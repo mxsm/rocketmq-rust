@@ -1,0 +1,32 @@
+# Copyright 2026 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0.
+
+[broker]
+listenPort = 10911
+brokerIp1 = "broker"
+storePathRootDir = "/var/lib/rocketmq/broker"
+namesrvAddr = "namesrv:9876"
+autoCreateTopicEnable = true
+metricsExportIntervalMillis = 2000
+traceSampleRatio = 1.0
+authConfigPath = "/var/lib/rocketmq/broker/auth"
+aclFile = "/etc/rocketmq/security/broker-acl.yml"
+aclFileWatchEnabled = true
+authenticationEnabled = true
+authorizationEnabled = true
+signatureAlgorithm = "HmacSHA256"
+
+[broker.brokerIdentity]
+brokerName = "sre-dev-broker"
+brokerClusterName = "SreDev"
+brokerId = 0
+
+[store]
+storePathRootDir = "/var/lib/rocketmq/broker"
+haListenPort = 10912
+mappedFileSizeCommitLog = 1048576
+mappedFileSizeConsumeQueue = 6000
+mappedFileSizeConsumeQueueExt = 65536
+maxHashSlotNum = 1000
+maxIndexNum = 4000
+timerWheelEnable = false

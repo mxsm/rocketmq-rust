@@ -124,25 +124,17 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         })?;
     let mut bootstrap_config = build_proxy_telemetry_bootstrap_config(&config, &process_telemetry);
     bootstrap_config.logging.reload = logging_overrides.logging.reload;
-    let telemetry_guard = rocketmq_observability::install_global_with_filter_and_service_context(
-        &bootstrap_config,
-        resolved_filter.clone(),
-        &service_context,
-    )
-    .await
-    .map_err(|error| ProxyError::Transport {
-        message: format!("failed to initialize proxy telemetry bootstrap: {error}"),
+    rocketmq_observability::apply_standard_otlp_environment(&mut bootstrap_config).map_err(|error| {
+        ProxyError::Transport {
+            message: format!("failed to apply standard OTLP environment to proxy telemetry: {error}"),
+        }
     })?;
-    if let Err(registration_error) = register_proxy_release_identity(&telemetry_guard, &process_telemetry) {
-        let request = lifecycle.request_shutdown(ShutdownReason::Internal);
-        return complete_proxy_process_shutdown(
-            Err(registration_error),
-            telemetry_guard,
-            &service_context,
-            request.deadline,
-        )
-        .await;
-    }
+    let telemetry_guard =
+        rocketmq_observability::install_global_with_filter(&bootstrap_config, resolved_filter.clone()).map_err(
+            |error| ProxyError::Transport {
+                message: format!("failed to initialize proxy telemetry bootstrap: {error}"),
+            },
+        )?;
     log_telemetry_bootstrap(
         &bootstrap_config,
         &resolved_filter,
@@ -649,105 +641,29 @@ mod tests {
     }
 
     #[test]
-    fn proxy_release_identity_config_enables_prometheus_before_install() {
-        let process_telemetry =
-            rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig::try_from_values(
-                "rocketmq-proxy",
-                Some("0123456789abcdef0123456789abcdef01234567"),
-                Some("proxy-01"),
-                Some("true"),
-                Some("prometheus"),
-                Some("127.0.0.1:9657"),
-                Some("/internal/metrics"),
-            )
-            .expect("Proxy Prometheus process telemetry");
+    fn proxy_bootstrap_accepts_standard_otlp_environment_values() {
+        let mut config = build_proxy_telemetry_bootstrap_config(&ProxyConfig::default());
 
-        let config = build_proxy_telemetry_bootstrap_config(&ProxyConfig::default(), &process_telemetry);
+        rocketmq_observability::apply_standard_otlp_environment_values(
+            &mut config,
+            Some(std::ffi::OsStr::new("http://collector:4317")),
+            Some(std::ffi::OsStr::new("grpc")),
+        )
+        .expect("valid standard OTLP environment should apply");
 
         assert!(config.observability.enabled);
-        assert!(config.observability.metrics.enabled);
+        assert_eq!(config.observability.service_name, "rocketmq-proxy");
         assert_eq!(
             config.observability.metrics.exporter,
-            rocketmq_observability::MetricsExporter::Prometheus
+            rocketmq_observability::MetricsExporter::OtlpGrpc
         );
-        assert_eq!(config.observability.prometheus.host, "127.0.0.1");
-        assert_eq!(config.observability.prometheus.port, 9657);
-        assert_eq!(config.observability.prometheus.path, "/internal/metrics");
-        assert_eq!(process_telemetry.release_identity().service(), "rocketmq-proxy");
-    }
-
-    #[tokio::test]
-    async fn runtime_composition_failure_runs_expired_service_root_barrier() {
-        let service_context =
-            rocketmq_runtime::RuntimeContext::from_current("proxy-shutdown-barrier-test").service_context("proxy");
-        let service_tasks = service_context.task_group();
-        service_tasks
-            .spawn_service("pending-service", std::future::pending())
-            .expect("pending service should be owned by the Proxy service root");
-        let cancellation = service_tasks.cancellation_token();
-        let deadline = ShutdownDeadline::after(std::time::Duration::ZERO);
-
-        let error = finish_proxy_process_shutdown(
-            Err(ProxyError::Transport {
-                message: "synthetic Proxy runtime composition failure".to_string(),
-            }),
-            service_tasks,
-            deadline,
-        )
-        .await
-        .expect_err("composition and service-root failures should be aggregated");
-
-        assert!(cancellation.is_cancelled(), "service-root barrier was not executed");
-        assert_eq!(service_tasks.shutdown_deadline(), Some(deadline));
-        let message = error.to_string();
-        assert!(
-            message.contains("synthetic Proxy runtime composition failure"),
-            "{message}"
+        assert_eq!(
+            config.observability.traces.exporter,
+            rocketmq_observability::TraceExporter::OtlpGrpc
         );
-        assert!(
-            message.contains("Proxy service task shutdown was unhealthy"),
-            "{message}"
-        );
-        assert!(message.contains("\"timed_out\": 1"), "{message}");
-    }
-
-    #[tokio::test]
-    async fn process_shutdown_closes_service_root_before_telemetry() {
-        let service_context =
-            rocketmq_runtime::RuntimeContext::from_current("proxy-process-shutdown-order").service_context("proxy");
-        let service_tasks = service_context.task_group();
-        service_tasks
-            .spawn_service("pending-service", std::future::pending())
-            .expect("pending service should be owned by the Proxy service root");
-        let cancellation = service_tasks.cancellation_token();
-
-        let telemetry_guard =
-            rocketmq_observability::init_observability(&rocketmq_observability::ObservabilityConfig {
-                enabled: true,
-                ..rocketmq_observability::ObservabilityConfig::default()
-            })
-            .expect("test telemetry runtime should initialize");
-        let telemetry = telemetry_guard.handle();
-        assert!(telemetry.is_active());
-
-        let error = complete_proxy_process_shutdown(
-            Err(ProxyError::Transport {
-                message: "synthetic Proxy composition failure".to_string(),
-            }),
-            telemetry_guard,
-            &service_context,
-            ShutdownDeadline::after(std::time::Duration::ZERO),
-        )
-        .await
-        .expect_err("primary and root shutdown failures should remain visible");
-
-        assert!(cancellation.is_cancelled(), "service-root barrier was not executed");
-        assert_eq!(telemetry.state(), rocketmq_observability::TelemetryState::Closed);
-        let message = error.to_string();
-        assert!(message.contains("synthetic Proxy composition failure"), "{message}");
-        assert!(
-            message.contains("Proxy service task shutdown was unhealthy"),
-            "{message}"
+        assert_eq!(
+            config.observability.logs.exporter,
+            rocketmq_observability::LogsExporter::OtlpGrpc
         );
     }
 }

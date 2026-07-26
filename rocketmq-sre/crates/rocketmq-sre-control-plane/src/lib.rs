@@ -1,0 +1,44 @@
+// Copyright 2023 The RocketMQ Rust Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! PostgreSQL-backed, read-only control plane for RocketMQ AI SRE.
+//!
+//! Phase 00 owns cluster onboarding and compatibility history. It deliberately
+//! exposes no RocketMQ mutation, approval, or execution endpoint.
+
+mod api;
+mod config;
+mod error;
+mod model;
+mod repository;
+
+pub use api::CapabilityDocuments;
+pub use api::build_router;
+pub use api::run;
+pub use config::ControlPlaneConfig;
+pub use error::ControlPlaneError;
+pub use model::CapabilitySnapshot;
+pub use model::Cluster;
+pub use model::ClusterSummary;
+pub use model::DataSourceAvailability;
+pub use model::DataSourceStatus;
+pub use model::HandshakeRequest;
+pub use model::OffboardRequest;
+pub use model::OnboardClusterRequest;
+pub use model::OnboardingState;
+pub use repository::PostgresRepository;
+
+pub const DEFAULT_CONTROL_PLANE_PORT: u16 = 8090;
+pub const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
+pub const MCP_BUSINESS_SCHEMA: &str = "rocketmq-mcp.v2";

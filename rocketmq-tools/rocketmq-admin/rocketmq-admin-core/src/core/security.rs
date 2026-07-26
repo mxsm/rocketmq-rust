@@ -45,17 +45,17 @@ impl AdminCredentials {
         })
     }
 
-    #[cfg(any(feature = "client-adapter", test))]
+    #[cfg(any(feature = "read-client-adapter", test))]
     pub(crate) fn access_key(&self) -> &str {
         &self.access_key
     }
 
-    #[cfg(any(feature = "client-adapter", test))]
+    #[cfg(any(feature = "read-client-adapter", test))]
     pub(crate) fn secret_key(&self) -> &str {
         &self.secret_key
     }
 
-    #[cfg(any(feature = "client-adapter", test))]
+    #[cfg(any(feature = "read-client-adapter", test))]
     pub(crate) fn security_token(&self) -> Option<&str> {
         self.security_token.as_deref()
     }

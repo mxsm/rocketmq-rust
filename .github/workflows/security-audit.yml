@@ -46,6 +46,10 @@ jobs:
         include:
           - project: workspace
             lockfile: Cargo.lock
+          - project: rocketmq-mcp
+            lockfile: rocketmq-tools/rocketmq-mcp/Cargo.lock
+          - project: rocketmq-sre
+            lockfile: rocketmq-sre/Cargo.lock
           - project: example
             lockfile: rocketmq-example/Cargo.lock
           - project: dashboard-gpui

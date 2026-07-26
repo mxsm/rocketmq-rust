@@ -14,6 +14,7 @@
 
 mod attributes;
 mod config;
+mod environment;
 mod error;
 mod exporter;
 mod exporter_types;
@@ -30,6 +31,7 @@ mod sampling;
 pub mod semantic;
 pub mod statistics;
 pub mod stats;
+mod status;
 pub mod trace;
 
 pub use attributes::base_attributes;
@@ -43,12 +45,18 @@ pub use config::LogsExporter;
 pub use config::MetricsExporter;
 pub use config::NonBlockingLogConfig;
 pub use config::ObservabilityConfig;
+pub use config::OtlpProtocol;
 pub use config::ReloadConfig;
 pub use config::SubscriberInstallPolicy;
 pub use config::SubscriberInstallStatus;
 pub use config::TelemetryBootstrapConfig;
 pub use config::TraceExporter;
 pub use config::TracesConfig;
+pub use environment::apply_standard_otlp_environment;
+pub use environment::apply_standard_otlp_environment_values;
+pub use environment::StandardOtlpEnvironmentStatus;
+pub use environment::OTEL_EXPORTER_OTLP_ENDPOINT;
+pub use environment::OTEL_EXPORTER_OTLP_PROTOCOL;
 pub use error::ObservabilityError;
 pub use exporter::outage::*;
 pub use exporter_types::LogExporterType;
@@ -104,6 +112,12 @@ pub use propagation::set_span_parent_from_properties_with_handle;
 pub use propagation::TRACEPARENT;
 pub use propagation::TRACESTATE;
 pub use sampling::SamplingGate;
+pub use status::ObservabilityCompiledFeaturesV1;
+pub use status::ObservabilitySignalStatusV1;
+pub use status::ObservabilityStatusHandle;
+pub use status::ObservabilityStatusValueV1;
+pub use status::ObservabilityStatusViewV1;
+pub use status::ObservabilitySubscriberStatusV1;
 
 #[cfg(feature = "prometheus")]
 #[doc(hidden)]

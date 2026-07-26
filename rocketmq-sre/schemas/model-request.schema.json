@@ -1,0 +1,204 @@
+{
+  "$defs": {
+    "CorrelationId": {
+      "description": "Identifier propagated across one logical SRE operation.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ModelMessage": {
+      "description": "Provider-neutral model message.",
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "$ref": "#/$defs/ModelRole"
+        },
+        "tool_call_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "role",
+        "content"
+      ],
+      "type": "object"
+    },
+    "ModelRole": {
+      "description": "Provider-neutral conversation role.",
+      "enum": [
+        "system",
+        "user",
+        "assistant",
+        "tool"
+      ],
+      "type": "string"
+    },
+    "ModelTool": {
+      "description": "Read-only tool contract exposed to a model.",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "input_schema": true,
+        "mutates_cluster": {
+          "description": "Phase 00 requires every model-visible tool to remain false.",
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "input_schema",
+        "mutates_cluster"
+      ],
+      "type": "object"
+    },
+    "ResponseFormat": {
+      "description": "Requested model response representation.",
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "const": "text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "json_object",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "schema": true,
+            "type": {
+              "const": "json_schema",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "name",
+            "schema"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SchemaVersion": {
+      "description": "Version negotiation information for a serialized contract family.",
+      "properties": {
+        "family": {
+          "type": "string"
+        },
+        "major": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "minor": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "required_features": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "family",
+        "major",
+        "minor"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Canonical request before provider-specific translation.",
+  "properties": {
+    "correlation_id": {
+      "$ref": "#/$defs/CorrelationId"
+    },
+    "max_output_tokens": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "messages": {
+      "items": {
+        "$ref": "#/$defs/ModelMessage"
+      },
+      "type": "array"
+    },
+    "model": {
+      "type": "string"
+    },
+    "response_format": {
+      "$ref": "#/$defs/ResponseFormat"
+    },
+    "schema": {
+      "$ref": "#/$defs/SchemaVersion"
+    },
+    "temperature_milli": {
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "tools": {
+      "items": {
+        "$ref": "#/$defs/ModelTool"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema",
+    "correlation_id",
+    "model",
+    "messages",
+    "response_format"
+  ],
+  "title": "CanonicalModelRequest",
+  "type": "object"
+}

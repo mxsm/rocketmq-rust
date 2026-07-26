@@ -380,6 +380,33 @@ fn build_broker_observability_config_maps_logging_bootstrap_defaults() {
 }
 
 #[test]
+fn broker_bootstrap_accepts_standard_otlp_environment_values() {
+    let mut config = build_broker_telemetry_bootstrap_config(&BrokerConfig::default());
+
+    let status = rocketmq_observability::apply_standard_otlp_environment_values(
+        &mut config,
+        Some(std::ffi::OsStr::new("http://collector:4317")),
+        Some(std::ffi::OsStr::new("grpc")),
+    )
+    .expect("valid standard OTLP environment should apply");
+
+    assert_eq!(status, rocketmq_observability::StandardOtlpEnvironmentStatus::Applied);
+    assert_eq!(config.observability.service_name, "rocketmq-broker");
+    assert_eq!(
+        config.observability.metrics.exporter,
+        rocketmq_observability::MetricsExporter::OtlpGrpc
+    );
+    assert_eq!(
+        config.observability.traces.exporter,
+        rocketmq_observability::TraceExporter::OtlpGrpc
+    );
+    assert_eq!(
+        config.observability.logs.exporter,
+        rocketmq_observability::LogsExporter::OtlpGrpc
+    );
+}
+
+#[test]
 fn build_auth_config_maps_signature_algorithm() {
     let broker_config = BrokerConfig {
         signature_algorithm: CheetahString::from_static_str("HmacSHA256"),

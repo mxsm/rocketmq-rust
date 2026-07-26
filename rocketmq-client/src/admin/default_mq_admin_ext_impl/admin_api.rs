@@ -22,80 +22,11 @@ use super::*;
 #[allow(unused_mut)]
 impl MQAdminExt for DefaultMQAdminExtImpl {
     async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
-        match self.service_state {
-            ServiceState::CreateJust => {
-                self.service_state = ServiceState::StartFailed;
-                self.client_config.change_instance_name_to_pid();
-                if "{}".eq(&self.client_config.socks_proxy_config) {
-                    self.client_config.socks_proxy_config =
-                        env::var(SOCKS_PROXY_JSON).unwrap_or_else(|_| "{}".to_string()).into();
-                }
-                let pooled = self
-                    .client_pool
-                    .get_or_create(self.client_config.clone(), self.rpc_hook.clone())?;
-                let (client_instance, token) = pooled.into_parts();
-                self.client_instance = Some(client_instance);
-                self.client_pool_token = Some(token);
-
-                let group = &self.admin_ext_group.clone();
-                let register_ok = self
-                    .client_instance
-                    .as_mut()
-                    .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?
-                    .register_admin_ext(group)
-                    .await;
-                if !register_ok {
-                    if let Some(token) = self.client_pool_token.take() {
-                        self.client_pool.release(token).await;
-                    }
-                    self.service_state = ServiceState::StartFailed;
-                    return Err(rocketmq_error::RocketMQError::illegal_argument(format!(
-                        "The adminExt group[{}] has created already, specified another name please.{}",
-                        self.admin_ext_group,
-                        FAQUrl::suggest_todo(FAQUrl::GROUP_NAME_DUPLICATE_URL)
-                    )));
-                }
-                let arc_mut = self
-                    .client_instance
-                    .clone()
-                    .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
-                if let Err(error) = self
-                    .client_instance
-                    .as_mut()
-                    .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?
-                    .start()
-                    .await
-                {
-                    if let Some(token) = self.client_pool_token.take() {
-                        self.client_pool.release(token).await;
-                    }
-                    return Err(error);
-                }
-                self.service_state = ServiceState::Running;
-                info!("the adminExt [{}] start OK", self.admin_ext_group);
-                Ok(())
-            }
-            ServiceState::Running | ServiceState::ShutdownAlready | ServiceState::StartFailed => {
-                Err(rocketmq_error::RocketMQError::ClientAlreadyStarted)
-            }
-        }
+        self.start_admin().await
     }
 
     async fn shutdown(&mut self) {
-        match self.service_state {
-            ServiceState::CreateJust | ServiceState::ShutdownAlready | ServiceState::StartFailed => {
-                // do nothing
-            }
-            ServiceState::Running => {
-                if let Some(instance) = self.client_instance.as_mut() {
-                    instance.unregister_admin_ext(&self.admin_ext_group).await;
-                }
-                if let Some(token) = self.client_pool_token.take() {
-                    self.client_pool.release(token).await;
-                }
-                self.service_state = ServiceState::ShutdownAlready;
-            }
-        }
+        self.shutdown_admin().await;
     }
 
     async fn add_broker_to_container(

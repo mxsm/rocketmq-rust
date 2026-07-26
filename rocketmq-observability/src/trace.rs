@@ -14,7 +14,9 @@
 
 pub mod broker;
 pub mod client;
+pub mod controller;
 pub mod hooks;
+pub mod mcp;
 pub mod namesrv;
 pub mod remoting;
 pub mod span_names;

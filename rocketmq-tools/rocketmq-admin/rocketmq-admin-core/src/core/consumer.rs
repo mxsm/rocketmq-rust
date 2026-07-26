@@ -339,3 +339,107 @@ pub trait ConsumerAdmin: Send {
         request: &'a SetConsumerRequestModeRequest,
     ) -> AdminFuture<'a, SetConsumerRequestModeResult>;
 }
+
+/// Consumer queries available to read-only integrations.
+pub trait ConsumerQueryAdmin: Send {
+    fn list_consumer_groups<'a>(
+        &'a mut self,
+        request: &'a ListConsumerGroupsRequest,
+    ) -> AdminFuture<'a, ListConsumerGroupsResult>;
+    fn query_consumer_lag<'a>(
+        &'a mut self,
+        request: &'a QueryConsumerLagRequest,
+    ) -> AdminFuture<'a, QueryConsumerLagResult>;
+    fn query_dashboard_consumer_groups<'a>(
+        &'a mut self,
+        request: &'a DashboardConsumerGroupListRequest,
+    ) -> AdminFuture<'a, DashboardConsumerGroupListResult>;
+    fn query_dashboard_consumer_connection<'a>(
+        &'a mut self,
+        request: &'a DashboardConsumerConnectionRequest,
+    ) -> AdminFuture<'a, DashboardConsumerConnection>;
+    fn query_dashboard_consumer_progress<'a>(
+        &'a mut self,
+        request: &'a DashboardConsumerProgressRequest,
+    ) -> AdminFuture<'a, DashboardConsumerProgress>;
+    fn query_dashboard_consumer_config<'a>(
+        &'a mut self,
+        request: &'a DashboardConsumerConfigRequest,
+    ) -> AdminFuture<'a, DashboardConsumerConfig>;
+}
+
+/// Consumer mutations require the explicit mutation adapter feature.
+pub trait ConsumerMutationAdmin: Send {
+    fn upsert_dashboard_consumer_group<'a>(
+        &'a mut self,
+        request: &'a DashboardConsumerUpsertRequest,
+    ) -> AdminFuture<'a, DashboardConsumerMutationResult>;
+    fn delete_dashboard_consumer_group<'a>(
+        &'a mut self,
+        request: &'a DashboardConsumerDeleteRequest,
+    ) -> AdminFuture<'a, DashboardConsumerMutationResult>;
+    fn set_consumer_request_mode<'a>(
+        &'a mut self,
+        request: &'a SetConsumerRequestModeRequest,
+    ) -> AdminFuture<'a, SetConsumerRequestModeResult>;
+}
+
+impl<T: ConsumerAdmin + ?Sized> ConsumerQueryAdmin for T {
+    fn list_consumer_groups<'a>(
+        &'a mut self,
+        request: &'a ListConsumerGroupsRequest,
+    ) -> AdminFuture<'a, ListConsumerGroupsResult> {
+        ConsumerAdmin::list_consumer_groups(self, request)
+    }
+    fn query_consumer_lag<'a>(
+        &'a mut self,
+        request: &'a QueryConsumerLagRequest,
+    ) -> AdminFuture<'a, QueryConsumerLagResult> {
+        ConsumerAdmin::query_consumer_lag(self, request)
+    }
+    fn query_dashboard_consumer_groups<'a>(
+        &'a mut self,
+        request: &'a DashboardConsumerGroupListRequest,
+    ) -> AdminFuture<'a, DashboardConsumerGroupListResult> {
+        ConsumerAdmin::query_dashboard_consumer_groups(self, request)
+    }
+    fn query_dashboard_consumer_connection<'a>(
+        &'a mut self,
+        request: &'a DashboardConsumerConnectionRequest,
+    ) -> AdminFuture<'a, DashboardConsumerConnection> {
+        ConsumerAdmin::query_dashboard_consumer_connection(self, request)
+    }
+    fn query_dashboard_consumer_progress<'a>(
+        &'a mut self,
+        request: &'a DashboardConsumerProgressRequest,
+    ) -> AdminFuture<'a, DashboardConsumerProgress> {
+        ConsumerAdmin::query_dashboard_consumer_progress(self, request)
+    }
+    fn query_dashboard_consumer_config<'a>(
+        &'a mut self,
+        request: &'a DashboardConsumerConfigRequest,
+    ) -> AdminFuture<'a, DashboardConsumerConfig> {
+        ConsumerAdmin::query_dashboard_consumer_config(self, request)
+    }
+}
+
+impl<T: ConsumerAdmin + ?Sized> ConsumerMutationAdmin for T {
+    fn upsert_dashboard_consumer_group<'a>(
+        &'a mut self,
+        request: &'a DashboardConsumerUpsertRequest,
+    ) -> AdminFuture<'a, DashboardConsumerMutationResult> {
+        ConsumerAdmin::upsert_dashboard_consumer_group(self, request)
+    }
+    fn delete_dashboard_consumer_group<'a>(
+        &'a mut self,
+        request: &'a DashboardConsumerDeleteRequest,
+    ) -> AdminFuture<'a, DashboardConsumerMutationResult> {
+        ConsumerAdmin::delete_dashboard_consumer_group(self, request)
+    }
+    fn set_consumer_request_mode<'a>(
+        &'a mut self,
+        request: &'a SetConsumerRequestModeRequest,
+    ) -> AdminFuture<'a, SetConsumerRequestModeResult> {
+        ConsumerAdmin::set_consumer_request_mode(self, request)
+    }
+}

@@ -7,6 +7,21 @@ updates:
     schedule:
       interval: "daily"
     open-pull-requests-limit: 10
+  - package-ecosystem: "cargo"
+    directory: "/rocketmq-tools/rocketmq-mcp"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 10
+  - package-ecosystem: "cargo"
+    directory: "/rocketmq-sre"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 10
+  - package-ecosystem: "npm"
+    directory: "/rocketmq-sre/ui"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 10
   - package-ecosystem: "github-actions"
     directory: "/"
     # Check for updates every Monday 

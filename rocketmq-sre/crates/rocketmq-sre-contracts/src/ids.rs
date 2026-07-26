@@ -1,0 +1,93 @@
+// Copyright 2023 The RocketMQ Rust Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use std::fmt::Display;
+use std::fmt::Formatter;
+use std::str::FromStr;
+
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde::Serialize;
+use uuid::Uuid;
+
+macro_rules! uuid_id {
+    ($name:ident, $description:literal) => {
+        #[doc = $description]
+        #[derive(Clone, Copy, Debug, Eq, Hash, JsonSchema, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+        #[serde(transparent)]
+        pub struct $name(Uuid);
+
+        impl $name {
+            /// Creates a collision-resistant identifier.
+            #[must_use]
+            pub fn new() -> Self {
+                Self(Uuid::new_v4())
+            }
+
+            /// Wraps an existing UUID.
+            #[must_use]
+            pub const fn from_uuid(value: Uuid) -> Self {
+                Self(value)
+            }
+
+            /// Returns the underlying UUID.
+            #[must_use]
+            pub const fn as_uuid(self) -> Uuid {
+                self.0
+            }
+        }
+
+        impl Default for $name {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+
+        impl Display for $name {
+            fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+                Display::fmt(&self.0, formatter)
+            }
+        }
+
+        impl FromStr for $name {
+            type Err = uuid::Error;
+
+            fn from_str(value: &str) -> Result<Self, Self::Err> {
+                Uuid::parse_str(value).map(Self)
+            }
+        }
+    };
+}
+
+uuid_id!(IncidentId, "Stable identifier for an SRE incident.");
+uuid_id!(EvidenceId, "Stable identifier for an evidence snapshot.");
+uuid_id!(QueryId, "Stable identifier for an evidence query.");
+uuid_id!(CorrelationId, "Identifier propagated across one logical SRE operation.");
+uuid_id!(ClusterId, "Internal identifier for an onboarded cluster.");
+uuid_id!(TenantId, "Stable tenant boundary identifier.");
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ids_round_trip_as_uuid_strings() {
+        let id = IncidentId::new();
+        let encoded = serde_json::to_string(&id).expect("identifier should serialize");
+        let decoded: IncidentId = serde_json::from_str(&encoded).expect("identifier should deserialize");
+
+        assert_eq!(decoded, id);
+        assert_eq!(id.to_string().parse::<IncidentId>().expect("UUID is valid"), id);
+    }
+}

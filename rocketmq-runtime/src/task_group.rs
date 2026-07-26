@@ -172,6 +172,21 @@ pub struct TaskGroupChildStats {
     pub pruned: usize,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TaskKindDiagnostics {
+    pub(crate) kind: TaskKind,
+    pub(crate) active: usize,
+    pub(crate) long_running: usize,
+    pub(crate) max_elapsed: Duration,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct TaskGroupDiagnostics {
+    pub(crate) group_count: usize,
+    pub(crate) task_count: usize,
+    pub(crate) task_kinds: Vec<TaskKindDiagnostics>,
+}
+
 #[derive(Debug)]
 struct TaskGroupInner {
     id: TaskGroupId,
@@ -337,6 +352,30 @@ impl TaskGroup {
             active,
             created: self.inner.dynamic_children_created.load(Ordering::Relaxed),
             pruned: self.inner.dynamic_children_pruned.load(Ordering::Relaxed),
+        }
+    }
+
+    pub(crate) fn diagnostics(&self, long_running_threshold: Duration) -> TaskGroupDiagnostics {
+        let mut aggregate = TaskGroupDiagnosticsAccumulator::default();
+        self.accumulate_diagnostics(long_running_threshold, &mut aggregate);
+        aggregate.finish()
+    }
+
+    fn accumulate_diagnostics(
+        &self,
+        long_running_threshold: Duration,
+        aggregate: &mut TaskGroupDiagnosticsAccumulator,
+    ) {
+        aggregate.group_count = aggregate.group_count.saturating_add(1);
+        for task in self.inner.tasks.iter() {
+            let elapsed = task.started_at.elapsed();
+            aggregate.record_task(task.kind, elapsed, elapsed >= long_running_threshold);
+        }
+
+        let mut children = self.inner.children.lock().clone();
+        children.extend(self.live_dynamic_children());
+        for child in children {
+            child.accumulate_diagnostics(long_running_threshold, aggregate);
         }
     }
 
@@ -911,5 +950,68 @@ impl TaskMeta {
             detached: self.detached,
             detached_policy: self.detached_policy,
         }
+    }
+}
+
+#[derive(Debug, Default)]
+struct TaskGroupDiagnosticsAccumulator {
+    group_count: usize,
+    task_count: usize,
+    active_by_kind: [usize; 7],
+    long_running_by_kind: [usize; 7],
+    max_elapsed_by_kind: [Duration; 7],
+}
+
+impl TaskGroupDiagnosticsAccumulator {
+    fn record_task(&mut self, kind: TaskKind, elapsed: Duration, long_running: bool) {
+        let index = task_kind_index(kind);
+        self.task_count = self.task_count.saturating_add(1);
+        self.active_by_kind[index] = self.active_by_kind[index].saturating_add(1);
+        if long_running {
+            self.long_running_by_kind[index] = self.long_running_by_kind[index].saturating_add(1);
+        }
+        self.max_elapsed_by_kind[index] = self.max_elapsed_by_kind[index].max(elapsed);
+    }
+
+    fn finish(self) -> TaskGroupDiagnostics {
+        let kinds = [
+            TaskKind::Service,
+            TaskKind::Worker,
+            TaskKind::ScheduledDriver,
+            TaskKind::ScheduledRun,
+            TaskKind::BlockingReaper,
+            TaskKind::Shutdown,
+            TaskKind::Other,
+        ];
+        let task_kinds = kinds
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, kind)| {
+                (self.active_by_kind[index] > 0).then_some(TaskKindDiagnostics {
+                    kind,
+                    active: self.active_by_kind[index],
+                    long_running: self.long_running_by_kind[index],
+                    max_elapsed: self.max_elapsed_by_kind[index],
+                })
+            })
+            .collect();
+
+        TaskGroupDiagnostics {
+            group_count: self.group_count,
+            task_count: self.task_count,
+            task_kinds,
+        }
+    }
+}
+
+const fn task_kind_index(kind: TaskKind) -> usize {
+    match kind {
+        TaskKind::Service => 0,
+        TaskKind::Worker => 1,
+        TaskKind::ScheduledDriver => 2,
+        TaskKind::ScheduledRun => 3,
+        TaskKind::BlockingReaper => 4,
+        TaskKind::Shutdown => 5,
+        TaskKind::Other => 6,
     }
 }

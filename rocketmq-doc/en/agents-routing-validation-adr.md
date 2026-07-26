@@ -7,6 +7,8 @@ Accepted
 The RocketMQ Rust repository is broader than the root Cargo workspace. The root `Cargo.toml` owns the main workspace members, while several projects are intentionally standalone:
 
 - `rocketmq-example/`
+- `rocketmq-tools/rocketmq-mcp/`
+- `rocketmq-sre/`
 - `rocketmq-dashboard/rocketmq-dashboard-gpui/`
 - `rocketmq-dashboard/rocketmq-dashboard-tauri/`
 - `rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/`
@@ -15,7 +17,7 @@ The RocketMQ Rust repository is broader than the root Cargo workspace. The root 
 - `rocketmq-dashboard/rocketmq-dashboard-web/frontend/`
 - `rocketmq-website/`
 
-Root workspace commands such as `cargo fmt --all -- --check` and `cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings` do not validate all standalone Rust, Node/Vite, or Docusaurus projects. The repository also has specialized quality gates for runtime ownership, typed error architecture, observability feature combinations, RocksDB store behavior, and the feature/security boundary of the root-workspace `rocketmq-mcp` crate.
+Root workspace commands such as `cargo fmt --all -- --check` and `cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings` do not validate all standalone Rust, Node/Vite, or Docusaurus projects. The repository also has specialized quality gates for runtime ownership, typed error architecture, observability feature combinations, RocksDB store behavior, and the feature/security boundary of the standalone `rocketmq-mcp` crate.
 
 Without an explicit routing model, agents can incorrectly treat the root Cargo workspace as the whole repository or skip project-specific validation after touching shared crates.
 
@@ -40,7 +42,7 @@ Add `scripts/check-agents-routing.ps1` and `scripts/check-agents-routing.sh` as 
 - Every discovered `package.json` project has a same-directory `AGENTS.md`.
 - Required workflow files exist and their project routes are represented in root `AGENTS.md`.
 - The shared-code list, cumulative validation policy, and specialized guard commands remain discoverable.
-- The `rocketmq-mcp` path and its exact CI-equivalent commands remain present in both root guidance and the root CI workflow.
+- The `rocketmq-mcp` path and its exact CI-equivalent commands remain present in root guidance and its standalone CI workflow.
 
 ## Alternatives
 ### Only Expand Root AGENTS.md

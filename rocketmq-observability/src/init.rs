@@ -87,7 +87,7 @@ impl TelemetryProviderShutdownReport {
 #[derive(Debug, Default)]
 pub(crate) struct TelemetryProviderGuard {
     subscriber_install_status: SubscriberInstallStatus,
-    handle: TelemetryHandle,
+    status: crate::status::ObservabilityStatusHandle,
     #[cfg(feature = "otel-metrics")]
     meter_provider: Option<opentelemetry_sdk::metrics::SdkMeterProvider>,
     #[cfg(feature = "prometheus")]
@@ -103,6 +103,13 @@ pub(crate) struct TelemetryProviderGuard {
 impl TelemetryProviderGuard {
     pub fn noop() -> Self {
         Self::default()
+    }
+
+    fn from_config(config: &ObservabilityConfig) -> Self {
+        Self {
+            status: crate::status::ObservabilityStatusHandle::from_config(config),
+            ..Self::default()
+        }
     }
 
     pub fn shutdown(self) -> Result<(), ObservabilityError> {
@@ -132,57 +139,22 @@ impl TelemetryProviderGuard {
         self.subscriber_install_status
     }
 
-    /// Returns a cloneable telemetry capability without exposing provider ownership.
-    #[must_use]
-    pub fn handle(&self) -> TelemetryHandle {
-        self.handle.clone()
+    pub fn status_handle(&self) -> crate::status::ObservabilityStatusHandle {
+        self.status.clone()
     }
 
     pub(crate) fn set_subscriber_install_status(&mut self, status: SubscriberInstallStatus) {
         self.subscriber_install_status = status;
     }
 
-    #[cfg(feature = "prometheus")]
-    pub(crate) fn take_prometheus_http(&mut self) -> Option<crate::exporter::prometheus::PrometheusHttpHandle> {
-        self.prometheus_http.take()
-    }
-
-    #[cfg(feature = "prometheus")]
-    pub(crate) fn prometheus_local_addr(&self) -> Option<std::net::SocketAddr> {
-        self.prometheus_http
-            .as_ref()
-            .map(crate::exporter::prometheus::PrometheusHttpHandle::local_addr)
-    }
-
-    #[cfg(feature = "prometheus")]
-    pub(crate) fn prometheus_task_count(&self) -> usize {
-        self.prometheus_http
-            .as_ref()
-            .map_or(0, crate::exporter::prometheus::PrometheusHttpHandle::task_count)
-    }
-
-    #[cfg(feature = "prometheus")]
-    pub(crate) fn start_prometheus_endpoint(
-        &mut self,
-        config: &ObservabilityConfig,
-        service_context: &ChildServiceContext,
-    ) -> Result<(), ObservabilityError> {
-        let Some(registry) = self.prometheus_registry.take() else {
-            return Ok(());
-        };
-        self.prometheus_http = Some(
-            crate::exporter::prometheus::spawn_prometheus_http_endpoint_with_task_group(
-                config,
-                registry,
-                service_context.task_group().clone(),
-            )?,
-        );
-        Ok(())
+    pub(crate) fn mark_status_initialized(&self) {
+        self.status.mark_initialized(self.subscriber_install_status);
     }
 
     #[cfg(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs"))]
     fn shutdown_inner(mut self, timeout: std::time::Duration) -> TelemetryProviderShutdownReport {
-        self.handle.begin_closing();
+        self.status.mark_shutdown_started();
+        let status = self.status.clone();
         let mut report = TelemetryProviderShutdownReport::default();
         let started_at = std::time::Instant::now();
 
@@ -219,15 +191,16 @@ impl TelemetryProviderGuard {
             );
         }
 
-        self.handle.mark_closed();
+        status.mark_shutdown_finished(report.is_healthy());
         report
     }
 
     #[cfg(not(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs")))]
     fn shutdown_inner(self, _timeout: std::time::Duration) -> TelemetryProviderShutdownReport {
-        self.handle.begin_closing();
-        self.handle.mark_closed();
-        TelemetryProviderShutdownReport::default()
+        self.status.mark_shutdown_started();
+        let report = TelemetryProviderShutdownReport::default();
+        self.status.mark_shutdown_finished(true);
+        report
     }
 
     #[cfg(all(feature = "otel-metrics", test))]
@@ -339,7 +312,8 @@ fn finish_observability_initialization(
     guard.set_subscriber_install_status(subscriber_install_status);
     enforce_subscriber_install_policy(config, guard.subscriber_install_status())?;
 
-    Ok(())
+    guard.mark_status_initialized();
+    Ok(guard)
 }
 
 pub(crate) fn init_telemetry_providers(
@@ -362,24 +336,14 @@ fn init_telemetry_providers_inner(
     validate_config(config)?;
 
     if !config.enabled {
-        return Ok(TelemetryProviderGuard::noop());
-    }
-
-    #[cfg(feature = "prometheus")]
-    if config.metrics.enabled
-        && config.metrics.exporter == MetricsExporter::Prometheus
-        && !prometheus_task_owner_available
-    {
-        return Err(ObservabilityError::invalid_config(
-            "Prometheus metrics require init_observability_with_service_context or \
-             install_global_with_service_context so endpoint tasks have an explicit lifecycle owner",
-        ));
+        return Ok(TelemetryGuard::from_config(config));
     }
 
     #[cfg(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs"))]
-    let mut guard = TelemetryProviderGuard::noop();
+    let mut guard = TelemetryGuard::from_config(config);
     #[cfg(not(any(feature = "otel-metrics", feature = "otel-traces", feature = "otel-logs")))]
-    let mut guard = TelemetryProviderGuard::noop();
+    let guard = TelemetryGuard::from_config(config);
+
     if config.metrics.enabled {
         #[cfg(feature = "otel-metrics")]
         {
@@ -515,6 +479,12 @@ fn validate_config(config: &ObservabilityConfig) -> Result<(), ObservabilityErro
     {
         return Err(ObservabilityError::invalid_config(
             "prometheus.path must not be empty when Prometheus metrics are enabled",
+        ));
+    }
+
+    if crate::status::uses_otlp(config) && config.otlp.protocol != crate::config::OtlpProtocol::Grpc {
+        return Err(ObservabilityError::invalid_config(
+            "only OTLP gRPC is implemented; set observability.otlp.protocol to grpc",
         ));
     }
 
@@ -809,107 +779,19 @@ mod tests {
         assert!(matches!(error, ObservabilityError::InvalidConfig(_)));
     }
 
-    #[cfg(all(feature = "otel-metrics", feature = "prometheus"))]
     #[test]
-    fn prometheus_endpoint_requires_an_explicit_service_context() {
+    fn unimplemented_otlp_http_protocol_is_rejected() {
         let mut config = ObservabilityConfig {
             enabled: true,
             ..ObservabilityConfig::default()
         };
         config.metrics.enabled = true;
-        config.metrics.exporter = MetricsExporter::Prometheus;
-        config.prometheus.host = "127.0.0.1".to_string();
-        config.prometheus.port = 0;
+        config.metrics.exporter = MetricsExporter::OtlpGrpc;
+        config.otlp.protocol = crate::config::OtlpProtocol::HttpBinary;
 
-        let error = init_observability(&config).expect_err("unowned Prometheus tasks must be rejected");
+        let error = init_observability(&config).expect_err("OTLP HTTP must fail closed");
 
         assert!(matches!(error, ObservabilityError::InvalidConfig(_)));
-    }
-
-    #[cfg(all(feature = "otel-metrics", feature = "prometheus"))]
-    #[tokio::test]
-    async fn scoped_shutdown_awaits_an_incomplete_prometheus_scrape() {
-        let runtime = rocketmq_runtime::RuntimeContext::from_current("prometheus-runtime-guard-test");
-        let service_context = runtime.service_context("observability");
-        let mut config = ObservabilityConfig {
-            enabled: true,
-            ..ObservabilityConfig::default()
-        };
-        config.metrics.enabled = true;
-        config.metrics.exporter = MetricsExporter::Prometheus;
-        config.prometheus.host = "127.0.0.1".to_string();
-        config.prometheus.port = 0;
-
-        let guard = init_observability_with_service_context(&config, &service_context)
-            .await
-            .expect("scoped Prometheus endpoint should initialize");
-        let address = guard
-            .prometheus_local_addr()
-            .expect("Prometheus endpoint should expose its bound address");
-        let _incomplete_scrape = tokio::net::TcpStream::connect(address)
-            .await
-            .expect("incomplete scrape should connect");
-        tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            while guard.prometheus_task_count() < 2 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("Prometheus connection task should become owned");
-
-        let report = guard
-            .shutdown_with_service_context(&service_context, std::time::Duration::from_secs(1))
-            .await;
-
-        assert!(report.is_healthy(), "{}", report.to_json());
-        let parent_report = service_context
-            .task_group()
-            .shutdown(std::time::Duration::from_secs(1))
-            .await;
-        assert!(parent_report.is_healthy(), "{}", parent_report.to_json());
-    }
-
-    #[cfg(all(feature = "otel-metrics", feature = "prometheus"))]
-    #[tokio::test]
-    async fn parent_task_group_shutdown_cancels_prometheus_accept_and_scrape_tasks() {
-        let runtime = rocketmq_runtime::RuntimeContext::from_current("prometheus-parent-shutdown-test");
-        let service_context = runtime.service_context("observability");
-        let mut config = ObservabilityConfig {
-            enabled: true,
-            ..ObservabilityConfig::default()
-        };
-        config.metrics.enabled = true;
-        config.metrics.exporter = MetricsExporter::Prometheus;
-        config.prometheus.host = "127.0.0.1".to_string();
-        config.prometheus.port = 0;
-
-        let guard = init_observability_with_service_context(&config, &service_context)
-            .await
-            .expect("scoped Prometheus endpoint should initialize");
-        let address = guard
-            .prometheus_local_addr()
-            .expect("Prometheus endpoint should expose its bound address");
-        let _incomplete_scrape = tokio::net::TcpStream::connect(address)
-            .await
-            .expect("incomplete scrape should connect");
-        tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            while guard.prometheus_task_count() < 2 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("Prometheus connection task should become owned");
-
-        let parent_report = service_context
-            .task_group()
-            .shutdown(std::time::Duration::from_secs(1))
-            .await;
-        assert!(parent_report.is_healthy(), "{}", parent_report.to_json());
-
-        let telemetry_report = guard
-            .shutdown_with_service_context(&service_context, std::time::Duration::from_secs(1))
-            .await;
-        assert!(telemetry_report.is_healthy(), "{}", telemetry_report.to_json());
     }
 
     #[cfg(feature = "otel-metrics")]

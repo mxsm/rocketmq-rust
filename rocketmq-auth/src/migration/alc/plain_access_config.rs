@@ -37,6 +37,13 @@ pub struct PlainAccessConfig {
     pub topic_perms: Option<Vec<CheetahString>>,
     #[serde(alias = "group_perms")]
     pub group_perms: Option<Vec<CheetahString>>,
+    /// Optional read-only cluster permission used by diagnostic clients.
+    ///
+    /// The legacy Java ACL format has no cluster permission field. RocketMQ
+    /// Rust accepts only `GET` or `DENY` here so a migrated normal user can
+    /// inspect broker runtime state without receiving super-user privileges.
+    #[serde(alias = "cluster_perm")]
+    pub cluster_perm: Option<CheetahString>,
 }
 
 impl PlainAccessConfig {
@@ -115,6 +122,15 @@ impl PlainAccessConfig {
     pub fn set_group_perms(&mut self, perms: Vec<CheetahString>) {
         self.group_perms = Some(perms);
     }
+
+    // clusterPerm
+    pub fn cluster_perm(&self) -> Option<&CheetahString> {
+        self.cluster_perm.as_ref()
+    }
+
+    pub fn set_cluster_perm(&mut self, permission: CheetahString) {
+        self.cluster_perm = Some(permission);
+    }
 }
 
 impl fmt::Display for PlainAccessConfig {
@@ -122,7 +138,7 @@ impl fmt::Display for PlainAccessConfig {
         write!(
             f,
             "PlainAccessConfig{{ access_key={:?}, white_remote_address={:?}, admin={}, default_topic_perm={:?}, \
-             default_group_perm={:?}, topic_perms={:?}, group_perms={:?} }}",
+             default_group_perm={:?}, topic_perms={:?}, group_perms={:?}, cluster_perm={:?} }}",
             self.access_key,
             self.white_remote_address,
             self.admin,
@@ -130,6 +146,7 @@ impl fmt::Display for PlainAccessConfig {
             self.default_group_perm,
             self.topic_perms,
             self.group_perms,
+            self.cluster_perm,
         )
     }
 }
@@ -145,6 +162,7 @@ impl fmt::Debug for PlainAccessConfig {
             .field("default_group_perm", &self.default_group_perm)
             .field("topic_perms", &self.topic_perms)
             .field("group_perms", &self.group_perms)
+            .field("cluster_perm", &self.cluster_perm)
             .finish()
     }
 }
@@ -179,5 +197,20 @@ secretKey: sk
         assert_eq!(config.secret_key().unwrap().as_str(), "sk");
         assert!(!config.is_admin());
         assert!(config.topic_perms().is_none());
+        assert!(config.cluster_perm().is_none());
+    }
+
+    #[test]
+    fn plain_access_config_deserializes_read_only_cluster_permission() {
+        let config: PlainAccessConfig = serde_yaml::from_str(
+            r#"
+accessKey: sre-reader
+secretKey: secret
+clusterPerm: GET
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.cluster_perm().map(CheetahString::as_str), Some("GET"));
     }
 }

@@ -100,6 +100,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::Server;
 use tracing::info;
+use tracing::Instrument;
 
 const CONTROLLER_RAFT_BIND_ADDR_ENV: &str = "ROCKETMQ_CONTROLLER_RAFT_BIND_ADDR";
 
@@ -882,6 +883,9 @@ impl Controller for OpenRaftController {
                 use openraft::async_runtime::WatchReceiver;
                 let metrics = node.raft().metrics().borrow_watched().clone();
                 let config = config.snapshot();
+                rocketmq_observability::metrics::controller::record_quorum_health(
+                    metrics.running_state.is_ok() && metrics.last_quorum_acked.is_some(),
+                );
                 if metrics.current_leader != Some(config.node_id) {
                     return;
                 }
@@ -893,8 +897,18 @@ impl Controller for OpenRaftController {
                     return;
                 }
 
-                match Self::scan_not_active_broker_once(node.clone(), now_millis).await {
+                let scan_span = rocketmq_observability::trace::controller::heartbeat_scan_span();
+                match Self::scan_not_active_broker_once(node.clone(), now_millis)
+                    .instrument(scan_span.clone())
+                    .await
+                {
                     Ok(inactive_brokers) => {
+                        let stale_count = inactive_brokers.len();
+                        rocketmq_observability::metrics::controller::record_stale_brokers(
+                            u64::try_from(stale_count).unwrap_or(u64::MAX),
+                        );
+                        scan_span.record("result", "success");
+                        scan_span.record("stale_count", i64::try_from(stale_count).unwrap_or(i64::MAX));
                         for broker_identity in inactive_brokers {
                             for listener in listeners.read().iter() {
                                 listener.on_broker_inactive(
@@ -904,9 +918,24 @@ impl Controller for OpenRaftController {
                                 );
                             }
                         }
+                        info!(
+                            event = rocketmq_observability::semantic::events::CONTROLLER_HEARTBEAT,
+                            state = "scanned",
+                            result = "success",
+                            stale_count,
+                            "Controller replicated heartbeat scan completed"
+                        );
                     }
-                    Err(error) => {
-                        tracing::warn!("Failed to run replicated broker inactive scan: {}", error);
+                    Err(_) => {
+                        scan_span.record("result", "error");
+                        scan_span.record("stale_count", 0_i64);
+                        tracing::warn!(
+                            event = rocketmq_observability::semantic::events::CONTROLLER_HEARTBEAT,
+                            state = "scanned",
+                            result = "error",
+                            stale_count = 0_usize,
+                            "Controller replicated heartbeat scan failed"
+                        );
                     }
                 }
             }

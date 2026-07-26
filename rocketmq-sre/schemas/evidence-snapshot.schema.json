@@ -1,0 +1,242 @@
+{
+  "$defs": {
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "CorrelationId": {
+      "description": "Identifier propagated across one logical SRE operation.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "CoverageStatus": {
+      "description": "Availability of a required signal or evidence source.",
+      "enum": [
+        "available",
+        "partial",
+        "missing",
+        "not_production_verified"
+      ],
+      "type": "string"
+    },
+    "EvidenceContent": {
+      "description": "Bounded evidence payload or a content-addressed reference.",
+      "oneOf": [
+        {
+          "properties": {
+            "storage": {
+              "const": "inline",
+              "type": "string"
+            },
+            "value": true
+          },
+          "required": [
+            "storage",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "storage": {
+              "const": "reference",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/EvidenceReference"
+            }
+          },
+          "required": [
+            "storage",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "EvidenceId": {
+      "description": "Stable identifier for an evidence snapshot.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "EvidenceReference": {
+      "description": "Content stored outside the inline evidence envelope.",
+      "properties": {
+        "digest": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri",
+        "digest",
+        "media_type",
+        "size_bytes"
+      ],
+      "type": "object"
+    },
+    "QueryId": {
+      "description": "Stable identifier for an evidence query.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "SchemaVersion": {
+      "description": "Version negotiation information for a serialized contract family.",
+      "properties": {
+        "family": {
+          "type": "string"
+        },
+        "major": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "minor": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "required_features": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "family",
+        "major",
+        "minor"
+      ],
+      "type": "object"
+    },
+    "Sensitivity": {
+      "description": "Data handling classification applied before evidence leaves its source.",
+      "enum": [
+        "public",
+        "internal",
+        "confidential",
+        "restricted"
+      ],
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TimeRange": {
+      "description": "Inclusive time range requested from an evidence source.",
+      "properties": {
+        "end": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "start": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Immutable evidence captured from a queryable source.",
+  "properties": {
+    "cluster_id": {
+      "$ref": "#/$defs/ClusterId"
+    },
+    "content": {
+      "$ref": "#/$defs/EvidenceContent"
+    },
+    "content_hash": {
+      "type": "string"
+    },
+    "correlation_id": {
+      "$ref": "#/$defs/CorrelationId"
+    },
+    "coverage": {
+      "$ref": "#/$defs/CoverageStatus"
+    },
+    "evidence_id": {
+      "$ref": "#/$defs/EvidenceId"
+    },
+    "freshness_seconds": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "observed_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "partial": {
+      "type": "boolean"
+    },
+    "query_id": {
+      "$ref": "#/$defs/QueryId"
+    },
+    "resource": {
+      "type": "string"
+    },
+    "schema": {
+      "$ref": "#/$defs/SchemaVersion"
+    },
+    "sensitivity": {
+      "$ref": "#/$defs/Sensitivity"
+    },
+    "source": {
+      "type": "string"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    },
+    "time_range": {
+      "$ref": "#/$defs/TimeRange"
+    },
+    "warnings": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema",
+    "evidence_id",
+    "query_id",
+    "correlation_id",
+    "tenant_id",
+    "cluster_id",
+    "source",
+    "resource",
+    "time_range",
+    "observed_at",
+    "freshness_seconds",
+    "partial",
+    "sensitivity",
+    "coverage",
+    "content",
+    "content_hash"
+  ],
+  "title": "EvidenceSnapshot",
+  "type": "object"
+}

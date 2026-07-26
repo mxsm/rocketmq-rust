@@ -1,0 +1,137 @@
+{
+  "$defs": {
+    "ActionRisk": {
+      "description": "Risk taxonomy reserved for future action planning and approval.",
+      "enum": [
+        "read",
+        "plan",
+        "r1",
+        "r2",
+        "r3"
+      ],
+      "type": "string"
+    },
+    "Deprecation": {
+      "description": "Explicit migration information for a deprecated extension.",
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "replacement": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "since": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "since",
+        "message"
+      ],
+      "type": "object"
+    },
+    "DescriptorStatus": {
+      "description": "Lifecycle status of one descriptor version.",
+      "enum": [
+        "active",
+        "disabled",
+        "deprecated"
+      ],
+      "type": "string"
+    },
+    "SchemaVersion": {
+      "description": "Version negotiation information for a serialized contract family.",
+      "properties": {
+        "family": {
+          "type": "string"
+        },
+        "major": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "minor": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "required_features": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "family",
+        "major",
+        "minor"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Extension contract for a future action.",
+  "properties": {
+    "config_schema": true,
+    "deprecation": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Deprecation"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "execution_supported": {
+      "type": "boolean"
+    },
+    "id": {
+      "type": "string"
+    },
+    "owner": {
+      "type": "string"
+    },
+    "required_capabilities": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "risk": {
+      "$ref": "#/$defs/ActionRisk"
+    },
+    "status": {
+      "$ref": "#/$defs/DescriptorStatus"
+    },
+    "supported_versions": {
+      "items": {
+        "$ref": "#/$defs/SchemaVersion"
+      },
+      "type": "array"
+    },
+    "version": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "version",
+    "owner",
+    "supported_versions",
+    "config_schema",
+    "status",
+    "risk",
+    "execution_supported"
+  ],
+  "title": "ActionDescriptor",
+  "type": "object"
+}

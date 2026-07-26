@@ -1,0 +1,116 @@
+{
+  "$defs": {
+    "FinishReason": {
+      "description": "Why a provider stopped generation.",
+      "enum": [
+        "stop",
+        "length",
+        "tool_calls",
+        "content_filter",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "ModelToolCall": {
+      "description": "Provider-neutral tool call selected by a model.",
+      "properties": {
+        "arguments": true,
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "arguments"
+      ],
+      "type": "object"
+    },
+    "SchemaVersion": {
+      "description": "Version negotiation information for a serialized contract family.",
+      "properties": {
+        "family": {
+          "type": "string"
+        },
+        "major": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "minor": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "required_features": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "family",
+        "major",
+        "minor"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Canonical response after provider-specific translation.",
+  "properties": {
+    "content": {
+      "type": "string"
+    },
+    "finish_reason": {
+      "$ref": "#/$defs/FinishReason"
+    },
+    "input_tokens": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "model": {
+      "type": "string"
+    },
+    "output_tokens": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "provider": {
+      "type": "string"
+    },
+    "schema": {
+      "$ref": "#/$defs/SchemaVersion"
+    },
+    "tool_calls": {
+      "items": {
+        "$ref": "#/$defs/ModelToolCall"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema",
+    "provider",
+    "model",
+    "content",
+    "finish_reason"
+  ],
+  "title": "CanonicalModelResponse",
+  "type": "object"
+}

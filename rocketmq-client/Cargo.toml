@@ -28,12 +28,12 @@ description            = "Rust implementation of Apache rocketmq client"
 rust-version.workspace = true
 
 [features]
-default = []
-observability = [
-  "rocketmq-observability/otel-traces",
-  "rocketmq-transport/observability-traces",
-]
-observability-metrics = ["rocketmq-observability/otel-metrics", "rocketmq-transport/observability"]
+default = ["admin-full"]
+admin-read = []
+admin-mutation = []
+admin-full = ["admin-read", "admin-mutation"]
+observability = ["rocketmq-observability/otel-traces"]
+observability-metrics = ["rocketmq-observability/otel-metrics"]
 otlp-traces = ["observability", "rocketmq-observability/otlp-traces"]
 
 [dependencies]

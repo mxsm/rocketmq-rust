@@ -53,13 +53,16 @@ impl Permission {
         let trimmed = value.map(str::trim).unwrap_or_default();
         let decision = if trimmed.is_empty() || trimmed == "DENY" {
             Decision::Deny
-        } else {
+        } else if matches!(trimmed, "PUB" | "SUB" | "PUB|SUB" | "SUB|PUB" | "GET") {
             Decision::Allow
+        } else {
+            Decision::Deny
         };
         let actions = match trimmed {
             "PUB" => vec![Action::Pub],
             "SUB" => vec![Action::Sub],
             "PUB|SUB" | "SUB|PUB" => vec![Action::Pub, Action::Sub],
+            "GET" => vec![Action::Get],
             "DENY" | "" => vec![Action::All],
             _ => vec![Action::All],
         };
@@ -117,6 +120,10 @@ mod tests {
             (vec![Action::Pub, Action::Sub], Decision::Allow)
         );
         assert_eq!(
+            Permission::migration_actions_and_decision(Some("GET")),
+            (vec![Action::Get], Decision::Allow)
+        );
+        assert_eq!(
             Permission::migration_actions_and_decision(Some("DENY")),
             (vec![Action::All], Decision::Deny)
         );
@@ -126,7 +133,7 @@ mod tests {
         );
         assert_eq!(
             Permission::migration_actions_and_decision(Some("UNKNOWN")),
-            (vec![Action::All], Decision::Allow)
+            (vec![Action::All], Decision::Deny)
         );
     }
 }

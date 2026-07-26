@@ -82,6 +82,13 @@ SPAN_ATTRIBUTES = {
         "messaging.message.body.size",
         "messaging.rocketmq.message.keys",
     ],
+    "NAMESRV_ROUTE_LOOKUP": ["result"],
+    "NAMESRV_BROKER_REGISTRATION": ["result"],
+    "CONTROLLER_HEARTBEAT_SCAN": ["result", "stale_count"],
+    "CONTROLLER_ELECTION": ["result"],
+    "MCP_TOOL": ["operation", "result"],
+    "MCP_RESOURCE": ["operation", "result"],
+    "PROXY_RPC": ["rpc", "result"],
 }
 EVENT_CONTRACTS = {
     "AUTH_DECISION": ("auth-mcp", "security", ["operation", "decision", "result", "reason"]),
@@ -95,10 +102,20 @@ EVENT_CONTRACTS = {
         "observability",
         ["result", "reason", "queued_items", "queued_bytes", "dropped_count"],
     ),
+    "BROKER_LIFECYCLE": ("request", "broker", ["state", "result", "reason"]),
+    "RUNTIME_LIFECYCLE": ("task", "runtime", ["component", "state", "result", "reason"]),
+    "CONTROLLER_HEARTBEAT": ("request", "controller", ["state", "result", "stale_count"]),
+    "CONTROLLER_ELECTION": ("request", "controller", ["state", "result"]),
 }
 
 
 def metric_family(metric_id: str) -> str:
+    if metric_id.startswith("rocketmq_mcp_audit_"):
+        return "auth-mcp"
+    if metric_id.startswith("rocketmq_mcp_cache_"):
+        return "recovery-cache"
+    if metric_id.startswith("rocketmq_runtime_"):
+        return "task"
     if "metrics_label_dropped" in metric_id:
         return "exporter"
     if metric_id == "rocketmq_release_info":
@@ -194,6 +211,13 @@ def build_registry() -> dict[str, Any]:
         "STORE_DISPATCH": "store",
         "PRODUCER_SEND": "client",
         "CONSUMER_PROCESS": "client",
+        "NAMESRV_ROUTE_LOOKUP": "name-server",
+        "NAMESRV_BROKER_REGISTRATION": "name-server",
+        "CONTROLLER_HEARTBEAT_SCAN": "controller",
+        "CONTROLLER_ELECTION": "controller",
+        "MCP_TOOL": "mcp",
+        "MCP_RESOURCE": "mcp",
+        "PROXY_RPC": "proxy",
     }
     for symbol, span_id in inventory["spans"].items():
         attributes = SPAN_ATTRIBUTES[symbol]

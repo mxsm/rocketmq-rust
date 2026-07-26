@@ -1,0 +1,180 @@
+schema_version: rocketmq.sre.required-signals.v1
+component: mcp
+exposure:
+  implementation: implemented_local
+  observable: true
+  remote_queryable: protected_system_resources_only
+signals:
+  - requirement_id: mcp.action_audit
+    purpose: Audit authenticated MCP operations.
+    owner: mcp
+    source_symbol: MCP_ACTION
+    registry_reference: rocketmq.mcp.action
+    signal_type: log
+    status: in_process_only
+    query: null
+    freshness_seconds: 300
+    expected_attributes: [operation, result, reason]
+    sensitivity: operational
+    missing_behavior: not_production_verified
+    evidence_field: mcp.action_audit
+    notes: Phase 00 keeps the bounded audit history in the configured MCP audit sink; it does not claim a Loki event.
+  - requirement_id: mcp.operation_requests
+    purpose: Measure Tool and Resource demand.
+    owner: mcp
+    source_symbol: MCP_REQUESTS_TOTAL
+    registry_reference: rocketmq_mcp_requests_total
+    signal_type: metric
+    status: existing
+    query: sum by (operation_kind, operation, result) (rate(rocketmq_mcp_requests_total[5m]))
+    freshness_seconds: 60
+    expected_attributes: [operation_kind, operation, result]
+    sensitivity: operational
+    missing_behavior: missing
+    evidence_field: mcp.request_rate
+  - requirement_id: mcp.request_latency
+    purpose: Detect MCP read path degradation.
+    owner: mcp
+    source_symbol: MCP_REQUEST_LATENCY
+    registry_reference: rocketmq_mcp_request_latency
+    signal_type: metric
+    status: existing
+    query: histogram_quantile(0.99, sum by (operation_kind, operation, le) (rate(rocketmq_mcp_request_latency_bucket[5m])))
+    freshness_seconds: 60
+    expected_attributes: [operation_kind, operation]
+    sensitivity: operational
+    missing_behavior: missing
+    evidence_field: mcp.request_latency_p99_ms
+  - requirement_id: mcp.request_errors
+    purpose: Explain failed and denied MCP Tool and Resource requests.
+    owner: mcp
+    source_symbol: MCP_ERRORS_TOTAL
+    registry_reference: rocketmq_mcp_errors_total
+    signal_type: metric
+    status: existing
+    query: sum by (operation_kind, operation, result) (rate(rocketmq_mcp_errors_total[5m]))
+    freshness_seconds: 60
+    expected_attributes: [operation_kind, operation, result]
+    sensitivity: operational
+    missing_behavior: missing
+    evidence_field: mcp.request_errors
+  - requirement_id: mcp.tool_span
+    purpose: Correlate bounded Tool execution outcomes without arguments or sensitive resource values.
+    owner: mcp
+    source_symbol: MCP_TOOL
+    registry_reference: RocketMQ MCP TOOL
+    signal_type: span
+    status: existing
+    query: '{ resource.service.name = "rocketmq-mcp" && name = "RocketMQ MCP TOOL" }'
+    freshness_seconds: 300
+    expected_attributes: [operation, result]
+    sensitivity: operational
+    missing_behavior: not_production_verified
+    evidence_field: mcp.tool_trace
+  - requirement_id: mcp.resource_span
+    purpose: Correlate bounded Resource read outcomes without exposing resource URIs or caller input.
+    owner: mcp
+    source_symbol: MCP_RESOURCE
+    registry_reference: RocketMQ MCP RESOURCE
+    signal_type: span
+    status: existing
+    query: '{ resource.service.name = "rocketmq-mcp" && name = "RocketMQ MCP RESOURCE" }'
+    freshness_seconds: 300
+    expected_attributes: [operation, result]
+    sensitivity: operational
+    missing_behavior: not_production_verified
+    evidence_field: mcp.resource_trace
+  - requirement_id: mcp.cache_operations
+    purpose: Explain MCP query cache hits, misses, bypasses, evictions, invalidations, and coalescing.
+    owner: mcp
+    source_symbol: MCP_CACHE_OPERATIONS_TOTAL
+    registry_reference: rocketmq_mcp_cache_operations_total
+    signal_type: metric
+    status: existing
+    query: sum by (result) (rate(rocketmq_mcp_cache_operations_total[5m]))
+    freshness_seconds: 60
+    expected_attributes: [result]
+    sensitivity: operational
+    missing_behavior: missing
+    evidence_field: mcp.cache_operations
+  - requirement_id: mcp.rate_limit
+    purpose: Explain admission denials.
+    owner: mcp
+    source_symbol: MCP_RATE_LIMIT_TOTAL
+    registry_reference: rocketmq_mcp_rate_limit_total
+    signal_type: metric
+    status: existing
+    query: sum by (result) (rate(rocketmq_mcp_rate_limit_total[5m]))
+    freshness_seconds: 60
+    expected_attributes: [result]
+    sensitivity: operational
+    missing_behavior: missing
+    evidence_field: mcp.rate_limit
+  - requirement_id: mcp.audit_backlog
+    purpose: Detect audit persistence backlog.
+    owner: mcp
+    source_symbol: MCP_AUDIT_BACKLOG
+    registry_reference: rocketmq_mcp_audit_backlog
+    signal_type: metric
+    status: existing
+    query: max(rocketmq_mcp_audit_backlog)
+    freshness_seconds: 60
+    expected_attributes: []
+    sensitivity: operational
+    missing_behavior: missing
+    evidence_field: mcp.audit_backlog
+  - requirement_id: mcp.audit_dropped
+    purpose: Detect audit records dropped before persistence.
+    owner: mcp
+    source_symbol: MCP_AUDIT_DROPPED_TOTAL
+    registry_reference: rocketmq_mcp_audit_dropped_total
+    signal_type: metric
+    status: existing
+    query: sum by (reason) (rate(rocketmq_mcp_audit_dropped_total[5m]))
+    freshness_seconds: 60
+    expected_attributes: [reason]
+    sensitivity: operational
+    missing_behavior: missing
+    evidence_field: mcp.audit_dropped
+  - requirement_id: mcp.audit_failures
+    purpose: Detect audit sink and flush failures.
+    owner: mcp
+    source_symbol: MCP_AUDIT_FAILURES_TOTAL
+    registry_reference: rocketmq_mcp_audit_failures_total
+    signal_type: metric
+    status: existing
+    query: sum by (reason) (rate(rocketmq_mcp_audit_failures_total[5m]))
+    freshness_seconds: 60
+    expected_attributes: [reason]
+    sensitivity: operational
+    missing_behavior: missing
+    evidence_field: mcp.audit_failures
+  - requirement_id: mcp.runtime_resource
+    purpose: Expose bounded, sanitized MCP runtime state through the authenticated System Resource.
+    owner: mcp
+    source_symbol: RuntimeDiagnosticsViewV1
+    registry_reference: rocketmq://system/runtime/v1
+    signal_type: resource
+    status: queryable
+    query: rocketmq://system/runtime/v1
+    freshness_seconds: null
+    expected_attributes: [schema_version, component]
+    sensitivity: operational
+    missing_behavior: missing
+    evidence_field: mcp.runtime
+  - requirement_id: mcp.observability_resource
+    purpose: Expose sanitized MCP observability state through the authenticated System Resource.
+    owner: mcp
+    source_symbol: ObservabilityStatusViewV1
+    registry_reference: rocketmq://system/observability/v1
+    signal_type: resource
+    status: queryable
+    query: rocketmq://system/observability/v1
+    freshness_seconds: null
+    expected_attributes: [schema_version]
+    sensitivity: operational
+    missing_behavior: missing
+    evidence_field: mcp.observability
+notes:
+  - MCP metric labels are bounded; operation values are static catalog identifiers and never resource URIs or caller input.
+  - Missing signals are reported as missing and are never synthesized as zero.

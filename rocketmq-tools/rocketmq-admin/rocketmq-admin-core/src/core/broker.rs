@@ -82,3 +82,29 @@ pub trait BrokerAdmin: Send {
         request: &'a ProbeBrokerRuntimeRequest,
     ) -> AdminFuture<'a, ProbeBrokerRuntimeResult>;
 }
+
+/// Read-only broker administration capability.
+pub trait BrokerQueryAdmin: Send {
+    fn list_brokers<'a>(&'a mut self, request: &'a ListBrokersRequest) -> AdminFuture<'a, ListBrokersResult>;
+
+    fn probe_broker_runtime<'a>(
+        &'a mut self,
+        request: &'a ProbeBrokerRuntimeRequest,
+    ) -> AdminFuture<'a, ProbeBrokerRuntimeResult>;
+}
+
+impl<T: BrokerAdmin + ?Sized> BrokerQueryAdmin for T {
+    fn list_brokers<'a>(&'a mut self, request: &'a ListBrokersRequest) -> AdminFuture<'a, ListBrokersResult> {
+        BrokerAdmin::list_brokers(self, request)
+    }
+
+    fn probe_broker_runtime<'a>(
+        &'a mut self,
+        request: &'a ProbeBrokerRuntimeRequest,
+    ) -> AdminFuture<'a, ProbeBrokerRuntimeResult> {
+        BrokerAdmin::probe_broker_runtime(self, request)
+    }
+}
+
+/// Marker for future broker mutation operations.
+pub trait BrokerMutationAdmin: Send {}

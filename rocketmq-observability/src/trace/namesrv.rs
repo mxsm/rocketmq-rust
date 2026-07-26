@@ -12,5 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub const GET_ROUTEINFO: &str = "RocketMQ NAMESRV GET_ROUTEINFO";
-pub const REGISTER_BROKER: &str = "RocketMQ NAMESRV REGISTER_BROKER";
+pub use super::span_names::NAMESRV_BROKER_REGISTRATION as REGISTER_BROKER;
+pub use super::span_names::NAMESRV_ROUTE_LOOKUP as GET_ROUTEINFO;
+
+pub fn route_lookup_span() -> tracing::Span {
+    #[cfg(feature = "otel-traces")]
+    {
+        tracing::info_span!(GET_ROUTEINFO, result = tracing::field::Empty)
+    }
+
+    #[cfg(not(feature = "otel-traces"))]
+    {
+        tracing::Span::none()
+    }
+}
+
+pub fn broker_registration_span() -> tracing::Span {
+    #[cfg(feature = "otel-traces")]
+    {
+        tracing::info_span!(REGISTER_BROKER, result = tracing::field::Empty)
+    }
+
+    #[cfg(not(feature = "otel-traces"))]
+    {
+        tracing::Span::none()
+    }
+}

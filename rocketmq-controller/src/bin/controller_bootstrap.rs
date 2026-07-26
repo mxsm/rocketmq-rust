@@ -155,28 +155,11 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     let mut bootstrap_config = build_controller_telemetry_bootstrap_config(&config);
     process_telemetry.apply_to(&mut bootstrap_config.observability);
     bootstrap_config.logging.reload = logging_overrides.logging.reload;
-    let telemetry_guard = rocketmq_observability::install_global_with_filter_and_service_context(
-        &bootstrap_config,
-        resolved_filter.clone(),
-        &service_context,
-    )
-    .await
-    .context("failed to initialize controller telemetry bootstrap")?;
-    let telemetry_handle = telemetry_guard.handle();
-    if let Err(error) = register_controller_release_identity(&process_telemetry, &telemetry_handle) {
-        let request = lifecycle.request_shutdown(ShutdownReason::Internal);
-        if let Err(shutdown_error) = telemetry_guard
-            .shutdown_with_service_context(&service_context, request.deadline.remaining())
-            .await
-            .into_result()
-        {
-            tracing::warn!(
-                error = %shutdown_error,
-                "controller telemetry cleanup after release identity failure was unhealthy"
-            );
-        }
-        return Err(error);
-    }
+    rocketmq_observability::apply_standard_otlp_environment(&mut bootstrap_config)
+        .context("failed to apply standard OTLP environment to controller telemetry")?;
+    let telemetry_guard =
+        rocketmq_observability::install_global_with_filter(&bootstrap_config, resolved_filter.clone())
+            .context("failed to initialize controller telemetry bootstrap")?;
     log_telemetry_bootstrap(
         &bootstrap_config,
         &resolved_filter,
@@ -682,59 +665,29 @@ mod tests {
     }
 
     #[test]
-    fn controller_release_identity_config_is_applied_before_bootstrap() {
-        let process_telemetry =
-            rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig::try_from_values(
-                "rocketmq-controller",
-                Some("0123456789abcdef0123456789abcdef01234567"),
-                Some("rollout-07"),
-                Some("true"),
-                Some("prometheus"),
-                Some("0.0.0.0:5557"),
-                Some("/metrics"),
-            )
-            .expect("valid Controller process telemetry");
-        let mut bootstrap_config = build_controller_telemetry_bootstrap_config(&ControllerConfig::default());
+    fn controller_bootstrap_accepts_standard_otlp_environment_values() {
+        let mut config = build_controller_telemetry_bootstrap_config(&ControllerConfig::default());
 
-        process_telemetry.apply_to(&mut bootstrap_config.observability);
-
-        assert_eq!(process_telemetry.release_identity().service(), "rocketmq-controller");
-        assert!(bootstrap_config.observability.enabled);
-        assert!(bootstrap_config.observability.metrics.enabled);
-        assert_eq!(
-            bootstrap_config.observability.metrics.exporter,
-            rocketmq_observability::MetricsExporter::Prometheus
-        );
-        assert_eq!(bootstrap_config.observability.prometheus.host, "0.0.0.0");
-        assert_eq!(bootstrap_config.observability.prometheus.port, 5557);
-    }
-
-    #[tokio::test]
-    async fn controller_failure_still_runs_expired_service_root_barrier() {
-        let service_context = rocketmq_runtime::RuntimeContext::from_current("controller-shutdown-barrier-test")
-            .service_context("controller");
-        let service_tasks = service_context.task_group();
-        service_tasks
-            .spawn_service("pending-service", std::future::pending())
-            .expect("pending service should be owned by the Controller service root");
-        let cancellation = service_tasks.cancellation_token();
-        let deadline = ShutdownDeadline::after(Duration::ZERO);
-
-        let error = finish_controller_process_shutdown(
-            Err(ControllerError::runtime_error("synthetic Controller shutdown failure").into()),
-            service_tasks,
-            deadline,
+        rocketmq_observability::apply_standard_otlp_environment_values(
+            &mut config,
+            Some(std::ffi::OsStr::new("http://collector:4317")),
+            Some(std::ffi::OsStr::new("grpc")),
         )
-        .await
-        .expect_err("manager and service-root failures should be aggregated");
+        .expect("valid standard OTLP environment should apply");
 
-        assert!(cancellation.is_cancelled(), "service-root barrier was not executed");
-        assert_eq!(service_tasks.shutdown_deadline(), Some(deadline));
-        let message = format!("{error:#}");
-        assert!(message.contains("synthetic Controller shutdown failure"), "{message}");
-        assert!(
-            message.contains("Controller service task shutdown was unhealthy"),
-            "{message}"
+        assert!(config.observability.enabled);
+        assert_eq!(config.observability.service_name, "rocketmq-controller");
+        assert_eq!(
+            config.observability.metrics.exporter,
+            rocketmq_observability::MetricsExporter::OtlpGrpc
+        );
+        assert_eq!(
+            config.observability.traces.exporter,
+            rocketmq_observability::TraceExporter::OtlpGrpc
+        );
+        assert_eq!(
+            config.observability.logs.exporter,
+            rocketmq_observability::LogsExporter::OtlpGrpc
         );
     }
 }

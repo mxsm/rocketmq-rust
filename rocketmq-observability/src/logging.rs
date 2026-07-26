@@ -235,6 +235,7 @@ fn install_global_with_filter_inner(
         telemetry_handle,
     );
     telemetry_guard.set_subscriber_install_status(subscriber_install_status);
+    telemetry_guard.mark_status_initialized();
 
     if let Err(error) = enforce_bootstrap_subscriber_policy(config, subscriber_install_status) {
         let _ = telemetry_guard.shutdown();
@@ -585,6 +586,10 @@ impl TelemetryRuntimeGuard {
 
     pub fn subscriber_install_status(&self) -> SubscriberInstallStatus {
         self.telemetry_guard.subscriber_install_status()
+    }
+
+    pub fn status_handle(&self) -> crate::ObservabilityStatusHandle {
+        self.telemetry_guard.status_handle()
     }
 
     pub fn dropped_log_lines(&self) -> usize {

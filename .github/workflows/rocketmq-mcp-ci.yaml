@@ -1,0 +1,74 @@
+name: RocketMQ MCP CI
+
+on:
+  push:
+    paths:
+      - "rocketmq-tools/rocketmq-mcp/**"
+      - "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/**"
+      - "rocketmq-auth/**"
+      - "rocketmq-client/**"
+      - "rocketmq-error/**"
+      - "rocketmq-macros/**"
+      - "rocketmq-model/**"
+      - "rocketmq-observability/**"
+      - "rocketmq-protocol/**"
+      - "rocketmq-runtime/**"
+      - "rocketmq-security-api/**"
+      - "rocketmq-transport/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/rocketmq-mcp-ci.yaml"
+  pull_request:
+    paths:
+      - "rocketmq-tools/rocketmq-mcp/**"
+      - "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/**"
+      - "rocketmq-auth/**"
+      - "rocketmq-client/**"
+      - "rocketmq-error/**"
+      - "rocketmq-macros/**"
+      - "rocketmq-model/**"
+      - "rocketmq-observability/**"
+      - "rocketmq-protocol/**"
+      - "rocketmq-runtime/**"
+      - "rocketmq-security-api/**"
+      - "rocketmq-transport/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/rocketmq-mcp-ci.yaml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rocketmq-tools/rocketmq-mcp
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rocketmq-tools/rocketmq-mcp
+      - run: cargo fmt --all -- --check
+      - run: cargo check --locked
+      - run: python scripts/check_read_only_boundary.py
+      - run: cargo test --locked
+      - run: cargo test --locked --all-features
+      - run: cargo clippy --locked --all-targets --features streamable-http -- -D warnings
+      - run: cargo doc --locked --no-deps
+
+  msrv:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rocketmq-tools/rocketmq-mcp
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - run: cargo check --locked

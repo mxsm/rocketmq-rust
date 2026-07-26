@@ -580,6 +580,24 @@ def standalone_dependency_edges(source_root: Path, policy: dict[str, Any]) -> li
     return edges
 
 
+def standalone_target_package_names(source_root: Path, policy: dict[str, Any]) -> set[str]:
+    """Return standalone packages that remain part of the governed target DAG."""
+    governed = set(policy["target_dag"])
+    names: set[str] = set()
+    for relative_manifest in policy["roots"]["standalone_manifests"]:
+        manifest = source_root / relative_manifest
+        if not manifest.is_file():
+            continue
+        try:
+            data = tomllib.loads(manifest.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+            raise InputError(f"cannot read standalone manifest {manifest}: {error}") from error
+        name = data.get("package", {}).get("name")
+        if isinstance(name, str) and name in governed:
+            names.add(name)
+    return names
+
+
 def resolve_workspace_dependency(manifest: Path, alias: str, source_root: Path) -> str:
     """Resolve a standalone `{ workspace = true }` alias from an ancestor workspace manifest."""
     current = manifest.parent.resolve()
@@ -1167,8 +1185,9 @@ def validate_package_state(
     policy: dict[str, Any],
     baseline: dict[str, Any],
     enforce_target_package_state: bool,
+    standalone_names: set[str] | None = None,
 ) -> list[str]:
-    names = sorted(item["name"] for item in packages)
+    names = sorted({item["name"] for item in packages} | (standalone_names or set()))
     messages: list[str] = []
     if mode == "baseline":
         frozen = set(baseline["workspace_packages"])
@@ -1205,7 +1224,14 @@ def evaluate(
     enforce_target_package_state: bool = True,
 ) -> tuple[list[Finding], list[str]]:
     packages = workspace_packages(metadata)
-    messages = validate_package_state(mode, packages, policy, baseline, enforce_target_package_state)
+    messages = validate_package_state(
+        mode,
+        packages,
+        policy,
+        baseline,
+        enforce_target_package_state,
+        standalone_target_package_names(source_root, policy),
+    )
     edges = dependency_edges(packages, source_root)
     edges.extend(standalone_dependency_edges(source_root, policy))
     internal_names = {item["name"] for item in packages}

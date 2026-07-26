@@ -1,0 +1,71 @@
+spec:
+  template:
+    metadata:
+      labels:
+        rocketmq.apache.org/sre-connector: "true"
+    spec:
+      volumes:
+        - name: runtime-secrets
+          secret:
+            secretName: rocketmq-mcp-runtime-secrets
+      containers:
+        - name: mcp
+          env:
+            - name: ROCKETMQ_MCP_HTTP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-sre-kind-secrets
+                  key: mcp-token
+            - {name: ROCKETMQ_MCP_TRACE_SAMPLE_RATIO, value: "1.0"}
+        - name: connector
+          image: rocketmq-rust/sre-connector:phase00-local
+          imagePullPolicy: Never
+          env:
+            - {name: ROCKETMQ_SRE_CONNECTOR_BIND_ADDR, value: "0.0.0.0:8091"}
+            - {name: ROCKETMQ_SRE_CONTROL_PLANE_URL, value: "http://sre-control-plane.rocketmq-sre.svc.cluster.local:8090"}
+            - {name: ROCKETMQ_SRE_MCP_URL, value: "https://127.0.0.1:8089/mcp"}
+            - {name: ROCKETMQ_SRE_MCP_CA_PATH, value: "/var/run/secrets/rocketmq/ca.crt"}
+            - {name: ROCKETMQ_SRE_MCP_STATIC_TOKEN_ENV, value: "ROCKETMQ_SRE_MCP_STATIC_TOKEN"}
+            - name: ROCKETMQ_SRE_MCP_STATIC_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-sre-kind-secrets
+                  key: mcp-token
+            - name: ROCKETMQ_SRE_INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-sre-kind-secrets
+                  key: internal-token
+            - {name: ROCKETMQ_SRE_CLUSTER_ID, value: "00000000-0000-4000-8000-000000000001"}
+            - {name: ROCKETMQ_SRE_CLUSTER_ALLOWLIST, value: "rocketmq-rust"}
+            - {name: ROCKETMQ_SRE_TENANT_ID, value: "00000000-0000-4000-8000-000000000002"}
+            - {name: ROCKETMQ_SRE_PROMETHEUS_URL, value: "http://prometheus.observability.svc.cluster.local:9090"}
+            - {name: ROCKETMQ_SRE_LOKI_URL, value: "http://loki.observability.svc.cluster.local:3100"}
+            - {name: ROCKETMQ_SRE_TEMPO_URL, value: "http://tempo.observability.svc.cluster.local:3200"}
+            - {name: ROCKETMQ_SRE_HANDSHAKE_INTERVAL_SECONDS, value: "5"}
+            - {name: OTEL_SERVICE_NAME, value: "rocketmq-sre-connector"}
+            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.observability.svc.cluster.local:4317"}
+            - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: "grpc"}
+          ports:
+            - {name: connector-http, containerPort: 8091, protocol: TCP}
+          readinessProbe:
+            httpGet: {path: /readyz, port: connector-http}
+            periodSeconds: 3
+            timeoutSeconds: 2
+            failureThreshold: 40
+          livenessProbe:
+            httpGet: {path: /healthz, port: connector-http}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: runtime-secrets, mountPath: /var/run/secrets/rocketmq, readOnly: true}

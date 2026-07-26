@@ -20,10 +20,94 @@ pub use crate::semantic::metrics::CONTROLLER_DLEDGER_OP_TOTAL;
 pub use crate::semantic::metrics::CONTROLLER_ELECTION_LATENCY;
 pub use crate::semantic::metrics::CONTROLLER_ELECTION_TOTAL;
 pub use crate::semantic::metrics::CONTROLLER_ELECTION_TOTAL_JAVA;
+pub use crate::semantic::metrics::CONTROLLER_HEARTBEAT_AGE;
 pub use crate::semantic::metrics::CONTROLLER_LEADER_CHANGES_TOTAL;
+pub use crate::semantic::metrics::CONTROLLER_QUORUM_HEALTH;
 pub use crate::semantic::metrics::CONTROLLER_REQUEST_LATENCY;
 pub use crate::semantic::metrics::CONTROLLER_REQUEST_TOTAL;
 pub use crate::semantic::metrics::CONTROLLER_ROLE;
+pub use crate::semantic::metrics::CONTROLLER_STALE_BROKERS;
+
+#[cfg(feature = "otel-metrics")]
+use std::sync::OnceLock;
+
+#[cfg(feature = "otel-metrics")]
+static CONTROLLER_METRICS: OnceLock<ControllerMetrics> = OnceLock::new();
+
+#[cfg(feature = "otel-metrics")]
+pub fn init_global(meter: &opentelemetry::metrics::Meter) -> bool {
+    CONTROLLER_METRICS.set(ControllerMetrics::new(meter)).is_ok()
+}
+
+pub fn record_election_total(count: u64) {
+    #[cfg(feature = "otel-metrics")]
+    if let Some(metrics) = CONTROLLER_METRICS.get() {
+        metrics.record_election_total(count, &[]);
+    }
+
+    #[cfg(not(feature = "otel-metrics"))]
+    let _ = count;
+}
+
+pub fn record_election_latency(latency_ms: u64) {
+    #[cfg(feature = "otel-metrics")]
+    if let Some(metrics) = CONTROLLER_METRICS.get() {
+        metrics.record_election_latency(latency_ms, &[]);
+    }
+
+    #[cfg(not(feature = "otel-metrics"))]
+    let _ = latency_ms;
+}
+
+pub fn record_leader_changes_total(count: u64) {
+    #[cfg(feature = "otel-metrics")]
+    if let Some(metrics) = CONTROLLER_METRICS.get() {
+        metrics.record_leader_changes_total(count, &[]);
+    }
+
+    #[cfg(not(feature = "otel-metrics"))]
+    let _ = count;
+}
+
+pub fn record_active_brokers(count: u64) {
+    #[cfg(feature = "otel-metrics")]
+    if let Some(metrics) = CONTROLLER_METRICS.get() {
+        metrics.record_active_brokers(count, &[]);
+    }
+
+    #[cfg(not(feature = "otel-metrics"))]
+    let _ = count;
+}
+
+pub fn record_quorum_health(healthy: bool) {
+    #[cfg(feature = "otel-metrics")]
+    if let Some(metrics) = CONTROLLER_METRICS.get() {
+        metrics.record_quorum_health(u64::from(healthy), &[]);
+    }
+
+    #[cfg(not(feature = "otel-metrics"))]
+    let _ = healthy;
+}
+
+pub fn record_heartbeat_age(age_ms: u64) {
+    #[cfg(feature = "otel-metrics")]
+    if let Some(metrics) = CONTROLLER_METRICS.get() {
+        metrics.record_heartbeat_age(age_ms, &[]);
+    }
+
+    #[cfg(not(feature = "otel-metrics"))]
+    let _ = age_ms;
+}
+
+pub fn record_stale_brokers(count: u64) {
+    #[cfg(feature = "otel-metrics")]
+    if let Some(metrics) = CONTROLLER_METRICS.get() {
+        metrics.record_stale_brokers(count, &[]);
+    }
+
+    #[cfg(not(feature = "otel-metrics"))]
+    let _ = count;
+}
 
 #[cfg(not(feature = "otel-metrics"))]
 #[derive(Debug, Clone, Default)]
@@ -46,6 +130,15 @@ impl ControllerMetrics {
 
     #[inline]
     pub fn record_active_brokers(&self, _count: u64) {}
+
+    #[inline]
+    pub fn record_quorum_health(&self, _healthy: u64, _attributes: &[()]) {}
+
+    #[inline]
+    pub fn record_heartbeat_age(&self, _age_ms: u64, _attributes: &[()]) {}
+
+    #[inline]
+    pub fn record_stale_brokers(&self, _count: u64, _attributes: &[()]) {}
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -61,6 +154,9 @@ struct ControllerMetricInstruments {
     election_latency: opentelemetry::metrics::Histogram<u64>,
     leader_changes_total: opentelemetry::metrics::Counter<u64>,
     active_brokers: opentelemetry::metrics::Gauge<u64>,
+    quorum_health: opentelemetry::metrics::Gauge<u64>,
+    heartbeat_age: opentelemetry::metrics::Histogram<u64>,
+    stale_brokers: opentelemetry::metrics::Gauge<u64>,
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -97,14 +193,30 @@ impl ControllerMetrics {
             .with_description("Number of active brokers known by controller")
             .with_unit("{broker}")
             .build();
+        let quorum_health = meter
+            .u64_gauge(CONTROLLER_QUORUM_HEALTH)
+            .with_description("Controller leader has a recent quorum acknowledgement")
+            .with_unit("1")
+            .build();
+        let heartbeat_age = meter
+            .u64_histogram(CONTROLLER_HEARTBEAT_AGE)
+            .with_description("Age of broker heartbeats observed during liveness scans")
+            .with_unit("ms")
+            .build();
+        let stale_brokers = meter
+            .u64_gauge(CONTROLLER_STALE_BROKERS)
+            .with_description("Brokers classified as stale during the latest liveness scan")
+            .with_unit("{broker}")
+            .build();
 
         Self {
-            instruments: Some(ControllerMetricInstruments {
-                election_total,
-                election_latency,
-                leader_changes_total,
-                active_brokers,
-            }),
+            election_total,
+            election_latency,
+            leader_changes_total,
+            active_brokers,
+            quorum_health,
+            heartbeat_age,
+            stale_brokers,
         }
     }
 
@@ -135,6 +247,21 @@ impl ControllerMetrics {
             instruments.active_brokers.record(count, attributes);
         }
     }
+
+    #[inline]
+    pub fn record_quorum_health(&self, healthy: u64, attributes: &[opentelemetry::KeyValue]) {
+        self.quorum_health.record(healthy, attributes);
+    }
+
+    #[inline]
+    pub fn record_heartbeat_age(&self, age_ms: u64, attributes: &[opentelemetry::KeyValue]) {
+        self.heartbeat_age.record(age_ms, attributes);
+    }
+
+    #[inline]
+    pub fn record_stale_brokers(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
+        self.stale_brokers.record(count, attributes);
+    }
 }
 
 #[cfg(all(test, feature = "otel-metrics"))]
@@ -155,6 +282,9 @@ mod tests {
         metrics.record_election_latency(15, &attrs);
         metrics.record_leader_changes_total(1, &attrs);
         metrics.record_active_brokers(3, &attrs);
+        metrics.record_quorum_health(1, &attrs);
+        metrics.record_heartbeat_age(50, &attrs);
+        metrics.record_stale_brokers(0, &attrs);
     }
 
     #[test]

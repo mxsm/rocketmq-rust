@@ -73,15 +73,52 @@ fn direct_sdk_imports_are_adapter_only() {
 #[test]
 fn client_adapter_feature_owns_all_sdk_dependencies() {
     let manifest = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml")).unwrap();
-    assert!(manifest.contains("default        = []"));
-    assert!(manifest.contains("client-adapter = ["));
+    assert!(
+        manifest.lines().any(|line| {
+            line.split_once('=')
+                .is_some_and(|(name, value)| name.trim() == "default" && value.trim() == "[]")
+        }),
+        "default feature set must stay empty"
+    );
+
+    let read_feature = feature_block(&manifest, "read-client-adapter");
     for dependency in [
         "dep:rocketmq-client-rust",
+        "rocketmq-client-rust/admin-read",
         "dep:rocketmq-observability",
         "dep:rocketmq-runtime",
         "dep:rocketmq-transport",
     ] {
-        assert!(manifest.contains(dependency), "missing adapter dependency {dependency}");
+        assert!(
+            read_feature.contains(dependency),
+            "read adapter is missing dependency {dependency}"
+        );
+    }
+
+    let mutation_feature = feature_block(&manifest, "mutation-client-adapter");
+    for dependency in [
+        "dep:rocketmq-client-rust",
+        "rocketmq-client-rust/admin-mutation",
+        "dep:rocketmq-observability",
+        "dep:rocketmq-runtime",
+        "dep:rocketmq-transport",
+    ] {
+        assert!(
+            mutation_feature.contains(dependency),
+            "mutation adapter is missing dependency {dependency}"
+        );
+    }
+
+    let compatibility_feature = feature_block(&manifest, "client-adapter");
+    for dependency in [
+        "read-client-adapter",
+        "mutation-client-adapter",
+        "rocketmq-client-rust/admin-full",
+    ] {
+        assert!(
+            compatibility_feature.contains(dependency),
+            "compatibility adapter is missing feature {dependency}"
+        );
     }
     assert!(!manifest.contains("dep:rocketmq-common"));
     assert!(!manifest.contains("legacy-common-compat"));
@@ -136,4 +173,27 @@ fn visit_rust_files(root: &Path, visit: &mut impl FnMut(&Path, &str)) {
             visit(&path, &source);
         }
     }
+}
+
+fn feature_block<'a>(manifest: &'a str, feature: &str) -> &'a str {
+    let start = manifest
+        .match_indices(feature)
+        .find_map(|(offset, _)| {
+            (offset == 0 || manifest.as_bytes().get(offset.wrapping_sub(1)) == Some(&b'\n')).then_some(offset)
+        })
+        .unwrap_or_else(|| panic!("missing feature `{feature}`"));
+    let remainder = &manifest[start..];
+    assert!(
+        remainder
+            .lines()
+            .next()
+            .and_then(|line| line.split_once('='))
+            .is_some_and(|(name, value)| name.trim() == feature && value.trim() == "["),
+        "feature `{feature}` must use a list definition"
+    );
+    let end = remainder
+        .find("\n]")
+        .map(|index| index + 2)
+        .unwrap_or_else(|| panic!("feature `{feature}` has no closing bracket"));
+    &remainder[..end]
 }

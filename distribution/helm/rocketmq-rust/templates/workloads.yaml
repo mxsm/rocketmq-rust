@@ -287,7 +287,11 @@ spec:
           volumeMounts:
             - name: config
               mountPath: /etc/rocketmq/controller.toml
+{{- if eq (int .Values.services.controller.replicas) 1 }}
+              subPath: controller-0.toml
+{{- else }}
               subPathExpr: $(POD_NAME).toml
+{{- end }}
               readOnly: true
 {{- if .Values.maintenance.enabled }}
             - name: maintenance-policy

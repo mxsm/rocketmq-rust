@@ -19,6 +19,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
 
+use rocketmq_observability::metrics::mcp::McpRateLimitOutcome;
+
 use crate::guard::GuardError;
 
 const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
@@ -38,12 +40,14 @@ impl RateLimiter {
     ) -> Result<(), GuardError> {
         let key = format!("{principal_id}|{}|{operation}", cluster.unwrap_or("_"));
         if limit_per_minute == 0 {
+            rocketmq_observability::metrics::mcp::record_rate_limit(McpRateLimitOutcome::Rejected);
             return Err(GuardError::RateLimited(format!(
                 "{operation} is disabled by zero rate limit"
             )));
         }
 
         let Ok(mut calls) = self.calls.lock() else {
+            rocketmq_observability::metrics::mcp::record_rate_limit(McpRateLimitOutcome::Rejected);
             return Err(GuardError::RateLimited("rate limiter state is unavailable".to_string()));
         };
         let now = Instant::now();
@@ -57,12 +61,14 @@ impl RateLimiter {
         }
 
         if entries.len() >= limit_per_minute as usize {
+            rocketmq_observability::metrics::mcp::record_rate_limit(McpRateLimitOutcome::Rejected);
             return Err(GuardError::RateLimited(format!(
                 "{operation} exceeded {limit_per_minute} calls per minute for principal `{principal_id}`"
             )));
         }
 
         entries.push_back(now);
+        rocketmq_observability::metrics::mcp::record_rate_limit(McpRateLimitOutcome::Accepted);
         Ok(())
     }
 }

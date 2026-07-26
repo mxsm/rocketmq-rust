@@ -15,18 +15,19 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use rocketmq_admin_core::client_adapter::AdminBuilder;
-use rocketmq_admin_core::client_adapter::AdminGuard;
-use rocketmq_admin_core::client_adapter::ClientRuntime;
-use rocketmq_admin_core::core::broker::BrokerAdmin;
+use rocketmq_admin_core::core::broker::BrokerQueryAdmin;
 use rocketmq_admin_core::core::broker::ListBrokersRequest;
 use rocketmq_admin_core::core::broker::ProbeBrokerRuntimeRequest;
-use rocketmq_admin_core::core::consumer::ConsumerAdmin;
+use rocketmq_admin_core::core::consumer::ConsumerQueryAdmin;
 use rocketmq_admin_core::core::consumer::ListConsumerGroupsRequest;
 use rocketmq_admin_core::core::consumer::QueryConsumerLagRequest;
+use rocketmq_admin_core::core::security::AdminCredentials;
 use rocketmq_admin_core::core::topic::GetTopicRouteRequest;
 use rocketmq_admin_core::core::topic::ListTopicsRequest;
-use rocketmq_admin_core::core::topic::TopicAdmin;
+use rocketmq_admin_core::core::topic::TopicQueryAdmin;
+use rocketmq_admin_core::read_client_adapter::ClientRuntime;
+use rocketmq_admin_core::read_client_adapter::ReadAdminBuilder;
+use rocketmq_admin_core::read_client_adapter::ReadAdminGuard;
 
 use crate::model::contract::observed_at_from_millis;
 use crate::tools::cluster_tools::BrokerSummary;
@@ -40,7 +41,9 @@ use crate::tools::topic_tools::TopicRouteQueue;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedCluster {
     pub name: String,
+    pub rocketmq_cluster_name: String,
     pub namesrv_addr: String,
+    pub credentials: Option<AdminCredentials>,
 }
 
 #[derive(Debug, Clone)]
@@ -110,11 +113,11 @@ impl AdminSessionFactory for AdminCoreSessionFactory {
     type Session = AdminCoreSession;
 
     async fn start(&self, cluster: ResolvedCluster) -> Result<Self::Session, ToolExecutionError> {
-        let admin = AdminBuilder::new(self.client_runtime.clone())
-            .namesrv_addr(cluster.namesrv_addr.clone())
-            .build_with_guard()
-            .await
-            .map_err(ToolExecutionError::backend)?;
+        let mut builder = ReadAdminBuilder::new(self.client_runtime.clone()).namesrv_addr(cluster.namesrv_addr.clone());
+        if let Some(credentials) = cluster.credentials.clone() {
+            builder = builder.credentials(credentials);
+        }
+        let admin = builder.build_with_guard().await.map_err(ToolExecutionError::backend)?;
         Ok(AdminCoreSession {
             cluster,
             admin: Some(admin),
@@ -124,11 +127,11 @@ impl AdminSessionFactory for AdminCoreSessionFactory {
 
 pub(crate) struct AdminCoreSession {
     cluster: ResolvedCluster,
-    admin: Option<AdminGuard>,
+    admin: Option<ReadAdminGuard>,
 }
 
 impl AdminCoreSession {
-    fn admin_mut(&mut self) -> Result<&mut AdminGuard, ToolExecutionError> {
+    fn admin_mut(&mut self) -> Result<&mut ReadAdminGuard, ToolExecutionError> {
         self.admin
             .as_mut()
             .ok_or_else(|| ToolExecutionError::internal("admin session is already shut down"))
@@ -138,7 +141,8 @@ impl AdminCoreSession {
 #[async_trait::async_trait]
 impl AdminSession for AdminCoreSession {
     async fn broker_rows(&mut self) -> Result<Vec<BrokerSummary>, ToolExecutionError> {
-        let request = ListBrokersRequest::try_new(self.cluster.name.clone()).map_err(ToolExecutionError::backend)?;
+        let request = ListBrokersRequest::try_new(self.cluster.rocketmq_cluster_name.clone())
+            .map_err(ToolExecutionError::backend)?;
         let result = self
             .admin_mut()?
             .list_brokers(&request)
@@ -148,7 +152,7 @@ impl AdminSession for AdminCoreSession {
     }
 
     async fn topic_entries(&mut self) -> Result<Vec<TopicListEntry>, ToolExecutionError> {
-        let request = ListTopicsRequest::new(Some(self.cluster.name.clone()));
+        let request = ListTopicsRequest::new(Some(self.cluster.rocketmq_cluster_name.clone()));
         let result = self
             .admin_mut()?
             .list_topics(&request)
@@ -231,7 +235,7 @@ impl AdminSession for AdminCoreSession {
         consumer_group: &str,
     ) -> Result<SessionConsumerLag, ToolExecutionError> {
         let request =
-            QueryConsumerLagRequest::try_new(topic, consumer_group, true).map_err(ToolExecutionError::backend)?;
+            QueryConsumerLagRequest::try_new(topic, consumer_group, false).map_err(ToolExecutionError::backend)?;
         let result = self
             .admin_mut()?
             .query_consumer_lag(&request)
@@ -266,8 +270,8 @@ impl AdminSession for AdminCoreSession {
     }
 
     async fn probe_broker_runtime(&mut self) -> Result<(), ToolExecutionError> {
-        let request =
-            ProbeBrokerRuntimeRequest::try_new(self.cluster.name.clone()).map_err(ToolExecutionError::backend)?;
+        let request = ProbeBrokerRuntimeRequest::try_new(self.cluster.rocketmq_cluster_name.clone())
+            .map_err(ToolExecutionError::backend)?;
         self.admin_mut()?
             .probe_broker_runtime(&request)
             .await

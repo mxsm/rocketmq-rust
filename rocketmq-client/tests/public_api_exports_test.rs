@@ -11,7 +11,9 @@ use rocketmq_client_rust::AckResult;
 use rocketmq_client_rust::AckStatus;
 use rocketmq_client_rust::AclClientRPCHook;
 use rocketmq_client_rust::AdminClient;
+#[cfg(feature = "admin-full")]
 use rocketmq_client_rust::AdminToolResult;
+#[cfg(feature = "admin-full")]
 use rocketmq_client_rust::AdminToolsResultCodeEnum;
 use rocketmq_client_rust::AllocateMessageQueueAveragely;
 use rocketmq_client_rust::AllocateMessageQueueAveragelyByCircle;
@@ -28,14 +30,21 @@ use rocketmq_client_rust::ConsumeMessageHookArc;
 use rocketmq_client_rust::ConsumerClient;
 use rocketmq_client_rust::ControllableOffset;
 use rocketmq_client_rust::DefaultLitePullConsumer;
+#[cfg(feature = "admin-full")]
 use rocketmq_client_rust::DefaultMQAdminExt;
+#[cfg(feature = "admin-full")]
 use rocketmq_client_rust::DefaultMQAdminExtImpl;
 use rocketmq_client_rust::DefaultMQProducer;
 use rocketmq_client_rust::DefaultMQPushConsumer;
 use rocketmq_client_rust::HashFunction;
 use rocketmq_client_rust::JavaHashCode;
 use rocketmq_client_rust::LitePullConsumer;
+#[cfg(feature = "admin-full")]
 use rocketmq_client_rust::MQAdminExt;
+#[cfg(feature = "admin-full")]
+use rocketmq_client_rust::MQAdminExtInner;
+#[cfg(feature = "admin-full")]
+use rocketmq_client_rust::MQAdminExtInnerImpl;
 use rocketmq_client_rust::MQConsumer;
 use rocketmq_client_rust::MQProducer;
 use rocketmq_client_rust::MQPushConsumer;
@@ -405,6 +414,7 @@ async fn crate_root_exports_trace_dispatcher_api_for_custom_trace_wiring() {
     assert!(lite_pull_consumer.get_trace_dispatcher().await.is_some());
 }
 
+#[cfg(feature = "admin-full")]
 #[test]
 fn crate_root_exports_modern_admin_facades_and_results() {
     let client_runtime = support::client_runtime("public-api-admin");
@@ -430,6 +440,7 @@ fn crate_root_exports_modern_admin_facades_and_results() {
     assert_eq!(failure.get_error_msg(), "client error");
 }
 
+#[cfg(feature = "admin-full")]
 #[tokio::test]
 async fn crate_root_exports_java_style_admin_list_user_alias() {
     let admin = DefaultMQAdminExt::new(support::client_runtime("public-api-admin-list-user"));

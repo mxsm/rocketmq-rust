@@ -295,3 +295,71 @@ pub trait TopicAdmin: Send {
 
     fn send_topic_test_message<'a>(&'a mut self, request: &'a TopicSendRequest) -> AdminFuture<'a, TopicSendResult>;
 }
+
+/// Topic queries that are safe for read-only SRE integrations.
+pub trait TopicQueryAdmin: Send {
+    fn list_topics<'a>(&'a mut self, request: &'a ListTopicsRequest) -> AdminFuture<'a, ListTopicsResult>;
+    fn get_topic_route<'a>(&'a mut self, request: &'a GetTopicRouteRequest) -> AdminFuture<'a, Option<TopicRoute>>;
+    fn get_topic_catalog<'a>(&'a mut self, request: &'a TopicCatalogRequest) -> AdminFuture<'a, TopicCatalog>;
+    fn get_topic_current_stats(&mut self) -> AdminFuture<'_, TopicCurrentStats>;
+    fn get_topic_stats<'a>(&'a mut self, topic: &'a str) -> AdminFuture<'a, TopicStats>;
+    fn get_topic_config<'a>(&'a mut self, request: &'a GetTopicConfigRequest) -> AdminFuture<'a, TopicConfigDetail>;
+    fn get_topic_consumer_groups<'a>(&'a mut self, topic: &'a str) -> AdminFuture<'a, TopicConsumerGroups>;
+    fn get_topic_consumers<'a>(&'a mut self, topic: &'a str) -> AdminFuture<'a, TopicConsumers>;
+}
+
+/// Topic mutations require the explicit mutation adapter feature.
+pub trait TopicMutationAdmin: Send {
+    fn upsert_topic<'a>(&'a mut self, request: &'a UpsertTopicRequest) -> AdminFuture<'a, TopicMutationOutcome>;
+    fn delete_topic<'a>(&'a mut self, request: &'a DeleteTopicAdminRequest) -> AdminFuture<'a, TopicMutationOutcome>;
+    fn reset_topic_consumer_offset<'a>(
+        &'a mut self,
+        request: &'a ResetTopicConsumerOffsetRequest,
+    ) -> AdminFuture<'a, TopicMutationOutcome>;
+    fn send_topic_test_message<'a>(&'a mut self, request: &'a TopicSendRequest) -> AdminFuture<'a, TopicSendResult>;
+}
+
+impl<T: TopicAdmin + ?Sized> TopicQueryAdmin for T {
+    fn list_topics<'a>(&'a mut self, request: &'a ListTopicsRequest) -> AdminFuture<'a, ListTopicsResult> {
+        TopicAdmin::list_topics(self, request)
+    }
+    fn get_topic_route<'a>(&'a mut self, request: &'a GetTopicRouteRequest) -> AdminFuture<'a, Option<TopicRoute>> {
+        TopicAdmin::get_topic_route(self, request)
+    }
+    fn get_topic_catalog<'a>(&'a mut self, request: &'a TopicCatalogRequest) -> AdminFuture<'a, TopicCatalog> {
+        TopicAdmin::get_topic_catalog(self, request)
+    }
+    fn get_topic_current_stats(&mut self) -> AdminFuture<'_, TopicCurrentStats> {
+        TopicAdmin::get_topic_current_stats(self)
+    }
+    fn get_topic_stats<'a>(&'a mut self, topic: &'a str) -> AdminFuture<'a, TopicStats> {
+        TopicAdmin::get_topic_stats(self, topic)
+    }
+    fn get_topic_config<'a>(&'a mut self, request: &'a GetTopicConfigRequest) -> AdminFuture<'a, TopicConfigDetail> {
+        TopicAdmin::get_topic_config(self, request)
+    }
+    fn get_topic_consumer_groups<'a>(&'a mut self, topic: &'a str) -> AdminFuture<'a, TopicConsumerGroups> {
+        TopicAdmin::get_topic_consumer_groups(self, topic)
+    }
+    fn get_topic_consumers<'a>(&'a mut self, topic: &'a str) -> AdminFuture<'a, TopicConsumers> {
+        TopicAdmin::get_topic_consumers(self, topic)
+    }
+}
+
+impl<T: TopicAdmin + ?Sized> TopicMutationAdmin for T {
+    fn upsert_topic<'a>(&'a mut self, request: &'a UpsertTopicRequest) -> AdminFuture<'a, TopicMutationOutcome> {
+        TopicAdmin::upsert_topic(self, request)
+    }
+    fn delete_topic<'a>(&'a mut self, request: &'a DeleteTopicAdminRequest) -> AdminFuture<'a, TopicMutationOutcome> {
+        TopicAdmin::delete_topic(self, request)
+    }
+    fn reset_topic_consumer_offset<'a>(
+        &'a mut self,
+        request: &'a ResetTopicConsumerOffsetRequest,
+    ) -> AdminFuture<'a, TopicMutationOutcome> {
+        TopicAdmin::reset_topic_consumer_offset(self, request)
+    }
+    fn send_topic_test_message<'a>(&'a mut self, request: &'a TopicSendRequest) -> AdminFuture<'a, TopicSendResult> {
+        TopicAdmin::send_topic_test_message(self, request)
+    }
+}

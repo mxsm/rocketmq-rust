@@ -55,7 +55,7 @@ class McpClientEdgeContractTest(unittest.TestCase):
         self.assertEqual(set(), dependencies & FORBIDDEN_DIRECT_PACKAGES)
 
     def test_lockfile_has_no_redundant_mcp_direct_edges(self) -> None:
-        lockfile = load_toml(ROOT / "Cargo.lock")
+        lockfile = load_toml(MCP / "Cargo.lock")
         package = next(item for item in lockfile["package"] if item["name"] == "rocketmq-mcp")
         dependencies = {
             dependency.split(" ", 1)[0]

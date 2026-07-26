@@ -95,7 +95,15 @@ mod utils;
 
 pub use crate::admin::DefaultMQAdminExt;
 pub use crate::admin::DefaultMQAdminExtImpl;
+#[cfg(feature = "admin-full")]
 pub use crate::admin::MQAdminExt;
+pub use crate::admin::MQAdminExtInner;
+pub use crate::admin::MQAdminExtInnerImpl;
+#[cfg(feature = "admin-mutation")]
+pub use crate::admin::MQAdminMutationExt;
+#[cfg(feature = "admin-read")]
+pub use crate::admin::MQAdminReadExt;
+pub use crate::base::client_config::ClientConfig;
 pub use crate::base::query_result::QueryResult;
 pub use crate::base::MQAdmin;
 pub use crate::base::MqClientAdmin;

@@ -81,6 +81,15 @@ pub enum GuardError {
     #[error("permission denied: {0}")]
     PermissionDenied(String),
 
+    #[error("permission denied: {0}")]
+    UnauthorizedScope(String),
+
+    #[error("permission denied: {0}")]
+    TenantMismatch(String),
+
+    #[error("permission denied: {0}")]
+    ClusterNotAllowed(String),
+
     #[error("rate limit exceeded: {0}")]
     RateLimited(String),
 
@@ -88,11 +97,30 @@ pub enum GuardError {
     ChangePlanningDisabled(String),
 }
 
+impl GuardError {
+    pub(crate) fn code(&self) -> &'static str {
+        match self {
+            Self::InvalidArgument(_) => "invalid_arguments",
+            Self::PermissionDenied(_) => "permission_denied",
+            Self::UnauthorizedScope(_) => "unauthorized_scope",
+            Self::TenantMismatch(_) => "tenant_mismatch",
+            Self::ClusterNotAllowed(_) => "cluster_not_allowed",
+            Self::RateLimited(_) => "rate_limited",
+            Self::ChangePlanningDisabled(_) => "change_planning_disabled",
+        }
+    }
+
+    pub(crate) fn retryable(&self) -> bool {
+        matches!(self, Self::RateLimited(_))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Guard {
     security: SecurityConfig,
     audit_config: AuditConfig,
     allowed_clusters: Arc<[String]>,
+    cluster_tenants: Arc<std::collections::HashMap<String, Option<String>>>,
     audit_log: AuditLog,
     rate_limiter: RateLimiter,
     policy: PolicyEngine,
@@ -112,6 +140,10 @@ impl Guard {
             .collect::<Vec<_>>()
             .into();
         let policy = PolicyEngine::load(std::path::Path::new(&security.permissions_file))?;
+        let cluster_tenants = clusters
+            .iter()
+            .map(|cluster| (cluster.name.clone(), cluster.tenant.clone()))
+            .collect();
         let cluster_concurrency = clusters
             .iter()
             .map(|cluster| {
@@ -125,6 +157,7 @@ impl Guard {
             security,
             audit_config,
             allowed_clusters,
+            cluster_tenants: Arc::new(cluster_tenants),
             audit_log: AuditLog::default(),
             rate_limiter: RateLimiter::default(),
             policy,
@@ -161,7 +194,7 @@ impl Guard {
             _cluster_permit: None,
         };
 
-        if let Err(error) = self.validate_cluster(arguments) {
+        if let Err(error) = self.validate_cluster(context, arguments) {
             guarded.record_failure(error.to_string());
             return Err(error);
         }
@@ -205,18 +238,29 @@ impl Guard {
         format!("mcp-{id}")
     }
 
-    fn validate_cluster(&self, arguments: &JsonObject) -> Result<(), GuardError> {
+    fn validate_cluster(&self, context: &RequestContext, arguments: &JsonObject) -> Result<(), GuardError> {
         let Some(cluster) = extract_cluster(arguments) else {
             return Ok(());
         };
 
-        if self.allowed_clusters.iter().any(|allowed| allowed == &cluster) {
-            return Ok(());
+        if !self.allowed_clusters.iter().any(|allowed| allowed == &cluster) {
+            return Err(GuardError::ClusterNotAllowed(format!(
+                "cluster `{cluster}` is not configured"
+            )));
         }
 
-        Err(GuardError::InvalidArgument(format!(
-            "cluster `{cluster}` is not configured"
-        )))
+        self.validate_tenant(context, &cluster)
+    }
+
+    fn validate_tenant(&self, context: &RequestContext, cluster: &str) -> Result<(), GuardError> {
+        let required = self.cluster_tenants.get(cluster).and_then(Option::as_deref);
+        match required {
+            None => Ok(()),
+            Some(required) if context.principal.tenant.as_deref() == Some(required) => Ok(()),
+            Some(_) => Err(GuardError::TenantMismatch(format!(
+                "principal tenant does not match cluster `{cluster}`"
+            ))),
+        }
     }
 
     fn check_tool_availability(&self, tool_name: &str, risk_level: RiskLevel) -> Result<(), GuardError> {
@@ -246,7 +290,7 @@ impl Guard {
         let semaphore = self
             .cluster_concurrency
             .get(cluster)
-            .ok_or_else(|| GuardError::InvalidArgument(format!("cluster `{cluster}` is not configured")))?;
+            .ok_or_else(|| GuardError::ClusterNotAllowed(format!("cluster `{cluster}` is not configured")))?;
         semaphore
             .clone()
             .try_acquire_owned()
@@ -255,6 +299,7 @@ impl Guard {
     }
 
     pub fn authorize_resource(&self, context: &RequestContext, cluster: &str) -> Result<(), GuardError> {
+        self.validate_tenant(context, cluster)?;
         self.policy.authorize_resource(&context.principal, cluster)
     }
 
@@ -262,17 +307,70 @@ impl Guard {
         &self,
         context: &RequestContext,
         cluster: &str,
+        resource_uri: &str,
     ) -> Result<GuardedResourceRead, GuardError> {
-        self.authorize_resource(context, cluster)?;
-        self.rate_limiter.check(
+        let mut guarded = GuardedResourceRead {
+            guard: self.clone(),
+            request_id: self.allocate_request_id(),
+            principal: context.principal.clone(),
+            client: context.client.clone(),
+            cluster: Some(cluster.to_string()),
+            resource_uri: resource_uri.to_string(),
+            started_at: Instant::now(),
+            _cluster_permit: None,
+        };
+        if let Err(error) = self.authorize_resource(context, cluster) {
+            guarded.record_failure(error.to_string());
+            return Err(error);
+        }
+        if let Err(error) = self.rate_limiter.check(
             &context.principal.id,
             Some(cluster),
             "resource_read",
             self.security.rate_limit_per_minute,
-        )?;
-        Ok(GuardedResourceRead {
-            _cluster_permit: self.acquire_cluster_permit(Some(cluster))?,
-        })
+        ) {
+            guarded.record_failure(error.to_string());
+            return Err(error);
+        }
+        match self.acquire_cluster_permit(Some(cluster)) {
+            Ok(permit) => guarded._cluster_permit = permit,
+            Err(error) => {
+                guarded.record_failure(error.to_string());
+                return Err(error);
+            }
+        }
+        Ok(guarded)
+    }
+
+    pub fn begin_system_resource_read(
+        &self,
+        context: &RequestContext,
+        resource_uri: &str,
+    ) -> Result<GuardedResourceRead, GuardError> {
+        let guarded = GuardedResourceRead {
+            guard: self.clone(),
+            request_id: self.allocate_request_id(),
+            principal: context.principal.clone(),
+            client: context.client.clone(),
+            cluster: None,
+            resource_uri: resource_uri.to_string(),
+            started_at: Instant::now(),
+            _cluster_permit: None,
+        };
+        if let Err(error) = self.policy.authorize_system_resource(&context.principal) {
+            guarded.record_failure(error.to_string());
+            return Err(error);
+        }
+        if let Err(error) = self.rate_limiter.check(
+            &context.principal.id,
+            None,
+            "system_resource_read",
+            self.security.rate_limit_per_minute,
+        ) {
+            guarded.record_failure(error.to_string());
+            return Err(error);
+        }
+        Ok(guarded)
     }
 
     pub fn allows_tool(&self, context: &RequestContext, tool_name: &str, risk: RiskLevel) -> bool {
@@ -281,6 +379,10 @@ impl Guard {
 
     pub fn allows_resources(&self, context: &RequestContext) -> bool {
         self.policy.allows_resources(&context.principal)
+    }
+
+    pub fn allows_system_resources(&self, context: &RequestContext) -> bool {
+        self.policy.allows_system_resources(&context.principal)
     }
 
     #[cfg(feature = "streamable-http")]
@@ -331,11 +433,7 @@ pub struct GuardedToolCall {
 
 impl GuardedToolCall {
     pub fn finish_result(&self, result: CallToolResult) -> CallToolResult {
-        let result = if self.guard.security.sanitize_output {
-            sanitizer::sanitize_call_tool_result(result)
-        } else {
-            result
-        };
+        let result = sanitizer::process_call_tool_result(result, &self.request_id, self.guard.security.sanitize_output);
 
         let is_error = result.is_error.unwrap_or(false);
         if is_error {
@@ -554,6 +652,41 @@ mod tests {
         drop(first);
     }
 
+    #[test]
+    fn cluster_tenant_and_system_diagnostic_scope_fail_closed() {
+        let guard = test_guard_for_tenant("tenant-a");
+        let arguments = serde_json::json!({ "cluster": "local-dev" })
+            .as_object()
+            .unwrap()
+            .clone();
+        let mut mismatched = guard.local_request_context();
+        mismatched.principal.tenant = Some("tenant-b".to_string());
+        assert!(matches!(
+            guard.begin_tool_call(
+                &mismatched,
+                "rocketmq_get_cluster_overview",
+                RiskLevel::ReadOnly,
+                &arguments,
+            ),
+            Err(GuardError::TenantMismatch(_))
+        ));
+
+        let mut matched = guard.local_request_context();
+        matched.principal.tenant = Some("tenant-a".to_string());
+        assert!(guard
+            .begin_tool_call(
+                &matched,
+                "rocketmq_get_cluster_overview",
+                RiskLevel::ReadOnly,
+                &arguments,
+            )
+            .is_ok());
+        assert!(guard.allows_system_resources(&matched));
+
+        let read_only = test_guard("read_only", false, 60);
+        assert!(!read_only.allows_system_resources(&read_only.local_request_context()));
+    }
+
     fn test_guard(profile: &str, allow_change_planning: bool, rate_limit_per_minute: u32) -> Guard {
         test_guard_with_concurrency(profile, allow_change_planning, rate_limit_per_minute, 8)
     }
@@ -585,6 +718,39 @@ mod tests {
                 name: "local-dev".to_string(),
                 namesrv_addr: "127.0.0.1:9876".to_string(),
                 default: Some(true),
+                rocketmq_cluster_name: None,
+                tenant: None,
+                credentials: None,
+            }],
+        )
+        .unwrap()
+    }
+
+    fn test_guard_for_tenant(tenant: &str) -> Guard {
+        Guard::new(
+            SecurityConfig {
+                profile: "diagnose".to_string(),
+                allow_change_planning: false,
+                sanitize_output: true,
+                rate_limit_per_minute: 60,
+                permissions_file: permission_path(),
+                max_concurrent_requests_per_cluster: 8,
+            },
+            AuditConfig {
+                enabled: true,
+                sink: "memory".to_string(),
+                path: String::new(),
+                queue_capacity: 16,
+                max_record_bytes: 16 * 1024,
+                queue_max_bytes: 1024 * 1024,
+            },
+            &[ClusterConfig {
+                name: "local-dev".to_string(),
+                namesrv_addr: "127.0.0.1:9876".to_string(),
+                default: Some(true),
+                rocketmq_cluster_name: None,
+                tenant: Some(tenant.to_string()),
+                credentials: None,
             }],
         )
         .unwrap()
@@ -601,5 +767,80 @@ mod tests {
 
 #[derive(Debug)]
 pub struct GuardedResourceRead {
+    guard: Guard,
+    request_id: String,
+    principal: crate::guard::context::Principal,
+    client: Option<String>,
+    cluster: Option<String>,
+    resource_uri: String,
+    started_at: Instant,
     _cluster_permit: Option<OwnedSemaphorePermit>,
+}
+
+impl GuardedResourceRead {
+    pub fn finish_result(
+        &self,
+        result: Result<rmcp::model::ReadResourceResult, rmcp::ErrorData>,
+    ) -> Result<rmcp::model::ReadResourceResult, rmcp::ErrorData> {
+        match result {
+            Ok(result) => {
+                let result = sanitizer::process_read_resource_result(
+                    result,
+                    &self.request_id,
+                    self.guard.security.sanitize_output,
+                );
+                match result {
+                    Ok(result) => {
+                        self.record(AuditStatus::Success, None);
+                        Ok(result)
+                    }
+                    Err(error) => {
+                        self.record(AuditStatus::Failure, Some(error.to_string()));
+                        Err(error)
+                    }
+                }
+            }
+            Err(error) => {
+                self.record(AuditStatus::Failure, Some(error.to_string()));
+                Err(with_resource_correlation(error, &self.request_id))
+            }
+        }
+    }
+
+    fn record_failure(&self, error: impl Into<String>) {
+        self.record(AuditStatus::Failure, Some(error.into()));
+    }
+
+    fn record(&self, status: AuditStatus, error: Option<String>) {
+        if !self.guard.audit_config.enabled {
+            return;
+        }
+        let record = AuditRecord::new(
+            self.request_id.clone(),
+            self.principal.id.clone(),
+            self.client.clone(),
+            self.cluster.clone(),
+            self.resource_uri.clone(),
+            hash_arguments(&JsonObject::new()),
+            RiskLevel::ReadOnly,
+            status,
+            self.started_at.elapsed().as_millis(),
+            error,
+        );
+        self.guard.audit_log.record(&self.guard.audit_config, record);
+    }
+}
+
+fn with_resource_correlation(mut error: rmcp::ErrorData, request_id: &str) -> rmcp::ErrorData {
+    let mut data = match error.data.take() {
+        Some(Value::Object(data)) => data,
+        Some(data) => serde_json::Map::from_iter([("details".to_string(), data)]),
+        None => serde_json::Map::new(),
+    };
+    data.entry("code".to_string())
+        .or_insert_with(|| Value::String("resource_error".to_string()));
+    data.entry("retryable".to_string()).or_insert(Value::Bool(false));
+    data.insert("correlation_id".to_string(), Value::String(request_id.to_string()));
+    error.data = Some(Value::Object(data));
+    error
 }

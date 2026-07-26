@@ -1,0 +1,124 @@
+schema_version: rocketmq.sre.required-signals.v1
+component: broker
+exposure:
+  implementation: implemented_local
+  observable: true
+  remote_queryable: false
+signals:
+  - requirement_id: broker.availability
+    purpose: Determine whether the broker process is serving.
+    owner: broker
+    source_symbol: BROKER_UP
+    registry_reference: rocketmq_broker_up
+    signal_type: metric
+    status: existing
+    query: max(rocketmq_broker_up)
+    freshness_seconds: 30
+    expected_attributes: [cluster, node_type, node_id]
+    sensitivity: operational
+    missing_behavior: missing
+    evidence_field: broker.availability
+  - requirement_id: broker.lifecycle
+    purpose: Explain bounded startup and shutdown transitions.
+    owner: broker
+    source_symbol: BROKER_LIFECYCLE
+    registry_reference: rocketmq.broker.lifecycle
+    signal_type: log
+    status: existing
+    query: '{event="rocketmq.broker.lifecycle"}'
+    freshness_seconds: 300
+    expected_attributes: [state, result, reason]
+    sensitivity: operational
+    missing_behavior: not_production_verified
+    evidence_field: broker.lifecycle
+  - requirement_id: broker.consumer_lag
+    purpose: Detect stalled or under-provisioned consumers.
+    owner: broker
+    source_symbol: CONSUMER_LAG_MESSAGES
+    registry_reference: rocketmq_consumer_lag_messages
+    signal_type: metric
+    status: missing_instrumentation
+    query: null
+    freshness_seconds: 30
+    expected_attributes: [cluster, topic, consumer_group]
+    sensitivity: operational
+    missing_behavior: missing
+    evidence_field: broker.consumer_lag_messages
+  - requirement_id: broker.request_errors
+    purpose: Separate broker request failures from message-flow changes.
+    owner: broker
+    source_symbol: BROKER_REQUEST_ERRORS_TOTAL
+    registry_reference: rocketmq_broker_request_errors_total
+    signal_type: metric
+    status: missing_instrumentation
+    query: null
+    freshness_seconds: 60
+    expected_attributes: [cluster, operation, result]
+    sensitivity: operational
+    missing_behavior: missing
+    evidence_field: broker.request_error_rate
+  - requirement_id: broker.processor_watermark
+    purpose: Detect request processor saturation.
+    owner: broker
+    source_symbol: PROCESSOR_WATERMARK
+    registry_reference: rocketmq_processor_watermark
+    signal_type: metric
+    status: missing_instrumentation
+    query: null
+    freshness_seconds: 30
+    expected_attributes: [cluster, node_id, processor]
+    sensitivity: operational
+    missing_behavior: missing
+    evidence_field: broker.processor_watermark
+  - requirement_id: broker.request_volume
+    purpose: Establish the Broker remoting demand baseline used to interpret latency and errors.
+    owner: remoting
+    source_symbol: TRANSPORT_REQUESTS_TOTAL
+    registry_reference: rocketmq_transport_requests_total
+    signal_type: metric
+    status: existing
+    query: sum(rate(rocketmq_transport_requests_total[5m]))
+    freshness_seconds: 60
+    expected_attributes: []
+    sensitivity: operational
+    missing_behavior: missing
+    evidence_field: broker.request_rate
+  - requirement_id: broker.message_flow
+    purpose: Correlate ingress and egress throughput with lag.
+    owner: broker
+    source_symbol: MESSAGES_IN_TOTAL
+    registry_reference: rocketmq_messages_in_total
+    signal_type: metric
+    status: existing
+    query: sum by (cluster) (rate(rocketmq_messages_in_total[5m]))
+    freshness_seconds: 60
+    expected_attributes: [cluster]
+    sensitivity: operational
+    missing_behavior: missing
+    evidence_field: broker.messages_in_rate
+  - requirement_id: broker.flush_behind
+    purpose: Detect commit-log data that has not reached durable storage.
+    owner: store
+    source_symbol: STORAGE_FLUSH_BEHIND_BYTES
+    registry_reference: rocketmq_storage_flush_behind_bytes
+    signal_type: metric
+    status: existing
+    query: max(rocketmq_storage_flush_behind_bytes)
+    freshness_seconds: 30
+    expected_attributes: [storage_type, storage_medium]
+    sensitivity: operational
+    missing_behavior: missing
+    evidence_field: broker.flush_behind_bytes
+  - requirement_id: broker.ha_replication_lag
+    purpose: Detect master-to-replica byte lag before availability degrades.
+    owner: store
+    source_symbol: STORE_HA_REPLICATION_LAG_BYTES
+    registry_reference: rocketmq_store_ha_replication_lag_bytes
+    signal_type: metric
+    status: missing_instrumentation
+    query: null
+    freshness_seconds: 30
+    expected_attributes: []
+    sensitivity: operational
+    missing_behavior: missing
+    evidence_field: broker.ha_replication_lag_bytes

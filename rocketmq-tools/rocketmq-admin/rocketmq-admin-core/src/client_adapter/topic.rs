@@ -12,30 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::any::Any;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::DefaultMQProducer;
-use rocketmq_client_rust::LocalTransactionState;
 use rocketmq_client_rust::MQAdminExt;
-use rocketmq_client_rust::SendResult;
-use rocketmq_client_rust::TransactionListener;
-use rocketmq_client_rust::TransactionMQProducer;
-use rocketmq_client_rust::TransactionSendResult;
 use rocketmq_error::RocketMQError;
-use rocketmq_model::common::message::message_ext::MessageExt;
-use rocketmq_model::common::message::message_single::Message;
-use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::topic::is_system_topic;
 use rocketmq_model::topic::TopicConfig;
 use rocketmq_model::topic::DLQ_GROUP_TOPIC_PREFIX;
 use rocketmq_model::topic::RETRY_GROUP_TOPIC_PREFIX;
-use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::common::wire_constants::MASTER_ID;
 use rocketmq_protocol::protocol::admin::topic_stats_table::TopicStatsTable;
 use rocketmq_protocol::protocol::body::broker_body::cluster_info::ClusterInfo;
@@ -44,6 +31,7 @@ use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::subscription::broker_stats_data::BrokerStatsData;
 
 use crate::client_adapter::lifecycle::AdminSession;
+use crate::client_adapter::producer::*;
 use crate::core::topic::DeleteTopicAdminRequest;
 use crate::core::topic::GetTopicConfigRequest;
 use crate::core::topic::GetTopicRouteRequest;
@@ -78,9 +66,6 @@ use crate::core::AdminFuture;
 const TOPIC_PUT_NUMS: &str = "TOPIC_PUT_NUMS";
 const GROUP_GET_NUMS: &str = "GROUP_GET_NUMS";
 const MESSAGE_TYPE_ATTRIBUTE: &str = "message.type";
-const SEND_TIMEOUT_MILLIS: u64 = 5_000;
-
-static PRODUCER_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Debug)]
 struct TopicBrokerConfigSnapshot {
@@ -105,22 +90,6 @@ struct TopicCurrentStatsRow {
     out_tps: Option<f64>,
     in_msg_count_24h: u64,
     out_msg_count_24h: Option<u64>,
-}
-
-struct CommitTransactionListener;
-
-impl TransactionListener for CommitTransactionListener {
-    fn execute_local_transaction(
-        &self,
-        _message: &dyn MessageTrait,
-        _argument: Option<&(dyn Any + Send + Sync)>,
-    ) -> LocalTransactionState {
-        LocalTransactionState::CommitMessage
-    }
-
-    fn check_local_transaction(&self, _message: &MessageExt) -> LocalTransactionState {
-        LocalTransactionState::CommitMessage
-    }
 }
 
 impl TopicAdmin for AdminSession {
@@ -675,10 +644,8 @@ fn backend_error(operation: &'static str, error: RocketMQError) -> AdminError {
     )
 }
 
-mod producer;
 mod query;
 
-use producer::*;
 use query::*;
 
 #[cfg(test)]

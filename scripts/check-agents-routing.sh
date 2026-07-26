@@ -86,6 +86,8 @@ ROOT_AGENTS_TEXT="$(read_repository_text "AGENTS.md")"
 REQUIRED_ROUTE_PATHS=(
   "fuzz/"
   "rocketmq-example/"
+  "rocketmq-tools/rocketmq-mcp/"
+  "rocketmq-sre/"
   "rocketmq-dashboard/rocketmq-dashboard-gpui/"
   "rocketmq-dashboard/rocketmq-dashboard-tauri/"
   "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/"
@@ -100,10 +102,11 @@ for route_path in "${REQUIRED_ROUTE_PATHS[@]}"; do
 done
 
 REQUIRED_MCP_COMMANDS=(
-  "cargo check -p rocketmq-mcp"
-  "cargo test -p rocketmq-mcp"
-  "cargo clippy --all-targets -p rocketmq-mcp --features streamable-http -- -D warnings"
-  "cargo doc -p rocketmq-mcp --no-deps"
+  "cargo check --locked"
+  "python scripts/check_read_only_boundary.py"
+  "cargo test --locked"
+  "cargo clippy --locked --all-targets --features streamable-http -- -D warnings"
+  "cargo doc --locked --no-deps"
 )
 
 REQUIRED_ROOT_TERMS=(
@@ -151,6 +154,8 @@ done
 EXPECTED_PROJECT_AGENTS=(
   "fuzz/AGENTS.md"
   "rocketmq-example/AGENTS.md"
+  "rocketmq-tools/rocketmq-mcp/AGENTS.md"
+  "rocketmq-sre/AGENTS.md"
   "rocketmq-dashboard/rocketmq-dashboard-gpui/AGENTS.md"
   "rocketmq-dashboard/rocketmq-dashboard-tauri/AGENTS.md"
   "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/AGENTS.md"
@@ -195,6 +200,8 @@ WORKFLOW_PATHS=(
   ".github/workflows/rocketmq-rust-ci.yaml|Root workspace validation"
   ".github/workflows/fuzz-ci.yml|fuzz/"
   ".github/workflows/rocketmq-example-ci.yaml|rocketmq-example/"
+  ".github/workflows/rocketmq-mcp-ci.yaml|rocketmq-tools/rocketmq-mcp/"
+  ".github/workflows/rocketmq-sre-ci.yml|rocketmq-sre/"
   ".github/workflows/dashboard-web-ci.yml|rocketmq-dashboard/rocketmq-dashboard-web/"
   ".github/workflows/dashboard-tauri-ci.yml|rocketmq-dashboard/rocketmq-dashboard-tauri/"
   ".github/workflows/website-check.yml|rocketmq-website/"
@@ -211,12 +218,59 @@ for workflow_entry in "${WORKFLOW_PATHS[@]}"; do
   assert_text_contains "$ROOT_AGENTS_TEXT" "$route" "Root AGENTS.md workflow routing for $workflow_path"
 done
 
-ROOT_WORKFLOW_PATH="$ROOT/.github/workflows/rocketmq-rust-ci.yaml"
-if [[ -f "$ROOT_WORKFLOW_PATH" ]]; then
-  ROOT_WORKFLOW_TEXT="$(cat "$ROOT_WORKFLOW_PATH")"
+MCP_WORKFLOW_PATH="$ROOT/.github/workflows/rocketmq-mcp-ci.yaml"
+if [[ -f "$MCP_WORKFLOW_PATH" ]]; then
+  MCP_WORKFLOW_TEXT="$(cat "$MCP_WORKFLOW_PATH")"
   for command in "${REQUIRED_MCP_COMMANDS[@]}"; do
-    assert_text_contains "$ROOT_WORKFLOW_TEXT" "$command" "Root workspace CI rocketmq-mcp validation"
+    assert_text_contains "$MCP_WORKFLOW_TEXT" "$command" "Standalone rocketmq-mcp CI validation"
   done
+  for trigger_path in \
+    "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/**" \
+    "rocketmq-auth/**" \
+    "rocketmq-client/**" \
+    "rocketmq-error/**" \
+    "rocketmq-macros/**" \
+    "rocketmq-model/**" \
+    "rocketmq-observability/**" \
+    "rocketmq-protocol/**" \
+    "rocketmq-runtime/**" \
+    "rocketmq-security-api/**" \
+    "rocketmq-transport/**" \
+    "Cargo.toml" \
+    "Cargo.lock" \
+    "rust-toolchain.toml"; do
+    assert_text_contains "$MCP_WORKFLOW_TEXT" "$trigger_path" "Standalone rocketmq-mcp CI consumer trigger"
+  done
+fi
+
+SRE_WORKFLOW_PATH="$ROOT/.github/workflows/rocketmq-sre-ci.yml"
+if [[ -f "$SRE_WORKFLOW_PATH" ]]; then
+  SRE_WORKFLOW_TEXT="$(cat "$SRE_WORKFLOW_PATH")"
+  for trigger_path in \
+    "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/**" \
+    "rocketmq-tools/rocketmq-mcp/**" \
+    "rocketmq-auth/**" \
+    "rocketmq-client/**" \
+    "rocketmq-error/**" \
+    "rocketmq-macros/**" \
+    "rocketmq-model/**" \
+    "rocketmq-observability/**" \
+    "rocketmq-protocol/**" \
+    "rocketmq-runtime/**" \
+    "rocketmq-security-api/**" \
+    "rocketmq-transport/**"; do
+    assert_text_contains "$SRE_WORKFLOW_TEXT" "$trigger_path" "Standalone rocketmq-sre CI consumer trigger"
+  done
+fi
+
+STANDALONE_TRIGGER_GUARD_PATH="$ROOT/scripts/standalone_workspace_trigger_guard.py"
+if [[ -f "$STANDALONE_TRIGGER_GUARD_PATH" ]]; then
+  PYTHON_COMMAND="${PYTHON:-python3}"
+  if ! command -v "$PYTHON_COMMAND" >/dev/null 2>&1; then
+    add_failure "Python is required for standalone workspace consumer-trigger validation"
+  elif ! "$PYTHON_COMMAND" "$STANDALONE_TRIGGER_GUARD_PATH" --repo-root "$ROOT"; then
+    add_failure "Standalone workspace metadata consumer-trigger validation failed"
+  fi
 fi
 
 ADR_PATH="$ROOT/rocketmq-doc/en/agents-routing-validation-adr.md"

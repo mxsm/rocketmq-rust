@@ -1,0 +1,206 @@
+schema_version: rocketmq.sre.capability-signal-coverage.v1
+semantic_registry_owners:
+  - owner: broker
+    component_surface: Broker
+    exposure: implemented_local
+    backlog: expose bounded broker lifecycle and health evidence through the read-only MCP surface
+    notable_sources:
+      - name: broker_metrics
+        source_path: rocketmq-observability/src/metrics/broker.rs
+        source_symbol: BrokerMetrics
+        exposure: metrics_observable_local
+  - owner: client
+    component_surface: Client
+    exposure: implemented_local
+    backlog: add a sanitized client diagnostics adapter without exposing message bodies or credentials
+    notable_sources:
+      - name: client_metrics
+        source_path: rocketmq-observability/src/metrics/client.rs
+        source_symbol: ClientMetrics
+        exposure: metrics_observable_local
+  - owner: controller
+    component_surface: Controller
+    exposure: implemented_local
+    backlog: expose bounded controller diagnostics through an authenticated read-only resource
+    notable_sources:
+      - name: controller_metrics
+        source_path: rocketmq-observability/src/metrics/controller.rs
+        source_symbol: ControllerMetrics
+        exposure: metrics_observable_local
+  - owner: mcp
+    component_surface: MCP
+    exposure: queryable
+    backlog: production-verify exporter recovery and audit backlog alerts
+    notable_sources:
+      - name: mcp_system_resources
+        source_path: rocketmq-tools/rocketmq-mcp/src/resources/system.rs
+        source_symbol: read_result
+        exposure: queryable
+  - owner: name-server
+    component_surface: NameServer
+    exposure: implemented_local
+    backlog: expose bounded route diagnostics through an authenticated read-only resource
+    notable_sources:
+      - name: nameserver_metrics
+        source_path: rocketmq-observability/src/metrics/namesrv.rs
+        source_symbol: NameServerMetrics
+        exposure: metrics_observable_local
+  - owner: observability
+    component_surface: Observability
+    exposure: mcp_system_resource_only
+    backlog: add authenticated component-local status adapters after production exporter validation
+    notable_sources:
+      - name: ObservabilityStatusViewV1
+        source_path: rocketmq-observability/src/status.rs
+        source_symbol: ObservabilityStatusViewV1
+        exposure: mcp_system_resource_only
+  - owner: pop
+    component_surface: Broker/POP
+    exposure: implemented_local
+    backlog: add a POP diagnostic pack that correlates revive lag and buffer pressure
+    notable_sources:
+      - name: pop_metrics
+        source_path: rocketmq-observability/src/metrics/pop_manager.rs
+        source_symbol: PopMetricsManager
+        exposure: metrics_observable_local
+  - owner: proxy
+    component_surface: Proxy
+    exposure: implemented_local
+    backlog: add an authenticated bounded Proxy evidence adapter and production query verification
+    notable_sources:
+      - name: ProxyMetricsSnapshot
+        source_path: rocketmq-proxy/src/observability.rs
+        source_symbol: ProxyMetricsSnapshot
+        exposure: in_process_only
+  - owner: remoting
+    component_surface: Admission/Remoting
+    exposure: in_process_only
+    backlog: publish aggregate admission pressure without client addresses or request payloads
+    notable_sources:
+      - name: AdmissionSnapshot
+        source_path: rocketmq-transport/src/admission.rs
+        source_symbol: AdmissionSnapshot
+        exposure: in_process_only
+  - owner: rocks-db
+    component_surface: RocksDB
+    exposure: implemented_local
+    backlog: correlate RocksDB amplification and cache signals with store health evidence
+    notable_sources:
+      - name: rocksdb_metrics
+        source_path: rocketmq-observability/src/metrics/rocksdb.rs
+        source_symbol: RocksDbMetrics
+        exposure: metrics_observable_local
+  - owner: runtime
+    component_surface: Runtime
+    exposure: mcp_system_resource_only
+    backlog: add authenticated component adapters for Broker NameServer Controller and Proxy
+    notable_sources:
+      - name: RuntimeDiagnosticsViewV1
+        source_path: rocketmq-runtime/src/diagnostics.rs
+        source_symbol: RuntimeDiagnosticsViewV1
+        exposure: mcp_system_resource_only
+  - owner: security
+    component_surface: Auth
+    exposure: in_process_only
+    backlog: expose only aggregate auth outcomes through an authenticated sanitized evidence adapter
+    notable_sources:
+      - name: AuthMetricsSnapshot
+        source_path: rocketmq-observability/src/metrics/auth.rs
+        source_symbol: AuthMetricsSnapshot
+        exposure: in_process_only
+  - owner: storage
+    component_surface: Store recovery
+    exposure: in_process_only
+    backlog: export a bounded recovery summary without paths record bodies or storage configuration
+    notable_sources:
+      - name: RecoveryReport
+        source_path: rocketmq-store/src/message_store/recovery.rs
+        source_symbol: RecoveryReport
+        exposure: in_process_only
+  - owner: store
+    component_surface: Store
+    exposure: in_process_only
+    backlog: add read-only evidence adapters for store health and background index rebuild progress
+    notable_sources:
+      - name: StoreHealthSnapshot
+        source_path: rocketmq-store/src/capability.rs
+        source_symbol: StoreHealthSnapshot
+        exposure: in_process_only
+      - name: BackgroundIndexRebuildSnapshot
+        source_path: rocketmq-store/src/message_store/local_file_message_store/recovery.rs
+        source_symbol: BackgroundIndexRebuildSnapshot
+        exposure: in_process_only
+  - owner: tiered-store
+    component_surface: TieredStore
+    exposure: implemented_local
+    backlog: add a tiered-store diagnostic pack with bounded provider failure summaries
+    notable_sources:
+      - name: tiered_store_metrics
+        source_path: rocketmq-observability/src/metrics/tiered_store.rs
+        source_symbol: TieredStoreMetrics
+        exposure: metrics_observable_local
+  - owner: timer
+    component_surface: Broker/Timer
+    exposure: implemented_local
+    backlog: add timer backlog correlation to the broker runtime diagnostic pack
+    notable_sources:
+      - name: timer_metrics
+        source_path: rocketmq-observability/src/metrics/timer.rs
+        source_symbol: TimerMetrics
+        exposure: metrics_observable_local
+diagnostic_packs:
+  cluster_health:
+    capabilities: [cluster.overview, broker.describe]
+    required_signals:
+      - broker.availability
+      - nameserver.active_brokers
+      - controller.quorum_health
+    optional_signals:
+      - proxy.availability
+  route_health:
+    capabilities: [topic.list, topic.describe]
+    required_signals:
+      - nameserver.route_requests
+      - nameserver.route_errors
+      - nameserver.route_freshness
+    optional_signals:
+      - nameserver.route_trace
+  consumer_lag:
+    capabilities: [consumer.lag]
+    required_signals:
+      - broker.consumer_lag
+      - broker.message_flow
+    optional_signals:
+      - broker.processor_watermark
+  broker_runtime:
+    capabilities: [broker.describe, runtime.diagnostics]
+    required_signals:
+      - broker.availability
+      - broker.lifecycle
+      - broker.processor_watermark
+    optional_signals:
+      - runtime.blocking_pressure
+      - runtime.blocking_timeouts
+  controller_stability:
+    capabilities: [cluster.overview]
+    required_signals:
+      - controller.quorum_health
+      - controller.elections
+      - controller.heartbeat_age
+      - controller.stale_brokers
+    optional_signals:
+      - controller.heartbeat_trace
+  mcp_runtime:
+    capabilities: [runtime.diagnostics, observability.status]
+    required_signals:
+      - mcp.runtime_resource
+      - mcp.observability_resource
+    optional_signals:
+      - runtime.tasks
+      - runtime.task_groups
+      - runtime.long_running
+coverage_rules:
+  covered: all required signals are queryable
+  partial: at least one required signal is existing or in_process_only
+  missing: any required signal is missing_instrumentation
+  not_production_verified: query exists but production validation has not completed

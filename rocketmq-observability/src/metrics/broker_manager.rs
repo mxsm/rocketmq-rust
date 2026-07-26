@@ -445,6 +445,8 @@ impl BrokerMetricsManager {
 
         #[cfg(feature = "otel-metrics")]
         let broker_metrics = BrokerMetrics::new(&meter);
+        #[cfg(feature = "otel-metrics")]
+        broker_metrics.record_broker_up(1, &attributes_supplier.get());
 
         let send_to_dlq_messages = meter
             .u64_counter(BrokerMetricsConstant::COUNTER_CONSUMER_SEND_TO_DLQ_MESSAGES_TOTAL)

@@ -1,0 +1,175 @@
+name: RocketMQ AI SRE CI
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "rocketmq-sre/**"
+      - "rocketmq-auth/**"
+      - "rocketmq-runtime/**"
+      - "rocketmq-observability/**"
+      - "rocketmq-client/**"
+      - "rocketmq-error/**"
+      - "rocketmq-macros/**"
+      - "rocketmq-model/**"
+      - "rocketmq-protocol/**"
+      - "rocketmq-security-api/**"
+      - "rocketmq-transport/**"
+      - "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/**"
+      - "rocketmq-tools/rocketmq-mcp/**"
+      - "scripts/generate_sre_capability_catalog.py"
+      - "scripts/standalone_workspace_trigger_guard.py"
+      - "scripts/generate_telemetry_semantic_registry.py"
+      - "scripts/telemetry_semantic_guard.py"
+      - "scripts/telemetry-semantic-registry.json"
+      - "scripts/tests/test_standalone_workspace_trigger_guard.py"
+      - "scripts/tests/test_telemetry_semantic_guard.py"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/rocketmq-sre-ci.yml"
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "rocketmq-sre/**"
+      - "rocketmq-auth/**"
+      - "rocketmq-runtime/**"
+      - "rocketmq-observability/**"
+      - "rocketmq-client/**"
+      - "rocketmq-error/**"
+      - "rocketmq-macros/**"
+      - "rocketmq-model/**"
+      - "rocketmq-protocol/**"
+      - "rocketmq-security-api/**"
+      - "rocketmq-transport/**"
+      - "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/**"
+      - "rocketmq-tools/rocketmq-mcp/**"
+      - "scripts/generate_sre_capability_catalog.py"
+      - "scripts/standalone_workspace_trigger_guard.py"
+      - "scripts/generate_telemetry_semantic_registry.py"
+      - "scripts/telemetry_semantic_guard.py"
+      - "scripts/telemetry-semantic-registry.json"
+      - "scripts/tests/test_standalone_workspace_trigger_guard.py"
+      - "scripts/tests/test_telemetry_semantic_guard.py"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/rocketmq-sre-ci.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: full
+  CI: true
+
+jobs:
+  rust:
+    name: Rust workspace
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: rocketmq_sre
+          POSTGRES_PASSWORD: rocketmq_sre
+          POSTGRES_DB: rocketmq_sre
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rocketmq_sre"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://rocketmq_sre:rocketmq_sre@127.0.0.1:5432/rocketmq_sre
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rocketmq-sre -> target
+
+      - name: Check metadata
+        run: cargo metadata --manifest-path rocketmq-sre/Cargo.toml --locked --no-deps
+
+      - name: Check formatting
+        run: |
+          cargo fmt --manifest-path rocketmq-sre/Cargo.toml \
+            -p rocketmq-sre-contracts \
+            -p rocketmq-sre-core \
+            -p rocketmq-sre-model-gateway \
+            -p rocketmq-sre-control-plane \
+            -p rocketmq-sre-connector \
+            -p rocketmq-sre-executor \
+            -p rocketmq-sre-execution-agent \
+            -p rocketmq-sre-probe \
+            -p rocketmq-sre-eval \
+            -- --check
+
+      - name: Test
+        run: cargo test --manifest-path rocketmq-sre/Cargo.toml --locked --workspace --all-features
+
+      - name: Clippy
+        run: cargo clippy --manifest-path rocketmq-sre/Cargo.toml --locked --workspace --all-targets --all-features -- -D warnings
+
+      - name: Rustdoc
+        run: cargo doc --manifest-path rocketmq-sre/Cargo.toml --locked --workspace --no-deps
+
+      - name: Check capability catalog
+        run: python scripts/generate_sre_capability_catalog.py --check
+
+      - name: Test standalone workspace consumer triggers
+        run: python -m unittest scripts.tests.test_standalone_workspace_trigger_guard -v
+
+      - name: Check telemetry semantic registry
+        run: |
+          python scripts/telemetry_semantic_guard.py
+          python -m unittest scripts.tests.test_telemetry_semantic_guard -v
+
+  msrv:
+    name: Rust 1.95 MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Rust 1.95
+        uses: dtolnay/rust-toolchain@1.95.0
+
+      - name: Check workspace
+        run: cargo check --manifest-path rocketmq-sre/Cargo.toml --locked --workspace
+
+  ui:
+    name: Read-only UI
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rocketmq-sre/ui
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: rocketmq-sre/ui/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Unit tests
+        run: npm run test -- --run
+
+      - name: Production build
+        run: npm run build

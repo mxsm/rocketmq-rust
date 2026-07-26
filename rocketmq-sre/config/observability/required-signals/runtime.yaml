@@ -1,0 +1,98 @@
+schema_version: rocketmq.sre.required-signals.v1
+component: runtime
+exposure:
+  implementation: implemented_local
+  observable: true
+  remote_queryable: false
+signals:
+  - requirement_id: runtime.task_groups
+    purpose: Detect unexpected lifecycle scope growth.
+    owner: runtime
+    source_symbol: RUNTIME_TASK_GROUPS
+    registry_reference: rocketmq_runtime_task_groups
+    signal_type: metric
+    status: in_process_only
+    query: null
+    freshness_seconds: 30
+    expected_attributes: [component]
+    sensitivity: operational
+    missing_behavior: not_production_verified
+    evidence_field: runtime.task_groups
+  - requirement_id: runtime.tasks
+    purpose: Detect task growth by bounded TaskKind.
+    owner: runtime
+    source_symbol: RUNTIME_TASKS
+    registry_reference: rocketmq_runtime_tasks
+    signal_type: metric
+    status: in_process_only
+    query: null
+    freshness_seconds: 30
+    expected_attributes: [component, task_type]
+    sensitivity: operational
+    missing_behavior: not_production_verified
+    evidence_field: runtime.tasks
+  - requirement_id: runtime.long_running
+    purpose: Detect tasks exceeding the configured observation threshold.
+    owner: runtime
+    source_symbol: RUNTIME_LONG_RUNNING_TASKS
+    registry_reference: rocketmq_runtime_long_running_tasks
+    signal_type: metric
+    status: in_process_only
+    query: null
+    freshness_seconds: 30
+    expected_attributes: [component, task_type]
+    sensitivity: operational
+    missing_behavior: not_production_verified
+    evidence_field: runtime.long_running_tasks
+  - requirement_id: runtime.blocking_pressure
+    purpose: Detect blocking executor queue and concurrency pressure.
+    owner: runtime
+    source_symbol: RUNTIME_BLOCKING_QUEUED
+    registry_reference: rocketmq_runtime_blocking_queued
+    signal_type: metric
+    status: in_process_only
+    query: null
+    freshness_seconds: 30
+    expected_attributes: [component, blocking_lane]
+    sensitivity: operational
+    missing_behavior: not_production_verified
+    evidence_field: runtime.blocking_queued
+  - requirement_id: runtime.blocking_timeouts
+    purpose: Detect blocking work still running after timeout.
+    owner: runtime
+    source_symbol: RUNTIME_BLOCKING_TIMEOUTS
+    registry_reference: rocketmq_runtime_blocking_timeouts
+    signal_type: metric
+    status: in_process_only
+    query: null
+    freshness_seconds: 30
+    expected_attributes: [component, blocking_lane]
+    sensitivity: operational
+    missing_behavior: not_production_verified
+    evidence_field: runtime.blocking_timeouts
+  - requirement_id: runtime.lifecycle_transitions
+    purpose: Detect bounded startup, readiness, shutdown, and failure transitions.
+    owner: runtime
+    source_symbol: RUNTIME_LIFECYCLE_TRANSITIONS_TOTAL
+    registry_reference: rocketmq_runtime_lifecycle_transitions_total
+    signal_type: metric
+    status: in_process_only
+    query: null
+    freshness_seconds: 30
+    expected_attributes: [component, state, result, reason]
+    sensitivity: operational
+    missing_behavior: not_production_verified
+    evidence_field: runtime.lifecycle_transitions
+  - requirement_id: runtime.diagnostics_view
+    purpose: Provide an authenticated bounded snapshot without raw names or identifiers.
+    owner: runtime
+    source_symbol: RuntimeDiagnosticsViewV1
+    registry_reference: rocketmq.runtime-diagnostics.v1
+    signal_type: resource
+    status: in_process_only
+    query: null
+    freshness_seconds: null
+    expected_attributes: [component]
+    sensitivity: operational
+    missing_behavior: missing
+    evidence_field: runtime.diagnostics

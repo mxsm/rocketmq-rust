@@ -162,11 +162,12 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,id=rocketmq-service-target-${SOURCE_REVISION},target=/workspace/target,sharing=locked <<EOF
 set -eux
-cargo build --locked --release --package rocketmq-broker --no-default-features --features production --bin rocketmq-broker-rust
-cargo build --locked --release --package rocketmq-namesrv --no-default-features --features production --bin rocketmq-namesrv-rust
-cargo build --locked --release --package rocketmq-controller --no-default-features --features production --bin rocketmq-controller-rust
-cargo build --locked --release --package rocketmq-proxy --no-default-features --features production --bin rocketmq-proxy-rust
-cargo build --locked --release --package rocketmq-mcp --no-default-features --features production --bin rocketmq-mcp
+cargo build --locked --release --package rocketmq-broker --features otlp-metrics,otlp-traces,otlp-logs --bin rocketmq-broker-rust
+cargo build --locked --release --package rocketmq-namesrv --features otlp-metrics,otlp-traces,otlp-logs --bin rocketmq-namesrv-rust
+cargo build --locked --release --package rocketmq-controller --features metrics-otlp,otlp-traces,otlp-logs --bin rocketmq-controller-rust
+cargo build --locked --release --package rocketmq-proxy --features otlp-metrics,otlp-traces,otlp-logs --bin rocketmq-proxy-rust
+export CARGO_TARGET_DIR=/workspace/target
+cargo build --manifest-path rocketmq-tools/rocketmq-mcp/Cargo.toml --locked --release --package rocketmq-mcp --features streamable-http,otlp --bin rocketmq-mcp
 install -d /opt/rocketmq-binaries
 for binary in \
     rocketmq-broker-rust \

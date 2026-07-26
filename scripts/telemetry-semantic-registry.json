@@ -33,6 +33,15 @@
       "redaction": "none"
     },
     {
+      "id": "blocking_lane",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
       "id": "broker_set",
       "cardinality": "bounded",
       "privacy": "operational",
@@ -339,6 +348,15 @@
       "redaction": "none"
     },
     {
+      "id": "operation_kind",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
       "id": "path",
       "cardinality": "bounded",
       "privacy": "operational",
@@ -519,6 +537,15 @@
       "redaction": "none"
     },
     {
+      "id": "rpc",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
       "id": "server.address",
       "cardinality": "bounded",
       "privacy": "operational",
@@ -547,6 +574,15 @@
     },
     {
       "id": "source",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "stale_count",
       "cardinality": "bounded",
       "privacy": "operational",
       "max_distinct": 10000,
@@ -677,6 +713,33 @@
     {
       "id": "rocketmq_broker_permission",
       "source_symbol": "BROKER_PERMISSION",
+      "signal_type": "metric",
+      "kind": "observable_gauge",
+      "unit": "1",
+      "owner": "broker",
+      "catalog": "java",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "cluster",
+        "node_type",
+        "node_id"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_broker_up",
+      "source_symbol": "BROKER_UP",
       "signal_type": "metric",
       "kind": "observable_gauge",
       "unit": "1",
@@ -3592,6 +3655,54 @@
       }
     },
     {
+      "id": "rocketmq_namesrv_route_errors_total",
+      "source_symbol": "NAMESRV_ROUTE_ERRORS_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{error}",
+      "owner": "name-server",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "result"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_namesrv_route_freshness",
+      "source_symbol": "NAMESRV_ROUTE_FRESHNESS",
+      "signal_type": "metric",
+      "kind": "histogram",
+      "unit": "ms",
+      "owner": "name-server",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
       "id": "rocketmq_controller_election_total",
       "source_symbol": "CONTROLLER_ELECTION_TOTAL",
       "signal_type": "metric",
@@ -3665,6 +3776,75 @@
       "source_symbol": "CONTROLLER_ACTIVE_BROKERS",
       "signal_type": "metric",
       "kind": "observable_gauge",
+      "unit": "{broker}",
+      "owner": "controller",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_controller_quorum_health",
+      "source_symbol": "CONTROLLER_QUORUM_HEALTH",
+      "signal_type": "metric",
+      "kind": "gauge",
+      "unit": "1",
+      "owner": "controller",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_controller_heartbeat_age",
+      "source_symbol": "CONTROLLER_HEARTBEAT_AGE",
+      "signal_type": "metric",
+      "kind": "histogram",
+      "unit": "ms",
+      "owner": "controller",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_controller_stale_brokers",
+      "source_symbol": "CONTROLLER_STALE_BROKERS",
+      "signal_type": "metric",
+      "kind": "gauge",
       "unit": "{broker}",
       "owner": "controller",
       "catalog": "rust",
@@ -3764,6 +3944,31 @@
       "stability": "stable",
       "attributes": [],
       "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_proxy_grpc_errors_total",
+      "source_symbol": "PROXY_GRPC_ERRORS_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{error}",
+      "owner": "proxy",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "result"
+      ],
+      "cardinality_budget": 10000,
       "privacy": "operational",
       "sampling": {
         "strategy": "aggregate"
@@ -3914,21 +4119,380 @@
       }
     },
     {
-      "id": "rocketmq_release_info",
-      "source_symbol": "RELEASE_INFO",
+      "id": "rocketmq_mcp_requests_total",
+      "source_symbol": "MCP_REQUESTS_TOTAL",
       "signal_type": "metric",
-      "kind": "gauge",
-      "unit": "1",
-      "owner": "observability",
+      "kind": "counter",
+      "unit": "{request}",
+      "owner": "mcp",
       "catalog": "rust",
-      "family": "release-identity",
+      "family": "request",
       "stability": "stable",
       "attributes": [
-        "service",
-        "release_commit",
-        "release_nonce"
+        "operation_kind",
+        "operation",
+        "result"
       ],
-      "cardinality_budget": 64,
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_mcp_request_latency",
+      "source_symbol": "MCP_REQUEST_LATENCY",
+      "signal_type": "metric",
+      "kind": "histogram",
+      "unit": "ms",
+      "owner": "mcp",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "operation_kind",
+        "operation"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_mcp_errors_total",
+      "source_symbol": "MCP_ERRORS_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{error}",
+      "owner": "mcp",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "operation_kind",
+        "operation",
+        "result"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_mcp_cache_operations_total",
+      "source_symbol": "MCP_CACHE_OPERATIONS_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{operation}",
+      "owner": "mcp",
+      "catalog": "rust",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [
+        "result"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_mcp_rate_limit_total",
+      "source_symbol": "MCP_RATE_LIMIT_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{decision}",
+      "owner": "mcp",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "result"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_mcp_audit_backlog",
+      "source_symbol": "MCP_AUDIT_BACKLOG",
+      "signal_type": "metric",
+      "kind": "gauge",
+      "unit": "{record}",
+      "owner": "mcp",
+      "catalog": "rust",
+      "family": "auth-mcp",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_mcp_audit_dropped_total",
+      "source_symbol": "MCP_AUDIT_DROPPED_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{record}",
+      "owner": "mcp",
+      "catalog": "rust",
+      "family": "auth-mcp",
+      "stability": "stable",
+      "attributes": [
+        "reason"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_mcp_audit_failures_total",
+      "source_symbol": "MCP_AUDIT_FAILURES_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{failure}",
+      "owner": "mcp",
+      "catalog": "rust",
+      "family": "auth-mcp",
+      "stability": "stable",
+      "attributes": [
+        "reason"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_runtime_tasks",
+      "source_symbol": "RUNTIME_TASKS",
+      "signal_type": "metric",
+      "kind": "gauge",
+      "unit": "{task}",
+      "owner": "runtime",
+      "catalog": "rust",
+      "family": "task",
+      "stability": "stable",
+      "attributes": [
+        "component",
+        "task_type"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_runtime_task_groups",
+      "source_symbol": "RUNTIME_TASK_GROUPS",
+      "signal_type": "metric",
+      "kind": "gauge",
+      "unit": "{group}",
+      "owner": "runtime",
+      "catalog": "rust",
+      "family": "task",
+      "stability": "stable",
+      "attributes": [
+        "component"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_runtime_long_running_tasks",
+      "source_symbol": "RUNTIME_LONG_RUNNING_TASKS",
+      "signal_type": "metric",
+      "kind": "gauge",
+      "unit": "{task}",
+      "owner": "runtime",
+      "catalog": "rust",
+      "family": "task",
+      "stability": "stable",
+      "attributes": [
+        "component",
+        "task_type"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_runtime_blocking_queued",
+      "source_symbol": "RUNTIME_BLOCKING_QUEUED",
+      "signal_type": "metric",
+      "kind": "gauge",
+      "unit": "{task}",
+      "owner": "runtime",
+      "catalog": "rust",
+      "family": "task",
+      "stability": "stable",
+      "attributes": [
+        "component",
+        "blocking_lane"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_runtime_blocking_running",
+      "source_symbol": "RUNTIME_BLOCKING_RUNNING",
+      "signal_type": "metric",
+      "kind": "gauge",
+      "unit": "{task}",
+      "owner": "runtime",
+      "catalog": "rust",
+      "family": "task",
+      "stability": "stable",
+      "attributes": [
+        "component",
+        "blocking_lane"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_runtime_blocking_timeouts",
+      "source_symbol": "RUNTIME_BLOCKING_TIMEOUTS",
+      "signal_type": "metric",
+      "kind": "gauge",
+      "unit": "{task}",
+      "owner": "runtime",
+      "catalog": "rust",
+      "family": "task",
+      "stability": "stable",
+      "attributes": [
+        "component",
+        "blocking_lane"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_runtime_lifecycle_transitions_total",
+      "source_symbol": "RUNTIME_LIFECYCLE_TRANSITIONS_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{transition}",
+      "owner": "runtime",
+      "catalog": "rust",
+      "family": "task",
+      "stability": "stable",
+      "attributes": [
+        "component",
+        "state",
+        "result",
+        "reason"
+      ],
+      "cardinality_budget": 10000,
       "privacy": "operational",
       "sampling": {
         "strategy": "aggregate"
@@ -4096,6 +4660,178 @@
       ],
       "cardinality_budget": 1000,
       "privacy": "sensitive",
+      "sampling": {
+        "strategy": "ratio",
+        "default_ratio": 0.01,
+        "max_events_per_operation": 0
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "RocketMQ NAMESRV ROUTE_LOOKUP",
+      "source_symbol": "NAMESRV_ROUTE_LOOKUP",
+      "signal_type": "span",
+      "owner": "name-server",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "result"
+      ],
+      "cardinality_budget": 1000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "ratio",
+        "default_ratio": 0.01,
+        "max_events_per_operation": 0
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "RocketMQ NAMESRV BROKER_REGISTRATION",
+      "source_symbol": "NAMESRV_BROKER_REGISTRATION",
+      "signal_type": "span",
+      "owner": "name-server",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "result"
+      ],
+      "cardinality_budget": 1000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "ratio",
+        "default_ratio": 0.01,
+        "max_events_per_operation": 0
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "RocketMQ CONTROLLER HEARTBEAT_SCAN",
+      "source_symbol": "CONTROLLER_HEARTBEAT_SCAN",
+      "signal_type": "span",
+      "owner": "controller",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "result",
+        "stale_count"
+      ],
+      "cardinality_budget": 1000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "ratio",
+        "default_ratio": 0.01,
+        "max_events_per_operation": 0
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "RocketMQ CONTROLLER ELECTION",
+      "source_symbol": "CONTROLLER_ELECTION",
+      "signal_type": "span",
+      "owner": "controller",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "result"
+      ],
+      "cardinality_budget": 1000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "ratio",
+        "default_ratio": 0.01,
+        "max_events_per_operation": 0
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "RocketMQ MCP TOOL",
+      "source_symbol": "MCP_TOOL",
+      "signal_type": "span",
+      "owner": "mcp",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "operation",
+        "result"
+      ],
+      "cardinality_budget": 1000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "ratio",
+        "default_ratio": 0.01,
+        "max_events_per_operation": 0
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "RocketMQ MCP RESOURCE",
+      "source_symbol": "MCP_RESOURCE",
+      "signal_type": "span",
+      "owner": "mcp",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "operation",
+        "result"
+      ],
+      "cardinality_budget": 1000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "ratio",
+        "default_ratio": 0.01,
+        "max_events_per_operation": 0
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_proxy.rpc",
+      "source_symbol": "PROXY_RPC",
+      "signal_type": "span",
+      "owner": "proxy",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "rpc",
+        "result"
+      ],
+      "cardinality_budget": 1000,
+      "privacy": "operational",
       "sampling": {
         "strategy": "ratio",
         "default_ratio": 0.01,
@@ -4279,6 +5015,110 @@
         "queued_items",
         "queued_bytes",
         "dropped_count"
+      ],
+      "cardinality_budget": 1000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "rate_limit",
+        "max_per_second": 100,
+        "max_events_per_operation": 1
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq.broker.lifecycle",
+      "source_symbol": "BROKER_LIFECYCLE",
+      "signal_type": "log",
+      "owner": "broker",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "state",
+        "result",
+        "reason"
+      ],
+      "cardinality_budget": 1000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "rate_limit",
+        "max_per_second": 100,
+        "max_events_per_operation": 1
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq.runtime.lifecycle",
+      "source_symbol": "RUNTIME_LIFECYCLE",
+      "signal_type": "log",
+      "owner": "runtime",
+      "family": "task",
+      "stability": "stable",
+      "attributes": [
+        "component",
+        "state",
+        "result",
+        "reason"
+      ],
+      "cardinality_budget": 1000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "rate_limit",
+        "max_per_second": 100,
+        "max_events_per_operation": 1
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq.controller.heartbeat",
+      "source_symbol": "CONTROLLER_HEARTBEAT",
+      "signal_type": "log",
+      "owner": "controller",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "state",
+        "result",
+        "stale_count"
+      ],
+      "cardinality_budget": 1000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "rate_limit",
+        "max_per_second": 100,
+        "max_events_per_operation": 1
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq.controller.election",
+      "source_symbol": "CONTROLLER_ELECTION",
+      "signal_type": "log",
+      "owner": "controller",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "state",
+        "result"
       ],
       "cardinality_budget": 1000,
       "privacy": "operational",

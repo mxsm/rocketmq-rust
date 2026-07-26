@@ -14,14 +14,19 @@
 
 //! Client lifecycle adapter for an opaque admin session.
 
+#[cfg(feature = "client-adapter")]
 use std::ops::Deref;
+#[cfg(feature = "client-adapter")]
 use std::ops::DerefMut;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rocketmq_client_rust::ClientRuntime;
 use rocketmq_client_rust::DefaultMQAdminExt;
 use rocketmq_error::RocketMQError;
+
+pub use rocketmq_client_rust::ClientRuntime;
+#[cfg(feature = "client-adapter")]
+pub use rocketmq_client_rust::ClientRuntimeConfig;
 
 use crate::core::clock::Clock;
 use crate::core::AdminError;
@@ -102,6 +107,7 @@ pub struct AdminSession {
 }
 
 impl AdminSession {
+    #[cfg(feature = "client-adapter")]
     pub(crate) fn from_started(inner: DefaultMQAdminExt, clock: Arc<dyn Clock>) -> Self {
         let client_runtime = inner.client_runtime();
         Self {
@@ -112,10 +118,12 @@ impl AdminSession {
         }
     }
 
+    #[cfg(feature = "client-adapter")]
     pub(crate) fn client(&self) -> &DefaultMQAdminExt {
         &self.inner
     }
 
+    #[cfg(feature = "client-adapter")]
     pub(crate) fn client_mut(&mut self) -> &mut DefaultMQAdminExt {
         &mut self.inner
     }
@@ -135,6 +143,7 @@ impl AdminSession {
         Arc::clone(&self.client_runtime)
     }
 
+    #[cfg(feature = "client-adapter")]
     pub async fn probe_name_server(&self, name_server: &str) -> AdminResult<()> {
         self.ensure_open()?;
         use rocketmq_client_rust::MQAdminExt;
@@ -162,10 +171,12 @@ impl Drop for AdminSession {
 }
 
 #[must_use = "the guard owns a live admin session; call shutdown when the workflow completes"]
+#[cfg(feature = "client-adapter")]
 pub struct AdminGuard {
     session: Option<AdminSession>,
 }
 
+#[cfg(feature = "client-adapter")]
 impl AdminGuard {
     pub(crate) fn new(session: AdminSession) -> Self {
         Self { session: Some(session) }
@@ -200,6 +211,7 @@ impl AdminGuard {
     }
 }
 
+#[cfg(feature = "client-adapter")]
 impl Deref for AdminGuard {
     type Target = AdminSession;
 
@@ -208,6 +220,7 @@ impl Deref for AdminGuard {
     }
 }
 
+#[cfg(feature = "client-adapter")]
 impl DerefMut for AdminGuard {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.inner_mut()
@@ -257,6 +270,7 @@ impl AdminBuilder {
         })
     }
 
+    #[cfg(feature = "client-adapter")]
     pub async fn build_with_guard(self) -> AdminResult<AdminGuard> {
         self.build_and_start().await.map(AdminGuard::new)
     }

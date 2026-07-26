@@ -21,7 +21,8 @@ use cheetah_string::CheetahString;
 use rocketmq_transport::RPCHook;
 
 use crate::admin::default_mq_admin_ext_impl::DefaultMQAdminExtImpl;
-use crate::admin::mq_admin_ext_async::MQAdminExt;
+#[cfg(all(feature = "admin-read", not(feature = "admin-mutation")))]
+use crate::admin::mq_admin_read_ext::MQAdminReadExt;
 use crate::base::client_config::ClientConfig;
 use crate::runtime::ClientRuntime;
 
@@ -141,6 +142,22 @@ impl DefaultMQAdminExt {
         )
     }
 
+    pub fn with_admin_ext_group_rpc_hook_and_timeout(
+        client_runtime: Arc<ClientRuntime>,
+        admin_ext_group: impl Into<CheetahString>,
+        rpc_hook: Arc<dyn RPCHook>,
+        timeout_millis: Duration,
+    ) -> Self {
+        let client_config = ClientConfig::new();
+        Self::build(
+            client_runtime,
+            client_config,
+            admin_ext_group.into(),
+            timeout_millis,
+            Some(rpc_hook),
+        )
+    }
+
     pub fn set_namesrv_addr(&mut self, name_serv_addr: impl Into<CheetahString>) {
         self.default_mqadmin_ext_impl
             .client_config_mut()
@@ -182,12 +199,28 @@ impl DefaultMQAdminExt {
         self.default_mqadmin_ext_impl.has_inner()
     }
 
+    #[cfg(any(feature = "admin-read", feature = "admin-mutation"))]
     pub async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
-        MQAdminExt::start(&mut self.default_mqadmin_ext_impl).await
+        #[cfg(feature = "admin-mutation")]
+        {
+            return self.default_mqadmin_ext_impl.start_admin().await;
+        }
+        #[cfg(all(feature = "admin-read", not(feature = "admin-mutation")))]
+        {
+            MQAdminReadExt::start(self).await
+        }
     }
 
+    #[cfg(any(feature = "admin-read", feature = "admin-mutation"))]
     pub async fn shutdown(&mut self) {
-        MQAdminExt::shutdown(&mut self.default_mqadmin_ext_impl).await;
+        #[cfg(feature = "admin-mutation")]
+        {
+            self.default_mqadmin_ext_impl.shutdown_admin().await;
+        }
+        #[cfg(all(feature = "admin-read", not(feature = "admin-mutation")))]
+        {
+            MQAdminReadExt::shutdown(self).await;
+        }
     }
 }
 
@@ -217,7 +250,7 @@ impl DerefMut for DefaultMQAdminExt {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "admin-full"))]
 mod tests {
     use std::time::Duration;
 

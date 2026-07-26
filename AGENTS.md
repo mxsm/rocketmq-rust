@@ -16,7 +16,9 @@
 |---|---|---|
 | `rocketmq-dashboard/rocketmq-dashboard-common/` | Root workspace member and shared dashboard crate | This file |
 | `rocketmq-example/` | Standalone Cargo project | `rocketmq-example/AGENTS.md` |
-| `fuzz/` | Standalone Cargo fuzz project | `fuzz/AGENTS.md` |
+| `rocketmq-tools/rocketmq-mcp/` | Standalone Rust MCP server | Its local `AGENTS.md` |
+| `rocketmq-sre/` | Standalone AI SRE Rust workspace and UI | Its local `AGENTS.md` |
+| `rocketmq-sre/ui/` | Standalone React/TypeScript/Vite AI SRE frontend | Its local `AGENTS.md` |
 | `rocketmq-dashboard/rocketmq-dashboard-gpui/` | Standalone Cargo project | Its local `AGENTS.md` |
 | `rocketmq-dashboard/rocketmq-dashboard-tauri/` | Standalone Node/Vite/Tauri frontend | Its local `AGENTS.md` |
 | `rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/` | Standalone Rust backend | Its local `AGENTS.md` |
@@ -197,13 +199,15 @@ cargo test -p rocketmq-broker --features rocksdb_store pop_consumer
 
 ### RocketMQ MCP
 
-If changes touch `rocketmq-tools/rocketmq-mcp/`, its feature definitions, or a shared public API it consumes, run the CI-equivalent checks:
+If changes touch `rocketmq-tools/rocketmq-mcp/`, its feature definitions, or a shared public API it consumes, run from the MCP project root:
 
 ```bash
-cargo check -p rocketmq-mcp
-cargo test -p rocketmq-mcp
-cargo clippy --all-targets -p rocketmq-mcp --features streamable-http -- -D warnings
-cargo doc -p rocketmq-mcp --no-deps
+cargo check --locked
+python scripts/check_read_only_boundary.py
+cargo test --locked
+cargo test --locked --all-features
+cargo clippy --locked --all-targets --features streamable-http -- -D warnings
+cargo doc --locked --no-deps
 ```
 
 Preserve the MCP deny-by-default boundary: default tools remain read-only/diagnostic; `dangerous-tools` requires

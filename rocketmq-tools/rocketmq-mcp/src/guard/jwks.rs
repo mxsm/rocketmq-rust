@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -40,13 +41,22 @@ pub struct HttpJwksSource {
 }
 
 impl HttpJwksSource {
-    pub fn new(url: impl Into<Arc<str>>) -> Result<Self, JwksError> {
-        let client = reqwest::Client::builder()
+    pub fn new(url: impl Into<Arc<str>>, ca_path: Option<&Path>) -> Result<Self, JwksError> {
+        let mut builder = reqwest::Client::builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
-            .timeout(JWKS_FETCH_TIMEOUT)
-            .build()
-            .map_err(|_| JwksError::Unavailable)?;
+            .timeout(JWKS_FETCH_TIMEOUT);
+        if let Some(ca_path) = ca_path {
+            let pem = std::fs::read(ca_path).map_err(|_| JwksError::InvalidCa)?;
+            let certificates = reqwest::Certificate::from_pem_bundle(&pem).map_err(|_| JwksError::InvalidCa)?;
+            if certificates.is_empty() {
+                return Err(JwksError::InvalidCa);
+            }
+            for certificate in certificates {
+                builder = builder.add_root_certificate(certificate);
+            }
+        }
+        let client = builder.build().map_err(|_| JwksError::Unavailable)?;
         Ok(Self {
             client,
             url: url.into(),
@@ -259,6 +269,8 @@ pub enum JwksError {
     RejectedToken,
     #[error("JWKS generation is exhausted")]
     GenerationExhausted,
+    #[error("JWKS CA bundle is invalid")]
+    InvalidCa,
 }
 
 #[cfg(test)]
@@ -276,6 +288,24 @@ mod tests {
 
         let duplicate = jwks_document(&["one", "one"]);
         assert!(matches!(parse_jwks(&duplicate), Err(JwksError::InvalidDocument)));
+    }
+
+    #[test]
+    fn http_source_accepts_only_readable_pem_ca_bundles() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let rcgen::CertifiedKey { cert, .. } =
+            rcgen::generate_simple_self_signed(vec!["issuer.example.test".to_string()]).unwrap();
+        let ca_path = temp_dir.path().join("issuer-ca.pem");
+        std::fs::write(&ca_path, cert.pem()).unwrap();
+
+        assert!(HttpJwksSource::new("https://issuer.example.test/jwks", Some(&ca_path)).is_ok());
+
+        let invalid_path = temp_dir.path().join("invalid-ca.pem");
+        std::fs::write(&invalid_path, b"not a certificate").unwrap();
+        assert!(matches!(
+            HttpJwksSource::new("https://issuer.example.test/jwks", Some(&invalid_path)),
+            Err(JwksError::InvalidCa)
+        ));
     }
 
     #[tokio::test]

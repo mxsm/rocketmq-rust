@@ -1,0 +1,98 @@
+schema_version: rocketmq.sre.required-signals.v1
+component: name_server
+exposure:
+  implementation: implemented_local
+  observable: true
+  remote_queryable: false
+signals:
+  - requirement_id: nameserver.route_requests
+    purpose: Measure route lookup demand and availability.
+    owner: name-server
+    source_symbol: NAMESRV_ROUTE_REQUEST_TOTAL
+    registry_reference: rocketmq_namesrv_route_request_total
+    signal_type: metric
+    status: existing
+    query: sum(rate(rocketmq_namesrv_route_request_total[5m]))
+    freshness_seconds: 60
+    expected_attributes: []
+    sensitivity: operational
+    missing_behavior: missing
+    evidence_field: nameserver.route_request_rate
+  - requirement_id: nameserver.route_errors
+    purpose: Separate missing, rejected, and internal route failures.
+    owner: name-server
+    source_symbol: NAMESRV_ROUTE_ERRORS_TOTAL
+    registry_reference: rocketmq_namesrv_route_errors_total
+    signal_type: metric
+    status: existing
+    query: sum by (result) (rate(rocketmq_namesrv_route_errors_total[5m]))
+    freshness_seconds: 60
+    expected_attributes: [result]
+    sensitivity: operational
+    missing_behavior: missing
+    evidence_field: nameserver.route_errors
+  - requirement_id: nameserver.route_freshness
+    purpose: Detect stale broker registrations used in routing.
+    owner: name-server
+    source_symbol: NAMESRV_ROUTE_FRESHNESS
+    registry_reference: rocketmq_namesrv_route_freshness
+    signal_type: metric
+    status: existing
+    query: histogram_quantile(0.99, sum by (le) (rate(rocketmq_namesrv_route_freshness_bucket[5m])))
+    freshness_seconds: 60
+    expected_attributes: []
+    sensitivity: operational
+    missing_behavior: missing
+    evidence_field: nameserver.route_freshness_p99_ms
+  - requirement_id: nameserver.active_brokers
+    purpose: Detect registration loss.
+    owner: name-server
+    source_symbol: NAMESRV_ACTIVE_BROKERS
+    registry_reference: rocketmq_namesrv_active_brokers
+    signal_type: metric
+    status: existing
+    query: max(rocketmq_namesrv_active_brokers)
+    freshness_seconds: 30
+    expected_attributes: []
+    sensitivity: operational
+    missing_behavior: missing
+    evidence_field: nameserver.active_brokers
+  - requirement_id: nameserver.broker_registrations
+    purpose: Confirm that broker registration traffic reaches the routing table.
+    owner: name-server
+    source_symbol: NAMESRV_BROKER_REGISTRATIONS
+    registry_reference: rocketmq_namesrv_broker_registrations
+    signal_type: metric
+    status: existing
+    query: sum(rate(rocketmq_namesrv_broker_registrations[5m]))
+    freshness_seconds: 60
+    expected_attributes: []
+    sensitivity: operational
+    missing_behavior: missing
+    evidence_field: nameserver.broker_registration_rate
+  - requirement_id: nameserver.route_trace
+    purpose: Correlate route failures with request latency.
+    owner: name-server
+    source_symbol: NAMESRV_ROUTE_LOOKUP
+    registry_reference: RocketMQ NAMESRV ROUTE_LOOKUP
+    signal_type: span
+    status: existing
+    query: span.name = "RocketMQ NAMESRV ROUTE_LOOKUP"
+    freshness_seconds: 300
+    expected_attributes: [result]
+    sensitivity: operational
+    missing_behavior: not_production_verified
+    evidence_field: nameserver.route_trace
+  - requirement_id: nameserver.registration_trace
+    purpose: Correlate bounded broker registration outcomes with routing changes.
+    owner: name-server
+    source_symbol: NAMESRV_BROKER_REGISTRATION
+    registry_reference: RocketMQ NAMESRV BROKER_REGISTRATION
+    signal_type: span
+    status: existing
+    query: span.name = "RocketMQ NAMESRV BROKER_REGISTRATION"
+    freshness_seconds: 300
+    expected_attributes: [result]
+    sensitivity: operational
+    missing_behavior: not_production_verified
+    evidence_field: nameserver.registration_trace

@@ -86,6 +86,14 @@ impl ProxyRequestOutcome {
             Self::Transport { .. } => ProxyRpcOutcome::TransportFailed,
         }
     }
+
+    pub(crate) fn metric_result(&self) -> &'static str {
+        match self {
+            Self::Payload(status) if status.is_ok() => "success",
+            Self::Payload(_) => "payload_failure",
+            Self::Transport { .. } => "transport_failure",
+        }
+    }
 }
 
 #[async_trait]

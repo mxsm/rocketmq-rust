@@ -1,0 +1,482 @@
+{
+  "$defs": {
+    "ActionDescriptor": {
+      "description": "Extension contract for a future action.",
+      "properties": {
+        "config_schema": true,
+        "deprecation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Deprecation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "execution_supported": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "required_capabilities": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "risk": {
+          "$ref": "#/$defs/ActionRisk"
+        },
+        "status": {
+          "$ref": "#/$defs/DescriptorStatus"
+        },
+        "supported_versions": {
+          "items": {
+            "$ref": "#/$defs/SchemaVersion"
+          },
+          "type": "array"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "owner",
+        "supported_versions",
+        "config_schema",
+        "status",
+        "risk",
+        "execution_supported"
+      ],
+      "type": "object"
+    },
+    "ActionRisk": {
+      "description": "Risk taxonomy reserved for future action planning and approval.",
+      "enum": [
+        "read",
+        "plan",
+        "r1",
+        "r2",
+        "r3"
+      ],
+      "type": "string"
+    },
+    "Deprecation": {
+      "description": "Explicit migration information for a deprecated extension.",
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "replacement": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "since": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "since",
+        "message"
+      ],
+      "type": "object"
+    },
+    "DescriptorStatus": {
+      "description": "Lifecycle status of one descriptor version.",
+      "enum": [
+        "active",
+        "disabled",
+        "deprecated"
+      ],
+      "type": "string"
+    },
+    "DiagnosticPackDescriptor": {
+      "description": "Extension contract for a diagnostic reasoning pack.",
+      "properties": {
+        "config_schema": true,
+        "deprecation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Deprecation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "produced_hypotheses": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "required_capabilities": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "required_sources": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "status": {
+          "$ref": "#/$defs/DescriptorStatus"
+        },
+        "supported_versions": {
+          "items": {
+            "$ref": "#/$defs/SchemaVersion"
+          },
+          "type": "array"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "owner",
+        "supported_versions",
+        "config_schema",
+        "status",
+        "required_sources",
+        "produced_hypotheses"
+      ],
+      "type": "object"
+    },
+    "EvidenceSourceDescriptor": {
+      "description": "Extension contract for a queryable evidence source.",
+      "properties": {
+        "config_schema": true,
+        "deprecation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Deprecation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "query_schema": true,
+        "required_capabilities": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "result_schema": true,
+        "source_kind": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/DescriptorStatus"
+        },
+        "supported_versions": {
+          "items": {
+            "$ref": "#/$defs/SchemaVersion"
+          },
+          "type": "array"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "owner",
+        "supported_versions",
+        "config_schema",
+        "status",
+        "source_kind",
+        "query_schema",
+        "result_schema"
+      ],
+      "type": "object"
+    },
+    "IntegrationDescriptor": {
+      "description": "Extension contract for an external system integration.",
+      "properties": {
+        "config_schema": true,
+        "deprecation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Deprecation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "inbound": {
+          "type": "boolean"
+        },
+        "integration_kind": {
+          "type": "string"
+        },
+        "outbound": {
+          "type": "boolean"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "required_capabilities": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "status": {
+          "$ref": "#/$defs/DescriptorStatus"
+        },
+        "supported_versions": {
+          "items": {
+            "$ref": "#/$defs/SchemaVersion"
+          },
+          "type": "array"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "owner",
+        "supported_versions",
+        "config_schema",
+        "status",
+        "integration_kind",
+        "inbound",
+        "outbound"
+      ],
+      "type": "object"
+    },
+    "ProviderDescriptor": {
+      "description": "Model provider capabilities without provider SDK coupling.",
+      "properties": {
+        "config_schema": true,
+        "deprecation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Deprecation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "protocols": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "required_capabilities": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "status": {
+          "$ref": "#/$defs/DescriptorStatus"
+        },
+        "supported_versions": {
+          "items": {
+            "$ref": "#/$defs/SchemaVersion"
+          },
+          "type": "array"
+        },
+        "supports_embeddings": {
+          "type": "boolean"
+        },
+        "supports_streaming": {
+          "type": "boolean"
+        },
+        "supports_structured_output": {
+          "type": "boolean"
+        },
+        "supports_tools": {
+          "type": "boolean"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "owner",
+        "supported_versions",
+        "config_schema",
+        "status",
+        "protocols",
+        "supports_streaming",
+        "supports_tools",
+        "supports_structured_output",
+        "supports_embeddings"
+      ],
+      "type": "object"
+    },
+    "SchemaVersion": {
+      "description": "Version negotiation information for a serialized contract family.",
+      "properties": {
+        "family": {
+          "type": "string"
+        },
+        "major": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "minor": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "required_features": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "family",
+        "major",
+        "minor"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "All Phase 00 descriptor types in one versioned registry value.",
+  "oneOf": [
+    {
+      "properties": {
+        "descriptor": {
+          "$ref": "#/$defs/EvidenceSourceDescriptor"
+        },
+        "kind": {
+          "const": "evidence_source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "descriptor"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "descriptor": {
+          "$ref": "#/$defs/DiagnosticPackDescriptor"
+        },
+        "kind": {
+          "const": "diagnostic_pack",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "descriptor"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "descriptor": {
+          "$ref": "#/$defs/ActionDescriptor"
+        },
+        "kind": {
+          "const": "action",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "descriptor"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "descriptor": {
+          "$ref": "#/$defs/ProviderDescriptor"
+        },
+        "kind": {
+          "const": "provider",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "descriptor"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "descriptor": {
+          "$ref": "#/$defs/IntegrationDescriptor"
+        },
+        "kind": {
+          "const": "integration",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "descriptor"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "Descriptor"
+}

@@ -16,14 +16,20 @@ use std::path::Path;
 use std::str::FromStr;
 
 use clap::Parser;
+use rocketmq_admin_core::core::security::AdminCredentials;
 use serde::de;
 use serde::Deserialize;
 
 use crate::error::McpError;
 
+const MAX_JWKS_CA_BYTES: usize = 1024 * 1024;
+const MAX_CLUSTER_CREDENTIAL_BYTES: usize = 64 * 1024;
+
 #[derive(Debug, Clone, Parser)]
 pub struct Args {
-    #[arg(long, default_value = "rocketmq-tools/rocketmq-mcp/conf/mcp.example.toml")]
+    /// Configuration is explicit so the standalone binary never depends on
+    /// the caller's current working directory.
+    #[arg(long, env = "ROCKETMQ_MCP_CONFIG")]
     pub config: String,
 
     #[arg(long, default_value = "stdio", value_parser = parse_transport)]
@@ -51,10 +57,18 @@ pub struct McpConfig {
 
 impl McpConfig {
     pub fn load(path: impl AsRef<Path>) -> Result<Self, McpError> {
-        let path = path.as_ref();
-        let config = config::Config::builder().add_source(config::File::from(path)).build()?;
+        let requested_path = path.as_ref();
+        let path = requested_path.canonicalize().map_err(|error| {
+            McpError::InvalidConfig(format!(
+                "MCP configuration `{}` cannot be resolved: {error}",
+                requested_path.display()
+            ))
+        })?;
+        let config = config::Config::builder()
+            .add_source(config::File::from(path.as_path()))
+            .build()?;
         let mut config = config.try_deserialize::<Self>()?;
-        config.resolve_permissions_path(path)?;
+        config.resolve_paths(&path)?;
         config.validate()?;
         Ok(config)
     }
@@ -112,8 +126,20 @@ impl McpConfig {
         for cluster in &self.clusters {
             validate_non_empty("clusters.name", &cluster.name)?;
             validate_non_empty("clusters.namesrv_addr", &cluster.namesrv_addr)?;
+            if let Some(rocketmq_cluster_name) = cluster.rocketmq_cluster_name.as_deref() {
+                validate_non_empty("clusters.rocketmq_cluster_name", rocketmq_cluster_name)?;
+            }
+            if cluster.tenant.as_deref().is_some_and(|tenant| tenant.trim().is_empty()) {
+                return Err(McpError::InvalidConfig(
+                    "clusters.tenant must not be empty when configured".to_string(),
+                ));
+            }
             if cluster.default.unwrap_or(false) {
                 default_count += 1;
+            }
+            if let Some(credentials) = &cluster.credentials {
+                credentials.validate_reference(&cluster.name)?;
+                credentials.resolve(&cluster.name)?;
             }
         }
 
@@ -194,16 +220,11 @@ impl McpConfig {
         Ok(())
     }
 
-    fn resolve_permissions_path(&mut self, config_path: &Path) -> Result<(), McpError> {
-        let permissions_path = Path::new(&self.security.permissions_file);
-        let resolved = if permissions_path.is_absolute() {
-            permissions_path.to_path_buf()
-        } else {
-            config_path
-                .parent()
-                .unwrap_or_else(|| Path::new("."))
-                .join(permissions_path)
-        };
+    fn resolve_paths(&mut self, config_path: &Path) -> Result<(), McpError> {
+        let config_dir = config_path
+            .parent()
+            .ok_or_else(|| McpError::InvalidConfig("MCP configuration has no parent directory".to_string()))?;
+        let resolved = resolve_config_relative(config_dir, &self.security.permissions_file);
         let canonical = resolved.canonicalize().map_err(|error| {
             McpError::InvalidConfig(format!(
                 "security.permissions_file `{}` cannot be resolved: {error}",
@@ -211,7 +232,45 @@ impl McpConfig {
             ))
         })?;
         self.security.permissions_file = canonical.to_string_lossy().into_owned();
+
+        self.server.http.tls.cert_path = resolve_config_relative(config_dir, &self.server.http.tls.cert_path)
+            .to_string_lossy()
+            .into_owned();
+        self.server.http.tls.key_path = resolve_config_relative(config_dir, &self.server.http.tls.key_path)
+            .to_string_lossy()
+            .into_owned();
+        if let Some(jwks_ca_path) = self.server.http.auth.jwks_ca_path.as_deref() {
+            validate_non_empty("server.http.auth.jwks_ca_path", jwks_ca_path)?;
+            let resolved = resolve_config_relative(config_dir, jwks_ca_path);
+            let canonical = resolved.canonicalize().map_err(|error| {
+                McpError::InvalidConfig(format!(
+                    "server.http.auth.jwks_ca_path `{}` cannot be resolved: {error}",
+                    resolved.display()
+                ))
+            })?;
+            validate_jwks_ca_file(&canonical)?;
+            self.server.http.auth.jwks_ca_path = Some(canonical.to_string_lossy().into_owned());
+        }
+        if !self.audit.path.trim().is_empty() {
+            self.audit.path = resolve_config_relative(config_dir, &self.audit.path)
+                .to_string_lossy()
+                .into_owned();
+        }
+        for cluster in &mut self.clusters {
+            if let Some(credentials) = &mut cluster.credentials {
+                credentials.resolve_paths(config_dir, &cluster.name)?;
+            }
+        }
         Ok(())
+    }
+}
+
+fn resolve_config_relative(config_dir: &Path, value: &str) -> std::path::PathBuf {
+    let path = Path::new(value);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        config_dir.join(path)
     }
 }
 
@@ -338,6 +397,8 @@ impl HttpTlsConfig {
 pub struct HttpAuthConfig {
     pub mode: HttpAuthMode,
     pub development_token_env: String,
+    #[serde(default)]
+    pub development_tenant: Option<String>,
     pub issuer: String,
     pub audience: String,
     pub required_scopes: Vec<String>,
@@ -346,6 +407,8 @@ pub struct HttpAuthConfig {
     pub jwt_key_env: String,
     #[serde(default)]
     pub jwks_url: String,
+    #[serde(default)]
+    pub jwks_ca_path: Option<String>,
     #[serde(default = "default_jwks_refresh_seconds")]
     pub jwks_refresh_seconds: u64,
     #[serde(default = "default_jwks_max_stale_seconds")]
@@ -356,6 +419,15 @@ pub struct HttpAuthConfig {
 impl HttpAuthConfig {
     fn validate(&self) -> Result<(), McpError> {
         validate_non_empty("server.http.auth.development_token_env", &self.development_token_env)?;
+        if self
+            .development_tenant
+            .as_deref()
+            .is_some_and(|tenant| tenant.trim().is_empty())
+        {
+            return Err(McpError::InvalidConfig(
+                "server.http.auth.development_tenant must not be empty when configured".to_string(),
+            ));
+        }
         validate_non_empty(
             "server.http.auth.protected_resource_metadata_path",
             &self.protected_resource_metadata_path,
@@ -368,6 +440,11 @@ impl HttpAuthConfig {
         if self.required_scopes.iter().any(|scope| scope.trim().is_empty()) {
             return Err(McpError::InvalidConfig(
                 "server.http.auth.required_scopes must not contain empty values".to_string(),
+            ));
+        }
+        if self.jwks_ca_path.is_some() && self.mode != HttpAuthMode::OAuthJwt {
+            return Err(McpError::InvalidConfig(
+                "server.http.auth.jwks_ca_path is only valid for OAuth JWT over HTTPS".to_string(),
             ));
         }
         if self.mode == HttpAuthMode::OAuthJwt {
@@ -410,6 +487,10 @@ impl HttpAuthConfig {
                 return Err(McpError::InvalidConfig(
                     "server.http.auth.jwks_url must be an absolute HTTPS URL".to_string(),
                 ));
+            }
+            if let Some(jwks_ca_path) = self.jwks_ca_path.as_deref() {
+                validate_non_empty("server.http.auth.jwks_ca_path", jwks_ca_path)?;
+                validate_jwks_ca_file(Path::new(jwks_ca_path))?;
             }
             if self.jwks_refresh_seconds == 0 {
                 return Err(McpError::InvalidConfig(
@@ -454,6 +535,182 @@ pub struct ClusterConfig {
     pub name: String,
     pub namesrv_addr: String,
     pub default: Option<bool>,
+    /// Physical cluster name returned by NameServer. Defaults to the logical
+    /// MCP cluster name when both are identical.
+    #[serde(default)]
+    pub rocketmq_cluster_name: Option<String>,
+    /// Optional tenant binding. When set, HTTP callers must present the exact
+    /// `rocketmq_tenant` JWT claim.
+    #[serde(default)]
+    pub tenant: Option<String>,
+    /// Reference to a RocketMQ request-signing identity.
+    ///
+    /// Secret values are never accepted inline in the MCP configuration.
+    #[serde(default)]
+    pub credentials: Option<ClusterCredentialReference>,
+}
+
+impl ClusterConfig {
+    pub(crate) fn physical_cluster_name(&self) -> &str {
+        self.rocketmq_cluster_name.as_deref().unwrap_or(&self.name)
+    }
+
+    pub(crate) fn resolve_admin_credentials(&self) -> Result<Option<AdminCredentials>, McpError> {
+        self.credentials
+            .as_ref()
+            .map(|reference| reference.resolve(&self.name))
+            .transpose()
+    }
+}
+
+#[derive(Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ClusterCredentialReference {
+    #[serde(default)]
+    pub access_key_env: Option<String>,
+    #[serde(default)]
+    pub secret_key_env: Option<String>,
+    #[serde(default)]
+    pub security_token_env: Option<String>,
+    /// Mounted YAML secret containing `access_key`, `secret_key`, and an
+    /// optional `security_token`.
+    #[serde(default)]
+    pub file: Option<String>,
+}
+
+impl std::fmt::Debug for ClusterCredentialReference {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let source = if self.file.is_some() {
+            "mounted_file"
+        } else {
+            "environment"
+        };
+        formatter
+            .debug_struct("ClusterCredentialReference")
+            .field("source", &source)
+            .field("reference", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl ClusterCredentialReference {
+    fn validate_reference(&self, cluster: &str) -> Result<(), McpError> {
+        let has_file = self.file.is_some();
+        let has_environment =
+            self.access_key_env.is_some() || self.secret_key_env.is_some() || self.security_token_env.is_some();
+        if has_file == has_environment {
+            return Err(cluster_credentials_error(
+                cluster,
+                "configure exactly one source: file or access_key_env/secret_key_env",
+            ));
+        }
+        if let Some(file) = &self.file {
+            if file.trim().is_empty() {
+                return Err(cluster_credentials_error(cluster, "file reference must not be empty"));
+            }
+            return Ok(());
+        }
+
+        let access_key_env = self.access_key_env.as_deref().ok_or_else(|| {
+            cluster_credentials_error(cluster, "access_key_env and secret_key_env must be configured together")
+        })?;
+        let secret_key_env = self.secret_key_env.as_deref().ok_or_else(|| {
+            cluster_credentials_error(cluster, "access_key_env and secret_key_env must be configured together")
+        })?;
+        validate_credential_env_name(cluster, "access_key_env", access_key_env)?;
+        validate_credential_env_name(cluster, "secret_key_env", secret_key_env)?;
+        if let Some(security_token_env) = self.security_token_env.as_deref() {
+            validate_credential_env_name(cluster, "security_token_env", security_token_env)?;
+        }
+        Ok(())
+    }
+
+    fn resolve_paths(&mut self, config_dir: &Path, cluster: &str) -> Result<(), McpError> {
+        let Some(file) = self.file.as_deref() else {
+            return Ok(());
+        };
+        if file.trim().is_empty() {
+            return Err(cluster_credentials_error(cluster, "file reference must not be empty"));
+        }
+        let resolved = resolve_config_relative(config_dir, file);
+        let canonical = resolved
+            .canonicalize()
+            .map_err(|_| cluster_credentials_error(cluster, "credential file reference cannot be resolved"))?;
+        self.file = Some(canonical.to_string_lossy().into_owned());
+        Ok(())
+    }
+
+    fn resolve(&self, cluster: &str) -> Result<AdminCredentials, McpError> {
+        self.validate_reference(cluster)?;
+        let (access_key, secret_key, security_token) = if let Some(file) = self.file.as_deref() {
+            resolve_credential_file(cluster, Path::new(file))?
+        } else {
+            let access_key_env = self.access_key_env.as_deref().ok_or_else(|| {
+                cluster_credentials_error(cluster, "access_key_env and secret_key_env must be configured together")
+            })?;
+            let secret_key_env = self.secret_key_env.as_deref().ok_or_else(|| {
+                cluster_credentials_error(cluster, "access_key_env and secret_key_env must be configured together")
+            })?;
+            let access_key = read_credential_env(cluster, access_key_env)?;
+            let secret_key = read_credential_env(cluster, secret_key_env)?;
+            let security_token = self
+                .security_token_env
+                .as_deref()
+                .map(|name| read_credential_env(cluster, name))
+                .transpose()?;
+            (access_key, secret_key, security_token)
+        };
+
+        AdminCredentials::try_new(access_key, secret_key, security_token)
+            .map_err(|_| cluster_credentials_error(cluster, "resolved credentials contain an empty required value"))
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClusterCredentialFile {
+    access_key: String,
+    secret_key: String,
+    #[serde(default)]
+    security_token: Option<String>,
+}
+
+fn resolve_credential_file(cluster: &str, path: &Path) -> Result<(String, String, Option<String>), McpError> {
+    let metadata =
+        std::fs::metadata(path).map_err(|_| cluster_credentials_error(cluster, "credential file is unavailable"))?;
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_CLUSTER_CREDENTIAL_BYTES as u64 {
+        return Err(cluster_credentials_error(
+            cluster,
+            "credential file must be a non-empty regular file no larger than 64 KiB",
+        ));
+    }
+    let bytes =
+        std::fs::read(path).map_err(|_| cluster_credentials_error(cluster, "credential file is unavailable"))?;
+    let credentials: ClusterCredentialFile = serde_yaml::from_slice(&bytes)
+        .map_err(|_| cluster_credentials_error(cluster, "credential file must be valid bounded YAML"))?;
+    Ok((
+        credentials.access_key,
+        credentials.secret_key,
+        credentials.security_token,
+    ))
+}
+
+fn read_credential_env(cluster: &str, name: &str) -> Result<String, McpError> {
+    std::env::var(name).map_err(|_| cluster_credentials_error(cluster, "credential environment value is unavailable"))
+}
+
+fn validate_credential_env_name(cluster: &str, field: &str, name: &str) -> Result<(), McpError> {
+    if name.trim().is_empty() || name.contains('=') || name.contains('\0') {
+        return Err(cluster_credentials_error(
+            cluster,
+            format!("{field} must contain a valid environment variable name"),
+        ));
+    }
+    Ok(())
+}
+
+fn cluster_credentials_error(cluster: &str, reason: impl std::fmt::Display) -> McpError {
+    McpError::InvalidConfig(format!("clusters `{cluster}` credentials: {reason}"))
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -514,6 +771,37 @@ impl Default for DiagnosisConfig {
 fn validate_non_empty(field: &str, value: &str) -> Result<(), McpError> {
     if value.trim().is_empty() {
         return Err(McpError::InvalidConfig(format!("{field} must not be empty")));
+    }
+    Ok(())
+}
+
+fn validate_jwks_ca_file(path: &Path) -> Result<(), McpError> {
+    let bytes = std::fs::read(path).map_err(|error| {
+        McpError::InvalidConfig(format!(
+            "server.http.auth.jwks_ca_path `{}` is not a readable file: {error}",
+            path.display()
+        ))
+    })?;
+    if bytes.is_empty() || bytes.len() > MAX_JWKS_CA_BYTES {
+        return Err(McpError::InvalidConfig(
+            "server.http.auth.jwks_ca_path must contain a bounded PEM CA bundle".to_string(),
+        ));
+    }
+    let pem = std::str::from_utf8(&bytes).map_err(|_| {
+        McpError::InvalidConfig("server.http.auth.jwks_ca_path must contain UTF-8 PEM certificates".to_string())
+    })?;
+    let certificate_count = pem.matches("-----BEGIN CERTIFICATE-----").count();
+    let contains_other_pem_section = pem.lines().map(str::trim).any(|line| {
+        (line.starts_with("-----BEGIN ") && line != "-----BEGIN CERTIFICATE-----")
+            || (line.starts_with("-----END ") && line != "-----END CERTIFICATE-----")
+    });
+    if certificate_count == 0
+        || certificate_count != pem.matches("-----END CERTIFICATE-----").count()
+        || contains_other_pem_section
+    {
+        return Err(McpError::InvalidConfig(
+            "server.http.auth.jwks_ca_path must contain only PEM certificates".to_string(),
+        ));
     }
     Ok(())
 }
@@ -613,9 +901,76 @@ mod tests {
     }
 
     #[test]
+    fn mounted_cluster_credentials_resolve_without_exposing_secret_values() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("rocketmq-reader.yml");
+        std::fs::write(
+            &path,
+            "access_key: reader-access-value\nsecret_key: reader-secret-value\n",
+        )
+        .unwrap();
+        let reference = ClusterCredentialReference {
+            access_key_env: None,
+            secret_key_env: None,
+            security_token_env: None,
+            file: Some(path.to_string_lossy().into_owned()),
+        };
+        let reference_debug = format!("{reference:?}");
+        assert!(reference_debug.contains("mounted_file"));
+        assert!(reference_debug.contains("[REDACTED]"));
+        assert!(!reference_debug.contains("rocketmq-reader.yml"));
+
+        let credentials = reference.resolve("local-dev").unwrap();
+        let debug = format!("{credentials:?}");
+
+        assert!(!debug.contains("reader-access-value"));
+        assert!(!debug.contains("reader-secret-value"));
+        assert!(debug.contains("<redacted>"));
+    }
+
+    #[test]
+    fn cluster_credentials_reject_inline_and_ambiguous_secret_sources() {
+        assert!(serde_json::from_value::<ClusterCredentialReference>(serde_json::json!({
+            "access_key": "inline-access",
+            "secret_key": "inline-secret"
+        }))
+        .is_err());
+
+        let reference = ClusterCredentialReference {
+            access_key_env: Some("PRIVATE_READER_ACCESS_REFERENCE".to_string()),
+            secret_key_env: Some("PRIVATE_READER_SECRET_REFERENCE".to_string()),
+            security_token_env: None,
+            file: Some("private-reader-reference.yml".to_string()),
+        };
+        let debug = format!("{reference:?}");
+        assert!(!debug.contains("PRIVATE_READER_ACCESS_REFERENCE"));
+        assert!(!debug.contains("PRIVATE_READER_SECRET_REFERENCE"));
+        assert!(!debug.contains("private-reader-reference.yml"));
+        let error = reference.validate_reference("local-dev").unwrap_err().to_string();
+        assert!(error.contains("exactly one source"));
+        assert!(!error.contains("PRIVATE_READER_ACCESS_REFERENCE"));
+        assert!(!error.contains("PRIVATE_READER_SECRET_REFERENCE"));
+        assert!(!error.contains("private-reader-reference.yml"));
+
+        let missing_path = std::path::Path::new("private").join("credential").join("reference.yml");
+        let missing = ClusterCredentialReference {
+            access_key_env: None,
+            secret_key_env: None,
+            security_token_env: None,
+            file: Some(missing_path.to_string_lossy().into_owned()),
+        };
+        let error = missing.resolve("local-dev").unwrap_err().to_string();
+        assert!(error.contains("credential file is unavailable"));
+        assert!(!error.contains("reference.yml"));
+        assert!(!error.contains("private"));
+    }
+
+    #[test]
     fn command_line_overrides_update_effective_config() {
         let args = Args::try_parse_from([
             "rocketmq-mcp",
+            "--config",
+            "conf/mcp.example.toml",
             "--transport",
             "stdio",
             "--bind",
@@ -634,8 +989,20 @@ mod tests {
     }
 
     #[test]
+    fn standalone_config_is_explicit_and_relative_paths_are_config_owned() {
+        assert!(Args::try_parse_from(["rocketmq-mcp"]).is_err());
+
+        let config = McpConfig::load(example_config_path()).unwrap();
+        assert!(Path::new(&config.security.permissions_file).is_absolute());
+        assert!(Path::new(&config.server.http.tls.cert_path).is_absolute());
+        assert!(Path::new(&config.server.http.tls.key_path).is_absolute());
+        assert!(Path::new(&config.audit.path).is_absolute());
+    }
+
+    #[test]
     fn endpoint_override_must_be_absolute_path() {
-        let args = Args::try_parse_from(["rocketmq-mcp", "--endpoint", "mcp"]).unwrap();
+        let args =
+            Args::try_parse_from(["rocketmq-mcp", "--config", "conf/mcp.example.toml", "--endpoint", "mcp"]).unwrap();
         let mut config = McpConfig::load(example_config_path()).unwrap();
 
         let err = config.apply_overrides(&args).unwrap_err();
@@ -710,6 +1077,42 @@ mod tests {
         config.server.http.auth.jwt_algorithm = JwtAlgorithm::Rs256;
         config.server.http.auth.jwks_url = "http://issuer.example.test/jwks".to_string();
         assert!(config.validate().unwrap_err().to_string().contains("absolute HTTPS"));
+    }
+
+    #[test]
+    fn custom_jwks_ca_requires_oauth_and_a_readable_pem_certificate() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let ca_path = temp_dir.path().join("issuer-ca.pem");
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.server.http.auth.jwks_ca_path = Some(ca_path.to_string_lossy().into_owned());
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("only valid for OAuth JWT"));
+
+        config.server.http.auth.mode = HttpAuthMode::OAuthJwt;
+        config.server.http.auth.issuer = "https://issuer.example.test".to_string();
+        config.server.http.auth.audience = "rocketmq-mcp".to_string();
+        config.server.http.auth.jwt_algorithm = JwtAlgorithm::Rs256;
+        config.server.http.auth.jwks_url = "https://issuer.example.test/jwks".to_string();
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("not a readable file"));
+
+        std::fs::write(&ca_path, b"not a certificate").unwrap();
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("only PEM certificates"));
+
+        let rcgen::CertifiedKey { cert, .. } =
+            rcgen::generate_simple_self_signed(vec!["issuer.example.test".to_string()]).unwrap();
+        std::fs::write(&ca_path, cert.pem()).unwrap();
+        config.validate().unwrap();
     }
 
     fn example_config_path() -> std::path::PathBuf {

@@ -1,0 +1,161 @@
+// Copyright 2023 The RocketMQ Rust Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use std::fmt::Debug;
+use std::fmt::Formatter;
+#[cfg(test)]
+use std::net::IpAddr;
+#[cfg(test)]
+use std::net::Ipv4Addr;
+use std::net::SocketAddr;
+use std::time::Duration;
+
+use crate::ControlPlaneError;
+use crate::DEFAULT_CONTROL_PLANE_PORT;
+
+/// Process configuration loaded from explicit environment variables.
+#[derive(Clone)]
+pub struct ControlPlaneConfig {
+    bind_addr: SocketAddr,
+    database_url: String,
+    database_max_connections: u32,
+    shutdown_timeout: Duration,
+    internal_token: String,
+}
+
+impl ControlPlaneConfig {
+    /// Loads configuration without logging the database URL.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ControlPlaneError::Configuration`] for missing or malformed
+    /// required values.
+    pub fn from_env() -> Result<Self, ControlPlaneError> {
+        let bind_addr = std::env::var("ROCKETMQ_SRE_BIND_ADDR")
+            .unwrap_or_else(|_| format!("0.0.0.0:{DEFAULT_CONTROL_PLANE_PORT}"))
+            .parse()
+            .map_err(|error| ControlPlaneError::configuration(format!("ROCKETMQ_SRE_BIND_ADDR is invalid: {error}")))?;
+        let database_url = std::env::var("DATABASE_URL")
+            .map_err(|_| ControlPlaneError::configuration("DATABASE_URL must be configured"))?;
+        if database_url.trim().is_empty() {
+            return Err(ControlPlaneError::configuration("DATABASE_URL must not be empty"));
+        }
+        let database_max_connections = parse_env("ROCKETMQ_SRE_DATABASE_MAX_CONNECTIONS", 10)?;
+        if database_max_connections == 0 {
+            return Err(ControlPlaneError::configuration(
+                "ROCKETMQ_SRE_DATABASE_MAX_CONNECTIONS must be greater than zero",
+            ));
+        }
+        let shutdown_seconds = parse_env("ROCKETMQ_SRE_SHUTDOWN_SECONDS", 30)?;
+        if shutdown_seconds == 0 {
+            return Err(ControlPlaneError::configuration(
+                "ROCKETMQ_SRE_SHUTDOWN_SECONDS must be greater than zero",
+            ));
+        }
+        let internal_token = std::env::var("ROCKETMQ_SRE_INTERNAL_TOKEN")
+            .map_err(|_| ControlPlaneError::configuration("ROCKETMQ_SRE_INTERNAL_TOKEN must be configured"))?;
+        if internal_token.trim().is_empty() {
+            return Err(ControlPlaneError::configuration(
+                "ROCKETMQ_SRE_INTERNAL_TOKEN must not be empty",
+            ));
+        }
+        Ok(Self {
+            bind_addr,
+            database_url,
+            database_max_connections,
+            shutdown_timeout: Duration::from_secs(shutdown_seconds),
+            internal_token,
+        })
+    }
+
+    #[must_use]
+    pub const fn bind_addr(&self) -> SocketAddr {
+        self.bind_addr
+    }
+
+    #[must_use]
+    pub fn database_url(&self) -> &str {
+        &self.database_url
+    }
+
+    #[must_use]
+    pub const fn database_max_connections(&self) -> u32 {
+        self.database_max_connections
+    }
+
+    #[must_use]
+    pub const fn shutdown_timeout(&self) -> Duration {
+        self.shutdown_timeout
+    }
+
+    #[must_use]
+    pub fn internal_token(&self) -> &str {
+        &self.internal_token
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_config() -> Self {
+        Self {
+            bind_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+            database_url: "postgres://redacted".to_owned(),
+            database_max_connections: 1,
+            shutdown_timeout: Duration::from_secs(1),
+            internal_token: "test-internal-token".to_owned(),
+        }
+    }
+}
+
+impl Debug for ControlPlaneConfig {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ControlPlaneConfig")
+            .field("bind_addr", &self.bind_addr)
+            .field("database_url", &"[REDACTED]")
+            .field("database_max_connections", &self.database_max_connections)
+            .field("shutdown_timeout", &self.shutdown_timeout)
+            .field("internal_token", &"[REDACTED]")
+            .finish()
+    }
+}
+
+fn parse_env<T>(name: &str, default: T) -> Result<T, ControlPlaneError>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    match std::env::var(name) {
+        Ok(value) => value
+            .parse()
+            .map_err(|error| ControlPlaneError::configuration(format!("{name} is invalid: {error}"))),
+        Err(std::env::VarError::NotPresent) => Ok(default),
+        Err(error) => Err(ControlPlaneError::configuration(format!(
+            "{name} cannot be read: {error}"
+        ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_output_redacts_database_credentials() {
+        let config = ControlPlaneConfig::test_config();
+        let debug = format!("{config:?}");
+
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("postgres://redacted"));
+        assert!(!debug.contains("test-internal-token"));
+    }
+}

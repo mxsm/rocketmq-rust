@@ -143,7 +143,29 @@ impl RequestProcessor for NameServerRequestProcessor {
             Some(processor) => RequestProcessor::process_request(processor, channel, ctx, request).await,
         };
         if let Some(started) = route_request_started {
-            self.metrics.record_route_request(started.elapsed());
+            rocketmq_observability::metrics::namesrv::record_route_request(started.elapsed());
+            match &response {
+                Ok(Some(command))
+                    if command.code() == rocketmq_protocol::code::response_code::ResponseCode::TopicNotExist as i32 =>
+                {
+                    rocketmq_observability::metrics::namesrv::record_route_error(
+                        rocketmq_observability::metrics::namesrv::NameServerRouteErrorKind::NotFound,
+                    );
+                }
+                Ok(Some(command))
+                    if command.code() != rocketmq_protocol::code::response_code::ResponseCode::Success as i32 =>
+                {
+                    rocketmq_observability::metrics::namesrv::record_route_error(
+                        rocketmq_observability::metrics::namesrv::NameServerRouteErrorKind::Rejected,
+                    );
+                }
+                Err(_) => {
+                    rocketmq_observability::metrics::namesrv::record_route_error(
+                        rocketmq_observability::metrics::namesrv::NameServerRouteErrorKind::Internal,
+                    );
+                }
+                Ok(_) => {}
+            }
         }
         response
     }

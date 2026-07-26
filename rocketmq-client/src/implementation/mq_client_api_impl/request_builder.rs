@@ -14,6 +14,7 @@
 
 use super::*;
 
+#[cfg(feature = "admin-mutation")]
 pub(super) fn lite_subscription_ctl_request(
     lite_subscription_dto: LiteSubscriptionDTO,
 ) -> RocketMQResult<RemotingCommand> {
@@ -28,6 +29,7 @@ pub(super) fn notification_request(request_header: NotificationRequestHeader) ->
     RemotingCommand::create_request_command(RequestCode::Notification, request_header)
 }
 
+#[cfg(feature = "admin-mutation")]
 pub(super) fn create_and_update_plain_access_config_request(
     plain_access_config: &PlainAccessConfig,
 ) -> RocketMQResult<RemotingCommand> {
@@ -40,6 +42,7 @@ pub(super) fn get_acl_request(subject: CheetahString) -> RemotingCommand {
     RemotingCommand::create_request_command(RequestCode::AuthGetAcl, GetAclRequestHeader { subject })
 }
 
+#[cfg(feature = "admin-mutation")]
 pub(super) fn delete_plain_access_config_request(access_key: &CheetahString) -> RemotingCommand {
     RemotingCommand::create_request_command(RequestCode::DeleteAclConfig, EmptyHeader {})
         .set_body(access_key.as_str().as_bytes().to_vec())
@@ -60,6 +63,7 @@ pub(super) fn get_all_consumer_offset_request() -> RemotingCommand {
     RemotingCommand::create_remoting_command(RequestCode::GetAllConsumerOffset)
 }
 
+#[cfg(feature = "admin-mutation")]
 pub(super) fn create_topic_list_request(topic_config_list: Vec<TopicConfig>) -> RocketMQResult<RemotingCommand> {
     let body = CreateTopicListRequestBody { topic_config_list };
     Ok(RemotingCommand::create_request_command(
@@ -69,6 +73,7 @@ pub(super) fn create_topic_list_request(topic_config_list: Vec<TopicConfig>) -> 
     .set_body(body.encode()?))
 }
 
+#[cfg(feature = "admin-mutation")]
 pub(super) fn create_subscription_group_list_request(
     configs: Vec<SubscriptionGroupConfig>,
 ) -> RocketMQResult<RemotingCommand> {

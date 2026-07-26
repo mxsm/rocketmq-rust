@@ -38,6 +38,8 @@ pub enum MetricSource {
     Proxy,
     Controller,
     Observability,
+    Mcp,
+    Runtime,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,6 +150,11 @@ const CONTROLLER_DLEDGER_LABELS: &[&str] = &[
 ];
 const CONTROLLER_ELECTION_LABELS: &[&str] = &[labels::ADDRESS, labels::GROUP, labels::PEER_ID, labels::ELECTION_RESULT];
 const BROKER_LABEL_DROPPED_LABELS: &[&str] = &[labels::CLUSTER, labels::NODE_TYPE, labels::NODE_ID, labels::LABEL_KEY];
+const MCP_OPERATION_LABELS: &[&str] = &[labels::OPERATION_KIND, labels::OPERATION];
+const MCP_OPERATION_RESULT_LABELS: &[&str] = &[labels::OPERATION_KIND, labels::OPERATION, labels::RESULT];
+const RUNTIME_TASK_LABELS: &[&str] = &[labels::COMPONENT, labels::TASK_TYPE];
+const RUNTIME_BLOCKING_LABELS: &[&str] = &[labels::COMPONENT, labels::BLOCKING_LANE];
+const RUNTIME_LIFECYCLE_LABELS: &[&str] = &[labels::COMPONENT, labels::STATE, labels::RESULT, labels::REASON];
 
 pub const JAVA_METRICS: &[MetricDescriptor] = &[
     MetricDescriptor {
@@ -159,6 +166,13 @@ pub const JAVA_METRICS: &[MetricDescriptor] = &[
     },
     MetricDescriptor {
         name: metrics::BROKER_PERMISSION,
+        kind: MetricKind::ObservableGauge,
+        unit: "1",
+        labels: BASE_NODE_LABELS,
+        source: MetricSource::Broker,
+    },
+    MetricDescriptor {
+        name: metrics::BROKER_UP,
         kind: MetricKind::ObservableGauge,
         unit: "1",
         labels: BASE_NODE_LABELS,
@@ -943,6 +957,20 @@ pub const RUST_METRICS: &[MetricDescriptor] = &[
         source: MetricSource::NameServer,
     },
     MetricDescriptor {
+        name: metrics::NAMESRV_ROUTE_ERRORS_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{error}",
+        labels: &[labels::RESULT],
+        source: MetricSource::NameServer,
+    },
+    MetricDescriptor {
+        name: metrics::NAMESRV_ROUTE_FRESHNESS,
+        kind: MetricKind::Histogram,
+        unit: "ms",
+        labels: &[],
+        source: MetricSource::NameServer,
+    },
+    MetricDescriptor {
         name: metrics::CONTROLLER_ELECTION_TOTAL,
         kind: MetricKind::Counter,
         unit: "{election}",
@@ -966,6 +994,27 @@ pub const RUST_METRICS: &[MetricDescriptor] = &[
     MetricDescriptor {
         name: metrics::CONTROLLER_ACTIVE_BROKERS,
         kind: MetricKind::ObservableGauge,
+        unit: "{broker}",
+        labels: &[],
+        source: MetricSource::Controller,
+    },
+    MetricDescriptor {
+        name: metrics::CONTROLLER_QUORUM_HEALTH,
+        kind: MetricKind::Gauge,
+        unit: "1",
+        labels: &[],
+        source: MetricSource::Controller,
+    },
+    MetricDescriptor {
+        name: metrics::CONTROLLER_HEARTBEAT_AGE,
+        kind: MetricKind::Histogram,
+        unit: "ms",
+        labels: &[],
+        source: MetricSource::Controller,
+    },
+    MetricDescriptor {
+        name: metrics::CONTROLLER_STALE_BROKERS,
+        kind: MetricKind::Gauge,
         unit: "{broker}",
         labels: &[],
         source: MetricSource::Controller,
@@ -996,6 +1045,13 @@ pub const RUST_METRICS: &[MetricDescriptor] = &[
         kind: MetricKind::ObservableGauge,
         unit: "{connection}",
         labels: &[],
+        source: MetricSource::Proxy,
+    },
+    MetricDescriptor {
+        name: metrics::PROXY_GRPC_ERRORS_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{error}",
+        labels: &[labels::RESULT],
         source: MetricSource::Proxy,
     },
     MetricDescriptor {
@@ -1041,11 +1097,109 @@ pub const RUST_METRICS: &[MetricDescriptor] = &[
         source: MetricSource::Observability,
     },
     MetricDescriptor {
-        name: metrics::RELEASE_INFO,
+        name: metrics::MCP_REQUESTS_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{request}",
+        labels: MCP_OPERATION_RESULT_LABELS,
+        source: MetricSource::Mcp,
+    },
+    MetricDescriptor {
+        name: metrics::MCP_REQUEST_LATENCY,
+        kind: MetricKind::Histogram,
+        unit: "ms",
+        labels: MCP_OPERATION_LABELS,
+        source: MetricSource::Mcp,
+    },
+    MetricDescriptor {
+        name: metrics::MCP_ERRORS_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{error}",
+        labels: MCP_OPERATION_RESULT_LABELS,
+        source: MetricSource::Mcp,
+    },
+    MetricDescriptor {
+        name: metrics::MCP_CACHE_OPERATIONS_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{operation}",
+        labels: &[labels::RESULT],
+        source: MetricSource::Mcp,
+    },
+    MetricDescriptor {
+        name: metrics::MCP_RATE_LIMIT_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{decision}",
+        labels: &[labels::RESULT],
+        source: MetricSource::Mcp,
+    },
+    MetricDescriptor {
+        name: metrics::MCP_AUDIT_BACKLOG,
         kind: MetricKind::Gauge,
-        unit: "1",
-        labels: &[labels::SERVICE, labels::RELEASE_COMMIT, labels::RELEASE_NONCE],
-        source: MetricSource::Observability,
+        unit: "{record}",
+        labels: &[],
+        source: MetricSource::Mcp,
+    },
+    MetricDescriptor {
+        name: metrics::MCP_AUDIT_DROPPED_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{record}",
+        labels: &[labels::REASON],
+        source: MetricSource::Mcp,
+    },
+    MetricDescriptor {
+        name: metrics::MCP_AUDIT_FAILURES_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{failure}",
+        labels: &[labels::REASON],
+        source: MetricSource::Mcp,
+    },
+    MetricDescriptor {
+        name: metrics::RUNTIME_TASKS,
+        kind: MetricKind::Gauge,
+        unit: "{task}",
+        labels: RUNTIME_TASK_LABELS,
+        source: MetricSource::Runtime,
+    },
+    MetricDescriptor {
+        name: metrics::RUNTIME_TASK_GROUPS,
+        kind: MetricKind::Gauge,
+        unit: "{group}",
+        labels: &[labels::COMPONENT],
+        source: MetricSource::Runtime,
+    },
+    MetricDescriptor {
+        name: metrics::RUNTIME_LONG_RUNNING_TASKS,
+        kind: MetricKind::Gauge,
+        unit: "{task}",
+        labels: RUNTIME_TASK_LABELS,
+        source: MetricSource::Runtime,
+    },
+    MetricDescriptor {
+        name: metrics::RUNTIME_BLOCKING_QUEUED,
+        kind: MetricKind::Gauge,
+        unit: "{task}",
+        labels: RUNTIME_BLOCKING_LABELS,
+        source: MetricSource::Runtime,
+    },
+    MetricDescriptor {
+        name: metrics::RUNTIME_BLOCKING_RUNNING,
+        kind: MetricKind::Gauge,
+        unit: "{task}",
+        labels: RUNTIME_BLOCKING_LABELS,
+        source: MetricSource::Runtime,
+    },
+    MetricDescriptor {
+        name: metrics::RUNTIME_BLOCKING_TIMEOUTS,
+        kind: MetricKind::Gauge,
+        unit: "{task}",
+        labels: RUNTIME_BLOCKING_LABELS,
+        source: MetricSource::Runtime,
+    },
+    MetricDescriptor {
+        name: metrics::RUNTIME_LIFECYCLE_TRANSITIONS_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{transition}",
+        labels: RUNTIME_LIFECYCLE_LABELS,
+        source: MetricSource::Runtime,
     },
 ];
 
@@ -1072,6 +1226,7 @@ mod tests {
         "request_latency",
         "request_total",
         "rocketmq_broker_permission",
+        "rocketmq_broker_up",
         "rocketmq_commit_messages_total",
         "rocketmq_consumer_connections",
         "rocketmq_consumer_group_create_execution_time",
@@ -1179,9 +1334,9 @@ mod tests {
             .map(|descriptor| descriptor.name)
             .collect::<HashSet<_>>();
 
-        assert_eq!(JAVA_METRICS.len(), 93);
-        assert_eq!(RUST_METRICS.len(), 33);
-        assert_eq!(combined.len(), 126, "duplicate metric names across catalogs");
+        assert_eq!(JAVA_METRICS.len(), 94);
+        assert_eq!(RUST_METRICS.len(), 53);
+        assert_eq!(combined.len(), 147, "duplicate metric names across catalogs");
     }
 
     #[test]
@@ -1199,6 +1354,8 @@ mod tests {
         assert!(sources.contains(&MetricSource::Proxy));
         assert!(sources.contains(&MetricSource::Controller));
         assert!(sources.contains(&MetricSource::Observability));
+        assert!(sources.contains(&MetricSource::Mcp));
+        assert!(sources.contains(&MetricSource::Runtime));
     }
 
     #[test]
