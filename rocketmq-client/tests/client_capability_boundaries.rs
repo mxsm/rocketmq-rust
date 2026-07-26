@@ -1,0 +1,164 @@
+// Copyright 2023 The RocketMQ Rust Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+const CLIENT_FACADE: &str = include_str!("../src/implementation/mq_client_api_impl.rs");
+const CLIENT_ADMIN: &str = include_str!("../src/implementation/mq_client_api_impl/admin.rs");
+const CLIENT_CONSUMER: &str = include_str!("../src/implementation/mq_client_api_impl/consumer.rs");
+const CLIENT_PRODUCER: &str = include_str!("../src/implementation/mq_client_api_impl/producer.rs");
+const CLIENT_REQUEST_BUILDER: &str = include_str!("../src/implementation/mq_client_api_impl/request_builder.rs");
+const CLIENT_RESPONSE_DECODER: &str = include_str!("../src/implementation/mq_client_api_impl/response_decoder.rs");
+const CLIENT_ROUTE: &str = include_str!("../src/implementation/mq_client_api_impl/route.rs");
+const CLIENT_TRANSACTION: &str = include_str!("../src/implementation/mq_client_api_impl/transaction.rs");
+const CLIENT_TRANSPORT: &str = include_str!("../src/implementation/mq_client_api_impl/transport.rs");
+
+const ADMIN_FACADE: &str = include_str!("../src/admin/default_mq_admin_ext_impl.rs");
+const ADMIN_API: &str = include_str!("../src/admin/default_mq_admin_ext_impl/admin_api.rs");
+const ADMIN_BROKER: &str = include_str!("../src/admin/default_mq_admin_ext_impl/broker.rs");
+const ADMIN_GROUP: &str = include_str!("../src/admin/default_mq_admin_ext_impl/group.rs");
+const ADMIN_SECURITY: &str = include_str!("../src/admin/default_mq_admin_ext_impl/security.rs");
+const ADMIN_TOPIC: &str = include_str!("../src/admin/default_mq_admin_ext_impl/topic.rs");
+
+const PRODUCER_FACADE: &str = include_str!("../src/producer/producer_impl/default_mq_producer_impl.rs");
+const PRODUCER_LIFECYCLE: &str = include_str!("../src/producer/producer_impl/default_mq_producer_impl/lifecycle.rs");
+const PRODUCER_RETRY: &str = include_str!("../src/producer/producer_impl/default_mq_producer_impl/retry.rs");
+const PRODUCER_SEND: &str = include_str!("../src/producer/producer_impl/default_mq_producer_impl/send.rs");
+const PRODUCER_TRANSACTION: &str =
+    include_str!("../src/producer/producer_impl/default_mq_producer_impl/transaction.rs");
+
+#[test]
+fn client_facades_declare_explicit_capability_modules() {
+    for module in [
+        "admin",
+        "consumer",
+        "producer",
+        "request_builder",
+        "response_decoder",
+        "route",
+        "transaction",
+        "transport",
+    ] {
+        assert!(CLIENT_FACADE.contains(&format!("mod {module};")));
+    }
+    for module in ["admin_api", "broker", "group", "security", "topic"] {
+        assert!(ADMIN_FACADE.contains(&format!("mod {module};")));
+    }
+    for module in ["lifecycle", "retry", "send", "transaction"] {
+        assert!(PRODUCER_FACADE.contains(&format!("mod {module};")));
+    }
+
+    assert!(CLIENT_FACADE.lines().count() <= 450);
+    assert!(ADMIN_FACADE.lines().count() <= 300);
+    assert!(PRODUCER_FACADE.lines().count() <= 450);
+    assert!(!CLIENT_FACADE.contains("pub async fn send_message"));
+    assert!(!ADMIN_FACADE.contains("impl MQAdminExt for DefaultMQAdminExtImpl"));
+    assert!(!PRODUCER_FACADE.contains("pub async fn send_with_timeout"));
+}
+
+#[test]
+fn mq_client_exposes_five_typed_capability_views() {
+    for (source, capability, getter) in [
+        (CLIENT_ROUTE, "RouteClient", "route_client"),
+        (CLIENT_ADMIN, "AdminClient", "admin_client"),
+        (CLIENT_PRODUCER, "ProducerClient", "producer_client"),
+        (CLIENT_CONSUMER, "ConsumerClient", "consumer_client"),
+        (CLIENT_TRANSACTION, "TransactionClient", "transaction_client"),
+    ] {
+        assert!(source.contains(&format!("pub struct {capability}<'a>")));
+        assert!(source.contains(&format!("pub fn {getter}(&self)")));
+    }
+
+    assert!(CLIENT_ROUTE.contains("topic_route_info"));
+    assert!(CLIENT_ADMIN.contains("broker_cluster_info"));
+    assert!(CLIENT_PRODUCER.contains("send_heartbeat"));
+    assert!(CLIENT_CONSUMER.contains("consumer_offset"));
+    assert!(CLIENT_TRANSACTION.contains("end_transaction"));
+    assert!(CLIENT_REQUEST_BUILDER.contains("heartbeat_request"));
+    assert!(CLIENT_REQUEST_BUILDER.contains("notification_request"));
+    assert!(CLIENT_RESPONSE_DECODER.contains("consumer_offset_json_from_response"));
+    assert!(CLIENT_RESPONSE_DECODER.contains("reset_offset_table_from_response"));
+}
+
+#[test]
+fn protocol_and_retry_responsibilities_remain_in_their_own_modules() {
+    assert!(CLIENT_TRANSPORT.contains("pub async fn invoke("));
+    assert!(CLIENT_TRANSPORT.contains("pub async fn invoke_oneway("));
+    assert!(CLIENT_ROUTE.contains("RequestCode::GetRouteinfoByTopic"));
+    assert!(CLIENT_PRODUCER.contains("RequestCode::SendMessage"));
+    assert!(CLIENT_CONSUMER.contains("RequestCode::PullMessage"));
+    assert!(CLIENT_TRANSACTION.contains("RequestCode::EndTransaction"));
+
+    assert!(PRODUCER_SEND.contains("send_kernel_impl"));
+    assert!(PRODUCER_RETRY.contains("send_with_retry"));
+    assert!(PRODUCER_RETRY.contains("ClientRetryDecision"));
+    assert!(PRODUCER_TRANSACTION.contains("send_message_in_transaction"));
+    assert!(PRODUCER_LIFECYCLE.contains("shutdown_with_factory"));
+}
+
+#[test]
+fn capability_files_stay_within_the_reviewed_split_limits() {
+    for (name, source, limit) in [
+        ("client/admin.rs", CLIENT_ADMIN, 3_650),
+        ("client/consumer.rs", CLIENT_CONSUMER, 1_650),
+        ("client/producer.rs", CLIENT_PRODUCER, 950),
+        ("client/request_builder.rs", CLIENT_REQUEST_BUILDER, 150),
+        ("client/response_decoder.rs", CLIENT_RESPONSE_DECODER, 100),
+        ("client/route.rs", CLIENT_ROUTE, 150),
+        ("client/transaction.rs", CLIENT_TRANSACTION, 100),
+        ("client/transport.rs", CLIENT_TRANSPORT, 200),
+        ("admin/admin_api.rs", ADMIN_API, 2_750),
+        ("admin/broker.rs", ADMIN_BROKER, 250),
+        ("admin/group.rs", ADMIN_GROUP, 550),
+        ("admin/security.rs", ADMIN_SECURITY, 200),
+        ("admin/topic.rs", ADMIN_TOPIC, 450),
+        ("producer/lifecycle.rs", PRODUCER_LIFECYCLE, 1_250),
+        ("producer/retry.rs", PRODUCER_RETRY, 250),
+        ("producer/send.rs", PRODUCER_SEND, 2_050),
+        ("producer/transaction.rs", PRODUCER_TRANSACTION, 450),
+    ] {
+        assert!(
+            source.lines().count() <= limit,
+            "{name} exceeded its reviewed split limit of {limit} lines"
+        );
+    }
+}
+
+#[test]
+fn capability_split_does_not_introduce_detached_runtime_work() {
+    let production_sources = [
+        CLIENT_ADMIN,
+        CLIENT_CONSUMER,
+        CLIENT_PRODUCER,
+        CLIENT_REQUEST_BUILDER,
+        CLIENT_RESPONSE_DECODER,
+        CLIENT_ROUTE,
+        CLIENT_TRANSACTION,
+        CLIENT_TRANSPORT,
+        ADMIN_API,
+        ADMIN_BROKER,
+        ADMIN_GROUP,
+        ADMIN_SECURITY,
+        ADMIN_TOPIC,
+        PRODUCER_LIFECYCLE,
+        PRODUCER_RETRY,
+        PRODUCER_SEND,
+        PRODUCER_TRANSACTION,
+    ];
+
+    for source in production_sources {
+        assert!(!source.contains("tokio::spawn("));
+        assert!(!source.contains("tokio::task::spawn_blocking("));
+        assert!(!source.contains("std::thread::spawn("));
+        assert!(!source.contains("Runtime::new("));
+    }
+}
