@@ -353,7 +353,7 @@ impl TlsServerRuntime {
     async fn accept_tls(&self, stream: TcpStream, remote_addr: SocketAddr) -> Option<Connection> {
         self.accept_stream(stream, remote_addr)
             .await
-            .map(Connection::new_with_stream)
+            .map(Connection::new_with_tls_stream)
     }
 
     /// Performs a server-side TLS handshake with the atomically published acceptor generation.

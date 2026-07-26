@@ -5121,6 +5121,7 @@ dependencies = [
  "bytemuck",
  "bytes",
  "cheetah-string",
+ "criterion",
  "dashmap",
  "flate2",
  "flume",

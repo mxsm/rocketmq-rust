@@ -12,14 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use bytes::BufMut;
-use bytes::Bytes;
 use bytes::BytesMut;
-use tokio_util::codec::BytesCodec;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
-use crate::error_helpers::encoder_error;
+use rocketmq_protocol::protocol::encoded_frame::EncodedFrame;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 /// A decoded command together with the complete frame size retained while processing it.
@@ -217,81 +214,28 @@ impl Encoder<RemotingCommand> for RemotingCommandCodec {
     ///
     /// This function will return an error if the encoding process fails.
     fn encode(&mut self, item: RemotingCommand, dst: &mut BytesMut) -> Result<(), Self::Error> {
-        let mut item = item;
-        item.fast_header_encode(dst);
-        if let Some(body_inner) = item.take_body() {
-            dst.put(body_inner);
-        }
+        EncodedFrame::from_command(item)?.copy_to(dst);
         Ok(())
     }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Default)]
-pub struct CompositeCodec {
-    bytes_codec: BytesCodec,
-    remoting_command_codec: RemotingCommandCodec,
+pub(crate) struct SessionCommandDecoder {
+    inner: RemotingCommandCodec,
 }
 
-impl CompositeCodec {
-    pub fn new() -> Self {
-        Self {
-            bytes_codec: BytesCodec::new(),
-            remoting_command_codec: RemotingCommandCodec::new(),
-        }
-    }
-
-    pub fn with_limits(limits: FrameLimits) -> Self {
-        Self {
-            bytes_codec: BytesCodec::new(),
-            remoting_command_codec: RemotingCommandCodec::with_limits(limits),
-        }
-    }
-}
-
-impl Decoder for CompositeCodec {
-    type Error = rocketmq_error::RocketMQError;
-    type Item = RemotingCommand;
-
-    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, rocketmq_error::RocketMQError> {
-        self.remoting_command_codec.decode(src)
-    }
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Default)]
-pub(crate) struct SessionCodec {
-    inner: CompositeCodec,
-}
-
-impl From<CompositeCodec> for SessionCodec {
-    fn from(inner: CompositeCodec) -> Self {
+impl From<RemotingCommandCodec> for SessionCommandDecoder {
+    fn from(inner: RemotingCommandCodec) -> Self {
         Self { inner }
     }
 }
 
-impl Decoder for SessionCodec {
+impl Decoder for SessionCommandDecoder {
     type Error = rocketmq_error::RocketMQError;
     type Item = DecodedCommand;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        self.inner.remoting_command_codec.decode_with_metadata(src)
-    }
-}
-
-impl Encoder<Bytes> for SessionCodec {
-    type Error = rocketmq_error::RocketMQError;
-
-    fn encode(&mut self, item: Bytes, dst: &mut BytesMut) -> Result<(), Self::Error> {
-        self.inner.encode(item, dst)
-    }
-}
-
-impl Encoder<Bytes> for CompositeCodec {
-    type Error = rocketmq_error::RocketMQError;
-
-    fn encode(&mut self, item: Bytes, dst: &mut BytesMut) -> Result<(), Self::Error> {
-        self.bytes_codec
-            .encode(item, dst)
-            .map_err(|error| encoder_error(format!("Error encoding bytes: {error}")))
+        self.inner.decode_with_metadata(src)
     }
 }
 

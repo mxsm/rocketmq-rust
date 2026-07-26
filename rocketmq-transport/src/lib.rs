@@ -41,6 +41,7 @@ mod security;
 mod server;
 mod session_executor;
 mod tls;
+mod write_strategy;
 
 pub use admission::AdmissionClass;
 pub use admission::AdmissionConfigError;
@@ -149,6 +150,8 @@ pub use tls::tls_disabled_error;
 #[cfg(feature = "tls")]
 pub use tls::TlsReloadReport;
 pub use tls::TlsServerRuntime;
+pub use write_strategy::FrameWriteMode;
+pub use write_strategy::FrameWriter;
 
 pub use error_helpers::abort_process_error;
 pub use error_helpers::channel_recv_failed;

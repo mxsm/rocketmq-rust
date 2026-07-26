@@ -1184,7 +1184,7 @@ mod tests {
         let pending_requests = PendingRequestTable::new();
         let channel = Arc::new(
             ChannelInner::try_new_with_pending_requests(
-                Connection::new_with_stream(transport),
+                Connection::new_with_plaintext_stream(transport),
                 pending_requests.clone(),
                 test_parent("channel-writer-deadline-test"),
             )
@@ -1232,7 +1232,7 @@ mod tests {
         let (transport, mut peer) = tokio::io::duplex(4096);
         let channel = Arc::new(
             ChannelInner::try_new_with_pending_requests(
-                Connection::new_with_stream(transport),
+                Connection::new_with_plaintext_stream(transport),
                 PendingRequestTable::new(),
                 test_parent("channel-oneway-deadline-test"),
             )

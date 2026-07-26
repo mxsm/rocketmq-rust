@@ -25,7 +25,6 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use futures_util::SinkExt;
 use futures_util::StreamExt;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
@@ -53,16 +52,18 @@ use crate::admission::AdmissionScope;
 use crate::admission::FullPolicy;
 use crate::config::TlsConfig;
 use crate::config::TlsMode;
+use crate::connection::record_transport_write;
 use crate::connection::Connection;
 use crate::connection::ConnectionId;
 use crate::connection::ConnectionState;
-use crate::connection::QueuedWrite;
 use crate::connection::SessionLifecycle;
 use crate::request_ordering::RequestOrdering;
 use crate::security::TransportSecurity;
 use crate::session_executor::SessionDispatchError;
 use crate::session_executor::SessionExecutor;
 use crate::tls::TlsServerRuntime;
+use crate::write_strategy::QueuedWrite;
+use crate::write_strategy::WriterOperation;
 
 const SESSION_WRITER_QUEUE_CAPACITY: usize = 1024;
 const SESSION_RETIREMENT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -179,7 +180,7 @@ impl SessionHandle {
         }
         let _retirement_guard = self.lifecycle.begin_retirement().await;
         let (completion, result) = tokio::sync::oneshot::channel();
-        let send_result = self.writer.send(QueuedWrite::Close { completion }).await;
+        let send_result = self.writer.send(QueuedWrite::close(completion)).await;
         if send_result.is_err() {
             let _ = self.state_tx.send(ConnectionState::Closed);
             self.task_group.cancel();
@@ -393,55 +394,67 @@ async fn run_framed_session<H>(
     H: ConnectionHandler,
 {
     let connection_id = connection.connection_id().clone();
-    let (mut sink, mut stream) = connection.into_framed_parts();
+    let (mut frame_writer, mut stream) = connection.into_session_io();
     let executor = match SessionExecutor::try_new(&task_group, admission.clone(), scope) {
         Ok(executor) => executor,
         Err(_) => return,
     };
     let (state_tx, state_rx) = tokio::sync::watch::channel(ConnectionState::Healthy);
     let lifecycle = Arc::new(SessionLifecycle::new());
-    let (writer, mut writes) = tokio::sync::mpsc::channel(SESSION_WRITER_QUEUE_CAPACITY);
+    let (writer, mut writes) = tokio::sync::mpsc::channel::<QueuedWrite>(SESSION_WRITER_QUEUE_CAPACITY);
     let writer_state = state_tx.clone();
     let writer_group = task_group.clone();
+    let writer_shutdown_group = writer_group.clone();
     let writer_task_id = match writer_group.spawn("rocketmq.transport.session.writer", TaskKind::Worker, async move {
         while let Some(next) = writes.recv().await {
-            match next {
-                QueuedWrite::Data {
-                    bytes,
-                    completion,
-                    _permit,
-                    deadline,
-                    target,
-                    progress,
-                } => {
-                    let result = match deadline {
-                        Some(deadline) if deadline.is_expired() => {
-                            Err(RocketMQError::network_deadline_exceeded_before_send(target))
+            match next.operation {
+                WriterOperation::Send(payload) => {
+                    let completion = next.completion;
+                    let deadline = next.deadline;
+                    let target = next.target;
+                    let progress = next.progress;
+                    let result = if deadline.is_some_and(|deadline| deadline.is_expired()) {
+                        Err(RocketMQError::network_deadline_exceeded_before_send(target))
+                    } else {
+                        if let Some(progress) = progress.as_ref() {
+                            progress.start_write();
                         }
-                        Some(deadline) => {
-                            if let Some(progress) = progress.as_ref() {
-                                progress.start_write();
-                            }
-                            match deadline.timeout(sink.send(bytes)).await {
-                                Ok(result) => result,
-                                Err(_) => Err(RocketMQError::network_write_timeout(target, deadline.budget_millis())),
-                            }
-                        }
-                        None => sink.send(bytes).await,
+                        payload
+                            .write_to(&mut frame_writer)
+                            .await
+                            .map_err(|error| RocketMQError::network_connection_failed(target, error.to_string()))
                     };
-                    if result.is_err() {
+                    if result.is_ok() {
+                        record_transport_write(payload.encoded_len());
+                    }
+                    let poisoned = frame_writer.is_poisoned();
+                    if poisoned {
                         let _ = writer_state.send(ConnectionState::Degraded);
                     }
-                    let failed = result.is_err();
+                    drop(next.permit);
                     let _ = completion.send(result);
-                    drop(_permit);
-                    if failed {
+                    if poisoned {
+                        writes.close();
+                        let _ = frame_writer.shutdown().await;
+                        while let Some(pending) = writes.recv().await {
+                            let target = match pending.operation {
+                                WriterOperation::Send(_) => pending.target,
+                                WriterOperation::Close => "transport-session-writer".to_string(),
+                            };
+                            drop(pending.permit);
+                            let _ = pending.completion.send(Err(RocketMQError::network_connection_failed(
+                                target,
+                                "connection writer is poisoned by a previous frame failure",
+                            )));
+                        }
+                        let _ = writer_state.send(ConnectionState::Closed);
+                        writer_shutdown_group.cancel();
                         break;
                     }
                 }
-                QueuedWrite::Close { completion } => {
-                    let result = sink.close().await;
-                    let _ = completion.send(result);
+                WriterOperation::Close => {
+                    let result = frame_writer.shutdown().await.map_err(Into::into);
+                    let _ = next.completion.send(result);
                     break;
                 }
             }
@@ -550,10 +563,7 @@ async fn run_framed_session<H>(
         .unwrap_or_else(|| ShutdownDeadline::after(SESSION_RETIREMENT_TIMEOUT));
     executor.drain_until(request_deadline).await.log_if_unhealthy();
     handler.disconnected(session.clone()).await;
-    let (completion, closed) = tokio::sync::oneshot::channel();
-    let _ = writer.send(QueuedWrite::Close { completion }).await;
-    let _ = closed.await;
-    let _ = state_tx.send(ConnectionState::Closed);
+    let _ = session.retire().await;
 }
 
 /// Runs an already-connected client or compatibility socket through the canonical framed session
@@ -930,7 +940,7 @@ mod retirement_tests {
         let local_addr: SocketAddr = "127.0.0.1:19001".parse().unwrap();
         let remote_addr: SocketAddr = "127.0.0.1:19002".parse().unwrap();
         let runner = tokio::spawn(super::run_connected_session(
-            Connection::new_with_stream(transport),
+            Connection::new_with_plaintext_stream(transport),
             local_addr,
             remote_addr,
             service.task_group().clone(),
@@ -972,7 +982,7 @@ mod retirement_tests {
             .send_command(RemotingCommand::create_remoting_command(2))
             .await
             .is_err());
-        let mut peer = Connection::new_with_stream(peer_stream);
+        let mut peer = Connection::new_with_plaintext_stream(peer_stream);
         let first = peer.receive_command().await.unwrap().unwrap();
         assert_eq!(first.code(), 1);
         assert!(peer.receive_command().await.is_none());
@@ -991,7 +1001,7 @@ mod retirement_tests {
         let local_addr: SocketAddr = "127.0.0.1:19003".parse().unwrap();
         let remote_addr: SocketAddr = "127.0.0.1:19004".parse().unwrap();
         let runner = tokio::spawn(super::run_connected_session(
-            Connection::new_with_stream(transport),
+            Connection::new_with_plaintext_stream(transport),
             local_addr,
             remote_addr,
             service.task_group().clone(),
@@ -1038,7 +1048,7 @@ mod retirement_tests {
         let local_addr: SocketAddr = "127.0.0.1:19005".parse().unwrap();
         let remote_addr: SocketAddr = "127.0.0.1:19006".parse().unwrap();
         let runner = tokio::spawn(super::run_connected_session(
-            Connection::new_with_stream(transport),
+            Connection::new_with_plaintext_stream(transport),
             local_addr,
             remote_addr,
             service.task_group().clone(),

@@ -89,7 +89,7 @@ async fn connected_session_with_limits(
     let remote_addr: SocketAddr = "127.0.0.1:19012".parse().expect("remote address");
     let admission = Arc::new(AdmissionController::new(limits));
     let runner = tokio::spawn(run_connected_session(
-        Connection::new_with_stream(transport),
+        Connection::new_with_plaintext_stream(transport),
         local_addr,
         remote_addr,
         service.task_group().clone(),
@@ -125,7 +125,7 @@ async fn expired_before_send_has_zero_remote_side_effects() {
     let side_effects = Arc::new(AtomicUsize::new(0));
     let remote_effects = side_effects.clone();
     let remote = tokio::spawn(async move {
-        let mut peer = Connection::new_with_stream(peer);
+        let mut peer = Connection::new_with_plaintext_stream(peer);
         if peer.receive_command().await.is_some() {
             remote_effects.fetch_add(1, Ordering::SeqCst);
         }
