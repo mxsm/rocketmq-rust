@@ -15,10 +15,33 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::net::IpAddr;
-use std::sync::Arc;
 use std::sync::Mutex;
 
 use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_runtime::BudgetCapacity;
+use rocketmq_runtime::BudgetClass;
+use rocketmq_runtime::BudgetConfigError;
+use rocketmq_runtime::BudgetDimension;
+use rocketmq_runtime::BudgetLimit;
+pub use rocketmq_runtime::FullPolicy;
+use rocketmq_runtime::MemoryLimitError;
+use rocketmq_runtime::ProcessMemoryLimit;
+use rocketmq_runtime::ResourceBudget;
+use rocketmq_runtime::ResourceBudgetTree;
+use rocketmq_runtime::ResourcePermit;
+
+const ESTABLISHED_CONNECTION_RETAINED_BYTES: usize = 16 * 1024;
+const HANDSHAKE_RETAINED_BYTES: usize = 64 * 1024;
+
+#[must_use]
+pub(crate) const fn estimated_connection_retained_bytes() -> usize {
+    ESTABLISHED_CONNECTION_RETAINED_BYTES
+}
+
+#[must_use]
+pub(crate) const fn estimated_handshake_retained_bytes() -> usize {
+    HANDSHAKE_RETAINED_BYTES
+}
 
 /// Simultaneous item and retained-byte limit for one transport resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,12 +139,6 @@ impl AdmissionClass {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FullPolicy {
-    Reject,
-    CloseConnection,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AdmissionScope {
     ip: IpAddr,
     tenant: Option<u64>,
@@ -199,122 +216,133 @@ impl fmt::Display for AdmissionError {
 
 impl std::error::Error for AdmissionError {}
 
-#[derive(Default)]
-struct Usage {
-    count: usize,
-    bytes: usize,
-    data_count: usize,
-    data_bytes: usize,
-    rejected: usize,
+#[derive(Debug)]
+pub enum AdmissionConfigError {
+    Budget(BudgetConfigError),
+    Memory(MemoryLimitError),
+    ZeroScopeCapacity {
+        scope: &'static str,
+        dimension: BudgetDimension,
+    },
+    ZeroMaxScopeKeys,
 }
 
-struct Budget {
-    limit: ResourceLimit,
-    reserve: ResourceLimit,
-    usage: Mutex<Usage>,
-}
-
-impl Budget {
-    fn new(limit: ResourceLimit, reserve: ResourceLimit) -> Self {
-        let reserve = ResourceLimit {
-            count: if reserve.count < limit.count { reserve.count } else { 0 },
-            bytes: if reserve.bytes < limit.bytes { reserve.bytes } else { 0 },
-        };
-        Self {
-            limit,
-            reserve,
-            usage: Mutex::new(Usage::default()),
+impl fmt::Display for AdmissionConfigError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Budget(error) => error.fmt(formatter),
+            Self::Memory(error) => error.fmt(formatter),
+            Self::ZeroScopeCapacity { scope, dimension } => {
+                write!(formatter, "{scope} admission limit has zero {dimension:?} capacity")
+            }
+            Self::ZeroMaxScopeKeys => {
+                formatter.write_str("transport admission max_scope_keys must be greater than zero")
+            }
         }
-    }
-
-    fn try_acquire(self: &Arc<Self>, bytes: usize, class: AdmissionClass) -> Option<BudgetPermit> {
-        let mut usage = self.usage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let total_fits = usage.count < self.limit.count
-            && usage
-                .bytes
-                .checked_add(bytes)
-                .is_some_and(|value| value <= self.limit.bytes);
-        let data_fits = class == AdmissionClass::Control
-            || (usage.data_count < self.limit.count.saturating_sub(self.reserve.count)
-                && usage
-                    .data_bytes
-                    .checked_add(bytes)
-                    .is_some_and(|value| value <= self.limit.bytes.saturating_sub(self.reserve.bytes)));
-        if !total_fits || !data_fits {
-            usage.rejected += 1;
-            return None;
-        }
-        usage.count += 1;
-        usage.bytes += bytes;
-        if class == AdmissionClass::Data {
-            usage.data_count += 1;
-            usage.data_bytes += bytes;
-        }
-        drop(usage);
-        Some(BudgetPermit {
-            budget: self.clone(),
-            bytes,
-            class,
-        })
-    }
-
-    fn snapshot(&self) -> ResourceSnapshot {
-        let usage = self.usage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        ResourceSnapshot {
-            current_count: usage.count,
-            current_bytes: usage.bytes,
-            rejected_count: usage.rejected,
-        }
-    }
-
-    fn is_idle(&self) -> bool {
-        let usage = self.usage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        usage.count == 0
     }
 }
 
-struct BudgetPermit {
-    budget: Arc<Budget>,
-    bytes: usize,
-    class: AdmissionClass,
+impl std::error::Error for AdmissionConfigError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Budget(error) => Some(error),
+            Self::Memory(error) => Some(error),
+            Self::ZeroScopeCapacity { .. } | Self::ZeroMaxScopeKeys => None,
+        }
+    }
 }
 
-impl Drop for BudgetPermit {
-    fn drop(&mut self) {
-        let mut usage = self
-            .budget
-            .usage
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        usage.count -= 1;
-        usage.bytes -= self.bytes;
-        if self.class == AdmissionClass::Data {
-            usage.data_count -= 1;
-            usage.data_bytes -= self.bytes;
-        }
+impl From<BudgetConfigError> for AdmissionConfigError {
+    fn from(error: BudgetConfigError) -> Self {
+        Self::Budget(error)
+    }
+}
+
+impl From<MemoryLimitError> for AdmissionConfigError {
+    fn from(error: MemoryLimitError) -> Self {
+        Self::Memory(error)
     }
 }
 
 struct GlobalBudgets {
-    connections: Arc<Budget>,
-    handshakes: Arc<Budget>,
-    inflight: Arc<Budget>,
-    queued: Arc<Budget>,
-    processors: Arc<Budget>,
+    connections: ResourceBudget,
+    handshakes: ResourceBudget,
+    inflight: ResourceBudget,
+    queued: ResourceBudget,
+    processors: ResourceBudget,
 }
 
 impl GlobalBudgets {
-    fn new(limits: AdmissionLimits) -> Self {
-        Self {
-            connections: Arc::new(Budget::new(limits.connections, limits.control_reserve)),
-            handshakes: Arc::new(Budget::new(limits.handshakes, limits.control_reserve)),
-            inflight: Arc::new(Budget::new(limits.inflight, limits.control_reserve)),
-            queued: Arc::new(Budget::new(limits.queued, limits.control_reserve)),
-            processors: Arc::new(Budget::new(limits.processors, limits.control_reserve)),
-        }
+    fn new(limits: AdmissionLimits) -> Result<Self, AdmissionConfigError> {
+        let resources = [
+            limits.connections,
+            limits.handshakes,
+            limits.inflight,
+            limits.queued,
+            limits.processors,
+        ];
+        let root_count = resources
+            .iter()
+            .fold(0usize, |total, limit| total.saturating_add(limit.count));
+        let requested_root_bytes = resources
+            .iter()
+            .fold(0usize, |total, limit| total.saturating_add(limit.bytes));
+        let managed_bytes = ProcessMemoryLimit::detect()?.fraction(1, 8)?;
+        let managed_bytes = usize::try_from(managed_bytes).unwrap_or(usize::MAX).max(1);
+        let root_bytes = requested_root_bytes.min(managed_bytes).max(1);
+        let reserve_count = resources.iter().fold(0usize, |total, limit| {
+            total.saturating_add(effective_reserve(limits.control_reserve.count, limit.count))
+        });
+        let requested_reserve_bytes = resources.iter().fold(0usize, |total, limit| {
+            total.saturating_add(effective_reserve(limits.control_reserve.bytes, limit.bytes))
+        });
+        let reserve_bytes = effective_reserve(requested_reserve_bytes, root_bytes);
+        let tree = ResourceBudgetTree::new(
+            "transport",
+            BudgetLimit::new(root_count, root_bytes, FullPolicy::Reject)
+                .with_control_reserve(BudgetCapacity::new(reserve_count, reserve_bytes)),
+        )?;
+        let root = tree.root();
+        Ok(Self {
+            connections: global_budget(
+                &root,
+                "connections",
+                limits.connections,
+                limits.control_reserve,
+                FullPolicy::CloseSlowConsumer,
+            )?,
+            handshakes: global_budget(
+                &root,
+                "handshakes",
+                limits.handshakes,
+                limits.control_reserve,
+                FullPolicy::CloseSlowConsumer,
+            )?,
+            inflight: global_budget(
+                &root,
+                "inflight",
+                limits.inflight,
+                limits.control_reserve,
+                FullPolicy::Reject,
+            )?,
+            queued: global_budget(
+                &root,
+                "queued",
+                limits.queued,
+                limits.control_reserve,
+                FullPolicy::Reject,
+            )?,
+            processors: global_budget(
+                &root,
+                "processors",
+                limits.processors,
+                limits.control_reserve,
+                FullPolicy::Reject,
+            )?,
+        })
     }
 
-    fn get(&self, resource: AdmissionResource) -> Arc<Budget> {
+    fn get(&self, resource: AdmissionResource) -> ResourceBudget {
         match resource {
             AdmissionResource::Connection => self.connections.clone(),
             AdmissionResource::Handshake => self.handshakes.clone(),
@@ -328,13 +356,13 @@ impl GlobalBudgets {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum ScopeKey {
     Ip(AdmissionResource, IpAddr),
-    Tenant(AdmissionResource, u64),
-    Session(AdmissionResource, u64),
+    Tenant(AdmissionResource, IpAddr, u64),
+    Session(AdmissionResource, IpAddr, Option<u64>, u64),
 }
 
 /// RAII ownership of global and scoped admission capacity.
 pub struct AdmissionPermit {
-    _permits: Vec<BudgetPermit>,
+    _permit: ResourcePermit,
     observer: Option<tokio::sync::mpsc::Sender<AdmissionEvent>>,
     resource: AdmissionResource,
     bytes: usize,
@@ -366,26 +394,53 @@ impl Drop for AdmissionPermit {
 pub struct AdmissionController {
     limits: AdmissionLimits,
     global: GlobalBudgets,
-    scoped: Mutex<HashMap<ScopeKey, Arc<Budget>>>,
+    scoped: Mutex<HashMap<ScopeKey, ResourceBudget>>,
     observer: Option<tokio::sync::mpsc::Sender<AdmissionEvent>>,
 }
 
 impl AdmissionController {
+    /// Creates a transport admission controller.
+    ///
+    /// # Panics
+    ///
+    /// Panics when a limit is zero or a control reserve exceeds its owning
+    /// resource. Production configuration paths should prefer [`Self::try_new`].
     pub fn new(limits: AdmissionLimits) -> Self {
+        Self::try_new(limits).unwrap_or_else(|error| panic!("invalid transport admission limits: {error}"))
+    }
+
+    pub fn try_new(limits: AdmissionLimits) -> Result<Self, AdmissionConfigError> {
         Self::build(limits, None)
     }
 
+    /// Creates an observed transport admission controller.
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same invalid-limit conditions as [`Self::new`].
     pub fn with_observer(limits: AdmissionLimits, observer: tokio::sync::mpsc::Sender<AdmissionEvent>) -> Self {
+        Self::try_with_observer(limits, observer)
+            .unwrap_or_else(|error| panic!("invalid transport admission limits: {error}"))
+    }
+
+    pub fn try_with_observer(
+        limits: AdmissionLimits,
+        observer: tokio::sync::mpsc::Sender<AdmissionEvent>,
+    ) -> Result<Self, AdmissionConfigError> {
         Self::build(limits, Some(observer))
     }
 
-    fn build(limits: AdmissionLimits, observer: Option<tokio::sync::mpsc::Sender<AdmissionEvent>>) -> Self {
-        Self {
+    fn build(
+        limits: AdmissionLimits,
+        observer: Option<tokio::sync::mpsc::Sender<AdmissionEvent>>,
+    ) -> Result<Self, AdmissionConfigError> {
+        validate_scope_limits(limits)?;
+        Ok(Self {
             limits,
-            global: GlobalBudgets::new(limits),
+            global: GlobalBudgets::new(limits)?,
             scoped: Mutex::new(HashMap::new()),
             observer,
-        }
+        })
     }
 
     pub fn try_acquire(
@@ -395,34 +450,22 @@ impl AdmissionController {
         bytes: usize,
         class: AdmissionClass,
     ) -> Result<AdmissionPermit, AdmissionError> {
-        let policy = match resource {
-            AdmissionResource::Connection | AdmissionResource::Handshake => FullPolicy::CloseConnection,
-            AdmissionResource::Inflight | AdmissionResource::Queued | AdmissionResource::Processor => {
-                FullPolicy::Reject
-            }
+        let policy = policy_for(resource);
+        let budget = self.scoped_budget(resource, scope)?;
+        let class = match class {
+            AdmissionClass::Data => BudgetClass::Data,
+            AdmissionClass::Control => BudgetClass::Control,
         };
-        let error = || AdmissionError { resource, policy };
-        let mut permits = Vec::with_capacity(4);
-        permits.push(self.global.get(resource).try_acquire(bytes, class).ok_or_else(error)?);
-        permits.push(
-            self.scoped_budget(ScopeKey::Ip(resource, scope.ip), self.limits.per_ip)?
-                .try_acquire(bytes, class)
-                .ok_or_else(error)?,
-        );
-        if let Some(tenant) = scope.tenant {
-            permits.push(
-                self.scoped_budget(ScopeKey::Tenant(resource, tenant), self.limits.per_tenant)?
-                    .try_acquire(bytes, class)
-                    .ok_or_else(error)?,
-            );
-        }
-        if let Some(session) = scope.session {
-            permits.push(
-                self.scoped_budget(ScopeKey::Session(resource, session), self.limits.per_session)?
-                    .try_acquire(bytes, class)
-                    .ok_or_else(error)?,
-            );
-        }
+        let permit = budget.try_acquire(bytes, class).map_err(|_| {
+            if let Some(observer) = &self.observer {
+                let _ = observer.try_send(AdmissionEvent {
+                    resource,
+                    outcome: AdmissionOutcome::Rejected,
+                    bytes,
+                });
+            }
+            AdmissionError { resource, policy }
+        })?;
         if let Some(observer) = &self.observer {
             let _ = observer.try_send(AdmissionEvent {
                 resource,
@@ -431,42 +474,206 @@ impl AdmissionController {
             });
         }
         Ok(AdmissionPermit {
-            _permits: permits,
+            _permit: permit,
             observer: self.observer.clone(),
             resource,
             bytes,
         })
     }
 
-    fn scoped_budget(&self, key: ScopeKey, limit: ResourceLimit) -> Result<Arc<Budget>, AdmissionError> {
-        let resource = match key {
-            ScopeKey::Ip(resource, _) | ScopeKey::Tenant(resource, _) | ScopeKey::Session(resource, _) => resource,
-        };
+    fn scoped_budget(
+        &self,
+        resource: AdmissionResource,
+        scope: AdmissionScope,
+    ) -> Result<ResourceBudget, AdmissionError> {
         let mut scoped = self.scoped.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(budget) = scoped.get(&key) {
-            return Ok(budget.clone());
+        let global = self.global.get(resource);
+        let ip_key = ScopeKey::Ip(resource, scope.ip);
+        let tenant_key = scope.tenant.map(|tenant| ScopeKey::Tenant(resource, scope.ip, tenant));
+        let session_key = scope
+            .session
+            .map(|session| ScopeKey::Session(resource, scope.ip, scope.tenant, session));
+        let scope_keys = [Some(ip_key), tenant_key, session_key];
+        let mut missing_scope_count = scope_keys
+            .into_iter()
+            .flatten()
+            .filter(|key| !scoped.contains_key(key))
+            .count();
+        if scoped.len().saturating_add(missing_scope_count) > self.limits.max_scope_keys {
+            scoped.retain(|_, budget| budget.snapshot().current_count > 0);
+            missing_scope_count = scope_keys
+                .into_iter()
+                .flatten()
+                .filter(|key| !scoped.contains_key(key))
+                .count();
         }
-        if scoped.len() >= self.limits.max_scope_keys {
-            scoped.retain(|_, budget| Arc::strong_count(budget) > 1 || !budget.is_idle());
-        }
-        if scoped.len() >= self.limits.max_scope_keys {
+        if scoped.len().saturating_add(missing_scope_count) > self.limits.max_scope_keys {
             return Err(AdmissionError {
                 resource,
-                policy: FullPolicy::Reject,
+                policy: policy_for(resource),
             });
         }
-        let budget = Arc::new(Budget::new(limit, ResourceLimit { count: 0, bytes: 0 }));
-        scoped.insert(key, budget.clone());
-        Ok(budget)
+        let ip_budget = scoped_child(
+            &mut scoped,
+            self.limits.max_scope_keys,
+            ip_key,
+            &global,
+            format!("ip-{}", scope.ip),
+            self.limits.per_ip,
+            self.limits.control_reserve,
+            resource,
+        )?;
+        let tenant_budget = match (scope.tenant, tenant_key) {
+            (Some(tenant), Some(tenant_key)) => scoped_child(
+                &mut scoped,
+                self.limits.max_scope_keys,
+                tenant_key,
+                &ip_budget,
+                format!("tenant-{tenant}"),
+                self.limits.per_tenant,
+                self.limits.control_reserve,
+                resource,
+            )?,
+            (None, None) => ip_budget,
+            _ => unreachable!("tenant scope key is derived from the tenant identifier"),
+        };
+        match (scope.session, session_key) {
+            (Some(session), Some(session_key)) => scoped_child(
+                &mut scoped,
+                self.limits.max_scope_keys,
+                session_key,
+                &tenant_budget,
+                format!("session-{session}"),
+                self.limits.per_session,
+                self.limits.control_reserve,
+                resource,
+            ),
+            (None, None) => Ok(tenant_budget),
+            _ => unreachable!("session scope key is derived from the session identifier"),
+        }
     }
 
     pub fn snapshot(&self) -> AdmissionSnapshot {
         AdmissionSnapshot {
-            connections: self.global.connections.snapshot(),
-            handshakes: self.global.handshakes.snapshot(),
-            inflight: self.global.inflight.snapshot(),
-            queued: self.global.queued.snapshot(),
-            processors: self.global.processors.snapshot(),
+            connections: resource_snapshot(&self.global.connections),
+            handshakes: resource_snapshot(&self.global.handshakes),
+            inflight: resource_snapshot(&self.global.inflight),
+            queued: resource_snapshot(&self.global.queued),
+            processors: resource_snapshot(&self.global.processors),
         }
+    }
+}
+
+fn global_budget(
+    root: &ResourceBudget,
+    name: &str,
+    limit: ResourceLimit,
+    reserve: ResourceLimit,
+    policy: FullPolicy,
+) -> Result<ResourceBudget, BudgetConfigError> {
+    let root_capacity = root.limit().capacity;
+    let limit = ResourceLimit {
+        count: limit.count.min(root_capacity.count),
+        bytes: limit.bytes.min(root_capacity.bytes),
+    };
+    let reserve = ResourceLimit {
+        count: effective_reserve(reserve.count, limit.count),
+        bytes: effective_reserve(reserve.bytes, limit.bytes),
+    };
+    root.child(
+        name,
+        BudgetLimit::new(limit.count, limit.bytes, policy)
+            .with_control_reserve(BudgetCapacity::new(reserve.count, reserve.bytes)),
+    )
+}
+
+fn effective_reserve(requested: usize, capacity: usize) -> usize {
+    if requested < capacity {
+        requested
+    } else {
+        0
+    }
+}
+
+fn scoped_child(
+    scoped: &mut HashMap<ScopeKey, ResourceBudget>,
+    max_scope_keys: usize,
+    key: ScopeKey,
+    parent: &ResourceBudget,
+    name: String,
+    requested: ResourceLimit,
+    requested_reserve: ResourceLimit,
+    resource: AdmissionResource,
+) -> Result<ResourceBudget, AdmissionError> {
+    if let Some(budget) = scoped.get(&key) {
+        return Ok(budget.clone());
+    }
+    if scoped.len() >= max_scope_keys {
+        return Err(AdmissionError {
+            resource,
+            policy: policy_for(resource),
+        });
+    }
+    let parent_limit = parent.limit().capacity;
+    let limit = ResourceLimit {
+        count: requested.count.min(parent_limit.count),
+        bytes: requested.bytes.min(parent_limit.bytes),
+    };
+    let reserve = ResourceLimit {
+        count: effective_reserve(requested_reserve.count, limit.count),
+        bytes: effective_reserve(requested_reserve.bytes, limit.bytes),
+    };
+    let budget = parent
+        .child(
+            name,
+            BudgetLimit::new(limit.count, limit.bytes, parent.limit().full_policy)
+                .with_control_reserve(BudgetCapacity::new(reserve.count, reserve.bytes)),
+        )
+        .map_err(|_| AdmissionError {
+            resource,
+            policy: policy_for(resource),
+        })?;
+    scoped.insert(key, budget.clone());
+    Ok(budget)
+}
+
+fn validate_scope_limits(limits: AdmissionLimits) -> Result<(), AdmissionConfigError> {
+    if limits.max_scope_keys == 0 {
+        return Err(AdmissionConfigError::ZeroMaxScopeKeys);
+    }
+    for (scope, limit) in [
+        ("per_ip", limits.per_ip),
+        ("per_tenant", limits.per_tenant),
+        ("per_session", limits.per_session),
+    ] {
+        if limit.count == 0 {
+            return Err(AdmissionConfigError::ZeroScopeCapacity {
+                scope,
+                dimension: BudgetDimension::Count,
+            });
+        }
+        if limit.bytes == 0 {
+            return Err(AdmissionConfigError::ZeroScopeCapacity {
+                scope,
+                dimension: BudgetDimension::Bytes,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn policy_for(resource: AdmissionResource) -> FullPolicy {
+    match resource {
+        AdmissionResource::Connection | AdmissionResource::Handshake => FullPolicy::CloseSlowConsumer,
+        AdmissionResource::Inflight | AdmissionResource::Queued | AdmissionResource::Processor => FullPolicy::Reject,
+    }
+}
+
+fn resource_snapshot(budget: &ResourceBudget) -> ResourceSnapshot {
+    let snapshot = budget.snapshot();
+    ResourceSnapshot {
+        current_count: snapshot.current_count,
+        current_bytes: snapshot.current_bytes,
+        rejected_count: usize::try_from(snapshot.rejected_count).unwrap_or(usize::MAX),
     }
 }

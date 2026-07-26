@@ -20,6 +20,13 @@ use cheetah_string::CheetahString;
 use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_observability::MetricsExporterType;
 use rocketmq_observability::TraceExporterType;
+use rocketmq_runtime::BudgetCapacity;
+use rocketmq_runtime::BudgetConfigError;
+use rocketmq_runtime::BudgetLimit;
+use rocketmq_runtime::FullPolicy;
+use rocketmq_runtime::MemoryLimitSource;
+use rocketmq_runtime::ProcessMemoryLimit;
+use rocketmq_runtime::ResourceBudgetTree;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::StoreType;
 
@@ -175,7 +182,11 @@ impl SecurityConfig {
 pub struct ResourceConfig {
     max_lite_subscriptions: u64,
     max_client_events: i32,
+    max_pop_polling_requests: u64,
     compaction_threads: usize,
+    process_memory_limit: ProcessMemoryLimit,
+    managed_memory_bytes: u64,
+    control_reserve_bytes: u64,
 }
 
 impl ResourceConfig {
@@ -190,8 +201,54 @@ impl ResourceConfig {
     }
 
     #[must_use]
+    pub const fn max_pop_polling_requests(&self) -> u64 {
+        self.max_pop_polling_requests
+    }
+
+    #[must_use]
     pub const fn compaction_threads(&self) -> usize {
         self.compaction_threads
+    }
+
+    #[must_use]
+    pub const fn process_memory_limit_bytes(&self) -> u64 {
+        self.process_memory_limit.bytes()
+    }
+
+    #[must_use]
+    pub const fn process_memory_limit_source(&self) -> MemoryLimitSource {
+        self.process_memory_limit.source()
+    }
+
+    #[must_use]
+    pub const fn managed_memory_bytes(&self) -> u64 {
+        self.managed_memory_bytes
+    }
+
+    #[must_use]
+    pub const fn control_reserve_bytes(&self) -> u64 {
+        self.control_reserve_bytes
+    }
+
+    pub fn budget_tree(&self) -> Result<ResourceBudgetTree, BudgetConfigError> {
+        // A Lite subscription can contribute one pending event and one tracked
+        // client-access entry. Both consume separate child permits.
+        let item_limit = self
+            .max_lite_subscriptions
+            .saturating_mul(2)
+            .saturating_add(self.max_pop_polling_requests)
+            .saturating_add(65_536);
+        let count = usize::try_from(item_limit).unwrap_or(usize::MAX);
+        let bytes = usize::try_from(self.managed_memory_bytes).unwrap_or(usize::MAX);
+        let reserve_count = 64.min(count.saturating_sub(1));
+        let reserve_bytes = usize::try_from(self.control_reserve_bytes)
+            .unwrap_or(usize::MAX)
+            .min(bytes.saturating_sub(1));
+        ResourceBudgetTree::new(
+            "broker",
+            BudgetLimit::new(count, bytes, FullPolicy::Reject)
+                .with_control_reserve(BudgetCapacity::new(reserve_count, reserve_bytes)),
+        )
     }
 }
 
@@ -577,6 +634,13 @@ fn validate_resources(broker: &BrokerConfig, store: &MessageStoreConfig) -> Resu
             "must be greater than zero",
         ));
     }
+    if broker.max_pop_polling_size == 0 || broker.pop_polling_map_size == 0 || broker.pop_polling_size == 0 {
+        return Err(BrokerConfigError::invalid(
+            ConfigSection::Resources,
+            "broker.popPollingCapacity",
+            "maxPopPollingSize, popPollingMapSize and popPollingSize must be greater than zero",
+        ));
+    }
     if store.compaction_thread_num == 0 {
         return Err(BrokerConfigError::invalid(
             ConfigSection::Resources,
@@ -592,10 +656,42 @@ fn validate_resources(broker: &BrokerConfig, store: &MessageStoreConfig) -> Resu
         ));
     }
 
+    let process_memory_limit = if broker.process_memory_limit_bytes == 0 {
+        ProcessMemoryLimit::detect()
+    } else {
+        ProcessMemoryLimit::configured(broker.process_memory_limit_bytes)
+    }
+    .map_err(|error| {
+        BrokerConfigError::invalid(
+            ConfigSection::Resources,
+            "broker.processMemoryLimitBytes",
+            error.to_string(),
+        )
+    })?;
+    let managed_memory_bytes = process_memory_limit.fraction(1, 4).map_err(|error| {
+        BrokerConfigError::invalid(
+            ConfigSection::Resources,
+            "broker.processMemoryLimitBytes",
+            error.to_string(),
+        )
+    })?;
+    if managed_memory_bytes < 1024 * 1024 {
+        return Err(BrokerConfigError::invalid(
+            ConfigSection::Resources,
+            "broker.processMemoryLimitBytes",
+            "must provide at least 4 MiB so the managed queue budget is at least 1 MiB",
+        ));
+    }
+    let control_reserve_bytes = (managed_memory_bytes / 20).max(1);
+
     Ok(ResourceConfig {
         max_lite_subscriptions: broker.max_lite_subscription_count,
         max_client_events: broker.max_client_event_count,
+        max_pop_polling_requests: broker.max_pop_polling_size,
         compaction_threads: store.compaction_thread_num,
+        process_memory_limit,
+        managed_memory_bytes,
+        control_reserve_bytes,
     })
 }
 

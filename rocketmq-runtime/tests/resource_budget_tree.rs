@@ -1,0 +1,364 @@
+// Copyright 2023 The RocketMQ Rust Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use std::future::pending;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::time::Duration;
+
+use rocketmq_runtime::BudgetCapacity;
+use rocketmq_runtime::BudgetClass;
+use rocketmq_runtime::BudgetDimension;
+use rocketmq_runtime::BudgetLimit;
+use rocketmq_runtime::BudgetedQueue;
+use rocketmq_runtime::FullPolicy;
+use rocketmq_runtime::MonotonicClock;
+use rocketmq_runtime::QueuePushErrorKind;
+use rocketmq_runtime::QueuePushOutcome;
+use rocketmq_runtime::RateLimit;
+use rocketmq_runtime::ResourceBudgetTree;
+
+#[derive(Default)]
+struct ManualClock {
+    millis: AtomicU64,
+}
+
+impl ManualClock {
+    fn advance(&self, duration: Duration) {
+        self.millis.fetch_add(
+            duration.as_millis().try_into().expect("test duration fits u64"),
+            Ordering::AcqRel,
+        );
+    }
+}
+
+impl MonotonicClock for ManualClock {
+    fn now(&self) -> Duration {
+        Duration::from_millis(self.millis.load(Ordering::Acquire))
+    }
+}
+
+fn limit(count: usize, bytes: usize, policy: FullPolicy) -> BudgetLimit {
+    BudgetLimit::new(count, bytes, policy)
+}
+
+#[test]
+fn child_permit_reserves_every_ancestor_and_releases_on_drop() {
+    let tree = ResourceBudgetTree::new("process", limit(4, 400, FullPolicy::Reject)).expect("root budget");
+    let broker = tree
+        .root()
+        .child("broker", limit(3, 300, FullPolicy::Reject))
+        .expect("broker budget");
+    let queue = broker
+        .child("events", limit(2, 200, FullPolicy::Reject))
+        .expect("event budget");
+
+    let permit = queue.try_acquire_data(80).expect("first event");
+    assert_eq!(tree.root().snapshot().current_count, 1);
+    assert_eq!(broker.snapshot().current_bytes, 80);
+    assert_eq!(queue.snapshot().current_count, 1);
+
+    drop(permit);
+    assert_eq!(tree.root().snapshot().current_count, 0);
+    assert_eq!(broker.snapshot().current_bytes, 0);
+    assert_eq!(queue.snapshot().released_count, 1);
+}
+
+#[test]
+fn parent_budget_bounds_the_sum_of_independent_children() {
+    let tree = ResourceBudgetTree::new("process", limit(2, 100, FullPolicy::Reject)).expect("root budget");
+    let first = tree
+        .root()
+        .child("first", limit(2, 100, FullPolicy::Reject))
+        .expect("first budget");
+    let second = tree
+        .root()
+        .child("second", limit(2, 100, FullPolicy::Reject))
+        .expect("second budget");
+
+    let first_permit = first.try_acquire_data(60).expect("first reservation");
+    let error = second
+        .try_acquire_data(60)
+        .expect_err("root byte limit must cover siblings");
+    assert_eq!(error.dimension(), BudgetDimension::Bytes);
+    assert_eq!(error.path(), "process/second");
+    assert_eq!(error.exhausted_path(), "process");
+    assert_eq!(second.snapshot().rejected_count, 1);
+    drop(first_permit);
+    assert!(second.try_acquire_data(60).is_ok());
+}
+
+#[test]
+fn control_reserve_survives_data_plane_overload() {
+    let limit = limit(3, 30, FullPolicy::Reject).with_control_reserve(BudgetCapacity::new(1, 10));
+    let tree = ResourceBudgetTree::new("process", limit).expect("root budget");
+    let root = tree.root();
+
+    let first = root.try_acquire_data(10).expect("first data permit");
+    let second = root.try_acquire_data(10).expect("second data permit");
+    assert!(root.try_acquire_data(1).is_err());
+    let control = root.try_acquire_control(10).expect("reserved control capacity");
+    assert!(root.try_acquire_control(1).is_err());
+
+    drop((first, second, control));
+    assert_eq!(root.snapshot().current_count, 0);
+}
+
+#[test]
+fn rate_limit_uses_injected_monotonic_time_and_preserves_control_tokens() {
+    let clock = Arc::new(ManualClock::default());
+    let limit = limit(8, 800, FullPolicy::Reject)
+        .with_rate(RateLimit::new(4, 4))
+        .with_control_reserve(BudgetCapacity::new(1, 100).with_rate(RateLimit::new(1, 1)));
+    let tree = ResourceBudgetTree::with_clock("process", limit, clock.clone()).expect("root budget");
+    let root = tree.root();
+
+    let data = (0..3)
+        .map(|_| root.try_acquire_data(1).expect("data burst permit"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        root.try_acquire_data(1)
+            .expect_err("data burst must retain one control token")
+            .dimension(),
+        BudgetDimension::Rate
+    );
+    let control = root.try_acquire_control(1).expect("control rate reserve");
+    assert!(root.try_acquire_control(1).is_err());
+
+    clock.advance(Duration::from_secs(1));
+    assert!(root.try_acquire_control(1).is_ok());
+    drop((data, control));
+}
+
+#[test]
+fn child_limits_cannot_escape_parent_hard_limits() {
+    let tree = ResourceBudgetTree::new(
+        "process",
+        limit(4, 400, FullPolicy::Reject)
+            .with_rate(RateLimit::new(10, 10))
+            .with_max_age(Duration::from_secs(10)),
+    )
+    .expect("root budget");
+
+    assert!(tree
+        .root()
+        .child(
+            "too-large",
+            limit(5, 400, FullPolicy::Reject)
+                .with_rate(RateLimit::new(10, 10))
+                .with_max_age(Duration::from_secs(10)),
+        )
+        .is_err());
+    assert!(tree
+        .root()
+        .child(
+            "unbounded-rate",
+            limit(4, 400, FullPolicy::Reject).with_max_age(Duration::from_secs(10)),
+        )
+        .is_err());
+    assert!(tree
+        .root()
+        .child(
+            "unbounded-age",
+            limit(4, 400, FullPolicy::Reject).with_rate(RateLimit::new(10, 10)),
+        )
+        .is_err());
+}
+
+#[test]
+fn reject_policy_keeps_depth_and_bytes_bounded_at_two_times_overload() {
+    let tree = ResourceBudgetTree::new("process", limit(4, 40, FullPolicy::Reject)).expect("root budget");
+    let queue = BudgetedQueue::new(tree.root());
+    let mut rejected = Vec::new();
+
+    for item in 0..8 {
+        if let Err(error) = queue.try_push_data(item, 10) {
+            rejected.push(error.into_item());
+        }
+    }
+
+    assert_eq!(queue.len(), 4);
+    assert_eq!(rejected, vec![4, 5, 6, 7]);
+    let snapshot = queue.snapshot();
+    assert_eq!(snapshot.retained_bytes, 40);
+    assert_eq!(snapshot.rejected_count, 4);
+}
+
+#[test]
+fn coalesce_latest_replaces_pending_state_and_releases_old_permits() {
+    let tree = ResourceBudgetTree::new("process", limit(1, 16, FullPolicy::CoalesceLatest)).expect("root budget");
+    let queue = BudgetedQueue::new(tree.root());
+
+    assert_eq!(
+        queue.try_push_data("old", 8).expect("old state"),
+        QueuePushOutcome::Enqueued
+    );
+    assert_eq!(
+        queue.try_push_data("new", 8).expect("latest state"),
+        QueuePushOutcome::Coalesced { replaced: 1 }
+    );
+    assert_eq!(queue.try_pop(), Some("new"));
+    assert_eq!(queue.snapshot().coalesced_count, 1);
+    assert_eq!(queue.snapshot().retained_bytes, 0);
+}
+
+#[test]
+fn coalesce_latest_preserves_pending_state_when_an_ancestor_is_exhausted() {
+    let tree = ResourceBudgetTree::new("process", limit(2, 32, FullPolicy::Reject)).expect("root budget");
+    let coalescing = tree
+        .root()
+        .child("latest-state", limit(2, 32, FullPolicy::CoalesceLatest))
+        .expect("coalescing child");
+    let sibling = tree
+        .root()
+        .child("sibling", limit(1, 16, FullPolicy::Reject))
+        .expect("sibling child");
+    let queue = BudgetedQueue::new(coalescing);
+
+    queue.try_push_data("pending", 8).expect("pending state");
+    let _sibling_permit = sibling.try_acquire_data(8).expect("sibling reservation");
+    let error = queue
+        .try_push_data("replacement", 8)
+        .expect_err("the shared ancestor is exhausted");
+
+    assert_eq!(error.into_item(), "replacement");
+    assert_eq!(queue.try_pop(), Some("pending"));
+    assert_eq!(queue.snapshot().coalesced_count, 0);
+}
+
+#[test]
+fn coalesce_latest_preserves_pending_state_when_replacement_cannot_fit() {
+    let tree = ResourceBudgetTree::new("coalesce-oversized", limit(2, 16, FullPolicy::CoalesceLatest)).expect("tree");
+    let queue = BudgetedQueue::new(tree.root());
+
+    queue.try_push_data("retained", 8).expect("initial item");
+    let error = queue
+        .try_push_data("oversized", 17)
+        .expect_err("oversized replacement must be rejected");
+
+    assert!(matches!(error.kind(), QueuePushErrorKind::BudgetExhausted(_)));
+    assert_eq!(queue.try_pop(), Some("retained"));
+    assert_eq!(queue.snapshot().coalesced_count, 0);
+}
+
+#[test]
+fn retain_preserves_order_and_releases_removed_item_permits() {
+    let tree = ResourceBudgetTree::new("process", limit(4, 40, FullPolicy::Reject)).expect("root budget");
+    let queue = BudgetedQueue::new(tree.root());
+    for item in 0..4 {
+        queue.try_push_data(item, 10).expect("queue capacity");
+    }
+
+    assert_eq!(queue.retain(|item| item % 2 == 0), 2);
+    assert_eq!(queue.try_pop(), Some(0));
+    assert_eq!(queue.try_pop(), Some(2));
+    assert_eq!(queue.snapshot().retained_bytes, 0);
+}
+
+#[test]
+fn drop_stale_policy_uses_virtual_time_and_reports_oldest_age() {
+    let clock = Arc::new(ManualClock::default());
+    let tree = ResourceBudgetTree::with_clock(
+        "process",
+        limit(1, 16, FullPolicy::DropStale).with_max_age(Duration::from_secs(5)),
+        clock.clone(),
+    )
+    .expect("root budget");
+    let queue = BudgetedQueue::new(tree.root());
+
+    queue.try_push_data("stale", 8).expect("stale item");
+    clock.advance(Duration::from_secs(6));
+    assert_eq!(
+        queue.try_push_data("fresh", 8).expect("fresh item"),
+        QueuePushOutcome::DroppedStale { dropped: 1 }
+    );
+    assert_eq!(queue.try_pop(), Some("fresh"));
+    assert_eq!(queue.snapshot().dropped_count, 1);
+}
+
+#[test]
+fn reject_policy_never_discards_aged_work_silently() {
+    let clock = Arc::new(ManualClock::default());
+    let tree = ResourceBudgetTree::with_clock(
+        "reject-aged-work",
+        limit(2, 16, FullPolicy::Reject).with_max_age(Duration::from_secs(1)),
+        clock.clone(),
+    )
+    .expect("tree");
+    let queue = BudgetedQueue::new(tree.root());
+
+    queue.try_push_data("required", 8).expect("initial work");
+    clock.advance(Duration::from_secs(2));
+
+    assert_eq!(queue.try_pop(), Some("required"));
+    assert_eq!(queue.snapshot().dropped_count, 0);
+}
+
+#[test]
+fn close_slow_consumer_policy_closes_when_oldest_item_exceeds_max_age() {
+    let clock = Arc::new(ManualClock::default());
+    let tree = ResourceBudgetTree::with_clock(
+        "slow-consumer-age",
+        limit(2, 16, FullPolicy::CloseSlowConsumer).with_max_age(Duration::from_secs(1)),
+        clock.clone(),
+    )
+    .expect("tree");
+    let queue = BudgetedQueue::new(tree.root());
+
+    queue.try_push_data("stale", 8).expect("initial item");
+    clock.advance(Duration::from_secs(2));
+
+    assert_eq!(queue.try_pop(), None);
+    assert!(queue.is_closed());
+    assert_eq!(queue.snapshot().dropped_count, 1);
+    assert_eq!(queue.snapshot().closed_slow_consumer_count, 1);
+}
+
+#[test]
+fn slow_consumer_policy_closes_and_drains_the_queue() {
+    let tree = ResourceBudgetTree::new("process", limit(1, 16, FullPolicy::CloseSlowConsumer)).expect("root budget");
+    let queue = BudgetedQueue::new(tree.root());
+
+    queue.try_push_data("first", 8).expect("first item");
+    let error = queue.try_push_data("second", 8).expect_err("slow consumer must close");
+    assert_eq!(error.kind(), &QueuePushErrorKind::SlowConsumerClosed);
+    assert_eq!(error.into_item(), "second");
+    assert!(queue.is_closed());
+    assert!(queue.is_empty());
+    let snapshot = queue.snapshot();
+    assert_eq!(snapshot.closed_slow_consumer_count, 1);
+    assert_eq!(snapshot.dropped_count, 1);
+    assert_eq!(snapshot.retained_bytes, 0);
+}
+
+#[tokio::test]
+async fn aborted_owner_releases_raii_permit() {
+    let tree = ResourceBudgetTree::new("process", limit(1, 16, FullPolicy::Reject)).expect("root budget");
+    let budget = tree.root();
+    let task_budget = budget.clone();
+    let (acquired_tx, acquired_rx) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        let _permit = task_budget.try_acquire(8, BudgetClass::Data).expect("task permit");
+        acquired_tx.send(()).expect("signal acquisition");
+        pending::<()>().await;
+    });
+
+    acquired_rx.await.expect("task acquired permit");
+    assert_eq!(budget.snapshot().current_count, 1);
+    task.abort();
+    let _ = task.await;
+    assert_eq!(budget.snapshot().current_count, 0);
+    assert!(budget.try_acquire_data(8).is_ok());
+}

@@ -17,10 +17,12 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Instant;
 
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_runtime::ResourcePermit;
 use rocketmq_store::ArcMessageFilter;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
@@ -30,12 +32,31 @@ pub struct PopRequest {
     ctx: ConnectionHandlerContext,
     complete: Arc<AtomicBool>,
     op: i64,
+    created_at: Instant,
     expired: u64,
     subscription_data: Option<SubscriptionData>,
     message_filter: Option<ArcMessageFilter>,
+    _resource_permit: Option<ResourcePermit>,
 }
 
 impl PopRequest {
+    #[must_use]
+    pub fn estimated_retained_bytes(remoting_command: &RemotingCommand) -> usize {
+        let extension_bytes = remoting_command.ext_fields().map_or(0, |fields| {
+            fields.iter().fold(0usize, |total, (key, value)| {
+                total
+                    .saturating_add(std::mem::size_of_val(key))
+                    .saturating_add(std::mem::size_of_val(value))
+                    .saturating_add(key.len())
+                    .saturating_add(value.len())
+            })
+        });
+        std::mem::size_of::<Self>()
+            .saturating_add(remoting_command.body().map_or(0, |body| body.len()))
+            .saturating_add(remoting_command.remark().map_or(0, |remark| remark.len()))
+            .saturating_add(extension_bytes)
+    }
+
     pub fn new(
         remoting_command: RemotingCommand,
         ctx: ConnectionHandlerContext,
@@ -51,10 +72,25 @@ impl PopRequest {
             ctx,
             complete: Arc::new(AtomicBool::new(false)),
             op,
+            created_at: Instant::now(),
             expired,
             subscription_data,
             message_filter,
+            _resource_permit: None,
         }
+    }
+
+    pub fn new_with_resource_permit(
+        remoting_command: RemotingCommand,
+        ctx: ConnectionHandlerContext,
+        expired: u64,
+        subscription_data: Option<SubscriptionData>,
+        message_filter: Option<ArcMessageFilter>,
+        resource_permit: ResourcePermit,
+    ) -> Self {
+        let mut request = Self::new(remoting_command, ctx, expired, subscription_data, message_filter);
+        request._resource_permit = Some(resource_permit);
+        request
     }
 
     pub fn get_channel(&self) -> &Channel {
@@ -80,7 +116,7 @@ impl PopRequest {
 
     pub fn is_timeout(&self) -> bool {
         let now = current_millis();
-        now > (self.expired - 50)
+        now > self.expired.saturating_sub(50)
     }
 
     pub fn complete(&self) -> bool {
@@ -91,6 +127,10 @@ impl PopRequest {
 
     pub fn get_expired(&self) -> u64 {
         self.expired
+    }
+
+    pub fn age(&self) -> std::time::Duration {
+        self.created_at.elapsed()
     }
 
     pub fn get_subscription_data(&self) -> Option<&SubscriptionData> {

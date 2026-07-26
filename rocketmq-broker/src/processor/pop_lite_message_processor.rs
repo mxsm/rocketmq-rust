@@ -720,11 +720,13 @@ mod tests {
             .clone()
             .map(QueueLockManager::new_with_parent_task_group)
             .unwrap_or_else(QueueLockManager::new);
-        let long_polling = PopLiteLongPollingServiceContext::new(
+        let long_polling = PopLiteLongPollingServiceContext::try_with_resource_budget(
             PopLiteLongPollingPolicy::from_config(&inner.broker_config()),
             lite_event_dispatcher.clone(),
             parent_task_group,
-        );
+            inner.resource_budget(),
+        )
+        .expect("test Broker resource budget");
         let consumer_offset_manager = inner.consumer_offset_manager_handle();
 
         PopLiteMessageProcessor::new(PopLiteMessageProcessorContext::new(

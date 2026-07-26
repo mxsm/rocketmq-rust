@@ -294,6 +294,8 @@ async fn count_and_byte_admission_are_observable_and_released_on_every_completio
     let table = PendingRequestTable::with_limits(PendingRequestLimits {
         max_count: 2,
         max_bytes: 8,
+        admission_rate_per_second: 2,
+        max_request_age: Duration::from_secs(3),
     });
     let (first_sender, first_receiver) = tokio::sync::oneshot::channel();
     let first = table
@@ -325,6 +327,24 @@ async fn count_and_byte_admission_are_observable_and_released_on_every_completio
     drop(next);
     assert_eq!(table.usage().count, 0);
     assert_eq!(table.usage().bytes, 0);
+}
+
+#[test]
+fn pending_request_deadline_is_capped_by_the_configured_maximum_age() {
+    let table = PendingRequestTable::try_with_limits(PendingRequestLimits {
+        max_count: 1,
+        max_bytes: 1024,
+        admission_rate_per_second: 1,
+        max_request_age: Duration::from_millis(50),
+    })
+    .expect("pending request limits");
+    let (sender, _receiver) = tokio::sync::oneshot::channel();
+    let guard = table
+        .register(1, RequestDeadline::from_timeout_millis(60_000), sender)
+        .expect("request should be admitted");
+
+    assert_eq!(guard.deadline().budget(), Duration::from_millis(50));
+    assert!(guard.deadline().remaining() <= Duration::from_millis(50));
 }
 
 #[test]

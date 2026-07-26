@@ -16,12 +16,14 @@ use std::sync::Arc;
 
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::message::MessageTrait;
 
 use crate::consumer::consumer_impl::process_queue::ProcessQueue;
 
 /// Request to consume messages from a specific queue.
 ///
-/// This structure is passed from pull tasks to the poll() API via an unbounded channel.
+/// This structure is passed from pull tasks to the poll API through a
+/// resource-budgeted queue.
 #[derive(Clone)]
 pub struct LitePullConsumeRequest {
     /// Messages to be consumed.
@@ -62,5 +64,41 @@ impl LitePullConsumeRequest {
     /// Consumes the request and returns its components.
     pub fn into_parts(self) -> (Vec<Arc<MessageExt>>, MessageQueue, Arc<ProcessQueue>) {
         (self.messages, self.message_queue, self.process_queue)
+    }
+
+    /// Estimated bytes retained while this request waits in the poll queue.
+    pub fn retained_bytes(&self) -> usize {
+        let message_bytes = self.messages.iter().fold(0usize, |total, message| {
+            let properties = message.properties();
+            let property_bytes = properties
+                .capacity()
+                .saturating_mul(std::mem::size_of::<(
+                    cheetah_string::CheetahString,
+                    cheetah_string::CheetahString,
+                )>())
+                .saturating_add(
+                    properties
+                        .iter()
+                        .map(|(key, value)| key.len().saturating_add(value.len()))
+                        .sum::<usize>(),
+                );
+            total
+                .saturating_add(std::mem::size_of::<MessageExt>())
+                .saturating_add(message.get_body().map_or(0, |body| body.len()))
+                .saturating_add(message.topic().len())
+                .saturating_add(message.broker_name().len())
+                .saturating_add(message.msg_id().len())
+                .saturating_add(message.message_inner().transaction_id().map_or(0, str::len))
+                .saturating_add(property_bytes)
+        });
+        std::mem::size_of::<Self>()
+            .saturating_add(
+                self.messages
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<Arc<MessageExt>>()),
+            )
+            .saturating_add(self.message_queue.topic().len())
+            .saturating_add(self.message_queue.broker_name().len())
+            .saturating_add(message_bytes)
     }
 }

@@ -41,6 +41,7 @@ mod server;
 mod tls;
 
 pub use admission::AdmissionClass;
+pub use admission::AdmissionConfigError;
 pub use admission::AdmissionController;
 pub use admission::AdmissionLimits;
 pub use admission::AdmissionResource;

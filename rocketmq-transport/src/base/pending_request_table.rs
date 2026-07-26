@@ -24,14 +24,50 @@ use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use tokio::sync::OwnedSemaphorePermit;
-use tokio::sync::Semaphore;
+use rocketmq_runtime::BudgetDimension;
+use rocketmq_runtime::BudgetLimit;
+use rocketmq_runtime::FullPolicy;
+use rocketmq_runtime::ProcessMemoryLimit;
+use rocketmq_runtime::RateLimit;
+use rocketmq_runtime::ResourceBudget;
+use rocketmq_runtime::ResourceBudgetTree;
+use rocketmq_runtime::ResourcePermit;
 
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 use crate::deadline::RequestDeadline;
 
 static NEXT_TABLE_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Estimates the heap and inline memory retained while a remoting command is
+/// in flight.
+///
+/// The estimate deliberately includes metadata as well as the body so
+/// header-heavy requests cannot bypass byte admission with an empty body.
+pub(crate) fn materialize_and_estimate_remoting_command_retained_bytes(command: &mut RemotingCommand) -> usize {
+    command.materialize_custom_header_to_ext_fields();
+    let remark_bytes = command.remark().map_or(0, cheetah_string::CheetahString::len);
+    let ext_field_bytes = command.ext_fields().map_or(0, |fields| {
+        fields
+            .capacity()
+            .saturating_mul(std::mem::size_of::<(
+                cheetah_string::CheetahString,
+                cheetah_string::CheetahString,
+            )>())
+            .saturating_add(
+                fields
+                    .iter()
+                    .map(|(key, value)| key.len().saturating_add(value.len()))
+                    .sum::<usize>(),
+            )
+    });
+    let body_bytes = command.body().map_or(0, bytes::Bytes::len);
+
+    std::mem::size_of::<RemotingCommand>()
+        .saturating_add(remark_bytes)
+        .saturating_add(ext_field_bytes)
+        .saturating_add(body_bytes)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct PendingRequestKey {
@@ -87,8 +123,7 @@ struct PendingRequest {
     created_at: Instant,
     deadline: RequestDeadline,
     timeout_millis: u64,
-    _permit: OwnedSemaphorePermit,
-    _byte_permit: PendingBytePermit,
+    _permit: ResourcePermit,
     completion: Box<dyn PendingCompletion>,
 }
 
@@ -119,9 +154,8 @@ struct PendingRequestTableInner {
     next_owner: AtomicU64,
     next_reservation: AtomicU64,
     default_owner: PendingRequestOwner,
-    permits: Arc<Semaphore>,
-    max_count: usize,
-    byte_budget: Arc<PendingByteBudget>,
+    budget: ResourceBudget,
+    max_request_age: Duration,
     rejected_count: AtomicUsize,
     rejected_bytes: AtomicUsize,
 }
@@ -130,6 +164,19 @@ struct PendingRequestTableInner {
 pub struct PendingRequestLimits {
     pub max_count: usize,
     pub max_bytes: usize,
+    pub admission_rate_per_second: u64,
+    pub max_request_age: Duration,
+}
+
+impl Default for PendingRequestLimits {
+    fn default() -> Self {
+        Self {
+            max_count: PendingRequestTable::DEFAULT_CAPACITY,
+            max_bytes: PendingRequestTable::DEFAULT_MAX_BYTES,
+            admission_rate_per_second: PendingRequestTable::DEFAULT_CAPACITY as u64,
+            max_request_age: Duration::from_secs(300),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -138,37 +185,6 @@ pub struct PendingRequestUsage {
     pub bytes: usize,
     pub rejected_count: usize,
     pub rejected_bytes: usize,
-}
-
-struct PendingByteBudget {
-    max_bytes: usize,
-    used_bytes: AtomicUsize,
-}
-
-struct PendingBytePermit {
-    budget: Arc<PendingByteBudget>,
-    bytes: usize,
-}
-
-impl PendingByteBudget {
-    fn try_acquire(self: &Arc<Self>, bytes: usize) -> Option<PendingBytePermit> {
-        let acquired = self
-            .used_bytes
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
-                used.checked_add(bytes).filter(|next| *next <= self.max_bytes)
-            })
-            .is_ok();
-        acquired.then(|| PendingBytePermit {
-            budget: self.clone(),
-            bytes,
-        })
-    }
-}
-
-impl Drop for PendingBytePermit {
-    fn drop(&mut self) {
-        self.budget.used_bytes.fetch_sub(self.bytes, Ordering::AcqRel);
-    }
 }
 
 /// Concurrent pending request registry with connection-aware, exactly-once completion.
@@ -195,40 +211,75 @@ impl PendingRequestTable {
     const DEFAULT_MAX_BYTES: usize = 256 * 1024 * 1024;
 
     pub fn new() -> Self {
-        Self::with_limits(PendingRequestLimits {
-            max_count: Self::DEFAULT_CAPACITY,
-            max_bytes: Self::DEFAULT_MAX_BYTES,
-        })
+        Self::with_limits(PendingRequestLimits::default())
     }
 
     pub fn with_capacity(capacity: usize) -> Self {
         Self::with_limits(PendingRequestLimits {
             max_count: capacity,
-            max_bytes: Self::DEFAULT_MAX_BYTES,
+            ..PendingRequestLimits::default()
         })
     }
 
-    pub fn with_limits(limits: PendingRequestLimits) -> Self {
+    /// Builds a table from explicit count, byte, rate, and age limits.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed configuration error when process-memory detection or
+    /// budget validation fails.
+    pub fn try_with_limits(limits: PendingRequestLimits) -> RocketMQResult<Self> {
         let max_count = limits.max_count.max(1);
-        let max_bytes = limits.max_bytes.max(1);
+        let process_bytes = ProcessMemoryLimit::detect()
+            .and_then(|limit| limit.fraction(1, 16))
+            .map_err(|error| RocketMQError::ConfigInvalidValue {
+                key: "transport.pendingRequest.processMemoryLimit",
+                value: limits.max_bytes.to_string(),
+                reason: error.to_string(),
+            })?;
+        let process_bytes = usize::try_from(process_bytes).unwrap_or(usize::MAX).max(1);
+        let max_bytes = limits.max_bytes.min(process_bytes).max(1);
+        let request_rate = limits.admission_rate_per_second.max(1);
+        let max_request_age = limits.max_request_age;
         let table_id = NEXT_TABLE_ID.fetch_add(1, Ordering::Relaxed);
-        Self {
+        let budget = ResourceBudgetTree::new(
+            format!("pending-request-table-{table_id}"),
+            BudgetLimit::new(max_count, max_bytes, FullPolicy::Reject)
+                .with_rate(RateLimit::new(request_rate, request_rate))
+                .with_max_age(max_request_age),
+        )
+        .map_err(|error| RocketMQError::ConfigInvalidValue {
+            key: "transport.pendingRequest",
+            value: format!(
+                "count={max_count},bytes={max_bytes},rate={request_rate},age_ms={}",
+                max_request_age.as_millis()
+            ),
+            reason: error.to_string(),
+        })?
+        .root();
+        Ok(Self {
             inner: Arc::new(PendingRequestTableInner {
                 table_id,
                 entries: DashMap::with_capacity(max_count),
                 next_owner: AtomicU64::new(2),
                 next_reservation: AtomicU64::new(1),
                 default_owner: PendingRequestOwner::new(table_id, 1),
-                permits: Arc::new(Semaphore::new(max_count)),
-                max_count,
-                byte_budget: Arc::new(PendingByteBudget {
-                    max_bytes,
-                    used_bytes: AtomicUsize::new(0),
-                }),
+                budget,
+                max_request_age,
                 rejected_count: AtomicUsize::new(0),
                 rejected_bytes: AtomicUsize::new(0),
             }),
-        }
+        })
+    }
+
+    /// Compatibility constructor for callers that cannot return startup
+    /// configuration errors.
+    ///
+    /// # Panics
+    ///
+    /// Panics when process-memory detection or budget validation fails. New
+    /// production composition should use [`Self::try_with_limits`].
+    pub fn with_limits(limits: PendingRequestLimits) -> Self {
+        Self::try_with_limits(limits).unwrap_or_else(|error| panic!("invalid pending request resource limits: {error}"))
     }
 
     /// Creates a correlation owner for one physical connection.
@@ -277,6 +328,7 @@ impl PendingRequestTable {
         retained_bytes: usize,
         sender: tokio::sync::oneshot::Sender<RocketMQResult<RemotingCommand>>,
     ) -> RocketMQResult<PendingRequestGuard> {
+        let deadline = deadline.capped(self.inner.max_request_age);
         deadline.ensure_before_send("pending_request")?;
         self.validate_owner(owner)?;
         let owner_state = owner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -286,12 +338,15 @@ impl PendingRequestTable {
                 "connection owner is retired; reconnect before sending another request",
             ));
         }
-        let permit = self.inner.permits.clone().try_acquire_owned().map_err(|_| {
-            self.inner.rejected_count.fetch_add(1, Ordering::Relaxed);
-            RocketMQError::network_queue_full("pending_request")
-        })?;
-        let byte_permit = self.inner.byte_budget.try_acquire(retained_bytes).ok_or_else(|| {
-            self.inner.rejected_bytes.fetch_add(1, Ordering::Relaxed);
+        let permit = self.inner.budget.try_acquire_data(retained_bytes).map_err(|error| {
+            match error.dimension() {
+                BudgetDimension::Bytes => {
+                    self.inner.rejected_bytes.fetch_add(1, Ordering::Relaxed);
+                }
+                BudgetDimension::Count | BudgetDimension::Rate => {
+                    self.inner.rejected_count.fetch_add(1, Ordering::Relaxed);
+                }
+            }
             RocketMQError::network_queue_full("pending_request")
         })?;
         let reservation = self.inner.next_reservation.fetch_add(1, Ordering::Relaxed);
@@ -309,7 +364,6 @@ impl PendingRequestTable {
             deadline,
             timeout_millis,
             _permit: permit,
-            _byte_permit: byte_permit,
             completion: Box::new(OneShotCompletion {
                 sender: Mutex::new(Some(sender)),
             }),
@@ -366,9 +420,10 @@ impl PendingRequestTable {
     }
 
     pub fn usage(&self) -> PendingRequestUsage {
+        let snapshot = self.inner.budget.snapshot();
         PendingRequestUsage {
-            count: self.inner.max_count - self.inner.permits.available_permits(),
-            bytes: self.inner.byte_budget.used_bytes.load(Ordering::Acquire),
+            count: snapshot.current_count,
+            bytes: snapshot.current_bytes,
             rejected_count: self.inner.rejected_count.load(Ordering::Relaxed),
             rejected_bytes: self.inner.rejected_bytes.load(Ordering::Relaxed),
         }
@@ -573,9 +628,28 @@ impl PendingRequest {
 
 #[cfg(test)]
 mod owner_epoch_tests {
+    use std::collections::HashMap;
     use std::sync::mpsc;
 
+    use cheetah_string::CheetahString;
+
     use super::*;
+
+    #[test]
+    fn retained_byte_estimate_includes_body_and_dynamic_metadata() {
+        let mut command = RemotingCommand::create_remoting_command(7)
+            .set_remark("resource-budget")
+            .set_ext_fields(HashMap::from([(
+                CheetahString::from_static_str("tenant"),
+                CheetahString::from_static_str("tenant-a"),
+            )]))
+            .set_body(vec![1_u8; 1024]);
+
+        let estimate = materialize_and_estimate_remoting_command_retained_bytes(&mut command);
+
+        assert!(estimate >= std::mem::size_of::<RemotingCommand>() + 1024);
+        assert!(estimate > std::mem::size_of::<RemotingCommand>() + 1024 + "resource-budget".len());
+    }
 
     #[test]
     fn registration_linearizes_behind_the_owner_close_gate() {

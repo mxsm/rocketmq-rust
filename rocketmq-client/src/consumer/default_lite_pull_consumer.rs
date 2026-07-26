@@ -1051,11 +1051,11 @@ impl DefaultLitePullConsumer {
     async fn get_or_init_impl(&self) -> RocketMQResult<&Arc<DefaultLitePullConsumerImpl>> {
         self.default_lite_pull_consumer_impl
             .get_or_try_init(|| async {
-                let impl_ = Arc::new(DefaultLitePullConsumerImpl::new(
+                let impl_ = Arc::new(DefaultLitePullConsumerImpl::try_new(
                     Arc::clone(&self.client_runtime),
                     self.client_config_snapshot(),
                     self.consumer_config_snapshot(),
-                ));
+                )?);
                 impl_.bind_self();
                 impl_.set_rpc_hook(self.rpc_hook.clone());
                 impl_.set_message_queue_listener(self.current_message_queue_listener());

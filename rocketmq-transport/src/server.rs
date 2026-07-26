@@ -285,10 +285,12 @@ impl TransportListener {
             let local_addr = stream.local_addr()?;
             let session_id = self.next_session.fetch_add(1, Ordering::Relaxed);
             let scope = AdmissionScope::new(remote_addr.ip()).with_session(session_id);
-            let Ok(connection_permit) =
-                self.admission
-                    .try_acquire(AdmissionResource::Connection, scope, 0, AdmissionClass::Data)
-            else {
+            let Ok(connection_permit) = self.admission.try_acquire(
+                AdmissionResource::Connection,
+                scope,
+                crate::admission::estimated_connection_retained_bytes(),
+                AdmissionClass::Data,
+            ) else {
                 continue;
             };
             let session_lease = match self.task_group.try_child_lease("rocketmq.transport.session") {
@@ -308,9 +310,12 @@ impl TransportListener {
                 .spawn("rocketmq.transport.session", TaskKind::Service, async move {
                     let _session_lease = session_lease;
                     let _connection_permit = connection_permit;
-                    let Ok(_handshake_permit) =
-                        admission.try_acquire(AdmissionResource::Handshake, scope, 0, AdmissionClass::Data)
-                    else {
+                    let Ok(_handshake_permit) = admission.try_acquire(
+                        AdmissionResource::Handshake,
+                        scope,
+                        crate::admission::estimated_handshake_retained_bytes(),
+                        AdmissionClass::Data,
+                    ) else {
                         return;
                     };
                     let handshake_cancellation = session_group.cancellation_token();
@@ -543,7 +548,6 @@ pub async fn run_connected_session<H>(
 
 struct FramedRequestAdmission {
     _inflight: AdmissionPermit,
-    _queued: AdmissionPermit,
     _processor: AdmissionPermit,
 }
 
@@ -554,11 +558,9 @@ fn acquire_framed_request(
     class: AdmissionClass,
 ) -> Result<FramedRequestAdmission, AdmissionError> {
     let inflight = admission.try_acquire(AdmissionResource::Inflight, scope, bytes, class)?;
-    let queued = admission.try_acquire(AdmissionResource::Queued, scope, bytes, class)?;
     let processor = admission.try_acquire(AdmissionResource::Processor, scope, bytes, class)?;
     Ok(FramedRequestAdmission {
         _inflight: inflight,
-        _queued: queued,
         _processor: processor,
     })
 }
@@ -606,7 +608,6 @@ pub struct TransportServer {
 
 struct RequestAdmission {
     _inflight: AdmissionPermit,
-    _queued: AdmissionPermit,
     _processor: AdmissionPermit,
 }
 
@@ -684,11 +685,12 @@ impl TransportServer {
                 };
                 let session_id = server.next_session.fetch_add(1, Ordering::Relaxed);
                 let scope = AdmissionScope::new(remote_addr.ip()).with_session(session_id);
-                let Ok(connection_permit) =
-                    server
-                        .admission
-                        .try_acquire(AdmissionResource::Connection, scope, 0, AdmissionClass::Data)
-                else {
+                let Ok(connection_permit) = server.admission.try_acquire(
+                    AdmissionResource::Connection,
+                    scope,
+                    crate::admission::estimated_connection_retained_bytes(),
+                    AdmissionClass::Data,
+                ) else {
                     drop(stream);
                     continue;
                 };
@@ -719,10 +721,12 @@ impl TransportServer {
         session_context: ChildServiceContext,
     ) {
         let scope = AdmissionScope::new(remote_addr.ip()).with_session(session_id);
-        let Ok(_handshake_permit) =
-            self.admission
-                .try_acquire(AdmissionResource::Handshake, scope, 0, AdmissionClass::Data)
-        else {
+        let Ok(_handshake_permit) = self.admission.try_acquire(
+            AdmissionResource::Handshake,
+            scope,
+            crate::admission::estimated_handshake_retained_bytes(),
+            AdmissionClass::Data,
+        ) else {
             return;
         };
         let handshake_deadline = tokio::time::Instant::now() + self.config.handshake_timeout;
@@ -771,7 +775,7 @@ impl TransportServer {
             let _admission = match self.acquire_request(scope, bytes, class) {
                 Ok(admission) => admission,
                 Err(error) => {
-                    if error.policy() == FullPolicy::CloseConnection {
+                    if error.policy() == FullPolicy::CloseSlowConsumer {
                         break;
                     }
                     let rejection = RemotingCommand::create_response_command_with_code_remark(
@@ -827,15 +831,11 @@ impl TransportServer {
         let inflight = self
             .admission
             .try_acquire(AdmissionResource::Inflight, scope, bytes, class)?;
-        let queued = self
-            .admission
-            .try_acquire(AdmissionResource::Queued, scope, bytes, class)?;
         let processor = self
             .admission
             .try_acquire(AdmissionResource::Processor, scope, bytes, class)?;
         Ok(RequestAdmission {
             _inflight: inflight,
-            _queued: queued,
             _processor: processor,
         })
     }

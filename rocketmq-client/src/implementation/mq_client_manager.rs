@@ -21,6 +21,7 @@ use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_transport::RPCHook;
 use tracing::info;
@@ -68,6 +69,7 @@ pub struct ClientPool {
 
 struct ClientPoolInner {
     service_context: ChildServiceContext,
+    resource_budget: ResourceBudget,
     factory_table: Arc<ClientInstanceHashMap>,
     accumulator_table: Arc<AccumulatorHashMap>,
     request_future_holder: Arc<RequestFutureHolder>,
@@ -98,11 +100,12 @@ impl PooledClient {
 }
 
 impl ClientPool {
-    pub(crate) fn new(service_context: ChildServiceContext) -> Self {
+    pub(crate) fn new(service_context: ChildServiceContext, resource_budget: ResourceBudget) -> Self {
         let request_future_holder = Arc::new(RequestFutureHolder::new(service_context.child("request-futures")));
         Self {
             inner: Arc::new(ClientPoolInner {
                 service_context,
+                resource_budget,
                 factory_table: Arc::new(DashMap::with_capacity(128)),
                 accumulator_table: Arc::new(DashMap::with_capacity(128)),
                 request_future_holder,
@@ -140,13 +143,14 @@ impl ClientPool {
                 generation,
                 "Created new MQClientInstance in ClientPool"
             );
-            let instance = MQClientInstance::new_arc(
+            let instance = MQClientInstance::new_arc_with_resource_budget(
                 client_config,
                 generation,
                 client_id.clone(),
                 rpc_hook,
                 self.inner.service_context.child(format!("instance-{generation}")),
                 Arc::clone(&self.inner.request_future_holder),
+                self.inner.resource_budget.clone(),
             );
             ClientPoolEntry {
                 generation,
@@ -184,9 +188,10 @@ impl ClientPool {
                 .entry(client_id.clone())
                 .or_insert_with(|| {
                     info!("Created new ProduceAccumulator for clientId:[{}]", client_id);
-                    Arc::new(ProduceAccumulator::new(
+                    Arc::new(ProduceAccumulator::with_resource_budget(
                         self.inner.service_context.child(format!("accumulator-{}", client_id)),
                         client_id.as_str(),
+                        self.inner.resource_budget.clone(),
                     ))
                 })
                 .clone(),

@@ -418,11 +418,11 @@ impl DefaultMQPushConsumerImpl {
                     offset_store
                 } else {
                     let offset_store = Arc::new(match consumer_config.message_model {
-                        MessageModel::Broadcasting => OffsetStore::new_with_local(LocalFileOffsetStore::new(
+                        MessageModel::Broadcasting => OffsetStore::new_with_local(LocalFileOffsetStore::try_new(
                             self.service_context.child("offset-store"),
                             client_instance.clone(),
                             consumer_config.consumer_group.clone(),
-                        )),
+                        )?),
                         MessageModel::Clustering => OffsetStore::new_with_remote(RemoteBrokerOffsetStore::new(
                             client_instance.clone(),
                             consumer_config.consumer_group.clone(),

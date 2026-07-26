@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::LinkedList;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
@@ -23,7 +22,12 @@ use rocketmq_model::common::mix_all;
 use rocketmq_runtime::task::service_task::ServiceTask;
 use rocketmq_runtime::task::service_task::ServiceTaskContext;
 use rocketmq_runtime::task::ServiceManager;
-use tokio::sync::Mutex;
+use rocketmq_runtime::BudgetLimit;
+use rocketmq_runtime::BudgetedQueue;
+use rocketmq_runtime::FullPolicy;
+use rocketmq_runtime::ProcessMemoryLimit;
+use rocketmq_runtime::RateLimit;
+use rocketmq_runtime::ResourceBudgetTree;
 use tokio::sync::Notify;
 use tokio::time::timeout;
 use tracing::error;
@@ -47,12 +51,23 @@ pub struct GroupTransferService {
 }
 
 impl GroupTransferService {
+    /// Builds the HA acknowledgement queue from the process memory limit.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the process memory limit cannot be detected. Production
+    /// composition should prefer [`Self::try_new`].
     pub fn new(ha_service: GeneralHAServiceReference) -> Self {
-        let inner = Arc::new(GroupTransferServiceInner::new(ha_service));
-        GroupTransferService {
+        Self::try_new(ha_service)
+            .unwrap_or_else(|error| panic!("failed to build GroupTransferService resource budget: {error}"))
+    }
+
+    pub fn try_new(ha_service: GeneralHAServiceReference) -> HAResult<Self> {
+        let inner = Arc::new(GroupTransferServiceInner::try_new(ha_service)?);
+        Ok(GroupTransferService {
             inner: inner.clone(),
             service_manager: ServiceManager::new_arc(inner),
-        }
+        })
     }
 
     pub async fn start(&self) -> HAResult<()> {
@@ -98,19 +113,36 @@ struct GroupTransferServiceInner {
     ha_service: GeneralHAServiceReference,
     notified: (Arc<Notify>, AtomicBool),
     ack_notify_count: AtomicU64,
-    requests_write: Arc<Mutex<LinkedList<GroupCommitRequest>>>,
-    requests_read: Arc<Mutex<LinkedList<GroupCommitRequest>>>,
+    pending_requests: BudgetedQueue<PendingGroupTransfer>,
 }
 
 impl GroupTransferServiceInner {
-    fn new(ha_service: GeneralHAServiceReference) -> Self {
-        GroupTransferServiceInner {
+    fn try_new(ha_service: GeneralHAServiceReference) -> HAResult<Self> {
+        let process_limit = ProcessMemoryLimit::detect()
+            .map_err(|error| HAError::operation("detect HA process memory limit", error))?;
+        let managed_bytes = process_limit
+            .fraction(1, 16)
+            .map_err(|error| HAError::operation("derive HA memory budget", error))?;
+        let queue_bytes = usize::try_from((managed_bytes / 2).max(1)).unwrap_or(usize::MAX);
+        let request_bytes = std::mem::size_of::<PendingGroupTransfer>().max(1);
+        let queue_count = (queue_bytes / request_bytes).clamp(1, 65_536);
+        let tree = ResourceBudgetTree::new("store", BudgetLimit::new(queue_count, queue_bytes, FullPolicy::Reject))
+            .map_err(|error| HAError::operation("build Store resource budget", error))?;
+        let queue_budget = tree
+            .root()
+            .child(
+                "ha-group-transfer",
+                BudgetLimit::new(queue_count, queue_bytes, FullPolicy::Reject)
+                    .with_rate(RateLimit::new(queue_count as u64, queue_count as u64))
+                    .with_max_age(Duration::from_secs(30)),
+            )
+            .map_err(|error| HAError::operation("build HA group-transfer budget", error))?;
+        Ok(GroupTransferServiceInner {
             ha_service,
             notified: (Arc::new(Notify::new()), AtomicBool::new(false)),
             ack_notify_count: AtomicU64::new(0),
-            requests_write: Arc::new(Mutex::new(LinkedList::new())),
-            requests_read: Arc::new(Mutex::new(LinkedList::new())),
-        }
+            pending_requests: BudgetedQueue::new(queue_budget),
+        })
     }
 
     #[inline]
@@ -119,28 +151,27 @@ impl GroupTransferServiceInner {
     }
 
     fn runtime_info(&self) -> GroupTransferRuntimeInfo {
-        let now = Instant::now();
-        let (write_count, write_oldest_wait_millis) = pending_request_snapshot(&self.requests_write, now);
-        let (read_count, read_oldest_wait_millis) = pending_request_snapshot(&self.requests_read, now);
+        let snapshot = self.pending_requests.snapshot();
 
         GroupTransferRuntimeInfo {
-            pending_request_count: write_count.saturating_add(read_count),
-            pending_request_oldest_wait_millis: write_oldest_wait_millis.max(read_oldest_wait_millis),
+            pending_request_count: snapshot.reserved_count as u64,
+            pending_request_oldest_wait_millis: snapshot
+                .oldest_age
+                .and_then(|age| u64::try_from(age.as_millis()).ok())
+                .unwrap_or(0),
             ack_notify_count: self.ack_notify_count.load(std::sync::atomic::Ordering::Relaxed),
         }
     }
 
     #[inline]
     async fn put_request(&self, request: GroupCommitRequest) {
-        let mut write_requests = self.requests_write.lock().await;
-        write_requests.push_back(request);
-    }
-
-    #[inline]
-    async fn swap_requests(&self) {
-        let mut write_requests = self.requests_write.lock().await;
-        let mut read_requests = self.requests_read.lock().await;
-        std::mem::swap(&mut *read_requests, &mut *write_requests);
+        let retained_bytes = std::mem::size_of::<PendingGroupTransfer>();
+        if let Err(error) = self
+            .pending_requests
+            .try_push_data(PendingGroupTransfer::new(request), retained_bytes)
+        {
+            warn!(error = %error, "HA group-transfer queue rejected a request");
+        }
     }
 
     async fn load_acked_replicas(ha_service: &GeneralHAService) -> Vec<HAAckedReplicaSnapshot> {
@@ -148,25 +179,16 @@ impl GroupTransferServiceInner {
     }
 
     async fn do_wait_transfer(&self) {
-        let mut read_requests = {
-            let mut pending_requests = self.requests_read.lock().await;
-            if pending_requests.is_empty() {
-                return;
-            }
-            std::mem::take(&mut *pending_requests)
-        };
-
-        if read_requests.is_empty() {
-            return;
-        }
         let ha_service = self.ha_service.upgrade();
 
-        for request in read_requests.iter_mut() {
+        while let Some(pending) = self.pending_requests.try_pop_budgeted() {
+            let (mut pending, _permit, _) = pending.into_parts();
+            let request = pending.request_mut();
             let mut transfer_ok = false;
             let deadline = request.get_deadline();
             let all_ack_in_sync_state_set = request.get_ack_nums() == mix_all::ALL_ACK_IN_SYNC_STATE_SET;
             let mut index = 0;
-            while !transfer_ok && deadline - Instant::now() > Duration::ZERO {
+            while !transfer_ok && Instant::now() < deadline {
                 if index > 0
                     && timeout(Duration::from_millis(1), self.notified.0.notified())
                         .await
@@ -216,22 +238,39 @@ impl GroupTransferServiceInner {
             } else {
                 PutMessageStatus::FlushSlaveTimeout
             });
+            pending.complete();
         }
     }
 }
 
-fn pending_request_snapshot(requests: &Arc<Mutex<LinkedList<GroupCommitRequest>>>, now: Instant) -> (u64, u64) {
-    let Ok(requests) = requests.try_lock() else {
-        return (0, 0);
-    };
-    let count = requests.len() as u64;
-    let oldest_wait_millis = requests
-        .iter()
-        .map(|request| now.saturating_duration_since(request.created_at()).as_millis())
-        .max()
-        .and_then(|millis| u64::try_from(millis).ok())
-        .unwrap_or(0);
-    (count, oldest_wait_millis)
+struct PendingGroupTransfer {
+    request: GroupCommitRequest,
+    completed: bool,
+}
+
+impl PendingGroupTransfer {
+    fn new(request: GroupCommitRequest) -> Self {
+        Self {
+            request,
+            completed: false,
+        }
+    }
+
+    fn request_mut(&mut self) -> &mut GroupCommitRequest {
+        &mut self.request
+    }
+
+    fn complete(&mut self) {
+        self.completed = true;
+    }
+}
+
+impl Drop for PendingGroupTransfer {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.request.wakeup_customer(PutMessageStatus::FlushSlaveTimeout);
+        }
+    }
 }
 
 impl ServiceTask for GroupTransferServiceInner {
@@ -247,9 +286,7 @@ impl ServiceTask for GroupTransferServiceInner {
         }
     }
 
-    async fn on_wait_end(&self) {
-        self.swap_requests().await;
-    }
+    async fn on_wait_end(&self) {}
 }
 
 #[cfg(test)]
@@ -327,6 +364,67 @@ mod tests {
         assert_eq!(runtime_info.pending_request_count, 1);
         assert!(runtime_info.pending_request_oldest_wait_millis < 5_000);
         assert_eq!(runtime_info.ack_notify_count, 2);
+    }
+
+    #[tokio::test]
+    async fn overload_rejects_excess_group_transfers_without_growing_the_queue() {
+        let ha_service = new_test_ha_service();
+        let reference = GeneralHAServiceReference::new();
+        reference.bind(&ha_service).expect("bind general ha service");
+        let retained_bytes = std::mem::size_of::<PendingGroupTransfer>().max(1);
+        let tree = ResourceBudgetTree::new(
+            "store-overload-test",
+            BudgetLimit::new(2, retained_bytes * 2, FullPolicy::Reject),
+        )
+        .expect("root budget");
+        let queue_budget = tree
+            .root()
+            .child(
+                "ha-group-transfer",
+                BudgetLimit::new(2, retained_bytes * 2, FullPolicy::Reject)
+                    .with_rate(RateLimit::new(4, 4))
+                    .with_max_age(Duration::from_secs(30)),
+            )
+            .expect("queue budget");
+        let inner = GroupTransferServiceInner {
+            ha_service: reference,
+            notified: (Arc::new(Notify::new()), AtomicBool::new(false)),
+            ack_notify_count: AtomicU64::new(0),
+            pending_requests: BudgetedQueue::new(queue_budget),
+        };
+        let mut responses = Vec::new();
+
+        for offset in 0..4 {
+            let (request, response) = GroupCommitRequest::with_ack_nums(offset, 5_000, 2);
+            inner.put_request(request).await;
+            responses.push(response);
+        }
+
+        assert_eq!(inner.runtime_info().pending_request_count, 2);
+        for response in responses.iter_mut().skip(2) {
+            assert_eq!(
+                response.wait_for_result_with_timeout().await.expect("rejection status"),
+                PutMessageStatus::FlushSlaveTimeout
+            );
+        }
+        assert_eq!(inner.pending_requests.snapshot().rejected_count, 2);
+    }
+
+    #[tokio::test]
+    async fn already_expired_group_transfer_completes_without_deadline_subtraction_panic() {
+        let ha_service = new_test_ha_service();
+        let reference = GeneralHAServiceReference::new();
+        reference.bind(&ha_service).expect("bind general ha service");
+        let inner = GroupTransferServiceInner::try_new(reference).expect("group transfer service");
+        let (request, mut response) = GroupCommitRequest::with_ack_nums(128, 0, 2);
+
+        inner.put_request(request).await;
+        inner.do_wait_transfer().await;
+
+        assert_eq!(
+            response.wait_for_result_with_timeout().await.expect("timeout status"),
+            PutMessageStatus::FlushSlaveTimeout
+        );
     }
 
     #[test]

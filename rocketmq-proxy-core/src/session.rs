@@ -20,12 +20,13 @@ use std::time::SystemTime;
 use dashmap::DashMap;
 use rocketmq_model::lite::get_parent_and_lite_topic;
 use rocketmq_model::lite::to_lmq_name;
-use tokio::sync::mpsc;
+use rocketmq_runtime::BudgetedQueue;
 use tokio_util::sync::CancellationToken;
 
 use crate::context::ProxyContextWithPrincipal;
 use crate::error::ProxyError;
 use crate::error::ProxyResult;
+use crate::grpc::service::admission::estimated_protobuf_retained_bytes;
 use crate::proto::v2;
 use crate::ResourceIdentity;
 
@@ -165,7 +166,7 @@ pub struct PreparedTransactionHandle {
 
 #[derive(Clone)]
 pub struct TelemetryLink {
-    pub sender: mpsc::UnboundedSender<v2::TelemetryCommand>,
+    pub queue: BudgetedQueue<v2::TelemetryCommand>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -653,13 +654,9 @@ impl<C> ClientSessionRegistry<C> {
         tracked
     }
 
-    pub fn bind_telemetry_link(
-        &self,
-        client_id: impl Into<String>,
-        sender: mpsc::UnboundedSender<v2::TelemetryCommand>,
-    ) {
+    pub fn bind_telemetry_link(&self, client_id: impl Into<String>, queue: BudgetedQueue<v2::TelemetryCommand>) {
         let client_id = client_id.into();
-        self.telemetry_links.insert(client_id.clone(), TelemetryLink { sender });
+        self.telemetry_links.insert(client_id.clone(), TelemetryLink { queue });
         self.clear_pending_telemetry_commands_of_kind(client_id.as_str(), TelemetryCommandKind::ReconnectEndpoints);
     }
 
@@ -668,13 +665,21 @@ impl<C> ClientSessionRegistry<C> {
             return false;
         };
 
-        if link.sender.send(command).is_ok() {
+        let retained_bytes = estimated_protobuf_retained_bytes(&command);
+        if link.queue.try_push_control(command, retained_bytes).is_ok() {
             true
         } else {
+            let failed_queue = link.queue.clone();
             drop(link);
-            self.telemetry_links.remove(client_id);
+            self.unbind_telemetry_link_if_same(client_id, &failed_queue);
             false
         }
+    }
+
+    fn unbind_telemetry_link_if_same(&self, client_id: &str, expected: &BudgetedQueue<v2::TelemetryCommand>) -> bool {
+        self.telemetry_links
+            .remove_if(client_id, |_, current| current.queue.is_same_queue(expected))
+            .is_some()
     }
 
     pub fn unbind_telemetry_link(&self, client_id: &str) -> bool {
@@ -1394,7 +1399,11 @@ mod tests {
     use std::time::Duration;
     use std::time::SystemTime;
 
-    use tokio::sync::mpsc;
+    use rocketmq_runtime::BudgetLimit;
+    use rocketmq_runtime::BudgetedQueue;
+    use rocketmq_runtime::FullPolicy;
+    use rocketmq_runtime::RateLimit;
+    use rocketmq_runtime::ResourceBudgetTree;
     use tokio_util::sync::CancellationToken;
 
     use super::ClientSession;
@@ -1409,6 +1418,18 @@ mod tests {
     use crate::context::ProxyContext;
     use crate::proto::v2;
     use crate::ResourceIdentity;
+
+    fn telemetry_queue(capacity: usize) -> BudgetedQueue<v2::TelemetryCommand> {
+        let budget = ResourceBudgetTree::new(
+            "telemetry-test",
+            BudgetLimit::new(capacity, 1024 * 1024, FullPolicy::CloseSlowConsumer)
+                .with_rate(RateLimit::new(1024, 1024))
+                .with_max_age(Duration::from_secs(30)),
+        )
+        .expect("telemetry test budget")
+        .root();
+        BudgetedQueue::new(budget)
+    }
 
     fn context(client_id: &'static str) -> ProxyContext {
         let mut request = tonic::Request::new(());
@@ -1656,8 +1677,8 @@ mod tests {
     #[tokio::test]
     async fn telemetry_link_can_send_and_unbind_commands() {
         let registry = ClientSessionRegistry::default();
-        let (sender, mut receiver) = mpsc::unbounded_channel();
-        registry.bind_telemetry_link("client-a", sender);
+        let receiver = telemetry_queue(4);
+        registry.bind_telemetry_link("client-a", receiver.clone());
 
         assert!(registry.send_telemetry_command(
             "client-a",
@@ -1682,6 +1703,45 @@ mod tests {
 
         assert!(registry.unbind_telemetry_link("client-a"));
         assert!(!registry.has_telemetry_link("client-a"));
+    }
+
+    #[test]
+    fn telemetry_overload_closes_the_slow_consumer_instead_of_growing_unbounded() {
+        let registry = ClientSessionRegistry::default();
+        let queue = telemetry_queue(1);
+        registry.bind_telemetry_link("client-a", queue.clone());
+        let command = || v2::TelemetryCommand {
+            status: None,
+            command: Some(v2::telemetry_command::Command::ReconnectEndpointsCommand(
+                v2::ReconnectEndpointsCommand {
+                    nonce: "nonce-a".to_owned(),
+                },
+            )),
+        };
+
+        assert!(registry.send_telemetry_command("client-a", command()));
+        assert!(!registry.send_telemetry_command("client-a", command()));
+        assert!(!registry.has_telemetry_link("client-a"));
+        let snapshot = queue.snapshot();
+        assert!(snapshot.closed);
+        assert_eq!(snapshot.closed_slow_consumer_count, 1);
+        assert_eq!(snapshot.depth, 0);
+    }
+
+    #[test]
+    fn stale_telemetry_failure_never_unbinds_a_replacement_link() {
+        let registry = ClientSessionRegistry::default();
+        let stale = telemetry_queue(1);
+        registry.bind_telemetry_link("client-a", stale.clone());
+        let replacement = telemetry_queue(4);
+        registry.bind_telemetry_link("client-a", replacement.clone());
+
+        assert!(!registry.unbind_telemetry_link_if_same("client-a", &stale));
+        assert!(registry.has_telemetry_link("client-a"));
+        assert!(registry
+            .telemetry_links
+            .get("client-a")
+            .is_some_and(|link| link.queue.is_same_queue(&replacement)));
     }
 
     #[test]
@@ -1737,8 +1797,7 @@ mod tests {
             TelemetryCommandKind::ReconnectEndpoints,
             "nonce-a",
         ));
-        let (sender, _receiver) = mpsc::unbounded_channel();
-        registry.bind_telemetry_link("client-a", sender);
+        registry.bind_telemetry_link("client-a", telemetry_queue(4));
 
         assert!(!registry.has_pending_telemetry_command(
             "client-a",
@@ -1776,8 +1835,7 @@ mod tests {
         registry.upsert_from_context(&context);
         let tracked = registry.track_receipt_handle(tracked_handle("client-a", "msg-1", "handle-1"));
         registry.track_prepared_transaction(prepared_transaction("client-a", "msg-2", "tx-2"));
-        let (sender, _receiver) = mpsc::unbounded_channel();
-        registry.bind_telemetry_link("client-a", sender);
+        registry.bind_telemetry_link("client-a", telemetry_queue(4));
         assert!(registry.register_pending_telemetry_command(
             "client-a",
             TelemetryCommandKind::VerifyMessage,

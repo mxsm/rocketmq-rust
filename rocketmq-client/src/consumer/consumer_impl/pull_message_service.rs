@@ -31,9 +31,16 @@ use cheetah_string::CheetahString;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::UnifiedServiceError;
 use rocketmq_model::common::message::message_enum::MessageRequestMode;
+use rocketmq_runtime::BudgetLimit;
+use rocketmq_runtime::BudgetedItem;
+use rocketmq_runtime::BudgetedQueue;
+use rocketmq_runtime::FullPolicy;
+use rocketmq_runtime::QueuePushOutcome;
+use rocketmq_runtime::RateLimit;
+use rocketmq_runtime::ResourceBudget;
+use rocketmq_runtime::ResourcePermit;
 use rocketmq_runtime::Shutdown;
 use serde::Serialize;
-use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 use tokio::time::Instant as TokioInstant;
 use tokio_util::sync::CancellationToken;
@@ -63,7 +70,7 @@ const DEFAULT_MAX_PULL_SHARDS: usize = 8;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS: u64 = 1000;
 
 type BoxedMessageRequest = Box<dyn MessageRequest + Send + 'static>;
-type MessageRequestSender = tokio::sync::mpsc::Sender<BoxedMessageRequest>;
+type MessageRequestQueue = BudgetedQueue<BoxedMessageRequest>;
 
 /// RocketMQ Consumer Pull Message Service
 ///
@@ -83,10 +90,11 @@ type MessageRequestSender = tokio::sync::mpsc::Sender<BoxedMessageRequest>;
 #[derive(Clone)]
 pub struct PullMessageService {
     service_context: Arc<StdRwLock<Option<ChildServiceContext>>>,
+    resource_budget: ResourceBudget,
     lifecycle_transition: Arc<Mutex<()>>,
 
-    /// Message request channel sender
-    tx: Arc<StdRwLock<Option<MessageRequestSender>>>,
+    /// Immediate Pop request queue.
+    tx: Arc<StdRwLock<Option<MessageRequestQueue>>>,
 
     /// Shutdown signal broadcaster
     tx_shutdown: Arc<StdRwLock<Option<tokio::sync::broadcast::Sender<()>>>>,
@@ -118,8 +126,8 @@ pub struct PullMessageService {
     /// Cancels delayed scheduler and tracked generic tasks during shutdown.
     scheduled_task_shutdown: CancellationToken,
 
-    /// Shared delayed scheduler command channel.
-    delayed_scheduler_tx: Arc<StdMutex<Option<mpsc::UnboundedSender<DelayedScheduleCommand>>>>,
+    /// Shared delayed scheduler command queue.
+    delayed_scheduler_queue: Arc<StdMutex<Option<BudgetedQueue<DelayedScheduleCommand>>>>,
 
     /// Shared delayed scheduler metrics.
     delayed_scheduler_metrics: Arc<DelayedSchedulerMetrics>,
@@ -218,7 +226,8 @@ impl PullRequestDispatcher {
         let shard_index = pull_request_shard_index(self.client_id.as_str(), &request, self.shards.len());
         let shard = &self.shards[shard_index];
         shard.metrics.record_submitted();
-        if let Err(error) = shard.tx.send(request).await {
+        let retained_bytes = request.retained_bytes();
+        if let Err(error) = shard.queue.try_push_data(request, retained_bytes) {
             shard.metrics.record_rejected();
             warn!(
                 shard_index = shard.index,
@@ -226,12 +235,18 @@ impl PullRequestDispatcher {
             );
         }
     }
+
+    fn close(&self) {
+        for shard in self.shards.iter() {
+            shard.queue.close();
+        }
+    }
 }
 
 #[derive(Clone)]
 struct PullRequestShard {
     index: usize,
-    tx: mpsc::Sender<PullRequest>,
+    queue: BudgetedQueue<PullRequest>,
     metrics: Arc<PullRequestShardMetrics>,
 }
 
@@ -287,6 +302,12 @@ struct DelayedScheduleCommand {
     payload: DelayedSchedulePayload,
 }
 
+impl DelayedScheduleCommand {
+    fn retained_bytes(&self) -> usize {
+        std::mem::size_of::<Self>().saturating_add(self.payload.additional_retained_bytes())
+    }
+}
+
 enum DelayedSchedulePayload {
     Pull {
         request: PullRequest,
@@ -294,12 +315,24 @@ enum DelayedSchedulePayload {
     },
     Pop {
         request: PopRequest,
-        tx: Option<MessageRequestSender>,
+        tx: Option<MessageRequestQueue>,
     },
     Task(Box<dyn FnOnce() + Send + 'static>),
 }
 
 impl DelayedSchedulePayload {
+    fn additional_retained_bytes(&self) -> usize {
+        match self {
+            Self::Pull { request, .. } => request
+                .retained_bytes()
+                .saturating_sub(std::mem::size_of::<PullRequest>()),
+            Self::Pop { request, .. } => request
+                .retained_bytes()
+                .saturating_sub(std::mem::size_of::<PopRequest>()),
+            Self::Task(task) => std::mem::size_of_val(task.as_ref()),
+        }
+    }
+
     async fn execute(self, stopped: &AtomicBool) {
         if stopped.load(Ordering::Acquire) {
             return;
@@ -315,7 +348,8 @@ impl DelayedSchedulePayload {
             }
             Self::Pop { request, tx } => {
                 if let Some(tx) = tx {
-                    if let Err(error) = tx.send(Box::new(request)).await {
+                    let retained_bytes = request.retained_bytes();
+                    if let Err(error) = tx.try_push_data(Box::new(request), retained_bytes) {
                         warn!("Failed to send pop request: {:?}", error);
                     }
                 }
@@ -329,6 +363,7 @@ struct DelayedQueueEntry {
     deadline: TokioInstant,
     sequence: u64,
     payload: DelayedSchedulePayload,
+    _permit: ResourcePermit,
 }
 
 impl PartialEq for DelayedQueueEntry {
@@ -372,7 +407,7 @@ impl Drop for DelayedSchedulerRunningGuard {
 }
 
 async fn run_delayed_scheduler(
-    mut rx: mpsc::UnboundedReceiver<DelayedScheduleCommand>,
+    commands: BudgetedQueue<DelayedScheduleCommand>,
     shutdown_token: CancellationToken,
     stopped: Arc<AtomicBool>,
     metrics: Arc<DelayedSchedulerMetrics>,
@@ -383,7 +418,7 @@ async fn run_delayed_scheduler(
 
     loop {
         if shutdown_token.is_cancelled() {
-            cancel_delayed_queue(&mut delayed_queue, &mut rx, &metrics);
+            cancel_delayed_queue(&mut delayed_queue, &commands, &metrics);
             break;
         }
 
@@ -397,32 +432,32 @@ async fn run_delayed_scheduler(
                     _ = tokio::time::sleep_until(deadline) => {
                         drain_expired_delayed_requests(&mut delayed_queue, &stopped, &metrics).await;
                     }
-                    command = rx.recv() => {
+                    command = commands.recv_budgeted() => {
                         if let Some(command) = command {
                             push_delayed_command(&mut delayed_queue, command, &mut sequence);
                         } else {
-                            cancel_delayed_queue(&mut delayed_queue, &mut rx, &metrics);
+                            cancel_delayed_queue(&mut delayed_queue, &commands, &metrics);
                             break;
                         }
                     }
                     _ = shutdown_token.cancelled() => {
-                        cancel_delayed_queue(&mut delayed_queue, &mut rx, &metrics);
+                        cancel_delayed_queue(&mut delayed_queue, &commands, &metrics);
                         break;
                     }
                 }
             }
             None => {
                 tokio::select! {
-                    command = rx.recv() => {
+                    command = commands.recv_budgeted() => {
                         if let Some(command) = command {
                             push_delayed_command(&mut delayed_queue, command, &mut sequence);
                         } else {
-                            cancel_delayed_queue(&mut delayed_queue, &mut rx, &metrics);
+                            cancel_delayed_queue(&mut delayed_queue, &commands, &metrics);
                             break;
                         }
                     }
                     _ = shutdown_token.cancelled() => {
-                        cancel_delayed_queue(&mut delayed_queue, &mut rx, &metrics);
+                        cancel_delayed_queue(&mut delayed_queue, &commands, &metrics);
                         break;
                     }
                 }
@@ -433,13 +468,15 @@ async fn run_delayed_scheduler(
 
 fn push_delayed_command(
     delayed_queue: &mut BinaryHeap<DelayedQueueEntry>,
-    command: DelayedScheduleCommand,
+    command: BudgetedItem<DelayedScheduleCommand>,
     sequence: &mut u64,
 ) {
+    let (command, permit, _) = command.into_parts();
     delayed_queue.push(DelayedQueueEntry {
         deadline: command.deadline,
         sequence: *sequence,
         payload: command.payload,
+        _permit: permit,
     });
     *sequence = sequence.wrapping_add(1);
 }
@@ -459,12 +496,12 @@ async fn drain_expired_delayed_requests(
 
 fn cancel_delayed_queue(
     delayed_queue: &mut BinaryHeap<DelayedQueueEntry>,
-    rx: &mut mpsc::UnboundedReceiver<DelayedScheduleCommand>,
+    commands: &BudgetedQueue<DelayedScheduleCommand>,
     metrics: &DelayedSchedulerMetrics,
 ) {
     let mut cancelled = delayed_queue.len();
     delayed_queue.clear();
-    while rx.try_recv().is_ok() {
+    while commands.try_pop_budgeted().is_some() {
         cancelled += 1;
     }
     metrics.record_cancelled(cancelled);
@@ -489,7 +526,7 @@ fn pull_request_shard_index(client_id: &str, request: &PullRequest, shard_count:
 
 async fn run_pull_request_shard_worker(
     index: usize,
-    mut rx: mpsc::Receiver<PullRequest>,
+    queue: BudgetedQueue<PullRequest>,
     mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     instance: Arc<MQClientInstance>,
     metrics: Arc<PullRequestShardMetrics>,
@@ -501,12 +538,14 @@ async fn run_pull_request_shard_worker(
             _ = shutdown_rx.recv() => {
                 break;
             }
-            Some(request) = rx.recv() => {
-                PullMessageService::pull_message(request, instance.as_ref()).await;
-                metrics.record_processed();
-            }
-            else => {
-                break;
+            request = queue.recv() => {
+                match request {
+                    Some(request) => {
+                        PullMessageService::pull_message(request, instance.as_ref()).await;
+                        metrics.record_processed();
+                    }
+                    None => break,
+                }
             }
         }
     }
@@ -532,6 +571,20 @@ impl PullMessageService {
 
     /// Creates a new PullMessageService instance with custom queue capacity and shard count.
     pub fn with_capacity_and_shards(queue_capacity: usize, shard_count: usize) -> Self {
+        let resource_budget = crate::runtime::standalone_client_resource_budget()
+            .expect("standalone PullMessageService resource budget must be valid");
+        Self::with_capacity_shards_and_resource_budget(queue_capacity, shard_count, resource_budget)
+    }
+
+    pub(crate) fn with_shards_and_resource_budget(shard_count: usize, resource_budget: ResourceBudget) -> Self {
+        Self::with_capacity_shards_and_resource_budget(DEFAULT_QUEUE_CAPACITY, shard_count, resource_budget)
+    }
+
+    fn with_capacity_shards_and_resource_budget(
+        queue_capacity: usize,
+        shard_count: usize,
+        resource_budget: ResourceBudget,
+    ) -> Self {
         let shard_count = normalize_pull_shard_count(shard_count);
         let pull_shard_metrics = (0..shard_count)
             .map(|_| Arc::new(PullRequestShardMetrics::default()))
@@ -539,6 +592,7 @@ impl PullMessageService {
 
         PullMessageService {
             service_context: Arc::new(StdRwLock::new(None)),
+            resource_budget,
             lifecycle_transition: Arc::new(Mutex::new(())),
             tx: Arc::new(StdRwLock::new(None)),
             tx_shutdown: Arc::new(StdRwLock::new(None)),
@@ -551,7 +605,7 @@ impl PullMessageService {
             pull_shard_metrics: Arc::new(pull_shard_metrics),
             scheduled_task_tracker: TaskTracker::new(),
             scheduled_task_shutdown: CancellationToken::new(),
-            delayed_scheduler_tx: Arc::new(StdMutex::new(None)),
+            delayed_scheduler_queue: Arc::new(StdMutex::new(None)),
             delayed_scheduler_metrics: Arc::new(DelayedSchedulerMetrics::default()),
         }
     }
@@ -599,7 +653,11 @@ impl PullMessageService {
             return Ok(());
         }
 
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<Box<dyn MessageRequest + Send + 'static>>(self.queue_capacity);
+        let tx = self.build_request_queue("pull-pop-immediate", FullPolicy::Reject)?;
+        let main_queue = tx.clone();
+        let shard_queues = (0..self.shard_count)
+            .map(|index| self.build_request_queue(format!("pull-worker-shard-{index}"), FullPolicy::Reject))
+            .collect::<Result<Vec<BudgetedQueue<PullRequest>>, RocketMQError>>()?;
         let (mut shutdown, tx_shutdown) = Shutdown::new(1);
         let pop_instance = instance.clone();
         let service_context = instance.service_context().child("pull-message-service");
@@ -620,10 +678,14 @@ impl PullMessageService {
                             info!("{} received shutdown signal", "PullMessageService");
                             break;
                         }
-                        Some(request) = rx.recv() => {
-                            // Process request with exception handling
-                            if let Err(e) = Self::process_request(request, pop_instance.as_ref()).await {
-                                error!("{} failed to process request: {:?}", "PullMessageService", e);
+                        request = main_queue.recv() => {
+                            match request {
+                                Some(request) => {
+                                    if let Err(e) = Self::process_request(request, pop_instance.as_ref()).await {
+                                        error!("{} failed to process request: {:?}", "PullMessageService", e);
+                                    }
+                                }
+                                None => break,
                             }
                         }
                     }
@@ -636,21 +698,21 @@ impl PullMessageService {
 
         let mut pull_shards = Vec::with_capacity(self.shard_count);
         let mut pull_handles = Vec::with_capacity(self.shard_count);
-        for index in 0..self.shard_count {
-            let (shard_tx, shard_rx) = mpsc::channel::<PullRequest>(self.queue_capacity);
+        for (index, shard_queue) in shard_queues.into_iter().enumerate() {
             let metrics = self.pull_shard_metrics[index].clone();
             let worker_instance = instance.clone();
             let shutdown_rx = tx_shutdown.subscribe();
+            let worker_queue = shard_queue.clone();
             let handle = spawn_client_tracked_task_with_context(
                 &service_context,
                 "rocketmq-client-pull-message-service-shard",
-                run_pull_request_shard_worker(index, shard_rx, shutdown_rx, worker_instance, metrics.clone()),
+                run_pull_request_shard_worker(index, worker_queue, shutdown_rx, worker_instance, metrics.clone()),
             )
             .map_err(|error| pull_message_service_startup_failed("spawn shard worker", error))?;
 
             pull_shards.push(PullRequestShard {
                 index,
-                tx: shard_tx,
+                queue: shard_queue,
                 metrics,
             });
             pull_handles.push(handle);
@@ -736,38 +798,47 @@ impl PullMessageService {
 
     fn submit_delayed(&self, payload: DelayedSchedulePayload, time_delay: u64) {
         self.delayed_scheduler_metrics.record_submitted();
-        let Some(tx) = self.ensure_delayed_scheduler_started() else {
+        let Some(queue) = self.ensure_delayed_scheduler_started() else {
             self.delayed_scheduler_metrics.record_cancelled(1);
             return;
         };
 
-        if tx
-            .send(DelayedScheduleCommand {
-                deadline: TokioInstant::now() + Duration::from_millis(time_delay),
-                payload,
-            })
-            .is_err()
-        {
-            self.delayed_scheduler_metrics.record_cancelled(1);
+        let command = DelayedScheduleCommand {
+            deadline: TokioInstant::now() + Duration::from_millis(time_delay),
+            payload,
+        };
+        let retained_bytes = command.retained_bytes();
+        match queue.try_push_data(command, retained_bytes) {
+            Ok(QueuePushOutcome::DroppedStale { dropped }) => {
+                self.delayed_scheduler_metrics.record_cancelled(dropped);
+            }
+            Ok(QueuePushOutcome::Enqueued | QueuePushOutcome::Coalesced { .. }) => {}
+            Err(_) => self.delayed_scheduler_metrics.record_cancelled(1),
         }
     }
 
-    fn ensure_delayed_scheduler_started(&self) -> Option<mpsc::UnboundedSender<DelayedScheduleCommand>> {
+    fn ensure_delayed_scheduler_started(&self) -> Option<BudgetedQueue<DelayedScheduleCommand>> {
         if self.scheduled_task_shutdown.is_cancelled() {
             return None;
         }
 
         let mut guard = self
-            .delayed_scheduler_tx
+            .delayed_scheduler_queue
             .lock()
-            .expect("delayed scheduler sender lock should not be poisoned");
-        if let Some(tx) = guard.as_ref() {
-            return Some(tx.clone());
+            .expect("delayed scheduler queue lock should not be poisoned");
+        if let Some(queue) = guard.as_ref() {
+            return Some(queue.clone());
         }
 
-        let (tx, rx) = mpsc::unbounded_channel();
+        let queue = match self.build_delayed_scheduler_queue() {
+            Ok(queue) => queue,
+            Err(error) => {
+                error!("Failed to build PullMessageService delayed scheduler budget: {error}");
+                return None;
+            }
+        };
         let tracked_task = self.scheduled_task_tracker.track_future(run_delayed_scheduler(
-            rx,
+            queue.clone(),
             self.scheduled_task_shutdown.clone(),
             self.stopped.clone(),
             self.delayed_scheduler_metrics.clone(),
@@ -780,14 +851,42 @@ impl PullMessageService {
             .clone()?;
         match spawn_client_task_with_context(&service_context, "rocketmq-client-pull-delayed-scheduler", tracked_task) {
             Ok(_) => {
-                *guard = Some(tx.clone());
-                Some(tx)
+                *guard = Some(queue.clone());
+                Some(queue)
             }
             Err(error) => {
                 error!("Failed to spawn PullMessageService delayed scheduler: {}", error);
                 None
             }
         }
+    }
+
+    fn build_delayed_scheduler_queue(&self) -> Result<BudgetedQueue<DelayedScheduleCommand>, RocketMQError> {
+        self.build_request_queue("pull-delayed-scheduler", FullPolicy::DropStale)
+    }
+
+    fn build_request_queue<T>(
+        &self,
+        name: impl Into<String>,
+        policy: FullPolicy,
+    ) -> Result<BudgetedQueue<T>, RocketMQError> {
+        let queue_count = self.queue_capacity.max(1);
+        let queue_bytes = (self.resource_budget.limit().capacity.bytes / 16).max(1);
+        let queue_rate = u64::try_from(queue_count).unwrap_or(u64::MAX).max(1);
+        let budget = self
+            .resource_budget
+            .child(
+                name,
+                BudgetLimit::new(queue_count, queue_bytes, policy)
+                    .with_rate(RateLimit::new(queue_rate, queue_rate))
+                    .with_max_age(Duration::from_secs(300)),
+            )
+            .map_err(|error| RocketMQError::ConfigInvalidValue {
+                key: "client.pull.requestQueue",
+                value: queue_count.to_string(),
+                reason: error.to_string(),
+            })?;
+        Ok(BudgetedQueue::new(budget))
     }
 
     /// Processes a message request (Pull or Pop)
@@ -910,7 +1009,8 @@ impl PullMessageService {
 
         let tx = self.tx.read().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
         if let Some(tx) = tx {
-            if let Err(e) = tx.send(Box::new(pop_request)).await {
+            let retained_bytes = pop_request.retained_bytes();
+            if let Err(e) = tx.try_push_data(Box::new(pop_request), retained_bytes) {
                 error!(
                     "executePopPullRequestImmediately messageRequestQueue.put error: {:?}",
                     e
@@ -984,25 +1084,34 @@ impl PullMessageService {
         // 1. Set stopped flag
         self.stopped.store(true, Ordering::Release);
         self.scheduled_task_shutdown.cancel();
-        self.delayed_scheduler_tx
+        if let Some(queue) = self
+            .delayed_scheduler_queue
             .lock()
-            .expect("delayed scheduler sender lock should not be poisoned")
-            .take();
-        self.pull_dispatcher
-            .lock()
-            .expect("pull dispatcher lock should not be poisoned")
-            .take();
-
+            .expect("delayed scheduler queue lock should not be poisoned")
+            .take()
+        {
+            queue.close();
+        }
         // 2. Send shutdown signal
         let tx_shutdown = self
             .tx_shutdown
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone();
-        if let Some(tx_shutdown) = tx_shutdown {
-            tx_shutdown
-                .send(())
-                .map_err(|_| pull_message_service_shutdown_signal_failed())?;
+        let shutdown_signal_failed = tx_shutdown.is_some_and(|tx_shutdown| tx_shutdown.send(()).is_err());
+        if let Some(queue) = self.tx.write().unwrap_or_else(|poisoned| poisoned.into_inner()).take() {
+            queue.close();
+        }
+        if let Some(dispatcher) = self
+            .pull_dispatcher
+            .lock()
+            .expect("pull dispatcher lock should not be poisoned")
+            .take()
+        {
+            dispatcher.close();
+        }
+        if shutdown_signal_failed {
+            return Err(pull_message_service_shutdown_signal_failed());
         }
 
         // 3. Wait for main loop to exit (with timeout)
@@ -1157,6 +1266,37 @@ fn pull_message_service_shutdown_signal_failed() -> RocketMQError {
 mod tests {
     use super::*;
     use rocketmq_error::ErrorKind;
+
+    #[test]
+    fn overload_rejects_excess_pull_worker_requests() {
+        let service = PullMessageService::with_capacity_and_shards(2, 1);
+        let queue = service
+            .build_request_queue::<u64>("pull-worker-overload", FullPolicy::Reject)
+            .expect("pull worker queue");
+
+        assert!(queue.try_push_data(1, 1).is_ok());
+        assert!(queue.try_push_data(2, 1).is_ok());
+        assert!(queue.try_push_data(3, 1).is_err());
+        assert!(queue.try_push_data(4, 1).is_err());
+
+        let snapshot = queue.snapshot();
+        assert_eq!(snapshot.depth, 2);
+        assert_eq!(snapshot.retained_bytes, 2);
+        assert_eq!(snapshot.rejected_count, 2);
+    }
+
+    #[test]
+    fn delayed_command_accounts_for_the_captured_task_allocation() {
+        let captured = [7_u8; 1024];
+        let command = DelayedScheduleCommand {
+            deadline: TokioInstant::now() + Duration::from_secs(1),
+            payload: DelayedSchedulePayload::Task(Box::new(move || {
+                std::hint::black_box(captured);
+            })),
+        };
+
+        assert!(command.retained_bytes() >= std::mem::size_of::<DelayedScheduleCommand>() + captured.len());
+    }
 
     fn service_with_context(scope: &'static str) -> PullMessageService {
         let service = PullMessageService::new();
