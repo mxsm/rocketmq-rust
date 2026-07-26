@@ -10,6 +10,7 @@ use rocketmq_client_rust::AckCallbackFn;
 use rocketmq_client_rust::AckResult;
 use rocketmq_client_rust::AckStatus;
 use rocketmq_client_rust::AclClientRPCHook;
+use rocketmq_client_rust::AdminClient;
 use rocketmq_client_rust::AdminToolResult;
 use rocketmq_client_rust::AdminToolsResultCodeEnum;
 use rocketmq_client_rust::AllocateMessageQueueAveragely;
@@ -24,6 +25,7 @@ use rocketmq_client_rust::AsyncTraceDispatcher;
 use rocketmq_client_rust::ConsumeMessageContext;
 use rocketmq_client_rust::ConsumeMessageHook;
 use rocketmq_client_rust::ConsumeMessageHookArc;
+use rocketmq_client_rust::ConsumerClient;
 use rocketmq_client_rust::ControllableOffset;
 use rocketmq_client_rust::DefaultLitePullConsumer;
 use rocketmq_client_rust::DefaultMQAdminExt;
@@ -50,10 +52,12 @@ use rocketmq_client_rust::OffsetStore;
 use rocketmq_client_rust::PopCallbackFn;
 use rocketmq_client_rust::PopResult;
 use rocketmq_client_rust::PopStatus;
+use rocketmq_client_rust::ProducerClient;
 use rocketmq_client_rust::PullCallbackFn;
 use rocketmq_client_rust::PullResult;
 use rocketmq_client_rust::PullStatus;
 use rocketmq_client_rust::ReadOffsetType;
+use rocketmq_client_rust::RouteClient;
 use rocketmq_client_rust::SelectMessageQueueByHash;
 use rocketmq_client_rust::SelectMessageQueueByMachineRoom;
 use rocketmq_client_rust::SelectMessageQueueByRandom;
@@ -63,6 +67,7 @@ use rocketmq_client_rust::TraceDispatcher;
 use rocketmq_client_rust::TraceDispatcherOperation;
 use rocketmq_client_rust::TraceDispatcherType;
 use rocketmq_client_rust::TraceType;
+use rocketmq_client_rust::TransactionClient;
 use rocketmq_client_rust::TransactionMQProducer;
 use rocketmq_error::RocketMQError;
 use rocketmq_model::common::message::message_queue::MessageQueue;
@@ -154,6 +159,19 @@ fn assert_unsupported_error(error: RocketMQError, api: &str, replacement: &str) 
         }
         other => panic!("expected IllegalArgument unsupported error for {api}, got {other:?}"),
     }
+}
+
+#[test]
+fn crate_root_exports_client_capability_views() {
+    let capability_sizes = [
+        std::mem::size_of::<RouteClient<'static>>(),
+        std::mem::size_of::<AdminClient<'static>>(),
+        std::mem::size_of::<ProducerClient<'static>>(),
+        std::mem::size_of::<ConsumerClient<'static>>(),
+        std::mem::size_of::<TransactionClient<'static>>(),
+    ];
+
+    assert!(capability_sizes.iter().all(|size| *size > 0));
 }
 
 #[test]

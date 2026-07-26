@@ -927,6 +927,11 @@ pub use crate::stat::consumer_stats_manager::run_consumer_stats_manager_lifecycl
 pub use crate::stat::consumer_stats_manager::ConsumerStatsManagerLifecycleProbe;
 pub type MQClientAPIExt = crate::implementation::mq_client_api_impl::MQClientAPIImpl;
 pub type MqClientAdminImpl = crate::implementation::mq_client_api_impl::MQClientAPIImpl;
+pub use crate::implementation::mq_client_api_impl::AdminClient;
+pub use crate::implementation::mq_client_api_impl::ConsumerClient;
+pub use crate::implementation::mq_client_api_impl::ProducerClient;
+pub use crate::implementation::mq_client_api_impl::RouteClient;
+pub use crate::implementation::mq_client_api_impl::TransactionClient;
 #[doc(hidden)]
 pub use crate::latency::latency_fault_tolerance_impl::run_latency_fault_detector_lifecycle_probe;
 #[doc(hidden)]
