@@ -567,6 +567,6 @@ mod tests {
         let production_source = source.split("#[cfg(test)]").next().expect("production source");
 
         assert!(!production_source.contains("ArcMut"));
-        assert!(!production_source.contains("BrokerRuntimeInner"));
+        assert!(!production_source.contains("BrokerRuntimeState"));
     }
 }

@@ -2161,7 +2161,7 @@ mod tests {
         let parent_group = service_context.task_group().clone();
         let mut runtime = BrokerRuntime::new_with_service_context(broker_config, message_store_config, service_context);
         let service = runtime
-            .inner_for_test()
+            .runtime_state_mut()
             .schedule_message_service_for_test()
             .expect("schedule message service should be configured")
             .clone();
@@ -2210,7 +2210,7 @@ mod tests {
         });
         let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
         let service = runtime
-            .inner_for_test()
+            .runtime_state_mut()
             .schedule_message_service_for_test()
             .expect("schedule message service should be configured")
             .clone();
@@ -2242,7 +2242,7 @@ mod tests {
         let service_context = runtime_context.service_context("broker");
         let mut runtime = BrokerRuntime::new_with_service_context(broker_config, message_store_config, service_context);
         let service = runtime
-            .inner_for_test()
+            .runtime_state_mut()
             .schedule_message_service_for_test()
             .expect("schedule message service should be configured")
             .clone();

@@ -467,7 +467,7 @@ mod tests {
         let production_source = source.split("#[cfg(test)]").next().expect("production source");
 
         assert!(!production_source.contains("ArcMut"));
-        assert!(!production_source.contains("BrokerRuntimeInner"));
+        assert!(!production_source.contains("BrokerRuntimeState"));
     }
 
     fn temp_test_root(label: &str) -> PathBuf {
@@ -524,7 +524,7 @@ mod tests {
     #[tokio::test]
     async fn check_client_config_rejects_property_filter_when_disabled() {
         let mut runtime = new_test_runtime("check-client-filter-disabled", false).await;
-        let processor = runtime.inner_for_test().build_client_manage_processor();
+        let processor = runtime.runtime_state_mut().build_client_manage_processor();
         let mut request = check_request(SubscriptionData {
             topic: "topic-a".into(),
             sub_string: "a > 1".into(),
@@ -551,7 +551,7 @@ mod tests {
     #[tokio::test]
     async fn check_client_config_accepts_valid_property_filter_when_enabled() {
         let mut runtime = new_test_runtime("check-client-filter-enabled-valid", true).await;
-        let processor = runtime.inner_for_test().build_client_manage_processor();
+        let processor = runtime.runtime_state_mut().build_client_manage_processor();
         let mut request = check_request(SubscriptionData {
             topic: "topic-a".into(),
             sub_string: "region IN ('hz', 'sh') AND name CONTAINS 'rocket' AND score BETWEEN 0 AND 100".into(),
@@ -574,7 +574,7 @@ mod tests {
     #[tokio::test]
     async fn check_client_config_rejects_invalid_property_filter_when_enabled() {
         let mut runtime = new_test_runtime("check-client-filter-enabled-invalid", true).await;
-        let processor = runtime.inner_for_test().build_client_manage_processor();
+        let processor = runtime.runtime_state_mut().build_client_manage_processor();
         let mut request = check_request(SubscriptionData {
             topic: "topic-a".into(),
             sub_string: "a >".into(),
@@ -598,7 +598,7 @@ mod tests {
     async fn heart_beat_v2_without_sub_registers_consumer_and_marks_sub_change() {
         let mut runtime = new_test_runtime("heartbeat-v2-without-sub", false).await;
         let (consumer_manager, mut processor) = {
-            let inner = runtime.inner_for_test();
+            let inner = runtime.runtime_state_mut();
             (
                 inner.consumer_manager().clone_shared_state(),
                 inner.build_client_manage_processor(),
@@ -655,7 +655,7 @@ mod tests {
     async fn heart_beat_v1_and_unregister_share_live_client_registries() {
         let mut runtime = new_test_runtime("heartbeat-v1-unregister", false).await;
         let (producer_manager, consumer_manager, mut processor) = {
-            let inner = runtime.inner_for_test();
+            let inner = runtime.runtime_state_mut();
             (
                 inner.producer_manager().clone_shared_state(),
                 inner.consumer_manager().clone_shared_state(),
@@ -727,7 +727,7 @@ mod tests {
     async fn explicit_client_capabilities_share_live_state_and_preserve_retry_topic_options() {
         let mut runtime = new_test_runtime("explicit-client-capabilities", false).await;
         let (producer_manager, topic_config_manager, processor) = {
-            let inner = runtime.inner_for_test();
+            let inner = runtime.runtime_state_mut();
             (
                 inner.producer_manager().clone_shared_state(),
                 inner.topic_config_manager_handle(),

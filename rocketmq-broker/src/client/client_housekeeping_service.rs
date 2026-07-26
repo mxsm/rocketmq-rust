@@ -231,7 +231,7 @@ mod tests {
         let broker_config = Arc::new(BrokerConfig::default());
         let message_store_config = Arc::new(MessageStoreConfig::default());
         let mut broker_runtime = BrokerRuntime::new(broker_config, message_store_config);
-        let inner = broker_runtime.inner_for_test();
+        let inner = broker_runtime.runtime_state_mut();
         let service = ClientHousekeepingService::new(
             inner.producer_manager().connection_housekeeping(),
             inner.consumer_manager().connection_housekeeping(),
@@ -261,7 +261,7 @@ mod tests {
         let message_store_config = Arc::new(MessageStoreConfig::default());
         let mut broker_runtime =
             BrokerRuntime::new_with_service_context(broker_config, message_store_config, broker_service.clone());
-        let inner = broker_runtime.inner_for_test();
+        let inner = broker_runtime.runtime_state_mut();
         let service = ClientHousekeepingService::new(
             inner.producer_manager().connection_housekeeping(),
             inner.consumer_manager().connection_housekeeping(),

@@ -985,7 +985,7 @@ mod tests {
         timer_message_store
             .timer_metrics
             .add_timing_count(&CheetahString::from_static_str("TimerTopicA"), 2);
-        runtime.inner_for_test().set_timer_message_store(timer_message_store);
+        runtime.runtime_state_mut().set_timer_message_store(timer_message_store);
 
         let handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_for_test());
         let response = handler.build_timer_metrics_response();
@@ -1013,7 +1013,7 @@ mod tests {
             crate::test_service_context("timer-store"),
         );
         assert!(timer_message_store.load());
-        runtime.inner_for_test().set_timer_message_store(timer_message_store);
+        runtime.runtime_state_mut().set_timer_message_store(timer_message_store);
 
         let handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_for_test());
         let response = handler.build_timer_checkpoint_response();
@@ -1240,7 +1240,7 @@ mod tests {
         let group = CheetahString::from_static_str("ExportGroup");
 
         {
-            let inner_mut = runtime.inner_for_test();
+            let inner_mut = runtime.runtime_state_mut();
             let _ = inner_mut
                 .topic_config_manager()
                 .update_topic_config(TopicConfig::with_queues(topic.clone(), 2, 4), 0);

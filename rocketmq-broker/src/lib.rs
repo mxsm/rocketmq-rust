@@ -408,7 +408,7 @@ pub mod bench_support {
             message_store_config,
             service_context,
         );
-        let inner = runtime.inner_for_test();
+        let inner = runtime.runtime_state_mut();
         let service = crate::client::client_housekeeping_service::ClientHousekeepingService::new(
             inner.producer_manager().connection_housekeeping(),
             inner.consumer_manager().connection_housekeeping(),
@@ -475,7 +475,7 @@ pub mod bench_support {
             service_context,
         );
         let service = runtime
-            .inner_for_test()
+            .runtime_state_mut()
             .topic_queue_mapping_clean_service_for_test()
             .expect("topic queue mapping clean service should be configured")
             .clone();
@@ -623,7 +623,7 @@ pub mod bench_support {
             service_context,
         );
         let service = runtime
-            .inner_for_test()
+            .runtime_state_mut()
             .schedule_message_service_for_test()
             .expect("schedule message service should be configured")
             .clone();

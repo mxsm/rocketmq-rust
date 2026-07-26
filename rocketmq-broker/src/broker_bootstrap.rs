@@ -221,7 +221,7 @@ mod tests {
 
         let broker_task_group = bootstrap
             .broker_runtime
-            .inner_for_test()
+            .runtime_state_mut()
             .broker_service_task_group()
             .expect("broker service task group should come from service context");
 

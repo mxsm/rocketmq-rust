@@ -202,7 +202,7 @@ mod tests {
 
         for source in handler_sources {
             let production = source.split("#[cfg(test)]").next().unwrap_or(source);
-            assert!(!production.contains("BrokerRuntimeInner"));
+            assert!(!production.contains("BrokerRuntimeState"));
             assert!(!production.contains(&["Arc", "Mut"].concat()));
         }
     }

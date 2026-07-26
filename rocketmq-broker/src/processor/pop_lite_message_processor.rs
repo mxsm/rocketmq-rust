@@ -711,7 +711,7 @@ mod tests {
     use crate::processor::pop_message_processor::QueueLockManager;
 
     fn pop_lite_processor_for_test(runtime: &mut BrokerRuntime) -> Arc<PopLiteMessageProcessor<BrokerMessageStore>> {
-        let inner = runtime.inner_for_test();
+        let inner = runtime.runtime_state_mut();
         let topic_config_manager = inner.topic_config_manager_handle();
         let subscription_group_lookup = inner.subscription_group_manager().config_lookup();
         let lite_event_dispatcher = inner.lite_event_dispatcher().clone();
@@ -783,7 +783,7 @@ mod tests {
         let broker_config = Arc::new(BrokerConfig::default());
         let message_store_config = Arc::new(MessageStoreConfig::default());
         let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
-        let inner = runtime.inner_for_test();
+        let inner = runtime.runtime_state_mut();
         let offset_manager = inner.consumer_offset_manager_handle();
         let offset = PopLiteOffsetCapability::new(&offset_manager);
         let escape_bridge = inner.escape_bridge();
@@ -866,7 +866,7 @@ mod tests {
         let mut runtime =
             BrokerRuntime::new_with_service_context(broker_config, message_store_config, broker_service.clone());
         let parent_id = runtime
-            .inner_for_test()
+            .runtime_state_mut()
             .broker_service_task_group()
             .expect("broker service task group should exist")
             .id();
