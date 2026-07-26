@@ -26,7 +26,7 @@ const DEFAULT_BROKER_NAME: &str = "DEFAULT_BROKER";
 /// This is a domain value shared by service and storage code. Runtime and
 /// service-specific configuration remain in their owning crates.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BrokerIdentity {
     #[serde(default = "default_broker_name")]
     pub broker_name: CheetahString,

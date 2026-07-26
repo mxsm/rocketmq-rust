@@ -776,8 +776,8 @@ impl<MS: MessageStore> BrokerRuntimeState<MS> {
     }
 
     #[inline]
-    pub fn set_broker_config(&mut self, broker_config: BrokerConfig) {
-        let generation = self.config_state.update_broker(broker_config);
+    pub fn set_broker_config(&mut self, broker_config: BrokerConfig) -> Result<(), BrokerConfigError> {
+        let generation = self.config_state.replace_broker(broker_config)?;
         let broker_config = generation.broker();
         self.online_role_state
             .set_local_broker_id(broker_config.broker_identity.broker_id);
@@ -785,11 +785,15 @@ impl<MS: MessageStore> BrokerRuntimeState<MS> {
         self.pull_message_policy_state.update_broker_config(broker_config);
         self.pop_policy_state.update_broker_config(broker_config);
         self.escape_bridge_policy_state.update_broker_config(broker_config);
+        Ok(())
     }
 
     #[inline]
-    pub fn set_message_store_config(&mut self, message_store_config: MessageStoreConfig) {
-        let generation = self.config_state.update_store(message_store_config);
+    pub fn set_message_store_config(
+        &mut self,
+        message_store_config: MessageStoreConfig,
+    ) -> Result<(), BrokerConfigError> {
+        let generation = self.config_state.replace_store(message_store_config)?;
         let message_store_config = generation.store();
         if let Some(topic_config_manager) = self.topic_config_manager.as_ref() {
             topic_config_manager.update_message_store_policy(message_store_config);
@@ -800,6 +804,7 @@ impl<MS: MessageStore> BrokerRuntimeState<MS> {
         self.pop_policy_state.update_store_config(message_store_config);
         self.escape_bridge_policy_state
             .update_message_store_config(message_store_config);
+        Ok(())
     }
 
     #[inline]
@@ -1024,19 +1029,15 @@ impl<MS: MessageStore> BrokerRuntimeState<MS> {
 }
 
 impl BrokerRuntime {
-    pub(crate) fn new_with_service_context(
-        broker_config: Arc<BrokerConfig>,
-        message_store_config: Arc<MessageStoreConfig>,
+    pub(crate) fn new_with_validated_config(
+        validated_config: Arc<ValidatedBrokerConfig>,
         service_context: ChildServiceContext,
     ) -> Self {
-        let broker_address = format!("{}:{}", broker_config.broker_ip1, broker_config.listen_port);
-        let (store_host, configuration_error) = match broker_address.parse::<SocketAddr>() {
-            Ok(store_host) => (store_host, None),
-            Err(error) => (
-                SocketAddr::from(([0, 0, 0, 0], 0)),
-                Some(format!("invalid broker store address `{broker_address}`: {error}")),
-            ),
-        };
+        let broker_config = validated_config.broker_arc();
+        let message_store_config = validated_config.store_arc();
+        let broker_address = broker_config.get_broker_addr();
+        let network = validated_config.sections().network();
+        let store_host = SocketAddr::new(network.bind_address(), network.listen_port());
         let scheduled_task_manager = BrokerScheduledTasks::new_with_task_group(service_context.task_group().clone());
         let metadata_io = Some(MetadataIoActor::start(
             &service_context.child("broker.metadata-io"),
@@ -1096,7 +1097,7 @@ impl BrokerRuntime {
         let pull_message_policy_state = PullMessagePolicyState::from_configs(&broker_config, &message_store_config);
         let pop_policy_state = PopPolicyState::from_configs(&broker_config, &message_store_config, store_host);
         let escape_bridge_policy_state = EscapeBridgePolicyState::from_configs(&broker_config, &message_store_config);
-        let config_state = BrokerRuntimeConfigState::new(broker_config.clone(), message_store_config.clone());
+        let config_state = BrokerRuntimeConfigState::new(validated_config);
         let slave_master_addr = Arc::new(SlaveMasterAddress::default());
 
         let mut state = Box::new(BrokerRuntimeState::<BrokerMessageStore> {
@@ -1365,7 +1366,7 @@ impl BrokerRuntime {
                 state,
                 escape_bridge,
                 consumer_ids_change_listener,
-                configuration_error,
+                None,
                 #[cfg(feature = "rocksdb_store")]
                 rocksdb_config_managers,
             ),

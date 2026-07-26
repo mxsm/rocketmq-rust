@@ -1,0 +1,10 @@
+[broker]
+listenPort = 10911
+storePathRootDir = "./target/config-contract/broker"
+
+[broker.brokerServerConfig]
+listenPort = 10911
+
+[store]
+haListenPort = 10912
+storePathRootDir = "./target/config-contract/store"

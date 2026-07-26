@@ -15,6 +15,9 @@
 use std::net::TcpListener;
 
 use rocketmq_broker::config::broker_config::BrokerConfig;
+use rocketmq_broker::config::error::BrokerConfigError;
+use rocketmq_broker::config::error::ConfigSection;
+use rocketmq_broker::config::validated::ValidatedBrokerConfig;
 use rocketmq_broker::BrokerStartupError;
 use rocketmq_broker::Builder;
 use rocketmq_runtime::RuntimeContext;
@@ -56,40 +59,21 @@ fn broker_configs(root: &std::path::Path, normal_port: u16) -> (BrokerConfig, Me
 }
 
 #[tokio::test]
-async fn invalid_broker_address_returns_typed_initialization_error() {
+async fn invalid_broker_address_fails_before_runtime_construction() {
     let _test_guard = BROKER_TEST_LOCK.lock().await;
     let root = tempfile::tempdir().expect("create broker test root");
     let (normal_probe, normal_port) = reserve_listener_pair();
     drop(normal_probe);
     let (mut broker_config, message_store_config) = broker_configs(root.path(), normal_port);
-    broker_config.broker_ip1 = "not-an-ip-address".into();
+    broker_config.broker_ip1 = "invalid broker address".into();
 
-    let runtime_context = RuntimeContext::from_current("broker-invalid-address-test");
-    let initialization = Builder::new(runtime_context.service_context("broker-under-test"))
-        .set_broker_config(broker_config)
-        .set_message_store_config(message_store_config)
-        .build()
-        .initialize()
-        .await;
-    let error = match initialization {
-        Ok(running) => {
-            running
-                .start()
-                .await
-                .expect("unexpected initialized broker should start")
-                .shutdown()
-                .await;
-            panic!("invalid broker address must fail without panicking");
-        }
-        Err(error) => error,
-    };
-    let BrokerStartupError::RolledBack { cause, .. } = error else {
-        panic!("configuration failure should include rollback evidence");
-    };
+    let error = ValidatedBrokerConfig::try_from_parts(broker_config, message_store_config)
+        .expect_err("invalid broker address must fail validation");
     assert!(matches!(
-        *cause,
-        BrokerStartupError::Initialization {
-            component: "broker_configuration",
+        error,
+        BrokerConfigError::Invalid {
+            section: ConfigSection::Network,
+            field: "broker.brokerIp1",
             ..
         }
     ));
@@ -102,10 +86,11 @@ async fn listener_bind_failure_rolls_back_already_started_components() {
     let (reserved_normal_listener, normal_port) = reserve_listener_pair();
     let fast_port = normal_port - 2;
     let (broker_config, message_store_config) = broker_configs(root.path(), normal_port);
+    let validated_config = ValidatedBrokerConfig::try_from_parts(broker_config, message_store_config)
+        .expect("listener rollback test configuration should be valid");
     let runtime_context = RuntimeContext::from_current("broker-transactional-startup-test");
     let initialized = Builder::new(runtime_context.service_context("broker-under-test"))
-        .set_broker_config(broker_config)
-        .set_message_store_config(message_store_config)
+        .with_validated_config(validated_config)
         .build()
         .initialize()
         .await
@@ -150,10 +135,11 @@ async fn unsupported_cold_data_hold_capability_fails_before_listener_startup() {
     drop(normal_probe);
     let (broker_config, mut message_store_config) = broker_configs(root.path(), normal_port);
     message_store_config.cold_data_flow_control_enable = true;
+    let validated_config = ValidatedBrokerConfig::try_from_parts(broker_config, message_store_config)
+        .expect("unsupported capability test configuration should remain structurally valid");
     let runtime_context = RuntimeContext::from_current("broker-unsupported-capability-test");
     let initialized = Builder::new(runtime_context.service_context("broker-under-test"))
-        .set_broker_config(broker_config)
-        .set_message_store_config(message_store_config)
+        .with_validated_config(validated_config)
         .build()
         .initialize()
         .await
@@ -192,10 +178,11 @@ async fn configured_but_unreachable_name_server_prevents_readiness() {
     drop(unavailable_namesrv);
     broker_config.namesrv_addr = Some(unavailable_namesrv_addr.to_string().into());
     broker_config.register_broker_timeout_mills = 250;
+    let validated_config = ValidatedBrokerConfig::try_from_parts(broker_config, message_store_config)
+        .expect("registration readiness test configuration should be valid");
     let runtime_context = RuntimeContext::from_current("broker-registration-readiness-test");
     let initialized = Builder::new(runtime_context.service_context("broker-under-test"))
-        .set_broker_config(broker_config)
-        .set_message_store_config(message_store_config)
+        .with_validated_config(validated_config)
         .build()
         .initialize()
         .await

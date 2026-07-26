@@ -29,7 +29,7 @@ mod defaults {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ServerConfig {
     #[serde(default = "defaults::listen_port")]
     pub listen_port: u32,

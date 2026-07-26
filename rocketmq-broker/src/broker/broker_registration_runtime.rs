@@ -393,10 +393,7 @@ impl<MS: MessageStore> BrokerRegistrationRuntime<MS> {
     }
 
     fn broker_addr(&self, broker_config: &BrokerConfig) -> CheetahString {
-        CheetahString::from_string(format!(
-            "{}:{}",
-            broker_config.broker_ip1, broker_config.broker_server_config.listen_port
-        ))
+        CheetahString::from_string(broker_config.get_broker_addr())
     }
 }
 

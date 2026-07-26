@@ -15,6 +15,7 @@
 use std::net::TcpListener;
 
 use rocketmq_broker::config::broker_config::BrokerConfig;
+use rocketmq_broker::config::validated::ValidatedBrokerConfig;
 use rocketmq_broker::Builder;
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
@@ -54,9 +55,10 @@ async fn running_state_is_created_only_with_complete_readiness_evidence() {
         ..MessageStoreConfig::default()
     };
     let runtime_context = RuntimeContext::from_current("broker-readiness-test");
+    let validated_config = ValidatedBrokerConfig::try_from_parts(broker_config, message_store_config)
+        .expect("broker readiness test configuration should be valid");
     let initialized = Builder::new(runtime_context.service_context("broker-under-test"))
-        .set_broker_config(broker_config)
-        .set_message_store_config(message_store_config)
+        .with_validated_config(validated_config)
         .build()
         .initialize()
         .await

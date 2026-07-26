@@ -32,6 +32,8 @@ use std::time::Instant;
 
 use crate::config::broker_config::BrokerConfig;
 use crate::config::config_manager::ConfigManager;
+use crate::config::error::BrokerConfigError;
+use crate::config::validated::ValidatedBrokerConfig;
 use cheetah_string::CheetahString;
 use rocketmq_auth::authentication::AclClientRpcHook;
 use rocketmq_auth::config::AuthConfig;
@@ -744,11 +746,25 @@ mod test_support {
 
     impl BrokerRuntime {
         pub(crate) fn new(broker_config: Arc<BrokerConfig>, message_store_config: Arc<MessageStoreConfig>) -> Self {
-            Self::new_with_service_context(
-                broker_config,
-                message_store_config,
-                crate::test_service_context("broker-runtime"),
+            let validated = ValidatedBrokerConfig::try_from_parts(
+                broker_config.as_ref().clone(),
+                message_store_config.as_ref().clone(),
             )
+            .expect("broker runtime test configuration should be valid");
+            Self::new_with_validated_config(Arc::new(validated), crate::test_service_context("broker-runtime"))
+        }
+
+        pub(crate) fn new_with_service_context(
+            broker_config: Arc<BrokerConfig>,
+            message_store_config: Arc<MessageStoreConfig>,
+            service_context: ChildServiceContext,
+        ) -> Self {
+            let validated = ValidatedBrokerConfig::try_from_parts(
+                broker_config.as_ref().clone(),
+                message_store_config.as_ref().clone(),
+            )
+            .expect("broker runtime test configuration should be valid");
+            Self::new_with_validated_config(Arc::new(validated), service_context)
         }
     }
 }

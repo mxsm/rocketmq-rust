@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicBool;
@@ -19,6 +20,9 @@ use std::sync::Arc;
 use std::sync::Weak;
 
 use crate::config::broker_config::BrokerConfig;
+use crate::config::error::BrokerConfigError;
+use crate::config::transaction::ConfigUpdateTransaction;
+use crate::config::validated::ConfigGeneration;
 use cheetah_string::CheetahString;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
@@ -68,6 +72,15 @@ use crate::topic::manager::topic_config_coordinator::TopicConfigCoordinator;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum CommitLogReadModeUpdateError {
+    #[error(transparent)]
+    Store(#[from] StoreError),
+
+    #[error(transparent)]
+    Config(#[from] BrokerConfigError),
+}
+
 /// Explicit capability carrier for the serialized Admin request surface.
 ///
 /// The carrier shares only independently synchronized managers and narrow
@@ -109,6 +122,7 @@ pub(crate) struct BrokerAdminRuntime<MS: MessageStore> {
     pop_policy: PopPolicyState,
     escape_policy: EscapeBridgePolicyState,
     log_filter_control: Option<Arc<BrokerLogFilterControl>>,
+    config_update_lock: Arc<parking_lot::Mutex<()>>,
 }
 
 impl<MS: MessageStore> Clone for BrokerAdminRuntime<MS> {
@@ -149,6 +163,7 @@ impl<MS: MessageStore> Clone for BrokerAdminRuntime<MS> {
             pop_policy: self.pop_policy.clone(),
             escape_policy: self.escape_policy.clone(),
             log_filter_control: self.log_filter_control.clone(),
+            config_update_lock: Arc::clone(&self.config_update_lock),
         }
     }
 }
@@ -231,6 +246,7 @@ impl<MS: MessageStore> BrokerAdminRuntime<MS> {
             pop_policy,
             escape_policy,
             log_filter_control,
+            config_update_lock: Arc::new(parking_lot::Mutex::new(())),
         }
     }
 
@@ -262,12 +278,12 @@ impl<MS: MessageStore> BrokerAdminRuntime<MS> {
         message_store.put_message_to_local_store(message).await
     }
 
-    pub(crate) fn set_commitlog_read_mode(&self, read_ahead_mode: i32) -> Result<(), StoreError> {
+    pub(crate) fn set_commitlog_read_mode(&self, read_ahead_mode: i32) -> Result<(), CommitLogReadModeUpdateError> {
         self.message_store_provider
             .upgrade()
             .ok_or(StoreError::NotStarted)?
             .set_commitlog_read_mode(read_ahead_mode)?;
-        self.config.apply_data_read_ahead(read_ahead_mode == MADV_NORMAL);
+        self.config.apply_data_read_ahead(read_ahead_mode == MADV_NORMAL)?;
         Ok(())
     }
 
@@ -447,8 +463,34 @@ impl<MS: MessageStore> BrokerAdminRuntime<MS> {
             .await
     }
 
-    pub(crate) fn set_broker_config(&mut self, broker_config: BrokerConfig) {
-        let generation = self.config.update_broker(broker_config);
+    pub(crate) fn set_broker_config(&mut self, broker_config: BrokerConfig) -> Result<(), BrokerConfigError> {
+        let update_lock = Arc::clone(&self.config_update_lock);
+        let _update_guard = update_lock.lock();
+        let generation = self.config.replace_broker(broker_config)?;
+        self.apply_broker_config_generation(&generation);
+        Ok(())
+    }
+
+    pub(crate) fn commit_broker_config_patch(
+        &mut self,
+        properties: &HashMap<CheetahString, CheetahString>,
+    ) -> Result<ConfigGeneration, BrokerConfigError> {
+        // Request handlers own cloned capability carriers. Serialize the
+        // publish-and-project sequence so a slower request cannot overwrite
+        // policy views with an older, though valid, generation.
+        let update_lock = Arc::clone(&self.config_update_lock);
+        let _update_guard = update_lock.lock();
+        let current = self.config.snapshot();
+        let transaction = ConfigUpdateTransaction::from_broker_patch(current.id(), current.validated(), properties)?;
+        let generation = self.config.commit(transaction)?;
+        self.apply_broker_config_generation(&generation);
+        Ok(generation.id())
+    }
+
+    fn apply_broker_config_generation(
+        &mut self,
+        generation: &crate::broker::broker_runtime_config_state::BrokerRuntimeConfigGeneration,
+    ) {
         self.role_state
             .set_local_broker_id(generation.broker().broker_identity.broker_id);
         self.send_policy.update_broker_config(generation.broker());

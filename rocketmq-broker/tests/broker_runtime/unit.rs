@@ -1395,6 +1395,7 @@ async fn new_phase3_test_runtime(label: &str) -> BrokerRuntime {
     let message_store_config = Arc::new(MessageStoreConfig {
         store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
         flush_disk_type: FlushDiskType::AsyncFlush,
+        ha_listen_port: allocate_broker_runtime_test_port() as usize,
         ..MessageStoreConfig::default()
     });
     let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
@@ -1441,7 +1442,6 @@ fn message_arriving_listener_does_not_retain_runtime_root() {
     assert!(!production_source.contains(concat!("Arc", "Mut")));
 }
 
-#[cfg(feature = "tieredstore")]
 fn allocate_broker_runtime_test_port() -> u16 {
     loop {
         let Ok(listener) = TcpListener::bind(("127.0.0.1", 0)) else {
@@ -1740,7 +1740,11 @@ async fn start_namesrv(port: u16, root: &Path) -> TestNameServer {
 async fn configure_namesrv(runtime: &mut BrokerRuntime, namesrv_addr: &CheetahString) {
     let mut broker_config = runtime.composition.state.broker_config().as_ref().clone();
     broker_config.namesrv_addr = Some(namesrv_addr.clone());
-    runtime.composition.state.set_broker_config(broker_config);
+    runtime
+        .composition
+        .state
+        .set_broker_config(broker_config)
+        .expect("nameserver test configuration should remain valid");
     runtime
         .composition
         .state
@@ -2604,7 +2608,7 @@ async fn admin_runtime_does_not_retain_message_store_root() {
     assert!(admin.put_message(MessageExtBrokerInner::default()).await.is_err());
     assert!(matches!(
         admin.set_commitlog_read_mode(MADV_NORMAL),
-        Err(StoreError::NotStarted)
+        Err(crate::broker::broker_admin_runtime::CommitLogReadModeUpdateError::Store(StoreError::NotStarted))
     ));
     assert!(admin.delete_topics(Vec::new()).is_err());
 
@@ -2624,7 +2628,7 @@ async fn initialize_message_store_opens_rocksdb_owner_for_rocksdb_store_type() {
     let message_store_config = Arc::new(MessageStoreConfig {
         store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
         store_type: StoreType::RocksDB,
-        ha_listen_port: 0,
+        ha_listen_port: allocate_broker_runtime_test_port() as usize,
         ..MessageStoreConfig::default()
     });
     let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
@@ -4391,7 +4395,10 @@ async fn trigger_lite_dispatch_respects_broker_max_client_event_count_fallback()
     seed_lmq_offsets(&mut runtime, &[("child-a", 8), ("child-b", 12)]);
     let mut broker_config = runtime.runtime_state_mut().broker_config().as_ref().clone();
     broker_config.max_client_event_count = 1;
-    runtime.runtime_state_mut().set_broker_config(broker_config);
+    runtime
+        .runtime_state_mut()
+        .set_broker_config(broker_config)
+        .expect("lite dispatch test configuration should remain valid");
 
     let (mut processor, _) = runtime.init_processor();
     let channel = create_test_channel().await;
@@ -5161,6 +5168,7 @@ async fn apply_message_store_role_change_promotes_store_to_master() {
     let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-broker-runtime-master-{}", current_millis()));
     let broker_config = Arc::new(BrokerConfig {
         enable_controller_mode: true,
+        controller_addr: CheetahString::from_static_str("127.0.0.1:19876"),
         ..BrokerConfig::default()
     });
     let message_store_config = Arc::new(MessageStoreConfig {
@@ -5201,6 +5209,7 @@ async fn apply_message_store_role_change_demotes_store_to_slave() {
     let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-broker-runtime-slave-{}", current_millis()));
     let broker_config = Arc::new(BrokerConfig {
         enable_controller_mode: true,
+        controller_addr: CheetahString::from_static_str("127.0.0.1:19876"),
         ..BrokerConfig::default()
     });
     let message_store_config = Arc::new(MessageStoreConfig {

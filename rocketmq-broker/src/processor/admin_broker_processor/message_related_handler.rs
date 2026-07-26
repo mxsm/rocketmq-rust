@@ -544,6 +544,16 @@ mod tests {
         std::env::temp_dir().join(format!("rocketmq-rust-admin-message-related-{label}-{millis}"))
     }
 
+    fn available_ha_port() -> usize {
+        loop {
+            let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("reserve an ephemeral HA port");
+            let port = listener.local_addr().expect("read ephemeral HA port").port();
+            if port != 10_909 && port != 10_911 {
+                return usize::from(port);
+            }
+        }
+    }
+
     async fn new_test_runtime(label: &str) -> BrokerRuntime {
         let temp_root = temp_test_root(label);
         let broker_config = Arc::new(BrokerConfig {
@@ -553,6 +563,7 @@ mod tests {
         });
         let message_store_config = Arc::new(MessageStoreConfig {
             store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            ha_listen_port: available_ha_port(),
             ..MessageStoreConfig::default()
         });
         let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
@@ -744,10 +755,8 @@ mod tests {
             .pop_message_processor()
             .cloned()
             .expect("pop message processor should exist");
-        pop_message_processor.start().await;
 
         let service = pop_message_processor.pop_buffer_merge_service().clone();
-        crate::processor::processor_service::pop_buffer_merge_service::PopBufferMergeService::start(service.clone());
         service
             .add_ck_mock(
                 CheetahString::from_static_str("group-a"),
@@ -762,6 +771,7 @@ mod tests {
             )
             .await;
         assert!(service.get_offset_total_size().await > 0);
+        pop_message_processor.start().await;
 
         let handler = MessageRelatedHandler::new();
         let channel = create_test_channel().await;

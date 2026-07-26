@@ -1,0 +1,9 @@
+[broker]
+listenPort = 10911
+storePathRootDir = "./target/config-contract/broker"
+enableControllerMode = false
+
+[store]
+haListenPort = 10912
+storePathRootDir = "./target/config-contract/store"
+enableControllerMode = false

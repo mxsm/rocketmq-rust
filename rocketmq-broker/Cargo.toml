@@ -80,6 +80,7 @@ bytes                 = { workspace = true }
 parking_lot.workspace = true
 
 clap = { version = "4.6.1", features = ["derive"] }
+config.workspace = true
 rand = { workspace = true }
 
 #tools

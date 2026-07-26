@@ -402,12 +402,11 @@ metadata:
     rocketmq.apache.org/architecture-milestone: P0-05
 data:
   rocketmq-broker-0.toml: |-
+    [broker]
     listenPort = 10911
-    haListenAddress = "0.0.0.0"
     brokerIp1 = "rocketmq-broker-0.rocketmq-broker-headless.rocketmq.svc.cluster.local"
     brokerIp2 = "rocketmq-broker-0.rocketmq-broker-headless.rocketmq.svc.cluster.local"
     storePathRootDir = "/var/lib/rocketmq/broker"
-    storePathBrokerIdentity = "/var/lib/rocketmq/broker/brokerIdentity.json"
     namesrvAddr = "rocketmq-namesrv-0.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876;rocketmq-namesrv-1.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876;rocketmq-namesrv-2.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876"
     autoCreateTopicEnable = false
     enableControllerMode = true
@@ -419,17 +418,22 @@ data:
     authorizationEnabled = true
     signatureAlgorithm = "HmacSHA256"
 
-    [brokerIdentity]
+    [broker.brokerIdentity]
     brokerName = "rocketmq-broker"
     brokerClusterName = "RocketmqRust"
     brokerId = 0
-  rocketmq-broker-1.toml: |-
-    listenPort = 10911
+
+    [store]
     haListenAddress = "0.0.0.0"
+    haListenPort = 10912
+    storePathRootDir = "/var/lib/rocketmq/broker"
+    storePathBrokerIdentity = "/var/lib/rocketmq/broker/brokerIdentity.json"
+  rocketmq-broker-1.toml: |-
+    [broker]
+    listenPort = 10911
     brokerIp1 = "rocketmq-broker-1.rocketmq-broker-headless.rocketmq.svc.cluster.local"
     brokerIp2 = "rocketmq-broker-1.rocketmq-broker-headless.rocketmq.svc.cluster.local"
     storePathRootDir = "/var/lib/rocketmq/broker"
-    storePathBrokerIdentity = "/var/lib/rocketmq/broker/brokerIdentity.json"
     namesrvAddr = "rocketmq-namesrv-0.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876;rocketmq-namesrv-1.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876;rocketmq-namesrv-2.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876"
     autoCreateTopicEnable = false
     enableControllerMode = true
@@ -441,17 +445,22 @@ data:
     authorizationEnabled = true
     signatureAlgorithm = "HmacSHA256"
 
-    [brokerIdentity]
+    [broker.brokerIdentity]
     brokerName = "rocketmq-broker"
     brokerClusterName = "RocketmqRust"
     brokerId = 0
-  rocketmq-broker-2.toml: |-
-    listenPort = 10911
+
+    [store]
     haListenAddress = "0.0.0.0"
+    haListenPort = 10912
+    storePathRootDir = "/var/lib/rocketmq/broker"
+    storePathBrokerIdentity = "/var/lib/rocketmq/broker/brokerIdentity.json"
+  rocketmq-broker-2.toml: |-
+    [broker]
+    listenPort = 10911
     brokerIp1 = "rocketmq-broker-2.rocketmq-broker-headless.rocketmq.svc.cluster.local"
     brokerIp2 = "rocketmq-broker-2.rocketmq-broker-headless.rocketmq.svc.cluster.local"
     storePathRootDir = "/var/lib/rocketmq/broker"
-    storePathBrokerIdentity = "/var/lib/rocketmq/broker/brokerIdentity.json"
     namesrvAddr = "rocketmq-namesrv-0.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876;rocketmq-namesrv-1.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876;rocketmq-namesrv-2.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876"
     autoCreateTopicEnable = false
     enableControllerMode = true
@@ -463,10 +472,16 @@ data:
     authorizationEnabled = true
     signatureAlgorithm = "HmacSHA256"
 
-    [brokerIdentity]
+    [broker.brokerIdentity]
     brokerName = "rocketmq-broker"
     brokerClusterName = "RocketmqRust"
     brokerId = 0
+
+    [store]
+    haListenAddress = "0.0.0.0"
+    haListenPort = 10912
+    storePathRootDir = "/var/lib/rocketmq/broker"
+    storePathBrokerIdentity = "/var/lib/rocketmq/broker/brokerIdentity.json"
 ---
 # Source: rocketmq-rust/templates/configmaps.yaml
 apiVersion: v1

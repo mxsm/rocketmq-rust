@@ -17,6 +17,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::config::broker_config::BrokerConfig;
+use crate::config::error::BrokerConfigError;
+use crate::config::validated::ValidatedBrokerConfig;
 use cheetah_string::CheetahString;
 use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
 use rocketmq_model::common::config::TopicConfig;
@@ -44,6 +46,7 @@ const LOCAL_PROXY_RESPONSE_TIMEOUT: Duration = Duration::from_secs(3);
 #[doc(hidden)]
 pub mod proxy_adapter_compat {
     pub use crate::config::broker_config::BrokerConfig;
+    pub use crate::config::validated::ValidatedBrokerConfig;
     pub use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
     pub use rocketmq_model::common::boundary_type::BoundaryType;
     pub use rocketmq_model::common::filter::expression_type::ExpressionType;
@@ -105,20 +108,24 @@ pub struct ProxyBrokerFacade {
 }
 
 impl ProxyBrokerFacade {
-    pub fn new(
+    pub fn try_new(
         mut broker_config: BrokerConfig,
         message_store_config: MessageStoreConfig,
         service_context: ChildServiceContext,
-    ) -> Self {
+    ) -> Result<Self, BrokerConfigError> {
         broker_config.transfer_msg_by_heap = true;
         broker_config.broker_server_config.listen_port = broker_config.listen_port;
+        let validated_config = ValidatedBrokerConfig::try_from_parts(broker_config, message_store_config)?;
+        Ok(Self::from_validated_config(validated_config, service_context))
+    }
+
+    pub fn from_validated_config(
+        validated_config: ValidatedBrokerConfig,
+        service_context: ChildServiceContext,
+    ) -> Self {
         let runtime_context = service_context.child("embedded-broker");
         Self {
-            runtime: BrokerRuntime::new_with_service_context(
-                Arc::new(broker_config),
-                Arc::new(message_store_config),
-                runtime_context,
-            ),
+            runtime: BrokerRuntime::new_with_validated_config(Arc::new(validated_config), runtime_context),
             service_context,
         }
     }
@@ -214,10 +221,7 @@ fn embedded_broker_request_processor_not_ready() -> rocketmq_error::RocketMQErro
 
 fn build_topic_route(broker_config: &BrokerConfig, topic_config: &TopicConfig) -> TopicRouteData {
     let broker_name = broker_config.broker_identity.broker_name.clone();
-    let broker_addr = CheetahString::from(format!(
-        "{}:{}",
-        broker_config.broker_ip1, broker_config.broker_server_config.listen_port
-    ));
+    let broker_addr = CheetahString::from(broker_config.get_broker_addr());
     let mut broker_addrs = HashMap::new();
     broker_addrs.insert(mix_all::MASTER_ID, broker_addr);
 

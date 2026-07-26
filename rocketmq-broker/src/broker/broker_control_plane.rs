@@ -251,7 +251,10 @@ impl<MS: MessageStore> BrokerControllerRuntime<MS> {
 
         let previous_store_role = self.config.store_snapshot().broker_role;
         let target_store_role = outcome.target_broker_role().unwrap_or(previous_store_role);
-        let generation = self.config.apply_role(outcome.local_broker_id, target_store_role);
+        let generation = self
+            .config
+            .apply_role(outcome.local_broker_id, target_store_role)
+            .map_err(crate::runtime_to_rocketmq_error)?;
         self.role_state.set_local_broker_id(outcome.local_broker_id);
         self.send_policy.update_broker_config(generation.broker());
         self.send_policy.update_message_store_config(generation.store());
