@@ -30,6 +30,7 @@ use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
 use rocketmq_transport::RejectRequestResponse;
 use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
+use rocketmq_transport::RequestOrdering;
 use tokio::sync::Mutex;
 use tracing::warn;
 
@@ -80,6 +81,7 @@ pub(crate) mod query_assignment_processor;
 pub(crate) mod query_message_processor;
 pub(crate) mod recall_message_processor;
 pub(crate) mod reply_message_processor;
+mod request_ordering;
 pub(crate) mod send_message_processor;
 
 pub enum BrokerProcessorType<MS: MessageStore, TS> {
@@ -242,6 +244,10 @@ where
             BrokerProcessorType::AdminBroker(_) => (false, None),
         }
     }
+
+    fn request_ordering(&self, request: &RemotingCommand) -> RequestOrdering {
+        request_ordering::broker_request_ordering(request)
+    }
 }
 
 pub(crate) type RequestCodeType = i32;
@@ -380,6 +386,10 @@ where
                 }
             }
         }
+    }
+
+    fn request_ordering(&self, request: &RemotingCommand) -> RequestOrdering {
+        request_ordering::broker_request_ordering(request)
     }
 }
 
@@ -692,6 +702,16 @@ mod tests {
             true,
             true
         ));
+    }
+
+    #[test]
+    fn broker_request_processor_delegates_session_ordering_policy() {
+        let processor = TestBrokerRequestProcessor::new();
+        let send = RemotingCommand::create_remoting_command(RequestCode::SendMessage);
+        let pull = RemotingCommand::create_remoting_command(RequestCode::PullMessage);
+
+        assert!(matches!(processor.request_ordering(&send), RequestOrdering::Ordered(_)));
+        assert_eq!(processor.request_ordering(&pull), RequestOrdering::Concurrent);
     }
 
     #[test]

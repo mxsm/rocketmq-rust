@@ -80,11 +80,11 @@ type TestRequestHook =
     Arc<dyn Fn(i32, i32, Channel, TaskGroup, TestDeferredResponse) -> TestRequestHookResult + Send + Sync>;
 
 trait SessionCommandInterceptor: Send + Sync + 'static {
-    fn intercept(&self, code: i32, opaque: i32, channel: Channel, session_task_group: TaskGroup) -> bool;
+    fn intercept(&self, code: i32, opaque: i32, channel: Channel, request_executor_group: TaskGroup) -> bool;
 }
 
 impl SessionCommandInterceptor for () {
-    fn intercept(&self, _code: i32, _opaque: i32, _channel: Channel, _session_task_group: TaskGroup) -> bool {
+    fn intercept(&self, _code: i32, _opaque: i32, _channel: Channel, _request_executor_group: TaskGroup) -> bool {
         false
     }
 }
@@ -295,16 +295,11 @@ impl<RP: RequestProcessor + Sync + Clone + 'static> ConnectionHandler<RP> {
                 self.cmd_handler.response_table.clone(),
                 session.task_group().clone(),
             ),
-            RemotingSessionAction::Command(_) => {
-                let Ok(task_group_lease) = session.task_group().try_child_lease("rocketmq.remoting.command") else {
-                    return;
-                };
-                ChannelInner::new_transport_session_with_task_group(
-                    session.connection(),
-                    self.cmd_handler.response_table.clone(),
-                    task_group_lease.group().clone(),
-                )
-            }
+            RemotingSessionAction::Command(_) => ChannelInner::new_transport_session_with_task_group(
+                session.connection(),
+                self.cmd_handler.response_table.clone(),
+                session.task_group().clone(),
+            ),
         };
         let Ok(channel_inner) = channel_inner else {
             return;
@@ -330,7 +325,7 @@ impl<RP: RequestProcessor + Sync + Clone + 'static> ConnectionHandler<RP> {
                         command.code(),
                         command.opaque(),
                         remoting_session.context.channel().clone(),
-                        session.task_group().clone(),
+                        session.request_executor_group().clone(),
                     ) {
                         return;
                     }
@@ -349,6 +344,13 @@ impl<RP: RequestProcessor + Sync + Clone + 'static> TransportConnectionHandler f
         Box::pin(async move {
             self.run(session, RemotingSessionAction::Connect, None).await;
         })
+    }
+
+    fn request_ordering(
+        &self,
+        command: &rocketmq_protocol::protocol::remoting_command::RemotingCommand,
+    ) -> crate::request_ordering::RequestOrdering {
+        self.cmd_handler.request_processor.request_ordering(command)
     }
 
     fn command(
@@ -389,6 +391,13 @@ impl<RP: RequestProcessor + Sync + Clone + 'static> TransportConnectionHandler f
 impl<RP: RequestProcessor + Sync + Clone + 'static> TransportConnectionHandler for InterceptingConnectionHandler<RP> {
     fn connected(&self, session: crate::server::SessionHandle) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         self.inner.connected(session)
+    }
+
+    fn request_ordering(
+        &self,
+        command: &rocketmq_protocol::protocol::remoting_command::RemotingCommand,
+    ) -> crate::request_ordering::RequestOrdering {
+        self.inner.request_ordering(command)
     }
 
     fn command(
@@ -830,7 +839,7 @@ mod tests {
     use crate::runtime::config::client_config::TokioClientConfig;
 
     impl SessionCommandInterceptor for Option<TestRequestHook> {
-        fn intercept(&self, code: i32, opaque: i32, channel: Channel, session_task_group: TaskGroup) -> bool {
+        fn intercept(&self, code: i32, opaque: i32, channel: Channel, request_executor_group: TaskGroup) -> bool {
             let Some(hook) = self.as_ref() else {
                 return false;
             };
@@ -841,7 +850,7 @@ mod tests {
                 })
             });
             matches!(
-                hook(code, opaque, channel, session_task_group, deferred_response),
+                hook(code, opaque, channel, request_executor_group, deferred_response),
                 TestRequestHookResult::Intercept
             )
         }
@@ -1225,10 +1234,12 @@ mod tests {
         let reserved = TcpListener::bind("127.0.0.1:0").await.expect("reserve port");
         let addr = reserved.local_addr().unwrap();
         drop(reserved);
-        let session_task_group = Arc::new(std::sync::Mutex::new(None::<TaskGroup>));
-        let session_task_group_for_hook = session_task_group.clone();
+        let request_executor_group = Arc::new(std::sync::Mutex::new(None::<TaskGroup>));
+        let request_executor_group_for_hook = request_executor_group.clone();
         let hook: TestRequestHook = Arc::new(move |_code, _opaque, _channel, task_group, _deferred_response| {
-            let mut captured = session_task_group_for_hook.lock().expect("session task group lock");
+            let mut captured = request_executor_group_for_hook
+                .lock()
+                .expect("request executor group lock");
             if captured.is_none() {
                 *captured = Some(task_group);
             }
@@ -1274,19 +1285,19 @@ mod tests {
             assert_eq!(response.opaque(), opaque);
         }
 
-        let session_task_group = session_task_group
+        let request_executor_group = request_executor_group
             .lock()
-            .expect("session task group lock")
+            .expect("request executor group lock")
             .clone()
-            .expect("session task group");
-        let stats = session_task_group.child_stats();
+            .expect("request executor group");
+        let stats = request_executor_group.child_stats();
         assert_eq!(stats.active, 0);
         assert_eq!(stats.created, COMMAND_COUNT);
         assert_eq!(stats.pruned, COMMAND_COUNT);
         assert_eq!(
-            session_task_group.child_count(),
-            1,
-            "only the connect-time child remains"
+            request_executor_group.child_count(),
+            0,
+            "completed request groups must be pruned"
         );
 
         let _ = shutdown_tx.send(());
@@ -1309,11 +1320,11 @@ mod tests {
         let delayed: Arc<std::sync::Mutex<Option<DelayedResponse>>> = Arc::new(std::sync::Mutex::new(None));
         let first_seen = Arc::new(tokio::sync::Notify::new());
         let second_seen = Arc::new(tokio::sync::Notify::new());
-        let session_task_group = Arc::new(std::sync::Mutex::new(None::<TaskGroup>));
+        let request_executor_group = Arc::new(std::sync::Mutex::new(None::<TaskGroup>));
         let delayed_for_hook = delayed.clone();
         let first_seen_for_hook = first_seen.clone();
         let second_seen_for_hook = second_seen.clone();
-        let session_task_group_for_hook = session_task_group.clone();
+        let request_executor_group_for_hook = request_executor_group.clone();
         let hook: TestRequestHook = Arc::new(
             move |code, opaque, channel, task_group, deferred_response| match opaque {
                 81 => {
@@ -1321,7 +1332,9 @@ mod tests {
                         code,
                         rocketmq_protocol::code::request_code::RequestCode::SendMessage as i32
                     );
-                    *session_task_group_for_hook.lock().expect("session task group lock") = Some(task_group);
+                    *request_executor_group_for_hook
+                        .lock()
+                        .expect("request executor group lock") = Some(task_group);
                     *delayed_for_hook.lock().expect("delayed response lock") =
                         Some((channel.channel_id().to_owned(), deferred_response));
                     first_seen_for_hook.notify_one();
@@ -1397,12 +1410,12 @@ mod tests {
             .expect("control response frame")
             .expect("control response command");
         assert_eq!(control_response.opaque(), 82);
-        let retained_session_task_group = session_task_group
+        let retained_request_executor_group = request_executor_group
             .lock()
-            .expect("session task group lock")
+            .expect("request executor group lock")
             .clone()
-            .expect("session task group");
-        let retained_stats = retained_session_task_group.child_stats();
+            .expect("request executor group");
+        let retained_stats = retained_request_executor_group.child_stats();
         assert_eq!(retained_stats.active, 1);
         assert_eq!(retained_stats.created, 2);
         assert_eq!(retained_stats.pruned, 1);
@@ -1435,7 +1448,7 @@ mod tests {
             ),
         )
         .await;
-        let released_stats = retained_session_task_group.child_stats();
+        let released_stats = retained_request_executor_group.child_stats();
         assert_eq!(released_stats.active, 0);
         assert_eq!(released_stats.created, 2);
         assert_eq!(released_stats.pruned, 2);
