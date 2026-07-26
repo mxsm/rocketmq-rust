@@ -115,7 +115,7 @@ impl BrokerMembershipState {
 /// Explicit controller and membership control-plane capability.
 ///
 /// This owner contains only the state and services needed for role transitions;
-/// it never retains `BrokerRuntimeInner`.
+/// it never retains `BrokerRuntimeState`.
 pub(crate) struct BrokerControllerRuntime<MS: MessageStore> {
     controller: BrokerControllerState,
     membership: BrokerMembershipState,

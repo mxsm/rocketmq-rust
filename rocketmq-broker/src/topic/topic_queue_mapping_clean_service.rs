@@ -594,7 +594,7 @@ mod tests {
         let production_source = source.split("#[cfg(test)]").next().expect("production source");
 
         assert!(!production_source.contains("ArcMut"));
-        assert!(!production_source.contains("BrokerRuntimeInner"));
+        assert!(!production_source.contains("BrokerRuntimeState"));
         assert!(!production_source.contains("MessageStore"));
         assert!(!production_source.contains("TopicQueueMappingCleanService<"));
     }
@@ -608,7 +608,7 @@ mod tests {
         };
         let mut broker_runtime = BrokerRuntime::new(broker_config, Arc::new(message_store_config));
         let service = broker_runtime
-            .inner_for_test()
+            .runtime_state_mut()
             .topic_queue_mapping_clean_service_for_test()
             .expect("topic queue mapping clean service should be configured")
             .clone();
@@ -623,7 +623,7 @@ mod tests {
         let message_store_config = Arc::new(MessageStoreConfig::default());
         let mut broker_runtime = BrokerRuntime::new(broker_config, message_store_config);
         let service = broker_runtime
-            .inner_for_test()
+            .runtime_state_mut()
             .topic_queue_mapping_clean_service_for_test()
             .expect("topic queue mapping clean service should be configured")
             .clone();
@@ -651,7 +651,7 @@ mod tests {
         let mut broker_runtime =
             BrokerRuntime::new_with_service_context(broker_config, message_store_config, broker_service.clone());
         let service = broker_runtime
-            .inner_for_test()
+            .runtime_state_mut()
             .topic_queue_mapping_clean_service_for_test()
             .expect("topic queue mapping clean service should be configured")
             .clone();

@@ -520,7 +520,7 @@ mod tests {
     use crate::long_polling::long_polling_service::pop_long_polling_service::PopLongPollingPolicy;
 
     fn notification_processor_for_test(runtime: &mut BrokerRuntime) -> Arc<NotificationProcessor<BrokerMessageStore>> {
-        let inner = runtime.inner_for_test();
+        let inner = runtime.runtime_state_mut();
         let policy = NotificationPolicy::from_config(&inner.broker_config());
         let long_polling_policy = PopLongPollingPolicy::from_config(&inner.broker_config());
         let topic_config_manager = inner.topic_config_manager_handle();
@@ -574,7 +574,7 @@ mod tests {
         let mut runtime =
             BrokerRuntime::new_with_service_context(broker_config, message_store_config, broker_service.clone());
         let parent_id = runtime
-            .inner_for_test()
+            .runtime_state_mut()
             .broker_service_task_group()
             .expect("broker service task group should exist")
             .id();

@@ -782,15 +782,16 @@ mod tests {
 
     #[test]
     fn broker_store_lifecycle_requires_exclusive_owner_after_provider_detach() {
-        let runtime_source = include_str!("../broker_runtime.rs");
+        let composition_source = include_str!("../broker_runtime/composition.rs");
+        let lifecycle_source = include_str!("../broker_runtime/lifecycle.rs");
         let capability_source = include_str!("escape_bridge_capability.rs");
 
         assert!(!capability_source.contains("LegacyEscapeStoreLifecycleLease"));
         assert!(!capability_source.contains("LegacyEscapeStoreOwner"));
         assert!(!capability_source.contains("rocketmq_rust::ArcMut"));
         assert!(capability_source.contains("current: Arc<RwLock<Option<Weak<MS>>>>"));
-        assert!(runtime_source.contains(".and_then(Arc::get_mut)"));
-        let shutdown_source = runtime_source
+        assert!(composition_source.contains(".and_then(Arc::get_mut)"));
+        let shutdown_source = lifecycle_source
             .split_once("// Store durability therefore cannot be starved by a slow background component.")
             .map(|(_, shutdown_source)| shutdown_source)
             .expect("Store shutdown phase must remain documented");

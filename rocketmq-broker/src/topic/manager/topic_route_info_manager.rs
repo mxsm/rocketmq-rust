@@ -398,7 +398,7 @@ mod tests {
         let broker_config = Arc::new(BrokerConfig::default());
         let message_store_config = Arc::new(MessageStoreConfig::default());
         let mut broker_runtime = BrokerRuntime::new(broker_config, message_store_config);
-        let mut manager = broker_runtime.inner_for_test().topic_route_info_manager().clone();
+        let mut manager = broker_runtime.runtime_state_mut().topic_route_info_manager().clone();
 
         manager.start();
         manager.start();
@@ -416,7 +416,7 @@ mod tests {
         let message_store_config = Arc::new(MessageStoreConfig::default());
         let mut broker_runtime =
             BrokerRuntime::new_with_service_context(broker_config, message_store_config, broker_service.clone());
-        let mut manager = broker_runtime.inner_for_test().topic_route_info_manager().clone();
+        let mut manager = broker_runtime.runtime_state_mut().topic_route_info_manager().clone();
 
         manager.start();
 
@@ -438,7 +438,7 @@ mod tests {
         let broker_config = Arc::new(BrokerConfig::default());
         let message_store_config = Arc::new(MessageStoreConfig::default());
         let mut broker_runtime = BrokerRuntime::new(broker_config, message_store_config);
-        let manager = broker_runtime.inner_for_test().topic_route_info_manager().clone();
+        let manager = broker_runtime.runtime_state_mut().topic_route_info_manager().clone();
         let cloned_manager = manager.clone();
         let topic = CheetahString::from_static_str("SharedRouteTopic");
 

@@ -499,7 +499,7 @@ mod tests {
     fn lite_subscription_processor_for_test(
         runtime: &mut BrokerRuntime,
     ) -> LiteSubscriptionCtlProcessor<BrokerMessageStore> {
-        let inner = runtime.inner_for_test();
+        let inner = runtime.runtime_state_mut();
         let consumer_offset_manager = inner.consumer_offset_manager_handle();
         let escape_bridge = inner.escape_bridge();
         let pop_lite_message_processor = inner
@@ -541,7 +541,7 @@ mod tests {
             );
         config.set_attributes(attributes);
         runtime
-            .inner_for_test()
+            .runtime_state_mut()
             .subscription_group_manager_mut()
             .update_subscription_group_config(&mut config);
     }
@@ -593,7 +593,7 @@ mod tests {
     #[tokio::test]
     async fn complete_add_updates_registry_with_lmq_names() {
         let mut runtime = new_test_runtime("processor-success").await;
-        let lite_registry = runtime.inner_for_test().lite_subscription_registry().clone();
+        let lite_registry = runtime.runtime_state_mut().lite_subscription_registry().clone();
         seed_group_config(
             &mut runtime,
             "lite-group",
@@ -641,7 +641,7 @@ mod tests {
     #[tokio::test]
     async fn complete_add_ignores_stale_version_snapshot() {
         let mut runtime = new_test_runtime("processor-stale-version").await;
-        let lite_registry = runtime.inner_for_test().lite_subscription_registry().clone();
+        let lite_registry = runtime.runtime_state_mut().lite_subscription_registry().clone();
         seed_group_config(
             &mut runtime,
             "lite-group",
@@ -718,7 +718,7 @@ mod tests {
     #[tokio::test]
     async fn partial_add_returns_quota_exceeded_when_global_limit_is_hit() {
         let mut runtime = new_test_runtime_with_max_subscription_count("quota-exceeded", 1).await;
-        let lite_registry = runtime.inner_for_test().lite_subscription_registry().clone();
+        let lite_registry = runtime.runtime_state_mut().lite_subscription_registry().clone();
         seed_group_config(
             &mut runtime,
             "lite-group",
@@ -767,7 +767,7 @@ mod tests {
     #[tokio::test]
     async fn partial_add_with_offset_option_assigns_reset_offset() {
         let mut runtime = new_test_runtime("offset-option").await;
-        let consumer_offset_manager = runtime.inner_for_test().consumer_offset_manager_handle();
+        let consumer_offset_manager = runtime.runtime_state_mut().consumer_offset_manager_handle();
         seed_group_config(
             &mut runtime,
             "lite-group",
@@ -812,8 +812,8 @@ mod tests {
     #[tokio::test]
     async fn partial_remove_with_reset_offset_on_unsubscribe_assigns_min_offset() {
         let mut runtime = new_test_runtime("reset-on-unsubscribe").await;
-        let lite_registry = runtime.inner_for_test().lite_subscription_registry().clone();
-        let consumer_offset_manager = runtime.inner_for_test().consumer_offset_manager_handle();
+        let lite_registry = runtime.runtime_state_mut().lite_subscription_registry().clone();
+        let consumer_offset_manager = runtime.runtime_state_mut().consumer_offset_manager_handle();
         seed_group_config(
             &mut runtime,
             "lite-group",
@@ -871,8 +871,8 @@ mod tests {
     #[tokio::test]
     async fn partial_add_in_exclusive_mode_excludes_previous_client_subscription() {
         let mut runtime = new_test_runtime("exclusive-model").await;
-        let lite_registry = runtime.inner_for_test().lite_subscription_registry().clone();
-        let consumer_offset_manager = runtime.inner_for_test().consumer_offset_manager_handle();
+        let lite_registry = runtime.runtime_state_mut().lite_subscription_registry().clone();
+        let consumer_offset_manager = runtime.runtime_state_mut().consumer_offset_manager_handle();
         seed_group_config(
             &mut runtime,
             "lite-group",

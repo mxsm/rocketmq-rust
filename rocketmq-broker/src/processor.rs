@@ -698,7 +698,11 @@ mod tests {
     #[test]
     fn transaction_processor_roots_and_registry_use_standard_arc() {
         let processor_source = include_str!("processor.rs");
-        let runtime_source = include_str!("broker_runtime.rs");
+        let runtime_source = [
+            include_str!("broker_runtime.rs"),
+            include_str!("broker_runtime/request_pipeline.rs"),
+        ]
+        .join("\n");
 
         assert!(processor_source.contains("process_table: Arc<HashMap"));
         assert!(processor_source.contains("default_request_processor: Option<Arc<"));
@@ -713,7 +717,11 @@ mod tests {
     #[test]
     fn core_processor_roots_use_standard_arc() {
         let processor_source = include_str!("processor.rs");
-        let runtime_source = include_str!("broker_runtime.rs");
+        let runtime_source = [
+            include_str!("broker_runtime.rs"),
+            include_str!("broker_runtime/request_pipeline.rs"),
+        ]
+        .join("\n");
         let query_assignment_source = include_str!("processor/query_assignment_processor.rs");
 
         for (variant, processor) in [
@@ -749,7 +757,7 @@ mod tests {
         assert!(!runtime_source.contains("query_assignment_processor_mut("));
         assert!(!runtime_source.contains("query_assignment_processor_unchecked_mut("));
         assert!(!query_assignment_source.contains(concat!("Arc", "Mut")));
-        assert!(!query_assignment_source.contains("BrokerRuntimeInner"));
+        assert!(!query_assignment_source.contains("BrokerRuntimeState"));
     }
 
     #[tokio::test]

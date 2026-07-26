@@ -765,7 +765,7 @@ mod tests {
         assert!(offset_capability.manager().is_none());
 
         let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
-        let inner = runtime.inner_for_test();
+        let inner = runtime.runtime_state_mut();
         let escape_bridge = inner.escape_bridge();
         let capability = SlaveTimerStoreCapability::new(&escape_bridge);
 

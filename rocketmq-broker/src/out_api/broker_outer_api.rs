@@ -1696,7 +1696,7 @@ mod tests {
             .expect("register_broker_all signature should have the expected return type");
         let signature = &source[signature_start..signature_end];
 
-        assert!(!signature.contains("BrokerRuntimeInner"));
+        assert!(!signature.contains("BrokerRuntimeState"));
         assert!(!signature.contains("ArcMut"));
         assert!(!signature.contains("MessageStore"));
     }

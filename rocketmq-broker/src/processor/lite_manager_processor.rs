@@ -918,7 +918,7 @@ mod tests {
         let broker_config = Arc::new(BrokerConfig::default());
         let message_store_config = Arc::new(MessageStoreConfig::default());
         let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
-        let inner = runtime.inner_for_test();
+        let inner = runtime.runtime_state_mut();
         let offset_manager = inner.consumer_offset_manager_handle();
         let offset = LiteManagerOffsetCapability::new(&offset_manager);
         let escape_bridge = inner.escape_bridge();
