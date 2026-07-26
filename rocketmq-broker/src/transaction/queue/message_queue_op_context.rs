@@ -1,33 +1,51 @@
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use std::time::Duration;
 
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_error::UnifiedServiceError;
 use rocketmq_protocol::code::response_code::ResponseCode;
-use tokio::sync::mpsc;
+use rocketmq_runtime::BudgetLimit;
+use rocketmq_runtime::BudgetedQueue;
+use rocketmq_runtime::FullPolicy;
+use rocketmq_runtime::QueueSnapshot;
+use rocketmq_runtime::RateLimit;
+use rocketmq_runtime::ResourceBudget;
 use tokio::time;
 
 pub struct MessageQueueOpContext {
     total_size: AtomicU32,
     last_write_timestamp: AtomicU64,
-    context_queue: Arc<mpsc::UnboundedSender<String>>,
-    context_receiver: mpsc::UnboundedReceiver<String>,
-    queue_capacity: usize,
+    pending_operations: BudgetedQueue<String>,
 }
 
 impl MessageQueueOpContext {
-    pub fn new(timestamp: u64, queue_length: usize) -> Self {
-        let unbounded_channel = mpsc::unbounded_channel::<String>();
-        MessageQueueOpContext {
+    pub fn try_new(
+        timestamp: u64,
+        queue_length: usize,
+        queue_id: i32,
+        parent_budget: &ResourceBudget,
+    ) -> RocketMQResult<Self> {
+        let queue_bytes = parent_budget.limit().capacity.bytes;
+        let budget = parent_budget
+            .child(
+                format!("queue-{queue_id}"),
+                BudgetLimit::new(queue_length, queue_bytes, FullPolicy::Reject)
+                    .with_rate(RateLimit::new(queue_length as u64, queue_length as u64))
+                    .with_max_age(Duration::from_secs(30)),
+            )
+            .map_err(|error| RocketMQError::ConfigInvalidValue {
+                key: "broker.transaction.operationQueue",
+                value: queue_id.to_string(),
+                reason: error.to_string(),
+            })?;
+        Ok(Self {
             total_size: AtomicU32::new(0),
             last_write_timestamp: AtomicU64::new(timestamp),
-            context_queue: Arc::new(unbounded_channel.0),
-            context_receiver: unbounded_channel.1,
-            queue_capacity: queue_length,
-        }
+            pending_operations: BudgetedQueue::new(budget),
+        })
     }
 
     pub async fn get_total_size(&self) -> u32 {
@@ -47,16 +65,17 @@ impl MessageQueueOpContext {
     }
 
     pub async fn push(&self, msg: String) -> RocketMQResult<()> {
-        if self.context_receiver.len() > self.queue_capacity {
-            return Err(RocketMQError::broker_operation_failed(
-                "message_queue_push",
-                ResponseCode::SystemBusy as i32,
-                "queue is full",
-            ));
-        }
-        self.context_queue
-            .send(msg)
-            .map_err(|_| RocketMQError::Service(UnifiedServiceError::Interrupted))
+        let retained_bytes = std::mem::size_of::<String>().saturating_add(msg.capacity());
+        self.pending_operations
+            .try_push_data(msg, retained_bytes)
+            .map(|_| ())
+            .map_err(|_| {
+                RocketMQError::broker_operation_failed(
+                    "message_queue_push",
+                    ResponseCode::SystemBusy as i32,
+                    "transaction operation queue is full",
+                )
+            })
     }
     pub async fn offer(&self, item: String, timeout: std::time::Duration) -> RocketMQResult<()> {
         if let Ok(res) = time::timeout(timeout, self.push(item)).await {
@@ -67,13 +86,45 @@ impl MessageQueueOpContext {
             timeout_ms: timeout.as_millis() as u64,
         })
     }
-    pub async fn pull(&mut self) -> RocketMQResult<String> {
-        if let Some(item) = self.context_receiver.recv().await {
+    pub async fn pull(&self) -> RocketMQResult<String> {
+        if let Some(item) = self.pending_operations.recv().await {
             return Ok(item);
         }
         Err(RocketMQError::Service(UnifiedServiceError::Interrupted))
     }
     pub async fn is_empty(&self) -> bool {
-        self.context_receiver.len() == 0
+        self.pending_operations.is_empty()
+    }
+
+    pub fn queue_snapshot(&self) -> QueueSnapshot {
+        self.pending_operations.snapshot()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rocketmq_runtime::ResourceBudgetTree;
+
+    #[tokio::test]
+    async fn overload_rejects_excess_transaction_operations() {
+        let item_bytes = std::mem::size_of::<String>() + 1;
+        let root = ResourceBudgetTree::new(
+            "broker-transaction-overload",
+            BudgetLimit::new(2, item_bytes * 2, FullPolicy::Reject),
+        )
+        .expect("root budget")
+        .root();
+        let queue = MessageQueueOpContext::try_new(0, 2, 0, &root).expect("operation queue");
+
+        assert!(queue.push("a".to_owned()).await.is_ok());
+        assert!(queue.push("b".to_owned()).await.is_ok());
+        assert!(queue.push("c".to_owned()).await.is_err());
+        assert!(queue.push("d".to_owned()).await.is_err());
+
+        let snapshot = queue.queue_snapshot();
+        assert_eq!(snapshot.depth, 2);
+        assert_eq!(snapshot.retained_bytes, item_bytes * 2);
+        assert_eq!(snapshot.rejected_count, 2);
     }
 }

@@ -22,10 +22,12 @@ use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::ChildServiceContext;
 
+use crate::admission::estimated_connection_retained_bytes;
 use crate::admission::AdmissionClass;
 use crate::admission::AdmissionController;
 use crate::admission::AdmissionResource;
 use crate::admission::AdmissionScope;
+use crate::base::pending_request_table::materialize_and_estimate_remoting_command_retained_bytes;
 use crate::base::pending_request_table::PendingRequestLimits;
 use crate::base::pending_request_table::PendingRequestTable;
 use crate::base::pending_request_table::PendingRequestUsage;
@@ -129,29 +131,57 @@ pub struct TransportClient {
 }
 
 impl TransportClient {
-    pub fn new(service_context: ChildServiceContext, admission: Arc<AdmissionController>) -> Self {
-        Self::new_with_security(
+    /// Builds a client with fail-closed pending-request budget validation.
+    pub fn try_new(service_context: ChildServiceContext, admission: Arc<AdmissionController>) -> RocketMQResult<Self> {
+        Self::try_new_with_security(
             service_context,
             admission,
             Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
         )
     }
 
+    /// Compatibility constructor for existing embedders.
+    ///
+    /// # Panics
+    ///
+    /// Panics if pending-request resource-budget validation fails. New
+    /// production composition should use [`Self::try_new`].
+    pub fn new(service_context: ChildServiceContext, admission: Arc<AdmissionController>) -> Self {
+        Self::try_new(service_context, admission)
+            .unwrap_or_else(|error| panic!("invalid Transport client resource limits: {error}"))
+    }
+
+    pub fn try_new_with_security(
+        service_context: ChildServiceContext,
+        admission: Arc<AdmissionController>,
+        security: Arc<TransportSecurity>,
+    ) -> RocketMQResult<Self> {
+        Ok(Self {
+            _service_context: service_context,
+            admission,
+            pending: PendingRequestTable::try_with_limits(PendingRequestLimits {
+                max_count: 65_536,
+                max_bytes: 256 * 1024 * 1024,
+                ..PendingRequestLimits::default()
+            })?,
+            next_opaque: AtomicI32::new(1),
+            security,
+        })
+    }
+
+    /// Compatibility constructor for existing embedders with custom security.
+    ///
+    /// # Panics
+    ///
+    /// Panics if pending-request resource-budget validation fails. New
+    /// production composition should use [`Self::try_new_with_security`].
     pub fn new_with_security(
         service_context: ChildServiceContext,
         admission: Arc<AdmissionController>,
         security: Arc<TransportSecurity>,
     ) -> Self {
-        Self {
-            _service_context: service_context,
-            admission,
-            pending: PendingRequestTable::with_limits(PendingRequestLimits {
-                max_count: 65_536,
-                max_bytes: 256 * 1024 * 1024,
-            }),
-            next_opaque: AtomicI32::new(1),
-            security,
-        }
+        Self::try_new_with_security(service_context, admission, security)
+            .unwrap_or_else(|error| panic!("invalid Transport client resource limits: {error}"))
     }
 
     pub fn pending_usage(&self) -> PendingRequestUsage {
@@ -189,10 +219,15 @@ impl TransportClient {
             .sign(&mut request, Some(&peer))
             .map_err(|error| RocketMQError::network_connection_failed(address.to_string(), error.to_string()))?;
         deadline.ensure_before_send(address.to_string())?;
-        let retained_bytes = request.body().map_or(0, bytes::Bytes::len);
+        let retained_bytes = materialize_and_estimate_remoting_command_retained_bytes(&mut request);
         let _connection_permit = self
             .admission
-            .try_acquire(AdmissionResource::Connection, scope, 0, AdmissionClass::Data)
+            .try_acquire(
+                AdmissionResource::Connection,
+                scope,
+                estimated_connection_retained_bytes(),
+                AdmissionClass::Data,
+            )
             .map_err(|error| RocketMQError::network_connection_failed(address.to_string(), error.to_string()))?;
         let _inflight_permit = self
             .admission

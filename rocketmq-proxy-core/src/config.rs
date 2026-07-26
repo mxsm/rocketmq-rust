@@ -116,6 +116,12 @@ pub struct RuntimeConfig {
     pub producer_permits: usize,
     pub consumer_permits: usize,
     pub client_manager_permits: usize,
+    /// Process/Pod hard memory limit. Zero selects automatic detection.
+    pub process_memory_limit_bytes: u64,
+    pub telemetry_queue_capacity: usize,
+    pub telemetry_queue_bytes: usize,
+    pub telemetry_queue_rate_per_second: u64,
+    pub telemetry_queue_max_age_ms: u64,
 }
 
 impl Default for RuntimeConfig {
@@ -125,6 +131,11 @@ impl Default for RuntimeConfig {
             producer_permits: 1024,
             consumer_permits: 1024,
             client_manager_permits: 512,
+            process_memory_limit_bytes: 0,
+            telemetry_queue_capacity: 1024,
+            telemetry_queue_bytes: 16 * 1024 * 1024,
+            telemetry_queue_rate_per_second: 4096,
+            telemetry_queue_max_age_ms: 30_000,
         }
     }
 }

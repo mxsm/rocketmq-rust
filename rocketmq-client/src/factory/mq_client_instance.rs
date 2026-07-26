@@ -66,6 +66,7 @@ use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::schedule::simple_scheduler::ScheduledTaskManager;
 use rocketmq_runtime::tokio_lock::RocketMQTokioMutex;
 use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::ResourceBudget;
 use rocketmq_transport::ClientMetadata;
 use rocketmq_transport::ConnectionNetEvent;
 use rocketmq_transport::RPCHook;
@@ -233,6 +234,7 @@ fn schedule_rebalance_wakeup(
 
 pub struct MQClientInstance {
     service_context: ChildServiceContext,
+    resource_budget: ResourceBudget,
     request_future_holder: Arc<RequestFutureHolder>,
     pub(crate) client_config: Arc<ClientConfig>,
     pub(crate) client_id: CheetahString,
@@ -336,11 +338,33 @@ enum TopicRouteApplyOutcome {
 impl MQClientInstance {
     pub fn new_arc(
         client_config: ClientConfig,
+        instance_generation: u64,
+        client_id: impl Into<CheetahString>,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
+        service_context: ChildServiceContext,
+        request_future_holder: Arc<RequestFutureHolder>,
+    ) -> Arc<MQClientInstance> {
+        let resource_budget = crate::runtime::standalone_client_resource_budget()
+            .expect("standalone MQClientInstance resource budget must be valid");
+        Self::new_arc_with_resource_budget(
+            client_config,
+            instance_generation,
+            client_id,
+            rpc_hook,
+            service_context,
+            request_future_holder,
+            resource_budget,
+        )
+    }
+
+    pub(crate) fn new_arc_with_resource_budget(
+        client_config: ClientConfig,
         _instance_generation: u64,
         client_id: impl Into<CheetahString>,
         rpc_hook: Option<Arc<dyn RPCHook>>,
         service_context: ChildServiceContext,
         request_future_holder: Arc<RequestFutureHolder>,
+        resource_budget: ResourceBudget,
     ) -> Arc<MQClientInstance> {
         let client_id = client_id.into();
         let shared_config = Arc::new(client_config.clone());
@@ -369,6 +393,7 @@ impl MQClientInstance {
         let default_producer = Mutex::new(default_producer);
         let instance = Arc::new(MQClientInstance {
             service_context: service_context.clone(),
+            resource_budget: resource_budget.clone(),
             request_future_holder,
             client_config: shared_config,
             client_id,
@@ -386,8 +411,9 @@ impl MQClientInstance {
             lock_heartbeat: Arc::default(),
             lifecycle_transition: Mutex::new(()),
             service_state: StdRwLock::new(ServiceState::CreateJust),
-            pull_message_service: Arc::new(PullMessageService::with_shards(
+            pull_message_service: Arc::new(PullMessageService::with_shards_and_resource_budget(
                 client_config.pull_message_service_shards,
+                resource_budget,
             )),
             rebalance_service: RebalanceService::new(),
             default_producer,
@@ -449,6 +475,10 @@ impl MQClientInstance {
 
     pub fn service_context(&self) -> &ChildServiceContext {
         &self.service_context
+    }
+
+    pub(crate) fn resource_budget(&self) -> ResourceBudget {
+        self.resource_budget.clone()
     }
 
     pub(crate) fn request_future_holder(&self) -> Arc<RequestFutureHolder> {

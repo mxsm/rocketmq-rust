@@ -386,6 +386,10 @@ impl<MS: MessageStore> BrokerRuntimeState<MS> {
             .map(|service_context| service_context.task_group().clone())
     }
 
+    pub(crate) fn resource_budget(&self) -> &ResourceBudget {
+        &self.resource_budget
+    }
+
     #[inline]
     pub fn store_host_mut(&mut self) -> &mut SocketAddr {
         &mut self.store_host
@@ -1035,6 +1039,18 @@ impl BrokerRuntime {
     ) -> Self {
         let broker_config = validated_config.broker_arc();
         let message_store_config = validated_config.store_arc();
+        let resource_budget = validated_config
+            .sections()
+            .resources()
+            .budget_tree()
+            .expect("validated Broker resources must produce a budget tree")
+            .root();
+        let lite_event_dispatcher = LiteEventDispatcher::try_with_resource_budget(
+            &resource_budget,
+            usize::try_from(validated_config.sections().resources().max_lite_subscriptions()).unwrap_or(usize::MAX),
+            usize::try_from(validated_config.sections().resources().max_lite_subscriptions()).unwrap_or(usize::MAX),
+        )
+        .expect("validated Broker Lite event limits must fit the root resource budget");
         let broker_address = broker_config.get_broker_addr();
         let network = validated_config.sections().network();
         let store_host = SocketAddr::new(network.bind_address(), network.listen_port());
@@ -1105,6 +1121,7 @@ impl BrokerRuntime {
             store_host,
             broker_addr: CheetahString::from(broker_address),
             config_state,
+            resource_budget,
             send_message_policy_state,
             pull_message_policy_state,
             pop_policy_state,
@@ -1122,7 +1139,7 @@ impl BrokerRuntime {
             broker_stats: None,
             schedule_message_service: None,
             timer_message_store: None,
-            lite_event_dispatcher: Arc::new(LiteEventDispatcher::default()),
+            lite_event_dispatcher: Arc::new(lite_event_dispatcher),
             lite_lifecycle_manager: Arc::new(LiteLifecycleManager),
             lite_subscription_registry: Arc::new(LiteSubscriptionRegistry::default()),
             broker_outer_api,

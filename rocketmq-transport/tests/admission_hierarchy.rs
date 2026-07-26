@@ -81,6 +81,32 @@ fn control_reserve_remains_bounded_and_available_during_data_overload() {
     drop((data, control));
 }
 
+#[test]
+fn scoped_control_reserve_survives_per_ip_data_overload() {
+    let limits = AdmissionLimits {
+        processors: ResourceLimit { count: 4, bytes: 16 },
+        control_reserve: ResourceLimit { count: 1, bytes: 4 },
+        per_ip: ResourceLimit { count: 2, bytes: 8 },
+        per_tenant: ResourceLimit { count: 2, bytes: 8 },
+        per_session: ResourceLimit { count: 2, bytes: 8 },
+        ..AdmissionLimits::default()
+    };
+    let controller = AdmissionController::new(limits);
+    let scope = AdmissionScope::new(IpAddr::from_str("127.0.0.22").unwrap());
+    let data = controller
+        .try_acquire(AdmissionResource::Processor, scope, 4, AdmissionClass::Data)
+        .expect("first data request");
+
+    assert!(controller
+        .try_acquire(AdmissionResource::Processor, scope, 1, AdmissionClass::Data)
+        .is_err());
+    let control = controller
+        .try_acquire(AdmissionResource::Processor, scope, 4, AdmissionClass::Control)
+        .expect("per-IP reserve must remain available to control traffic");
+
+    drop((data, control));
+}
+
 #[tokio::test]
 async fn dropped_collector_never_blocks_or_unbounds_data_plane_admission() {
     let (sender, receiver) = tokio::sync::mpsc::channel(1);
@@ -151,4 +177,54 @@ fn scope_reclamation_is_safe_when_release_and_next_acquire_cross_threads() {
         second.is_ok(),
         "a fully released scope must be reclaimable across threads"
     );
+}
+
+#[test]
+fn reclaiming_idle_sessions_never_detaches_them_from_the_per_ip_parent() {
+    let controller = AdmissionController::new(AdmissionLimits {
+        connections: ResourceLimit {
+            count: 4,
+            bytes: 64 * 1024,
+        },
+        per_ip: ResourceLimit {
+            count: 1,
+            bytes: 16 * 1024,
+        },
+        per_session: ResourceLimit {
+            count: 1,
+            bytes: 16 * 1024,
+        },
+        max_scope_keys: 2,
+        ..AdmissionLimits::default()
+    });
+    let ip = IpAddr::from_str("127.0.0.6").unwrap();
+
+    let first = controller
+        .try_acquire(
+            AdmissionResource::Connection,
+            AdmissionScope::new(ip).with_session(1),
+            1024,
+            AdmissionClass::Data,
+        )
+        .expect("first session");
+    drop(first);
+
+    let second = controller
+        .try_acquire(
+            AdmissionResource::Connection,
+            AdmissionScope::new(ip).with_session(2),
+            1024,
+            AdmissionClass::Data,
+        )
+        .expect("idle first session should be reclaimable");
+
+    assert!(controller
+        .try_acquire(
+            AdmissionResource::Connection,
+            AdmissionScope::new(ip).with_session(3),
+            1024,
+            AdmissionClass::Data,
+        )
+        .is_err());
+    drop(second);
 }

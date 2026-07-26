@@ -235,11 +235,18 @@ impl BrokerRuntime {
                     topic_registration,
                     escape_bridge: Arc::downgrade(&self.composition.data_plane.escape_bridge_owner),
                 });
-                let service = Arc::new(DefaultTransactionalMessageService::new(
+                let service = match DefaultTransactionalMessageService::try_new_with_resource_budget(
                     bridge,
                     self.composition.state.broker_config_arc(),
                     self.composition.state.message_store_config().file_reserved_time as i64,
-                ));
+                    self.composition.state.resource_budget(),
+                ) {
+                    Ok(service) => Arc::new(service),
+                    Err(error) => {
+                        error!("Failed to initialize transactional message resource budget: {error}");
+                        return false;
+                    }
+                };
                 let weak_service = Arc::downgrade(&service);
                 if let Err(error) = service.set_transactional_op_batch_service_start(weak_service).await {
                     error!("Failed to start transactional op batch service: {error}");

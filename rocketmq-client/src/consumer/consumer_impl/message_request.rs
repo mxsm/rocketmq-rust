@@ -18,6 +18,11 @@ use rocketmq_model::common::message::message_enum::MessageRequestMode;
 
 pub trait MessageRequest: MessageRequestAny {
     fn get_message_request_mode(&self) -> MessageRequestMode;
+
+    /// Estimated bytes retained while this request waits for a pull worker.
+    fn retained_bytes(&self) -> usize {
+        std::mem::size_of_val(self)
+    }
 }
 
 pub trait MessageRequestAny: Any {

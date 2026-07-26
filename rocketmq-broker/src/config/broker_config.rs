@@ -254,6 +254,10 @@ mod defaults {
         100
     }
 
+    pub const fn process_memory_limit_bytes() -> u64 {
+        0
+    }
+
     pub fn lite_event_full_dispatch_delay_time() -> u64 {
         10_000
     }
@@ -970,6 +974,12 @@ pub struct BrokerConfig {
     #[serde(default = "defaults::max_client_event_count")]
     pub max_client_event_count: i32,
 
+    /// Process/Pod hard memory limit used to derive runtime resource budgets.
+    ///
+    /// Zero selects environment/cgroup/host auto-detection.
+    #[serde(default = "defaults::process_memory_limit_bytes")]
+    pub process_memory_limit_bytes: u64,
+
     #[serde(default = "defaults::lite_event_full_dispatch_delay_time")]
     pub lite_event_full_dispatch_delay_time: u64,
 
@@ -1429,6 +1439,7 @@ impl Default for BrokerConfig {
             max_lite_subscription_count: defaults::max_lite_subscription_count(),
             enable_lite_pop_log: defaults::enable_lite_pop_log(),
             max_client_event_count: defaults::max_client_event_count(),
+            process_memory_limit_bytes: defaults::process_memory_limit_bytes(),
             lite_event_full_dispatch_delay_time: defaults::lite_event_full_dispatch_delay_time(),
             lite_lag_latency_collect_enable: defaults::lite_lag_latency_collect_enable(),
             lite_lag_latency_metrics_enable: defaults::lite_lag_latency_metrics_enable(),
@@ -1902,6 +1913,10 @@ impl BrokerConfig {
         properties.insert(
             "maxClientEventCount".into(),
             self.max_client_event_count.to_string().into(),
+        );
+        properties.insert(
+            "processMemoryLimitBytes".into(),
+            self.process_memory_limit_bytes.to_string().into(),
         );
         properties.insert(
             "liteEventFullDispatchDelayTime".into(),

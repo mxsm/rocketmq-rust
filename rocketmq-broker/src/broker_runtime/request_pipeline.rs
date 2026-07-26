@@ -139,11 +139,16 @@ impl BrokerRuntime {
             .clone()
             .map(QueueLockManager::new_with_parent_task_group)
             .expect("BrokerRuntime always has an injected ChildServiceContext");
-        let pop_lite_long_polling_context = PopLiteLongPollingServiceContext::new(
+        let pop_lite_long_polling_context = PopLiteLongPollingServiceContext::try_with_resource_budget(
             PopLiteLongPollingPolicy::from_config(&self.composition.state.broker_config()),
             pop_lite_event_dispatcher.clone(),
             pop_lite_parent_task_group,
-        );
+            self.composition.state.resource_budget(),
+        )
+        .map_err(|error| BrokerStartupError::Initialization {
+            component: "pop_lite_long_polling",
+            detail: error.to_string(),
+        })?;
         let pop_lite_offset_manager = self.composition.state.consumer_offset_manager_handle();
         let pop_lite_escape_bridge = self.composition.state.escape_bridge();
         let pop_lite_message_processor = PopLiteMessageProcessor::new(PopLiteMessageProcessorContext::new(

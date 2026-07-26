@@ -35,6 +35,7 @@ use rocketmq_runtime::TaskGroup;
 use tracing::error;
 use uuid::Uuid;
 
+use crate::base::pending_request_table::materialize_and_estimate_remoting_command_retained_bytes;
 use crate::base::pending_request_table::PendingRequestOwner;
 use crate::base::pending_request_table::PendingRequestTable;
 use crate::base::pending_request_table::PendingRequestToken;
@@ -852,7 +853,7 @@ impl ChannelInner {
     /// ```
     pub async fn send_wait_response(
         &self,
-        request: RemotingCommand,
+        mut request: RemotingCommand,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         let deadline = RequestDeadline::from_timeout_millis(timeout_millis);
@@ -861,7 +862,7 @@ impl ChannelInner {
             tokio::sync::oneshot::channel::<rocketmq_error::RocketMQResult<RemotingCommand>>();
         let opaque = request.opaque();
         let (guard, reservation) = if let Some(owner) = self.pending_request_owner.as_ref() {
-            let retained_bytes = request.body().map_or(0, bytes::Bytes::len);
+            let retained_bytes = materialize_and_estimate_remoting_command_retained_bytes(&mut request);
             let guard = self.response_table.register_for_owner_with_bytes(
                 owner,
                 opaque,

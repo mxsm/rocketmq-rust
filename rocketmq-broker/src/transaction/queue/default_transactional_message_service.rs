@@ -21,6 +21,7 @@ use std::time::Duration;
 
 use crate::config::broker_config::BrokerConfig;
 use cheetah_string::CheetahString;
+use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_model::common::config::TopicConfig;
@@ -36,6 +37,12 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_protocol::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
 use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_runtime::BudgetLimit;
+use rocketmq_runtime::FullPolicy;
+use rocketmq_runtime::ProcessMemoryLimit;
+use rocketmq_runtime::RateLimit;
+use rocketmq_runtime::ResourceBudget;
+use rocketmq_runtime::ResourceBudgetTree;
 use rocketmq_store::MessageStore;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
@@ -94,18 +101,92 @@ pub struct DefaultTransactionalMessageService<MS: MessageStore> {
     transactional_op_batch_service: OnceLock<TransactionalOpBatchService<MS>>,
     op_queue_map: Arc<RwLock<HashMap<MessageQueue, MessageQueue>>>,
     transaction_metrics: TransactionMetrics,
+    operation_queue_budget: ResourceBudget,
+}
+
+fn standalone_transaction_resource_budget(broker_config: &BrokerConfig) -> RocketMQResult<ResourceBudget> {
+    let process_limit = if broker_config.process_memory_limit_bytes == 0 {
+        ProcessMemoryLimit::detect()
+    } else {
+        ProcessMemoryLimit::configured(broker_config.process_memory_limit_bytes)
+    }
+    .map_err(|error| RocketMQError::ConfigInvalidValue {
+        key: "broker.processMemoryLimitBytes",
+        value: broker_config.process_memory_limit_bytes.to_string(),
+        reason: error.to_string(),
+    })?;
+    let managed_bytes = process_limit
+        .fraction(1, 4)
+        .map_err(|error| RocketMQError::ConfigInvalidValue {
+            key: "broker.processMemoryLimitBytes",
+            value: process_limit.bytes().to_string(),
+            reason: error.to_string(),
+        })?;
+    let managed_bytes = usize::try_from(managed_bytes).unwrap_or(usize::MAX).max(1);
+    ResourceBudgetTree::new("broker", BudgetLimit::new(20_000, managed_bytes, FullPolicy::Reject))
+        .map(|tree| tree.root())
+        .map_err(|error| RocketMQError::ConfigInvalidValue {
+            key: "broker.transaction.operationQueue",
+            value: managed_bytes.to_string(),
+            reason: error.to_string(),
+        })
 }
 
 impl<MS> DefaultTransactionalMessageService<MS>
 where
     MS: MessageStore,
 {
+    /// Creates the transactional service with a process-derived operation budget.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the configured process memory limit is invalid. Production
+    /// composition should prefer [`Self::try_new`].
     pub fn new(
         transactional_message_bridge: TransactionalMessageBridge<MS>,
         broker_config: Arc<BrokerConfig>,
         file_reserved_time_hours: i64,
     ) -> Self {
-        Self {
+        Self::try_new(transactional_message_bridge, broker_config, file_reserved_time_hours)
+            .unwrap_or_else(|error| panic!("invalid Broker transaction resource budget: {error}"))
+    }
+
+    pub fn try_new(
+        transactional_message_bridge: TransactionalMessageBridge<MS>,
+        broker_config: Arc<BrokerConfig>,
+        file_reserved_time_hours: i64,
+    ) -> RocketMQResult<Self> {
+        let resource_budget = standalone_transaction_resource_budget(&broker_config)?;
+        Self::try_new_with_resource_budget(
+            transactional_message_bridge,
+            broker_config,
+            file_reserved_time_hours,
+            &resource_budget,
+        )
+    }
+
+    pub(crate) fn try_new_with_resource_budget(
+        transactional_message_bridge: TransactionalMessageBridge<MS>,
+        broker_config: Arc<BrokerConfig>,
+        file_reserved_time_hours: i64,
+        parent_budget: &ResourceBudget,
+    ) -> RocketMQResult<Self> {
+        let queue_count = 20_000.min(parent_budget.limit().capacity.count);
+        let queue_bytes = (parent_budget.limit().capacity.bytes / 16).max(1);
+        let queue_rate = u64::try_from(queue_count).unwrap_or(u64::MAX).max(1);
+        let operation_queue_budget = parent_budget
+            .child(
+                "transaction-operations",
+                BudgetLimit::new(queue_count, queue_bytes, FullPolicy::Reject)
+                    .with_rate(RateLimit::new(queue_rate, queue_rate))
+                    .with_max_age(Duration::from_secs(30)),
+            )
+            .map_err(|error| RocketMQError::ConfigInvalidValue {
+                key: "broker.transaction.operationQueue",
+                value: queue_bytes.to_string(),
+                reason: error.to_string(),
+            })?;
+        Ok(Self {
             transactional_message_bridge: Mutex::new(transactional_message_bridge),
             broker_config,
             file_reserved_time_hours,
@@ -113,7 +194,8 @@ where
             transactional_op_batch_service: OnceLock::new(),
             op_queue_map: Arc::new(Default::default()),
             transaction_metrics: TransactionMetrics,
-        }
+            operation_queue_budget,
+        })
     }
 
     pub async fn set_transactional_op_batch_service_start(
@@ -1084,9 +1166,24 @@ where
         let len = data.len();
         let offered_total_size = {
             let mut delete_context = self.delete_context.lock().await;
-            let mq_context = delete_context
-                .entry(queue_id)
-                .or_insert(MessageQueueOpContext::new(current_millis(), 20000));
+            let mq_context = match delete_context.entry(queue_id) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    let context = match MessageQueueOpContext::try_new(
+                        current_millis(),
+                        20_000,
+                        queue_id,
+                        &self.operation_queue_budget,
+                    ) {
+                        Ok(context) => context,
+                        Err(error) => {
+                            error!(queue_id, %error, "Failed to build transaction operation queue");
+                            return false;
+                        }
+                    };
+                    entry.insert(context)
+                }
+            };
             if mq_context.offer(data.clone(), Duration::from_millis(100)).await.is_ok() {
                 Some(mq_context.total_size_add_and_get(len as u32).await)
             } else {

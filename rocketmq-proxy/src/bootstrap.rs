@@ -221,7 +221,7 @@ impl ProxyRuntimeBuilder {
         let auth_metadata_service = Some(backend.service_manager.metadata_service());
         let session_registry = self.session_registry.unwrap_or_default();
         let processor = Arc::new(DefaultMessagingProcessor::new(backend.service_manager));
-        Ok(ProxyRuntime::from_processor_with_local_mode_support(
+        ProxyRuntime::from_processor_with_local_mode_support(
             self.config,
             processor,
             session_registry,
@@ -233,7 +233,7 @@ impl ProxyRuntimeBuilder {
             backend.remoting_backend,
             backend.context,
             service_context,
-        ))
+        )
     }
 }
 
@@ -269,7 +269,7 @@ where
         processor: Arc<P>,
         session_registry: ClientSessionRegistry,
         service_context: ChildServiceContext,
-    ) -> Self {
+    ) -> ProxyResult<Self> {
         Self::from_processor_with_local_mode_support(
             config,
             processor,
@@ -297,17 +297,17 @@ where
         remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
         backend_context: Option<ChildServiceContext>,
         service_context: ChildServiceContext,
-    ) -> Self {
+    ) -> ProxyResult<Self> {
         #[cfg(feature = "observability")]
         crate::observability::init_observability_metrics(&config);
 
         let config = Arc::new(config);
         let processor_ref = Arc::clone(&processor);
         let sessions = session_registry.clone();
-        let grpc_service = ProxyGrpcService::new(Arc::clone(&config), processor, session_registry)
+        let grpc_service = ProxyGrpcService::try_new(Arc::clone(&config), processor, session_registry)?
             .with_hooks(hooks)
             .with_metrics(metrics);
-        Self {
+        Ok(Self {
             config,
             processor: processor_ref,
             sessions,
@@ -318,7 +318,7 @@ where
             remoting_backend,
             backend_context,
             service_context,
-        }
+        })
     }
 
     pub fn config(&self) -> &ProxyConfig {

@@ -23,6 +23,7 @@ use rocketmq_broker::config::raw::RawBrokerConfig;
 use rocketmq_broker::config::transaction::ConfigUpdateTransaction;
 use rocketmq_broker::config::validated::ConfigGeneration;
 use rocketmq_broker::config::validated::ValidatedBrokerConfig;
+use rocketmq_runtime::MemoryLimitSource;
 use rocketmq_store::MessageStoreConfig;
 
 fn fixture(name: &str) -> PathBuf {
@@ -185,6 +186,43 @@ fn every_validated_section_rejects_an_invalid_candidate() {
         ValidatedBrokerConfig::try_from_parts(broker, MessageStoreConfig::default()),
         ConfigSection::Telemetry,
     );
+}
+
+#[test]
+fn resource_budget_is_derived_from_the_validated_process_hard_limit() {
+    const HARD_LIMIT: u64 = 512 * 1024 * 1024;
+    let broker = BrokerConfig {
+        process_memory_limit_bytes: HARD_LIMIT,
+        ..BrokerConfig::default()
+    };
+
+    let validated = ValidatedBrokerConfig::try_from_parts(broker, MessageStoreConfig::default())
+        .expect("explicit process memory hard limit should validate");
+    let resources = validated.sections().resources();
+
+    assert_eq!(resources.process_memory_limit_bytes(), HARD_LIMIT);
+    assert_eq!(resources.process_memory_limit_source(), MemoryLimitSource::Configured);
+    assert_eq!(resources.managed_memory_bytes(), HARD_LIMIT / 4);
+    assert_eq!(resources.control_reserve_bytes(), HARD_LIMIT / 4 / 20);
+    assert_eq!(
+        resources.max_pop_polling_requests(),
+        BrokerConfig::default().max_pop_polling_size
+    );
+    let root = resources
+        .budget_tree()
+        .expect("validated resources produce a budget tree")
+        .root();
+    let expected_item_capacity = resources
+        .max_lite_subscriptions()
+        .saturating_mul(2)
+        .saturating_add(resources.max_pop_polling_requests())
+        .saturating_add(65_536);
+    assert_eq!(
+        root.limit().capacity.count,
+        usize::try_from(expected_item_capacity).unwrap_or(usize::MAX)
+    );
+    assert_eq!(root.limit().capacity.bytes, (HARD_LIMIT / 4) as usize);
+    assert_eq!(root.limit().control_reserve.bytes, (HARD_LIMIT / 4 / 20) as usize);
 }
 
 #[test]

@@ -28,12 +28,17 @@ use parking_lot::Mutex;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
+use rocketmq_runtime::BudgetCapacity;
+use rocketmq_runtime::BudgetLimit;
+use rocketmq_runtime::BudgetedQueue;
+use rocketmq_runtime::FullPolicy;
+use rocketmq_runtime::RateLimit;
+use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use serde::Serialize;
 use std::sync::LazyLock;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::mpsc;
 use tokio::sync::Mutex as TokioMutex;
 use tracing::error;
 use tracing::info;
@@ -78,13 +83,32 @@ enum PersistCommand {
     Shutdown,
 }
 
+impl PersistCommand {
+    fn retained_bytes(&self) -> usize {
+        let payload_bytes = match self {
+            Self::PersistMQs(queues, _) => queues.iter().fold(
+                queues
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<MessageQueue>() + 1),
+                |total, queue| {
+                    total
+                        .saturating_add(queue.topic().len())
+                        .saturating_add(queue.broker_name().len())
+                },
+            ),
+            Self::PersistAll(_) | Self::Shutdown => 0,
+        };
+        std::mem::size_of::<Self>().saturating_add(payload_bytes)
+    }
+}
+
 pub struct LocalFileOffsetStore {
     client_instance: Arc<MQClientInstance>,
     group_name: CheetahString,
     store_path: CheetahString,
     offset_table: Arc<DashMap<MessageQueue, ControllableOffset>>,
     dirty_flag: Arc<AtomicBool>,
-    persist_tx: mpsc::UnboundedSender<PersistCommand>,
+    persist_commands: BudgetedQueue<PersistCommand>,
     persist_handle: Mutex<PersistTaskHandle>,
 }
 
@@ -107,7 +131,7 @@ impl PersistTaskHandle {
         }
     }
 
-    async fn shutdown(self, shutdown_tx: &mpsc::UnboundedSender<PersistCommand>, timeout: Duration) -> bool {
+    async fn shutdown(self, persist_commands: &BudgetedQueue<PersistCommand>, timeout: Duration) -> bool {
         match self {
             Self::Tokio {
                 command_handle,
@@ -126,12 +150,14 @@ impl PersistTaskHandle {
                     }
                 }
 
-                let _ = shutdown_tx.send(PersistCommand::Shutdown);
+                let command = PersistCommand::Shutdown;
+                let _ = persist_commands.try_push_control(command, std::mem::size_of::<PersistCommand>());
                 let remaining = timeout.checked_sub(started_at.elapsed()).unwrap_or(Duration::ZERO);
                 Self::shutdown_command_task(command_handle, remaining).await && healthy
             }
             Self::NotStarted => {
-                let _ = shutdown_tx.send(PersistCommand::Shutdown);
+                let command = PersistCommand::Shutdown;
+                let _ = persist_commands.try_push_control(command, std::mem::size_of::<PersistCommand>());
                 true
             }
         }
@@ -205,11 +231,26 @@ pub struct LocalFileOffsetStoreLifecycleProbe {
 }
 
 impl LocalFileOffsetStore {
+    /// Creates a local offset store with a process-derived command budget.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the process memory limit is unavailable. Production
+    /// composition should prefer [`Self::try_new`].
     pub fn new(
         service_context: ChildServiceContext,
         client_instance: Arc<MQClientInstance>,
         group_name: CheetahString,
     ) -> Self {
+        Self::try_new(service_context, client_instance, group_name)
+            .unwrap_or_else(|error| panic!("invalid local offset-store resource budget: {error}"))
+    }
+
+    pub fn try_new(
+        service_context: ChildServiceContext,
+        client_instance: Arc<MQClientInstance>,
+        group_name: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<Self> {
         let store_path = LOCAL_OFFSET_STORE_DIR
             .clone()
             .join(client_instance.client_id.as_str())
@@ -220,7 +261,7 @@ impl LocalFileOffsetStore {
 
         let offset_table = Arc::new(DashMap::new());
         let dirty_flag = Arc::new(AtomicBool::new(false));
-        let (persist_tx, persist_rx) = mpsc::unbounded_channel();
+        let persist_commands = Self::build_persist_command_queue_with_parent(&client_instance.resource_budget())?;
 
         // Clone for background task
         let offset_table_clone = offset_table.clone();
@@ -232,19 +273,44 @@ impl LocalFileOffsetStore {
             offset_table_clone,
             dirty_flag_clone,
             store_path_clone,
-            persist_rx,
+            persist_commands.clone(),
             PERIODIC_PERSIST_INTERVAL,
         );
 
-        Self {
+        Ok(Self {
             client_instance,
             group_name,
             store_path: CheetahString::from(store_path),
             offset_table,
             dirty_flag,
-            persist_tx,
+            persist_commands,
             persist_handle: Mutex::new(persist_handle),
-        }
+        })
+    }
+
+    fn build_persist_command_queue() -> rocketmq_error::RocketMQResult<BudgetedQueue<PersistCommand>> {
+        Self::build_persist_command_queue_with_parent(&crate::runtime::standalone_client_resource_budget()?)
+    }
+
+    fn build_persist_command_queue_with_parent(
+        parent_budget: &ResourceBudget,
+    ) -> rocketmq_error::RocketMQResult<BudgetedQueue<PersistCommand>> {
+        let queue_bytes = (parent_budget.limit().capacity.bytes / 64).max(1);
+        let control_bytes = std::mem::size_of::<PersistCommand>().min(queue_bytes);
+        let budget = parent_budget
+            .child(
+                "local-offset-persist-commands",
+                BudgetLimit::new(1_024, queue_bytes, FullPolicy::Reject)
+                    .with_control_reserve(BudgetCapacity::new(1, control_bytes).with_rate(RateLimit::new(1, 1)))
+                    .with_rate(RateLimit::new(1_024, 1_024))
+                    .with_max_age(Duration::from_secs(30)),
+            )
+            .map_err(|error| rocketmq_error::RocketMQError::ConfigInvalidValue {
+                key: "client.localOffsetStore.commandQueue",
+                value: queue_bytes.to_string(),
+                reason: error.to_string(),
+            })?;
+        Ok(BudgetedQueue::new(budget))
     }
 
     fn spawn_background_persist_task(
@@ -252,14 +318,14 @@ impl LocalFileOffsetStore {
         offset_table: Arc<DashMap<MessageQueue, ControllableOffset>>,
         dirty_flag: Arc<AtomicBool>,
         store_path: String,
-        persist_rx: mpsc::UnboundedReceiver<PersistCommand>,
+        persist_commands: BudgetedQueue<PersistCommand>,
     ) -> PersistTaskHandle {
         Self::spawn_background_persist_task_with_interval(
             service_context,
             offset_table,
             dirty_flag,
             store_path,
-            persist_rx,
+            persist_commands,
             PERIODIC_PERSIST_INTERVAL,
         )
     }
@@ -269,7 +335,7 @@ impl LocalFileOffsetStore {
         offset_table: Arc<DashMap<MessageQueue, ControllableOffset>>,
         dirty_flag: Arc<AtomicBool>,
         store_path: String,
-        persist_rx: mpsc::UnboundedReceiver<PersistCommand>,
+        persist_commands: BudgetedQueue<PersistCommand>,
         persist_interval: Duration,
     ) -> PersistTaskHandle {
         let persist_lock = Arc::new(TokioMutex::new(()));
@@ -282,7 +348,7 @@ impl LocalFileOffsetStore {
                 command_offset_table,
                 command_dirty_flag,
                 command_store_path,
-                persist_rx,
+                persist_commands,
                 command_persist_lock,
             )
             .await;
@@ -344,7 +410,7 @@ impl LocalFileOffsetStore {
             let mut persist_handle = self.persist_handle.lock();
             std::mem::replace(&mut *persist_handle, PersistTaskHandle::NotStarted)
         };
-        handle.shutdown(&self.persist_tx, timeout).await
+        handle.shutdown(&self.persist_commands, timeout).await
     }
 
     fn persist_task_count(&self) -> usize {
@@ -425,10 +491,11 @@ impl LocalFileOffsetStore {
         offset_table: Arc<DashMap<MessageQueue, ControllableOffset>>,
         dirty_flag: Arc<AtomicBool>,
         store_path: String,
-        mut rx: mpsc::UnboundedReceiver<PersistCommand>,
+        commands: BudgetedQueue<PersistCommand>,
         persist_lock: Arc<TokioMutex<()>>,
     ) {
-        while let Some(cmd) = rx.recv().await {
+        while let Some(command) = commands.recv_budgeted().await {
+            let (cmd, _permit, _) = command.into_parts();
             match cmd {
                 PersistCommand::PersistMQs(mqs, reply) => {
                     let _guard = persist_lock.lock().await;
@@ -511,6 +578,57 @@ impl LocalFileOffsetStore {
 
         // Use atomic write function
         Self::atomic_write_to_file(store_path, &content).await
+    }
+
+    async fn submit_persist_command(
+        &self,
+        command: PersistCommand,
+        receiver: tokio::sync::oneshot::Receiver<Result<(), std::io::Error>>,
+        operation: &'static str,
+    ) {
+        let retained_bytes = command.retained_bytes();
+        match self.persist_commands.try_push_data(command, retained_bytes) {
+            Ok(_) => Self::await_persist_result(receiver, operation).await,
+            Err(rejection) => {
+                let reason = rejection.to_string();
+                drop(rejection.into_item());
+                warn!(
+                    operation,
+                    reason,
+                    "local offset persist queue rejected a scoped command; retrying through the control reserve"
+                );
+
+                let (fallback_sender, fallback_receiver) = tokio::sync::oneshot::channel();
+                let fallback = PersistCommand::PersistAll(Some(fallback_sender));
+                let retained_bytes = fallback.retained_bytes();
+                match self.persist_commands.try_push_control(fallback, retained_bytes) {
+                    Ok(_) => Self::await_persist_result(fallback_receiver, operation).await,
+                    Err(rejection) => {
+                        error!(
+                            operation,
+                            reason = %rejection,
+                            "local offset persist control reserve is unavailable; the dirty offset remains eligible \
+                             for periodic persistence"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    async fn await_persist_result(
+        receiver: tokio::sync::oneshot::Receiver<Result<(), std::io::Error>>,
+        operation: &'static str,
+    ) {
+        match receiver.await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => error!(operation, %error, "local offset persistence failed"),
+            Err(error) => error!(
+                operation,
+                %error,
+                "local offset persistence worker dropped the completion channel"
+            ),
+        }
     }
 }
 
@@ -607,16 +725,8 @@ impl OffsetStoreTrait for LocalFileOffsetStore {
 
         // Send persist command and wait for completion to maintain original semantics
         let (tx, rx) = tokio::sync::oneshot::channel();
-        if self
-            .persist_tx
-            .send(PersistCommand::PersistMQs(mqs.clone(), Some(tx)))
-            .is_ok()
-        {
-            // Wait for persist to complete
-            if let Ok(Err(e)) = rx.await {
-                error!("persistAll consumer offset failed: {}", e);
-            }
-        }
+        let command = PersistCommand::PersistMQs(mqs.clone(), Some(tx));
+        self.submit_persist_command(command, rx, "persist_all").await;
     }
 
     async fn persist(&self, mq: &MessageQueue) {
@@ -625,12 +735,8 @@ impl OffsetStoreTrait for LocalFileOffsetStore {
         set.insert(mq.clone());
 
         let (tx, rx) = tokio::sync::oneshot::channel();
-        if self.persist_tx.send(PersistCommand::PersistMQs(set, Some(tx))).is_ok() {
-            // Wait for persist to complete
-            if let Ok(Err(e)) = rx.await {
-                error!("persist consumer offset failed: {}", e);
-            }
-        }
+        let command = PersistCommand::PersistMQs(set, Some(tx));
+        self.submit_persist_command(command, rx, "persist").await;
     }
 
     async fn remove_offset(&self, mq: &MessageQueue) {
@@ -665,7 +771,10 @@ impl OffsetStoreTrait for LocalFileOffsetStore {
 impl Drop for LocalFileOffsetStore {
     fn drop(&mut self) {
         // Send shutdown command to background task
-        self.persist_tx.send(PersistCommand::Shutdown).ok();
+        let command = PersistCommand::Shutdown;
+        let _ = self
+            .persist_commands
+            .try_push_control(command, std::mem::size_of::<PersistCommand>());
         let handle = std::mem::replace(self.persist_handle.get_mut(), PersistTaskHandle::NotStarted);
         handle.shutdown_now();
         // Note: We can't await the command worker in Drop (it's not async).
@@ -700,13 +809,14 @@ pub async fn run_local_file_offset_store_lifecycle_probe(
     );
     let offset_table = Arc::new(DashMap::<MessageQueue, ControllableOffset>::new());
     let dirty_flag = Arc::new(AtomicBool::new(false));
-    let (persist_tx, persist_rx) = mpsc::unbounded_channel();
+    let persist_commands =
+        LocalFileOffsetStore::build_persist_command_queue().expect("local offset probe persist command queue");
     let persist_handle = LocalFileOffsetStore::spawn_background_persist_task_with_interval(
         &client_runtime.child("local-offset-persist-probe"),
         offset_table.clone(),
         dirty_flag.clone(),
         store_path.clone(),
-        persist_rx,
+        persist_commands.clone(),
         Duration::from_millis(1),
     );
     let store = LocalFileOffsetStore {
@@ -715,7 +825,7 @@ pub async fn run_local_file_offset_store_lifecycle_probe(
         store_path: CheetahString::from(store_path.clone()),
         offset_table,
         dirty_flag,
-        persist_tx,
+        persist_commands,
         persist_handle: Mutex::new(persist_handle),
     };
     let mq = MessageQueue::from_parts("local-offset-store-probe-topic", "broker-a", 0);
@@ -784,7 +894,6 @@ mod tests {
     use rocketmq_model::common::message::message_queue::MessageQueue;
     use rocketmq_protocol::protocol::RemotingDeserializable;
     use rocketmq_protocol::protocol::RemotingSerializable;
-    use tokio::sync::mpsc;
 
     use super::PersistTaskHandle;
     use crate::base::client_config::ClientConfig;
@@ -848,13 +957,13 @@ mod tests {
         let store_path = store_dir.join("offsets.json").to_string_lossy().to_string();
         let offset_table = Arc::new(DashMap::<MessageQueue, ControllableOffset>::new());
         let dirty_flag = Arc::new(AtomicBool::new(false));
-        let (persist_tx, persist_rx) = mpsc::unbounded_channel();
+        let persist_commands = LocalFileOffsetStore::build_persist_command_queue().expect("persist command queue");
         let persist_handle = LocalFileOffsetStore::spawn_background_persist_task(
             &runtime.child("read-fallback-persist"),
             offset_table.clone(),
             dirty_flag.clone(),
             store_path.clone(),
-            persist_rx,
+            persist_commands.clone(),
         );
         let store = LocalFileOffsetStore {
             client_instance,
@@ -862,7 +971,7 @@ mod tests {
             store_path: CheetahString::from(store_path),
             offset_table,
             dirty_flag,
-            persist_tx,
+            persist_commands,
             persist_handle: Mutex::new(persist_handle),
         };
         let mq = MessageQueue::from_parts("local-offset-store-topic", "broker-a", 0);
@@ -900,13 +1009,13 @@ mod tests {
         let store_path = store_dir.join("offsets.json").to_string_lossy().to_string();
         let offset_table = Arc::new(DashMap::<MessageQueue, ControllableOffset>::new());
         let dirty_flag = Arc::new(AtomicBool::new(false));
-        let (persist_tx, persist_rx) = mpsc::unbounded_channel();
+        let persist_commands = LocalFileOffsetStore::build_persist_command_queue().expect("persist command queue");
         let persist_handle = LocalFileOffsetStore::spawn_background_persist_task(
             &runtime.child("shutdown-persist"),
             offset_table.clone(),
             dirty_flag.clone(),
             store_path.clone(),
-            persist_rx,
+            persist_commands.clone(),
         );
         let store = LocalFileOffsetStore {
             client_instance,
@@ -914,7 +1023,7 @@ mod tests {
             store_path: CheetahString::from(store_path.clone()),
             offset_table,
             dirty_flag,
-            persist_tx,
+            persist_commands,
             persist_handle: Mutex::new(persist_handle),
         };
         let mq = MessageQueue::from_parts("local-offset-store-shutdown-topic", "broker-a", 0);
@@ -955,10 +1064,52 @@ mod tests {
             command_handle: handle,
             scheduled_handle: None,
         };
-        let (persist_tx, _persist_rx) = mpsc::unbounded_channel();
+        let persist_commands = LocalFileOffsetStore::build_persist_command_queue().expect("persist command queue");
 
-        assert!(!handle.shutdown(&persist_tx, std::time::Duration::from_millis(20)).await);
+        assert!(
+            !handle
+                .shutdown(&persist_commands, std::time::Duration::from_millis(20))
+                .await
+        );
         assert!(dropped.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn overload_preserves_shutdown_reserve_in_offset_command_queue() {
+        let command_bytes = std::mem::size_of::<super::PersistCommand>().max(1);
+        let root = rocketmq_runtime::ResourceBudgetTree::new(
+            "client-offset-overload",
+            rocketmq_runtime::BudgetLimit::new(3, command_bytes * 3, rocketmq_runtime::FullPolicy::Reject)
+                .with_control_reserve(rocketmq_runtime::BudgetCapacity::new(1, command_bytes)),
+        )
+        .expect("root budget");
+        let budget = root
+            .root()
+            .child(
+                "persist-commands",
+                rocketmq_runtime::BudgetLimit::new(3, command_bytes * 3, rocketmq_runtime::FullPolicy::Reject)
+                    .with_control_reserve(rocketmq_runtime::BudgetCapacity::new(1, command_bytes))
+                    .with_rate(rocketmq_runtime::RateLimit::new(4, 4))
+                    .with_max_age(std::time::Duration::from_secs(30)),
+            )
+            .expect("queue budget");
+        let queue = rocketmq_runtime::BudgetedQueue::new(budget);
+
+        for _ in 0..2 {
+            let command = super::PersistCommand::PersistAll(None);
+            queue.try_push_data(command, command_bytes).expect("data capacity");
+        }
+        assert!(queue
+            .try_push_data(super::PersistCommand::PersistAll(None), command_bytes)
+            .is_err());
+        queue
+            .try_push_control(super::PersistCommand::Shutdown, command_bytes)
+            .expect("shutdown reserve");
+
+        let snapshot = queue.snapshot();
+        assert_eq!(snapshot.depth, 3);
+        assert_eq!(snapshot.retained_bytes, command_bytes * 3);
+        assert_eq!(snapshot.rejected_count, 1);
     }
 
     #[tokio::test]

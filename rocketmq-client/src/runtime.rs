@@ -21,7 +21,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use parking_lot::Mutex;
+use rocketmq_error::RocketMQError;
+use rocketmq_error::RocketMQResult;
+use rocketmq_runtime::BudgetCapacity;
+use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::FullPolicy;
+use rocketmq_runtime::ProcessMemoryLimit;
+use rocketmq_runtime::ResourceBudget;
+use rocketmq_runtime::ResourceBudgetTree;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskControl;
 use rocketmq_runtime::ScheduledTaskGroup;
@@ -39,12 +47,21 @@ use crate::implementation::mq_client_manager::ClientPool;
 pub struct ClientRuntimeConfig {
     /// Maximum duration used by [`ClientRuntime::shutdown`].
     pub shutdown_timeout: Duration,
+    /// Process/Pod hard memory limit. Zero selects automatic detection.
+    pub process_memory_limit_bytes: u64,
+    /// Share of the process hard limit managed by client resource budgets.
+    pub managed_memory_numerator: u64,
+    /// Denominator for [`Self::managed_memory_numerator`].
+    pub managed_memory_denominator: u64,
 }
 
 impl Default for ClientRuntimeConfig {
     fn default() -> Self {
         Self {
             shutdown_timeout: Duration::from_secs(30),
+            process_memory_limit_bytes: 0,
+            managed_memory_numerator: 1,
+            managed_memory_denominator: 4,
         }
     }
 }
@@ -57,20 +74,34 @@ impl Default for ClientRuntimeConfig {
 pub struct ClientRuntime {
     service_context: ChildServiceContext,
     pool: ClientPool,
+    resource_budget: ResourceBudget,
     config: ClientRuntimeConfig,
     shutdown: AtomicBool,
 }
 
 impl ClientRuntime {
     /// Creates a client runtime below a sealed application child context.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the configured process memory limit or managed-memory
+    /// fraction is invalid. Production composition should use
+    /// [`Self::try_new`].
     pub fn new(service_context: ChildServiceContext, config: ClientRuntimeConfig) -> Arc<Self> {
-        let pool = ClientPool::new(service_context.child("pool"));
-        Arc::new(Self {
+        Self::try_new(service_context, config).expect("client runtime resource budget must be valid")
+    }
+
+    /// Creates a client runtime with one shared process-derived resource root.
+    pub fn try_new(service_context: ChildServiceContext, config: ClientRuntimeConfig) -> RocketMQResult<Arc<Self>> {
+        let resource_budget = build_client_resource_budget(&config)?;
+        let pool = ClientPool::new(service_context.child("pool"), resource_budget.clone());
+        Ok(Arc::new(Self {
             service_context,
             pool,
+            resource_budget,
             config,
             shutdown: AtomicBool::new(false),
-        })
+        }))
     }
 
     /// Returns this runtime's isolated client-instance pool.
@@ -81,6 +112,12 @@ impl ClientRuntime {
     /// Returns the root client scope injected by the application.
     pub fn service_context(&self) -> &ChildServiceContext {
         &self.service_context
+    }
+
+    /// Returns the shared parent budget for every client component owned by
+    /// this runtime.
+    pub fn resource_budget(&self) -> ResourceBudget {
+        self.resource_budget.clone()
     }
 
     /// Creates a named descendant scope owned by this client runtime.
@@ -106,6 +143,49 @@ impl ClientRuntime {
     pub fn is_shutdown(&self) -> bool {
         self.shutdown.load(Ordering::Acquire)
     }
+}
+
+fn build_client_resource_budget(config: &ClientRuntimeConfig) -> RocketMQResult<ResourceBudget> {
+    const CLIENT_ITEM_LIMIT: usize = 262_144;
+    const CONTROL_RESERVE_COUNT: usize = 1_024;
+
+    let process_limit = if config.process_memory_limit_bytes == 0 {
+        ProcessMemoryLimit::detect()
+    } else {
+        ProcessMemoryLimit::configured(config.process_memory_limit_bytes)
+    }
+    .map_err(|error| RocketMQError::ConfigInvalidValue {
+        key: "client.runtime.processMemoryLimitBytes",
+        value: config.process_memory_limit_bytes.to_string(),
+        reason: error.to_string(),
+    })?;
+    let managed_bytes = process_limit
+        .fraction(config.managed_memory_numerator, config.managed_memory_denominator)
+        .map_err(|error| RocketMQError::ConfigInvalidValue {
+            key: "client.runtime.managedMemoryFraction",
+            value: format!(
+                "{}/{}",
+                config.managed_memory_numerator, config.managed_memory_denominator
+            ),
+            reason: error.to_string(),
+        })?;
+    let managed_bytes = usize::try_from(managed_bytes).unwrap_or(usize::MAX).max(1);
+    let control_bytes = (managed_bytes / 16).max(1);
+    ResourceBudgetTree::new(
+        "client",
+        BudgetLimit::new(CLIENT_ITEM_LIMIT, managed_bytes, FullPolicy::Reject)
+            .with_control_reserve(BudgetCapacity::new(CONTROL_RESERVE_COUNT, control_bytes)),
+    )
+    .map(|tree| tree.root())
+    .map_err(|error| RocketMQError::ConfigInvalidValue {
+        key: "client.runtime.resourceBudget",
+        value: managed_bytes.to_string(),
+        reason: error.to_string(),
+    })
+}
+
+pub(crate) fn standalone_client_resource_budget() -> RocketMQResult<ResourceBudget> {
+    build_client_resource_budget(&ClientRuntimeConfig::default())
 }
 
 #[cfg(test)]
@@ -425,6 +505,32 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
 
     use super::*;
+
+    #[test]
+    fn sibling_component_budgets_share_the_client_runtime_parent_limit() {
+        let runtime = ClientRuntime::try_new(
+            TEST_RUNTIME_OWNER.root_context().child("client-budget-parent-test"),
+            ClientRuntimeConfig {
+                process_memory_limit_bytes: 4_096,
+                managed_memory_numerator: 1,
+                managed_memory_denominator: 1,
+                ..ClientRuntimeConfig::default()
+            },
+        )
+        .expect("client runtime budget");
+        let parent = runtime.resource_budget();
+        let first = parent
+            .child("first-component", BudgetLimit::new(10, 4_096, FullPolicy::Reject))
+            .expect("first child");
+        let second = parent
+            .child("second-component", BudgetLimit::new(10, 4_096, FullPolicy::Reject))
+            .expect("second child");
+
+        let _first_permit = first.try_acquire_data(3_000).expect("first reservation");
+
+        assert!(second.try_acquire_data(1_000).is_err());
+        assert_eq!(parent.snapshot().current_bytes, 3_000);
+    }
 
     #[tokio::test]
     async fn explicit_context_owns_spawned_task() {

@@ -29,6 +29,7 @@ use std::time::Instant;
 
 use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
+use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_model::common::filter::expression_type::ExpressionType;
@@ -46,9 +47,14 @@ use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::common::util_all;
+use rocketmq_runtime::BudgetLimit;
+use rocketmq_runtime::BudgetedQueue;
+use rocketmq_runtime::FullPolicy;
+use rocketmq_runtime::QueueSnapshot;
+use rocketmq_runtime::RateLimit;
+use rocketmq_runtime::ResourceBudget;
 use rocketmq_transport::RPCHook;
 use serde::Serialize;
-use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
@@ -92,6 +98,9 @@ use rocketmq_runtime::ChildServiceContext;
 const QUERY_UNIQ_KEY_LOOKBACK_MILLIS: u64 = 3 * 24 * 60 * 60 * 1000;
 const OFFSET_STORE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const REBALANCE_LISTENER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
+const DEFAULT_CONSUME_REQUEST_CAPACITY: usize = 10_000;
+const MAX_CONSUME_REQUEST_CAPACITY: usize = 65_536;
+const CONSUME_REQUEST_MAX_AGE: Duration = Duration::from_secs(300);
 
 /// Subscription mode for lite pull consumer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -481,9 +490,8 @@ pub struct DefaultLitePullConsumerImpl {
     // Pull task scheduling
     task_handles: Arc<RwLock<HashMap<MessageQueue, LitePullTaskHandle>>>,
 
-    // Message flow (unbounded channel for non-blocking pull)
-    consume_request_tx: mpsc::UnboundedSender<LitePullConsumeRequest>,
-    consume_request_rx: Arc<Mutex<mpsc::UnboundedReceiver<LitePullConsumeRequest>>>,
+    // Message flow
+    consume_requests: BudgetedQueue<LitePullConsumeRequest>,
     poll_lock: Arc<Mutex<()>>,
 
     // ASSIGN mode subscriptions
@@ -519,14 +527,34 @@ pub struct DefaultLitePullConsumerImpl {
 
 impl DefaultLitePullConsumerImpl {
     /// Creates a new lite pull consumer implementation.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the process memory limit or resource budget cannot be
+    /// initialized. Production composition should use [`Self::try_new`].
     pub fn new<C, L>(client_runtime: Arc<ClientRuntime>, client_config: C, consumer_config: L) -> Self
+    where
+        C: AsRef<ClientConfig>,
+        L: AsRef<LitePullConsumerConfig>,
+    {
+        Self::try_new(client_runtime, client_config, consumer_config)
+            .expect("lite pull consume request resource budget must be valid")
+    }
+
+    /// Creates a new lite pull consumer implementation with validated resource
+    /// budgets.
+    pub fn try_new<C, L>(
+        client_runtime: Arc<ClientRuntime>,
+        client_config: C,
+        consumer_config: L,
+    ) -> RocketMQResult<Self>
     where
         C: AsRef<ClientConfig>,
         L: AsRef<LitePullConsumerConfig>,
     {
         let client_config = client_config.as_ref().clone();
         let consumer_config = consumer_config.as_ref().clone();
-        let (tx, rx) = mpsc::unbounded_channel();
+        let consume_requests = Self::build_consume_request_queue(&consumer_config, &client_runtime.resource_budget())?;
         let rebalance_config = consumer_config.to_consumer_config();
 
         let this = Self {
@@ -547,8 +575,7 @@ impl DefaultLitePullConsumerImpl {
             assigned_message_queue: Arc::new(AssignedMessageQueue::new()),
             message_queue_locks: Arc::new(RwLock::new(HashMap::new())),
             task_handles: Arc::new(RwLock::new(HashMap::new())),
-            consume_request_tx: tx,
-            consume_request_rx: Arc::new(Mutex::new(rx)),
+            consume_requests,
             poll_lock: Arc::new(Mutex::new(())),
             topic_to_sub_expression: Arc::new(RwLock::new(HashMap::new())),
             consume_request_flow_control_times: Arc::new(AtomicU64::new(0)),
@@ -568,7 +595,42 @@ impl DefaultLitePullConsumerImpl {
         };
         let wrapper = Arc::downgrade(&this.rebalance_impl);
         this.rebalance_impl.set_rebalance_impl(wrapper);
-        this
+        Ok(this)
+    }
+
+    fn build_consume_request_queue(
+        consumer_config: &LitePullConsumerConfig,
+        parent_budget: &ResourceBudget,
+    ) -> RocketMQResult<BudgetedQueue<LitePullConsumeRequest>> {
+        let queue_bytes = (parent_budget.limit().capacity.bytes / 16).max(1);
+        let queue_count = usize::try_from(consumer_config.pull_threshold_for_all)
+            .unwrap_or(DEFAULT_CONSUME_REQUEST_CAPACITY)
+            .clamp(1, MAX_CONSUME_REQUEST_CAPACITY);
+        let queue_rate = u64::try_from(queue_count).unwrap_or(u64::MAX);
+        let limit = BudgetLimit::new(queue_count, queue_bytes, FullPolicy::Reject)
+            .with_rate(RateLimit::new(queue_rate, queue_rate))
+            .with_max_age(CONSUME_REQUEST_MAX_AGE);
+        let budget = parent_budget
+            .child("lite-pull-consume-requests", limit)
+            .map_err(|error| RocketMQError::ConfigInvalidValue {
+                key: "client.litePull.consumeRequestQueue",
+                value: queue_count.to_string(),
+                reason: error.to_string(),
+            })?;
+        Ok(BudgetedQueue::new(budget))
+    }
+
+    fn enqueue_consume_request(&self, request: LitePullConsumeRequest) -> RocketMQResult<()> {
+        let retained_bytes = request.retained_bytes();
+        self.consume_requests
+            .try_push_data(request, retained_bytes)
+            .map(|_| ())
+            .map_err(|error| crate::mq_client_err!(format!("Lite pull consume request rejected: {error}")))
+    }
+
+    #[must_use]
+    fn consume_request_queue_snapshot(&self) -> QueueSnapshot {
+        self.consume_requests.snapshot()
     }
 
     fn consumer_config_snapshot(&self) -> Arc<LitePullConsumerConfig> {
@@ -1067,19 +1129,20 @@ impl DefaultLitePullConsumerImpl {
                         .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Arc::new(pull_api_wrapper));
                 }
 
-                let offset_store = self.offset_store().unwrap_or_else(|| {
-                    Arc::new(match consumer_config.message_model {
-                        MessageModel::Broadcasting => OffsetStore::new_with_local(LocalFileOffsetStore::new(
+                let offset_store = match self.offset_store() {
+                    Some(offset_store) => offset_store,
+                    None => Arc::new(match consumer_config.message_model {
+                        MessageModel::Broadcasting => OffsetStore::new_with_local(LocalFileOffsetStore::try_new(
                             self.service_context.child("offset-store"),
                             client_instance.clone(),
                             consumer_config.consumer_group.clone(),
-                        )),
+                        )?),
                         MessageModel::Clustering => OffsetStore::new_with_remote(RemoteBrokerOffsetStore::new(
                             client_instance.clone(),
                             consumer_config.consumer_group.clone(),
                         )),
-                    })
-                });
+                    }),
+                };
 
                 offset_store.load().await?;
 
@@ -1330,6 +1393,8 @@ impl DefaultLitePullConsumerImpl {
                 info!("DefaultLitePullConsumerImpl [{}] shutting down", consumer_group);
 
                 self.shutdown_signal.store(true, Ordering::Release);
+                self.consume_requests.close();
+                self.consume_requests.retain(|_| false);
                 self.rebalance_listener_shutdown.cancel();
                 self.rebalance_listener_tasks.close();
                 if tokio::time::timeout(
@@ -1757,9 +1822,21 @@ impl DefaultLitePullConsumerImpl {
                 if result_is_current && !messages.is_empty() {
                     let dispatch_to_consume = process_queue.put_message(&messages).await;
                     if dispatch_to_consume {
-                        self.consume_request_tx
-                            .send(LitePullConsumeRequest::new(messages, mq.clone(), process_queue.clone()))
-                            .map_err(|_| crate::mq_client_err!("Lite pull consume request queue is closed"))?;
+                        let retry_offset = messages.first().map_or(pull_offset, |message| message.queue_offset);
+                        let cached_messages = messages.clone();
+                        if let Err(error) = self.enqueue_consume_request(LitePullConsumeRequest::new(
+                            messages,
+                            mq.clone(),
+                            process_queue.clone(),
+                        )) {
+                            self.consume_request_flow_control_times.fetch_add(1, Ordering::Relaxed);
+                            process_queue.remove_message(&cached_messages).await;
+                            process_queue.set_consuming(false);
+                            self.assigned_message_queue
+                                .update_pull_offset(mq, retry_offset, process_queue)
+                                .await;
+                            return Err(error);
+                        }
                     }
                 }
 
@@ -1972,25 +2049,19 @@ impl DefaultLitePullConsumerImpl {
         loop {
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
 
-            // Only hold lock during receive, release before async operations.
-            let request = {
-                let mut rx = self.consume_request_rx.lock().await;
-                if remaining.is_zero() {
-                    match rx.try_recv() {
-                        Ok(req) => req,
-                        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
-                        | Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => return Ok(Vec::new()),
-                    }
-                } else {
-                    match tokio::time::timeout(remaining, rx.recv()).await {
-                        Ok(Some(req)) => req,
-                        Ok(None) => return Ok(Vec::new()),
-                        Err(_) => return Ok(Vec::new()),
-                    }
+            let queued_request = if remaining.is_zero() {
+                let Some(request) = self.consume_requests.try_pop_budgeted() else {
+                    return Ok(Vec::new());
+                };
+                request
+            } else {
+                match tokio::time::timeout(remaining, self.consume_requests.recv_budgeted()).await {
+                    Ok(Some(request)) => request,
+                    Ok(None) | Err(_) => return Ok(Vec::new()),
                 }
             };
+            let (request, _permit, _) = queued_request.into_parts();
 
-            // Filter dropped queues without holding lock.
             if request.process_queue.is_dropped() {
                 if tokio::time::Instant::now() >= deadline {
                     return Ok(Vec::new());
@@ -2902,22 +2973,8 @@ impl DefaultLitePullConsumerImpl {
             process_queue.clear().await;
         }
 
-        let mut retained_requests = Vec::new();
-        {
-            let mut rx = self.consume_request_rx.lock().await;
-            while let Ok(request) = rx.try_recv() {
-                if request.message_queue != *message_queue {
-                    retained_requests.push(request);
-                }
-            }
-        }
-
-        for request in retained_requests {
-            if self.consume_request_tx.send(request).is_err() {
-                tracing::warn!("Lite pull consume request queue is closed while clearing queue cache");
-                break;
-            }
-        }
+        self.consume_requests
+            .retain(|request| request.message_queue != *message_queue);
     }
 }
 
@@ -4070,8 +4127,7 @@ mod tests {
         let queued_messages = vec![message.clone()];
         process_queue.put_message(&queued_messages).await;
         impl_
-            .consume_request_tx
-            .send(LitePullConsumeRequest::new(vec![message], mq.clone(), process_queue))
+            .enqueue_consume_request(LitePullConsumeRequest::new(vec![message], mq.clone(), process_queue))
             .expect("consume request queue should accept cached message");
 
         let messages = impl_
@@ -4082,6 +4138,39 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].queue_offset, 7);
         assert_eq!(impl_.assigned_message_queue.get_consume_offset(&mq).await, 8);
+    }
+
+    #[test]
+    fn overload_rejects_excess_lite_pull_consume_requests_without_queue_growth() {
+        let impl_ = DefaultLitePullConsumerImpl::try_new(
+            crate::runtime::test_client_runtime("lite-pull-overload-test"),
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
+                consumer_group: CheetahString::from_static_str("lite_pull_overload_group"),
+                pull_threshold_for_all: 2,
+                ..Default::default()
+            }),
+        )
+        .expect("lite pull consumer budget");
+        let mq = MessageQueue::from_parts("topic-lite-pull-overload", "broker-a", 0);
+        let process_queue = Arc::new(crate::consumer::consumer_impl::process_queue::ProcessQueue::new());
+
+        for offset in 0..4 {
+            let result = impl_.enqueue_consume_request(LitePullConsumeRequest::new(
+                vec![Arc::new(MessageExt {
+                    queue_offset: offset,
+                    ..Default::default()
+                })],
+                mq.clone(),
+                process_queue.clone(),
+            ));
+            assert_eq!(result.is_ok(), offset < 2);
+        }
+
+        let snapshot = impl_.consume_request_queue_snapshot();
+        assert_eq!(snapshot.depth, 2);
+        assert_eq!(snapshot.reserved_count, 2);
+        assert_eq!(snapshot.rejected_count, 2);
     }
 
     #[tokio::test]
@@ -4125,16 +4214,14 @@ mod tests {
         cleared_process_queue.put_message(&cleared_messages).await;
         retained_process_queue.put_message(&retained_messages).await;
         impl_
-            .consume_request_tx
-            .send(LitePullConsumeRequest::new(
+            .enqueue_consume_request(LitePullConsumeRequest::new(
                 vec![cleared_message],
                 cleared_mq.clone(),
                 cleared_process_queue.clone(),
             ))
             .expect("cleared consume request should enqueue");
         impl_
-            .consume_request_tx
-            .send(LitePullConsumeRequest::new(
+            .enqueue_consume_request(LitePullConsumeRequest::new(
                 vec![retained_message],
                 retained_mq.clone(),
                 retained_process_queue,
@@ -4187,8 +4274,7 @@ mod tests {
         let queued_messages = vec![message.clone()];
         process_queue.put_message(&queued_messages).await;
         impl_
-            .consume_request_tx
-            .send(LitePullConsumeRequest::new(vec![message], mq, process_queue))
+            .enqueue_consume_request(LitePullConsumeRequest::new(vec![message], mq, process_queue))
             .expect("consume request queue should accept cached message");
 
         let messages = impl_
@@ -4247,8 +4333,7 @@ mod tests {
         let queued_messages = vec![message.clone()];
         process_queue.put_message(&queued_messages).await;
         impl_
-            .consume_request_tx
-            .send(LitePullConsumeRequest::new(vec![message], mq, process_queue.clone()))
+            .enqueue_consume_request(LitePullConsumeRequest::new(vec![message], mq, process_queue.clone()))
             .expect("consume request queue should accept cached message");
 
         let messages = impl_
@@ -4300,16 +4385,14 @@ mod tests {
         let queued_messages = vec![first_message.clone(), second_message.clone()];
         process_queue.put_message(&queued_messages).await;
         impl_
-            .consume_request_tx
-            .send(LitePullConsumeRequest::new(
+            .enqueue_consume_request(LitePullConsumeRequest::new(
                 vec![first_message],
                 mq.clone(),
                 process_queue.clone(),
             ))
             .expect("first consume request should enqueue");
         impl_
-            .consume_request_tx
-            .send(LitePullConsumeRequest::new(vec![second_message], mq, process_queue))
+            .enqueue_consume_request(LitePullConsumeRequest::new(vec![second_message], mq, process_queue))
             .expect("second consume request should enqueue");
 
         let first_consumer = impl_.clone();

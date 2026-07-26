@@ -57,6 +57,7 @@ use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
 use rocketmq_runtime::MetadataIoConfig;
 use rocketmq_runtime::MetadataIoError;
+use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
@@ -760,6 +761,7 @@ pub(crate) struct BrokerRuntimeState<MS: MessageStore> {
     store_host: SocketAddr,
     broker_addr: CheetahString,
     config_state: BrokerRuntimeConfigState,
+    resource_budget: ResourceBudget,
     send_message_policy_state: SendMessagePolicyState,
     pull_message_policy_state: PullMessagePolicyState,
     pop_policy_state: PopPolicyState,

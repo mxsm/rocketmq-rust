@@ -72,6 +72,22 @@ impl RequestDeadline {
         self.expires_at.saturating_duration_since(tokio::time::Instant::now())
     }
 
+    /// Caps this deadline to a maximum remaining queue age without extending
+    /// an earlier caller deadline.
+    #[must_use]
+    pub fn capped(self, maximum_remaining: Duration) -> Self {
+        let now = tokio::time::Instant::now();
+        let maximum_expiry = now.checked_add(maximum_remaining).unwrap_or(now);
+        if self.expires_at <= maximum_expiry {
+            self
+        } else {
+            Self {
+                expires_at: maximum_expiry,
+                budget: self.budget.min(maximum_remaining),
+            }
+        }
+    }
+
     /// Returns whether the deadline has elapsed.
     #[must_use]
     pub fn is_expired(self) -> bool {

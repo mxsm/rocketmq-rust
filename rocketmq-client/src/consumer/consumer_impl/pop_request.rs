@@ -117,6 +117,14 @@ impl MessageRequest for PopRequest {
     fn get_message_request_mode(&self) -> MessageRequestMode {
         MessageRequestMode::Pop
     }
+
+    fn retained_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            .saturating_add(self.topic.len())
+            .saturating_add(self.consumer_group.len())
+            .saturating_add(self.message_queue.topic().len())
+            .saturating_add(self.message_queue.broker_name().len())
+    }
 }
 
 impl Hash for PopRequest {

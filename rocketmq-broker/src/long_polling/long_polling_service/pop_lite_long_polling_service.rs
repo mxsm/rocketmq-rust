@@ -25,12 +25,19 @@ use crossbeam_skiplist::SkipSet;
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_runtime::BudgetConfigError;
+use rocketmq_runtime::BudgetLimit;
+use rocketmq_runtime::BudgetSnapshot;
+use rocketmq_runtime::FullPolicy;
+use rocketmq_runtime::RateLimit;
+use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
 use rocketmq_transport::ConnectionHandlerContext;
 use tokio::select;
-use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::Notify;
 use tracing::error;
 use tracing::warn;
 
@@ -38,6 +45,10 @@ use crate::broker_runtime::broker_task_group_or_current;
 use crate::lite::lite_event_dispatcher::LiteEventDispatcher;
 use crate::long_polling::polling_result::PollingResult;
 use crate::long_polling::pop_request::PopRequest;
+
+fn prune_empty_polling_queues(polling_map: &DashMap<CheetahString, SkipSet<Arc<PopRequest>>>) {
+    polling_map.retain(|_, queue| !queue.is_empty());
+}
 
 #[trait_variant::make(PopLiteLongPollingRequestProcessor: Send)]
 pub(crate) trait LocalPopLiteLongPollingRequestProcessor {
@@ -71,19 +82,35 @@ pub(crate) struct PopLiteLongPollingServiceContext {
     policy: PopLiteLongPollingPolicy,
     lite_event_dispatcher: LiteEventDispatcher,
     parent_task_group: Option<TaskGroup>,
+    request_budget: ResourceBudget,
 }
 
 impl PopLiteLongPollingServiceContext {
-    pub(crate) fn new(
+    pub(crate) fn try_with_resource_budget(
         policy: PopLiteLongPollingPolicy,
         lite_event_dispatcher: LiteEventDispatcher,
         parent_task_group: Option<TaskGroup>,
-    ) -> Self {
-        Self {
+        parent_budget: &ResourceBudget,
+    ) -> Result<Self, BudgetConfigError> {
+        let parent_capacity = parent_budget.limit().capacity;
+        let request_count = usize::try_from(policy.max_pop_polling_size)
+            .unwrap_or(usize::MAX)
+            .min(parent_capacity.count)
+            .max(1);
+        let request_bytes = (parent_capacity.bytes / 4).max(1);
+        let request_rate = u64::try_from(request_count).unwrap_or(u64::MAX).max(1);
+        let request_budget = parent_budget.child(
+            "lite-long-poll-requests",
+            BudgetLimit::new(request_count, request_bytes, FullPolicy::Reject)
+                .with_rate(RateLimit::new(request_rate, request_rate))
+                .with_max_age(Duration::from_secs(30)),
+        )?;
+        Ok(Self {
             policy,
             lite_event_dispatcher,
             parent_task_group,
-        }
+            request_budget,
+        })
     }
 }
 
@@ -94,7 +121,27 @@ pub(crate) struct PopLiteLongPollingService<RP> {
     processor: Weak<RP>,
     running: AtomicBool,
     lifecycle: AsyncMutex<()>,
+    polling_admission: Mutex<()>,
+    waking_clients: Arc<DashMap<CheetahString, ()>>,
     task_group: Mutex<Option<TaskGroup>>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PopLiteLongPollingResourceSnapshot {
+    pub(crate) requests: BudgetSnapshot,
+    pub(crate) oldest_request_age: Option<Duration>,
+    pub(crate) waking_client_count: usize,
+}
+
+struct ClientWakeupClaim {
+    client_id: CheetahString,
+    waking_clients: Arc<DashMap<CheetahString, ()>>,
+}
+
+impl Drop for ClientWakeupClaim {
+    fn drop(&mut self) {
+        self.waking_clients.remove(&self.client_id);
+    }
 }
 
 impl<RP: PopLiteLongPollingRequestProcessor + Sync + 'static> PopLiteLongPollingService<RP> {
@@ -106,6 +153,8 @@ impl<RP: PopLiteLongPollingRequestProcessor + Sync + 'static> PopLiteLongPolling
             processor,
             running: AtomicBool::new(false),
             lifecycle: AsyncMutex::new(()),
+            polling_admission: Mutex::new(()),
+            waking_clients: Arc::new(DashMap::new()),
             task_group: Mutex::new(None),
         }
     }
@@ -130,27 +179,23 @@ impl<RP: PopLiteLongPollingRequestProcessor + Sync + 'static> PopLiteLongPolling
         };
         let cancellation_token = task_group.cancellation_token();
         let service = Arc::downgrade(this);
-        let (wakeup_tx, mut wakeup_rx) = unbounded_channel();
+        let wakeup_notify = Arc::new(Notify::new());
+        let task_wakeup_notify = wakeup_notify.clone();
         *this.task_group.lock() = Some(task_group.clone());
 
         let spawn_result = task_group.spawn_service("broker.long-polling.pop-lite.scan", async move {
             loop {
-                let client_id = select! {
+                select! {
                     _ = cancellation_token.cancelled() => { break; }
-                    wakeup = wakeup_rx.recv() => {
-                        match wakeup {
-                            Some(client_id) => Some(client_id),
-                            None => break,
-                        }
-                    }
-                    _ = tokio::time::sleep(tokio::time::Duration::from_millis(20)) => None,
-                };
+                    _ = task_wakeup_notify.notified() => {}
+                    _ = tokio::time::sleep(tokio::time::Duration::from_millis(20)) => {}
+                }
 
                 let Some(service) = service.upgrade() else {
                     break;
                 };
 
-                if let Some(client_id) = client_id {
+                for client_id in service.context.lite_event_dispatcher.pending_client_ids() {
                     service.wake_up_client(&client_id);
                 }
 
@@ -175,6 +220,7 @@ impl<RP: PopLiteLongPollingRequestProcessor + Sync + 'static> PopLiteLongPolling
                         service.wake_up(first);
                     }
                 }
+                prune_empty_polling_queues(&service.polling_map);
             }
 
             if let Some(service) = service.upgrade() {
@@ -185,6 +231,7 @@ impl<RP: PopLiteLongPollingRequestProcessor + Sync + 'static> PopLiteLongPolling
                         service.wake_up(first.value().clone());
                     }
                 }
+                service.polling_map.clear();
                 service.running.store(false, Ordering::Release);
             }
         });
@@ -196,7 +243,7 @@ impl<RP: PopLiteLongPollingRequestProcessor + Sync + 'static> PopLiteLongPolling
             return;
         }
 
-        this.context.lite_event_dispatcher.set_wakeup_sender(wakeup_tx);
+        this.context.lite_event_dispatcher.set_wakeup_notify(wakeup_notify);
     }
 
     pub(crate) async fn shutdown(&self) {
@@ -212,6 +259,8 @@ impl<RP: PopLiteLongPollingRequestProcessor + Sync + 'static> PopLiteLongPolling
                 );
             }
         }
+        self.context.lite_event_dispatcher.clear_wakeup_notify();
+        self.waking_clients.clear();
         self.running.store(false, Ordering::Release);
     }
 
@@ -230,14 +279,31 @@ impl<RP: PopLiteLongPollingRequestProcessor + Sync + 'static> PopLiteLongPolling
             return PollingResult::PollingTimeout;
         }
 
-        let expired = born_time.saturating_add(poll_time);
-        let request = Arc::new(PopRequest::new(
+        let requested_expiry = born_time.saturating_add(poll_time);
+        let max_age_millis = self
+            .context
+            .request_budget
+            .limit()
+            .max_age
+            .and_then(|age| u64::try_from(age.as_millis()).ok())
+            .unwrap_or(30_000);
+        let expired = u64::try_from(requested_expiry)
+            .unwrap_or_default()
+            .min(current_millis().saturating_add(max_age_millis));
+        let retained_bytes = PopRequest::estimated_retained_bytes(remoting_command);
+        let permit = match self.context.request_budget.try_acquire_data(retained_bytes) {
+            Ok(permit) => permit,
+            Err(_) => return PollingResult::PollingFull,
+        };
+        let request = Arc::new(PopRequest::new_with_resource_permit(
             remoting_command.clone(),
             ctx,
-            expired as u64,
+            expired,
             None,
             None,
+            permit,
         ));
+        let _admission = self.polling_admission.lock();
 
         if self.total_polling_num.load(Ordering::SeqCst) >= self.context.policy.max_pop_polling_size {
             return PollingResult::PollingFull;
@@ -247,8 +313,14 @@ impl<RP: PopLiteLongPollingRequestProcessor + Sync + 'static> PopLiteLongPolling
             return PollingResult::PollingTimeout;
         }
 
+        prune_empty_polling_queues(&self.polling_map);
+        if !self.polling_map.contains_key(client_id)
+            && self.polling_map.len() >= self.context.policy.pop_polling_map_size
+        {
+            return PollingResult::PollingFull;
+        }
         let queue = self.polling_map.entry(client_id.clone()).or_default();
-        if queue.len() > self.context.policy.pop_polling_size {
+        if queue.len() >= self.context.policy.pop_polling_size {
             return PollingResult::PollingFull;
         }
 
@@ -259,16 +331,27 @@ impl<RP: PopLiteLongPollingRequestProcessor + Sync + 'static> PopLiteLongPolling
     }
 
     pub(crate) fn wake_up_client(&self, client_id: &CheetahString) -> bool {
+        if self.waking_clients.insert(client_id.clone(), ()).is_some() {
+            return false;
+        }
+        let claim = ClientWakeupClaim {
+            client_id: client_id.clone(),
+            waking_clients: self.waking_clients.clone(),
+        };
         let Some(remoting_commands) = self.polling_map.get(client_id) else {
             return false;
         };
         let Some(pop_request) = self.poll_request(remoting_commands.value()) else {
             return false;
         };
-        self.wake_up(pop_request)
+        self.wake_up_with_claim(pop_request, Some(claim))
     }
 
     fn wake_up(&self, pop_request: Arc<PopRequest>) -> bool {
+        self.wake_up_with_claim(pop_request, None)
+    }
+
+    fn wake_up_with_claim(&self, pop_request: Arc<PopRequest>, client_wakeup_claim: Option<ClientWakeupClaim>) -> bool {
         if !pop_request.complete() {
             return false;
         }
@@ -283,6 +366,7 @@ impl<RP: PopLiteLongPollingRequestProcessor + Sync + 'static> PopLiteLongPolling
 
                 let spawn_result =
                     task_group.spawn("broker.long-polling.pop-lite.wake-up", TaskKind::Worker, async move {
+                        let _client_wakeup_claim = client_wakeup_claim;
                         let channel = pop_request.get_channel().clone();
                         let ctx = pop_request.get_ctx().clone();
                         let opaque = pop_request.get_remoting_command().opaque();
@@ -331,6 +415,20 @@ impl<RP: PopLiteLongPollingRequestProcessor + Sync + 'static> PopLiteLongPolling
         self.polling_map.get(key).map(|queue| queue.len() as i32).unwrap_or(0)
     }
 
+    pub(crate) fn resource_snapshot(&self) -> PopLiteLongPollingResourceSnapshot {
+        let oldest_request_age = self.polling_map.iter().fold(None::<Duration>, |oldest, queue| {
+            queue.value().iter().fold(oldest, |oldest, request| {
+                let age = request.value().age();
+                Some(oldest.map_or(age, |current| current.max(age)))
+            })
+        });
+        PopLiteLongPollingResourceSnapshot {
+            requests: self.context.request_budget.snapshot(),
+            oldest_request_age,
+            waking_client_count: self.waking_clients.len(),
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn is_running(&self) -> bool {
         self.running.load(Ordering::Acquire)
@@ -345,6 +443,50 @@ impl<RP: PopLiteLongPollingRequestProcessor + Sync + 'static> PopLiteLongPolling
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overload_rejects_excess_long_poll_requests_and_releases_permits() {
+        let tree = rocketmq_runtime::ResourceBudgetTree::new(
+            "broker-long-poll-overload",
+            BudgetLimit::new(4, 4096, FullPolicy::Reject),
+        )
+        .expect("root budget");
+        let policy = PopLiteLongPollingPolicy {
+            pop_polling_map_size: 2,
+            max_pop_polling_size: 2,
+            pop_polling_size: 2,
+        };
+        let context = PopLiteLongPollingServiceContext::try_with_resource_budget(
+            policy,
+            LiteEventDispatcher::default(),
+            None,
+            &tree.root(),
+        )
+        .expect("long-poll budgets");
+
+        let first = context.request_budget.try_acquire_data(1).expect("first request");
+        let second = context.request_budget.try_acquire_data(1).expect("second request");
+        assert!(context.request_budget.try_acquire_data(1).is_err());
+        assert!(context.request_budget.try_acquire_data(1).is_err());
+        assert_eq!(context.request_budget.snapshot().current_count, 2);
+        assert_eq!(context.request_budget.snapshot().rejected_count, 2);
+
+        drop((first, second));
+        assert_eq!(context.request_budget.snapshot().current_count, 0);
+    }
+
+    #[test]
+    fn empty_client_polling_queues_are_pruned() {
+        let polling_map = DashMap::new();
+        polling_map.insert(
+            CheetahString::from_static_str("empty-client"),
+            SkipSet::<Arc<PopRequest>>::new(),
+        );
+
+        prune_empty_polling_queues(&polling_map);
+
+        assert!(polling_map.is_empty());
+    }
 
     #[test]
     fn pop_lite_long_polling_policy_captures_only_required_startup_values() {
@@ -372,5 +514,7 @@ mod tests {
         assert!(source.contains("PopLiteLongPollingServiceContext"));
         assert!(source.contains("lite_event_dispatcher: LiteEventDispatcher"));
         assert!(source.contains("parent_task_group: Option<TaskGroup>"));
+        assert!(source.contains("request_budget: ResourceBudget"));
+        assert!(source.contains("waking_clients: Arc<DashMap<CheetahString, ()>>"));
     }
 }

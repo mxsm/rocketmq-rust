@@ -29,6 +29,7 @@ use rocketmq_security_api::PeerInfo;
 use tokio::sync::broadcast;
 
 use crate::base::connection_net_event::ConnectionNetEvent;
+use crate::base::pending_request_table::materialize_and_estimate_remoting_command_retained_bytes;
 use crate::base::pending_request_table::PendingRequestOwner;
 use crate::base::pending_request_table::PendingRequestTable;
 use crate::codec::remoting_command_codec::FrameLimits;
@@ -282,16 +283,30 @@ where
         self
     }
 
-    async fn send_transport(&self, mut request: RemotingCommand, deadline: RequestDeadline) -> RocketMQResult<()> {
+    fn prepare_transport_request(
+        &self,
+        request: &mut RemotingCommand,
+        deadline: RequestDeadline,
+    ) -> RocketMQResult<()> {
         let transport_security = &self.transport_security;
         let target = self.peer.address().to_string();
         deadline.ensure_before_send(target.clone())?;
         transport_security
-            .sign(&mut request, Some(&self.peer))
+            .sign(request, Some(&self.peer))
             .map_err(|error| remote_error(format!("request signing failed: {error}")))?;
+        deadline.ensure_before_send(target)
+    }
+
+    async fn send_prepared_transport(&self, request: RemotingCommand, deadline: RequestDeadline) -> RocketMQResult<()> {
+        let target = self.peer.address().to_string();
         deadline.ensure_before_send(target.clone())?;
         let mut connection = self.session.connection();
         connection.send_command_with_deadline(request, deadline, target).await
+    }
+
+    async fn send_transport(&self, mut request: RemotingCommand, deadline: RequestDeadline) -> RocketMQResult<()> {
+        self.prepare_transport_request(&mut request, deadline)?;
+        self.send_prepared_transport(request, deadline).await
     }
 
     /// Invokes a remote operation with the given `RemotingCommand`.
@@ -306,12 +321,13 @@ where
     /// the invocation fails.
     pub async fn send_read(
         &mut self,
-        request: RemotingCommand,
+        mut request: RemotingCommand,
         deadline: RequestDeadline,
     ) -> RocketMQResult<RemotingCommand> {
+        self.prepare_transport_request(&mut request, deadline)?;
         let (tx, rx) = tokio::sync::oneshot::channel::<RocketMQResult<RemotingCommand>>();
         let opaque = request.opaque();
-        let retained_bytes = request.body().map_or(0, bytes::Bytes::len);
+        let retained_bytes = materialize_and_estimate_remoting_command_retained_bytes(&mut request);
         let guard = self.pending_requests.register_for_owner_with_bytes(
             &self.pending_request_owner,
             opaque,
@@ -320,7 +336,7 @@ where
             tx,
         )?;
 
-        self.send_transport(request, deadline).await?;
+        self.send_prepared_transport(request, deadline).await?;
         match deadline.timeout(rx).await {
             Ok(Ok(value)) => value,
             Ok(Err(error)) => Err(remote_error(error.to_string())),
@@ -343,13 +359,16 @@ where
             .await;
     }
 
-    async fn invoke_with_callback_timeout<F>(&self, request: RemotingCommand, timeout: Duration, mut func: F)
+    async fn invoke_with_callback_timeout<F>(&self, mut request: RemotingCommand, timeout: Duration, mut func: F)
     where
         F: FnMut(),
     {
         let (tx, rx) = tokio::sync::oneshot::channel::<RocketMQResult<RemotingCommand>>();
         let deadline = RequestDeadline::after(timeout);
-        let retained_bytes = request.body().map_or(0, bytes::Bytes::len);
+        if self.prepare_transport_request(&mut request, deadline).is_err() {
+            return;
+        }
+        let retained_bytes = materialize_and_estimate_remoting_command_retained_bytes(&mut request);
         let guard = match self.pending_requests.register_for_owner_with_bytes(
             &self.pending_request_owner,
             request.opaque(),
@@ -360,7 +379,7 @@ where
             Ok(guard) => guard,
             Err(_) => return,
         };
-        if self.send_transport(request, deadline).await.is_err() {
+        if self.send_prepared_transport(request, deadline).await.is_err() {
             return;
         }
 
@@ -473,9 +492,10 @@ where
         let mut receivers = Vec::with_capacity(requests.len());
 
         // Send all requests and collect oneshot receivers
-        for request in requests {
+        for mut request in requests {
+            self.prepare_transport_request(&mut request, deadline)?;
             let (tx, rx) = tokio::sync::oneshot::channel::<RocketMQResult<RemotingCommand>>();
-            let retained_bytes = request.body().map_or(0, bytes::Bytes::len);
+            let retained_bytes = materialize_and_estimate_remoting_command_retained_bytes(&mut request);
             let guard = self.pending_requests.register_for_owner_with_bytes(
                 &self.pending_request_owner,
                 request.opaque(),
@@ -484,7 +504,7 @@ where
                 tx,
             )?;
 
-            self.send_transport(request, deadline).await?;
+            self.send_prepared_transport(request, deadline).await?;
             receivers.push((guard, rx));
         }
 
@@ -708,7 +728,8 @@ mod lifecycle_tests {
         assert_eq!(service.task_group().child_stats().active, baseline_stats.active + 1);
 
         let mut retained_client = client.clone();
-        let retained_request = RemotingCommand::create_remoting_command(105).set_body(vec![7_u8; 4096]);
+        let mut retained_request = RemotingCommand::create_remoting_command(105).set_body(vec![7_u8; 4096]);
+        let expected_retained_bytes = materialize_and_estimate_remoting_command_retained_bytes(&mut retained_request);
         let retained_invocation = tokio::spawn(async move {
             retained_client
                 .send_read(retained_request, RequestDeadline::from_timeout_millis(100))
@@ -721,7 +742,7 @@ mod lifecycle_tests {
         })
         .await
         .expect("request should register");
-        assert_eq!(response_table.usage().bytes, 4096);
+        assert_eq!(response_table.usage().bytes, expected_retained_bytes);
         assert!(retained_invocation.await.unwrap().is_err());
         assert_eq!(response_table.usage().bytes, 0);
 

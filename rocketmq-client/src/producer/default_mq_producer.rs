@@ -1748,7 +1748,7 @@ impl MQProducer for DefaultMQProducer {
             }
         }
         if let Some(ref produce_accumulator) = self.producer_config.produce_accumulator {
-            produce_accumulator.start();
+            produce_accumulator.start()?;
         }
         if let Some(dispatcher) = trace_dispatcher_to_start {
             let name_server_addr = self

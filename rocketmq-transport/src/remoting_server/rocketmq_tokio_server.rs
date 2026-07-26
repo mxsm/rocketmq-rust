@@ -727,6 +727,16 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
         count: DEFAULT_MAX_CONNECTIONS,
         ..admission_limits.handshakes
     };
+    let admission = match admission {
+        Some(admission) => admission,
+        None => match AdmissionController::try_new(admission_limits) {
+            Ok(admission) => Arc::new(admission),
+            Err(error) => {
+                error!(%error, "failed to initialize transport admission budgets");
+                return None;
+            }
+        },
+    };
     let mut listener = ConnectionListener {
         listener: Some(listener),
         notify_shutdown,
@@ -736,7 +746,7 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
         cmd_handler: Arc::new(handler),
         tls_runtime,
         task_group: task_group.clone(),
-        admission: admission.unwrap_or_else(|| Arc::new(AdmissionController::new(admission_limits))),
+        admission,
         transport_security,
         transport_principal,
         command_interceptor,

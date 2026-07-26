@@ -463,7 +463,7 @@ impl DefaultHAService {
             self.connection_context.install_auto_switch_replication(replication)?;
         }
 
-        let group_transfer_service = Arc::new(GroupTransferService::new(service_reference.clone()));
+        let group_transfer_service = Arc::new(GroupTransferService::try_new(service_reference.clone())?);
         self.connection_context
             .install_group_transfer_service(&group_transfer_service)?;
         self.group_transfer_service = Some(group_transfer_service);

@@ -20,9 +20,9 @@ use std::time::SystemTime;
 use futures::stream;
 use futures::Stream;
 use futures::StreamExt;
+use rocketmq_runtime::BudgetedQueue;
+use rocketmq_runtime::ResourcePermit;
 use rocketmq_runtime::TaskGroup;
-use tokio::sync::mpsc;
-use tokio::sync::OwnedSemaphorePermit;
 use tonic::Request;
 use tonic::Response;
 use tonic::Status;
@@ -48,6 +48,7 @@ use crate::proto::v2;
 use crate::session::ClientSessionRegistry;
 use crate::status::ProxyStatusMapper;
 
+use rocketmq_proxy_core::grpc::service::admission::estimated_protobuf_retained_bytes;
 use rocketmq_proxy_core::grpc::service::consumer;
 use rocketmq_proxy_core::grpc::service::housekeeping;
 use rocketmq_proxy_core::grpc::service::telemetry;
@@ -121,8 +122,8 @@ struct TelemetryStreamState<P> {
     context: ProxyContext,
     principal: Option<AuthenticatedPrincipal>,
     client_id: String,
-    _permit: OwnedSemaphorePermit,
-    outbound_rx: mpsc::UnboundedReceiver<v2::TelemetryCommand>,
+    _permit: ResourcePermit,
+    outbound: BudgetedQueue<v2::TelemetryCommand>,
     inbound: tonic::Streaming<v2::TelemetryCommand>,
     done: bool,
 }
@@ -162,12 +163,19 @@ impl<P> Clone for ProxyGrpcService<P> {
 }
 
 impl<P> ProxyGrpcService<P> {
-    pub fn new(config: Arc<ProxyConfig>, processor: Arc<P>, sessions: ClientSessionRegistry) -> Self {
+    /// Builds a gRPC service after validating all runtime resource budgets.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed Proxy error when the configured resource limits are
+    /// invalid or the process memory limit cannot be detected.
+    pub fn try_new(config: Arc<ProxyConfig>, processor: Arc<P>, sessions: ClientSessionRegistry) -> ProxyResult<Self> {
+        let guards = ExecutionGuards::try_from_config(&config.runtime)?;
         let interval_ms = Self::housekeeping_interval_from_config(config.as_ref())
             .as_millis()
             .clamp(1, u128::from(u64::MAX)) as u64;
-        Self {
-            guards: ExecutionGuards::from_config(&config.runtime),
+        Ok(Self {
+            guards,
             config,
             processor,
             sessions,
@@ -175,7 +183,20 @@ impl<P> ProxyGrpcService<P> {
             auth_runtime: None,
             hooks: ProxyHookChain::default(),
             metrics: ProxyMetrics::default(),
-        }
+        })
+    }
+
+    /// Builds a gRPC service for compatibility with existing embedders.
+    ///
+    /// Production composition should prefer [`Self::try_new`] so invalid
+    /// resource limits are reported as startup errors.
+    ///
+    /// # Panics
+    ///
+    /// Panics when runtime resource-budget validation fails.
+    pub fn new(config: Arc<ProxyConfig>, processor: Arc<P>, sessions: ClientSessionRegistry) -> Self {
+        Self::try_new(config, processor, sessions)
+            .unwrap_or_else(|error| panic!("invalid Proxy gRPC resource limits: {error}"))
     }
 
     pub fn with_auth_runtime(mut self, auth_runtime: Option<ProxyAuthRuntime>) -> Self {
@@ -772,7 +793,7 @@ where
                     .authorize_contexts(&context, principal.as_ref(), &auth::query_route_contexts(&input))
                     .await
                 {
-                    Ok(()) => match self.guards.try_route() {
+                    Ok(()) => match self.guards.try_route(estimated_protobuf_retained_bytes(&request)) {
                         Ok(_permit) => match self.processor.query_route(&context.without_principal(), input).await {
                             Ok(plan) => adapter::build_query_route_response(&request, &plan),
                             Err(error) => adapter::error_query_route_response(ProxyStatusMapper::from_error(&error)),
@@ -807,7 +828,10 @@ where
         };
 
         let status = async {
-            match self.guards.try_client_manager() {
+            match self
+                .guards
+                .try_client_manager(estimated_protobuf_retained_bytes(&request))
+            {
                 Ok(_permit) => match self.validate_heartbeat_request(&context, request.client_type) {
                     Ok(()) => match self
                         .authorize_contexts(&context, principal.as_ref(), &auth::heartbeat_contexts(&request))
@@ -853,7 +877,7 @@ where
                     .authorize_contexts(&context, principal.as_ref(), &auth::send_message_contexts(&input))
                     .await
                 {
-                    Ok(()) => match self.guards.try_producer() {
+                    Ok(()) => match self.guards.try_producer(estimated_protobuf_retained_bytes(&request)) {
                         Ok(_permit) => match self
                             .processor
                             .send_message(&context.without_principal(), input.clone())
@@ -911,7 +935,7 @@ where
                     .authorize_contexts(&context, principal.as_ref(), &auth::query_assignment_contexts(&input))
                     .await
                 {
-                    Ok(()) => match self.guards.try_route() {
+                    Ok(()) => match self.guards.try_route(estimated_protobuf_retained_bytes(&request)) {
                         Ok(_permit) => match self
                             .processor
                             .query_assignment(&context.without_principal(), input)
@@ -960,7 +984,7 @@ where
                     .authorize_contexts(&context, principal.as_ref(), &auth::receive_message_contexts(&input))
                     .await
                 {
-                    Ok(()) => match self.guards.try_consumer() {
+                    Ok(()) => match self.guards.try_consumer(estimated_protobuf_retained_bytes(&request)) {
                         Ok(_permit) => {
                             self.sessions.upsert_from_context(&context);
                             match self
@@ -1017,7 +1041,7 @@ where
                     .authorize_contexts(&context, principal.as_ref(), &auth::ack_message_contexts(&input))
                     .await
                 {
-                    Ok(()) => match self.guards.try_consumer() {
+                    Ok(()) => match self.guards.try_consumer(estimated_protobuf_retained_bytes(&request)) {
                         Ok(_permit) => match self
                             .processor
                             .ack_message(&context.without_principal(), input.clone())
@@ -1073,7 +1097,7 @@ where
                     )
                     .await
                 {
-                    Ok(()) => match self.guards.try_consumer() {
+                    Ok(()) => match self.guards.try_consumer(estimated_protobuf_retained_bytes(&request)) {
                         Ok(_permit) => match self
                             .processor
                             .forward_message_to_dead_letter_queue(&context.without_principal(), input)
@@ -1122,7 +1146,7 @@ where
             match adapter::build_pull_message_request(&request) {
                 Ok(input) => match self
                     .validate_client_context(&context)
-                    .and_then(|_| self.guards.try_consumer().map(|_| ()))
+                    .and_then(|_| self.guards.try_consumer(estimated_protobuf_retained_bytes(&request)))
                 {
                     Ok(_permit) => match self
                         .authorize_contexts(&context, principal.as_ref(), &auth::pull_message_contexts(&input))
@@ -1171,7 +1195,7 @@ where
             match adapter::build_update_offset_request(&request) {
                 Ok(input) => match self
                     .validate_client_context(&context)
-                    .and_then(|_| self.guards.try_consumer().map(|_| ()))
+                    .and_then(|_| self.guards.try_consumer(estimated_protobuf_retained_bytes(&request)))
                 {
                     Ok(_permit) => match self
                         .authorize_contexts(&context, principal.as_ref(), &auth::update_offset_contexts(&input))
@@ -1210,7 +1234,7 @@ where
             match adapter::build_get_offset_request(&request) {
                 Ok(input) => match self
                     .validate_client_context(&context)
-                    .and_then(|_| self.guards.try_consumer().map(|_| ()))
+                    .and_then(|_| self.guards.try_consumer(estimated_protobuf_retained_bytes(&request)))
                 {
                     Ok(_permit) => match self
                         .authorize_contexts(&context, principal.as_ref(), &auth::get_offset_contexts(&input))
@@ -1249,7 +1273,7 @@ where
             match adapter::build_query_offset_request(&request) {
                 Ok(input) => match self
                     .validate_client_context(&context)
-                    .and_then(|_| self.guards.try_consumer().map(|_| ()))
+                    .and_then(|_| self.guards.try_consumer(estimated_protobuf_retained_bytes(&request)))
                 {
                     Ok(_permit) => match self
                         .authorize_contexts(&context, principal.as_ref(), &auth::query_offset_contexts(&input))
@@ -1297,7 +1321,7 @@ where
                     .authorize_contexts(&context, principal.as_ref(), &auth::end_transaction_contexts(&input))
                     .await
                 {
-                    Ok(()) => match self.guards.try_producer() {
+                    Ok(()) => match self.guards.try_producer(estimated_protobuf_retained_bytes(&request)) {
                         Ok(_permit) => match self
                             .processor
                             .end_transaction(&context.without_principal(), input.clone())
@@ -1342,7 +1366,7 @@ where
         let inbound = inbound;
         let permit = match self
             .validate_client_context(&context)
-            .and_then(|_| self.guards.try_client_manager())
+            .and_then(|_| self.guards.try_client_manager(context.client_id().map_or(0, str::len)))
         {
             Ok(permit) => permit,
             Err(error) => {
@@ -1358,8 +1382,15 @@ where
             self.finish_stream_payload(&observation, &status).await;
             return Ok(Response::new(self.status_stream(Self::telemetry_status(status))));
         };
-        let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
-        self.sessions.bind_telemetry_link(client_id.clone(), outbound_tx);
+        let outbound = match self.guards.telemetry_queue(&client_id) {
+            Ok(outbound) => outbound,
+            Err(error) => {
+                let status = ProxyStatusMapper::from_error(&error);
+                self.finish_stream_payload(&observation, &status).await;
+                return Ok(Response::new(self.status_stream(Self::telemetry_status(status))));
+            }
+        };
+        self.sessions.bind_telemetry_link(client_id.clone(), outbound.clone());
         self.dispatch_due_prepared_transaction_recoveries_for_client(Some(client_id.as_str()));
 
         self.finish_stream_payload(&observation, &ProxyStatusMapper::ok()).await;
@@ -1369,7 +1400,7 @@ where
             principal,
             client_id,
             _permit: permit,
-            outbound_rx,
+            outbound,
             inbound,
             done: false,
         };
@@ -1379,16 +1410,31 @@ where
             }
 
             tokio::select! {
-                outbound = state.outbound_rx.recv() => {
+                outbound = state.outbound.recv() => {
                     outbound.map(|command| (Ok(command), state))
                 }
                 inbound_item = state.inbound.next() => {
                     match inbound_item {
                         Some(Ok(command)) => {
-                            let response = state
+                            let response = match state
                                 .service
-                                .handle_telemetry_command(&state.context, state.principal.as_ref(), command)
-                                .await;
+                                .guards
+                                .try_telemetry_command(estimated_protobuf_retained_bytes(&command))
+                            {
+                                Ok(_command_permit) => {
+                                    state
+                                        .service
+                                        .handle_telemetry_command(
+                                            &state.context,
+                                            state.principal.as_ref(),
+                                            command,
+                                        )
+                                        .await
+                                }
+                                Err(error) => {
+                                    Self::telemetry_status(ProxyStatusMapper::from_error(&error))
+                                }
+                            };
                             Some((Ok(response), state))
                         }
                         Some(Err(error)) => {
@@ -1417,23 +1463,25 @@ where
             Err(response) => return response,
         };
         let status = async {
-            match self
-                .guards
-                .try_client_manager()
-                .and_then(|_| self.validate_client_context(&context))
-            {
+            match self.validate_client_context(&context) {
                 Ok(client_id) => match self
-                    .authorize_contexts(
-                        &context,
-                        principal.as_ref(),
-                        &auth::notify_client_termination_contexts(&request),
-                    )
-                    .await
+                    .guards
+                    .try_client_manager(estimated_protobuf_retained_bytes(&request))
                 {
-                    Ok(()) => {
-                        self.sessions.remove_client(client_id);
-                        ProxyStatusMapper::ok()
-                    }
+                    Ok(_permit) => match self
+                        .authorize_contexts(
+                            &context,
+                            principal.as_ref(),
+                            &auth::notify_client_termination_contexts(&request),
+                        )
+                        .await
+                    {
+                        Ok(()) => {
+                            self.sessions.remove_client(client_id);
+                            ProxyStatusMapper::ok()
+                        }
+                        Err(error) => ProxyStatusMapper::from_error(&error),
+                    },
                     Err(error) => ProxyStatusMapper::from_error(&error),
                 },
                 Err(error) => ProxyStatusMapper::from_error(&error),
@@ -1477,7 +1525,7 @@ where
                     )
                     .await
                 {
-                    Ok(()) => match self.guards.try_consumer() {
+                    Ok(()) => match self.guards.try_consumer(estimated_protobuf_retained_bytes(&request)) {
                         Ok(_permit) => match self
                             .processor
                             .change_invisible_duration(&context.without_principal(), input.clone())
@@ -1531,7 +1579,7 @@ where
                     .authorize_contexts(&context, principal.as_ref(), &auth::recall_message_contexts(&input))
                     .await
                 {
-                    Ok(()) => match self.guards.try_producer() {
+                    Ok(()) => match self.guards.try_producer(estimated_protobuf_retained_bytes(&request)) {
                         Ok(_permit) => match self.processor.recall_message(&context.without_principal(), input).await {
                             Ok(plan) => adapter::build_recall_message_response(&plan),
                             Err(error) => adapter::error_recall_message_response(ProxyStatusMapper::from_error(&error)),
@@ -1567,23 +1615,30 @@ where
 
         let status = async {
             match self.validate_client_context(&context).and_then(|client_id| {
-                let _permit = self.guards.try_client_manager()?;
-                let input = crate::session::build_lite_subscription_sync_request(&request)?;
-                self.sessions.upsert_from_context(&context);
-                let settings = self.sessions.settings_for_client(client_id);
-                self.sessions
-                    .sync_lite_subscription(client_id, input, settings.as_ref())
-                    .map(|_| ProxyStatusMapper::ok())
+                crate::session::build_lite_subscription_sync_request(&request).map(|input| (client_id, input))
             }) {
-                Ok(status) => match self
-                    .authorize_contexts(
-                        &context,
-                        principal.as_ref(),
-                        &auth::sync_lite_subscription_contexts(&request),
-                    )
-                    .await
+                Ok((client_id, input)) => match self
+                    .guards
+                    .try_client_manager(estimated_protobuf_retained_bytes(&request))
                 {
-                    Ok(()) => status,
+                    Ok(_permit) => match self
+                        .authorize_contexts(
+                            &context,
+                            principal.as_ref(),
+                            &auth::sync_lite_subscription_contexts(&request),
+                        )
+                        .await
+                    {
+                        Ok(()) => {
+                            self.sessions.upsert_from_context(&context);
+                            let settings = self.sessions.settings_for_client(client_id);
+                            self.sessions
+                                .sync_lite_subscription(client_id, input, settings.as_ref())
+                                .map(|_| ProxyStatusMapper::ok())
+                                .unwrap_or_else(|error| ProxyStatusMapper::from_error(&error))
+                        }
+                        Err(error) => ProxyStatusMapper::from_error(&error),
+                    },
                     Err(error) => ProxyStatusMapper::from_error(&error),
                 },
                 Err(error) => ProxyStatusMapper::from_error(&error),
@@ -1624,7 +1679,6 @@ mod tests {
     use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
     use rocketmq_security_api::Action;
     use sha1::Sha1;
-    use tokio::sync::mpsc;
     use tonic::metadata::MetadataValue;
     use tonic::Request;
 
@@ -2598,8 +2652,11 @@ mod tests {
     #[tokio::test]
     async fn due_prepared_transaction_dispatches_recovery_command() {
         let service = test_service(StaticRouteService::default(), StaticMetadataService::default());
-        let (sender, mut receiver) = mpsc::unbounded_channel();
-        service.sessions.bind_telemetry_link("client-a", sender);
+        let receiver = service
+            .guards
+            .telemetry_queue("client-a")
+            .expect("client telemetry queue");
+        service.sessions.bind_telemetry_link("client-a", receiver.clone());
         service
             .sessions
             .track_prepared_transaction(PreparedTransactionRegistration {
@@ -3221,8 +3278,11 @@ mod tests {
     #[tokio::test]
     async fn server_side_telemetry_command_is_queued_for_bound_client() {
         let service = test_service(StaticRouteService::default(), StaticMetadataService::default());
-        let (sender, mut receiver) = mpsc::unbounded_channel();
-        service.sessions.bind_telemetry_link("client-a", sender);
+        let receiver = service
+            .guards
+            .telemetry_queue("client-a")
+            .expect("client telemetry queue");
+        service.sessions.bind_telemetry_link("client-a", receiver.clone());
 
         assert!(service.send_reconnect_endpoints_command("client-a", "nonce-a"));
         assert!(service.sessions.has_pending_telemetry_command(
@@ -3243,8 +3303,11 @@ mod tests {
     #[tokio::test]
     async fn print_thread_stack_trace_command_tracks_pending_nonce_and_consumes_client_report() {
         let service = test_service(StaticRouteService::default(), StaticMetadataService::default());
-        let (sender, mut receiver) = mpsc::unbounded_channel();
-        service.sessions.bind_telemetry_link("client-a", sender);
+        let receiver = service
+            .guards
+            .telemetry_queue("client-a")
+            .expect("client telemetry queue");
+        service.sessions.bind_telemetry_link("client-a", receiver.clone());
 
         assert!(service.send_print_thread_stack_trace_command("client-a", "nonce-a"));
         assert!(service.sessions.has_pending_telemetry_command(
@@ -3354,8 +3417,11 @@ mod tests {
             }),
             body: Bytes::from_static(b"hello").to_vec(),
         };
-        let (sender, mut receiver) = mpsc::unbounded_channel();
-        service.sessions.bind_telemetry_link("client-a", sender);
+        let receiver = service
+            .guards
+            .telemetry_queue("client-a")
+            .expect("client telemetry queue");
+        service.sessions.bind_telemetry_link("client-a", receiver.clone());
         assert!(service.send_verify_message_command("client-a", "nonce-a", message));
         let _ = receiver.recv().await.expect("verify message command should be queued");
 
@@ -3400,8 +3466,11 @@ mod tests {
     #[tokio::test]
     async fn notify_unsubscribe_lite_command_registers_pending_notice() {
         let service = test_service(StaticRouteService::default(), StaticMetadataService::default());
-        let (sender, mut receiver) = mpsc::unbounded_channel();
-        service.sessions.bind_telemetry_link("client-a", sender);
+        let receiver = service
+            .guards
+            .telemetry_queue("client-a")
+            .expect("client telemetry queue");
+        service.sessions.bind_telemetry_link("client-a", receiver.clone());
 
         assert!(service.send_notify_unsubscribe_lite_command("client-a", "lite-a"));
         assert!(service
@@ -3420,8 +3489,11 @@ mod tests {
     #[tokio::test]
     async fn telemetry_command_state_is_exposed_via_metrics_snapshot() {
         let service = test_service(StaticRouteService::default(), StaticMetadataService::default());
-        let (sender, mut receiver) = mpsc::unbounded_channel();
-        service.sessions.bind_telemetry_link("client-a", sender);
+        let receiver = service
+            .guards
+            .telemetry_queue("client-a")
+            .expect("client telemetry queue");
+        service.sessions.bind_telemetry_link("client-a", receiver.clone());
 
         assert!(service.send_print_thread_stack_trace_command("client-a", "nonce-trace"));
         assert!(service.send_notify_unsubscribe_lite_command("client-a", "lite-a"));
