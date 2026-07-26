@@ -573,7 +573,7 @@ pub fn bounded_local_file_consume_queue_recovery_parallelism(
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MessageStoreConfig {
     #[serde(default = "defaults::store_path_root_dir")]
     pub store_path_root_dir: CheetahString,

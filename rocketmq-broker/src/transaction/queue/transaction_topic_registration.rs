@@ -224,10 +224,7 @@ where
             topic_queue_mapping_info_map,
             ..Default::default()
         };
-        let broker_addr = CheetahString::from_string(format!(
-            "{}:{}",
-            self.broker_config.broker_ip1, self.broker_config.broker_server_config.listen_port
-        ));
+        let broker_addr = CheetahString::from_string(self.broker_config.get_broker_addr());
         let results = self
             .broker_outer_api
             .register_broker_all(

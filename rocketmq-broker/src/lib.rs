@@ -76,6 +76,7 @@ pub mod bench_support {
     use std::time::Instant;
 
     use crate::config::broker_config::BrokerConfig;
+    use crate::config::validated::ValidatedBrokerConfig;
     use cheetah_string::CheetahString;
     use rocketmq_model::common::filter::expression_type::ExpressionType;
     use rocketmq_runtime::schedule::simple_scheduler::ScheduledShutdownReport;
@@ -91,6 +92,16 @@ pub mod bench_support {
     pub use crate::client::consumer_ids_change_listener::ConsumerIdsChangeListener;
     pub use crate::client::manager::consumer_manager::ConsumerManager;
     pub use crate::filter::manager::consumer_filter_manager::ConsumerFilterManagerStatsSnapshot;
+
+    fn validated_broker_config(
+        broker: Arc<BrokerConfig>,
+        store: Arc<MessageStoreConfig>,
+    ) -> Arc<ValidatedBrokerConfig> {
+        Arc::new(
+            ValidatedBrokerConfig::try_from_parts(broker.as_ref().clone(), store.as_ref().clone())
+                .expect("benchmark broker configuration should be valid"),
+        )
+    }
 
     pub struct ConsumerFilterBenchHarness {
         manager: crate::filter::manager::consumer_filter_manager::ConsumerFilterManager,
@@ -304,9 +315,8 @@ pub mod bench_support {
         });
         let runtime_context = RuntimeContext::from_current("broker-runtime-lifecycle-probe");
         let service_context = runtime_context.service_context("broker");
-        let mut runtime = crate::broker_runtime::BrokerRuntime::new_with_service_context(
-            broker_config,
-            message_store_config,
+        let mut runtime = crate::broker_runtime::BrokerRuntime::new_with_validated_config(
+            validated_broker_config(broker_config, message_store_config),
             service_context,
         );
 
@@ -403,9 +413,8 @@ pub mod bench_support {
     ) -> BrokerClientHousekeepingLifecycleProbe {
         let broker_config = Arc::new(BrokerConfig::default());
         let message_store_config = Arc::new(MessageStoreConfig::default());
-        let mut runtime = crate::broker_runtime::BrokerRuntime::new_with_service_context(
-            broker_config,
-            message_store_config,
+        let mut runtime = crate::broker_runtime::BrokerRuntime::new_with_validated_config(
+            validated_broker_config(broker_config, message_store_config),
             service_context,
         );
         let inner = runtime.runtime_state_mut();
@@ -469,9 +478,8 @@ pub mod bench_support {
             delete_when: "99".to_string(),
             ..MessageStoreConfig::default()
         });
-        let mut runtime = crate::broker_runtime::BrokerRuntime::new_with_service_context(
-            broker_config,
-            message_store_config,
+        let mut runtime = crate::broker_runtime::BrokerRuntime::new_with_validated_config(
+            validated_broker_config(broker_config, message_store_config),
             service_context,
         );
         let service = runtime
@@ -617,9 +625,8 @@ pub mod bench_support {
         });
         let runtime_context = RuntimeContext::from_current("broker-schedule-persistence-probe");
         let service_context = runtime_context.service_context("broker");
-        let mut runtime = crate::broker_runtime::BrokerRuntime::new_with_service_context(
-            broker_config,
-            message_store_config,
+        let mut runtime = crate::broker_runtime::BrokerRuntime::new_with_validated_config(
+            validated_broker_config(broker_config, message_store_config),
             service_context,
         );
         let service = runtime

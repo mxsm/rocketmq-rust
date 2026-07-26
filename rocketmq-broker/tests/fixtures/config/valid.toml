@@ -1,0 +1,27 @@
+# Copyright 2026 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0.
+
+[broker]
+listenPort = 10911
+brokerIp1 = "broker.example.internal"
+storePathRootDir = "./target/config-contract/broker"
+namesrvAddr = "namesrv-0.example.internal:9876;namesrv-1.example.internal:9876"
+authenticationEnabled = true
+authorizationEnabled = true
+authConfigPath = "./target/config-contract/auth"
+
+[broker.brokerIdentity]
+brokerName = "config-contract-broker"
+brokerClusterName = "ConfigContract"
+brokerId = 0
+
+[store]
+haListenAddress = "127.0.0.1"
+haListenPort = 10912
+storePathRootDir = "./target/config-contract/store"
+
+[logging]
+filter = "info"
+
+[logging.reload]
+enabled = true

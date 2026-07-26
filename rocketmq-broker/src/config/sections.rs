@@ -1,0 +1,760 @@
+// Copyright 2023 The RocketMQ Rust Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use std::net::IpAddr;
+use std::net::SocketAddr;
+use std::path::PathBuf;
+
+use cheetah_string::CheetahString;
+use rocketmq_model::common::broker::broker_role::BrokerRole;
+use rocketmq_observability::exporter_types::metrics_exporter_type::MetricsExporterType;
+use rocketmq_observability::exporter_types::trace_exporter_type::TraceExporterType;
+use rocketmq_store::base::store_enum::StoreType;
+use rocketmq_store::config::message_store_config::MessageStoreConfig;
+
+use super::broker_config::BrokerConfig;
+use super::error::BrokerConfigError;
+use super::error::ConfigSection;
+
+#[derive(Clone, Debug)]
+pub struct IdentityConfig {
+    broker_name: CheetahString,
+    cluster_name: CheetahString,
+    broker_id: u64,
+}
+
+impl IdentityConfig {
+    #[must_use]
+    pub fn broker_name(&self) -> &str {
+        self.broker_name.as_str()
+    }
+
+    #[must_use]
+    pub fn cluster_name(&self) -> &str {
+        self.cluster_name.as_str()
+    }
+
+    #[must_use]
+    pub const fn broker_id(&self) -> u64 {
+        self.broker_id
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct NetworkConfig {
+    advertised_address: CheetahString,
+    bind_address: IpAddr,
+    listen_port: u16,
+    fast_listen_port: u16,
+    name_server_addresses: Vec<CheetahString>,
+}
+
+impl NetworkConfig {
+    #[must_use]
+    pub fn advertised_address(&self) -> &str {
+        self.advertised_address.as_str()
+    }
+
+    #[must_use]
+    pub const fn bind_address(&self) -> IpAddr {
+        self.bind_address
+    }
+
+    #[must_use]
+    pub const fn listen_port(&self) -> u16 {
+        self.listen_port
+    }
+
+    #[must_use]
+    pub const fn fast_listen_port(&self) -> u16 {
+        self.fast_listen_port
+    }
+
+    #[must_use]
+    pub fn name_server_addresses(&self) -> &[CheetahString] {
+        &self.name_server_addresses
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct HighAvailabilityConfig {
+    listen_address: IpAddr,
+    listen_port: u16,
+    broker_role: BrokerRole,
+    controller_mode: bool,
+}
+
+impl HighAvailabilityConfig {
+    #[must_use]
+    pub const fn listen_address(&self) -> IpAddr {
+        self.listen_address
+    }
+
+    #[must_use]
+    pub const fn listen_port(&self) -> u16 {
+        self.listen_port
+    }
+
+    #[must_use]
+    pub const fn broker_role(&self) -> BrokerRole {
+        self.broker_role
+    }
+
+    #[must_use]
+    pub const fn controller_mode(&self) -> bool {
+        self.controller_mode
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct StorageConfig {
+    broker_root: PathBuf,
+    store_root: PathBuf,
+    commit_log_paths: Vec<PathBuf>,
+    store_type: StoreType,
+}
+
+impl StorageConfig {
+    #[must_use]
+    pub fn broker_root(&self) -> &std::path::Path {
+        &self.broker_root
+    }
+
+    #[must_use]
+    pub fn store_root(&self) -> &std::path::Path {
+        &self.store_root
+    }
+
+    #[must_use]
+    pub fn commit_log_paths(&self) -> &[PathBuf] {
+        &self.commit_log_paths
+    }
+
+    #[must_use]
+    pub const fn store_type(&self) -> StoreType {
+        self.store_type
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct SecurityConfig {
+    authentication_enabled: bool,
+    authorization_enabled: bool,
+    tls_enabled: bool,
+}
+
+impl SecurityConfig {
+    #[must_use]
+    pub const fn authentication_enabled(&self) -> bool {
+        self.authentication_enabled
+    }
+
+    #[must_use]
+    pub const fn authorization_enabled(&self) -> bool {
+        self.authorization_enabled
+    }
+
+    #[must_use]
+    pub const fn tls_enabled(&self) -> bool {
+        self.tls_enabled
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ResourceConfig {
+    max_lite_subscriptions: u64,
+    max_client_events: i32,
+    compaction_threads: usize,
+}
+
+impl ResourceConfig {
+    #[must_use]
+    pub const fn max_lite_subscriptions(&self) -> u64 {
+        self.max_lite_subscriptions
+    }
+
+    #[must_use]
+    pub const fn max_client_events(&self) -> i32 {
+        self.max_client_events
+    }
+
+    #[must_use]
+    pub const fn compaction_threads(&self) -> usize {
+        self.compaction_threads
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct TelemetryConfig {
+    metrics_exporter: MetricsExporterType,
+    trace_exporter: TraceExporterType,
+    metrics_sample_ratio: f64,
+    trace_sample_ratio: f64,
+}
+
+impl TelemetryConfig {
+    #[must_use]
+    pub const fn metrics_exporter(&self) -> MetricsExporterType {
+        self.metrics_exporter
+    }
+
+    #[must_use]
+    pub const fn trace_exporter(&self) -> TraceExporterType {
+        self.trace_exporter
+    }
+
+    #[must_use]
+    pub const fn metrics_sample_ratio(&self) -> f64 {
+        self.metrics_sample_ratio
+    }
+
+    #[must_use]
+    pub const fn trace_sample_ratio(&self) -> f64 {
+        self.trace_sample_ratio
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ValidatedConfigSections {
+    identity: IdentityConfig,
+    network: NetworkConfig,
+    high_availability: HighAvailabilityConfig,
+    storage: StorageConfig,
+    security: SecurityConfig,
+    resources: ResourceConfig,
+    telemetry: TelemetryConfig,
+}
+
+impl ValidatedConfigSections {
+    pub(crate) fn validate(broker: &BrokerConfig, store: &MessageStoreConfig) -> Result<Self, BrokerConfigError> {
+        let identity = validate_identity(broker, store)?;
+        let network = validate_network(broker)?;
+        let high_availability = validate_high_availability(broker, store, &network, &identity)?;
+        let storage = validate_storage(broker, store)?;
+        let security = validate_security(broker)?;
+        let resources = validate_resources(broker, store)?;
+        let telemetry = validate_telemetry(broker)?;
+
+        Ok(Self {
+            identity,
+            network,
+            high_availability,
+            storage,
+            security,
+            resources,
+            telemetry,
+        })
+    }
+
+    #[must_use]
+    pub fn identity(&self) -> &IdentityConfig {
+        &self.identity
+    }
+
+    #[must_use]
+    pub fn network(&self) -> &NetworkConfig {
+        &self.network
+    }
+
+    #[must_use]
+    pub fn high_availability(&self) -> &HighAvailabilityConfig {
+        &self.high_availability
+    }
+
+    #[must_use]
+    pub fn storage(&self) -> &StorageConfig {
+        &self.storage
+    }
+
+    #[must_use]
+    pub fn security(&self) -> &SecurityConfig {
+        &self.security
+    }
+
+    #[must_use]
+    pub fn resources(&self) -> &ResourceConfig {
+        &self.resources
+    }
+
+    #[must_use]
+    pub fn telemetry(&self) -> &TelemetryConfig {
+        &self.telemetry
+    }
+}
+
+fn validate_identity(broker: &BrokerConfig, store: &MessageStoreConfig) -> Result<IdentityConfig, BrokerConfigError> {
+    let broker_name = broker.broker_identity.broker_name.trim();
+    if broker_name.is_empty() {
+        return Err(BrokerConfigError::invalid(
+            ConfigSection::Identity,
+            "broker.brokerIdentity.brokerName",
+            "must not be blank",
+        ));
+    }
+    let cluster_name = broker.broker_identity.broker_cluster_name.trim();
+    if cluster_name.is_empty() {
+        return Err(BrokerConfigError::invalid(
+            ConfigSection::Identity,
+            "broker.brokerIdentity.brokerClusterName",
+            "must not be blank",
+        ));
+    }
+
+    let broker_id = broker.broker_identity.broker_id;
+    if !broker.enable_controller_mode {
+        match store.broker_role {
+            BrokerRole::AsyncMaster | BrokerRole::SyncMaster if broker_id != 0 => {
+                return Err(BrokerConfigError::invalid(
+                    ConfigSection::Identity,
+                    "broker.brokerIdentity.brokerId",
+                    "master brokers must use brokerId 0 when controller mode is disabled",
+                ));
+            }
+            BrokerRole::Slave if broker_id == 0 => {
+                return Err(BrokerConfigError::invalid(
+                    ConfigSection::Identity,
+                    "broker.brokerIdentity.brokerId",
+                    "slave brokers must use a non-zero brokerId when controller mode is disabled",
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    Ok(IdentityConfig {
+        broker_name: broker.broker_identity.broker_name.clone(),
+        cluster_name: broker.broker_identity.broker_cluster_name.clone(),
+        broker_id,
+    })
+}
+
+fn validate_network(broker: &BrokerConfig) -> Result<NetworkConfig, BrokerConfigError> {
+    validate_host(ConfigSection::Network, "broker.brokerIp1", broker.broker_ip1.as_str())?;
+    if let Some(address) = broker.broker_ip2.as_ref() {
+        validate_host(ConfigSection::Network, "broker.brokerIp2", address.as_str())?;
+    }
+    let bind_address = broker
+        .broker_server_config
+        .bind_address
+        .parse::<IpAddr>()
+        .map_err(|error| {
+            BrokerConfigError::invalid(
+                ConfigSection::Network,
+                "broker.brokerServerConfig.bindAddress",
+                format!("must be an IP address: {error}"),
+            )
+        })?;
+    let listen_port = validated_port(ConfigSection::Network, "broker.listenPort", broker.listen_port)?;
+    let fast_listen_port = listen_port.checked_sub(2).filter(|port| *port > 0).ok_or_else(|| {
+        BrokerConfigError::invalid(
+            ConfigSection::Network,
+            "broker.listenPort",
+            "must leave room for the fast remoting listener",
+        )
+    })?;
+
+    let mut name_server_addresses = Vec::new();
+    if let Some(addresses) = broker.namesrv_addr.as_ref() {
+        for address in addresses
+            .split(';')
+            .map(str::trim)
+            .filter(|address| !address.is_empty())
+        {
+            validate_endpoint(ConfigSection::Network, "broker.namesrvAddr", address)?;
+            name_server_addresses.push(address.into());
+        }
+    }
+
+    Ok(NetworkConfig {
+        advertised_address: broker.broker_ip1.clone(),
+        bind_address,
+        listen_port,
+        fast_listen_port,
+        name_server_addresses,
+    })
+}
+
+fn validate_high_availability(
+    broker: &BrokerConfig,
+    store: &MessageStoreConfig,
+    network: &NetworkConfig,
+    identity: &IdentityConfig,
+) -> Result<HighAvailabilityConfig, BrokerConfigError> {
+    let listen_port = u32::try_from(store.ha_listen_port)
+        .ok()
+        .and_then(|port| validated_port(ConfigSection::HighAvailability, "store.haListenPort", port).ok())
+        .ok_or_else(|| {
+            BrokerConfigError::invalid(
+                ConfigSection::HighAvailability,
+                "store.haListenPort",
+                "must be a non-zero TCP port",
+            )
+        })?;
+    if listen_port == network.listen_port || listen_port == network.fast_listen_port {
+        return Err(BrokerConfigError::invalid(
+            ConfigSection::HighAvailability,
+            "store.haListenPort",
+            "must not conflict with a remoting listener",
+        ));
+    }
+    if broker.enable_controller_mode {
+        if broker.controller_addr.trim().is_empty() {
+            return Err(BrokerConfigError::invalid(
+                ConfigSection::HighAvailability,
+                "broker.controllerAddr",
+                "must not be blank when controller mode is enabled",
+            ));
+        }
+        for address in broker
+            .controller_addr
+            .split(';')
+            .map(str::trim)
+            .filter(|address| !address.is_empty())
+        {
+            validate_endpoint(ConfigSection::HighAvailability, "broker.controllerAddr", address)?;
+        }
+    }
+    if identity.broker_id == 0 && store.broker_role == BrokerRole::Slave && !broker.enable_controller_mode {
+        return Err(BrokerConfigError::invalid(
+            ConfigSection::HighAvailability,
+            "store.brokerRole",
+            "slave role conflicts with master broker identity",
+        ));
+    }
+
+    Ok(HighAvailabilityConfig {
+        listen_address: store.ha_listen_address,
+        listen_port,
+        broker_role: store.broker_role,
+        controller_mode: broker.enable_controller_mode,
+    })
+}
+
+fn validate_storage(broker: &BrokerConfig, store: &MessageStoreConfig) -> Result<StorageConfig, BrokerConfigError> {
+    if broker.store_path_root_dir.trim().is_empty() {
+        return Err(BrokerConfigError::invalid(
+            ConfigSection::Storage,
+            "broker.storePathRootDir",
+            "must not be blank",
+        ));
+    }
+    if store.store_path_root_dir.trim().is_empty() {
+        return Err(BrokerConfigError::invalid(
+            ConfigSection::Storage,
+            "store.storePathRootDir",
+            "must not be blank",
+        ));
+    }
+    if store.mapped_file_size_commit_log == 0 {
+        return Err(BrokerConfigError::invalid(
+            ConfigSection::Storage,
+            "store.mappedFileSizeCommitLog",
+            "must be greater than zero",
+        ));
+    }
+    if store.mapped_file_size_consume_queue == 0 {
+        return Err(BrokerConfigError::invalid(
+            ConfigSection::Storage,
+            "store.mappedFileSizeConsumeQueue",
+            "must be greater than zero",
+        ));
+    }
+    if store.disk_space_clean_forcibly_ratio >= store.disk_space_warning_level_ratio {
+        return Err(BrokerConfigError::invalid(
+            ConfigSection::Storage,
+            "store.diskSpaceCleanForciblyRatio",
+            "must be lower than diskSpaceWarningLevelRatio",
+        ));
+    }
+    if store.disk_max_used_space_ratio >= store.disk_space_clean_forcibly_ratio {
+        return Err(BrokerConfigError::invalid(
+            ConfigSection::Storage,
+            "store.diskMaxUsedSpaceRatio",
+            "must be lower than diskSpaceCleanForciblyRatio",
+        ));
+    }
+
+    let commit_log_paths = store
+        .get_store_path_commit_log()
+        .split(rocketmq_model::common::mix_all::MULTI_PATH_SPLITTER.as_str())
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    if commit_log_paths.is_empty() {
+        return Err(BrokerConfigError::invalid(
+            ConfigSection::Storage,
+            "store.storePathCommitLog",
+            "must resolve to at least one path",
+        ));
+    }
+
+    #[cfg(feature = "tieredstore")]
+    if store
+        .tiered_store_config
+        .as_ref()
+        .is_some_and(|config| config.storage_level.enabled())
+        && store.store_type != StoreType::LocalFile
+    {
+        return Err(BrokerConfigError::invalid(
+            ConfigSection::Storage,
+            "store.storeType",
+            "tiered storage requires the local-file store",
+        ));
+    }
+
+    Ok(StorageConfig {
+        broker_root: PathBuf::from(broker.store_path_root_dir.as_str()),
+        store_root: PathBuf::from(store.store_path_root_dir.as_str()),
+        commit_log_paths,
+        store_type: store.store_type,
+    })
+}
+
+fn validate_security(broker: &BrokerConfig) -> Result<SecurityConfig, BrokerConfigError> {
+    if broker.authorization_enabled && !broker.authentication_enabled {
+        return Err(BrokerConfigError::invalid(
+            ConfigSection::Security,
+            "broker.authorizationEnabled",
+            "requires authenticationEnabled=true",
+        ));
+    }
+    if (broker.authentication_enabled || broker.authorization_enabled) && broker.auth_config_path.trim().is_empty() {
+        return Err(BrokerConfigError::invalid(
+            ConfigSection::Security,
+            "broker.authConfigPath",
+            "must not be blank when broker authentication or authorization is enabled",
+        ));
+    }
+    let tls = &broker.broker_server_config.tls_config;
+    if tls.enable && !tls.test_mode_enable {
+        if tls.server.cert_path.as_deref().is_none_or(str::is_empty) {
+            return Err(BrokerConfigError::invalid(
+                ConfigSection::Security,
+                "broker.brokerServerConfig.tlsConfig.server.certPath",
+                "must be configured when TLS is enabled",
+            ));
+        }
+        if tls.server.key_path.as_deref().is_none_or(str::is_empty) {
+            return Err(BrokerConfigError::invalid(
+                ConfigSection::Security,
+                "broker.brokerServerConfig.tlsConfig.server.keyPath",
+                "must be configured when TLS is enabled",
+            ));
+        }
+    }
+
+    Ok(SecurityConfig {
+        authentication_enabled: broker.authentication_enabled,
+        authorization_enabled: broker.authorization_enabled,
+        tls_enabled: tls.enable,
+    })
+}
+
+fn validate_resources(broker: &BrokerConfig, store: &MessageStoreConfig) -> Result<ResourceConfig, BrokerConfigError> {
+    if broker.max_lite_subscription_count == 0 {
+        return Err(BrokerConfigError::invalid(
+            ConfigSection::Resources,
+            "broker.maxLiteSubscriptionCount",
+            "must be greater than zero",
+        ));
+    }
+    if broker.max_client_event_count <= 0 {
+        return Err(BrokerConfigError::invalid(
+            ConfigSection::Resources,
+            "broker.maxClientEventCount",
+            "must be greater than zero",
+        ));
+    }
+    if store.compaction_thread_num == 0 {
+        return Err(BrokerConfigError::invalid(
+            ConfigSection::Resources,
+            "store.compactionThreadNum",
+            "must be greater than zero",
+        ));
+    }
+    if store.timer_get_message_thread_num == 0 || store.timer_put_message_thread_num == 0 {
+        return Err(BrokerConfigError::invalid(
+            ConfigSection::Resources,
+            "store.timerThreadCount",
+            "timer get and put thread counts must be greater than zero",
+        ));
+    }
+
+    Ok(ResourceConfig {
+        max_lite_subscriptions: broker.max_lite_subscription_count,
+        max_client_events: broker.max_client_event_count,
+        compaction_threads: store.compaction_thread_num,
+    })
+}
+
+fn validate_telemetry(broker: &BrokerConfig) -> Result<TelemetryConfig, BrokerConfigError> {
+    validate_ratio("broker.metricsSampleRatio", broker.metrics_sample_ratio)?;
+    validate_ratio("broker.traceSampleRatio", broker.trace_sample_ratio)?;
+    if broker.metrics_export_interval_millis == 0 {
+        return Err(BrokerConfigError::invalid(
+            ConfigSection::Telemetry,
+            "broker.metricsExportIntervalMillis",
+            "must be greater than zero",
+        ));
+    }
+    if broker.metrics_cardinality_limit == 0 {
+        return Err(BrokerConfigError::invalid(
+            ConfigSection::Telemetry,
+            "broker.metricsCardinalityLimit",
+            "must be greater than zero",
+        ));
+    }
+    if broker.metrics_exporter_type == MetricsExporterType::Prom {
+        broker.metrics_prom_exporter_host.parse::<IpAddr>().map_err(|error| {
+            BrokerConfigError::invalid(
+                ConfigSection::Telemetry,
+                "broker.metricsPromExporterHost",
+                format!("must be an IP address: {error}"),
+            )
+        })?;
+        if broker.metrics_prom_exporter_port == 0 {
+            return Err(BrokerConfigError::invalid(
+                ConfigSection::Telemetry,
+                "broker.metricsPromExporterPort",
+                "must be greater than zero",
+            ));
+        }
+        if !broker.metrics_prom_exporter_path.starts_with('/') {
+            return Err(BrokerConfigError::invalid(
+                ConfigSection::Telemetry,
+                "broker.metricsPromExporterPath",
+                "must start with '/'",
+            ));
+        }
+    }
+    if broker.metrics_exporter_type == MetricsExporterType::OtlpGrpc
+        || broker.trace_exporter_type == TraceExporterType::OtlpGrpc
+    {
+        validate_otlp_endpoint("broker.otlpExporterEndpoint", broker.otlp_exporter_endpoint.as_str())?;
+        if broker.otlp_exporter_timeout_millis == 0 {
+            return Err(BrokerConfigError::invalid(
+                ConfigSection::Telemetry,
+                "broker.otlpExporterTimeoutMillis",
+                "must be greater than zero",
+            ));
+        }
+    }
+
+    Ok(TelemetryConfig {
+        metrics_exporter: broker.metrics_exporter_type,
+        trace_exporter: broker.trace_exporter_type,
+        metrics_sample_ratio: broker.metrics_sample_ratio,
+        trace_sample_ratio: broker.trace_sample_ratio,
+    })
+}
+
+fn validate_ratio(field: &'static str, value: f64) -> Result<(), BrokerConfigError> {
+    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+        return Err(BrokerConfigError::invalid(
+            ConfigSection::Telemetry,
+            field,
+            "must be finite and between 0.0 and 1.0",
+        ));
+    }
+    Ok(())
+}
+
+fn validated_port(section: ConfigSection, field: &'static str, port: u32) -> Result<u16, BrokerConfigError> {
+    let port = u16::try_from(port).map_err(|_| BrokerConfigError::invalid(section, field, "must fit a TCP port"))?;
+    if port == 0 {
+        return Err(BrokerConfigError::invalid(section, field, "must be greater than zero"));
+    }
+    Ok(port)
+}
+
+fn validate_host(section: ConfigSection, field: &'static str, host: &str) -> Result<(), BrokerConfigError> {
+    let trimmed = host.trim();
+    if trimmed != host {
+        return Err(BrokerConfigError::invalid(
+            section,
+            field,
+            "must not contain surrounding whitespace",
+        ));
+    }
+    let host = trimmed.trim_end_matches('.');
+    if host.is_empty() {
+        return Err(BrokerConfigError::invalid(section, field, "must not be blank"));
+    }
+    if host.parse::<IpAddr>().is_ok() {
+        return Ok(());
+    }
+    let valid_dns_name = host.len() <= 253
+        && host.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        });
+    if !valid_dns_name {
+        return Err(BrokerConfigError::invalid(
+            section,
+            field,
+            "must be one valid IP address or DNS name",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_endpoint(section: ConfigSection, field: &'static str, endpoint: &str) -> Result<(), BrokerConfigError> {
+    if endpoint.parse::<SocketAddr>().is_ok() {
+        return Ok(());
+    }
+    let Some((host, port)) = endpoint.rsplit_once(':') else {
+        return Err(BrokerConfigError::invalid(
+            section,
+            field,
+            format!("endpoint `{endpoint}` must use host:port syntax"),
+        ));
+    };
+    validate_host(section, field, host.trim_matches(['[', ']']))?;
+    let port = port.parse::<u16>().map_err(|error| {
+        BrokerConfigError::invalid(
+            section,
+            field,
+            format!("endpoint `{endpoint}` has an invalid port: {error}"),
+        )
+    })?;
+    if port == 0 {
+        return Err(BrokerConfigError::invalid(
+            section,
+            field,
+            format!("endpoint `{endpoint}` must use a non-zero port"),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_otlp_endpoint(field: &'static str, endpoint: &str) -> Result<(), BrokerConfigError> {
+    let endpoint = endpoint.trim();
+    let authority = endpoint
+        .strip_prefix("http://")
+        .or_else(|| endpoint.strip_prefix("https://"))
+        .and_then(|remainder| remainder.split('/').next())
+        .filter(|authority| !authority.is_empty())
+        .ok_or_else(|| {
+            BrokerConfigError::invalid(
+                ConfigSection::Telemetry,
+                field,
+                "must be an http:// or https:// endpoint with an explicit port",
+            )
+        })?;
+    validate_endpoint(ConfigSection::Telemetry, field, authority)
+}

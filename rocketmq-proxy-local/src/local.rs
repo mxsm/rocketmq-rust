@@ -72,6 +72,7 @@ use rocketmq_broker::proxy_adapter_compat::TopicRequestHeader;
 use rocketmq_broker::proxy_adapter_compat::TopicRouteData;
 use rocketmq_broker::proxy_adapter_compat::TopicValidator;
 use rocketmq_broker::proxy_adapter_compat::UpdateConsumerOffsetRequestHeader;
+use rocketmq_broker::proxy_adapter_compat::ValidatedBrokerConfig;
 use rocketmq_broker::ProxyBrokerFacade;
 use rocketmq_error::RocketMQError;
 use rocketmq_model::result::SendResult;
@@ -331,25 +332,27 @@ fn validate_local_queue_config(config: &LocalConfig) -> ProxyResult<()> {
 impl LocalBrokerFacadeClient {
     pub fn new(config: LocalConfig, service_context: &ChildServiceContext) -> ProxyResult<Self> {
         validate_local_queue_config(&config)?;
+        let validated_broker_config =
+            ValidatedBrokerConfig::try_from_parts(build_broker_config(&config), build_message_store_config(&config))
+                .map_err(|error| {
+                    ProxyError::RocketMQ(RocketMQError::ConfigInvalidValue {
+                        key: "proxy.local.embeddedBroker",
+                        value: config.broker_name.clone(),
+                        reason: error.to_string(),
+                    })
+                })?;
         let (sender, receiver) = mpsc::channel(config.command_queue_capacity);
         let byte_budget = Arc::new(Semaphore::new(config.command_queue_max_bytes));
         let max_queue_age = config.command_queue_max_age();
         let broker_name = config.broker_name.clone();
         let worker_context = service_context.child("command-worker");
         let broker_context = worker_context.child("embedded-broker-store");
+        let facade = ProxyBrokerFacade::from_validated_config(validated_broker_config, broker_context);
         let shutdown_context = service_context.clone();
         let cancellation = worker_context.task_group().cancellation_token();
         worker_context
             .spawn_service("proxy.local.worker", async move {
-                run_local_broker_worker(
-                    config,
-                    receiver,
-                    cancellation,
-                    shutdown_context,
-                    broker_context,
-                    max_queue_age,
-                )
-                .await;
+                run_local_broker_worker(config, facade, receiver, cancellation, shutdown_context, max_queue_age).await;
             })
             .map_err(|error| ProxyError::Transport {
                 message: format!("failed to spawn proxy local worker: {error}"),
@@ -786,17 +789,12 @@ pub fn local_service_manager_from_config(
 
 async fn run_local_broker_worker(
     config: LocalConfig,
+    mut facade: ProxyBrokerFacade,
     mut receiver: mpsc::Receiver<QueuedLocalBrokerCommand>,
     cancellation: CancellationToken,
     shutdown_context: ChildServiceContext,
-    broker_context: ChildServiceContext,
     max_queue_age: Duration,
 ) {
-    let mut facade = ProxyBrokerFacade::new(
-        build_broker_config(&config),
-        build_message_store_config(&config),
-        broker_context,
-    );
     let initialization = tokio::select! {
         biased;
         () = cancellation.cancelled() => {
@@ -2175,6 +2173,7 @@ fn sanitize_thread_component(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::net::TcpListener;
     use std::sync::Arc;
     use std::time::Duration;
     use std::time::Instant;
@@ -2209,6 +2208,16 @@ mod tests {
     use super::transaction_resolution_flag;
     use super::LocalBrokerFacadeClient;
     use crate::LocalConfig;
+
+    fn available_local_broker_port() -> u16 {
+        loop {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).expect("reserve an ephemeral broker port");
+            let port = listener.local_addr().expect("read ephemeral broker port").port();
+            if port > 2 && port != 10_912 && port.checked_sub(2) != Some(10_912) {
+                return port;
+            }
+        }
+    }
 
     #[test]
     fn topic_message_type_conversion_maps_lite_topics() {
@@ -2351,7 +2360,7 @@ mod tests {
         let config = LocalConfig {
             command_queue_capacity: 7,
             command_queue_max_bytes: 1,
-            broker_listen_port: 0,
+            broker_listen_port: available_local_broker_port(),
             store_root_dir: store.path().to_string_lossy().into_owned(),
             ..LocalConfig::default()
         };
@@ -2432,13 +2441,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn embedded_broker_configuration_is_validated_before_worker_spawn() {
+        let runtime = rocketmq_runtime::RuntimeContext::try_from_current("proxy-local-config-test")
+            .expect("test runtime context");
+        let service = runtime.service_context("proxy-local-config-test.service");
+        let store = tempfile::tempdir().expect("create local Broker store directory");
+        let config = LocalConfig {
+            broker_ip: "invalid host!".to_owned(),
+            broker_listen_port: available_local_broker_port(),
+            store_root_dir: store.path().to_string_lossy().into_owned(),
+            ..LocalConfig::default()
+        };
+
+        match LocalBrokerFacadeClient::new(config, &service) {
+            Err(ProxyError::RocketMQ(RocketMQError::ConfigInvalidValue { key, reason, .. })) => {
+                assert_eq!(key, "proxy.local.embeddedBroker");
+                assert!(reason.contains("broker.brokerIp1"), "{reason}");
+            }
+            Err(error) => panic!("unexpected error: {error}"),
+            Ok(_) => panic!("invalid embedded broker configuration must be rejected"),
+        }
+        assert_eq!(service.task_group().child_count(), 0);
+    }
+
+    #[tokio::test]
     async fn embedded_local_worker_stops_with_its_task_group() {
         let runtime =
             rocketmq_runtime::RuntimeContext::try_from_current("proxy-local-test").expect("test runtime context");
         let service = runtime.service_context("proxy-local-test.service");
         let store = tempfile::tempdir().expect("create local Broker store directory");
         let config = LocalConfig {
-            broker_listen_port: 0,
+            broker_listen_port: available_local_broker_port(),
             store_root_dir: store.path().to_string_lossy().into_owned(),
             ..LocalConfig::default()
         };

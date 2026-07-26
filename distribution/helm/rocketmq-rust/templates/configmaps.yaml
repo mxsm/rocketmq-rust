@@ -9,12 +9,11 @@ metadata:
 data:
 {{- range $ordinal := until (int .Values.services.broker.replicas) }}
   rocketmq-broker-{{ $ordinal }}.toml: |-
+    [broker]
     listenPort = 10911
-    haListenAddress = "0.0.0.0"
     brokerIp1 = "rocketmq-broker-{{ $ordinal }}.rocketmq-broker-headless.{{ $.Release.Namespace }}.svc.cluster.local"
     brokerIp2 = "rocketmq-broker-{{ $ordinal }}.rocketmq-broker-headless.{{ $.Release.Namespace }}.svc.cluster.local"
     storePathRootDir = "/var/lib/rocketmq/broker"
-    storePathBrokerIdentity = "/var/lib/rocketmq/broker/brokerIdentity.json"
     namesrvAddr = "{{ include "rocketmq.namesrvAddresses" $ }}"
     autoCreateTopicEnable = {{ $.Values.services.broker.autoCreateTopicEnable }}
     enableControllerMode = {{ eq $.Values.deploymentProfile "production-controller-ha" }}
@@ -26,10 +25,16 @@ data:
     authorizationEnabled = true
     signatureAlgorithm = "HmacSHA256"
 
-    [brokerIdentity]
+    [broker.brokerIdentity]
     brokerName = {{ $.Values.services.broker.replicaGroupName | quote }}
     brokerClusterName = "RocketmqRust"
     brokerId = 0
+
+    [store]
+    haListenAddress = "0.0.0.0"
+    haListenPort = 10912
+    storePathRootDir = "/var/lib/rocketmq/broker"
+    storePathBrokerIdentity = "/var/lib/rocketmq/broker/brokerIdentity.json"
 {{- end }}
 ---
 apiVersion: v1

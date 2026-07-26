@@ -14,6 +14,11 @@
 
 pub mod broker_config;
 pub mod config_manager;
+pub mod error;
+pub mod raw;
+pub mod sections;
+pub mod transaction;
+pub mod validated;
 
 #[cfg(feature = "rocksdb_store")]
 pub(crate) mod rocksdb_manager;

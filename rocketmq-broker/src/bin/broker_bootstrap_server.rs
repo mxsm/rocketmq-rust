@@ -24,11 +24,12 @@ use clap::Parser;
 use rocketmq_broker::build_broker_telemetry_bootstrap_config;
 use rocketmq_broker::command::Args;
 use rocketmq_broker::config::broker_config::BrokerConfig;
+use rocketmq_broker::config::raw::RawBrokerConfig;
+use rocketmq_broker::config::validated::ValidatedBrokerConfig;
 use rocketmq_broker::Builder;
 use rocketmq_model::common::mq_version::CURRENT_VERSION;
 use rocketmq_model::utils::env_utils::EnvUtils;
 use rocketmq_protocol::protocol::remoting_command;
-use rocketmq_runtime::common::parse_config_file as config_file_parser;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
@@ -37,8 +38,6 @@ use rocketmq_runtime::ShutdownReason;
 use rocketmq_security_api::SecurityBootstrapConfig;
 use rocketmq_security_api::SecurityBootstrapProfile;
 use rocketmq_security_api::ValidatedSecurityBootstrap;
-#[cfg(feature = "tieredstore")]
-use rocketmq_store::base::store_enum::StoreType;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 #[cfg(test)]
 use rocketmq_transport::config::ServerConfig;
@@ -107,24 +106,25 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     args.validate().context("invalid broker arguments")?;
 
     // Parse configuration from file and command line
-    let (mut broker_config, message_store_config, logging_overrides) =
-        parse_config_file(&args).context("failed to parse broker configuration")?;
+    let mut raw_config = parse_config_file(&args).context("failed to parse broker configuration")?;
 
     // Apply system properties (should be done before command line override)
-    let properties = extract_properties_from_config(&broker_config);
+    let properties = extract_properties_from_config(raw_config.broker());
     Args::apply_system_properties(&properties);
 
     // Override config with command line arguments
-    apply_command_line_args(&mut broker_config, &args);
+    apply_command_line_args(&mut raw_config, &args);
 
-    // Validate broker configuration
-    validate_broker_config(&broker_config, &message_store_config).context("invalid broker configuration")?;
+    let validated_config = ValidatedBrokerConfig::try_from(raw_config).context("invalid broker configuration")?;
+    let broker_config = validated_config.broker();
+    let message_store_config = validated_config.store();
+    let logging_overrides = validated_config.logging();
 
     verify_rocketmq_home()?;
 
     // Handle print config and exit without creating telemetry or service listeners.
     if args.should_exit_after_print() {
-        print_config(&broker_config, &message_store_config, args.print_important_config);
+        print_config(broker_config, message_store_config, args.print_important_config);
         return Ok(());
     }
 
@@ -132,16 +132,16 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         SecurityBootstrapConfig::from_env().context("failed to load broker security bootstrap configuration")?;
     let validated_security = validate_broker_security(
         &security_config,
-        &broker_config,
-        &message_store_config,
+        broker_config,
+        message_store_config,
         lifecycle.config().probe_bind_addr,
     )
     .context("broker security bootstrap failed before listener bind")?;
 
     let environment_filter = rocketmq_observability::read_rust_log().context("failed to read RUST_LOG")?;
-    let resolved_filter = resolve_startup_log_filter(&args, &logging_overrides, environment_filter.as_deref())
+    let resolved_filter = resolve_startup_log_filter(&args, logging_overrides, environment_filter.as_deref())
         .context("failed to resolve broker log filter")?;
-    let mut bootstrap_config = build_broker_telemetry_bootstrap_config(&broker_config);
+    let mut bootstrap_config = build_broker_telemetry_bootstrap_config(broker_config);
     bootstrap_config.logging.reload = logging_overrides.logging.reload;
     let telemetry_guard =
         rocketmq_observability::install_global_with_filter(&bootstrap_config, resolved_filter.clone())
@@ -157,7 +157,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     println!("{}", LOGO);
 
     // Print startup info
-    print_startup_info(&broker_config, &message_store_config);
+    print_startup_info(broker_config, message_store_config);
     if let Err(error) = lifecycle.start(&service_context).await {
         lifecycle.mark_failed();
         let request = lifecycle.request_shutdown(ShutdownReason::Internal);
@@ -172,8 +172,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
 
     // Start broker
     Builder::new(service_context)
-        .set_broker_config(broker_config)
-        .set_message_store_config(message_store_config)
+        .with_validated_config(validated_config)
         .set_telemetry_runtime_guard(telemetry_guard)
         .build()
         .boot_with_lifecycle(lifecycle)
@@ -279,34 +278,14 @@ fn verify_rocketmq_home() -> Result<()> {
 /// 1. Explicit config file from `-c` argument
 /// 2. $ROCKETMQ_HOME/conf/broker.toml
 /// 3. Default configuration
-fn parse_config_file(
-    args: &Args,
-) -> Result<(
-    BrokerConfig,
-    MessageStoreConfig,
-    rocketmq_observability::LoggingOverrides,
-)> {
+fn parse_config_file(args: &Args) -> Result<RawBrokerConfig> {
     if let Some(config_file) = args.get_config_file() {
         info!("Loading configuration from: {}", config_file.display());
-
-        let mut broker_config = config_file_parser::parse_config_file::<BrokerConfig>(config_file.clone())
-            .with_context(|| format!("Failed to parse BrokerConfig from {:?}", config_file))?;
-        apply_tls_properties_from_file(&mut broker_config, config_file.clone())?;
-
-        let message_store_config = config_file_parser::parse_config_file::<MessageStoreConfig>(config_file.clone())
-            .with_context(|| format!("Failed to parse MessageStoreConfig from {:?}", config_file))?;
-        let logging_overrides =
-            config_file_parser::parse_config_file::<rocketmq_observability::LoggingOverrides>(config_file.clone())
-                .with_context(|| format!("Failed to parse logging configuration from {:?}", config_file))?;
-
-        Ok((broker_config, message_store_config, logging_overrides))
+        RawBrokerConfig::load(&config_file)
+            .with_context(|| format!("Failed to parse canonical broker configuration from {:?}", config_file))
     } else {
         info!("Using default configuration (no config file specified)");
-        Ok((
-            BrokerConfig::default(),
-            MessageStoreConfig::default(),
-            rocketmq_observability::LoggingOverrides::default(),
-        ))
+        Ok(RawBrokerConfig::default())
     }
 }
 
@@ -324,16 +303,6 @@ fn resolve_startup_log_filter(
     })
 }
 
-fn apply_tls_properties_from_file(broker_config: &mut BrokerConfig, config_file: PathBuf) -> Result<()> {
-    let content = std::fs::read_to_string(&config_file)
-        .with_context(|| format!("Failed to read TLS properties from {:?}", config_file))?;
-    broker_config
-        .broker_server_config
-        .tls_config
-        .apply_java_properties_str(&content);
-    Ok(())
-}
-
 /// Extract properties from BrokerConfig for system property mapping
 fn extract_properties_from_config(_broker_config: &BrokerConfig) -> HashMap<String, String> {
     // Extract relevant properties for system env mapping
@@ -346,94 +315,26 @@ fn extract_properties_from_config(_broker_config: &BrokerConfig) -> HashMap<Stri
 /// Apply command line arguments to broker configuration
 ///
 /// Command line arguments have highest priority and override config file values
-fn apply_command_line_args(broker_config: &mut BrokerConfig, args: &Args) {
+fn apply_command_line_args(raw_config: &mut RawBrokerConfig, args: &Args) {
     // Apply name server address only if explicitly provided via command line or env
     // Otherwise, keep the value from config file
     if args.namesrv_addr.is_some() || env::var("NAMESRV_ADDR").is_ok() {
         let namesrv_addr = args.get_namesrv_addr();
-        broker_config.namesrv_addr = Some(namesrv_addr.into());
+        raw_config.set_name_server_addresses(namesrv_addr);
         info!(
             "Name server address (from command line/env): {}",
-            broker_config.namesrv_addr.as_ref().unwrap()
+            raw_config.broker().namesrv_addr.as_ref().unwrap()
         );
-    } else if let Some(ref addr) = broker_config.namesrv_addr {
+    } else if let Some(ref addr) = raw_config.broker().namesrv_addr {
         info!("Name server address (from config file): {}", addr);
     } else {
         // Use default if not set anywhere
-        broker_config.namesrv_addr = Some("127.0.0.1:9876".to_string().into());
+        raw_config.set_name_server_addresses("127.0.0.1:9876");
         info!(
             "Name server address (default): {}",
-            broker_config.namesrv_addr.as_ref().unwrap()
+            raw_config.broker().namesrv_addr.as_ref().unwrap()
         );
     }
-}
-
-/// Validate broker configuration
-///
-/// Performs validation similar to Java's buildBrokerController:
-/// - Validate name server address format
-/// - Check broker role configuration
-/// - Validate broker ID
-fn validate_broker_config(broker_config: &BrokerConfig, message_store_config: &MessageStoreConfig) -> Result<()> {
-    // Validate name server address if set
-    if let Some(ref namesrv_addr) = broker_config.namesrv_addr {
-        validate_namesrv_address(namesrv_addr.as_str())?;
-    }
-
-    validate_tieredstore_config(message_store_config)?;
-
-    // Validate broker ID based on role (if not using controller mode)
-    // Note: broker_id is u64, so it's always >= 0
-    // No need to check for negative values
-
-    Ok(())
-}
-
-#[cfg(feature = "tieredstore")]
-fn validate_tieredstore_config(message_store_config: &MessageStoreConfig) -> Result<()> {
-    let Some(tiered_store_config) = message_store_config.tiered_store_config.as_ref() else {
-        return Ok(());
-    };
-    if !tiered_store_config.storage_level.enabled() {
-        return Ok(());
-    }
-    if message_store_config.store_type != StoreType::LocalFile {
-        anyhow::bail!(
-            "tieredstore currently requires storeType=LocalFile, actual storeType={}",
-            message_store_config.store_type.get_store_type()
-        );
-    }
-    Ok(())
-}
-
-#[cfg(not(feature = "tieredstore"))]
-fn validate_tieredstore_config(_message_store_config: &MessageStoreConfig) -> Result<()> {
-    Ok(())
-}
-
-/// Validate name server address format
-fn validate_namesrv_address(namesrv_addr: &str) -> Result<()> {
-    if namesrv_addr.is_empty() {
-        return Ok(());
-    }
-
-    let addr_array: Vec<&str> = namesrv_addr.split(';').collect();
-    for addr in addr_array {
-        let trimmed = addr.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        // Basic validation: should contain colon for port
-        if !trimmed.contains(':') {
-            anyhow::bail!(
-                "Invalid name server address format: {}. Expected format: '127.0.0.1:9876;192.168.0.1:9876'",
-                namesrv_addr
-            );
-        }
-    }
-
-    Ok(())
 }
 
 /// Print broker configuration
@@ -574,10 +475,7 @@ fn print_startup_info(broker_config: &BrokerConfig, message_store_config: &Messa
         info!("Name server address: {}", namesrv_addr);
     }
 
-    info!(
-        "Broker listening on: {}:{}",
-        broker_config.broker_ip1, broker_config.listen_port
-    );
+    info!("Broker listening on: {}", broker_config.get_broker_addr());
 
     #[cfg(feature = "tieredstore")]
     print_tieredstore_startup_info(message_store_config);
@@ -644,71 +542,6 @@ mod tests {
         assert!(validate_broker_security(&security, &broker, &store, None).is_err());
     }
 
-    #[cfg(feature = "tieredstore")]
-    fn tieredstore_message_store_config(store_type: StoreType) -> MessageStoreConfig {
-        let mut config: MessageStoreConfig = serde_json::from_value(serde_json::json!({
-            "storePathRootDir": "target/tieredstore-broker-config-test",
-            "tieredStoreConfig": {
-                "storageLevel": "force",
-                "backendProvider": "memory",
-                "metadataProvider": "json",
-                "storePathRootDir": "target/tieredstore-broker-config-test/tiered"
-            }
-        }))
-        .expect("deserialize tieredstore message store config");
-        config.store_type = store_type;
-        config
-    }
-
-    #[test]
-    fn test_validate_namesrv_address_single() {
-        assert!(validate_namesrv_address("127.0.0.1:9876").is_ok());
-    }
-
-    #[test]
-    fn test_validate_namesrv_address_multiple() {
-        assert!(validate_namesrv_address("192.168.0.1:9876;192.168.0.2:9876").is_ok());
-    }
-
-    #[test]
-    fn test_validate_namesrv_address_invalid() {
-        assert!(validate_namesrv_address("invalid_address").is_err());
-    }
-
-    #[test]
-    fn test_validate_namesrv_address_empty() {
-        assert!(validate_namesrv_address("").is_ok());
-    }
-
-    #[cfg(feature = "tieredstore")]
-    #[test]
-    fn validate_broker_config_accepts_tieredstore_with_local_file_store() {
-        let broker_config = BrokerConfig::default();
-        let message_store_config = tieredstore_message_store_config(StoreType::LocalFile);
-
-        assert!(validate_broker_config(&broker_config, &message_store_config).is_ok());
-    }
-
-    #[cfg(feature = "tieredstore")]
-    #[test]
-    fn validate_broker_config_rejects_tieredstore_with_rocksdb_store() {
-        let broker_config = BrokerConfig::default();
-        let message_store_config = tieredstore_message_store_config(StoreType::RocksDB);
-
-        let error = validate_broker_config(&broker_config, &message_store_config)
-            .expect_err("tieredstore should reject non-local-file message stores");
-        assert!(error.to_string().contains("storeType=LocalFile"));
-    }
-
-    #[cfg(not(feature = "tieredstore"))]
-    #[test]
-    fn validate_broker_config_keeps_default_path_without_tieredstore_feature() {
-        let broker_config = BrokerConfig::default();
-        let message_store_config = MessageStoreConfig::default();
-
-        assert!(validate_broker_config(&broker_config, &message_store_config).is_ok());
-    }
-
     #[test]
     fn parse_config_file_reads_camel_case_broker_and_store_paths() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -718,26 +551,34 @@ mod tests {
         let store_root = store_root.to_string_lossy().replace('\\', "/");
         let commit_log = commit_log.to_string_lossy().replace('\\', "/");
         let content = format!(
-            r#"namesrvAddr = "127.0.0.1:9876"
+            r#"[broker]
+namesrvAddr = "127.0.0.1:9876"
 brokerIp1 = "127.0.0.1"
 listenPort = 11911
 storePathRootDir = "{}"
-storePathCommitLog = "{}"
 enableControllerMode = false
-tls.enable = true
-tls.server.mode = "enforcing"
-tls.server.certPath = "/certs/server.pem"
 
-[brokerServerConfig]
-listenPort = 11911
+[broker.brokerServerConfig]
 bindAddress = "0.0.0.0"
 
-[brokerIdentity]
+[broker.brokerServerConfig.tlsConfig]
+enable = true
+testModeEnable = true
+
+[broker.brokerServerConfig.tlsConfig.server]
+mode = "enforcing"
+certPath = "/certs/server.pem"
+
+[broker.brokerIdentity]
 brokerName = "rust-local-broker"
 brokerClusterName = "DefaultCluster"
 brokerId = 0
+
+[store]
+storePathRootDir = "{}"
+storePathCommitLog = "{}"
 "#,
-            store_root, commit_log
+            store_root, store_root, commit_log
         );
         std::fs::write(&config_file, content).expect("write broker config");
 
@@ -749,8 +590,11 @@ brokerId = 0
             log_filter: None,
         };
 
-        let (broker_config, message_store_config, _logging_overrides) =
-            parse_config_file(&args).expect("parse broker config");
+        let raw_config = parse_config_file(&args).expect("parse broker config");
+        let validated_config =
+            ValidatedBrokerConfig::try_from(raw_config).expect("canonical broker config should validate");
+        let broker_config = validated_config.broker();
+        let message_store_config = validated_config.store();
 
         assert_eq!(broker_config.broker_identity.broker_name.as_str(), "rust-local-broker");
         assert_eq!(broker_config.listen_port, 11911);

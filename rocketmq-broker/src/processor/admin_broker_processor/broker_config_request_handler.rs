@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::config::broker_config::BrokerConfig;
+use crate::config::error::BrokerConfigError;
 use cheetah_string::CheetahString;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::constant::file_readahead_mode::READ_AHEAD_MODE;
@@ -163,28 +163,32 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
             return self.update_log_filter(channel, request, response, &properties).await;
         }
 
-        let mut updated_config = self.broker_runtime_inner.broker_config().as_ref().clone();
-        let unsupported_keys = match Self::apply_supported_broker_config_properties(&mut updated_config, &properties) {
-            Ok(unsupported_keys) => unsupported_keys,
-            Err(remark) => {
+        let generation = match self.broker_runtime_inner.commit_broker_config_patch(&properties) {
+            Ok(generation) => generation,
+            Err(error @ BrokerConfigError::RestartRequired { .. })
+            | Err(error @ BrokerConfigError::UnsupportedKeys { .. })
+            | Err(error @ BrokerConfigError::InvalidProperty { .. })
+            | Err(error @ BrokerConfigError::Invalid { .. })
+            | Err(error @ BrokerConfigError::GenerationConflict { .. }) => {
                 return Ok(Some(
-                    response.set_code(ResponseCode::InvalidParameter).set_remark(remark),
+                    response
+                        .set_code(ResponseCode::InvalidParameter)
+                        .set_remark(error.to_string()),
+                ));
+            }
+            Err(error @ BrokerConfigError::Load { .. }) | Err(error @ BrokerConfigError::GenerationExhausted) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::SystemError)
+                        .set_remark(error.to_string()),
                 ));
             }
         };
-        if !unsupported_keys.is_empty() {
-            return Ok(Some(response.set_code(ResponseCode::InvalidParameter).set_remark(
-                format!("unsupported broker config keys: {}", unsupported_keys.join(",")),
-            )));
-        }
 
-        self.broker_runtime_inner.set_broker_config(updated_config);
-
-        Ok(Some(
-            response
-                .set_code(ResponseCode::Success)
-                .set_remark("update broker config success"),
-        ))
+        Ok(Some(response.set_code(ResponseCode::Success).set_remark(format!(
+            "update broker config success, generation={}",
+            generation.value()
+        ))))
     }
 
     async fn update_log_filter(
@@ -539,106 +543,6 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
         ))
     }
 
-    fn apply_supported_broker_config_properties(
-        broker_config: &mut BrokerConfig,
-        properties: &HashMap<CheetahString, CheetahString>,
-    ) -> Result<Vec<String>, CheetahString> {
-        let mut unsupported_keys = Vec::new();
-
-        for (key, value) in properties {
-            match key.as_str() {
-                "enableLiteEventMode" => {
-                    broker_config.enable_lite_event_mode = Self::parse_bool_property(key, value)?;
-                }
-                "liteEventCheckInterval" => {
-                    broker_config.lite_event_check_interval = Self::parse_u64_property(key, value)?;
-                }
-                "liteTtlCheckInterval" => {
-                    broker_config.lite_ttl_check_interval = Self::parse_u64_property(key, value)?;
-                }
-                "liteSubscriptionCheckInterval" => {
-                    broker_config.lite_subscription_check_interval = Self::parse_u64_property(key, value)?;
-                }
-                "liteSubscriptionCheckTimeoutMills" => {
-                    broker_config.lite_subscription_check_timeout_mills = Self::parse_u64_property(key, value)?;
-                }
-                "maxLiteSubscriptionCount" => {
-                    broker_config.max_lite_subscription_count = Self::parse_positive_u64_property(key, value)?;
-                }
-                "enableLitePopLog" => {
-                    broker_config.enable_lite_pop_log = Self::parse_bool_property(key, value)?;
-                }
-                "maxClientEventCount" => {
-                    broker_config.max_client_event_count = Self::parse_positive_i32_property(key, value)?;
-                }
-                "liteEventFullDispatchDelayTime" => {
-                    broker_config.lite_event_full_dispatch_delay_time = Self::parse_u64_property(key, value)?;
-                }
-                "liteLagLatencyCollectEnable" => {
-                    broker_config.lite_lag_latency_collect_enable = Self::parse_bool_property(key, value)?;
-                }
-                "liteLagLatencyMetricsEnable" => {
-                    broker_config.lite_lag_latency_metrics_enable = Self::parse_bool_property(key, value)?;
-                }
-                "liteLagCountMetricsEnable" => {
-                    broker_config.lite_lag_count_metrics_enable = Self::parse_bool_property(key, value)?;
-                }
-                "liteLagLatencyTopK" => {
-                    broker_config.lite_lag_latency_top_k = Self::parse_positive_i32_property(key, value)?;
-                }
-                "validateSystemTopicWhenUpdateTopic" => {
-                    broker_config.validate_system_topic_when_update_topic = Self::parse_bool_property(key, value)?;
-                }
-                "enableMixedMessageType" => {
-                    broker_config.enable_mixed_message_type = Self::parse_bool_property(key, value)?;
-                }
-                _ => unsupported_keys.push(key.to_string()),
-            }
-        }
-
-        unsupported_keys.sort();
-        Ok(unsupported_keys)
-    }
-
-    fn parse_bool_property(key: &CheetahString, value: &CheetahString) -> Result<bool, CheetahString> {
-        value.parse::<bool>().map_err(|_| {
-            CheetahString::from_string(format!("broker config [{}] expects boolean, got [{}]", key, value))
-        })
-    }
-
-    fn parse_u64_property(key: &CheetahString, value: &CheetahString) -> Result<u64, CheetahString> {
-        value.parse::<u64>().map_err(|_| {
-            CheetahString::from_string(format!(
-                "broker config [{}] expects unsigned integer, got [{}]",
-                key, value
-            ))
-        })
-    }
-
-    fn parse_positive_u64_property(key: &CheetahString, value: &CheetahString) -> Result<u64, CheetahString> {
-        let parsed = Self::parse_u64_property(key, value)?;
-        if parsed == 0 {
-            return Err(CheetahString::from_string(format!(
-                "broker config [{}] expects positive integer, got [{}]",
-                key, value
-            )));
-        }
-        Ok(parsed)
-    }
-
-    fn parse_positive_i32_property(key: &CheetahString, value: &CheetahString) -> Result<i32, CheetahString> {
-        let parsed = value.parse::<i32>().map_err(|_| {
-            CheetahString::from_string(format!("broker config [{}] expects integer, got [{}]", key, value))
-        })?;
-        if parsed <= 0 {
-            return Err(CheetahString::from_string(format!(
-                "broker config [{}] expects positive integer, got [{}]",
-                key, value
-            )));
-        }
-        Ok(parsed)
-    }
-
     fn build_timer_metrics_response(&self) -> RemotingCommand {
         let mut response =
             RemotingCommand::create_response_command_with_code_remark(ResponseCode::SystemError, "Unknown");
@@ -885,6 +789,9 @@ mod tests {
     use crate::config::broker_config::BrokerConfig;
     #[cfg(feature = "rocksdb_store")]
     use crate::config::config_manager::ConfigManager;
+    use crate::config::transaction::ConfigUpdateTransaction;
+    use crate::config::validated::ConfigGeneration;
+    use crate::config::validated::ValidatedBrokerConfig;
     use cheetah_string::CheetahString;
     #[cfg(feature = "rocksdb_store")]
     use rocketmq_model::common::config::TopicConfig;
@@ -1166,35 +1073,71 @@ mod tests {
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::InvalidParameter);
         assert!(response
             .remark()
-            .is_some_and(|remark| remark.contains("unsupported broker config keys: unknownKey")));
+            .is_some_and(|remark| remark.contains("unsupported broker configuration keys: unknownKey")));
 
         let _ = fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
 
     #[test]
-    fn query_assignment_defaults_remain_startup_only() {
-        let properties = std::collections::HashMap::from([
-            ("brokerName".into(), "renamed".into()),
-            ("defaultMessageRequestMode".into(), "POP".into()),
-            ("defaultPopShareQueueNum".into(), "2".into()),
-            ("serverLoadBalancerEnable".into(), "true".into()),
-        ]);
-        let unsupported =
-            BrokerConfigRequestHandler::<rocketmq_store::message_store::OwnedMessageStore>::apply_supported_broker_config_properties(
-                &mut BrokerConfig::default(),
-                &properties,
-            )
-            .expect("startup-only keys should be reported, not parsed");
-
+    fn static_and_unknown_properties_are_rejected_before_publication() {
+        let current = ValidatedBrokerConfig::default();
+        let static_properties = HashMap::from([(
+            CheetahString::from_static_str("brokerName"),
+            CheetahString::from_static_str("renamed"),
+        )]);
+        let error =
+            match ConfigUpdateTransaction::from_broker_patch(ConfigGeneration::INITIAL, &current, &static_properties) {
+                Ok(_) => panic!("brokerName must require a restart"),
+                Err(error) => error,
+            };
         assert_eq!(
-            unsupported,
-            [
-                "brokerName",
-                "defaultMessageRequestMode",
-                "defaultPopShareQueueNum",
-                "serverLoadBalancerEnable",
-            ]
+            error.to_string(),
+            "broker configuration fields require restart: brokerName"
         );
+
+        let other_static_properties = HashMap::from([
+            (
+                CheetahString::from_static_str("defaultMessageRequestMode"),
+                CheetahString::from_static_str("POP"),
+            ),
+            (
+                CheetahString::from_static_str("defaultPopShareQueueNum"),
+                CheetahString::from_static_str("2"),
+            ),
+            (
+                CheetahString::from_static_str("serverLoadBalancerEnable"),
+                CheetahString::from_static_str("true"),
+            ),
+        ]);
+        let error = match ConfigUpdateTransaction::from_broker_patch(
+            ConfigGeneration::INITIAL,
+            &current,
+            &other_static_properties,
+        ) {
+            Ok(_) => panic!("other known static properties must require a restart"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error.to_string(),
+            concat!(
+                "broker configuration fields require restart: defaultMessageRequestMode,",
+                "defaultPopShareQueueNum,serverLoadBalancerEnable"
+            )
+        );
+
+        let unknown_properties = HashMap::from([(
+            CheetahString::from_static_str("unknownKey"),
+            CheetahString::from_static_str("true"),
+        )]);
+        let error = match ConfigUpdateTransaction::from_broker_patch(
+            ConfigGeneration::INITIAL,
+            &current,
+            &unknown_properties,
+        ) {
+            Ok(_) => panic!("unknown properties must not enter a runtime generation"),
+            Err(error) => error,
+        };
+        assert_eq!(error.to_string(), "unsupported broker configuration keys: unknownKey");
     }
 
     #[tokio::test]

@@ -113,6 +113,24 @@ impl BrokerRuntime {
         shutdown_report.request_processor = self.shutdown_request_processor_tasks(deadline).await;
         progress.complete("request_processor");
 
+        // Authentication and ACL watchers no longer serve useful work after
+        // remoting admission and request processors have stopped. Release
+        // them before store-dependent drains so a later unhealthy phase
+        // cannot leak security background work.
+        let started = Instant::now();
+        if let Some(auth_runtime) = self.composition.state.auth_runtime.take() {
+            if let Err(error) = auth_runtime.shutdown().await {
+                warn!("Failed to shutdown auth runtime: {error}");
+                shutdown_report.auth =
+                    BrokerShutdownComponentReport::unhealthy("auth", started.elapsed(), error.to_string());
+            } else {
+                shutdown_report.auth = BrokerShutdownComponentReport::completed("auth", started.elapsed());
+            }
+        } else {
+            shutdown_report.auth = BrokerShutdownComponentReport::skipped("auth");
+        }
+        progress.complete("auth");
+
         // Pre-online synchronization depends on metadata providers and Store/HA. Stop it before
         // detaching any of those providers so shutdown cannot race another online transition.
         if let Some(broker_pre_online_service) = self.composition.state.broker_pre_online_service.take() {
@@ -274,19 +292,6 @@ impl BrokerRuntime {
             }
         }
 
-        let started = Instant::now();
-        if let Some(auth_runtime) = self.composition.state.auth_runtime.take() {
-            if let Err(error) = auth_runtime.shutdown().await {
-                warn!("Failed to shutdown auth runtime: {error}");
-                shutdown_report.auth =
-                    BrokerShutdownComponentReport::unhealthy("auth", started.elapsed(), error.to_string());
-            } else {
-                shutdown_report.auth = BrokerShutdownComponentReport::completed("auth", started.elapsed());
-            }
-        } else {
-            shutdown_report.auth = BrokerShutdownComponentReport::skipped("auth");
-        }
-        progress.complete("auth");
         let started = Instant::now();
         let scheduled_report = self
             .shutdown_scheduled_tasks_with_timeout(deadline.remaining().min(SCHEDULED_TASK_SHUTDOWN_TIMEOUT))

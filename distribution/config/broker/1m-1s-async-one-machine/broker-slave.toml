@@ -13,25 +13,23 @@
 # limitations under the License.
 
 
-# ======================
-# Core Broker Settings
-# ======================
-brokerRole = "SLAVE"             # enum BrokerRole: ASYNC_MASTER/AsyncMaster|SYNC_MASTER/SyncMaster|SLAVE/Slave
+[broker]
+listenPort = 10931
+storePathRootDir = "/opt/rocketmq/store/slave"
+
+[broker.brokerIdentity]
+brokerName = "broker-mxsm-a"
+brokerClusterName = "DefaultCluster-mxsm"
+brokerId = 1
+
+[broker.brokerServerConfig]
+bindAddress = "127.0.0.1"
+
+[store]
+brokerRole = "SLAVE"
 flushDiskType = "ASYNC_FLUSH"
 deleteWhen = 4
 fileReservedTime = 72
 haListenPort = 10932
-storePathRootDir = '/opt/rocketmq/store/slave'
-haMasterAddress = "127.0.0.1:10912"  # For Slave to connect to Master
-
-[brokerServerConfig]
-listenPort = 10931
-bind_address = '127.0.0.1'
-
-# ======================
-# Broker Identity
-# ======================
-[brokerIdentity]
-brokerName = "broker-mxsm-a"          # default_broker_name()
-brokerClusterName = "DefaultCluster-mxsm"
-brokerId = 1                           # MASTER_ID
+haMasterAddress = "127.0.0.1:10912"
+storePathRootDir = "/opt/rocketmq/store/slave"

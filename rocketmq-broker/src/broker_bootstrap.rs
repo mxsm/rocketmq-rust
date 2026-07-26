@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use crate::config::broker_config::BrokerConfig;
+use crate::config::validated::ValidatedBrokerConfig;
 use rocketmq_observability::TelemetryRuntimeGuard;
 use rocketmq_runtime::wait_for_signal;
 use rocketmq_runtime::ChildServiceContext;
@@ -22,7 +22,6 @@ use rocketmq_runtime::RuntimeError;
 use rocketmq_runtime::RuntimeResult;
 use rocketmq_runtime::ServiceLifecycle;
 use rocketmq_runtime::ShutdownReason;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use tracing::error;
 use tracing::info;
 
@@ -158,8 +157,7 @@ impl BrokerBootstrap<Running> {
 }
 
 pub struct Builder {
-    broker_config: BrokerConfig,
-    message_store_config: MessageStoreConfig,
+    validated_config: ValidatedBrokerConfig,
     service_context: ChildServiceContext,
     telemetry_runtime_guard: Option<TelemetryRuntimeGuard>,
 }
@@ -168,22 +166,18 @@ impl Builder {
     #[inline]
     pub fn new(service_context: ChildServiceContext) -> Self {
         Builder {
-            broker_config: Default::default(),
-            message_store_config: MessageStoreConfig::default(),
+            validated_config: ValidatedBrokerConfig::default(),
             service_context,
             telemetry_runtime_guard: None,
         }
     }
+
     #[inline]
-    pub fn set_broker_config(mut self, broker_config: BrokerConfig) -> Self {
-        self.broker_config = broker_config;
+    pub fn with_validated_config(mut self, validated_config: ValidatedBrokerConfig) -> Self {
+        self.validated_config = validated_config;
         self
     }
-    #[inline]
-    pub fn set_message_store_config(mut self, message_store_config: MessageStoreConfig) -> Self {
-        self.message_store_config = message_store_config;
-        self
-    }
+
     #[inline]
     pub fn set_telemetry_runtime_guard(mut self, telemetry_runtime_guard: TelemetryRuntimeGuard) -> Self {
         self.telemetry_runtime_guard = Some(telemetry_runtime_guard);
@@ -191,10 +185,8 @@ impl Builder {
     }
     #[inline]
     pub fn build(self) -> BrokerBootstrap<Configured> {
-        let broker_config = Arc::new(self.broker_config);
-        let message_store_config = Arc::new(self.message_store_config);
         let mut broker_runtime =
-            BrokerRuntime::new_with_service_context(broker_config, message_store_config, self.service_context);
+            BrokerRuntime::new_with_validated_config(Arc::new(self.validated_config), self.service_context);
         if let Some(telemetry_runtime_guard) = self.telemetry_runtime_guard {
             broker_runtime.set_telemetry_runtime_guard(telemetry_runtime_guard);
         }

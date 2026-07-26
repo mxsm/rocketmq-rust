@@ -699,7 +699,7 @@ mod defaults {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BrokerConfig {
     #[serde(default = "defaults::broker_identity")]
     pub broker_identity: BrokerIdentity,
@@ -1592,7 +1592,10 @@ impl BrokerConfig {
     }
 
     pub fn get_broker_addr(&self) -> String {
-        format!("{}:{}", self.broker_ip1, self.listen_port)
+        match self.broker_ip1.parse::<IpAddr>() {
+            Ok(IpAddr::V6(address)) => format!("[{address}]:{}", self.listen_port),
+            _ => format!("{}:{}", self.broker_ip1, self.listen_port),
+        }
     }
 
     pub fn get_start_accept_send_request_time_stamp(&self) -> i64 {
@@ -1614,6 +1617,18 @@ impl BrokerConfig {
         properties.insert(
             "defaultTopicQueueNums".into(),
             self.topic_queue_config.default_topic_queue_nums.to_string().into(),
+        );
+        properties.insert(
+            "defaultMessageRequestMode".into(),
+            self.default_message_request_mode.get_name().into(),
+        );
+        properties.insert(
+            "defaultPopShareQueueNum".into(),
+            self.default_pop_share_queue_num.to_string().into(),
+        );
+        properties.insert(
+            "serverLoadBalancerEnable".into(),
+            self.server_load_balancer_enable.to_string().into(),
         );
         properties.insert(
             "timerWheelEnable".into(),
@@ -2104,7 +2119,7 @@ impl BrokerConfig {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TopicQueueConfig {
     #[serde(default = "defaults::default_topic_queue_nums")]
     pub default_topic_queue_nums: u32,
@@ -2119,7 +2134,7 @@ impl Default for TopicQueueConfig {
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TimerWheelConfig {
     #[serde(default)]
     pub timer_wheel_enable: bool,
@@ -2417,6 +2432,24 @@ mod tests {
         assert_eq!(
             properties.get("liteLagLatencyTopK").map(|value| value.as_str()),
             Some("50")
+        );
+    }
+
+    #[test]
+    fn get_properties_includes_query_assignment_startup_fields() {
+        let properties = BrokerConfig::default().get_properties();
+
+        assert_eq!(
+            properties.get("defaultMessageRequestMode").map(|value| value.as_str()),
+            Some("PULL")
+        );
+        assert_eq!(
+            properties.get("defaultPopShareQueueNum").map(|value| value.as_str()),
+            Some("-1")
+        );
+        assert_eq!(
+            properties.get("serverLoadBalancerEnable").map(|value| value.as_str()),
+            Some("true")
         );
     }
 

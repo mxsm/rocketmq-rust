@@ -134,7 +134,7 @@ impl<'de> Deserialize<'de> for TlsClientAuth {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TlsConfig {
     #[serde(default)]
     pub enable: bool,
@@ -283,7 +283,7 @@ impl TlsConfig {
 }
 
 #[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TlsServerConfig {
     #[serde(default)]
     pub mode: TlsMode,
@@ -323,7 +323,7 @@ impl fmt::Debug for TlsServerConfig {
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TlsClientConfig {
     #[serde(default)]
     pub key_path: Option<String>,

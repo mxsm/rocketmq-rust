@@ -1,0 +1,14 @@
+[broker]
+listenPort = 10911
+storePathRootDir = "./target/config-contract/broker"
+authenticationEnabled = false
+authorizationEnabled = true
+
+[broker.brokerIdentity]
+brokerName = "config-contract-broker"
+brokerClusterName = "ConfigContract"
+brokerId = 0
+
+[store]
+haListenPort = 10912
+storePathRootDir = "./target/config-contract/store"

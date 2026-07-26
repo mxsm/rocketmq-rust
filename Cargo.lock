@@ -4528,6 +4528,7 @@ dependencies = [
  "cfg-if",
  "cheetah-string",
  "clap",
+ "config",
  "criterion",
  "crossbeam-skiplist",
  "dashmap",
