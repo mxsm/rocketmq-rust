@@ -271,8 +271,9 @@ mod tests {
 
     #[tokio::test]
     async fn rocketmq_error_response_uses_redacted_context() {
-        let (status, body) = failure_response(DashboardError::from(RocketMQError::Internal(
-            "password=plain-text".to_string(),
+        let (status, body) = failure_response(DashboardError::from(RocketMQError::internal(
+            "run dashboard request",
+            std::io::Error::other("password=plain-text"),
         )))
         .await;
 

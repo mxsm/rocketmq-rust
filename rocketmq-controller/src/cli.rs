@@ -224,14 +224,14 @@ impl ControllerCli {
 /// # Examples
 ///
 /// ```rust,no_run
-/// use rocketmq_controller::cli::parse_command_line;
+/// use rocketmq_controller::parse_command_line;
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let (cli, config) = parse_command_line()?;
 ///
 ///     if cli.print_config_item {
-///         rocketmq_controller::cli::ControllerCli::print_config(&config);
+///         rocketmq_controller::ControllerCli::print_config(&config);
 ///         std::process::exit(0);
 ///     }
 ///

@@ -70,19 +70,19 @@ use rocketmq_model::common::message::message_single::Message;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
-use rocketmq_store::base::get_message_result::GetMessageResult;
-use rocketmq_store::base::message_result::PutMessageResult;
-use rocketmq_store::base::message_status_enum::GetMessageStatus;
-use rocketmq_store::base::message_status_enum::PutMessageStatus;
-use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::FlushDiskType;
+use rocketmq_store::GetMessageResult;
+use rocketmq_store::GetMessageStatus;
+use rocketmq_store::LocalFileMessageStore;
+use rocketmq_store::MessageStore;
+use rocketmq_store::MessageStoreConfig;
+use rocketmq_store::PutMessageResult;
+use rocketmq_store::PutMessageStatus;
 #[cfg(feature = "rocksdb_store")]
-use rocketmq_store::base::store_enum::StoreType;
-use rocketmq_store::config::flush_disk_type::FlushDiskType;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
-use rocketmq_store::config::store_runtime_config::StoreRuntimeConfig;
-use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
+use rocketmq_store::RocksDBMessageStore;
+use rocketmq_store::StoreRuntimeConfig;
 #[cfg(feature = "rocksdb_store")]
-use rocketmq_store::message_store::rocksdb_message_store::RocksDBMessageStore;
+use rocketmq_store::StoreType;
 use rocketmq_store_local::mapped_file::SelectMappedBufferCacheState;
 use rocketmq_store_local::mapped_file::SelectMappedBufferSourceKind;
 #[cfg(feature = "tieredstore")]

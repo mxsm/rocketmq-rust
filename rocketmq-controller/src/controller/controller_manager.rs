@@ -58,14 +58,14 @@ use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
-use rocketmq_transport::base::channel_event_listener::ChannelEventListener;
-use rocketmq_transport::clients::rocketmq_tokio_client::RocketmqDefaultClient;
-use rocketmq_transport::clients::RemotingClient;
-use rocketmq_transport::config::ServerConfig;
-use rocketmq_transport::remoting::RemotingService;
-use rocketmq_transport::remoting_server::rocketmq_tokio_server::RocketMQServer;
-use rocketmq_transport::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
-use rocketmq_transport::runtime::config::client_config::TokioClientConfig;
+use rocketmq_transport::ChannelEventListener;
+use rocketmq_transport::DefaultRemotingRequestProcessor;
+use rocketmq_transport::RemotingClient;
+use rocketmq_transport::RemotingService;
+use rocketmq_transport::RocketMQServer;
+use rocketmq_transport::RocketmqDefaultClient;
+use rocketmq_transport::ServerConfig;
+use rocketmq_transport::TokioClientConfig;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::Mutex as AsyncMutex;
@@ -1415,12 +1415,12 @@ mod tests {
     use rocketmq_protocol::protocol::header::controller::register_broker_to_controller_request_header::RegisterBrokerToControllerRequestHeader;
     use rocketmq_protocol::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-    use rocketmq_transport::base::response_future::ResponseFuture;
-    use rocketmq_transport::connection::Connection;
-    use rocketmq_transport::net::channel::Channel;
-    use rocketmq_transport::net::channel::ChannelInner;
-    use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
-    use rocketmq_transport::runtime::processor::RequestProcessor;
+    use rocketmq_transport::Channel;
+    use rocketmq_transport::ChannelInner;
+    use rocketmq_transport::Connection;
+    use rocketmq_transport::ConnectionHandlerContextWrapper;
+    use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
+    use rocketmq_transport::ResponseFuture;
 
     async fn wait_until<F>(timeout: Duration, mut predicate: F, context: &str)
     where

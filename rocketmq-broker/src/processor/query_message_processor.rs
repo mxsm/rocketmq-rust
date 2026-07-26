@@ -25,16 +25,16 @@ use rocketmq_protocol::protocol::header::query_message_request_header::QueryMess
 use rocketmq_protocol::protocol::header::query_message_response_header::QueryMessageResponseHeader;
 use rocketmq_protocol::protocol::header::view_message_request_header::ViewMessageRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::base::query_message_result::QueryMessageResult;
-use rocketmq_store::base::select_result::SelectMappedBufferResult;
+use rocketmq_store::MessageStore;
+use rocketmq_store::QueryMessageResult;
+use rocketmq_store::SelectMappedBufferResult;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreErrorKind;
 use rocketmq_store_api::StoreOperation;
-use rocketmq_transport::error_response;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_transport::runtime::processor::RequestProcessor;
+use rocketmq_transport::request_code_not_supported_with_remark_and_opaque;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
 use tracing::info;
 use tracing::warn;
 
@@ -154,7 +154,7 @@ where
                     "QueryMessageProcessor received unknown request code: {:?}",
                     request_code
                 );
-                let response = error_response::request_code_not_supported_with_remark_and_opaque(
+                let response = request_code_not_supported_with_remark_and_opaque(
                     request.code(),
                     format!("QueryMessageProcessor request code {} not supported", request.code()),
                     request.opaque(),
@@ -327,8 +327,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocketmq_store::base::query_message_result::QueryMessageResult;
-    use rocketmq_store::message_store::OwnedMessageStore;
+    use rocketmq_store::OwnedMessageStore;
+    use rocketmq_store::QueryMessageResult;
 
     fn header(index_type: Option<&'static str>) -> QueryMessageRequestHeader {
         QueryMessageRequestHeader {

@@ -30,15 +30,15 @@ use rocketmq_protocol::protocol::header::message_operation_header::TopicRequestH
 use rocketmq_protocol::protocol::header::reply_message_request_header::ReplyMessageRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_store::base::message_result::PutMessageResult;
-use rocketmq_store::base::message_status_enum::PutMessageStatus;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
-use rocketmq_store::stats::stats_type::StatsType;
-use rocketmq_transport::error_response;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_transport::runtime::processor::RequestProcessor;
+use rocketmq_store::BrokerStatsManager;
+use rocketmq_store::MessageStore;
+use rocketmq_store::PutMessageResult;
+use rocketmq_store::PutMessageStatus;
+use rocketmq_store::StatsType;
+use rocketmq_transport::request_code_not_supported_with_remark_and_opaque;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
 use tracing::info;
 use tracing::warn;
 
@@ -145,7 +145,7 @@ where
                     "ReplyMessageProcessor received unknown request code: {:?}",
                     request_code
                 );
-                let response = error_response::request_code_not_supported_with_remark_and_opaque(
+                let response = request_code_not_supported_with_remark_and_opaque(
                     request.code(),
                     format!("ReplyMessageProcessor request code {} not supported", request.code()),
                     request.opaque(),

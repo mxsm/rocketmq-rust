@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use rocketmq_error::RocketMQResult;
-use rocketmq_store::base::memory_lock_manager::MemoryLockCategory as LegacyCategory;
-use rocketmq_store::base::memory_lock_manager::MemoryLockHandle as LegacyHandle;
-use rocketmq_store::base::memory_lock_manager::MemoryLockManager as LegacyManager;
+use rocketmq_store::MemoryLockCategory as LegacyCategory;
+use rocketmq_store::MemoryLockHandle as LegacyHandle;
+use rocketmq_store::MemoryLockManager as LegacyManager;
 use rocketmq_store_local::base::memory_lock_manager::MemoryLockCategory as CanonicalCategory;
 use rocketmq_store_local::base::memory_lock_manager::MemoryLockHandle as CanonicalHandle;
 use rocketmq_store_local::base::memory_lock_manager::MemoryLockManager as CanonicalManager;
@@ -62,9 +62,9 @@ fn legacy_memory_lock_types_are_the_canonical_local_types() {
 
 #[test]
 fn legacy_memory_lock_syscalls_are_direct_local_reexports() {
-    let legacy_mlock: fn(*const u8, usize) -> RocketMQResult<()> = rocketmq_store::utils::ffi::mlock;
+    let legacy_mlock: fn(*const u8, usize) -> RocketMQResult<()> = rocketmq_store::mlock;
     let canonical_mlock: fn(*const u8, usize) -> RocketMQResult<()> = rocketmq_store_local::utils::ffi::mlock;
-    let legacy_munlock: fn(*const u8, usize) -> RocketMQResult<()> = rocketmq_store::utils::ffi::munlock;
+    let legacy_munlock: fn(*const u8, usize) -> RocketMQResult<()> = rocketmq_store::munlock;
     let canonical_munlock: fn(*const u8, usize) -> RocketMQResult<()> = rocketmq_store_local::utils::ffi::munlock;
 
     assert_eq!(legacy_mlock as usize, canonical_mlock as usize);

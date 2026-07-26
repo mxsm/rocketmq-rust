@@ -476,7 +476,7 @@ pub trait Controller: Send + Sync {
 /// # Example
 ///
 /// ```rust,ignore
-/// use rocketmq_controller::controller::MockController;
+/// use rocketmq_controller::MockController;
 ///
 /// #[tokio::test]
 /// async fn test_request_processor() {

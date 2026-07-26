@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_store::platform::classify_file_preallocate_result;
-use rocketmq_store::platform::current_store_platform_capability;
-use rocketmq_store::platform::FilePreallocateOutcome;
-use rocketmq_store::platform::PREALLOCATE_UNSUPPORTED_ERRNO;
+use rocketmq_store::classify_file_preallocate_result;
+use rocketmq_store::current_store_platform_capability;
+use rocketmq_store::FilePreallocateOutcome;
+use rocketmq_store::PREALLOCATE_UNSUPPORTED_ERRNO;
 use rocketmq_store_local::mapped_file::file::classify_file_preallocate_result as canonical_classify;
 use rocketmq_store_local::mapped_file::file::preallocate_file as canonical_preallocate;
 use rocketmq_store_local::mapped_file::file::FilePreallocateOutcome as CanonicalFilePreallocateOutcome;
@@ -55,7 +55,7 @@ fn legacy_preallocation_paths_are_exact_canonical_reexports() {
         canonical_classify(-1, CANONICAL_UNSUPPORTED_ERRNO)
     );
 
-    let legacy_fn: fn(&std::fs::File, u64) -> FilePreallocateOutcome = rocketmq_store::platform::preallocate_file;
+    let legacy_fn: fn(&std::fs::File, u64) -> FilePreallocateOutcome = rocketmq_store::preallocate_file;
     let canonical_fn: fn(&std::fs::File, u64) -> CanonicalFilePreallocateOutcome = canonical_preallocate;
     assert_eq!(legacy_fn as usize, canonical_fn as usize);
 }

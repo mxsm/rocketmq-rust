@@ -28,15 +28,17 @@ use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_protocol::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
 use rocketmq_protocol::protocol::DataVersion;
-use rocketmq_store::base::message_result::PutMessageResult;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
-use rocketmq_store::stats::broker_stats::BrokerStats;
-use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
-use rocketmq_store::store_error::StoreError;
-use rocketmq_store::timer::timer_message_store::TimerMessageStore;
-use rocketmq_store::utils::ffi::MADV_NORMAL;
-use rocketmq_transport::config::ServerConfig;
+use rocketmq_store::BrokerStats;
+use rocketmq_store::BrokerStatsManager;
+use rocketmq_store::MessageStore;
+use rocketmq_store::MessageStoreConfig;
+use rocketmq_store::PutMessageResult;
+use rocketmq_store::StoreError;
+use rocketmq_store::StoreErrorKind;
+use rocketmq_store::StoreOperation;
+use rocketmq_store::TimerMessageStore;
+use rocketmq_store::MADV_NORMAL;
+use rocketmq_transport::ServerConfig;
 use tracing::warn;
 
 use crate::broker::broker_control_plane::BrokerControllerRuntime;
@@ -281,7 +283,7 @@ impl<MS: MessageStore> BrokerAdminRuntime<MS> {
     pub(crate) fn set_commitlog_read_mode(&self, read_ahead_mode: i32) -> Result<(), CommitLogReadModeUpdateError> {
         self.message_store_provider
             .upgrade()
-            .ok_or(StoreError::NotStarted)?
+            .ok_or(StoreError::new(StoreErrorKind::NotStarted, StoreOperation::Admin))?
             .set_commitlog_read_mode(read_ahead_mode)?;
         self.config.apply_data_read_ahead(read_ahead_mode == MADV_NORMAL)?;
         Ok(())

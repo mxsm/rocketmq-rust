@@ -30,7 +30,7 @@ use rocketmq_security_api::Secret;
 use rocketmq_security_api::SecurityRequestView;
 use rocketmq_security_api::Signature;
 use rocketmq_security_api::SigningError;
-use rocketmq_transport::runtime::RPCHook;
+use rocketmq_transport::RPCHook;
 use serde::Deserialize;
 
 use crate::authentication::builder::DefaultAuthenticationContextBuilder;

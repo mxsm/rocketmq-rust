@@ -38,9 +38,9 @@ use rocketmq_runtime::ShutdownReason;
 use rocketmq_security_api::SecurityBootstrapConfig;
 use rocketmq_security_api::SecurityBootstrapProfile;
 use rocketmq_security_api::ValidatedSecurityBootstrap;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
+use rocketmq_store::MessageStoreConfig;
 #[cfg(test)]
-use rocketmq_transport::config::ServerConfig;
+use rocketmq_transport::ServerConfig;
 use tracing::info;
 use tracing::warn;
 
@@ -207,7 +207,7 @@ fn validate_broker_security(
             u16::try_from(message_store_config.ha_listen_port).context("broker haListenPort must fit a TCP port")?;
         listeners.push(SocketAddr::new(message_store_config.ha_listen_address, ha_listen_port));
     }
-    if broker_config.metrics_exporter_type == rocketmq_observability::exporter_types::MetricsExporterType::Prom {
+    if broker_config.metrics_exporter_type == rocketmq_observability::MetricsExporterType::Prom {
         let metrics_ip = broker_config
             .metrics_prom_exporter_host
             .parse::<IpAddr>()
@@ -533,10 +533,10 @@ mod tests {
         assert!(validate_broker_security(&security, &broker, &store, None).is_err());
         store.ha_listen_address = IpAddr::from([127, 0, 0, 1]);
 
-        broker.metrics_exporter_type = rocketmq_observability::exporter_types::MetricsExporterType::Prom;
+        broker.metrics_exporter_type = rocketmq_observability::MetricsExporterType::Prom;
         broker.metrics_prom_exporter_host = "0.0.0.0".into();
         assert!(validate_broker_security(&security, &broker, &store, None).is_err());
-        broker.metrics_exporter_type = rocketmq_observability::exporter_types::MetricsExporterType::Disable;
+        broker.metrics_exporter_type = rocketmq_observability::MetricsExporterType::Disable;
 
         broker.broker_server_config.bind_address = "0.0.0.0".to_string();
         assert!(validate_broker_security(&security, &broker, &store, None).is_err());
@@ -602,7 +602,7 @@ storePathCommitLog = "{}"
         assert!(broker_config.broker_server_config.tls_config.enable);
         assert_eq!(
             broker_config.broker_server_config.tls_config.server.mode,
-            rocketmq_transport::config::TlsMode::Enforcing
+            rocketmq_transport::TlsMode::Enforcing
         );
         assert_eq!(
             broker_config

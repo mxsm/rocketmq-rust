@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use rocketmq_error::RocketMQError;
+use rocketmq_error::UnifiedServiceError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TieredStoreErrorKind {
@@ -58,7 +59,7 @@ pub fn invalid_segment_type(message: impl Into<String>) -> RocketMQError {
 
 #[inline]
 pub fn internal(message: impl Into<String>) -> RocketMQError {
-    RocketMQError::Internal(message.into())
+    RocketMQError::Service(UnifiedServiceError::StartupFailed(message.into()))
 }
 
 pub fn from_kind(kind: TieredStoreErrorKind, path: impl Into<String>, message: impl Into<String>) -> RocketMQError {

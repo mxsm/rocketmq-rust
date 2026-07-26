@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_transport::buffer::ByteBufferPool;
+use rocketmq_transport::ByteBufferPool;
 
 #[test]
 fn byte_pool_rejects_before_allocation_and_releases_capacity_on_drop() {

@@ -70,8 +70,8 @@ impl<P: AuthorizationMetadataProvider> AclAuthorizationHandler<P> {
     /// # Example
     ///
     /// ```rust,ignore
-    /// use rocketmq_auth::authorization::chain::AclAuthorizationHandler;
-    /// use rocketmq_auth::authorization::metadata_provider::LocalAuthorizationMetadataProvider;
+    /// use rocketmq_auth::AclAuthorizationHandler;
+    /// use rocketmq_auth::LocalAuthorizationMetadataProvider;
     /// use std::sync::Arc;
     ///
     /// let provider = Arc::new(LocalAuthorizationMetadataProvider::new());

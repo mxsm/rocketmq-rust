@@ -15,7 +15,7 @@
 //! Consumer offset-related admin service models and operations.
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
+use rocketmq_client_rust::MQAdminExt;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::admin::rollback_stats::RollbackStats;

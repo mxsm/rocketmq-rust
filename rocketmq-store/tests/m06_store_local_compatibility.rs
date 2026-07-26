@@ -17,17 +17,18 @@ use std::time::Duration;
 
 use memmap2::MmapOptions;
 use parking_lot::RwLock;
-use rocketmq_store::log_file::mapped_file::io_uring_backend_status as legacy_io_uring_backend_status;
-use rocketmq_store::log_file::mapped_file::io_uring_impl as legacy_io_uring;
-use rocketmq_store::log_file::mapped_file::DirectIoBuffer as LegacyDirectIoBuffer;
-use rocketmq_store::log_file::mapped_file::DirectIoRequest as LegacyDirectIoRequest;
-use rocketmq_store::log_file::mapped_file::DirectIoValidationError as LegacyDirectIoValidationError;
-use rocketmq_store::log_file::mapped_file::FlushStrategy as LegacyFlushStrategy;
-use rocketmq_store::log_file::mapped_file::IoUringBackendStatus as LegacyIoUringBackendStatus;
-use rocketmq_store::log_file::mapped_file::MappedBuffer as LegacyMappedBuffer;
-use rocketmq_store::log_file::mapped_file::MappedFileError as LegacyMappedFileError;
-use rocketmq_store::log_file::mapped_file::MappedFileMetrics as LegacyMappedFileMetrics;
-use rocketmq_store::log_file::mapped_file::MappedFileResult as LegacyMappedFileResult;
+use rocketmq_store::io_uring_backend_status as legacy_io_uring_backend_status;
+use rocketmq_store::probe_io_uring_runtime_capability as legacy_probe_io_uring_runtime_capability;
+use rocketmq_store::DirectIoBuffer as LegacyDirectIoBuffer;
+use rocketmq_store::DirectIoRequest as LegacyDirectIoRequest;
+use rocketmq_store::DirectIoValidationError as LegacyDirectIoValidationError;
+use rocketmq_store::FlushStrategy as LegacyFlushStrategy;
+use rocketmq_store::IoUringBackendStatus as LegacyIoUringBackendStatus;
+use rocketmq_store::IoUringRuntimeCapability as LegacyIoUringRuntimeCapability;
+use rocketmq_store::MappedBuffer as LegacyMappedBuffer;
+use rocketmq_store::MappedFileError as LegacyMappedFileError;
+use rocketmq_store::MappedFileMetrics as LegacyMappedFileMetrics;
+use rocketmq_store::MappedFileResult as LegacyMappedFileResult;
 use rocketmq_store_local::mapped_file::io_uring_backend_status as canonical_io_uring_backend_status;
 use rocketmq_store_local::mapped_file::io_uring_impl as canonical_io_uring;
 use rocketmq_store_local::mapped_file::DirectIoBuffer as CanonicalDirectIoBuffer;
@@ -143,11 +144,10 @@ fn io_uring_status_and_capability_preserve_identity() {
     let canonical_status = canonical_io_uring_status(legacy_io_uring_backend_status());
     assert_eq!(canonical_status.as_str(), canonical_io_uring_backend_status().as_str());
 
-    let canonical_capability: canonical_io_uring::IoUringRuntimeCapability =
-        legacy_io_uring::probe_io_uring_runtime_capability();
+    let canonical_capability: canonical_io_uring::IoUringRuntimeCapability = legacy_probe_io_uring_runtime_capability();
     assert_eq!(canonical_capability.backend_status, canonical_status);
     assert!(canonical_capability.experimental);
 
-    let legacy_capability: legacy_io_uring::IoUringRuntimeCapability = canonical_capability;
+    let legacy_capability: LegacyIoUringRuntimeCapability = canonical_capability;
     assert_eq!(legacy_capability.fallback_reason, canonical_capability.fallback_reason);
 }

@@ -17,8 +17,8 @@ use std::sync::Arc;
 use std::sync::Weak;
 
 use cheetah_string::CheetahString;
-use rocketmq_store::base::message_arriving_listener::MessageArrivingListener;
-use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::MessageArrivingListener;
+use rocketmq_store::MessageStore;
 
 use crate::long_polling::long_polling_service::pull_request_hold_service::PullRequestHoldService;
 use crate::processor::notification_processor::NotificationProcessor;

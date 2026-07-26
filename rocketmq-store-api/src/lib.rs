@@ -14,9 +14,9 @@
 
 //! Storage capability contracts.
 
-pub mod capability;
-pub mod error;
-pub mod progress;
+mod capability;
+mod error;
+mod progress;
 
 pub use capability::AdminStore;
 pub use capability::DerivedRecordSink;
@@ -26,6 +26,7 @@ pub use capability::OffsetIndex;
 pub use capability::ReplicationControl;
 pub use capability::StoreHealth;
 pub use capability::StoreLifecycle;
+pub use error::StoreComponent;
 pub use error::StoreError;
 pub use error::StoreErrorKind;
 pub use error::StoreOperation;

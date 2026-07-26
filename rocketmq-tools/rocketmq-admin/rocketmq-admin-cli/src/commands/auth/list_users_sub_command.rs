@@ -81,10 +81,14 @@ fn render_list_users_result(result: ListUsersResult) -> RocketMQResult<()> {
     if result.failed_broker_addrs.is_empty() {
         Ok(())
     } else {
-        Err(RocketMQError::Internal(format!(
-            "ListUsersSubCommand: Failed to list users for brokers {}",
-            result.failed_broker_addrs.join(", ")
-        )))
+        Err(RocketMQError::broker_operation_failed(
+            "LIST_USERS",
+            -1,
+            format!(
+                "ListUsersSubCommand: Failed to list users for brokers {}",
+                result.failed_broker_addrs.join(", ")
+            ),
+        ))
     }
 }
 

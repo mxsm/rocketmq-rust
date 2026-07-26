@@ -28,7 +28,7 @@ use rocketmq_security_api::Secret;
 use rocketmq_security_api::SecurityRequestView;
 use rocketmq_security_api::Signature;
 use rocketmq_security_api::SigningError;
-use rocketmq_transport::security::TransportSecurity;
+use rocketmq_transport::TransportSecurity;
 
 struct AllowPolicy;
 

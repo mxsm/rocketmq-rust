@@ -44,7 +44,6 @@ use rocketmq_model::topic::RETRY_GROUP_TOPIC_PREFIX;
 use rocketmq_model::version::RocketMqVersion;
 use tracing::warn;
 
-use rocketmq_observability::config::MetricsExporter;
 use rocketmq_observability::metrics::auth::AuthMetricsSnapshot;
 use rocketmq_observability::metrics::broker::BrokerMetrics;
 use rocketmq_observability::metrics::broker_constants::BrokerMetricsConstant;
@@ -57,7 +56,8 @@ use rocketmq_observability::metrics::owner_instruments::KeyValue;
 use rocketmq_observability::metrics::owner_instruments::Meter;
 use rocketmq_observability::metrics::owner_instruments::MeterProvider;
 use rocketmq_observability::metrics::owner_instruments::SdkMeterProvider;
-use rocketmq_observability::sampling::SamplingGate;
+use rocketmq_observability::MetricsExporter;
+use rocketmq_observability::SamplingGate;
 
 // ============================================================================
 // Constants

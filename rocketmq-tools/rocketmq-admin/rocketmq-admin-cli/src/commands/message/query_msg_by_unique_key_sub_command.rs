@@ -98,8 +98,7 @@ impl QueryMsgByUniqueKeySubCommand {
 
     fn create_body_file(msg: &MessageExt, index: usize) -> RocketMQResult<PathBuf> {
         let mut body_tmp_file_path = PathBuf::from("/tmp/rocketmq/msgbodys");
-        fs::create_dir_all(&body_tmp_file_path)
-            .map_err(|e| RocketMQError::Internal(format!("Failed to create body temp directory: {}", e)))?;
+        fs::create_dir_all(&body_tmp_file_path).map_err(RocketMQError::IO)?;
 
         let mut filename = msg.msg_id().to_string();
         if index > 0 {
@@ -108,8 +107,7 @@ impl QueryMsgByUniqueKeySubCommand {
         body_tmp_file_path.push(filename);
 
         let body = msg.body().map(|b| b.to_vec()).unwrap_or_default();
-        fs::write(&body_tmp_file_path, &body)
-            .map_err(|e| RocketMQError::Internal(format!("Failed to write body file: {}", e)))?;
+        fs::write(&body_tmp_file_path, &body).map_err(RocketMQError::IO)?;
 
         Ok(body_tmp_file_path)
     }

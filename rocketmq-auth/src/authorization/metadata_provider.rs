@@ -58,10 +58,10 @@ pub type MetadataResult<T> = Result<T, AuthorizationError>;
 /// # Examples
 ///
 /// ```rust,ignore
-/// use rocketmq_auth::authorization::metadata_provider::{AuthorizationMetadataProvider, MetadataResult};
-/// use rocketmq_auth::authorization::model::acl::Acl;
-/// use rocketmq_auth::authentication::model::subject::Subject;
-/// use rocketmq_auth::config::AuthConfig;
+/// use rocketmq_auth::{AuthorizationMetadataProvider, MetadataResult};
+/// use rocketmq_auth::Acl;
+/// use rocketmq_auth::Subject;
+/// use rocketmq_auth::AuthConfig;
 ///
 /// struct MyMetadataProvider {
 ///     // Storage implementation

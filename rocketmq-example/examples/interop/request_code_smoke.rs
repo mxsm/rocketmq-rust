@@ -21,12 +21,12 @@ use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
-use rocketmq_client_rust::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
-use rocketmq_client_rust::consumer::listener::consume_concurrently_context::ConsumeConcurrentlyContext;
-use rocketmq_client_rust::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
-use rocketmq_client_rust::consumer::listener::message_listener_concurrently::MessageListenerConcurrently;
-use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
-use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
+use rocketmq_client_rust::ConsumeConcurrentlyContext;
+use rocketmq_client_rust::ConsumeConcurrentlyStatus;
+use rocketmq_client_rust::DefaultMQProducer;
+use rocketmq_client_rust::DefaultMQPushConsumer;
+use rocketmq_client_rust::MQPushConsumer;
+use rocketmq_client_rust::MessageListenerConcurrently;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;

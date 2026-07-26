@@ -35,8 +35,8 @@ use crate::config::config_manager::ConfigManager;
 use crate::config::error::BrokerConfigError;
 use crate::config::validated::ValidatedBrokerConfig;
 use cheetah_string::CheetahString;
-use rocketmq_auth::authentication::AclClientRpcHook;
-use rocketmq_auth::config::AuthConfig;
+use rocketmq_auth::AclClientRpcHook;
+use rocketmq_auth::AuthConfig;
 use rocketmq_auth::AuthMetricsSnapshot;
 use rocketmq_auth::AuthRuntime;
 use rocketmq_auth::AuthRuntimeBuilder;
@@ -60,23 +60,25 @@ use rocketmq_runtime::MetadataIoError;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_store::base::commit_log_dispatcher::CommitLogDispatcher;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::base::message_store::MessageStoreShutdownReport;
+use rocketmq_store::BrokerStats;
+use rocketmq_store::BrokerStatsManager;
+use rocketmq_store::CommitLogDispatcher;
+use rocketmq_store::MessageStore;
+use rocketmq_store::MessageStoreConfig;
+use rocketmq_store::MessageStoreShutdownReport;
+use rocketmq_store::OwnedMessageStore;
+use rocketmq_store::StoreError;
+use rocketmq_store::StoreErrorKind;
+use rocketmq_store::StoreFactory;
+use rocketmq_store::StoreFactoryConfig;
+use rocketmq_store::StoreOperation;
 #[cfg(all(test, feature = "rocksdb_store"))]
-use rocketmq_store::base::store_enum::StoreType;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
-use rocketmq_store::factory::StoreFactory;
-use rocketmq_store::factory::StoreFactoryConfig;
-use rocketmq_store::message_store::OwnedMessageStore;
-use rocketmq_store::stats::broker_stats::BrokerStats;
-use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
-use rocketmq_store::store_error::StoreError;
-use rocketmq_store::timer::timer_message_store::TimerMessageStore;
-use rocketmq_transport::base::channel_event_listener::ChannelEventListener;
-use rocketmq_transport::config::ServerConfig;
-use rocketmq_transport::remoting_server::rocketmq_tokio_server::RocketMQServer;
-use rocketmq_transport::runtime::config::client_config::TokioClientConfig;
+use rocketmq_store::StoreType;
+use rocketmq_store::TimerMessageStore;
+use rocketmq_transport::ChannelEventListener;
+use rocketmq_transport::RocketMQServer;
+use rocketmq_transport::ServerConfig;
+use rocketmq_transport::TokioClientConfig;
 use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tracing::error;
@@ -512,18 +514,10 @@ fn build_broker_observability_config(broker_config: &BrokerConfig) -> rocketmq_o
     config.resource_attributes = parse_observability_key_values(&broker_config.observability_resource_attributes);
     config.metrics.enabled = metrics_enabled;
     config.metrics.exporter = match broker_config.metrics_exporter_type {
-        rocketmq_observability::exporter_types::MetricsExporterType::Disable => {
-            rocketmq_observability::config::MetricsExporter::Disable
-        }
-        rocketmq_observability::exporter_types::MetricsExporterType::OtlpGrpc => {
-            rocketmq_observability::config::MetricsExporter::OtlpGrpc
-        }
-        rocketmq_observability::exporter_types::MetricsExporterType::Prom => {
-            rocketmq_observability::config::MetricsExporter::Prometheus
-        }
-        rocketmq_observability::exporter_types::MetricsExporterType::Log => {
-            rocketmq_observability::config::MetricsExporter::Log
-        }
+        rocketmq_observability::MetricsExporterType::Disable => rocketmq_observability::MetricsExporter::Disable,
+        rocketmq_observability::MetricsExporterType::OtlpGrpc => rocketmq_observability::MetricsExporter::OtlpGrpc,
+        rocketmq_observability::MetricsExporterType::Prom => rocketmq_observability::MetricsExporter::Prometheus,
+        rocketmq_observability::MetricsExporterType::Log => rocketmq_observability::MetricsExporter::Log,
     };
     config.metrics.export_interval_millis = broker_config.metrics_export_interval_millis;
     config.metrics.export_timeout_millis = broker_config.otlp_exporter_timeout_millis;
@@ -539,15 +533,9 @@ fn build_broker_observability_config(broker_config: &BrokerConfig) -> rocketmq_o
     config.prometheus.path = broker_config.metrics_prom_exporter_path.to_string();
     config.traces.enabled = traces_enabled;
     config.traces.exporter = match broker_config.trace_exporter_type {
-        rocketmq_observability::exporter_types::TraceExporterType::Disable => {
-            rocketmq_observability::config::TraceExporter::Disable
-        }
-        rocketmq_observability::exporter_types::TraceExporterType::OtlpGrpc => {
-            rocketmq_observability::config::TraceExporter::OtlpGrpc
-        }
-        rocketmq_observability::exporter_types::TraceExporterType::Log => {
-            rocketmq_observability::config::TraceExporter::Log
-        }
+        rocketmq_observability::TraceExporterType::Disable => rocketmq_observability::TraceExporter::Disable,
+        rocketmq_observability::TraceExporterType::OtlpGrpc => rocketmq_observability::TraceExporter::OtlpGrpc,
+        rocketmq_observability::TraceExporterType::Log => rocketmq_observability::TraceExporter::Log,
     };
     config.traces.sample_ratio = broker_config.trace_sample_ratio;
     config.traces.propagate_context = broker_config.trace_propagate_context;
@@ -556,15 +544,9 @@ fn build_broker_observability_config(broker_config: &BrokerConfig) -> rocketmq_o
     config.traces.record_body_size = broker_config.trace_record_body_size;
     config.logs.enabled = logs_enabled;
     config.logs.exporter = match broker_config.log_exporter_type {
-        rocketmq_observability::exporter_types::LogExporterType::Disable => {
-            rocketmq_observability::config::LogsExporter::Disable
-        }
-        rocketmq_observability::exporter_types::LogExporterType::OtlpGrpc => {
-            rocketmq_observability::config::LogsExporter::OtlpGrpc
-        }
-        rocketmq_observability::exporter_types::LogExporterType::Log => {
-            rocketmq_observability::config::LogsExporter::Log
-        }
+        rocketmq_observability::LogExporterType::Disable => rocketmq_observability::LogsExporter::Disable,
+        rocketmq_observability::LogExporterType::OtlpGrpc => rocketmq_observability::LogsExporter::OtlpGrpc,
+        rocketmq_observability::LogExporterType::Log => rocketmq_observability::LogsExporter::Log,
     };
     config
 }

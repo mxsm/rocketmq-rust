@@ -40,7 +40,7 @@ use super::MappedFileResult;
 /// # Examples
 ///
 /// ```rust,ignore
-/// use rocketmq_store::log_file::mapped_file::{MappedFileBuilder, FlushStrategy};
+/// use rocketmq_store::{FlushStrategy, MappedFileBuilder};
 ///
 /// // Basic configuration
 /// let file = MappedFileBuilder::new("data/commitlog/00000000000000000000")

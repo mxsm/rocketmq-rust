@@ -25,7 +25,7 @@ use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_model::common::mix_all::MASTER_ID;
 use rocketmq_protocol::protocol::body::epoch_entry_cache::EpochEntry;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
+use rocketmq_store::MessageStoreConfig;
 use serde::Deserialize;
 use serde::Serialize;
 use tracing::info;

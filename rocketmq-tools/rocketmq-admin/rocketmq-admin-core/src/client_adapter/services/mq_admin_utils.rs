@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
+use rocketmq_client_rust::MQAdminExt;
 use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_protocol::protocol::static_topic::logic_queue_mapping_item::LogicQueueMappingItem;
@@ -24,7 +24,7 @@ use rocketmq_protocol::protocol::static_topic::topic_config_and_queue_mapping::T
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
-use rocketmq_transport::rpc::client_metadata::ClientMetadata;
+use rocketmq_transport::ClientMetadata;
 
 use crate::client_adapter::services::errors;
 use rocketmq_client_rust::DefaultMQAdminExt;

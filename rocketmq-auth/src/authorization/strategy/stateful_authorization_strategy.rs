@@ -120,8 +120,8 @@ impl CachedAuthResult {
 /// # Examples
 ///
 /// ```rust,ignore
-/// use rocketmq_auth::authorization::strategy::StatefulAuthorizationStrategy;
-/// use rocketmq_auth::config::AuthConfig;
+/// use rocketmq_auth::StatefulAuthorizationStrategy;
+/// use rocketmq_auth::AuthConfig;
 ///
 /// let config = AuthConfig::default();
 /// let strategy = StatefulAuthorizationStrategy::new(config, None)?;

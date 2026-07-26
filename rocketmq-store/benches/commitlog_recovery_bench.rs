@@ -31,12 +31,12 @@ use criterion::criterion_main;
 use criterion::BenchmarkId;
 use criterion::Criterion;
 use criterion::Throughput;
-use rocketmq_store::config::message_store_config::bounded_local_file_consume_queue_recovery_parallelism;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
-use rocketmq_store::log_file::commit_log_recovery::plan_abnormal_recovery_window_from_ranges;
-use rocketmq_store::log_file::commit_log_recovery::AbnormalRecoveryFileRange;
-use rocketmq_store::log_file::commit_log_recovery::RecoveryContext;
-use rocketmq_store::log_file::commit_log_recovery::RecoveryStatistics;
+use rocketmq_store::bounded_local_file_consume_queue_recovery_parallelism;
+use rocketmq_store::plan_abnormal_recovery_window_from_ranges;
+use rocketmq_store::AbnormalRecoveryFileRange;
+use rocketmq_store::MessageStoreConfig;
+use rocketmq_store::RecoveryContext;
+use rocketmq_store::RecoveryStatistics;
 
 const BASELINE_SAMPLE_SIZE: usize = 10;
 const MESSAGE_SIZE_BYTES: u64 = 256;
@@ -431,9 +431,7 @@ fn write_phase1_baseline_manifest() {
     .expect("recovery baseline manifest should be written");
 }
 
-fn phase2_window_for_scenario(
-    scenario: RecoveryWindowComparisonScenario,
-) -> rocketmq_store::log_file::commit_log_recovery::AbnormalRecoveryWindow {
+fn phase2_window_for_scenario(scenario: RecoveryWindowComparisonScenario) -> rocketmq_store::AbnormalRecoveryWindow {
     let file_ranges = scenario.file_ranges();
     plan_abnormal_recovery_window_from_ranges(
         &file_ranges,

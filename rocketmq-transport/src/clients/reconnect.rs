@@ -65,7 +65,7 @@ impl ExponentialBackoff {
     /// ```
     /// use std::time::Duration;
     ///
-    /// use rocketmq_transport::clients::reconnect::ExponentialBackoff;
+    /// use rocketmq_transport::ExponentialBackoff;
     ///
     /// let backoff = ExponentialBackoff::new(Duration::from_secs(1), Duration::from_secs(60), 10);
     /// ```
@@ -189,7 +189,7 @@ impl CircuitBreaker {
     /// ```
     /// use std::time::Duration;
     ///
-    /// use rocketmq_transport::clients::reconnect::CircuitBreaker;
+    /// use rocketmq_transport::CircuitBreaker;
     ///
     /// let breaker = CircuitBreaker::new(5, 2, Duration::from_secs(30));
     /// ```

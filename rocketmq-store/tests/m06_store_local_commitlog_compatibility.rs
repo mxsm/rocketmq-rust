@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_store::log_file::commit_log_recovery::plan_abnormal_recovery_window_from_ranges as legacy_plan;
-use rocketmq_store::log_file::commit_log_recovery::AbnormalRecoveryFileRange as LegacyFileRange;
-use rocketmq_store::log_file::commit_log_recovery::AbnormalRecoveryWindow as LegacyWindow;
-use rocketmq_store::log_file::commit_log_recovery::RecoveryStatistics as LegacyRecoveryStatistics;
+use rocketmq_store::plan_abnormal_recovery_window_from_ranges as legacy_plan;
+use rocketmq_store::AbnormalRecoveryFileRange as LegacyFileRange;
+use rocketmq_store::AbnormalRecoveryWindow as LegacyWindow;
+use rocketmq_store::RecoveryStatistics as LegacyRecoveryStatistics;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryFileRange as CanonicalFileRange;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryWindow as CanonicalWindow;
 use rocketmq_store_local::commit_log::recovery::RecoveryStatistics as CanonicalRecoveryStatistics;

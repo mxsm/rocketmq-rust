@@ -34,8 +34,8 @@ use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::file_utils;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
-use rocketmq_store::base::message_store::StateMachineVersionView;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
+use rocketmq_store::MessageStoreConfig;
+use rocketmq_store::StateMachineVersionView;
 use serde::Deserialize;
 use serde::Serialize;
 use tracing::error;
@@ -1269,7 +1269,7 @@ mod tests {
     #[tokio::test]
     async fn subscription_group_manager_persists_group_and_forbidden_to_rocksdb() {
         use crate::config::broker_config::BrokerConfig;
-        use rocketmq_store::config::message_store_config::MessageStoreConfig;
+        use rocketmq_store::MessageStoreConfig;
 
         use crate::config::rocksdb_manager::RocksDbBrokerConfigManager;
         use crate::config::rocksdb_manager::RocksDbBrokerConfigManagerConfig;
@@ -1323,7 +1323,7 @@ mod tests {
     #[tokio::test]
     async fn subscription_group_manager_delete_removes_group_and_forbidden_from_rocksdb() {
         use crate::config::broker_config::BrokerConfig;
-        use rocketmq_store::config::message_store_config::MessageStoreConfig;
+        use rocketmq_store::MessageStoreConfig;
 
         use crate::config::rocksdb_manager::RocksDbBrokerConfigManager;
         use crate::config::rocksdb_manager::RocksDbBrokerConfigManagerConfig;

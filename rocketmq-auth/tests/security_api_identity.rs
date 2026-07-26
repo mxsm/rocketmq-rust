@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_auth::security_api::Principal as LegacyPrincipal;
-use rocketmq_auth::security_api::Resource as LegacyResource;
+use rocketmq_auth::SecurityPrincipal as LegacyPrincipal;
+use rocketmq_auth::SecurityResource as LegacyResource;
 use rocketmq_security_api::Principal;
 use rocketmq_security_api::Resource;
 

@@ -3053,7 +3053,7 @@ fn capture_message_pull_event(
 ) -> RocketMQResult<()> {
     events.push(event);
     if event_limit > 0 && events.len() >= event_limit {
-        Err(RocketMQError::Internal(MESSAGE_EVENT_LIMIT_REACHED.to_string()))
+        Err(RocketMQError::invariant_violated(MESSAGE_EVENT_LIMIT_REACHED))
     } else {
         Ok(())
     }

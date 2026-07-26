@@ -27,7 +27,7 @@ use tokio::sync::RwLock;
 
 use rocketmq_model::common::mix_all::ROCKETMQ_HOME_ENV;
 use rocketmq_model::utils::env_utils::EnvUtils;
-use rocketmq_observability::exporter_types::metrics_exporter_type::MetricsExporterType;
+use rocketmq_observability::MetricsExporterType;
 
 /// Controller type constant
 pub const RAFT_CONTROLLER: &str = "Raft";

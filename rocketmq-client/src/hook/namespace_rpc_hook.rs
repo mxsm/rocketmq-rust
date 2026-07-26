@@ -17,7 +17,7 @@ use std::net::SocketAddr;
 use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::mix_all;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::runtime::RPCHook;
+use rocketmq_transport::RPCHook;
 
 use crate::base::client_config::ClientConfig;
 
@@ -35,8 +35,8 @@ use crate::base::client_config::ClientConfig;
 ///
 /// ```ignore
 /// use cheetah_string::CheetahString;
-/// use rocketmq_client_rust::base::client_config::ClientConfig;
-/// use rocketmq_client_rust::hook::namespace_rpc_hook::NamespaceRpcHook;
+/// use rocketmq_client_rust::ClientConfig;
+/// use rocketmq_client_rust::NamespaceRpcHook;
 ///
 /// let mut config = ClientConfig::default();
 /// config.set_namespace_v2(CheetahString::from_static_str("my-namespace"));
@@ -97,7 +97,7 @@ mod tests {
 
     use cheetah_string::CheetahString;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-    use rocketmq_transport::runtime::RPCHook;
+    use rocketmq_transport::RPCHook;
 
     use super::*;
 

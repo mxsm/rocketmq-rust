@@ -155,7 +155,7 @@ fn traces_config(
         ..rocketmq_observability::ObservabilityConfig::default()
     };
     config.traces.enabled = true;
-    config.traces.exporter = rocketmq_observability::config::TraceExporter::Disable;
+    config.traces.exporter = rocketmq_observability::TraceExporter::Disable;
     config.subscriber_install_policy = subscriber_install_policy;
     config
 }
@@ -239,7 +239,7 @@ fn bootstrap_metrics_only() {
     config.logging.enabled = false;
     config.observability.enabled = true;
     config.observability.metrics.enabled = true;
-    config.observability.metrics.exporter = rocketmq_observability::config::MetricsExporter::Disable;
+    config.observability.metrics.exporter = rocketmq_observability::MetricsExporter::Disable;
 
     let guard = rocketmq_observability::install_global(&config).expect("metrics-only bootstrap should initialize");
 
@@ -265,7 +265,7 @@ fn bootstrap_metrics_best_effort_conflict() {
     let mut config = rocketmq_observability::TelemetryBootstrapConfig::default();
     config.observability.enabled = true;
     config.observability.metrics.enabled = true;
-    config.observability.metrics.exporter = rocketmq_observability::config::MetricsExporter::Disable;
+    config.observability.metrics.exporter = rocketmq_observability::MetricsExporter::Disable;
     config.observability.subscriber_install_policy = rocketmq_observability::SubscriberInstallPolicy::BestEffort;
 
     let guard = rocketmq_observability::install_global(&config)
@@ -293,7 +293,7 @@ fn bootstrap_traces_enabled() {
     config.logging.reload.enabled = true;
     config.observability.enabled = true;
     config.observability.traces.enabled = true;
-    config.observability.traces.exporter = rocketmq_observability::config::TraceExporter::Disable;
+    config.observability.traces.exporter = rocketmq_observability::TraceExporter::Disable;
 
     let guard = rocketmq_observability::install_global(&config).expect("trace bootstrap should install");
 
@@ -323,7 +323,7 @@ fn bootstrap_logs_enabled() {
     config.logging.reload.enabled = true;
     config.observability.enabled = true;
     config.observability.logs.enabled = true;
-    config.observability.logs.exporter = rocketmq_observability::config::LogsExporter::Disable;
+    config.observability.logs.exporter = rocketmq_observability::LogsExporter::Disable;
 
     let guard = rocketmq_observability::install_global(&config).expect("logs bootstrap should install");
 

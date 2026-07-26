@@ -23,7 +23,7 @@ use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::Criterion;
 use rocketmq_auth::bench_support::run_auth_acl_watcher_lifecycle_probe;
-use rocketmq_auth::bench_support::AuthAclWatcherLifecycleProbe;
+use rocketmq_auth::AuthAclWatcherLifecycleProbe;
 use rocketmq_runtime::RuntimeContext;
 
 fn run_lifecycle_probe() -> AuthAclWatcherLifecycleProbe {

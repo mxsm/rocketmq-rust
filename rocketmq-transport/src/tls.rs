@@ -84,6 +84,7 @@ struct VersionedTlsAcceptor {
 type TlsAcceptorSlot = arc_swap::ArcSwapOption<VersionedTlsAcceptor>;
 
 /// Result of publishing a completely validated TLS certificate/key/trust snapshot.
+#[cfg(feature = "tls")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TlsReloadReport {
     previous_generation: u64,
@@ -91,6 +92,7 @@ pub struct TlsReloadReport {
     changed: bool,
 }
 
+#[cfg(feature = "tls")]
 impl TlsReloadReport {
     pub const fn previous_generation(self) -> u64 {
         self.previous_generation
@@ -484,15 +486,6 @@ pub async fn connect_tls_stream(
         .map_err(|error| {
             RocketMQError::network_connection_failed(server_name, format!("TLS handshake failed: {error}"))
         })
-}
-
-#[cfg(not(feature = "tls"))]
-pub async fn connect_tls_stream(
-    _stream: TcpStream,
-    _server_name: &str,
-    _tls_config: &TlsConfig,
-) -> RocketMQResult<TcpStream> {
-    Err(tls_disabled_error())
 }
 
 #[cfg(feature = "tls")]

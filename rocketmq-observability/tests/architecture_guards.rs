@@ -94,8 +94,6 @@ const SUBSCRIBER_INSTALL_PATTERNS: &[&str] = &[
 ];
 
 const SUBSCRIBER_INSTALL_ALLOWLIST: &[&str] = &[
-    // Deprecated logging compatibility entrypoints remain owned and contained by Observability.
-    "rocketmq-observability/src/legacy_logging.rs",
     // Legacy observability entrypoint retained for source compatibility while production entries use logging.rs.
     "rocketmq-observability/src/init.rs",
     // Unified logging and telemetry bootstrap owns the new production subscriber installation path.

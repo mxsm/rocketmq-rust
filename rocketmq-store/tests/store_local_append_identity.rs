@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_store::base::compaction_append_msg_callback::CompactionAppendMsgCallback as LegacyCompactionCallback;
-use rocketmq_store::base::message_result::AppendMessageResult as LegacyAppendMessageResult;
-use rocketmq_store::base::message_status_enum::AppendMessageStatus as LegacyAppendMessageStatus;
-use rocketmq_store::base::put_message_context::PutMessageContext as LegacyPutMessageContext;
-use rocketmq_store::config::flush_disk_type::FlushDiskType as LegacyFlushDiskType;
+use rocketmq_store::AppendMessageResult as LegacyAppendMessageResult;
+use rocketmq_store::AppendMessageStatus as LegacyAppendMessageStatus;
+use rocketmq_store::CompactionAppendMsgCallback as LegacyCompactionCallback;
+use rocketmq_store::FlushDiskType as LegacyFlushDiskType;
+use rocketmq_store::PutMessageContext as LegacyPutMessageContext;
 use rocketmq_store_local::commit_log::append::AppendMessageResult;
 use rocketmq_store_local::commit_log::append::AppendMessageStatus;
 use rocketmq_store_local::commit_log::append::CompactionAppendMsgCallback;

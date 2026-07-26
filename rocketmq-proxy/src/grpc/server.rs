@@ -188,13 +188,13 @@ mod tests {
     use hmac::digest::KeyInit;
     use hmac::Hmac;
     use hmac::Mac;
-    use rocketmq_auth::authentication::enums::user_status::UserStatus;
-    use rocketmq_auth::authentication::enums::user_type::UserType;
-    use rocketmq_auth::authentication::model::user::User;
-    use rocketmq_auth::authorization::enums::decision::Decision;
-    use rocketmq_auth::authorization::model::acl::Acl;
-    use rocketmq_auth::authorization::model::policy::Policy;
-    use rocketmq_auth::authorization::model::resource::Resource;
+    use rocketmq_auth::Acl;
+    use rocketmq_auth::Decision;
+    use rocketmq_auth::Policy;
+    use rocketmq_auth::Resource;
+    use rocketmq_auth::User;
+    use rocketmq_auth::UserStatus;
+    use rocketmq_auth::UserType;
     use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_runtime::ShutdownDeadline;
@@ -527,7 +527,7 @@ mod tests {
         auth_runtime
             .create_acl(Acl::of(
                 username,
-                rocketmq_auth::authentication::enums::subject_type::SubjectType::User,
+                rocketmq_auth::SubjectType::User,
                 Policy::of(vec![Resource::of_topic(topic)], actions, None, Decision::Allow),
             ))
             .await

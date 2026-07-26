@@ -16,11 +16,11 @@ use std::sync::Arc;
 
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_model::common::message::MessageTrait;
-use rocketmq_store::base::message_result::PutMessageResult;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
-use rocketmq_store::hook::put_message_hook::PutMessageHook;
-use rocketmq_store::timer::timer_message_store::TimerMessageStore;
+use rocketmq_store::MessageStore;
+use rocketmq_store::MessageStoreConfig;
+use rocketmq_store::PutMessageHook;
+use rocketmq_store::PutMessageResult;
+use rocketmq_store::TimerMessageStore;
 use tracing::warn;
 
 use crate::schedule::schedule_message_service::ScheduleMessageService;

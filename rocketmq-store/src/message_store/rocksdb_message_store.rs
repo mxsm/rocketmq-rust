@@ -87,7 +87,10 @@ use crate::rocksdb::transaction::RocksDbTransBuildService;
 use crate::rocksdb::value::ConsumeQueueValue;
 use crate::stats::broker_stats_manager::BrokerStatsManager;
 use crate::store::running_flags::RunningFlags;
+use crate::store_error::StoreComponent;
 use crate::store_error::StoreError;
+use crate::store_error::StoreErrorKind;
+use crate::store_error::StoreOperation;
 use crate::timer::timer_message_store::TimerMessageStore;
 
 /// RocksDB-backed message store boundary.
@@ -506,9 +509,11 @@ fn legacy_get_status(status: ApiGetStatus) -> GetMessageStatus {
 
 fn message_store_adapter_error(error: RocksDbMessageStoreError) -> StoreError {
     match error {
-        RocksDbMessageStoreError::Config(message) => StoreError::Config(message),
-        RocksDbMessageStoreError::Backend { source } => StoreError::rocksdb(source),
-        RocksDbMessageStoreError::Local { source } => StoreError::Storage(source.to_string()),
+        RocksDbMessageStoreError::Config(message) => StoreError::config(StoreOperation::Load, message),
+        RocksDbMessageStoreError::Backend { source } => StoreError::rocksdb(StoreOperation::Load, source),
+        RocksDbMessageStoreError::Local { source } => StoreError::new(StoreErrorKind::Storage, StoreOperation::Load)
+            .in_component(StoreComponent::Store)
+            .with_source(source),
     }
 }
 

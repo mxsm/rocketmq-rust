@@ -32,8 +32,8 @@ use crate::producer::local_transaction_state::LocalTransactionState;
 /// # Examples
 ///
 /// ```ignore
-/// use rocketmq_client_rust::producer::transaction_listener::TransactionListener;
-/// use rocketmq_client_rust::producer::local_transaction_state::LocalTransactionState;
+/// use rocketmq_client_rust::TransactionListener;
+/// use rocketmq_client_rust::LocalTransactionState;
 /// use rocketmq_model::common::message::MessageTrait;
 /// use rocketmq_model::common::message::message_ext::MessageExt;
 /// use std::any::Any;
@@ -127,7 +127,7 @@ pub trait TransactionListener: Send + Sync + 'static {
 /// # Examples
 ///
 /// ```ignore
-/// use rocketmq_client_rust::producer::transaction_listener::{TransactionListener, ArcTransactionListener};
+/// use rocketmq_client_rust::{TransactionListener, ArcTransactionListener};
 /// use std::sync::Arc;
 ///
 /// struct MyListener;

@@ -88,8 +88,13 @@ impl ExportMetadataInRocksDBSubCommand {
                     serde_json::Value::Object(config_table),
                 );
 
-                let json_config_str = serde_json::to_string_pretty(&json_config)
-                    .map_err(|e| RocketMQError::Internal(format!("Failed to serialize JSON: {}", e)))?;
+                let json_config_str = serde_json::to_string_pretty(&json_config).map_err(|source| {
+                    RocketMQError::Serialization(rocketmq_error::SerializationError::source(
+                        "encode RocksDB metadata",
+                        "JSON",
+                        source,
+                    ))
+                })?;
                 println!("{}", json_config_str);
             }
             ExportMetadataInRocksDbResult::Data { entries, .. } => {

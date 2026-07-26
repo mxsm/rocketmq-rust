@@ -19,7 +19,7 @@ use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_model::common::lite::LiteSubscription;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::Channel;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct LiteSubscriptionKey {

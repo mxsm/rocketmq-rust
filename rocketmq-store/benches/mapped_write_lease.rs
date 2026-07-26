@@ -20,8 +20,8 @@ use criterion::criterion_main;
 use criterion::BenchmarkId;
 use criterion::Criterion;
 use criterion::Throughput;
-use rocketmq_store::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
-use rocketmq_store::log_file::mapped_file::MappedFile;
+use rocketmq_store::DefaultMappedFile;
+use rocketmq_store::MappedFile;
 use rocketmq_store_local::mapped_file::MappedWriteLease;
 use tempfile::TempDir;
 

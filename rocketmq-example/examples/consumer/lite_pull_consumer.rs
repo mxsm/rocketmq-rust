@@ -14,8 +14,8 @@
 
 //! Lite pull consumer example with manual offset commit.
 
-use rocketmq_client_rust::consumer::default_lite_pull_consumer::DefaultLitePullConsumer;
-use rocketmq_client_rust::consumer::message_selector::MessageSelector;
+use rocketmq_client_rust::DefaultLitePullConsumer;
+use rocketmq_client_rust::MessageSelector;
 use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_model::common::message::MessageTrait;

@@ -26,8 +26,8 @@ use std::thread;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_client_rust::producer::producer_impl::topic_publish_info::TopicPublishInfo;
+use rocketmq_client_rust::DefaultMQProducer;
+use rocketmq_client_rust::TopicPublishInfo;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_protocol::protocol::route::route_data_view::QueueData;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;

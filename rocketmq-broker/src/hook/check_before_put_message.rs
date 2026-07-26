@@ -15,10 +15,10 @@
 use std::sync::Arc;
 
 use rocketmq_model::common::message::MessageTrait;
-use rocketmq_store::base::message_result::PutMessageResult;
-use rocketmq_store::base::message_store::PutMessagePreflight;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
-use rocketmq_store::hook::put_message_hook::PutMessageHook;
+use rocketmq_store::MessageStoreConfig;
+use rocketmq_store::PutMessageHook;
+use rocketmq_store::PutMessagePreflight;
+use rocketmq_store::PutMessageResult;
 
 use crate::util::hook_utils::HookUtils;
 

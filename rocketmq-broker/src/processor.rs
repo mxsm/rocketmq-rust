@@ -20,12 +20,16 @@ use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_transport::error_response;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_transport::runtime::processor::RejectRequestResponse;
-use rocketmq_transport::runtime::processor::RequestProcessor;
+use rocketmq_store::MessageStore;
+use rocketmq_transport::command_from_error_with_opaque;
+use rocketmq_transport::command_from_error_with_remark_and_opaque;
+use rocketmq_transport::internal_error_with_opaque;
+use rocketmq_transport::request_code_not_supported;
+use rocketmq_transport::request_code_not_supported_with_opaque;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::RejectRequestResponse;
+use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
 use tokio::sync::Mutex;
 use tracing::warn;
 
@@ -328,11 +332,7 @@ where
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         if let Some(auth_runtime) = &self.auth_runtime {
             if let Err(error) = auth_runtime.check_remoting(&ctx, request).await {
-                let response = error_response::command_from_error_with_remark_and_opaque(
-                    &error,
-                    error.to_string(),
-                    request.opaque(),
-                );
+                let response = command_from_error_with_remark_and_opaque(&error, error.to_string(), request.opaque());
                 return Ok(Some(response));
             }
         }
@@ -362,8 +362,7 @@ where
                     .await
                 }
                 None => {
-                    let response =
-                        error_response::request_code_not_supported_with_opaque(request.code(), request.opaque());
+                    let response = request_code_not_supported_with_opaque(request.code(), request.opaque());
                     Ok(Some(response))
                 }
             },
@@ -377,7 +376,7 @@ where
                 if let Some(default_processor) = &self.default_request_processor {
                     default_processor.reject_request(code)
                 } else {
-                    (true, Some(error_response::request_code_not_supported(code)))
+                    (true, Some(request_code_not_supported(code)))
                 }
             }
         }
@@ -564,7 +563,7 @@ where
 
         let response = match processor.process_request(channel, ctx, &mut queued_request).await {
             Ok(response) => response,
-            Err(error) => Some(error_response::command_from_error_with_opaque(&error, opaque)),
+            Err(error) => Some(command_from_error_with_opaque(&error, opaque)),
         };
         broker_fast_failure.complete(queue_kind, &task, response);
     }
@@ -598,17 +597,17 @@ fn fast_failure_queue_kind(request_code: i32, default_processor: bool) -> Option
 }
 
 fn system_error_response(opaque: i32, remark: impl Into<String>) -> RemotingCommand {
-    error_response::internal_error_with_opaque(opaque, remark)
+    internal_error_with_opaque(opaque, remark)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocketmq_auth::config::AuthConfig;
+    use rocketmq_auth::AuthConfig;
     use rocketmq_auth::AuthRuntimeBuilder;
     use rocketmq_protocol::code::response_code::ResponseCode;
-    use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
-    use rocketmq_transport::local::LocalRequestHarness;
+    use rocketmq_store::LocalFileMessageStore;
+    use rocketmq_transport::LocalRequestHarness;
 
     use crate::transaction::queue::default_transactional_message_service::DefaultTransactionalMessageService;
 

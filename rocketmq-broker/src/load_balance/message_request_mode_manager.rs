@@ -20,7 +20,7 @@ use cheetah_string::CheetahString;
 use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_protocol::protocol::body::message_request_mode_serialize_wrapper::MessageRequestModeMap;
 use rocketmq_protocol::protocol::body::set_message_request_mode_request_body::SetMessageRequestModeRequestBody;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
+use rocketmq_store::MessageStoreConfig;
 use tracing::info;
 
 use crate::broker_path_config_helper;
@@ -103,7 +103,7 @@ mod tests {
     use cheetah_string::CheetahString;
     use rocketmq_model::common::message::message_enum::MessageRequestMode;
     use rocketmq_protocol::protocol::body::set_message_request_mode_request_body::SetMessageRequestModeRequestBody;
-    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_store::MessageStoreConfig;
 
     use super::*;
 

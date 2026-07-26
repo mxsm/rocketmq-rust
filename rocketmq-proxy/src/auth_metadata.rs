@@ -13,17 +13,17 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_auth::authentication::enums::subject_type::SubjectType;
-use rocketmq_auth::authentication::enums::user_status::UserStatus;
-use rocketmq_auth::authentication::enums::user_type::UserType;
-use rocketmq_auth::authentication::model::user::User;
-use rocketmq_auth::authorization::enums::decision::Decision;
-use rocketmq_auth::authorization::enums::policy_type::PolicyType;
-use rocketmq_auth::authorization::model::acl::Acl;
-use rocketmq_auth::authorization::model::environment::Environment;
-use rocketmq_auth::authorization::model::policy::Policy;
-use rocketmq_auth::authorization::model::policy_entry::PolicyEntry;
-use rocketmq_auth::authorization::model::resource::Resource;
+use rocketmq_auth::Acl;
+use rocketmq_auth::Decision;
+use rocketmq_auth::Environment;
+use rocketmq_auth::Policy;
+use rocketmq_auth::PolicyEntry;
+use rocketmq_auth::PolicyType;
+use rocketmq_auth::Resource;
+use rocketmq_auth::SubjectType;
+use rocketmq_auth::User;
+use rocketmq_auth::UserStatus;
+use rocketmq_auth::UserType;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::protocol::body::acl_info::AclInfo;

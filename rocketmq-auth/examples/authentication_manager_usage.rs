@@ -21,14 +21,14 @@
 //! - Checking super user privileges
 
 use cheetah_string::CheetahString;
-use rocketmq_auth::authentication::enums::user_type::UserType;
-use rocketmq_auth::authentication::manager::AuthenticationMetadataManager;
-use rocketmq_auth::authentication::manager::AuthenticationMetadataManagerImpl;
-use rocketmq_auth::authentication::model::user::User;
-use rocketmq_auth::authentication::provider::local_authentication_metadata_provider::LocalAuthenticationMetadataProvider;
-use rocketmq_auth::authentication::provider::AuthenticationMetadataProvider;
-use rocketmq_auth::authorization::metadata_provider::local::LocalAuthorizationMetadataProvider;
-use rocketmq_auth::config::AuthConfig;
+use rocketmq_auth::AuthConfig;
+use rocketmq_auth::AuthenticationMetadataManager;
+use rocketmq_auth::AuthenticationMetadataManagerImpl;
+use rocketmq_auth::AuthenticationMetadataProvider;
+use rocketmq_auth::LocalAuthenticationMetadataProvider;
+use rocketmq_auth::LocalAuthorizationMetadataProvider;
+use rocketmq_auth::User;
+use rocketmq_auth::UserType;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

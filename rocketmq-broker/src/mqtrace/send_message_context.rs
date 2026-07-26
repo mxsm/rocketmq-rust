@@ -17,7 +17,7 @@ use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
 use rocketmq_model::common::message::message_enum::MessageType;
-use rocketmq_store::stats::stats_type::StatsType;
+use rocketmq_store::StatsType;
 
 #[derive(Debug, Default)]
 pub struct SendMessageContext {

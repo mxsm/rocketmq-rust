@@ -27,7 +27,7 @@ use criterion::Criterion;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
-use rocketmq_store::base::store_stats_service::StoreStatsService;
+use rocketmq_store::StoreStatsService;
 
 fn benchmark_service_context() -> ChildServiceContext {
     static OWNER: OnceLock<RuntimeOwner> = OnceLock::new();

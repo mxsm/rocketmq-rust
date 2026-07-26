@@ -31,11 +31,11 @@ use rocketmq_protocol::protocol::header::unregister_client_request_header::Unreg
 use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_protocol::protocol::heartbeat::heartbeat_data::HeartbeatData;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_transport::error_response;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_transport::runtime::processor::RequestProcessor;
+use rocketmq_store::MessageStore;
+use rocketmq_transport::request_code_not_supported_with_remark_and_opaque;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
 use tracing::info;
 use tracing::warn;
 
@@ -87,7 +87,7 @@ where
                     "ClientManageProcessor received unknown request code: {:?}",
                     request_code
                 );
-                let response = error_response::request_code_not_supported_with_remark_and_opaque(
+                let response = request_code_not_supported_with_remark_and_opaque(
                     request.code(),
                     format!("ClientManageProcessor request code {} not supported", request.code()),
                     request.opaque(),
@@ -140,7 +140,7 @@ where
             RequestCode::HeartBeat => self.heart_beat(channel, ctx, request).await,
             RequestCode::UnregisterClient => self.unregister_client(channel, ctx, request),
             RequestCode::CheckClientConfig => self.check_client_config(request),
-            _ => Ok(Some(error_response::request_code_not_supported_with_remark_and_opaque(
+            _ => Ok(Some(request_code_not_supported_with_remark_and_opaque(
                 request.code(),
                 format!("ClientManageProcessor request code {} not supported", request.code()),
                 request.opaque(),
@@ -449,17 +449,17 @@ mod tests {
     use rocketmq_protocol::protocol::heartbeat::consumer_data::ConsumerData;
     use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
     use rocketmq_protocol::protocol::heartbeat::producer_data::ProducerData;
-    use rocketmq_store::config::message_store_config::MessageStoreConfig;
-    use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
+    use rocketmq_store::MessageStoreConfig;
+    use rocketmq_transport::ConnectionHandlerContextWrapper;
     use tokio::net::TcpStream;
 
     use super::*;
     use crate::broker_runtime::BrokerRuntime;
     use rocketmq_protocol::code::response_code::ResponseCode as RemotingResponseCode;
     use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
-    use rocketmq_transport::base::response_future::ResponseFuture;
-    use rocketmq_transport::connection::Connection;
-    use rocketmq_transport::net::channel::ChannelInner;
+    use rocketmq_transport::ChannelInner;
+    use rocketmq_transport::Connection;
+    use rocketmq_transport::ResponseFuture;
 
     #[test]
     fn production_processor_has_no_complete_runtime_owner() {

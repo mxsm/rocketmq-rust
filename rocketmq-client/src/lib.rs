@@ -67,30 +67,32 @@ macro_rules! client_broker_err {
     }};
 }
 
-pub mod admin;
-pub mod base;
-pub mod common;
-pub mod config_support;
-pub mod consumer;
-pub mod exception;
-pub mod factory;
+mod admin;
+mod base;
+mod common;
+mod config_support;
+mod consumer;
+mod exception;
+mod factory;
 mod hook;
-pub mod implementation;
-pub mod latency;
-pub mod legacy;
-pub mod lock;
-pub mod producer;
+mod implementation;
+mod latency;
+mod legacy;
+mod lock;
+mod producer;
 mod runtime;
-pub mod stat;
+mod stat;
 mod trace;
 mod types;
-pub mod utils;
+mod utils;
 
 pub use crate::admin::DefaultMQAdminExt;
 pub use crate::admin::DefaultMQAdminExtImpl;
 pub use crate::admin::MQAdminExt;
 pub use crate::admin::MQAdminExtInner;
 pub use crate::admin::MQAdminExtInnerImpl;
+pub use crate::base::client_config::ClientConfig;
+pub use crate::base::query_result::QueryResult;
 pub use crate::base::MQAdmin;
 pub use crate::base::MqClientAdmin;
 pub use crate::base::MqClientAdminInner;
@@ -105,6 +107,7 @@ pub use crate::common::admin_tool_result::AdminToolResult;
 pub use crate::common::admin_tools_result_code_enum::AdminToolsResultCodeEnum;
 pub use crate::common::nameserver_access_config::NameserverAccessConfig;
 pub use crate::common::session_credentials::SessionCredentials;
+pub use crate::common::thread_local_index::ThreadLocalIndex;
 
 /// Compatibility surface used by the Proxy Cluster adapter while Client
 /// runtime signatures are narrowed to canonical protocol contracts.
@@ -119,7 +122,7 @@ pub mod proxy_adapter_compat {
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_security_api::OutboundSigner;
     use rocketmq_security_api::SecurityRequestView;
-    use rocketmq_transport::runtime::RPCHook;
+    use rocketmq_transport::RPCHook;
 
     pub use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
     pub use rocketmq_model::common::boundary_type::BoundaryType;
@@ -277,9 +280,10 @@ pub mod proxy_adapter_compat {
                     OwnedPopCallback { sender: Some(sender) },
                 )
                 .await?;
-            receiver.await.unwrap_or_else(|_| {
-                Err(rocketmq_error::RocketMQError::Internal(
-                    "Client pop callback closed without a result".to_owned(),
+            receiver.await.unwrap_or_else(|source| {
+                Err(rocketmq_error::RocketMQError::internal(
+                    "receive client pop callback result",
+                    source,
                 ))
             })
         }
@@ -296,9 +300,10 @@ pub mod proxy_adapter_compat {
                 .get_mq_client_api_impl()?
                 .ack_message_async(broker_addr, request, timeout_millis, OwnedAckCallback::new(sender))
                 .await?;
-            receiver.await.unwrap_or_else(|_| {
-                Err(rocketmq_error::RocketMQError::Internal(
-                    "Client ack callback closed without a result".to_owned(),
+            receiver.await.unwrap_or_else(|source| {
+                Err(rocketmq_error::RocketMQError::internal(
+                    "receive client ack callback result",
+                    source,
                 ))
             })
         }
@@ -322,9 +327,10 @@ pub mod proxy_adapter_compat {
                     OwnedAckCallback::new(sender),
                 )
                 .await?;
-            receiver.await.unwrap_or_else(|_| {
-                Err(rocketmq_error::RocketMQError::Internal(
-                    "Client change-invisible callback closed without a result".to_owned(),
+            receiver.await.unwrap_or_else(|source| {
+                Err(rocketmq_error::RocketMQError::internal(
+                    "receive client change-invisible callback result",
+                    source,
                 ))
             })
         }
@@ -827,15 +833,38 @@ pub use crate::consumer::consumer_impl::default_lite_pull_consumer_impl::run_lit
 #[doc(hidden)]
 pub use crate::consumer::consumer_impl::default_lite_pull_consumer_impl::LitePullTaskLifecycleProbe;
 #[doc(hidden)]
+pub use crate::consumer::consumer_impl::process_queue::run_process_queue_has_temp_message_probe;
+#[doc(hidden)]
+pub use crate::consumer::consumer_impl::process_queue::run_process_queue_max_span_only_probe;
+#[doc(hidden)]
+pub use crate::consumer::consumer_impl::process_queue::run_process_queue_put_probe;
+#[doc(hidden)]
+pub use crate::consumer::consumer_impl::process_queue::run_process_queue_remove_probe;
+#[doc(hidden)]
+pub use crate::consumer::consumer_impl::process_queue::run_process_queue_take_probe;
+#[doc(hidden)]
+pub use crate::consumer::consumer_impl::process_queue::ProcessQueue;
+#[doc(hidden)]
+pub use crate::consumer::consumer_impl::process_queue::ProcessQueueOperationFixture;
+#[doc(hidden)]
 pub use crate::consumer::consumer_impl::pull_message_service::run_pull_message_service_lifecycle_probe;
 #[doc(hidden)]
+pub use crate::consumer::consumer_impl::pull_message_service::PullMessageService;
+#[doc(hidden)]
 pub use crate::consumer::consumer_impl::pull_message_service::PullMessageServiceLifecycleProbe;
+#[doc(hidden)]
+pub use crate::consumer::consumer_impl::pull_message_service::PullMessageServiceShardSnapshot;
+#[doc(hidden)]
+pub use crate::consumer::consumer_impl::pull_request::PullRequest;
 pub use crate::consumer::consumer_impl::pull_request_ext::PullResultExt;
 #[doc(hidden)]
 pub use crate::consumer::consumer_impl::re_balance::rebalance_service::run_rebalance_service_lifecycle_probe;
 #[doc(hidden)]
 pub use crate::consumer::consumer_impl::re_balance::rebalance_service::RebalanceServiceLifecycleProbe;
+pub use crate::consumer::listener::message_listener_concurrently::ArcMessageListenerConcurrently;
+pub use crate::consumer::listener::message_listener_orderly::ArcMessageListenerOrderly;
 pub use crate::consumer::notify_result::NotifyResult;
+pub use crate::consumer::pull_result::PullOutcome;
 #[doc(hidden)]
 pub use crate::consumer::store::local_file_offset_store::run_local_file_offset_store_lifecycle_probe;
 #[doc(hidden)]
@@ -907,12 +936,17 @@ pub use crate::factory::mq_client_instance::ConnectionEventListenerLifecycleProb
 #[doc(hidden)]
 pub use crate::factory::mq_client_instance::HeartbeatRouteIndexProbe;
 #[doc(hidden)]
+pub use crate::factory::mq_client_instance::MQClientInstance;
+#[doc(hidden)]
 pub use crate::factory::mq_client_instance::RouteRefreshConcurrentProbe;
 #[doc(hidden)]
 pub use crate::factory::mq_client_instance::RouteRefreshShardProbe;
+pub use crate::hook::check_forbidden_context::CheckForbiddenContext;
+pub use crate::hook::check_forbidden_hook::CheckForbiddenHook;
 pub use crate::hook::consume_message_context::ConsumeMessageContext;
 pub use crate::hook::consume_message_hook::ConsumeMessageHook;
 pub use crate::hook::consume_message_hook::ConsumeMessageHookArc;
+pub use crate::hook::namespace_rpc_hook::NamespaceRpcHook;
 #[doc(hidden)]
 pub use crate::implementation::mq_client_api_factory::run_namesrv_refresh_lifecycle_probe;
 pub use crate::implementation::mq_client_api_factory::MQClientAPIFactory;
@@ -975,6 +1009,12 @@ pub use crate::producer::produce_accumulator::run_produce_accumulator_guard_life
 #[doc(hidden)]
 pub use crate::producer::produce_accumulator::ProduceAccumulatorGuardLifecycleProbe;
 #[doc(hidden)]
+pub use crate::producer::producer_impl::timeout_utils::with_timeout;
+#[doc(hidden)]
+pub use crate::producer::producer_impl::timeout_utils::with_timeout_all;
+#[doc(hidden)]
+pub use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
+#[doc(hidden)]
 pub use crate::producer::request_future_holder::run_request_future_holder_lifecycle_probe;
 #[doc(hidden)]
 pub use crate::producer::request_future_holder::run_request_future_holder_scan_probe;
@@ -982,12 +1022,15 @@ pub use crate::producer::request_future_holder::run_request_future_holder_scan_p
 pub use crate::producer::request_future_holder::RequestFutureHolderLifecycleProbe;
 #[doc(hidden)]
 pub use crate::producer::request_future_holder::RequestFutureHolderScanProbe;
+pub use crate::producer::send_callback::ArcSendCallback;
+pub use crate::producer::transaction_listener::ArcTransactionListener;
 pub use crate::producer::DefaultMQProducer;
 pub use crate::producer::JavaHashCode;
 pub use crate::producer::LocalTransactionState;
 pub use crate::producer::MQProducer;
 pub use crate::producer::MessageQueueSelector;
 pub use crate::producer::MessageQueueSelectorFn;
+pub use crate::producer::ProducerConfig;
 pub use crate::producer::RequestCallback;
 pub use crate::producer::SelectMessageQueueByHash;
 pub use crate::producer::SelectMessageQueueByMachineRoom;
@@ -1012,6 +1055,7 @@ pub use crate::trace::trace_dispatcher::TraceDispatcher;
 pub use crate::trace::trace_dispatcher::Type as TraceDispatcherOperation;
 pub use crate::trace::trace_dispatcher_type::TraceDispatcherType;
 pub use crate::trace::trace_type::TraceType;
+pub use crate::utils::message_util::MessageUtil;
 
 #[cfg(test)]
 mod tests {

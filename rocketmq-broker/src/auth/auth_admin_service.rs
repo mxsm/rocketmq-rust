@@ -1,21 +1,21 @@
 use std::sync::Arc;
 
-use rocketmq_auth::acl::FileAclConfigStore;
-use rocketmq_auth::authentication::enums::subject_type::SubjectType;
-use rocketmq_auth::authentication::enums::user_status::UserStatus;
-use rocketmq_auth::authentication::enums::user_type::UserType;
-use rocketmq_auth::authentication::model::subject::Subject;
-use rocketmq_auth::authentication::model::user::User;
-use rocketmq_auth::authentication::provider::AuthenticationMetadataProvider;
-use rocketmq_auth::authentication::provider::LocalAuthenticationMetadataProvider;
-use rocketmq_auth::authorization::enums::policy_type::PolicyType;
-use rocketmq_auth::authorization::metadata_provider::AuthorizationMetadataProvider;
-use rocketmq_auth::authorization::metadata_provider::LocalAuthorizationMetadataProvider;
-use rocketmq_auth::authorization::model::acl::Acl;
-use rocketmq_auth::authorization::model::resource::Resource;
-use rocketmq_auth::authorization::provider::AuthorizationError;
-use rocketmq_auth::config::AuthConfig;
+use rocketmq_auth::Acl;
+use rocketmq_auth::AuthConfig;
+use rocketmq_auth::AuthenticationMetadataProvider;
+use rocketmq_auth::AuthorizationError;
+use rocketmq_auth::AuthorizationMetadataProvider;
+use rocketmq_auth::FileAclConfigStore;
+use rocketmq_auth::LocalAuthenticationMetadataProvider;
+use rocketmq_auth::LocalAuthorizationMetadataProvider;
+use rocketmq_auth::PolicyType;
 use rocketmq_auth::ProviderRegistry;
+use rocketmq_auth::Resource;
+use rocketmq_auth::Subject;
+use rocketmq_auth::SubjectType;
+use rocketmq_auth::User;
+use rocketmq_auth::UserStatus;
+use rocketmq_auth::UserType;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::protocol::body::acl_info::AclInfo;
@@ -438,10 +438,10 @@ fn validate_acl(acl: &Acl) -> RocketMQResult<()> {
 #[cfg(test)]
 mod tests {
     use cheetah_string::CheetahString;
-    use rocketmq_auth::authentication::enums::user_status::UserStatus;
-    use rocketmq_auth::authorization::enums::decision::Decision;
-    use rocketmq_auth::authorization::model::acl::Acl;
-    use rocketmq_auth::authorization::model::policy::Policy;
+    use rocketmq_auth::Acl;
+    use rocketmq_auth::Decision;
+    use rocketmq_auth::Policy;
+    use rocketmq_auth::UserStatus;
     use rocketmq_security_api::Action;
     use std::sync::atomic::AtomicU64;
     use std::sync::atomic::Ordering;

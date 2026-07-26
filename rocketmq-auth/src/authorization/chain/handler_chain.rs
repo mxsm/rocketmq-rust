@@ -34,7 +34,7 @@ use crate::authorization::context::default_authorization_context::DefaultAuthori
 /// # Example
 ///
 /// ```rust,ignore
-/// use rocketmq_auth::authorization::chain::{AuthorizationHandlerChain, AclAuthorizationHandler};
+/// use rocketmq_auth::{AclAuthorizationHandler, AuthorizationHandlerChain};
 /// use std::sync::Arc;
 ///
 /// let chain = AuthorizationHandlerChain::new()

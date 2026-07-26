@@ -20,7 +20,7 @@
 use cheetah_string::CheetahString;
 use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::protocol::LanguageCode;
-use rocketmq_transport::config::TlsConfig;
+use rocketmq_transport::TlsConfig;
 
 use super::access_channel::AccessChannel;
 use super::client_config::ClientConfig;
@@ -31,7 +31,7 @@ use super::client_config_validation::ClientConfigValidator;
 /// # Example
 ///
 /// ```rust
-/// use rocketmq_client_rust::base::client_config::ClientConfig;
+/// use rocketmq_client_rust::ClientConfig;
 ///
 /// let config = ClientConfig::builder()
 ///     .namesrv_addr("localhost:9876")

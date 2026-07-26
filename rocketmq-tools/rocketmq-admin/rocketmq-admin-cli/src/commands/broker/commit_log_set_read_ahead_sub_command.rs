@@ -111,16 +111,20 @@ impl CommitLogSetReadAheadSubCommand {
         if result.failures.is_empty() {
             Ok(())
         } else {
-            Err(RocketMQError::Internal(format!(
-                "CommitLogSetReadAheadSubCommand: Failed on {} broker(s): {}",
-                result.failures.len(),
-                result
-                    .failures
-                    .iter()
-                    .map(|failure| format!("{}: {}", failure.broker_addr, failure.error))
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            )))
+            Err(RocketMQError::broker_operation_failed(
+                "SET_COMMIT_LOG_READ_MODE",
+                -1,
+                format!(
+                    "CommitLogSetReadAheadSubCommand: Failed on {} broker(s): {}",
+                    result.failures.len(),
+                    result
+                        .failures
+                        .iter()
+                        .map(|failure| format!("{}: {}", failure.broker_addr, failure.error))
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                ),
+            ))
         }
     }
 }

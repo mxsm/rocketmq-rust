@@ -38,7 +38,7 @@ use rocketmq_protocol::common::compression::compressor::Compressor;
 use rocketmq_protocol::common::compression::compressor_factory::CompressorFactory;
 use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::runtime::RPCHook;
+use rocketmq_transport::RPCHook;
 use tracing::error;
 
 use crate::base::client_config::ClientConfig;

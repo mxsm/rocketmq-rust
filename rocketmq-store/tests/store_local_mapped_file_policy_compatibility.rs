@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_store::log_file::mapped_file::default_mapped_file_impl::OS_PAGE_SIZE as LEGACY_OS_PAGE_SIZE;
+use rocketmq_store::OS_PAGE_SIZE as LEGACY_OS_PAGE_SIZE;
 use rocketmq_store_local::mapped_file::kernel::OS_PAGE_SIZE as CANONICAL_OS_PAGE_SIZE;
 
 const _: [(); CANONICAL_OS_PAGE_SIZE as usize] = [(); LEGACY_OS_PAGE_SIZE as usize];

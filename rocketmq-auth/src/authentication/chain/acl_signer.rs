@@ -112,9 +112,8 @@ where
     match algorithm {
         SignatureAlgorithm::HmacSha1 => {
             type HmacSha1 = Hmac<sha1::Sha1>;
-            let mut mac = HmacSha1::new_from_slice(secret_key.as_bytes()).map_err(|error| {
-                AuthError::AuthenticationFailed(format!("Invalid {} key: {error}", algorithm.java_name()))
-            })?;
+            let mut mac = HmacSha1::new_from_slice(secret_key.as_bytes())
+                .map_err(|source| AuthError::operation("initialize HMAC-SHA1 signer", source))?;
             for segment in segments {
                 mac.update(segment);
             }
@@ -122,9 +121,8 @@ where
         }
         SignatureAlgorithm::HmacSha256 => {
             type HmacSha256 = Hmac<sha2::Sha256>;
-            let mut mac = HmacSha256::new_from_slice(secret_key.as_bytes()).map_err(|error| {
-                AuthError::AuthenticationFailed(format!("Invalid {} key: {error}", algorithm.java_name()))
-            })?;
+            let mut mac = HmacSha256::new_from_slice(secret_key.as_bytes())
+                .map_err(|source| AuthError::operation("initialize HMAC-SHA256 signer", source))?;
             for segment in segments {
                 mac.update(segment);
             }
@@ -132,9 +130,8 @@ where
         }
         SignatureAlgorithm::HmacMd5 => {
             type HmacMd5 = Hmac<md5::Md5>;
-            let mut mac = HmacMd5::new_from_slice(secret_key.as_bytes()).map_err(|error| {
-                AuthError::AuthenticationFailed(format!("Invalid {} key: {error}", algorithm.java_name()))
-            })?;
+            let mut mac = HmacMd5::new_from_slice(secret_key.as_bytes())
+                .map_err(|source| AuthError::operation("initialize HMAC-MD5 signer", source))?;
             for segment in segments {
                 mac.update(segment);
             }

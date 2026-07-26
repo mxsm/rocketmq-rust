@@ -16,12 +16,12 @@ use std::fmt;
 use std::net::SocketAddr;
 
 use cheetah_string::CheetahString;
-use rocketmq_auth::authentication::acl_signer::cal_signature_segments_with_algorithm;
+use rocketmq_auth::cal_signature_segments_with_algorithm;
 use rocketmq_auth::SignatureAlgorithm;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::REDACTED;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::runtime::RPCHook;
+use rocketmq_transport::RPCHook;
 use smallvec::SmallVec;
 
 use crate::common::session_credentials::SessionCredentials;

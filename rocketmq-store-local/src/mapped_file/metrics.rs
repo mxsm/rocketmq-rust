@@ -31,7 +31,7 @@ use std::time::Instant;
 /// # Examples
 ///
 /// ```rust,ignore
-/// use rocketmq_store::log_file::mapped_file::MappedFileMetrics;
+/// use rocketmq_store::MappedFileMetrics;
 ///
 /// let metrics = MappedFileMetrics::new();
 ///

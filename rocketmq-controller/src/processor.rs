@@ -21,9 +21,9 @@ use crate::processor::controller_request_processor::ControllerRequestProcessor;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_transport::runtime::processor::RejectRequestResponse;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::RejectRequestResponse;
 
 pub(crate) type RequestCodeType = i32;
 
@@ -32,7 +32,7 @@ pub enum ControllerRequestProcessorWrapper {
     ControllerRequestProcessor(Arc<ControllerRequestProcessor>),
 }
 
-impl rocketmq_transport::runtime::processor::RequestProcessor for ControllerRequestProcessorWrapper {
+impl rocketmq_transport::RemotingRequestProcessor for ControllerRequestProcessorWrapper {
     async fn process_request(
         &mut self,
         channel: Channel,
@@ -51,7 +51,7 @@ impl rocketmq_transport::runtime::processor::RequestProcessor for ControllerRequ
     fn reject_request(&self, code: i32) -> RejectRequestResponse {
         match self {
             ControllerRequestProcessorWrapper::ControllerRequestProcessor(processor) => {
-                rocketmq_transport::runtime::processor::RequestProcessor::reject_request(processor.as_ref(), code)
+                rocketmq_transport::RemotingRequestProcessor::reject_request(processor.as_ref(), code)
             }
         }
     }
@@ -74,7 +74,7 @@ impl ControllerServerRequestProcessor {
     }
 }
 
-impl rocketmq_transport::runtime::processor::RequestProcessor for ControllerServerRequestProcessor {
+impl rocketmq_transport::RemotingRequestProcessor for ControllerServerRequestProcessor {
     async fn process_request(
         &mut self,
         channel: Channel,
@@ -90,10 +90,7 @@ impl rocketmq_transport::runtime::processor::RequestProcessor for ControllerServ
                 Ok(Some(response_command.set_opaque(request.opaque())))
             }
             Some(processor) => {
-                rocketmq_transport::runtime::processor::RequestProcessor::process_request(
-                    processor, channel, ctx, request,
-                )
-                .await
+                rocketmq_transport::RemotingRequestProcessor::process_request(processor, channel, ctx, request).await
             }
         }
     }

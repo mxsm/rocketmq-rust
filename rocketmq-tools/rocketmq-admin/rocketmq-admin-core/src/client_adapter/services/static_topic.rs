@@ -1,12 +1,12 @@
 //! Static topic admin service models and operations.
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
+use rocketmq_client_rust::MQAdminExt;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
 use rocketmq_protocol::protocol::static_topic::topic_remapping_detail_wrapper;
 use rocketmq_protocol::protocol::static_topic::topic_remapping_detail_wrapper::TopicRemappingDetailWrapper;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_transport::rpc::client_metadata::ClientMetadata;
+use rocketmq_transport::ClientMetadata;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashSet;

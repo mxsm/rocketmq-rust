@@ -77,12 +77,12 @@ use rocketmq_proxy_core::remoting::RemotingIngressRoute;
 use rocketmq_proxy_core::remoting::RemotingStatusMapper;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownReport;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::prelude::RemotingDeserializable;
-use rocketmq_transport::remoting_server::rocketmq_tokio_server;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_transport::runtime::processor::RejectRequestResponse;
-use rocketmq_transport::runtime::processor::RequestProcessor;
+use rocketmq_transport::run_remoting_server_with_report_with_service_context;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::RejectRequestResponse;
+use rocketmq_transport::RemotingDeserializable;
+use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
 use tokio::net::TcpListener;
 use tracing::warn;
 
@@ -258,7 +258,7 @@ where
     }
     let request_processor =
         ProxyRemotingRequestProcessor::new(config, processor, sessions, auth_runtime, remoting_backend);
-    let report = rocketmq_tokio_server::run_with_report_with_service_context(
+    let report = run_remoting_server_with_report_with_service_context(
         service_context,
         listener,
         shutdown,
@@ -1387,15 +1387,15 @@ mod tests {
     use async_trait::async_trait;
     use bytes::Bytes;
     use cheetah_string::CheetahString;
-    use rocketmq_auth::authentication::acl_signer;
-    use rocketmq_auth::authentication::enums::subject_type::SubjectType;
-    use rocketmq_auth::authentication::enums::user_status::UserStatus;
-    use rocketmq_auth::authentication::enums::user_type::UserType;
-    use rocketmq_auth::authentication::model::user::User;
-    use rocketmq_auth::authorization::enums::decision::Decision;
-    use rocketmq_auth::authorization::model::acl::Acl;
-    use rocketmq_auth::authorization::model::policy::Policy;
-    use rocketmq_auth::authorization::model::resource::Resource;
+    use rocketmq_auth::cal_signature;
+    use rocketmq_auth::Acl;
+    use rocketmq_auth::Decision;
+    use rocketmq_auth::Policy;
+    use rocketmq_auth::Resource;
+    use rocketmq_auth::SubjectType;
+    use rocketmq_auth::User;
+    use rocketmq_auth::UserStatus;
+    use rocketmq_auth::UserType;
     use rocketmq_error::RocketMQError;
     use rocketmq_model::common::boundary_type::BoundaryType;
     use rocketmq_model::common::entity::ClientGroup;
@@ -1444,10 +1444,10 @@ mod tests {
     use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_security_api::Action;
-    use rocketmq_transport::local::LocalRequestHarness;
-    use rocketmq_transport::prelude::RemotingDeserializable;
-    use rocketmq_transport::prelude::RemotingSerializable;
-    use rocketmq_transport::runtime::processor::RequestProcessor;
+    use rocketmq_transport::LocalRequestHarness;
+    use rocketmq_transport::RemotingDeserializable;
+    use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
+    use rocketmq_transport::RemotingSerializable;
     use tokio::time::timeout;
 
     use super::ProxyRemotingBackend;
@@ -1591,7 +1591,7 @@ mod tests {
         if let Some(body) = command.body() {
             content.extend_from_slice(body);
         }
-        let signature = acl_signer::cal_signature(content.as_slice(), secret).expect("signature should be generated");
+        let signature = cal_signature(content.as_slice(), secret).expect("signature should be generated");
         command.add_ext_field("Signature", signature);
         command
     }

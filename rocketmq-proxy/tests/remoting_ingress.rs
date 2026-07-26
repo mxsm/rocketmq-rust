@@ -20,13 +20,12 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use rocketmq_auth::authentication::acl_signer;
+use rocketmq_auth::cal_signature;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
-use rocketmq_proxy::context::ResolvedEndpoint;
 use rocketmq_proxy::ClusterServiceManager;
 use rocketmq_proxy::DefaultAssignmentService;
 use rocketmq_proxy::DefaultConsumerService;
@@ -41,12 +40,13 @@ use rocketmq_proxy::ProxyResult;
 use rocketmq_proxy::ProxyRuntime;
 use rocketmq_proxy::ProxyTopicMessageType;
 use rocketmq_proxy::RemotingConfig;
+use rocketmq_proxy::ResolvedEndpoint;
 use rocketmq_proxy::ResourceIdentity;
 use rocketmq_proxy::RouteService;
 use rocketmq_proxy::SubscriptionGroupMetadata;
 use rocketmq_proxy_core::ProxyContext;
 use rocketmq_runtime::RuntimeContext;
-use rocketmq_transport::connection::Connection;
+use rocketmq_transport::Connection;
 use std::collections::BTreeMap;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
@@ -444,7 +444,7 @@ fn sign_remoting_command(command: &mut RemotingCommand, access_key: &str, secret
         content.extend_from_slice(body);
     }
 
-    let signature = acl_signer::cal_signature(content.as_slice(), secret_key).expect("remoting signature should build");
+    let signature = cal_signature(content.as_slice(), secret_key).expect("remoting signature should build");
     command.add_ext_field("Signature", signature.as_str());
 }
 

@@ -23,27 +23,28 @@ use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::BenchmarkId;
 use criterion::Criterion;
-use rocketmq_auth::acl::WhiteList;
-use rocketmq_auth::authentication::acl_signer;
-use rocketmq_auth::authentication::context::default_authentication_context::DefaultAuthenticationContext;
-use rocketmq_auth::authentication::provider::AuthenticationProvider;
-use rocketmq_auth::authentication::strategy::AuthenticationStrategy;
-use rocketmq_auth::authentication::strategy::StatefulAuthenticationStrategy;
-use rocketmq_auth::authorization::chain::AclAuthorizationHandler;
-use rocketmq_auth::authorization::chain::AuthorizationHandler;
-use rocketmq_auth::authorization::context::default_authorization_context::DefaultAuthorizationContext;
-use rocketmq_auth::authorization::enums::decision::Decision;
-use rocketmq_auth::authorization::enums::policy_type::PolicyType;
-use rocketmq_auth::authorization::metadata_provider::AuthorizationMetadataProvider;
-use rocketmq_auth::authorization::metadata_provider::LocalAuthorizationMetadataProvider;
-use rocketmq_auth::authorization::model::acl::Acl;
-use rocketmq_auth::authorization::model::policy::Policy;
-use rocketmq_auth::authorization::model::policy_entry::PolicyEntry;
-use rocketmq_auth::authorization::model::resource::Resource;
-use rocketmq_auth::authorization::strategy::abstract_authorization_strategy::AuthorizationStrategy;
-use rocketmq_auth::authorization::strategy::StatefulAuthorizationStrategy;
-use rocketmq_auth::config::AuthConfig;
+use rocketmq_auth::cal_signature_segments_with_algorithm;
+use rocketmq_auth::cal_signature_with_algorithm;
+use rocketmq_auth::Acl;
+use rocketmq_auth::AclAuthorizationHandler;
+use rocketmq_auth::AuthConfig;
+use rocketmq_auth::AuthenticationProvider;
+use rocketmq_auth::AuthenticationStrategy;
+use rocketmq_auth::AuthorizationHandler;
+use rocketmq_auth::AuthorizationMetadataProvider;
+use rocketmq_auth::AuthorizationStrategy;
+use rocketmq_auth::Decision;
+use rocketmq_auth::DefaultAuthenticationContext;
+use rocketmq_auth::DefaultAuthorizationContext;
+use rocketmq_auth::LocalAuthorizationMetadataProvider;
+use rocketmq_auth::Policy;
+use rocketmq_auth::PolicyEntry;
+use rocketmq_auth::PolicyType;
+use rocketmq_auth::Resource;
 use rocketmq_auth::SignatureAlgorithm;
+use rocketmq_auth::StatefulAuthenticationStrategy;
+use rocketmq_auth::StatefulAuthorizationStrategy;
+use rocketmq_auth::WhiteList;
 use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_security_api::Action;
@@ -73,12 +74,8 @@ fn bench_signature(c: &mut Criterion) {
             &algorithm,
             |b, algorithm| {
                 b.iter(|| {
-                    acl_signer::cal_signature_with_algorithm(
-                        black_box(content),
-                        black_box(secret),
-                        black_box(*algorithm),
-                    )
-                    .expect("benchmark signature should calculate")
+                    cal_signature_with_algorithm(black_box(content), black_box(secret), black_box(*algorithm))
+                        .expect("benchmark signature should calculate")
                 })
             },
         );
@@ -87,7 +84,7 @@ fn bench_signature(c: &mut Criterion) {
             &algorithm,
             |b, algorithm| {
                 b.iter(|| {
-                    acl_signer::cal_signature_segments_with_algorithm(
+                    cal_signature_segments_with_algorithm(
                         black_box(content_segments),
                         black_box(secret),
                         black_box(*algorithm),
@@ -149,11 +146,7 @@ fn bench_acl_authorization(c: &mut Criterion) {
         })
         .collect::<Vec<_>>();
     let policy = Policy::of_entries(PolicyType::Custom, entries);
-    let acl = Acl::of(
-        "alice",
-        rocketmq_auth::authentication::enums::subject_type::SubjectType::User,
-        policy,
-    );
+    let acl = Acl::of("alice", rocketmq_auth::SubjectType::User, policy);
     runtime
         .block_on(provider.create_acl(acl))
         .expect("benchmark ACL should be created");
@@ -161,7 +154,7 @@ fn bench_acl_authorization(c: &mut Criterion) {
     let handler = AclAuthorizationHandler::new(provider);
     let context = DefaultAuthorizationContext::of(
         "alice",
-        rocketmq_auth::authentication::enums::subject_type::SubjectType::User,
+        rocketmq_auth::SubjectType::User,
         Resource::of_topic("Topic127"),
         Action::Pub,
         "127.0.0.1",
@@ -230,7 +223,7 @@ fn bench_stateful_authorization_cache(c: &mut Criterion) {
     .expect("benchmark authorization strategy should build");
     let mut context = DefaultAuthorizationContext::of(
         "alice",
-        rocketmq_auth::authentication::enums::subject_type::SubjectType::User,
+        rocketmq_auth::SubjectType::User,
         Resource::of_topic("TopicA"),
         Action::Pub,
         "127.0.0.1",
@@ -276,7 +269,7 @@ fn bench_stateful_authorization_negative_cache(c: &mut Criterion) {
             .expect("benchmark authorization strategy should build");
     let mut context = DefaultAuthorizationContext::of(
         "alice",
-        rocketmq_auth::authentication::enums::subject_type::SubjectType::User,
+        rocketmq_auth::SubjectType::User,
         Resource::of_topic("TopicDenied"),
         Action::Pub,
         "127.0.0.1",

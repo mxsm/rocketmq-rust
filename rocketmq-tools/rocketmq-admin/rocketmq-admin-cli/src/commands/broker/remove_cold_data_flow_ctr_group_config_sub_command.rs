@@ -60,15 +60,19 @@ impl RemoveColdDataFlowCtrGroupConfigSubCommand {
         if result.failures.is_empty() {
             Ok(())
         } else {
-            Err(RocketMQError::Internal(format!(
-                "RemoveColdDataFlowCtrGroupConfigSubCommand: Failed to remove for brokers {}",
-                result
-                    .failures
-                    .iter()
-                    .map(|failure| failure.broker_addr.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )))
+            Err(RocketMQError::broker_operation_failed(
+                "REMOVE_COLD_DATA_FLOW_CONTROL_GROUP_CONFIG",
+                -1,
+                format!(
+                    "RemoveColdDataFlowCtrGroupConfigSubCommand: Failed to remove for brokers {}",
+                    result
+                        .failures
+                        .iter()
+                        .map(|failure| failure.broker_addr.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            ))
         }
     }
 }

@@ -49,31 +49,18 @@
 //! contracts only. Pre-typed compatibility aliases and enum variants are not
 //! part of the public API.
 
-// New unified error system
-pub mod unified;
-
-// Stable error taxonomy
-pub mod boundary;
-pub mod cli;
-pub mod context;
-pub mod kind;
-pub mod policy;
-pub mod spec;
-
-// Auth error module
-pub mod auth_error;
-
-// Controller error module
-pub mod controller_error;
-
-// Filter error module
-pub mod filter_error;
-
-// Observability error module
-pub mod observability_error;
-
-// Client error module
-pub mod client_error;
+mod auth_error;
+mod boundary;
+mod cli;
+mod context;
+mod controller_error;
+mod domain;
+mod filter_error;
+mod kind;
+mod observability_error;
+mod policy;
+mod spec;
+mod unified;
 
 // Re-export new error types as primary API
 // Re-export auth error types from unified module
@@ -89,7 +76,6 @@ pub use boundary::HttpStatusCode;
 pub use boundary::RemotingResponseCode;
 pub use boundary::RemotingSpec;
 pub use cli::CliErrorView;
-pub use client_error::ClientError;
 pub use context::ErrorContext;
 pub use context::ErrorContextField;
 pub use context::RedactionKind;
@@ -98,6 +84,7 @@ pub use context::Sensitive;
 pub use context::REDACTED;
 pub use controller_error::ControllerError;
 pub use controller_error::ControllerResult;
+pub use domain::DomainError;
 // Re-export filter error types
 pub use filter_error::FilterError;
 pub use kind::ErrorCategory;

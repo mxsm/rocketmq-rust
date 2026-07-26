@@ -38,7 +38,7 @@ use rocketmq_model::common::message::MessageTrait;
 /// # Example
 ///
 /// ```no_run
-/// use rocketmq_client_rust::producer::message_queue_selector::MessageQueueSelector;
+/// use rocketmq_client_rust::MessageQueueSelector;
 /// use rocketmq_model::common::message::message_queue::MessageQueue;
 /// use rocketmq_model::common::message::message_single::Message;
 ///
@@ -96,7 +96,7 @@ where
 /// # Example
 ///
 /// ```no_run
-/// use rocketmq_client_rust::producer::message_queue_selector::MessageQueueSelectorFn;
+/// use rocketmq_client_rust::MessageQueueSelectorFn;
 /// use std::sync::Arc;
 ///
 /// let selector: MessageQueueSelectorFn = Arc::new(|mqs, _msg, arg| {

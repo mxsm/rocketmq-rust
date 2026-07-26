@@ -18,5 +18,3 @@ pub mod allocate_message_queue_by_config;
 pub mod allocate_message_queue_by_machine_room;
 pub mod allocate_message_queue_by_machine_room_nearby;
 pub mod allocate_message_queue_consistent_hash;
-
-pub use rocketmq_model::allocation::check;

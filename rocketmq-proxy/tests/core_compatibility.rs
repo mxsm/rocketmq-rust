@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_proxy::proto as legacy_proto;
 use rocketmq_proxy_core::proto as canonical_proto;
 
 #[test]
@@ -21,13 +20,13 @@ fn legacy_paths_reexport_canonical_core_types() {
         resource_namespace: "tenant-a".to_owned(),
         name: "TopicA".to_owned(),
     };
-    let legacy_resource: legacy_proto::Resource = canonical_resource;
+    let legacy_resource: rocketmq_proxy::Resource = canonical_resource;
     let _: canonical_proto::v2::Resource = legacy_resource;
 
     let canonical_error = rocketmq_proxy_core::ProxyError::ClientIdRequired;
     let legacy_error: rocketmq_proxy::ProxyError = canonical_error;
     assert_eq!(
-        rocketmq_proxy::status::ProxyStatusMapper::from_error(&legacy_error),
+        rocketmq_proxy::ProxyStatusMapper::from_error(&legacy_error),
         rocketmq_proxy_core::status::ProxyStatusMapper::from_error(&legacy_error),
     );
 
@@ -36,7 +35,7 @@ fn legacy_paths_reexport_canonical_core_types() {
         host: "127.0.0.1".to_owned(),
         port: 8081,
     };
-    let _: rocketmq_proxy::context::ResolvedEndpoint = canonical_endpoint;
+    let _: rocketmq_proxy::ResolvedEndpoint = canonical_endpoint;
 
     let canonical_config = rocketmq_proxy_core::GrpcConfig::default();
     let _: rocketmq_proxy::GrpcConfig = canonical_config;
@@ -60,7 +59,7 @@ fn legacy_paths_reexport_canonical_core_types() {
 #[test]
 fn legacy_generated_client_and_session_registry_keep_type_identity() {
     fn accept_legacy_client(
-        _: Option<legacy_proto::v2::messaging_service_client::MessagingServiceClient<tonic::transport::Channel>>,
+        _: Option<rocketmq_proxy::v2::messaging_service_client::MessagingServiceClient<tonic::transport::Channel>>,
     ) {
     }
     let canonical_client: Option<
@@ -69,7 +68,7 @@ fn legacy_generated_client_and_session_registry_keep_type_identity() {
     accept_legacy_client(canonical_client);
 
     fn accept_legacy_registry(_: rocketmq_proxy::ClientSessionRegistry) {}
-    let canonical_registry: rocketmq_proxy_core::ClientSessionRegistry<rocketmq_transport::net::channel::Channel> =
+    let canonical_registry: rocketmq_proxy_core::ClientSessionRegistry<rocketmq_transport::Channel> =
         Default::default();
     accept_legacy_registry(canonical_registry);
 }
@@ -97,10 +96,10 @@ fn legacy_and_canonical_ingress_error_mappings_are_identical() {
 
     for error in errors {
         assert_eq!(
-            rocketmq_proxy::status::ProxyStatusMapper::from_error(&error),
+            rocketmq_proxy::ProxyStatusMapper::from_error(&error),
             rocketmq_proxy_core::status::ProxyStatusMapper::from_error(&error),
         );
-        let legacy = rocketmq_proxy::status::ProxyStatusMapper::to_tonic_status(&error);
+        let legacy = rocketmq_proxy::ProxyStatusMapper::to_tonic_status(&error);
         let canonical = rocketmq_proxy_core::status::ProxyStatusMapper::to_tonic_status(&error);
         assert_eq!(legacy.code(), canonical.code());
         assert_eq!(legacy.message(), canonical.message());

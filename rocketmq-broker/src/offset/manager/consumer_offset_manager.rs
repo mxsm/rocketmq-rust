@@ -34,8 +34,8 @@ use rocketmq_protocol::protocol::data_version_facade::DataVersionExt;
 use rocketmq_protocol::protocol::DataVersion;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::file_utils;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
+use rocketmq_store::MessageStore;
+use rocketmq_store::MessageStoreConfig;
 use serde::de;
 use serde::de::MapAccess;
 use serde::de::Visitor;
@@ -1005,8 +1005,8 @@ mod tests {
     use crate::config::config_manager::ConfigManager;
     use cheetah_string::CheetahString;
     use rocketmq_protocol::protocol::DataVersion;
-    use rocketmq_store::config::message_store_config::MessageStoreConfig;
-    use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
+    use rocketmq_store::LocalFileMessageStore;
+    use rocketmq_store::MessageStoreConfig;
 
     use super::build_topic_group_key;
     use super::build_topic_group_lookup_key;

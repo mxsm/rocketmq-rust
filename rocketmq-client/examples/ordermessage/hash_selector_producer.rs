@@ -21,9 +21,9 @@
 #[path = "../support/mod.rs"]
 mod support;
 
-use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_client_rust::producer::message_queue_selector::MessageQueueSelector;
-use rocketmq_client_rust::producer::queue_selector::SelectMessageQueueByHash;
+use rocketmq_client_rust::DefaultMQProducer;
+use rocketmq_client_rust::MessageQueueSelector;
+use rocketmq_client_rust::SelectMessageQueueByHash;
 use rocketmq_model::common::message::message_single::Message;
 
 #[tokio::main]

@@ -2,22 +2,22 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_auth::authentication::acl_signer;
-use rocketmq_auth::authentication::enums::subject_type::SubjectType;
-use rocketmq_auth::authentication::enums::user_status::UserStatus;
-use rocketmq_auth::authentication::enums::user_type::UserType;
-use rocketmq_auth::authentication::model::subject::Subject;
-use rocketmq_auth::authentication::model::user::User;
-use rocketmq_auth::authentication::provider::AuthenticationMetadataProvider;
-use rocketmq_auth::authorization::factory::AuthorizationFactory;
-use rocketmq_auth::authorization::metadata_provider::AuthorizationMetadataProvider;
-use rocketmq_auth::authorization::model::acl::Acl;
-use rocketmq_auth::authorization::model::policy::Policy;
-use rocketmq_auth::authorization::model::request_context::RequestContext;
-use rocketmq_auth::authorization::model::resource::Resource;
-use rocketmq_auth::config::AuthConfig;
+use rocketmq_auth::cal_signature;
+use rocketmq_auth::Acl;
+use rocketmq_auth::AuthConfig;
 use rocketmq_auth::AuthRuntime;
 use rocketmq_auth::AuthRuntimeBuilder as ProductionAuthRuntimeBuilder;
+use rocketmq_auth::AuthenticationMetadataProvider;
+use rocketmq_auth::AuthorizationFactory;
+use rocketmq_auth::AuthorizationMetadataProvider;
+use rocketmq_auth::Policy;
+use rocketmq_auth::RequestContext;
+use rocketmq_auth::Resource;
+use rocketmq_auth::Subject;
+use rocketmq_auth::SubjectType;
+use rocketmq_auth::User;
+use rocketmq_auth::UserStatus;
+use rocketmq_auth::UserType;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::RuntimeContext;
@@ -96,7 +96,7 @@ async fn allow_topic_pub(runtime: &AuthRuntime, username: &str, topic: &str) {
             vec![Resource::of_topic(topic)],
             vec![Action::Pub],
             None,
-            rocketmq_auth::authorization::enums::decision::Decision::Allow,
+            rocketmq_auth::Decision::Allow,
         ),
     );
     runtime
@@ -120,7 +120,7 @@ async fn remoting_signature_matches_java_sorted_value_only_content() {
 
     seed_user(&runtime, "alice", "secret", UserType::Normal).await;
 
-    let signature = acl_signer::cal_signature(b"aliceATopicAZbody", "secret").expect("signature should calculate");
+    let signature = cal_signature(b"aliceATopicAZbody", "secret").expect("signature should calculate");
     let command = send_message_command(
         "TopicA",
         Some("alice"),
@@ -133,8 +133,8 @@ async fn remoting_signature_matches_java_sorted_value_only_content() {
         .await
         .expect("Java value-only signed content should authenticate");
 
-    let key_value_signature = acl_signer::cal_signature(b"AccessKeyalicealphaAtopicTopicAzetaZbody", "secret")
-        .expect("signature should calculate");
+    let key_value_signature =
+        cal_signature(b"AccessKeyalicealphaAtopicTopicAzetaZbody", "secret").expect("signature should calculate");
     let command = send_message_command(
         "TopicA",
         Some("alice"),
@@ -191,14 +191,14 @@ accounts:
         .is_acl_white_remote_address(Some("alice"), Some("192.168.0.7"))
         .expect("white list check should succeed"));
 
-    let signature = acl_signer::cal_signature(b"aliceTopicA", "secret").expect("signature should calculate");
+    let signature = cal_signature(b"aliceTopicA", "secret").expect("signature should calculate");
     let command = send_message_command("TopicA", Some("alice"), Some(signature.as_str()), &[], None);
     runtime
         .check_remoting_with_source_ip(&(), &command, Some("172.16.0.1"), None)
         .await
         .expect("custom TopicA=PUB should override default topic DENY");
 
-    let signature = acl_signer::cal_signature(b"aliceTopicB", "secret").expect("signature should calculate");
+    let signature = cal_signature(b"aliceTopicB", "secret").expect("signature should calculate");
     let command = send_message_command("TopicB", Some("alice"), Some(signature.as_str()), &[], None);
     runtime
         .check_remoting_with_source_ip(&(), &command, Some("172.16.0.1"), None)
@@ -217,7 +217,7 @@ accounts:
         .await
         .expect("globalWhiteRemoteAddresses should bypass missing credentials");
 
-    let signature = acl_signer::cal_signature(b"adminTopicB", "admin-secret").expect("signature should calculate");
+    let signature = cal_signature(b"adminTopicB", "admin-secret").expect("signature should calculate");
     let command = send_message_command("TopicB", Some("admin"), Some(signature.as_str()), &[], None);
     runtime
         .check_remoting_with_source_ip(&(), &command, Some("172.16.0.1"), None)
@@ -243,13 +243,13 @@ async fn custom_deny_takes_precedence_over_custom_allow_for_same_resource() {
         vec![Resource::of_topic("TopicA")],
         vec![Action::Pub],
         None,
-        rocketmq_auth::authorization::enums::decision::Decision::Allow,
+        rocketmq_auth::Decision::Allow,
     );
     let deny = Policy::of(
         vec![Resource::of_topic("TopicA")],
         vec![Action::Pub],
         None,
-        rocketmq_auth::authorization::enums::decision::Decision::Deny,
+        rocketmq_auth::Decision::Deny,
     );
     runtime
         .provider_registry()
@@ -258,7 +258,7 @@ async fn custom_deny_takes_precedence_over_custom_allow_for_same_resource() {
         .await
         .expect("test acl should be created");
 
-    let signature = acl_signer::cal_signature(b"aliceTopicA", "secret").expect("signature should calculate");
+    let signature = cal_signature(b"aliceTopicA", "secret").expect("signature should calculate");
     let command = send_message_command("TopicA", Some("alice"), Some(signature.as_str()), &[], None);
     runtime
         .check_remoting_with_source_ip(&(), &command, Some("172.16.0.1"), None)
@@ -281,7 +281,7 @@ async fn super_user_short_circuits_acl_lookup() {
     seed_user(&runtime, "root", "secret", UserType::Super).await;
     allow_topic_pub(&runtime, "alice", "TopicA").await;
 
-    let signature = acl_signer::cal_signature(b"rootTopicWithoutAcl", "secret").expect("signature should calculate");
+    let signature = cal_signature(b"rootTopicWithoutAcl", "secret").expect("signature should calculate");
     let command = send_message_command("TopicWithoutAcl", Some("root"), Some(signature.as_str()), &[], None);
     runtime
         .check_remoting_with_source_ip(&(), &command, Some("172.16.0.1"), None)
@@ -318,7 +318,7 @@ accounts:
         .expect("auth runtime should build"),
     );
 
-    let old_signature = acl_signer::cal_signature(b"aliceTopicA", "first").expect("signature should calculate");
+    let old_signature = cal_signature(b"aliceTopicA", "first").expect("signature should calculate");
     let old_command = send_message_command("TopicA", Some("alice"), Some(old_signature.as_str()), &[], None);
     runtime
         .check_remoting_with_source_ip(&(), &old_command, Some("172.16.0.1"), Some("channel-a"))
@@ -373,7 +373,7 @@ accounts:
         .await
         .expect_err("reloaded ACL should reject the old secret and old topic");
 
-    let new_signature = acl_signer::cal_signature(b"aliceTopicB", "second").expect("signature should calculate");
+    let new_signature = cal_signature(b"aliceTopicB", "second").expect("signature should calculate");
     let new_command = send_message_command("TopicB", Some("alice"), Some(new_signature.as_str()), &[], None);
     runtime
         .check_remoting_with_source_ip(&(), &new_command, Some("172.16.0.1"), Some("channel-a"))
@@ -432,14 +432,14 @@ accounts:
         "failed reload must not advance ACL generation"
     );
 
-    let old_signature = acl_signer::cal_signature(b"aliceTopicA", "first").expect("signature should calculate");
+    let old_signature = cal_signature(b"aliceTopicA", "first").expect("signature should calculate");
     let old_command = send_message_command("TopicA", Some("alice"), Some(old_signature.as_str()), &[], None);
     runtime
         .check_remoting_with_source_ip(&(), &old_command, Some("172.16.0.1"), Some("channel-a"))
         .await
         .expect("failed reload must keep the previous working ACL snapshot");
 
-    let new_signature = acl_signer::cal_signature(b"aliceTopicB", "first").expect("signature should calculate");
+    let new_signature = cal_signature(b"aliceTopicB", "first").expect("signature should calculate");
     let new_command = send_message_command("TopicB", Some("alice"), Some(new_signature.as_str()), &[], None);
     runtime
         .check_remoting_with_source_ip(&(), &new_command, Some("172.16.0.1"), Some("channel-a"))
@@ -479,7 +479,7 @@ accounts:
     .await
     .expect("auth runtime should build");
 
-    let bob_signature = acl_signer::cal_signature(b"bobTopicB", "second").expect("signature should calculate");
+    let bob_signature = cal_signature(b"bobTopicB", "second").expect("signature should calculate");
     let bob_command = send_message_command("TopicB", Some("bob"), Some(bob_signature.as_str()), &[], None);
     runtime
         .check_remoting_with_source_ip(&(), &bob_command, Some("172.16.0.1"), Some("channel-b"))

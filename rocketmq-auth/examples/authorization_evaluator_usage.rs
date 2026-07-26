@@ -17,11 +17,11 @@
 //! This example demonstrates how to use the AuthorizationEvaluator to make
 //! authorization decisions in RocketMQ.
 
-use rocketmq_auth::authorization::context::default_authorization_context::DefaultAuthorizationContext;
-use rocketmq_auth::authorization::evaluator::AuthorizationEvaluator;
-use rocketmq_auth::authorization::model::resource::Resource;
-use rocketmq_auth::authorization::strategy::stateless_authorization_strategy::StatelessAuthorizationStrategy;
-use rocketmq_auth::config::AuthConfig;
+use rocketmq_auth::AuthConfig;
+use rocketmq_auth::AuthorizationEvaluator;
+use rocketmq_auth::DefaultAuthorizationContext;
+use rocketmq_auth::Resource;
+use rocketmq_auth::StatelessAuthorizationStrategy;
 use rocketmq_security_api::Action;
 
 #[tokio::main]

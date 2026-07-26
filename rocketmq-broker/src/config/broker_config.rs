@@ -30,10 +30,10 @@ use rocketmq_model::common::message::message_enum::MessageRequestMode;
 use rocketmq_model::common::mix_all;
 use rocketmq_model::common::mix_all::NAMESRV_ADDR_PROPERTY;
 use rocketmq_model::common::topic::TopicValidator;
-use rocketmq_observability::exporter_types::log_exporter_type::LogExporterType;
-use rocketmq_observability::exporter_types::metrics_exporter_type::MetricsExporterType;
-use rocketmq_observability::exporter_types::trace_exporter_type::TraceExporterType;
-use rocketmq_transport::config::server_config::ServerConfig;
+use rocketmq_observability::LogExporterType;
+use rocketmq_observability::MetricsExporterType;
+use rocketmq_observability::TraceExporterType;
+use rocketmq_transport::ServerConfig;
 
 pub static NAMESRV_ADDR: std::sync::LazyLock<Option<String>> =
     std::sync::LazyLock::new(|| std::env::var(NAMESRV_ADDR_PROPERTY).map_or(Some("127.0.0.1:9876".to_string()), Some));
@@ -1544,8 +1544,8 @@ impl Default for BrokerConfig {
 impl BrokerConfig {
     /// Builds the narrow, immutable configuration snapshot consumed by Store.
     #[must_use]
-    pub fn store_runtime_config(&self) -> rocketmq_store::config::store_runtime_config::StoreRuntimeConfig {
-        rocketmq_store::config::store_runtime_config::StoreRuntimeConfig {
+    pub fn store_runtime_config(&self) -> rocketmq_store::StoreRuntimeConfig {
+        rocketmq_store::StoreRuntimeConfig {
             broker_identity: self.broker_identity.clone(),
             broker_ip1: self.broker_ip1.clone(),
             enable_controller_mode: self.enable_controller_mode,
@@ -2146,9 +2146,9 @@ mod tests {
     use rocketmq_error::REDACTED;
 
     use super::BrokerConfig;
-    use rocketmq_observability::exporter_types::log_exporter_type::LogExporterType;
-    use rocketmq_observability::exporter_types::metrics_exporter_type::MetricsExporterType;
-    use rocketmq_observability::exporter_types::trace_exporter_type::TraceExporterType;
+    use rocketmq_observability::LogExporterType;
+    use rocketmq_observability::MetricsExporterType;
+    use rocketmq_observability::TraceExporterType;
 
     #[test]
     fn default_broker_config_uses_java_lite_defaults() {

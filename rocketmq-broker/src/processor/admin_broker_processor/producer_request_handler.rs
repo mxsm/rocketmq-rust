@@ -4,7 +4,7 @@ use rocketmq_protocol::protocol::body::producer_connection::ProducerConnection;
 use rocketmq_protocol::protocol::header::get_producer_connection_list_request_header::GetProducerConnectionListRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingSerializable;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_transport::ConnectionHandlerContext;
 
 use crate::client::manager::producer_manager::ProducerChannelRegistry;
 

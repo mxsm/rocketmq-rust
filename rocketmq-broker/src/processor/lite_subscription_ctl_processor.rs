@@ -26,10 +26,10 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::body::lite_subscription_ctl_request_body::LiteSubscriptionCtlRequestBody;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_transport::runtime::processor::RequestProcessor;
+use rocketmq_store::MessageStore;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
 use tracing::warn;
 
 use crate::lite::lite_event_dispatcher::LiteEventDispatcher;
@@ -448,13 +448,13 @@ mod tests {
     use rocketmq_protocol::protocol::body::lite_subscription_ctl_request_body::LiteSubscriptionCtlRequestBody;
     use rocketmq_protocol::protocol::header::empty_header::EmptyHeader;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-    use rocketmq_store::config::message_store_config::MessageStoreConfig;
-    use rocketmq_transport::base::response_future::ResponseFuture;
-    use rocketmq_transport::connection::Connection;
-    use rocketmq_transport::net::channel::Channel;
-    use rocketmq_transport::net::channel::ChannelInner;
-    use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
-    use rocketmq_transport::runtime::processor::RequestProcessor;
+    use rocketmq_store::MessageStoreConfig;
+    use rocketmq_transport::Channel;
+    use rocketmq_transport::ChannelInner;
+    use rocketmq_transport::Connection;
+    use rocketmq_transport::ConnectionHandlerContextWrapper;
+    use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
+    use rocketmq_transport::ResponseFuture;
 
     use super::LiteSubscriptionCtlContext;
     use super::LiteSubscriptionCtlPolicy;

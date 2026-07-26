@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_store::consume_queue::mapped_file_queue::FlushProgress as LegacyFlushProgress;
+use rocketmq_store::FlushProgress as LegacyFlushProgress;
 use rocketmq_store_local::flush::FlushProgress as CanonicalFlushProgress;
 
 fn accept_canonical(_progress: CanonicalFlushProgress) {}

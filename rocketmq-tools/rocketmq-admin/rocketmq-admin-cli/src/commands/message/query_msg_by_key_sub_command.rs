@@ -96,7 +96,7 @@ impl CommandExecute for QueryMsgByKeySubCommand {
             client_runtime.clone(),
         )
         .await
-        .map_err(|e| RocketMQError::Internal(format!("Failed to query message by key: {}", e)))?;
+        .map_err(|source| RocketMQError::internal("query message by key", source))?;
 
         println!(
             "{:<50} {:>4} {:>40} {:<200}",

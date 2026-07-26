@@ -27,7 +27,7 @@ use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::Channel;
 use tracing::info;
 use tracing::warn;
 
@@ -60,9 +60,9 @@ struct HeartbeatLifecycle {
 /// # Example
 ///
 /// ```no_run,ignore
-/// use rocketmq_controller::config::{ControllerConfig, ControllerConfigReader};
-/// use rocketmq_controller::heartbeat::default_broker_heartbeat_manager::DefaultBrokerHeartbeatManager;
-/// use rocketmq_controller::controller::broker_heartbeat_manager::BrokerHeartbeatManager;
+/// use rocketmq_controller::{ControllerConfig, ControllerConfigReader};
+/// use rocketmq_controller::DefaultBrokerHeartbeatManager;
+/// use rocketmq_controller::BrokerHeartbeatManager;
 ///
 /// # async fn example() {
 /// let config = ControllerConfigReader::new(ControllerConfig::test_config());

@@ -36,7 +36,7 @@ use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_transport::rpc::client_metadata::ClientMetadata;
+use rocketmq_transport::ClientMetadata;
 use tracing::info;
 use tracing::warn;
 
@@ -555,7 +555,7 @@ mod tests {
 
     use crate::config::broker_config::BrokerConfig;
     use rocketmq_runtime::RuntimeContext;
-    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_store::MessageStoreConfig;
 
     use crate::broker_runtime::BrokerRuntime;
 

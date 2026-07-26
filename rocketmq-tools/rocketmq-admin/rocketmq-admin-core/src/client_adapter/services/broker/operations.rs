@@ -16,7 +16,7 @@
 
 use cheetah_string::CheetahString;
 use regex::Regex;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
+use rocketmq_client_rust::MQAdminExt;
 use rocketmq_protocol::protocol::admin::consume_stats_list::ConsumeStatsList;
 use std::collections::HashMap;
 

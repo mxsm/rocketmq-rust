@@ -389,7 +389,7 @@ mod tests {
     use rocketmq_model::common::message::message_queue::MessageQueue;
     use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
     use rocketmq_runtime::RuntimeContext;
-    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_store::MessageStoreConfig;
 
     use crate::broker_runtime::BrokerRuntime;
 

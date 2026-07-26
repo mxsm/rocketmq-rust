@@ -61,6 +61,7 @@ use crate::log_file::mapped_file::MappedFile;
 use crate::queue::ArcConsumeQueue;
 use crate::stats::broker_stats_manager::BrokerStatsManager;
 use crate::store::running_flags::RunningFlags;
+use crate::store_error::StoreComponent;
 use crate::store_error::StoreError;
 use crate::store_error::StoreErrorKind;
 use crate::timer::timer_message_store::TimerMessageStore;
@@ -179,6 +180,7 @@ impl Default for StoreHealthSnapshot {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoreHealthError {
     pub kind: StoreErrorKind,
+    pub component: StoreComponent,
     pub detail: String,
 }
 
@@ -227,6 +229,7 @@ impl From<&StoreError> for StoreHealthError {
     fn from(error: &StoreError) -> Self {
         Self {
             kind: error.kind(),
+            component: error.component(),
             detail: error.to_string(),
         }
     }

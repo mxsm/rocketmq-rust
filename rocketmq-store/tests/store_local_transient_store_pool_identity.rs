@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_store::base::transient_store_pool::TransientStorePool as LegacyTransientStorePool;
+use rocketmq_store::TransientStorePool as LegacyTransientStorePool;
 use rocketmq_store_local::base::transient_store_pool::TransientStorePool as CanonicalTransientStorePool;
 
 fn to_canonical(value: LegacyTransientStorePool) -> CanonicalTransientStorePool {

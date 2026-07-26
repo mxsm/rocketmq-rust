@@ -56,8 +56,8 @@ impl UpdateTopicListSubCommand {
             return Ok(TopicTarget::Cluster(CheetahString::from(cluster.trim())));
         }
 
-        Err(RocketMQError::Internal(
-            "a broker or cluster is required for command UpdateTopicList".to_string(),
+        Err(RocketMQError::illegal_argument(
+            "a broker or cluster is required for command UpdateTopicList",
         ))
     }
 
@@ -82,15 +82,15 @@ impl CommandExecute for UpdateTopicListSubCommand {
         _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> rocketmq_error::RocketMQResult<()> {
         if !self.file.is_file() {
-            return Err(RocketMQError::Internal(
-                "the file path doesn't point to a valid file".to_string(),
+            return Err(RocketMQError::illegal_argument(
+                "the file path doesn't point to a valid file",
             ));
         }
 
         let mut topic_config_list_bytes = vec![];
         File::open(&self.file)
             .await
-            .map_err(|e| RocketMQError::Internal(format!("open file error {}", e)))?
+            .map_err(RocketMQError::IO)?
             .read_to_end(&mut topic_config_list_bytes)
             .await?;
         let topic_configs =
@@ -99,9 +99,7 @@ impl CommandExecute for UpdateTopicListSubCommand {
             } else if let Ok(topic_configs) = serde_yaml::from_slice::<Vec<TopicConfig>>(&topic_config_list_bytes) {
                 topic_configs
             } else {
-                return Err(RocketMQError::Internal(
-                    "the file isn't in json or yaml format".to_string(),
-                ));
+                return Err(RocketMQError::illegal_argument("the file isn't in json or yaml format"));
             };
 
         let result = TopicService::update_topic_config_list_by_request(self.request(topic_configs)?).await?;

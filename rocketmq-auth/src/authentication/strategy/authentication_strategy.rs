@@ -37,8 +37,8 @@
 //! ## Example
 //!
 //! ```rust,ignore
-//! use rocketmq_auth::authentication::strategy::AuthenticationStrategy;
-//! use rocketmq_auth::authentication::context::AuthenticationContext;
+//! use rocketmq_auth::AuthenticationStrategy;
+//! use rocketmq_auth::AuthenticationContext;
 //! use rocketmq_error::AuthError;
 //!
 //! struct AkSkAuthenticationStrategy;
@@ -86,7 +86,7 @@ use crate::authorization::context::authentication_context::AuthenticationContext
 /// ## Basic Implementation
 ///
 /// ```rust,ignore
-/// use rocketmq_auth::authentication::strategy::AuthenticationStrategy;
+/// use rocketmq_auth::AuthenticationStrategy;
 /// use rocketmq_error::AuthError;
 ///
 /// struct AllowAllAuthenticationStrategy;
@@ -102,8 +102,8 @@ use crate::authorization::context::authentication_context::AuthenticationContext
 /// ## AK/SK Authentication
 ///
 /// ```rust,ignore
-/// use rocketmq_auth::authentication::strategy::AuthenticationStrategy;
-/// use rocketmq_auth::authentication::context::DefaultAuthenticationContext;
+/// use rocketmq_auth::AuthenticationStrategy;
+/// use rocketmq_auth::DefaultAuthenticationContext;
 /// use rocketmq_error::AuthError;
 ///
 /// struct AkSkAuthenticationStrategy {
@@ -115,7 +115,7 @@ use crate::authorization::context::authentication_context::AuthenticationContext
 ///         // Downcast to DefaultAuthenticationContext
 ///         let ctx = context.as_any()
 ///             .downcast_ref::<DefaultAuthenticationContext>()
-///             .ok_or_else(|| AuthError::Other("Invalid context type".into()))?;
+///             .ok_or_else(|| AuthError::ContextCreationError("Invalid context type".into()))?;
 ///
 ///         // Extract username and signature
 ///         let username = ctx.username()
@@ -178,8 +178,8 @@ pub trait AuthenticationStrategy: Send + Sync {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// use rocketmq_auth::authentication::strategy::AuthenticationStrategy;
-    /// use rocketmq_auth::authentication::context::DefaultAuthenticationContext;
+    /// use rocketmq_auth::AuthenticationStrategy;
+    /// use rocketmq_auth::DefaultAuthenticationContext;
     /// use rocketmq_error::AuthError;
     ///
     /// fn authenticate_request(

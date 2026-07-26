@@ -23,7 +23,7 @@ use rocketmq_broker::config::raw::RawBrokerConfig;
 use rocketmq_broker::config::transaction::ConfigUpdateTransaction;
 use rocketmq_broker::config::validated::ConfigGeneration;
 use rocketmq_broker::config::validated::ValidatedBrokerConfig;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
+use rocketmq_store::MessageStoreConfig;
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

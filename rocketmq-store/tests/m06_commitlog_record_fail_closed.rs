@@ -25,10 +25,10 @@ use rocketmq_model::common::message::MessageConst;
 use rocketmq_model::common::topic::TopicValidator;
 use rocketmq_model::utils::crc32_utils::crc32;
 use rocketmq_protocol::common::message::message_decoder::create_crc32;
-use rocketmq_store::base::dispatch_request::DispatchRequest;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
-use rocketmq_store::log_file::commit_log::check_message_and_return_size;
-use rocketmq_store::log_file::commit_log::CRC32_RESERVED_LEN;
+use rocketmq_store::check_message_and_return_size;
+use rocketmq_store::DispatchRequest;
+use rocketmq_store::MessageStoreConfig;
+use rocketmq_store::CRC32_RESERVED_LEN;
 use rocketmq_store_local::commit_log::record::BLANK_MAGIC_CODE;
 use rocketmq_store_local::commit_log::record::MESSAGE_MAGIC_CODE;
 
@@ -153,11 +153,7 @@ fn frame(version: Version, sys_flag: i32, body: &[u8], topic: &[u8], properties:
     encoded.freeze()
 }
 
-fn dispatch(
-    bytes: &mut Bytes,
-    check_crc: bool,
-    read_body: bool,
-) -> rocketmq_store::base::dispatch_request::DispatchRequest {
+fn dispatch(bytes: &mut Bytes, check_crc: bool, read_body: bool) -> rocketmq_store::DispatchRequest {
     dispatch_with(
         bytes,
         check_crc,
@@ -173,7 +169,7 @@ fn dispatch_with(
     check_dup_info: bool,
     read_body: bool,
     config: Arc<MessageStoreConfig>,
-) -> rocketmq_store::base::dispatch_request::DispatchRequest {
+) -> rocketmq_store::DispatchRequest {
     dispatch_with_policy(bytes, check_crc, check_dup_info, read_body, config, 0, &BTreeMap::new())
 }
 

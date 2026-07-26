@@ -18,7 +18,7 @@ use config::Config;
 use config::File;
 use rocketmq_observability::LoggingOverrides;
 use rocketmq_observability::ReloadConfig;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
+use rocketmq_store::MessageStoreConfig;
 use serde::Deserialize;
 
 use super::broker_config::BrokerConfig;

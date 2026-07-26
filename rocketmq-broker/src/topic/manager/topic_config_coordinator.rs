@@ -493,7 +493,7 @@ mod tests {
     use rocketmq_model::common::config::TopicConfig;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_runtime::ShutdownDeadline;
-    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_store::MessageStoreConfig;
     use tempfile::TempDir;
     use tokio::sync::oneshot;
 

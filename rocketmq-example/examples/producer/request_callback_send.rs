@@ -16,7 +16,7 @@
 
 use std::time::Duration;
 
-use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
+use rocketmq_client_rust::DefaultMQProducer;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::message_single::Message;

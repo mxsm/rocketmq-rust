@@ -44,7 +44,6 @@ pub use tools::ToolsError;
 
 // Re-export auth error from the auth_error module
 pub use crate::auth_error::AuthError;
-pub use crate::client_error::*;
 // Re-export controller error from the controller_error module
 pub use crate::controller_error::ControllerError;
 
@@ -386,9 +385,17 @@ pub enum RocketMQError {
     #[error("Operation '{operation}' timed out after {timeout_ms}ms")]
     Timeout { operation: &'static str, timeout_ms: u64 },
 
-    /// Internal error (should be rare)
-    #[error("Internal error: {0}")]
-    Internal(String),
+    /// Internal operation failed with a preserved typed source.
+    #[error("Internal operation {operation} failed")]
+    Internal {
+        operation: &'static str,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
+    /// A violated program invariant with no lower-level source.
+    #[error("Invariant violated: {invariant}")]
+    InvariantViolation { invariant: &'static str },
 
     /// Service lifecycle error
     #[error("Service error: {0}")]
@@ -475,7 +482,7 @@ impl RocketMQError {
             Self::IO(_) => ErrorKind::Io,
             Self::IllegalArgument(_) => ErrorKind::IllegalArgument,
             Self::Timeout { .. } => ErrorKind::Timeout,
-            Self::Internal(_) => ErrorKind::Internal,
+            Self::Internal { .. } | Self::InvariantViolation { .. } => ErrorKind::Internal,
             Self::Service(_) => ErrorKind::Service,
             Self::InvalidVersionOrdinal(_) => ErrorKind::InvalidVersionOrdinal,
             Self::NotInitialized(_) => ErrorKind::NotInitialized,
@@ -628,7 +635,10 @@ impl RocketMQError {
             Self::Timeout { operation, timeout_ms } => ErrorContext::new()
                 .with_field("operation", *operation)
                 .with_field("timeout_ms", timeout_ms.to_string()),
-            Self::Internal(message) => redacted_context("internal_error", message.clone()),
+            Self::Internal { operation, source } => ErrorContext::new()
+                .with_field("operation", *operation)
+                .with_sensitive("internal_error", Sensitive::new(source.to_string())),
+            Self::InvariantViolation { invariant } => ErrorContext::new().with_field("invariant", *invariant),
             Self::Service(error) => redacted_context("service_error", error.to_string()),
             Self::InvalidVersionOrdinal(ordinal) => ErrorContext::new().with_field("ordinal", ordinal.to_string()),
             Self::NotInitialized(reason) => ErrorContext::new().with_field("reason", reason.as_str()),
@@ -749,6 +759,21 @@ impl RocketMQError {
     #[inline]
     pub fn illegal_argument(message: impl Into<String>) -> Self {
         Self::IllegalArgument(message.into())
+    }
+
+    /// Creates an internal operation failure while preserving its typed cause.
+    #[inline]
+    pub fn internal(operation: &'static str, source: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self::Internal {
+            operation,
+            source: Box::new(source),
+        }
+    }
+
+    /// Creates an internal invariant failure when no lower-level operation failed.
+    #[inline]
+    pub const fn invariant_violated(invariant: &'static str) -> Self {
+        Self::InvariantViolation { invariant }
     }
 
     /// Create a route not found error

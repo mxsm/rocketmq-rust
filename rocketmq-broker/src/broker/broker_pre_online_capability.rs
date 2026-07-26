@@ -31,11 +31,11 @@ use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::Topic
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
-use rocketmq_store::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
-use rocketmq_store::timer::timer_message_store::TimerMessageStore;
-use rocketmq_transport::common::remoting_helper::RemotingHelper;
+use rocketmq_store::HAConnectionStateNotificationRequest;
+use rocketmq_store::MessageStore;
+use rocketmq_store::MessageStoreConfig;
+use rocketmq_store::TimerMessageStore;
+use rocketmq_transport::RemotingHelper;
 use tokio::sync::Mutex;
 use tracing::error;
 use tracing::info;
@@ -191,7 +191,7 @@ impl<MS: MessageStore> BrokerPreOnlineStoreCapability<MS> {
 
     async fn wait_for_ha_transfer(&self, broker_addr: &CheetahString) -> RocketMQResult<bool> {
         let (request, completion) = HAConnectionStateNotificationRequest::new(
-            rocketmq_store::ha::ha_connection_state::HAConnectionState::Transfer,
+            rocketmq_store::HAConnectionState::Transfer,
             &RemotingHelper::parse_host_from_address(Some(broker_addr.as_str())),
             true,
         );

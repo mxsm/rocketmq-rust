@@ -1,6 +1,6 @@
 use crate::auth::auth_admin_service::AuthAdminService;
 use crate::auth::user_converter::UserConverter;
-use rocketmq_auth::authentication::enums::user_type::UserType;
+use rocketmq_auth::UserType;
 use rocketmq_error::RocketMQError;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
@@ -8,8 +8,8 @@ use rocketmq_protocol::protocol::body::user_info::UserInfo;
 use rocketmq_protocol::protocol::header::update_user_request_header::UpdateUserRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingDeserializable;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
 use std::sync::Arc;
 
 #[derive(Clone)]

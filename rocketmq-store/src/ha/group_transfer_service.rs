@@ -58,7 +58,7 @@ impl GroupTransferService {
     pub async fn start(&self) -> HAResult<()> {
         self.service_manager.start().await.map_err(|e| {
             error!("Failed to start GroupTransferService: {:?}", e);
-            HAError::Service(e.to_string())
+            HAError::operation("start group transfer service", e)
         })
     }
 

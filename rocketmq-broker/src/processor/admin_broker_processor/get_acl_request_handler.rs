@@ -20,7 +20,7 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::get_acl_request_header::GetAclRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingSerializable;
-use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::Channel;
 
 use crate::auth::auth_admin_service::AuthAdminService;
 
@@ -37,7 +37,7 @@ impl GetAclRequestHandler {
     pub async fn get_acl(
         &mut self,
         _channel: Channel,
-        _ctx: rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext,
+        _ctx: rocketmq_transport::ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -75,14 +75,14 @@ mod tests {
 
     use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
-    use rocketmq_auth::authentication::enums::user_status::UserStatus;
-    use rocketmq_auth::authentication::enums::user_type::UserType;
-    use rocketmq_auth::authentication::model::user::User;
-    use rocketmq_auth::authorization::enums::decision::Decision;
-    use rocketmq_auth::authorization::model::acl::Acl;
-    use rocketmq_auth::authorization::model::policy::Policy;
-    use rocketmq_auth::authorization::model::resource::Resource;
-    use rocketmq_auth::config::AuthConfig;
+    use rocketmq_auth::Acl;
+    use rocketmq_auth::AuthConfig;
+    use rocketmq_auth::Decision;
+    use rocketmq_auth::Policy;
+    use rocketmq_auth::Resource;
+    use rocketmq_auth::User;
+    use rocketmq_auth::UserStatus;
+    use rocketmq_auth::UserType;
     use rocketmq_protocol::protocol::body::acl_info::AclInfo;
     use rocketmq_protocol::protocol::body::acl_info::PolicyEntryInfo;
     use rocketmq_protocol::protocol::body::acl_info::PolicyInfo;
@@ -97,12 +97,12 @@ mod tests {
     use rocketmq_protocol::protocol::RemotingDeserializable;
     use rocketmq_protocol::protocol::RemotingSerializable;
     use rocketmq_security_api::Action;
-    use rocketmq_store::config::message_store_config::MessageStoreConfig;
-    use rocketmq_transport::base::response_future::ResponseFuture;
-    use rocketmq_transport::connection::Connection;
-    use rocketmq_transport::net::channel::Channel;
-    use rocketmq_transport::net::channel::ChannelInner;
-    use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
+    use rocketmq_store::MessageStoreConfig;
+    use rocketmq_transport::Channel;
+    use rocketmq_transport::ChannelInner;
+    use rocketmq_transport::Connection;
+    use rocketmq_transport::ConnectionHandlerContextWrapper;
+    use rocketmq_transport::ResponseFuture;
 
     use super::*;
     use crate::auth::auth_admin_service::AuthAdminService;
@@ -647,7 +647,7 @@ mod tests {
         auth_admin_service
             .create_acl(Acl::of_with_policies(
                 "alice",
-                rocketmq_auth::authentication::enums::subject_type::SubjectType::User,
+                rocketmq_auth::SubjectType::User,
                 vec![
                     Policy::of(
                         vec![Resource::of_topic("topic-a")],
@@ -656,7 +656,7 @@ mod tests {
                         Decision::Allow,
                     ),
                     Policy::of_type(
-                        rocketmq_auth::authorization::enums::policy_type::PolicyType::Default,
+                        rocketmq_auth::PolicyType::Default,
                         vec![Resource::of_topic("topic-a")],
                         vec![Action::Sub],
                         None,

@@ -20,9 +20,13 @@ use tracing::warn;
 
 use crate::base::message_status_enum::PutMessageStatus;
 use crate::store_error::StoreError;
+use crate::store_error::StoreOperation;
 
 fn group_commit_invalid_state(reason: impl Into<String>) -> StoreError {
-    StoreError::InvalidState(format!("group commit response {}", reason.into()))
+    StoreError::invalid_state(
+        StoreOperation::Flush,
+        format!("group commit response {}", reason.into()),
+    )
 }
 
 pub struct GroupCommitResponse {
@@ -165,6 +169,7 @@ mod tests {
     use tokio::time::Duration;
 
     use super::*;
+    use crate::store_error::StoreErrorKind;
 
     #[tokio::test]
     async fn test_group_commit_request_creation() {
@@ -210,9 +215,12 @@ mod tests {
         let second = response.wait_for_result_with_timeout().await;
 
         assert!(matches!(first, Ok(PutMessageStatus::FlushDiskTimeout)));
-        assert!(
-            matches!(second, Err(StoreError::InvalidState(message)) if message.contains("receiver was already consumed"))
-        );
+        assert!(matches!(
+            second,
+            Err(error)
+                if error.kind() == StoreErrorKind::Internal
+                    && error.detail().is_some_and(|detail| detail.contains("receiver was already consumed"))
+        ));
     }
 
     #[test]

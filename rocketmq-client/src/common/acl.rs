@@ -45,7 +45,7 @@ impl Permission {
     pub const SUB: u8 = 1 << 3;
 
     pub fn parse_perm_from_string(permission: Option<&str>) -> u8 {
-        rocketmq_auth::permission::Permission::parse(permission).bits()
+        rocketmq_auth::Permission::parse(permission).bits()
     }
 }
 
@@ -53,11 +53,11 @@ impl Permission {
 pub struct AclSigner;
 
 impl AclSigner {
-    pub const DEFAULT_CHARSET: &'static str = rocketmq_auth::authentication::acl_signer::DEFAULT_CHARSET;
+    pub const DEFAULT_CHARSET: &'static str = rocketmq_auth::DEFAULT_CHARSET;
     pub const DEFAULT_ALGORITHM: SigningAlgorithm = SigningAlgorithm::HmacSha1;
 
     pub fn cal_signature(data: &[u8], secret_key: &str) -> Result<String, AclException> {
-        rocketmq_auth::authentication::acl_signer::cal_signature(data, secret_key)
+        rocketmq_auth::cal_signature(data, secret_key)
     }
 
     pub fn cal_signature_str(data: &str, secret_key: &str) -> Result<String, AclException> {
@@ -69,7 +69,7 @@ impl AclSigner {
         secret_key: &str,
         algorithm: SigningAlgorithm,
     ) -> Result<String, AclException> {
-        rocketmq_auth::authentication::acl_signer::cal_signature_with_algorithm(data, secret_key, algorithm)
+        rocketmq_auth::cal_signature_with_algorithm(data, secret_key, algorithm)
     }
 }
 
@@ -78,7 +78,7 @@ pub struct AclUtils;
 
 impl AclUtils {
     fn net_address_scope_error(net_address: &str) -> AclException {
-        AclException::Other(format!(
+        AclException::InvalidCredential(format!(
             "NetAddress examine scope Exception netAddress is {net_address}"
         ))
     }

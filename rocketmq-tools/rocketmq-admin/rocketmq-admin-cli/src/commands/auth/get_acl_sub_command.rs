@@ -76,10 +76,14 @@ fn render_get_acl_result(result: GetAclResult, subject: &str, single_broker_targ
     }
 
     if !result.failed_broker_addrs.is_empty() && result.acl_infos.is_empty() {
-        Err(RocketMQError::Internal(format!(
-            "GetAclSubCommand: Failed to get ACL for brokers {}",
-            result.failed_broker_addrs.join(", ")
-        )))
+        Err(RocketMQError::broker_operation_failed(
+            "GET_ACL",
+            -1,
+            format!(
+                "GetAclSubCommand: Failed to get ACL for brokers {}",
+                result.failed_broker_addrs.join(", ")
+            ),
+        ))
     } else {
         Ok(())
     }

@@ -80,8 +80,10 @@ fn parse_consume_mode(s: &str) -> Result<MessageRequestMode, String> {
 
 fn validate_cluster_consume_mode_success(success_count: usize) -> RocketMQResult<()> {
     if success_count == 0 {
-        Err(RocketMQError::Internal(
-            "SetConsumeModeSubCommand: Failed to set consume mode on all brokers in cluster".into(),
+        Err(RocketMQError::broker_operation_failed(
+            "SET_CONSUMER_REQUEST_MODE",
+            -1,
+            "failed on every broker in the cluster",
         ))
     } else {
         Ok(())

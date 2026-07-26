@@ -22,9 +22,9 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::polling_info_request_header::PollingInfoRequestHeader;
 use rocketmq_protocol::protocol::header::polling_info_response_header::PollingInfoResponseHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_transport::runtime::processor::RequestProcessor;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
 use tracing::error;
 use tracing::warn;
 
@@ -233,8 +233,8 @@ mod tests {
     use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
     use rocketmq_model::common::key_builder::KeyBuilder;
-    use rocketmq_store::base::message_store::StateMachineVersionView;
-    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_store::MessageStoreConfig;
+    use rocketmq_store::StateMachineVersionView;
 
     use super::PollingCountProvider;
     use super::PollingInfoProcessor;

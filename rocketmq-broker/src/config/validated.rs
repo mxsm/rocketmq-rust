@@ -15,7 +15,7 @@
 use std::sync::Arc;
 
 use rocketmq_observability::LoggingOverrides;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
+use rocketmq_store::MessageStoreConfig;
 
 use super::broker_config::BrokerConfig;
 use super::error::BrokerConfigError;

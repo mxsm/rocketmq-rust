@@ -13,12 +13,12 @@
 // limitations under the License.
 
 use bytes::Bytes;
-use rocketmq_store::transfer::batch::TransferPlan;
-use rocketmq_store::transfer::planner::TransferPlanInput;
-use rocketmq_store::transfer::planner::TransferPlanner;
-use rocketmq_store::transfer::planner::DEFAULT_TRANSFER_BATCH_SIZE;
-use rocketmq_store::transfer::segment::SegmentLease;
-use rocketmq_store::transfer::segment::TransferCacheState;
+use rocketmq_store::SegmentLease;
+use rocketmq_store::TransferCacheState;
+use rocketmq_store::TransferPlan;
+use rocketmq_store::TransferPlanInput;
+use rocketmq_store::TransferPlanner;
+use rocketmq_store::DEFAULT_TRANSFER_BATCH_SIZE;
 
 #[test]
 fn zero_configured_batch_size_uses_default_without_zero_data_frame() {

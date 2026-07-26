@@ -30,12 +30,12 @@ use rocketmq_model::common::topic::TopicValidator;
 use rocketmq_model::utils::queue_type_utils::QueueTypeUtils;
 use rocketmq_protocol::common::message::message_decoder::message_properties_to_string;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_store::base::message_result::PutMessageResult;
-use rocketmq_store::base::message_status_enum::PutMessageStatus;
-use rocketmq_store::base::message_store::PutMessagePreflight;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
-use rocketmq_store::timer::timer_message_store;
-use rocketmq_store::timer::timer_message_store::TimerMessageStore;
+use rocketmq_store::MessageStoreConfig;
+use rocketmq_store::PutMessagePreflight;
+use rocketmq_store::PutMessageResult;
+use rocketmq_store::PutMessageStatus;
+use rocketmq_store::TimerMessageStore;
+use rocketmq_store::TIMER_TOPIC;
 use tracing::error;
 use tracing::warn;
 
@@ -169,7 +169,7 @@ impl HookUtils {
     }
 
     fn is_rolled_timer_message(msg: &MessageExtBrokerInner) -> bool {
-        timer_message_store::TIMER_TOPIC == msg.topic()
+        TIMER_TOPIC == msg.topic()
     }
 
     pub fn check_if_timer_message(msg: &mut MessageExtBrokerInner) -> bool {
@@ -209,7 +209,7 @@ impl HookUtils {
             }
             return false;
         }
-        if timer_message_store::TIMER_TOPIC == msg.topic()
+        if TIMER_TOPIC == msg.topic()
             || msg
                 .message_ext_inner
                 .properties()
@@ -279,7 +279,7 @@ impl HookUtils {
             msg.properties_string = message_properties_to_string(msg.message_ext_inner.message.properties().as_map());
             msg.message_ext_inner
                 .message
-                .set_topic(CheetahString::from_static_str(timer_message_store::TIMER_TOPIC));
+                .set_topic(CheetahString::from_static_str(TIMER_TOPIC));
             msg.message_ext_inner.queue_id = 0;
         } else if msg
             .message_ext_inner
@@ -353,9 +353,9 @@ mod tests {
     use rocketmq_model::common::message::message_ext::MessageExt;
     use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
     use rocketmq_model::common::message::MessageTrait;
-    use rocketmq_store::base::message_status_enum::PutMessageStatus;
-    use rocketmq_store::config::message_store_config::MessageStoreConfig;
-    use rocketmq_store::timer::timer_message_store::TIMER_TOPIC;
+    use rocketmq_store::MessageStoreConfig;
+    use rocketmq_store::PutMessageStatus;
+    use rocketmq_store::TIMER_TOPIC;
 
     use super::*;
 

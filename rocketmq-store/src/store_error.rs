@@ -12,171 +12,61 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::error::Error as StdError;
+
+pub use rocketmq_store_api::StoreComponent;
+pub use rocketmq_store_api::StoreError;
+pub use rocketmq_store_api::StoreErrorKind;
+pub use rocketmq_store_api::StoreOperation;
 use thiserror::Error;
 
-use rocketmq_error::RocketMQError;
-
-use crate::log_file::mapped_file::MappedFileError;
-
-/// Stable low-cardinality classification for store health and telemetry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StoreErrorKind {
-    MappedFile,
-    RocksDb,
-    NotStarted,
-    MessageNotFound,
-    Config,
-    Unsupported,
-    InvalidState,
-    Storage,
-    TieredStore,
-    Ha,
-    DLedger,
-    MappedFileNotFound,
-}
-
-impl StoreErrorKind {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::MappedFile => "mapped_file",
-            Self::RocksDb => "rocksdb",
-            Self::NotStarted => "not_started",
-            Self::MessageNotFound => "message_not_found",
-            Self::Config => "config",
-            Self::Unsupported => "unsupported",
-            Self::InvalidState => "invalid_state",
-            Self::Storage => "storage",
-            Self::TieredStore => "tiered_store",
-            Self::Ha => "ha",
-            Self::DLedger => "dledger",
-            Self::MappedFileNotFound => "mapped_file_not_found",
-        }
-    }
-}
-
-#[derive(Debug, Error)]
-pub enum StoreError {
-    #[error("Mapped file error: {source}")]
-    MappedFile {
-        #[source]
-        source: Box<MappedFileError>,
-    },
-
-    #[error("RocksDB error: {source}")]
-    RocksDb {
-        #[source]
-        source: Box<RocketMQError>,
-    },
-
-    #[error("Store is not started")]
-    NotStarted,
-
-    #[error("Message not found")]
-    MessageNotFound,
-
-    #[error("Store configuration error: {0}")]
-    Config(String),
-
-    #[error("Unsupported store configuration: {0}")]
-    Unsupported(String),
-
-    #[error("Invalid store state: {0}")]
-    InvalidState(String),
-
-    #[error("Store storage error: {0}")]
-    Storage(String),
-
-    #[error("Tiered store error: {0}")]
-    TieredStore(String),
-
-    #[error("HA store error: {0}")]
-    Ha(String),
-
-    #[error("DLedger store error: {0}")]
-    DLedger(String),
-
-    #[error("Mapped file not found")]
-    MappedFileNotFound,
-}
-
-impl StoreError {
-    pub const fn kind(&self) -> StoreErrorKind {
-        match self {
-            Self::MappedFile { .. } => StoreErrorKind::MappedFile,
-            Self::RocksDb { .. } => StoreErrorKind::RocksDb,
-            Self::NotStarted => StoreErrorKind::NotStarted,
-            Self::MessageNotFound => StoreErrorKind::MessageNotFound,
-            Self::Config(_) => StoreErrorKind::Config,
-            Self::Unsupported(_) => StoreErrorKind::Unsupported,
-            Self::InvalidState(_) => StoreErrorKind::InvalidState,
-            Self::Storage(_) => StoreErrorKind::Storage,
-            Self::TieredStore(_) => StoreErrorKind::TieredStore,
-            Self::Ha(_) => StoreErrorKind::Ha,
-            Self::DLedger(_) => StoreErrorKind::DLedger,
-            Self::MappedFileNotFound => StoreErrorKind::MappedFileNotFound,
-        }
-    }
-
-    #[inline]
-    pub fn mapped_file(source: MappedFileError) -> Self {
-        Self::MappedFile {
-            source: Box::new(source),
-        }
-    }
-
-    #[inline]
-    pub fn rocksdb(source: RocketMQError) -> Self {
-        Self::RocksDb {
-            source: Box::new(source),
-        }
-    }
-}
-
+/// High-availability subsystem failure.
 #[derive(Debug, Error)]
 pub enum HAError {
-    #[error("IO error: {0}")]
+    #[error("HA I/O operation failed")]
     Io(#[from] std::io::Error),
 
-    #[error("RocksDB error: {0}")]
-    RocksDb(String),
+    #[error("HA operation {operation} failed")]
+    Operation {
+        operation: &'static str,
+        #[source]
+        source: Box<dyn StdError + Send + Sync>,
+    },
 
-    #[error("HA service error: {0}")]
-    Service(String),
+    #[error("Invalid HA state: {0}")]
+    InvalidState(String),
+}
+
+impl HAError {
+    /// Preserves a typed source for an HA operation failure.
+    pub fn operation(operation: &'static str, source: impl StdError + Send + Sync + 'static) -> Self {
+        Self::Operation {
+            operation,
+            source: Box::new(source),
+        }
+    }
+
+    /// Reports an HA state invariant without manufacturing a synthetic source.
+    pub fn invalid_state(detail: impl Into<String>) -> Self {
+        Self::InvalidState(detail.into())
+    }
 }
 
 pub type HAResult<T> = std::result::Result<T, HAError>;
 
 #[cfg(test)]
 mod tests {
+    use std::io;
+
     use super::*;
-    use std::error::Error as _;
 
     #[test]
-    fn rocksdb_error() {
-        let error = StoreError::rocksdb(RocketMQError::storage_write_failed("rocksdb", "Database error"));
+    fn ha_operation_preserves_source() {
+        let error = HAError::operation("start acceptor", io::Error::other("address in use"));
 
         assert_eq!(
-            format!("{}", error),
-            "RocksDB error: Storage write failed for 'rocksdb': Database error"
+            Some("address in use"),
+            error.source().map(ToString::to_string).as_deref()
         );
-        assert!(error.source().is_some());
-    }
-
-    #[test]
-    fn store_not_started() {
-        let error = StoreError::NotStarted;
-        assert_eq!(format!("{}", error), "Store is not started");
-    }
-
-    #[test]
-    fn message_not_found() {
-        let error = StoreError::MessageNotFound;
-        assert_eq!(format!("{}", error), "Message not found");
-    }
-
-    #[test]
-    fn typed_store_error() {
-        let error = StoreError::InvalidState("An error occurred".to_string());
-        assert_eq!(format!("{}", error), "Invalid store state: An error occurred");
     }
 }

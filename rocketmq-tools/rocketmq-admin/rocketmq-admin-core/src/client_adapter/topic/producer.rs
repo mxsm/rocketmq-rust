@@ -48,7 +48,7 @@ pub(super) fn build_send_message(request: &TopicSendRequest) -> Message {
 
 pub(super) async fn send_normal_message(
     client_runtime: Arc<ClientRuntime>,
-    mut client_config: rocketmq_client_rust::base::client_config::ClientConfig,
+    mut client_config: rocketmq_client_rust::ClientConfig,
     producer_group: String,
     request: &TopicSendRequest,
 ) -> Result<TopicSendResult, AdminError> {
@@ -78,7 +78,7 @@ pub(super) async fn send_normal_message(
 
 pub(super) async fn send_transaction_message(
     client_runtime: Arc<ClientRuntime>,
-    mut client_config: rocketmq_client_rust::base::client_config::ClientConfig,
+    mut client_config: rocketmq_client_rust::ClientConfig,
     producer_group: String,
     request: &TopicSendRequest,
 ) -> Result<TopicSendResult, AdminError> {

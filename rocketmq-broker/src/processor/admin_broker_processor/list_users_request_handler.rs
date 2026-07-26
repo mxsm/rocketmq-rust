@@ -19,8 +19,8 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::list_users_request_header::ListUsersRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingSerializable;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
 use std::sync::Arc;
 
 #[derive(Clone)]

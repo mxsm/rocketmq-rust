@@ -71,8 +71,8 @@ const SLASH: char = '/';
 /// # Examples
 ///
 /// ```rust,ignore
-/// use rocketmq_auth::authentication::builder::DefaultAuthenticationContextBuilder;
-/// use rocketmq_auth::authentication::builder::AuthenticationContextBuilder;
+/// use rocketmq_auth::DefaultAuthenticationContextBuilder;
+/// use rocketmq_auth::AuthenticationContextBuilder;
 ///
 /// let builder = DefaultAuthenticationContextBuilder::new();
 ///
@@ -120,8 +120,8 @@ impl DefaultAuthenticationContextBuilder {
     /// * `Ok(String)` - Base64-encoded string
     /// * `Err(AuthError)` - Invalid hex input
     fn hex_to_base64(hex_input: &str) -> Result<String, AuthError> {
-        let bytes = hex::decode(hex_input)
-            .map_err(|e| AuthError::InvalidHexSignature(format!("Failed to decode hex: {}", e)))?;
+        let bytes =
+            hex::decode(hex_input).map_err(|source| AuthError::operation("decode hexadecimal signature", source))?;
         Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
     }
 

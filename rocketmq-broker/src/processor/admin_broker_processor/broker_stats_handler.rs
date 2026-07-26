@@ -19,9 +19,9 @@ use rocketmq_protocol::protocol::header::view_broker_stats_data_request_header::
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::subscription::broker_stats_data::BrokerStatsData;
 use rocketmq_protocol::protocol::RemotingSerializable;
-use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_store::BrokerStatsManager;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
 use std::sync::Arc;
 
 #[derive(Clone)]

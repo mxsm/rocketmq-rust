@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::common::acl::SigningAlgorithm;
 use rocketmq_client_rust::AclClientRPCHook;
 use rocketmq_client_rust::MQAdminExt;
 use rocketmq_client_rust::SessionCredentials;
+use rocketmq_client_rust::SigningAlgorithm;
 
 use crate::client_adapter::lifecycle::AdminSession;
 use crate::core::security::AdminCredentials;
@@ -48,7 +48,7 @@ fn admin_acl_rpc_hook(
 
 pub(crate) fn rpc_hook_from_credentials(
     credentials: &AdminCredentials,
-) -> std::sync::Arc<dyn rocketmq_transport::runtime::RPCHook> {
+) -> std::sync::Arc<dyn rocketmq_transport::RPCHook> {
     std::sync::Arc::new(admin_acl_rpc_hook(
         credentials.access_key(),
         credentials.secret_key(),

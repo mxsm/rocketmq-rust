@@ -13,11 +13,12 @@
 // limitations under the License.
 
 use bytes::Bytes;
-use rocketmq_store::consume_queue::mapped_file_queue::MappedFileQueue;
-use rocketmq_store::log_file::commit_log;
-use rocketmq_store::log_file::commit_log_recovery;
-use rocketmq_store::log_file::commit_log_recovery::BatchMessageIterator;
-use rocketmq_store::log_file::mapped_file::MappedFile;
+use rocketmq_store::is_blank_message;
+use rocketmq_store::BatchMessageIterator;
+use rocketmq_store::MappedFile;
+use rocketmq_store::MappedFileQueue;
+use rocketmq_store::BLANK_MAGIC_CODE;
+use rocketmq_store::MESSAGE_MAGIC_CODE;
 use rocketmq_store_local::commit_log::record;
 use tempfile::TempDir;
 
@@ -70,12 +71,12 @@ fn legacy_wrapper_preserves_cross_batch_refill_behavior() {
 
 #[test]
 fn legacy_constant_and_blank_paths_preserve_identity_and_signatures() {
-    let legacy_blank: fn(&Bytes) -> bool = commit_log_recovery::is_blank_message;
+    let legacy_blank: fn(&Bytes) -> bool = is_blank_message;
     let canonical_blank: fn(&Bytes) -> bool = record::is_blank_message;
     let blank = frame(8, record::BLANK_MAGIC_CODE);
 
-    assert_eq!(commit_log::MESSAGE_MAGIC_CODE, record::MESSAGE_MAGIC_CODE);
-    assert_eq!(commit_log::BLANK_MAGIC_CODE, record::BLANK_MAGIC_CODE);
+    assert_eq!(MESSAGE_MAGIC_CODE, record::MESSAGE_MAGIC_CODE);
+    assert_eq!(BLANK_MAGIC_CODE, record::BLANK_MAGIC_CODE);
     assert_eq!(
         record::MESSAGE_MAGIC_CODE,
         rocketmq_model::common::message::MESSAGE_MAGIC_CODE_V1

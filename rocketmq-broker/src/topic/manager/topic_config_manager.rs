@@ -44,8 +44,8 @@ use rocketmq_protocol::protocol::DataVersion;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::file_utils;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
-use rocketmq_store::timer::timer_message_store;
+use rocketmq_store::MessageStoreConfig;
+use rocketmq_store::TIMER_TOPIC;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -261,8 +261,8 @@ impl TopicConfigManager {
 
         {
             if message_store_config.timer_wheel_enable {
-                TopicValidator::add_system_topic(timer_message_store::TIMER_TOPIC);
-                self.put_topic_config(TopicConfig::with_queues(timer_message_store::TIMER_TOPIC, 1, 1));
+                TopicValidator::add_system_topic(TIMER_TOPIC);
+                self.put_topic_config(TopicConfig::with_queues(TIMER_TOPIC, 1, 1));
             }
         }
     }
@@ -1225,7 +1225,7 @@ mod tests {
     use rocketmq_model::common::config::TopicConfig;
     use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
     use rocketmq_protocol::protocol::DataVersion;
-    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_store::MessageStoreConfig;
     use tempfile::TempDir;
 
     use crate::topic::manager::topic_config_manager::TopicConfigManager;
@@ -1442,7 +1442,7 @@ mod rocksdb_config_tests {
     use crate::config::config_manager::ConfigManager;
     use cheetah_string::CheetahString;
     use rocketmq_model::common::config::TopicConfig;
-    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_store::MessageStoreConfig;
     use tempfile::TempDir;
 
     use crate::config::rocksdb_manager::RocksDbBrokerConfigManager;

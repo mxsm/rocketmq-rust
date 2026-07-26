@@ -12,30 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_store::base::message_result::AppendMessageResult;
-use rocketmq_store::base::message_result::PutMessageResult;
-use rocketmq_store::base::message_status_enum::AppendMessageStatus;
-use rocketmq_store::base::message_status_enum::PutMessageStatus;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::capability::get_status_to_api;
-use rocketmq_store::capability::put_status_to_append_status;
-use rocketmq_store::capability::store_append_receipt;
-use rocketmq_store::capability::store_error_kind_to_api;
-use rocketmq_store::capability::MessageReadRequest;
-use rocketmq_store::capability::MessageReadResult;
-use rocketmq_store::capability::MessageStoreHealthCapability;
-use rocketmq_store::capability::MessageStoreReadCapability;
-use rocketmq_store::capability::StoreHealthError;
-use rocketmq_store::capability::StoreHealthSnapshot;
-use rocketmq_store::message_store::OwnedMessageStore;
-use rocketmq_store::store_error::StoreErrorKind;
+use rocketmq_store::get_status_to_api;
+use rocketmq_store::put_status_to_append_status;
+use rocketmq_store::store_append_receipt;
+use rocketmq_store::AppendMessageResult;
+use rocketmq_store::AppendMessageStatus;
+use rocketmq_store::MessageReadRequest;
+use rocketmq_store::MessageReadResult;
+use rocketmq_store::MessageStore;
+use rocketmq_store::MessageStoreHealthCapability;
+use rocketmq_store::MessageStoreReadCapability;
+use rocketmq_store::OwnedMessageStore;
+use rocketmq_store::PutMessageResult;
+use rocketmq_store::PutMessageStatus;
+use rocketmq_store::StoreComponent;
+use rocketmq_store::StoreErrorKind;
+use rocketmq_store::StoreHealthError;
+use rocketmq_store::StoreHealthSnapshot;
 use rocketmq_store_api::AppendReceiptError;
 use rocketmq_store_api::AppendStatus;
 use rocketmq_store_api::Durability;
 use rocketmq_store_api::GetStatus;
 use rocketmq_store_api::MessageReader;
 use rocketmq_store_api::StoreError;
-use rocketmq_store_api::StoreErrorKind as ApiStoreErrorKind;
 use rocketmq_store_api::StoreHealth;
 use rocketmq_store_api::StoreLifecycle;
 use rocketmq_store_local::config::backend::LocalBackendConfig;
@@ -183,30 +182,18 @@ fn every_backend_append_status_maps_exhaustively_without_collapsing() {
 }
 
 #[test]
-fn every_backend_error_kind_maps_to_a_neutral_kind_exhaustively() {
-    let cases = [
-        (StoreErrorKind::MappedFile, ApiStoreErrorKind::Storage),
-        (StoreErrorKind::RocksDb, ApiStoreErrorKind::Storage),
-        (StoreErrorKind::NotStarted, ApiStoreErrorKind::NotStarted),
-        (StoreErrorKind::MessageNotFound, ApiStoreErrorKind::NotFound),
-        (StoreErrorKind::Config, ApiStoreErrorKind::InvalidRequest),
-        (StoreErrorKind::Unsupported, ApiStoreErrorKind::Unsupported),
-        (StoreErrorKind::InvalidState, ApiStoreErrorKind::Internal),
-        (StoreErrorKind::Storage, ApiStoreErrorKind::Storage),
-        (StoreErrorKind::TieredStore, ApiStoreErrorKind::Unavailable),
-        (StoreErrorKind::Ha, ApiStoreErrorKind::Unavailable),
-        (StoreErrorKind::DLedger, ApiStoreErrorKind::Unavailable),
-        (StoreErrorKind::MappedFileNotFound, ApiStoreErrorKind::NotFound),
-    ];
+fn canonical_store_error_kinds_have_unique_codes() {
+    let codes = StoreErrorKind::ALL
+        .iter()
+        .map(|kind| kind.code().as_str())
+        .collect::<std::collections::HashSet<_>>();
 
-    for (backend, expected) in cases {
-        assert_eq!(expected, store_error_kind_to_api(backend));
-    }
+    assert_eq!(StoreErrorKind::ALL.len(), codes.len());
 }
 
 #[test]
 fn every_backend_get_status_maps_exhaustively() {
-    use rocketmq_store::base::message_status_enum::GetMessageStatus;
+    use rocketmq_store::GetMessageStatus;
 
     let cases = [
         (GetMessageStatus::Found, GetStatus::Found),
@@ -227,24 +214,25 @@ fn every_backend_get_status_maps_exhaustively() {
 }
 
 #[test]
-fn every_backend_health_error_preserves_its_exact_token() {
+fn store_health_error_preserves_canonical_kind_or_component_token() {
     let cases = [
-        (StoreErrorKind::MappedFile, "mapped_file"),
-        (StoreErrorKind::RocksDb, "rocksdb"),
-        (StoreErrorKind::NotStarted, "not_started"),
-        (StoreErrorKind::MessageNotFound, "message_not_found"),
-        (StoreErrorKind::Config, "config"),
-        (StoreErrorKind::Unsupported, "unsupported"),
-        (StoreErrorKind::InvalidState, "invalid_state"),
-        (StoreErrorKind::Storage, "storage"),
-        (StoreErrorKind::TieredStore, "tiered_store"),
-        (StoreErrorKind::Ha, "ha"),
-        (StoreErrorKind::DLedger, "dledger"),
-        (StoreErrorKind::MappedFileNotFound, "mapped_file_not_found"),
+        (StoreErrorKind::Storage, StoreComponent::MappedFile, "mapped_file"),
+        (StoreErrorKind::Storage, StoreComponent::RocksDb, "rocksdb"),
+        (StoreErrorKind::Unavailable, StoreComponent::TieredStore, "tiered_store"),
+        (
+            StoreErrorKind::Unavailable,
+            StoreComponent::HighAvailability,
+            "high_availability",
+        ),
+        (StoreErrorKind::Unavailable, StoreComponent::DLedger, "dledger"),
+        (StoreErrorKind::NotStarted, StoreComponent::Store, "not_started"),
     ];
 
-    for (kind, expected) in cases {
-        assert_eq!(expected, StoreHealthError::new(kind).backend_token());
+    for (kind, component, expected) in cases {
+        assert_eq!(
+            expected,
+            StoreHealthError::in_component(kind, component).backend_token()
+        );
     }
 }
 
@@ -252,7 +240,10 @@ fn every_backend_health_error_preserves_its_exact_token() {
 fn store_health_exposes_a_backend_neutral_canonical_projection() {
     let snapshot = StoreHealthSnapshot {
         writable: false,
-        last_error: Some(StoreHealthError::new(StoreErrorKind::Ha)),
+        last_error: Some(StoreHealthError::in_component(
+            StoreErrorKind::Unavailable,
+            StoreComponent::HighAvailability,
+        )),
         appended_watermark: 80,
         durable_watermark: 48,
         ..StoreHealthSnapshot::default()
@@ -261,7 +252,7 @@ fn store_health_exposes_a_backend_neutral_canonical_projection() {
     let canonical = snapshot.canonical();
 
     assert!(!canonical.writable());
-    assert_eq!(Some(ApiStoreErrorKind::Unavailable), canonical.last_error());
+    assert_eq!(Some(StoreErrorKind::Unavailable), canonical.last_error());
     assert_eq!(80, canonical.appended_watermark());
     assert_eq!(48, canonical.durable_watermark());
 }
@@ -319,8 +310,8 @@ async fn local_backend_conforms_to_the_canonical_lifecycle() {
 #[tokio::test]
 async fn rocksdb_backend_conforms_to_the_canonical_lifecycle() {
     use rocketmq_runtime::RuntimeContext;
-    use rocketmq_store::base::store_enum::StoreType;
-    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_store::MessageStoreConfig;
+    use rocketmq_store::StoreType;
     use rocketmq_store_rocksdb::message_store::RocksDbDerivedStore;
     use rocketmq_store_rocksdb::message_store::RocksDbMessageStoreOptions;
 

@@ -20,7 +20,7 @@ use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_model::common::message::message_enum::MessageRequestMode;
 use rocketmq_model::common::mix_all;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
-use rocketmq_transport::runtime::RPCHook;
+use rocketmq_transport::RPCHook;
 
 use crate::base::client_config::ClientConfig;
 use crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
@@ -39,7 +39,7 @@ pub(crate) const MIN_AUTOCOMMIT_INTERVAL_MILLIS: u64 = 1000;
 /// # Examples
 ///
 /// ```rust,ignore
-/// use rocketmq_client::consumer::default_lite_pull_consumer::DefaultLitePullConsumer;
+/// use rocketmq_client::DefaultLitePullConsumer;
 ///
 /// let consumer = DefaultLitePullConsumer::builder(client_runtime.clone())
 ///     .consumer_group("my_consumer_group")

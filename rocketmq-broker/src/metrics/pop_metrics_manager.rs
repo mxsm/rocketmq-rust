@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_store::base::message_status_enum::PutMessageStatus;
-use rocketmq_store::pop::ack_msg::AckMsg;
-use rocketmq_store::pop::pop_check_point::PopCheckPoint;
+use rocketmq_store::AckMsg;
+use rocketmq_store::PopCheckPoint;
+use rocketmq_store::PutMessageStatus;
 
 use super::pop_revive_message_type::PopReviveMessageType;
 

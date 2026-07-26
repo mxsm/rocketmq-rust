@@ -18,11 +18,11 @@ use std::time::Instant;
 
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::error_response;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_transport::runtime::processor::RejectRequestResponse;
-use rocketmq_transport::runtime::processor::RequestProcessor;
+use rocketmq_transport::request_code_not_supported_with_opaque;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::RejectRequestResponse;
+use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
 
 pub use self::client_request_processor::ClientRequestProcessor;
 pub use self::cluster_test_request_processor::ClusterTestRequestProcessor;
@@ -128,8 +128,7 @@ impl RequestProcessor for NameServerRequestProcessor {
         let response = match self.processor_table.get_mut(request.code_ref()) {
             None => match self.default_request_processor.as_mut() {
                 None => {
-                    let response =
-                        error_response::request_code_not_supported_with_opaque(request.code(), request.opaque());
+                    let response = request_code_not_supported_with_opaque(request.code(), request.opaque());
                     Ok(Some(response))
                 }
                 Some(processor) => RequestProcessor::process_request(processor, channel, ctx, request).await,

@@ -28,9 +28,9 @@ use criterion::BatchSize;
 #[cfg(feature = "otel-traces")]
 use criterion::BenchmarkId;
 use criterion::Criterion;
-use rocketmq_observability::config::TracesConfig;
 use rocketmq_observability::metrics::labels::LabelGuard;
-use rocketmq_observability::sampling::SamplingGate;
+use rocketmq_observability::SamplingGate;
+use rocketmq_observability::TracesConfig;
 
 fn bench_label_guard(c: &mut Criterion) {
     let mut group = c.benchmark_group("observability_label_guard");
@@ -129,15 +129,17 @@ fn bench_trace_property_carrier(c: &mut Criterion) {
 
     #[cfg(feature = "otel-traces")]
     {
-        use rocketmq_observability::propagation;
+        use rocketmq_observability::extract_context;
+        use rocketmq_observability::inject_current_context;
+        use rocketmq_observability::install_trace_context_propagators;
 
-        propagation::install_trace_context_propagators();
+        install_trace_context_propagators();
 
         group.bench_function("inject_current_context", |b| {
             b.iter_batched(
                 build_message_properties,
                 |mut properties| {
-                    propagation::inject_current_context(black_box(&mut properties));
+                    inject_current_context(black_box(&mut properties));
                     black_box(properties)
                 },
                 BatchSize::SmallInput,
@@ -145,11 +147,11 @@ fn bench_trace_property_carrier(c: &mut Criterion) {
         });
 
         let mut properties = build_message_properties();
-        propagation::inject_current_context(&mut properties);
+        inject_current_context(&mut properties);
         group.bench_with_input(
             BenchmarkId::new("extract_context", "hash_map_properties"),
             &properties,
-            |b, properties| b.iter(|| black_box(propagation::extract_context(black_box(properties)))),
+            |b, properties| b.iter(|| black_box(extract_context(black_box(properties)))),
         );
     }
 

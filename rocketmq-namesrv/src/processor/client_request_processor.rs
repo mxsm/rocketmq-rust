@@ -25,10 +25,10 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::time_utils;
-use rocketmq_transport::error_response;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_transport::runtime::processor::RequestProcessor;
+use rocketmq_transport::command_from_error_with_remark;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
 use tracing::debug;
 use tracing::warn;
 
@@ -108,10 +108,7 @@ impl ClientRequestProcessor {
             if !namesrv_ready {
                 warn!("name server not ready. request code {}", request.code());
                 let error = rocketmq_error::RocketMQError::not_initialized("name server not ready");
-                return Ok(Some(error_response::command_from_error_with_remark(
-                    &error,
-                    "name server not ready",
-                )));
+                return Ok(Some(command_from_error_with_remark(&error, "name server not ready")));
             }
         }
 

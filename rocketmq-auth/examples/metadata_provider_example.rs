@@ -20,18 +20,18 @@
 //! - Query and filter ACLs
 //! - Handle errors properly
 
-use rocketmq_auth::authentication::enums::subject_type::SubjectType;
-use rocketmq_auth::authentication::model::user::User;
-use rocketmq_auth::authorization::enums::decision::Decision;
-use rocketmq_auth::authorization::enums::policy_type::PolicyType;
-use rocketmq_auth::authorization::metadata_provider::AuthorizationMetadataProvider;
-use rocketmq_auth::authorization::metadata_provider::NoopMetadataProvider;
-use rocketmq_auth::authorization::model::acl::Acl;
-use rocketmq_auth::authorization::model::environment::Environment;
-use rocketmq_auth::authorization::model::policy::Policy;
-use rocketmq_auth::authorization::model::policy_entry::PolicyEntry;
-use rocketmq_auth::authorization::model::resource::Resource;
-use rocketmq_auth::config::AuthConfig;
+use rocketmq_auth::Acl;
+use rocketmq_auth::AuthConfig;
+use rocketmq_auth::AuthorizationMetadataProvider;
+use rocketmq_auth::Decision;
+use rocketmq_auth::Environment;
+use rocketmq_auth::NoopMetadataProvider;
+use rocketmq_auth::Policy;
+use rocketmq_auth::PolicyEntry;
+use rocketmq_auth::PolicyType;
+use rocketmq_auth::Resource;
+use rocketmq_auth::SubjectType;
+use rocketmq_auth::User;
 use rocketmq_security_api::Action;
 
 #[tokio::main]

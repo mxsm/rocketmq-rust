@@ -15,7 +15,7 @@
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_protocol::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
-use rocketmq_store::base::message_result::PutMessageResult;
+use rocketmq_store::PutMessageResult;
 
 use crate::transaction::operation_result::OperationResult;
 use crate::transaction::transaction_metrics::TransactionMetrics;

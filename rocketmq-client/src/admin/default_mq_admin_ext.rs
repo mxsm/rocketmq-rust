@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
-use rocketmq_transport::runtime::RPCHook;
+use rocketmq_transport::RPCHook;
 
 use crate::admin::default_mq_admin_ext_impl::DefaultMQAdminExtImpl;
 use crate::admin::mq_admin_ext_async::MQAdminExt;

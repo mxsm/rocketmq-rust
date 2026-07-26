@@ -57,8 +57,8 @@ pub trait AuthorizationHandler: Send + Sync {
     /// # Example
     ///
     /// ```rust,ignore
-    /// use rocketmq_auth::authorization::chain::AuthorizationHandler;
-    /// use rocketmq_auth::authorization::context::DefaultAuthorizationContext;
+    /// use rocketmq_auth::AuthorizationHandler;
+    /// use rocketmq_auth::DefaultAuthorizationContext;
     ///
     /// struct MyHandler;
     ///

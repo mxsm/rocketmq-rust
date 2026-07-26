@@ -31,4 +31,29 @@ fn error_crate_public_api_exposes_only_typed_error_surface() {
             "`rocketmq-error` should not expose legacy error surface symbol `{symbol}`"
         );
     }
+
+    for module in [
+        "auth_error",
+        "boundary",
+        "cli",
+        "context",
+        "controller_error",
+        "domain",
+        "filter_error",
+        "kind",
+        "observability_error",
+        "policy",
+        "spec",
+        "unified",
+    ] {
+        assert!(
+            !source.contains(&format!("pub mod {module};")),
+            "`rocketmq-error` implementation module `{module}` must remain private"
+        );
+    }
+
+    fn accepts_domain_error(_: &dyn rocketmq_error::DomainError) {}
+    accepts_domain_error(&rocketmq_error::RocketMQError::invariant_violated(
+        "public root contract compiles",
+    ));
 }

@@ -15,9 +15,9 @@
 use rocketmq_error::RocketMQError;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::base::pending_request_table::PendingRequestLimits;
-use rocketmq_transport::base::pending_request_table::PendingRequestTable;
-use rocketmq_transport::deadline::RequestDeadline;
+use rocketmq_transport::PendingRequestLimits;
+use rocketmq_transport::PendingRequestTable;
+use rocketmq_transport::RequestDeadline;
 use std::sync::Arc;
 use std::sync::Barrier;
 use std::time::Duration;

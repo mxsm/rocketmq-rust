@@ -101,13 +101,22 @@ impl ExportMetadataSubCommand {
         let (export_path, json_content) = match result {
             ExportMetadataResult::BrokerTopic { wrapper } => (
                 format!("{}/topic.json", file_path),
-                serde_json::to_string_pretty(wrapper)
-                    .map_err(|e| RocketMQError::Internal(format!("Failed to serialize topic config: {}", e)))?,
+                serde_json::to_string_pretty(wrapper).map_err(|source| {
+                    RocketMQError::Serialization(rocketmq_error::SerializationError::source(
+                        "encode topic configuration",
+                        "JSON",
+                        source,
+                    ))
+                })?,
             ),
             ExportMetadataResult::BrokerSubscriptionGroup { wrapper } => (
                 format!("{}/subscriptionGroup.json", file_path),
-                serde_json::to_string_pretty(wrapper).map_err(|e| {
-                    RocketMQError::Internal(format!("Failed to serialize subscription group config: {}", e))
+                serde_json::to_string_pretty(wrapper).map_err(|source| {
+                    RocketMQError::Serialization(rocketmq_error::SerializationError::source(
+                        "encode subscription group configuration",
+                        "JSON",
+                        source,
+                    ))
                 })?,
             ),
             ExportMetadataResult::Cluster {
@@ -121,8 +130,12 @@ impl ExportMetadataSubCommand {
                     ExportMetadataScope::Topic => {
                         output.insert(
                             "topicConfigTable".to_string(),
-                            serde_json::to_value(topic_config_table).map_err(|e| {
-                                RocketMQError::Internal(format!("Failed to serialize topic config: {}", e))
+                            serde_json::to_value(topic_config_table).map_err(|source| {
+                                RocketMQError::Serialization(rocketmq_error::SerializationError::source(
+                                    "encode topic configuration table",
+                                    "JSON",
+                                    source,
+                                ))
                             })?,
                         );
                         format!("{}/topic.json", file_path)
@@ -130,8 +143,12 @@ impl ExportMetadataSubCommand {
                     ExportMetadataScope::SubscriptionGroup => {
                         output.insert(
                             "subscriptionGroupTable".to_string(),
-                            serde_json::to_value(subscription_group_table).map_err(|e| {
-                                RocketMQError::Internal(format!("Failed to serialize subscription group config: {}", e))
+                            serde_json::to_value(subscription_group_table).map_err(|source| {
+                                RocketMQError::Serialization(rocketmq_error::SerializationError::source(
+                                    "encode subscription group table",
+                                    "JSON",
+                                    source,
+                                ))
                             })?,
                         );
                         format!("{}/subscriptionGroup.json", file_path)
@@ -139,14 +156,22 @@ impl ExportMetadataSubCommand {
                     ExportMetadataScope::All => {
                         output.insert(
                             "topicConfigTable".to_string(),
-                            serde_json::to_value(topic_config_table).map_err(|e| {
-                                RocketMQError::Internal(format!("Failed to serialize topic config: {}", e))
+                            serde_json::to_value(topic_config_table).map_err(|source| {
+                                RocketMQError::Serialization(rocketmq_error::SerializationError::source(
+                                    "encode topic configuration table",
+                                    "JSON",
+                                    source,
+                                ))
                             })?,
                         );
                         output.insert(
                             "subscriptionGroupTable".to_string(),
-                            serde_json::to_value(subscription_group_table).map_err(|e| {
-                                RocketMQError::Internal(format!("Failed to serialize subscription group config: {}", e))
+                            serde_json::to_value(subscription_group_table).map_err(|source| {
+                                RocketMQError::Serialization(rocketmq_error::SerializationError::source(
+                                    "encode subscription group table",
+                                    "JSON",
+                                    source,
+                                ))
                             })?,
                         );
                         format!("{}/metadata.json", file_path)
@@ -158,8 +183,13 @@ impl ExportMetadataSubCommand {
                     serde_json::Value::Number(serde_json::Number::from(*export_time_millis)),
                 );
 
-                let json_content = serde_json::to_string_pretty(&output)
-                    .map_err(|e| RocketMQError::Internal(format!("Failed to serialize export result: {}", e)))?;
+                let json_content = serde_json::to_string_pretty(&output).map_err(|source| {
+                    RocketMQError::Serialization(rocketmq_error::SerializationError::source(
+                        "encode metadata export",
+                        "JSON",
+                        source,
+                    ))
+                })?;
                 (export_path, json_content)
             }
         };

@@ -602,7 +602,8 @@ def check_client_retry_boundary() -> list[Finding]:
         / "src"
         / "producer"
         / "producer_impl"
-        / "default_mq_producer_impl.rs": [
+        / "default_mq_producer_impl"
+        / "retry.rs": [
             "producer_send_retry_decision(error, runtime.producer_config.retry_response_codes())",
             "producer_send_fault_decision(error, detector_enabled)",
         ],
@@ -694,18 +695,21 @@ def is_source_stringification_line(line: str) -> bool:
 
 def check_source_stringification_allowlist() -> list[Finding]:
     required_tokens = {
-        ROOT / "rocketmq-store" / "src" / "store_error.rs": [
-            "pub fn rocksdb(source: RocketMQError) -> Self",
-            "#[source]",
-            "source: Box<RocketMQError>",
+        ROOT / "rocketmq-store-api" / "src" / "error.rs": [
+            "source: Option<BoxError>",
+            "pub fn rocksdb(operation: StoreOperation",
+            ".in_component(StoreComponent::RocksDb)",
+            ".with_source(source)",
+            "impl StdError for StoreError",
+            "impl DomainError for StoreError",
         ],
         ROOT / "rocketmq-store-local" / "src" / "mapped_file" / "mapped_file_error.rs": [
             "MmapFailed(#[source] io::Error)",
             "FlushFailed(#[source] io::Error)",
         ],
         ROOT / "rocketmq-store" / "src" / "message_store" / "rocksdb_message_store.rs": [
-            "RocksDbMessageStoreError::Backend { source } => StoreError::rocksdb(source)",
-            "RocksDbMessageStoreError::Local { source } => StoreError::Storage(source.to_string())",
+            "RocksDbMessageStoreError::Backend { source } => StoreError::rocksdb(StoreOperation::Load, source)",
+            ".with_source(source)",
         ],
     }
     findings: list[Finding] = []

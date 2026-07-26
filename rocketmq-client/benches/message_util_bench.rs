@@ -22,7 +22,7 @@ use criterion::criterion_main;
 use criterion::BenchmarkId;
 use criterion::Criterion;
 use criterion::Throughput;
-use rocketmq_client_rust::utils::message_util::MessageUtil;
+use rocketmq_client_rust::MessageUtil;
 use rocketmq_model::common::message::message_accessor::MessageAccessor;
 use rocketmq_model::common::message::message_single::Message;
 use rocketmq_model::common::message::MessageConst;

@@ -16,7 +16,7 @@ use std::fmt;
 use std::path::Path;
 
 use cheetah_string::CheetahString;
-use rocketmq_auth::config::AuthConfig as RocketmqAuthConfig;
+use rocketmq_auth::AuthConfig as RocketmqAuthConfig;
 use rocketmq_auth::SignatureAlgorithm;
 use rocketmq_error::RocketMQError;
 use serde::Deserialize;

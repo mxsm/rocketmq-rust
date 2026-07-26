@@ -26,12 +26,12 @@ use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_store::base::get_message_result::GetMessageResult;
-use rocketmq_store::base::message_result::PutMessageResult;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
-use rocketmq_store::filter::ArcMessageFilter;
-use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
+use rocketmq_store::ArcMessageFilter;
+use rocketmq_store::BrokerStatsManager;
+use rocketmq_store::GetMessageResult;
+use rocketmq_store::MessageStore;
+use rocketmq_store::MessageStoreConfig;
+use rocketmq_store::PutMessageResult;
 
 use crate::broker_runtime::broker_task_group_or_current;
 use crate::client::manager::consumer_manager::ConsumerManager;
@@ -538,8 +538,8 @@ mod tests {
 
     use crate::config::broker_config::BrokerConfig;
     use rocketmq_model::common::broker::broker_role::BrokerRole;
-    use rocketmq_store::config::message_store_config::MessageStoreConfig;
-    use rocketmq_store::message_store::OwnedMessageStore;
+    use rocketmq_store::MessageStoreConfig;
+    use rocketmq_store::OwnedMessageStore;
 
     use super::PopPolicyState;
     use super::PopStoreCapability;

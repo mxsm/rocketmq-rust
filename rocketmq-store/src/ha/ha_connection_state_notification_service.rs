@@ -218,7 +218,7 @@ impl HAConnectionStateNotificationService {
             Ok(_) => Ok(()),
             Err(e) => {
                 error!("Failed to start HAConnectionStateNotificationService, error: {:?}", e);
-                Err(HAError::Service(e.to_string()))
+                Err(HAError::operation("start HA connection-state notification", e))
             }
         }
     }

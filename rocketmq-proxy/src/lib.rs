@@ -20,25 +20,25 @@
 //! This crate now provides the Phase 1 gRPC foundation and the first
 //! route/assignment/heartbeat slice of the Java proxy architecture.
 
-pub mod auth;
+mod auth;
 mod auth_metadata;
-pub mod bootstrap;
+mod bootstrap;
 #[cfg(feature = "cluster-mode")]
-pub mod cluster;
-pub mod config;
-pub mod context;
-pub mod error;
-pub mod grpc;
+mod cluster;
+mod config;
+mod context;
+mod error;
+mod grpc;
 #[cfg(feature = "local-mode")]
-pub mod local;
+mod local;
 mod message;
-pub mod observability;
-pub mod processor;
-pub mod proto;
-pub mod remoting;
-pub mod service;
-pub mod session;
-pub mod status;
+mod observability;
+mod processor;
+mod proto;
+mod remoting;
+mod service;
+mod session;
+mod status;
 
 pub use auth::ProxyAuthRuntime;
 pub use bootstrap::ProxyRuntime;
@@ -58,8 +58,24 @@ pub use config::ProxyMode;
 pub use config::RemotingConfig;
 pub use config::RuntimeConfig;
 pub use config::SessionConfig;
+pub use context::GrpcTransportContext;
+pub use context::ProxyContext;
+pub use context::ResolvedAddressScheme;
+pub use context::ResolvedEndpoint;
 pub use error::ProxyError;
 pub use error::ProxyResult;
+pub use grpc::server::serve as serve_grpc;
+pub use grpc::server::serve_with_ready as serve_grpc_with_ready;
+pub use grpc::server::serve_with_report as serve_grpc_with_report;
+pub use grpc::server::serve_with_report_with_task_group as serve_grpc_with_report_and_task_group;
+pub use grpc::server::serve_with_report_with_task_group_and_ready as serve_grpc_with_report_task_group_and_ready;
+pub use grpc::server::ProxyGrpcServerShutdownReport;
+pub use grpc::service::ProxyHousekeepingRunReport;
+pub use grpc::ProxyGrpcService;
+#[cfg(feature = "local-mode")]
+pub use local::LocalBrokerFacadeClient;
+#[cfg(feature = "local-mode")]
+pub use local::LocalRemotingBackend;
 pub use observability::ProxyHook;
 pub use observability::ProxyHookChain;
 pub use observability::ProxyMetrics;
@@ -104,7 +120,12 @@ pub use processor::TransactionResolution;
 pub use processor::TransactionSource;
 pub use processor::UpdateOffsetPlan;
 pub use processor::UpdateOffsetRequest;
+pub use proto::v2;
+pub use proto::Resource;
+pub use remoting::serve_with_service_context as serve_remoting_with_service_context;
+pub use remoting::serve_with_service_context_and_ready as serve_remoting_with_service_context_and_ready;
 pub use remoting::ProxyRemotingDispatcher;
+pub use remoting::ProxyRemotingRequestProcessor;
 pub use rocketmq_proxy_core::ProxyMessage;
 pub use rocketmq_proxy_core::ProxyMessageExt;
 pub use service::AssignmentService;
@@ -137,13 +158,20 @@ pub use session::ClientSessionRegistry;
 pub use session::ClientSettingsSnapshot;
 pub use session::LiteSubscriptionSnapshot;
 pub use session::LiteSubscriptionSyncRequest;
+pub use session::PendingLiteUnsubscribeNotice;
+pub use session::PendingTelemetryCommand;
 pub use session::PreparedTransactionHandle;
 pub use session::PreparedTransactionRegistration;
 pub use session::ReapSummary;
 pub use session::ReceiptHandleRegistration;
 pub use session::SubscriptionSettingsSnapshot;
+pub use session::TelemetryCommandKind;
+pub use session::TelemetryLink;
+pub use session::ThreadStackTraceReport;
 pub use session::TrackedReceiptHandle;
+pub use session::VerifyMessageReport;
 pub use status::ProxyPayloadStatus;
+pub use status::ProxyStatusMapper;
 
 /// Default gRPC port used by the proxy runtime.
 pub const DEFAULT_PROXY_GRPC_PORT: u16 = rocketmq_proxy_core::DEFAULT_PROXY_GRPC_PORT;

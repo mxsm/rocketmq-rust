@@ -17,8 +17,8 @@ use std::time::Instant;
 
 use crate::config::broker_config::BrokerConfig;
 use rocketmq_filter::utils::bits_array::BitsArray;
-use rocketmq_store::base::commit_log_dispatcher::CommitLogDispatcher;
-use rocketmq_store::base::dispatch_request::DispatchRequest;
+use rocketmq_store::CommitLogDispatcher;
+use rocketmq_store::DispatchRequest;
 use tracing::debug;
 use tracing::error;
 use tracing::warn;
@@ -108,11 +108,11 @@ mod tests {
     use cheetah_string::CheetahString;
     use rocketmq_model::common::filter::expression_type::ExpressionType;
     use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
-    use rocketmq_store::base::dispatch_request::DispatchRequest;
+    use rocketmq_store::DispatchRequest;
 
     use super::*;
     use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
-    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_store::MessageStoreConfig;
 
     #[test]
     fn dispatch_sets_bitmap_for_matching_sql_filter() {

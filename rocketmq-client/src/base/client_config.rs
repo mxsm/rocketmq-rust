@@ -25,8 +25,8 @@ use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
 use rocketmq_protocol::protocol::request_type::RequestType;
 use rocketmq_protocol::protocol::LanguageCode;
 use rocketmq_runtime::common::time_utils::current_nano;
-use rocketmq_transport::config::TlsConfig;
-use rocketmq_transport::config_support::network_util::NetworkUtil;
+use rocketmq_transport::NetworkUtil;
+use rocketmq_transport::TlsConfig;
 
 use crate::base::access_channel::AccessChannel;
 
@@ -731,7 +731,7 @@ impl ClientConfig {
     /// # Example
     ///
     /// ```rust
-    /// use rocketmq_client_rust::base::client_config::ClientConfig;
+    /// use rocketmq_client_rust::ClientConfig;
     ///
     /// let config = ClientConfig::builder()
     ///     .namesrv_addr("localhost:9876")

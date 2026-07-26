@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_store::base::allocate_mapped_file_service::AllocateMappedFileService as LegacyAllocateService;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
+use rocketmq_store::AllocateMappedFileService as LegacyAllocateService;
+use rocketmq_store::MessageStoreConfig;
 use rocketmq_store_local::base::allocate_mapped_file_service::AllocateMappedFileService as CanonicalAllocateService;
 
 fn canonical_service(service: LegacyAllocateService) -> CanonicalAllocateService {

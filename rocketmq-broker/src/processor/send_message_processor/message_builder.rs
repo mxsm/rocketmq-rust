@@ -7,7 +7,7 @@ use rocketmq_protocol::common::message::message_decoder::message_properties_to_s
 use rocketmq_protocol::common::message::message_decoder::string_to_message_properties;
 use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 use rocketmq_runtime::common::time_utils;
-use rocketmq_store::timer::timer_message_store::TIMER_TOPIC;
+use rocketmq_store::TIMER_TOPIC;
 
 pub(super) fn recall_handle_topic_and_timestamp(
     message: &MessageExtBrokerInner,
@@ -95,7 +95,7 @@ pub(super) fn clear_reserved_properties(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_store::MessageStoreConfig;
 
     fn recall_handle_topic_and_timestamp_with_defaults(
         message: &MessageExtBrokerInner,

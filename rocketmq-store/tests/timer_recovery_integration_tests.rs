@@ -34,14 +34,14 @@ use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
-use rocketmq_store::config::store_runtime_config::StoreRuntimeConfig;
-use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
-use rocketmq_store::store_path_config_helper::get_timer_check_path;
-use rocketmq_store::timer::timer_checkpoint::TimerCheckpoint;
-use rocketmq_store::timer::timer_message_store::TIMER_OUT_MS;
-use rocketmq_store::timer::timer_message_store::TIMER_TOPIC;
+use rocketmq_store::get_timer_check_path;
+use rocketmq_store::LocalFileMessageStore;
+use rocketmq_store::MessageStore;
+use rocketmq_store::MessageStoreConfig;
+use rocketmq_store::StoreRuntimeConfig;
+use rocketmq_store::TimerCheckpoint;
+use rocketmq_store::TIMER_OUT_MS;
+use rocketmq_store::TIMER_TOPIC;
 use tempfile::TempDir;
 
 fn test_service_context() -> ChildServiceContext {

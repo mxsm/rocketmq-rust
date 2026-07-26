@@ -33,6 +33,7 @@ pub mod transaction_mq_producer;
 pub mod transaction_send_result;
 
 pub use default_mq_producer::DefaultMQProducer;
+pub use default_mq_producer::ProducerConfig;
 pub use local_transaction_state::LocalTransactionState;
 pub use message_queue_selector::MessageQueueSelector;
 pub use message_queue_selector::MessageQueueSelectorFn;

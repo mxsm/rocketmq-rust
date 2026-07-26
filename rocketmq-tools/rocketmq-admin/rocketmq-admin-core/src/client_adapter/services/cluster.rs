@@ -15,9 +15,9 @@
 //! Cluster admin service models and operations.
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_client_rust::base::client_config::ClientConfig;
-use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
+use rocketmq_client_rust::ClientConfig;
+use rocketmq_client_rust::DefaultMQProducer;
+use rocketmq_client_rust::MQAdminExt;
 use rocketmq_model::common::message::message_single::Message;
 use rocketmq_protocol::protocol::body::broker_body::cluster_info::ClusterInfo;
 use rocketmq_protocol::protocol::body::kv_table::KVTable;

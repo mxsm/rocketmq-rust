@@ -32,7 +32,7 @@ mod tests {
 
     use rocketmq_protocol::protocol::data_version_facade::DataVersionExt;
     use rocketmq_protocol::protocol::DataVersion;
-    use rocketmq_store::rocksdb::config::RocksDbWalRecoveryMode;
+    use rocketmq_store::RocksDbWalRecoveryMode;
 
     use super::rocksdb_manager::RocksDbBrokerConfigManager;
     use super::rocksdb_manager::RocksDbBrokerConfigManagerConfig;

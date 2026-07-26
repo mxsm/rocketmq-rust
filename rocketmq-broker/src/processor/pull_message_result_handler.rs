@@ -19,10 +19,10 @@ use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
-use rocketmq_store::base::get_message_result::GetMessageResult;
-use rocketmq_store::filter::ArcMessageFilter;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_store::ArcMessageFilter;
+use rocketmq_store::GetMessageResult;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
 
 /// Trait defining the behavior for handling the result of a pull message request.
 ///

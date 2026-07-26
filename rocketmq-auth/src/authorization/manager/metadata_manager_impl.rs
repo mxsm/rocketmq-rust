@@ -91,9 +91,9 @@ pub type ManagerResult<T> = Result<T, AuthorizationError>;
 /// # Examples
 ///
 /// ```rust,ignore
-/// use rocketmq_auth::authorization::manager::AuthorizationMetadataManagerImpl;
-/// use rocketmq_auth::config::AuthConfig;
-/// use rocketmq_auth::authorization::metadata_provider::LocalAuthorizationMetadataProvider;
+/// use rocketmq_auth::AuthorizationMetadataManagerImpl;
+/// use rocketmq_auth::AuthConfig;
+/// use rocketmq_auth::LocalAuthorizationMetadataProvider;
 /// use std::sync::Arc;
 ///
 /// // Create manager with local provider

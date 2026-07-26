@@ -49,8 +49,8 @@ pub type ManagerResult<T> = RocketMQResult<T>;
 /// # Example
 ///
 /// ```rust,ignore
-/// use rocketmq_auth::authentication::manager::AuthenticationMetadataManager;
-/// use rocketmq_auth::config::AuthConfig;
+/// use rocketmq_auth::AuthenticationMetadataManager;
+/// use rocketmq_auth::AuthConfig;
 ///
 /// async fn example(manager: &dyn AuthenticationMetadataManager, config: AuthConfig) {
 ///     // Initialize default users

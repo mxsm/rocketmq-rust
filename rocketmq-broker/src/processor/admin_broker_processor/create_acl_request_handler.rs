@@ -21,7 +21,7 @@ use rocketmq_protocol::protocol::body::acl_info::AclInfo;
 use rocketmq_protocol::protocol::header::create_acl_request_header::CreateAclRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingDeserializable;
-use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::Channel;
 
 use crate::auth::acl_converter::AclConverter;
 use crate::auth::auth_admin_service::AuthAdminService;
@@ -39,7 +39,7 @@ impl CreateAclRequestHandler {
     pub async fn create_acl(
         &mut self,
         _channel: Channel,
-        _ctx: rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext,
+        _ctx: rocketmq_transport::ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {

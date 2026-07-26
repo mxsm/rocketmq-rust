@@ -23,7 +23,7 @@ use criterion::Criterion;
 use criterion::Throughput;
 use memmap2::MmapMut;
 use parking_lot::RwLock;
-use rocketmq_store::log_file::mapped_file::MappedBuffer;
+use rocketmq_store::MappedBuffer;
 use tempfile::NamedTempFile;
 
 /// Create a test mmap of specified size

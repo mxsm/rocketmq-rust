@@ -29,14 +29,14 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::peek_message_request_header::PeekMessageRequestHeader;
 use rocketmq_protocol::protocol::header::pop_message_response_header::PopMessageResponseHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_store::base::get_message_result::GetMessageResult;
-use rocketmq_store::base::message_status_enum::GetMessageStatus;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
-use rocketmq_transport::error_response;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_transport::runtime::processor::RequestProcessor;
+use rocketmq_store::BrokerStatsManager;
+use rocketmq_store::GetMessageResult;
+use rocketmq_store::GetMessageStatus;
+use rocketmq_store::MessageStore;
+use rocketmq_transport::command_from_error_with_remark_and_opaque;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
 use tracing::error;
 use tracing::warn;
 
@@ -231,7 +231,7 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
                 );
                 let remark = format!("decode request header failed: {:?}", e);
                 let error = RocketMQError::request_header_error(remark.clone());
-                return Ok(Some(error_response::command_from_error_with_remark_and_opaque(
+                return Ok(Some(command_from_error_with_remark_and_opaque(
                     &error,
                     remark,
                     request.opaque(),
@@ -640,7 +640,7 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocketmq_store::message_store::OwnedMessageStore;
+    use rocketmq_store::OwnedMessageStore;
 
     #[test]
     fn peek_policy_captures_only_required_startup_values() {

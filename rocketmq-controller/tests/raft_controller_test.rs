@@ -15,12 +15,12 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use rocketmq_controller::config::ControllerConfig;
-use rocketmq_controller::config::ControllerConfigReader;
-use rocketmq_controller::config::StorageBackendType;
-use rocketmq_controller::typ::Node;
 use rocketmq_controller::Controller;
+use rocketmq_controller::ControllerConfig;
+use rocketmq_controller::ControllerConfigReader;
+use rocketmq_controller::Node;
 use rocketmq_controller::RaftController;
+use rocketmq_controller::StorageBackendType;
 
 fn test_service_context(name: &'static str) -> rocketmq_runtime::ChildServiceContext {
     rocketmq_runtime::RuntimeContext::from_current(name).service_context("controller-test")

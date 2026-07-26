@@ -19,7 +19,7 @@ use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::update_global_white_addrs_config_request_header::UpdateGlobalWhiteAddrsConfigRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::net::channel::Channel;
+use rocketmq_transport::Channel;
 
 use crate::auth::auth_admin_service::AuthAdminService;
 
@@ -36,7 +36,7 @@ impl UpdateGlobalWhiteAddrsConfigRequestHandler {
     pub async fn update_global_white_addrs_config(
         &mut self,
         _channel: Channel,
-        _ctx: rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext,
+        _ctx: rocketmq_transport::ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
@@ -100,13 +100,13 @@ mod tests {
 
     use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
-    use rocketmq_auth::config::AuthConfig;
+    use rocketmq_auth::AuthConfig;
     use rocketmq_auth::ProviderRegistry;
-    use rocketmq_store::config::message_store_config::MessageStoreConfig;
-    use rocketmq_transport::base::response_future::ResponseFuture;
-    use rocketmq_transport::connection::Connection;
-    use rocketmq_transport::net::channel::ChannelInner;
-    use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
+    use rocketmq_store::MessageStoreConfig;
+    use rocketmq_transport::ChannelInner;
+    use rocketmq_transport::Connection;
+    use rocketmq_transport::ConnectionHandlerContextWrapper;
+    use rocketmq_transport::ResponseFuture;
 
     use super::*;
     use crate::broker_runtime::BrokerRuntime;

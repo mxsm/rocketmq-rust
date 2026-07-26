@@ -790,7 +790,7 @@ impl DefaultMQProducerImpl {
         #[cfg(feature = "observability")]
         {
             let mut properties = msg.get_properties().clone();
-            rocketmq_observability::propagation::inject_current_context(&mut properties);
+            rocketmq_observability::inject_current_context(&mut properties);
             msg.set_properties(properties);
         }
 

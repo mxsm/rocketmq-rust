@@ -42,9 +42,9 @@ use crate::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyS
 /// # Example
 ///
 /// ```rust
-/// use rocketmq_client_rust::consumer::listener::ConsumeConcurrentlyContext;
-/// use rocketmq_client_rust::consumer::listener::ConsumeConcurrentlyStatus;
-/// use rocketmq_client_rust::consumer::listener::MessageListenerConcurrently;
+/// use rocketmq_client_rust::ConsumeConcurrentlyContext;
+/// use rocketmq_client_rust::ConsumeConcurrentlyStatus;
+/// use rocketmq_client_rust::MessageListenerConcurrently;
 /// use rocketmq_model::common::message::message_ext::MessageExt;
 ///
 /// // Closures automatically implement MessageListenerConcurrently
@@ -136,9 +136,9 @@ where
 /// # Example
 ///
 /// ```rust
-/// use rocketmq_client_rust::consumer::listener::ArcMessageListenerConcurrently;
-/// use rocketmq_client_rust::consumer::listener::ConsumeConcurrentlyStatus;
-/// use rocketmq_client_rust::consumer::listener::MessageListenerConcurrently;
+/// use rocketmq_client_rust::ArcMessageListenerConcurrently;
+/// use rocketmq_client_rust::ConsumeConcurrentlyStatus;
+/// use rocketmq_client_rust::MessageListenerConcurrently;
 /// use std::sync::Arc;
 ///
 /// struct Consumer {

@@ -25,10 +25,10 @@ use dashmap::DashMap;
 use rocketmq_protocol::protocol::body::producer_info::ProducerInfo;
 use rocketmq_protocol::protocol::body::producer_table_info::ProducerTableInfo;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
-use rocketmq_transport::connection::ConnectionState;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_store::BrokerStatsManager;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::ConnectionState;
 use tracing::info;
 use tracing::warn;
 
@@ -822,9 +822,9 @@ mod tests {
 
     use parking_lot::Mutex;
     use rocketmq_protocol::protocol::LanguageCode;
-    use rocketmq_transport::base::response_future::ResponseFuture;
-    use rocketmq_transport::connection::Connection;
-    use rocketmq_transport::net::channel::ChannelInner;
+    use rocketmq_transport::ChannelInner;
+    use rocketmq_transport::Connection;
+    use rocketmq_transport::ResponseFuture;
     use tokio::net::TcpStream;
 
     use super::*;

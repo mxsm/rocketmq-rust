@@ -14,8 +14,8 @@
 
 use bytes::BytesMut;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::codec::remoting_command_codec::FrameLimits;
-use rocketmq_transport::codec::remoting_command_codec::RemotingCommandCodec;
+use rocketmq_transport::FrameLimits;
+use rocketmq_transport::RemotingCommandCodec;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 

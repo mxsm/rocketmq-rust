@@ -42,10 +42,10 @@ use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_transport::runtime::processor::RejectRequestResponse;
-use rocketmq_transport::runtime::processor::RequestProcessor;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::RejectRequestResponse;
+use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -560,7 +560,7 @@ mod tests {
 
     use bytes::Bytes;
     use rocketmq_model::common::message::message_queue::MessageQueue;
-    use rocketmq_transport::local::LocalRequestHarness;
+    use rocketmq_transport::LocalRequestHarness;
 
     use super::*;
     use crate::base::client_config::ClientConfig;

@@ -26,12 +26,12 @@ use criterion::criterion_main;
 use criterion::BenchmarkId;
 use criterion::Criterion;
 use criterion::Throughput;
-use rocketmq_client_rust::consumer::consumer_impl::process_queue::run_process_queue_has_temp_message_probe;
-use rocketmq_client_rust::consumer::consumer_impl::process_queue::run_process_queue_max_span_only_probe;
-use rocketmq_client_rust::consumer::consumer_impl::process_queue::run_process_queue_put_probe;
-use rocketmq_client_rust::consumer::consumer_impl::process_queue::run_process_queue_remove_probe;
-use rocketmq_client_rust::consumer::consumer_impl::process_queue::run_process_queue_take_probe;
-use rocketmq_client_rust::consumer::consumer_impl::process_queue::ProcessQueueOperationFixture;
+use rocketmq_client_rust::run_process_queue_has_temp_message_probe;
+use rocketmq_client_rust::run_process_queue_max_span_only_probe;
+use rocketmq_client_rust::run_process_queue_put_probe;
+use rocketmq_client_rust::run_process_queue_remove_probe;
+use rocketmq_client_rust::run_process_queue_take_probe;
+use rocketmq_client_rust::ProcessQueueOperationFixture;
 
 fn bench_process_queue_put(c: &mut Criterion) {
     let runtime = tokio::runtime::Runtime::new().expect("benchmark runtime should start");

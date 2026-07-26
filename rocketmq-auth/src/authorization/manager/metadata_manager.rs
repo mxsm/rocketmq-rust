@@ -72,8 +72,8 @@ pub type ManagerResult<T> = Result<T, AuthorizationError>;
 /// # Examples
 ///
 /// ```rust,ignore
-/// use rocketmq_auth::authorization::manager::metadata_manager::AuthorizationMetadataManager;
-/// use rocketmq_auth::config::AuthConfig;
+/// use rocketmq_auth::AuthorizationMetadataManager;
+/// use rocketmq_auth::AuthConfig;
 ///
 /// // Create manager with configuration
 /// let config = AuthConfig::default();

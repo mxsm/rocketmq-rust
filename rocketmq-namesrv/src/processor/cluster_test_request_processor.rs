@@ -19,9 +19,9 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingSerializable;
-use rocketmq_transport::net::channel::Channel;
-use rocketmq_transport::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_transport::runtime::processor::RequestProcessor;
+use rocketmq_transport::Channel;
+use rocketmq_transport::ConnectionHandlerContext;
+use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
 use tracing::debug;
 use tracing::info;
 
@@ -143,8 +143,8 @@ mod tests {
     use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
     use rocketmq_protocol::protocol::route::route_data_view::QueueData;
     use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
-    use rocketmq_transport::local::LocalRequestHarness;
-    use rocketmq_transport::runtime::processor::RequestProcessor;
+    use rocketmq_transport::LocalRequestHarness;
+    use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
 
     use super::route_lookup::ClusterTestLookupFuture;
 

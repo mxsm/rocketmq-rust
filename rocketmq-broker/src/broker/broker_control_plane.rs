@@ -25,7 +25,7 @@ use rocketmq_model::common::mix_all::MASTER_ID;
 use rocketmq_protocol::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::MetadataIoActor;
-use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::MessageStore;
 use tokio::sync::Mutex as TokioMutex;
 
 use crate::broker::broker_pre_online_capability::BrokerOnlineRoleState;
@@ -417,7 +417,7 @@ mod tests {
     use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
     use rocketmq_protocol::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
-    use rocketmq_store::config::message_store_config::MessageStoreConfig;
+    use rocketmq_store::MessageStoreConfig;
 
     use super::BrokerControllerState;
     use super::BrokerMembershipState;

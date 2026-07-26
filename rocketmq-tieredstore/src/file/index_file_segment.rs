@@ -1209,7 +1209,7 @@ mod tests {
             .await?
             .into_iter()
             .find(|path| path.rsplit('/').next().is_some_and(|name| name.parse::<i64>().is_ok()))
-            .ok_or_else(|| RocketMQError::Internal("generation segment not found".to_owned()))?;
+            .ok_or_else(|| RocketMQError::invariant_violated("index generation must contain its segment"))?;
         provider.write(segment, 0, Bytes::from_static(&[0, 0, 0, 0])).await?;
 
         let corrupt = IndexFileSegment::with_limits(DEFAULT_INDEX_FILE_PATH.to_owned(), provider, 8, 8);

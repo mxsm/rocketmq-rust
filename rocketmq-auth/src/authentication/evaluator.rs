@@ -36,9 +36,9 @@ use crate::authorization::context::authentication_context::AuthenticationContext
 /// # Example
 ///
 /// ```rust,ignore
-/// use rocketmq_auth::authentication::evaluator::AuthenticationEvaluator;
-/// use rocketmq_auth::authentication::strategy::StatelessAuthenticationStrategy;
-/// use rocketmq_auth::config::AuthConfig;
+/// use rocketmq_auth::AuthenticationEvaluator;
+/// use rocketmq_auth::StatelessAuthenticationStrategy;
+/// use rocketmq_auth::AuthConfig;
 ///
 /// let config = AuthConfig::default();
 /// let strategy = StatelessAuthenticationStrategy::new(config, None);

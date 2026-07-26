@@ -17,7 +17,7 @@
 //! These tests verify that the new APIs compile correctly
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
+use rocketmq_client_rust::DefaultMQProducer;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::message::message_single::Message;
 

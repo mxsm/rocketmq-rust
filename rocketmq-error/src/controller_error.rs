@@ -119,9 +119,13 @@ pub enum ControllerError {
     #[error("Runtime error: {0}")]
     RuntimeError(String),
 
-    /// Internal error
-    #[error("Internal error: {0}")]
-    Internal(String),
+    /// Runtime operation failed with a preserved typed source.
+    #[error("Runtime operation {operation} failed")]
+    RuntimeSource {
+        operation: &'static str,
+        #[source]
+        source: Box<dyn StdError + Send + Sync>,
+    },
 
     /// Shutdown error
     #[error("Controller is shutting down")]
@@ -164,6 +168,14 @@ impl ControllerError {
     #[inline]
     pub fn runtime_error(message: impl Into<String>) -> Self {
         Self::RuntimeError(message.into())
+    }
+
+    #[inline]
+    pub fn runtime_source(operation: &'static str, source: impl StdError + Send + Sync + 'static) -> Self {
+        Self::RuntimeSource {
+            operation,
+            source: Box::new(source),
+        }
     }
 }
 
@@ -239,8 +251,9 @@ mod tests {
         let err = ControllerError::runtime_error("task group closed");
         assert_eq!(err.to_string(), "Runtime error: task group closed");
 
-        let err = ControllerError::Internal("panic".to_string());
-        assert_eq!(err.to_string(), "Internal error: panic");
+        let err = ControllerError::runtime_source("join controller task", io::Error::other("task failed"));
+        assert_eq!(err.to_string(), "Runtime operation join controller task failed");
+        assert!(err.source().is_some());
 
         let err = ControllerError::Shutdown;
         assert_eq!(err.to_string(), "Controller is shutting down");

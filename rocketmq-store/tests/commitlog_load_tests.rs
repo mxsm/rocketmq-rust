@@ -19,8 +19,8 @@
 
 use std::fs;
 
-use rocketmq_store::consume_queue::mapped_file_queue::MappedFileQueue;
-use rocketmq_store::log_file::mapped_file::MappedFile;
+use rocketmq_store::MappedFile;
+use rocketmq_store::MappedFileQueue;
 use tempfile::TempDir;
 
 /// Helper: Create test commitlog files with specific patterns
