@@ -1,0 +1,84 @@
+schema_version: rocketmq.sre.replay-dataset.v1
+fixture_file: ../../replay/phase2-scenarios.v1.yaml
+quality_file: quality.v1.yaml
+fixtures:
+  - fixture_id: rolling-upgrade
+    scenario: rolling-upgrade
+    expected_root_causes: [CHANGE_SLO_REGRESSION]
+    evaluable: true
+  - fixture_id: node-eviction
+    scenario: node-eviction
+    expected_root_causes: [BROKER_HA_REPLICA_UNHEALTHY]
+    evaluable: true
+  - fixture_id: collector-outage
+    scenario: collector-outage
+    expected_root_causes: [TELEMETRY_COLLECTOR_UNAVAILABLE]
+    evaluable: true
+  - fixture_id: disk-pressure-fault
+    scenario: disk-pressure
+    expected_root_causes: [STORE_DISK_PRESSURE]
+    evaluable: true
+  - fixture_id: disk-pressure-normal
+    scenario: disk-pressure
+    expected_root_causes: []
+    evaluable: false
+  - fixture_id: disk-pressure-missing
+    scenario: disk-pressure
+    expected_root_causes: []
+    evaluable: false
+  - fixture_id: controller-leader-failure
+    scenario: controller-leader-failure
+    expected_root_causes: [CONTROLLER_LEADER_UNKNOWN]
+    evaluable: true
+  - fixture_id: secret-rotation
+    scenario: secret-rotation
+    expected_root_causes: [AUTH_CERTIFICATE_INVALID]
+    evaluable: true
+  - fixture_id: acknowledged-message-recovery
+    scenario: acknowledged-message-recovery
+    expected_root_causes: [STORE_RECOVERY_INCOMPLETE]
+    evaluable: true
+  - fixture_id: producer-timeout-retry-storm
+    scenario: producer-timeout-retry-storm
+    expected_root_causes: [SEND_REMOTING_BROKER_LATENCY]
+    evaluable: true
+  - fixture_id: consumer-rebalance-queue-skew
+    scenario: consumer-rebalance-queue-skew
+    expected_root_causes: [QUEUE_STORAGE_HOTSPOT]
+    evaluable: true
+  - fixture_id: transaction-checkback-stall
+    scenario: transaction-checkback-stall
+    expected_root_causes: [TRANSACTION_CHECKBACK_STALLED]
+    evaluable: true
+  - fixture_id: pop-revive-anomaly
+    scenario: pop-revive-anomaly
+    expected_root_causes: [POP_REVIVE_LAG]
+    evaluable: true
+  - fixture_id: timer-backlog
+    scenario: timer-backlog
+    expected_root_causes: [TIMER_DEQUEUE_LAG]
+    evaluable: true
+  - fixture_id: retry-dlq-storm
+    scenario: retry-dlq-storm
+    expected_root_causes: [RETRY_DLQ_GROWTH]
+    evaluable: true
+  - fixture_id: rocksdb-tiered-degradation
+    scenario: rocksdb-tiered-degradation
+    expected_root_causes: [ROCKSDB_MAINTENANCE_STUCK, TIERED_PROVIDER_UNAVAILABLE]
+    evaluable: true
+  - fixture_id: namesrv-route-divergence
+    scenario: namesrv-route-divergence
+    expected_root_causes: [NAMESRV_ROUTE_DIVERGENT]
+    evaluable: true
+  - fixture_id: controller-quorum-partition
+    scenario: controller-quorum-partition
+    expected_root_causes: [CONTROLLER_QUORUM_INSUFFICIENT]
+    evaluable: true
+  - fixture_id: upgrade-config-regression
+    scenario: upgrade-config-regression
+    expected_root_causes: [UPGRADE_PROTOCOL_INCOMPATIBLE]
+    evaluable: true
+  - fixture_id: runtime-telemetry-saturation
+    scenario: runtime-telemetry-saturation
+    expected_root_causes: [RUNTIME_BLOCKING_EXECUTOR_PRESSURE]
+    evaluable: true

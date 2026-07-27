@@ -14,7 +14,10 @@
 
 //! Deterministic schema export and signal-coverage manifest loading.
 
+pub mod assertions;
 pub mod phase1_shadow;
+pub mod phase2;
+pub mod replay;
 
 use std::collections::BTreeSet;
 use std::fs;
