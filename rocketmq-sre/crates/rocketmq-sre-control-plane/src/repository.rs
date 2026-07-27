@@ -61,7 +61,8 @@ pub struct PostgresRepository {
 }
 
 impl PostgresRepository {
-    /// Connects to PostgreSQL and applies the embedded Phase 00 migration.
+    /// Connects to PostgreSQL and applies every embedded, forward-only
+    /// workspace migration.
     ///
     /// # Errors
     ///

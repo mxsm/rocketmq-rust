@@ -129,6 +129,23 @@ export function createMockSreApi(auth?: ApiRequestContext): SreApi {
       await wait(signal);
       return clone(demoCatalog);
     },
+    getPhase2Contract: async (signal) => {
+      await wait(signal);
+      return {
+        schema_version: "rocketmq-sre.api.v1",
+        effective_access: "read_only",
+        cluster_mutation_supported: false,
+        operations: [
+          "read_alerts",
+          "read_topology",
+          "read_forecasts",
+          "run_simulation",
+          "read_readiness",
+          "manage_postmortem_metadata",
+          "manage_action_item_metadata",
+        ],
+      };
+    },
     getCoverage: async (signal) => {
       await wait(signal);
       return clone(demoCoverage);

@@ -1,6 +1,6 @@
-import specification from "../../../openapi/rocketmq-sre-phase01.openapi.json";
+import specification from "../../../openapi/rocketmq-sre-phase02.openapi.json";
 
-describe("checked-in Phase 1 OpenAPI", () => {
+describe("checked-in Phase 2 OpenAPI", () => {
   it("keeps the generated UI contract read-only at the RocketMQ boundary", () => {
     expect(
       specification["x-rocketmq-cluster-mutation-supported"],
@@ -20,5 +20,15 @@ describe("checked-in Phase 1 OpenAPI", () => {
     expect(
       paths.some(([, operations]) => "delete" in operations),
     ).toBe(false);
+  });
+
+  it("publishes typed Phase 2 contracts without adding a cluster mutation", () => {
+    expect(specification["x-rocketmq-sre-phase"]).toBe(2);
+    expect(specification["x-rocketmq-phase2-contracts"]).toContain(
+      "PostmortemRevision",
+    );
+    expect(specification.components.schemas.AlertEvent).toBeDefined();
+    expect(specification.components.schemas.CapacityForecast).toBeDefined();
+    expect(specification.components.schemas.WhatIfSimulation).toBeDefined();
   });
 });

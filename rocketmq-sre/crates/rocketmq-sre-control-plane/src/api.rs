@@ -35,6 +35,7 @@ use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::wait_for_signal_result;
 use rocketmq_sre_contracts::ClusterId;
+use rocketmq_sre_contracts::Phase2ContractManifest;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -598,6 +599,7 @@ fn build_routers_with_auth(
         .route("/v1/clusters/{id}/offboard", post(offboard))
         .route("/v1/capabilities", get(capabilities))
         .route("/v1/capabilities/coverage", get(coverage))
+        .route("/v1/capabilities/phase2-contract", get(phase2_contract_manifest))
         .merge(crate::phase1_api::public_routes())
         .with_state(state.clone())
         .layer(middleware::from_fn_with_state(
@@ -977,7 +979,7 @@ async fn capabilities(State(state): State<AppState>, headers: HeaderMap) -> Resu
     let providers = rocketmq_sre_model_gateway::phase00_provider_descriptors();
     Ok(Json(json!({
         "schema_version": "rocketmq-sre.capabilities.v1",
-        "phase": "01",
+        "phase": "02",
         "effective_access_profile": "read_only",
         "execution_supported": false,
         "approval_supported": false,
@@ -987,6 +989,14 @@ async fn capabilities(State(state): State<AppState>, headers: HeaderMap) -> Resu
         "data_classification": state.documents.data_classification.as_ref(),
         "required_source_profiles": state.documents.required_source_profiles.as_ref()
     })))
+}
+
+async fn phase2_contract_manifest(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Phase2ContractManifest>, ControlPlaneError> {
+    let _auth = state.auth.authorize(&headers, None).await?;
+    Ok(Json(Phase2ContractManifest::default()))
 }
 
 async fn coverage(

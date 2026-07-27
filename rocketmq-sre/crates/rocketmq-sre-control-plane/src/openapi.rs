@@ -16,12 +16,12 @@ use std::sync::LazyLock;
 
 use serde_json::Value;
 
-const PHASE_ONE_OPENAPI: &str = include_str!("../../../openapi/rocketmq-sre-phase01.openapi.json");
+const PHASE_TWO_OPENAPI: &str = include_str!("../../../openapi/rocketmq-sre-phase02.openapi.json");
 
 static DOCUMENT: LazyLock<Value> = LazyLock::new(|| {
     // Invariant: the checked-in document is parsed by this module's tests and
     // by the UI type-generation contract before it can be accepted.
-    serde_json::from_str(PHASE_ONE_OPENAPI).expect("the checked-in Phase 01 OpenAPI document must be valid JSON")
+    serde_json::from_str(PHASE_TWO_OPENAPI).expect("the checked-in Phase 02 OpenAPI document must be valid JSON")
 });
 
 pub(crate) fn document() -> Value {
@@ -41,6 +41,7 @@ mod tests {
         "/v1/assets/dashboard-link",
         "/v1/capabilities",
         "/v1/capabilities/coverage",
+        "/v1/capabilities/phase2-contract",
         "/v1/clusters",
         "/v1/clusters/onboard",
         "/v1/clusters/{id}",
@@ -84,7 +85,7 @@ mod tests {
     ];
 
     #[test]
-    fn checked_in_document_covers_the_phase_one_public_surface() {
+    fn checked_in_document_preserves_the_phase_one_public_surface() {
         let document = document();
         let paths = document["paths"].as_object().expect("OpenAPI paths must be an object");
         let actual = paths.keys().map(String::as_str).collect::<BTreeSet<_>>();
@@ -131,10 +132,35 @@ mod tests {
         assert_eq!(document["openapi"], "3.1.0");
         assert_eq!(document["x-rocketmq-effective-access"], "read_only");
         assert_eq!(document["x-rocketmq-cluster-mutation-supported"], false);
+        assert_eq!(document["x-rocketmq-sre-phase"], 2);
 
         let encoded = serde_json::to_string(&document).expect("OpenAPI JSON");
         for forbidden in ["\"delete\":", "/apply", "/reset", "/restart", "/scale", "/truncate"] {
             assert!(!encoded.contains(forbidden), "forbidden OpenAPI surface: {forbidden}");
+        }
+    }
+
+    #[test]
+    fn document_contains_the_phase_two_domain_contracts() {
+        let document = document();
+        let schemas = document["components"]["schemas"]
+            .as_object()
+            .expect("OpenAPI schemas must be an object");
+        for required in [
+            "AlertEvent",
+            "TopologySnapshot",
+            "CapacityForecast",
+            "BacklogEta",
+            "WhatIfSimulation",
+            "UpgradeReadinessReport",
+            "DrReadinessReport",
+            "NotificationDelivery",
+            "PostmortemDraft",
+            "PostmortemRevision",
+            "ActionItem",
+            "Phase2ContractManifest",
+        ] {
+            assert!(schemas.contains_key(required), "missing Phase 2 schema {required}");
         }
     }
 }

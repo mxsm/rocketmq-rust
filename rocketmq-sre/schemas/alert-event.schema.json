@@ -1,0 +1,232 @@
+{
+  "$defs": {
+    "AlertEventId": {
+      "description": "Stable identifier for an ingested alert event.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "AlertSeverity": {
+      "description": "Stable alert severity independent of an upstream provider's spelling.",
+      "enum": [
+        "info",
+        "warning",
+        "error",
+        "critical"
+      ],
+      "type": "string"
+    },
+    "AlertSource": {
+      "description": "Source that supplied an alert-like event.",
+      "enum": [
+        "alertmanager",
+        "kubernetes_event",
+        "health_probe",
+        "operator_query",
+        "inspection",
+        "deployment",
+        "synthetic_probe"
+      ],
+      "type": "string"
+    },
+    "AlertStatus": {
+      "description": "Normalized alert lifecycle.",
+      "enum": [
+        "firing",
+        "resolved"
+      ],
+      "type": "string"
+    },
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "CorrelationKey": {
+      "description": "Deterministic first-pass key for bounded-window incident correlation.",
+      "properties": {
+        "cluster_id": {
+          "$ref": "#/$defs/ClusterId"
+        },
+        "resource_key": {
+          "type": "string"
+        },
+        "resource_kind": {
+          "$ref": "#/$defs/ResourceKind"
+        },
+        "symptom_family": {
+          "$ref": "#/$defs/SymptomFamily"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/TenantId"
+        },
+        "window_seconds": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "window_start": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tenant_id",
+        "cluster_id",
+        "resource_kind",
+        "resource_key",
+        "symptom_family",
+        "window_start",
+        "window_seconds"
+      ],
+      "type": "object"
+    },
+    "EvidenceId": {
+      "description": "Stable identifier for an evidence snapshot.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ResourceKind": {
+      "description": "Resource classes accepted by the Phase 2 correlation engine.",
+      "enum": [
+        "cluster",
+        "name_server",
+        "controller",
+        "broker",
+        "proxy",
+        "store",
+        "topic",
+        "queue",
+        "consumer_group",
+        "producer_group",
+        "pod",
+        "node",
+        "persistent_volume_claim",
+        "certificate",
+        "runtime",
+        "telemetry"
+      ],
+      "type": "string"
+    },
+    "ResourceRef": {
+      "description": "Tenant-scoped resource identity used for correlation and topology lookup.",
+      "properties": {
+        "display_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ResourceKind"
+        }
+      },
+      "required": [
+        "kind",
+        "key"
+      ],
+      "type": "object"
+    },
+    "SymptomFamily": {
+      "description": "Extensible symptom classifier. The value is a stable, lower snake-case ID.",
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Sanitized alert event persisted before correlation.",
+  "properties": {
+    "affected_resource": {
+      "$ref": "#/$defs/ResourceRef"
+    },
+    "cluster_id": {
+      "$ref": "#/$defs/ClusterId"
+    },
+    "correlation_key": {
+      "$ref": "#/$defs/CorrelationKey"
+    },
+    "evidence_ids": {
+      "items": {
+        "$ref": "#/$defs/EvidenceId"
+      },
+      "type": "array"
+    },
+    "fingerprint": {
+      "type": "string"
+    },
+    "id": {
+      "$ref": "#/$defs/AlertEventId"
+    },
+    "labels": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "type": "object"
+    },
+    "occurred_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "occurrence_count": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "received_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "sequence": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "severity": {
+      "$ref": "#/$defs/AlertSeverity"
+    },
+    "source": {
+      "$ref": "#/$defs/AlertSource"
+    },
+    "source_event_id": {
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/AlertStatus"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "symptom_family": {
+      "$ref": "#/$defs/SymptomFamily"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    }
+  },
+  "required": [
+    "id",
+    "tenant_id",
+    "cluster_id",
+    "source",
+    "source_event_id",
+    "fingerprint",
+    "correlation_key",
+    "affected_resource",
+    "symptom_family",
+    "severity",
+    "status",
+    "summary",
+    "occurrence_count",
+    "sequence",
+    "occurred_at",
+    "received_at"
+  ],
+  "title": "AlertEvent",
+  "type": "object"
+}

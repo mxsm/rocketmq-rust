@@ -33,6 +33,7 @@ pub mod observability;
 mod openapi;
 mod orchestrator;
 mod phase1_api;
+mod phase2_repository;
 mod read_audit;
 mod repository;
 mod workflow;
@@ -51,6 +52,7 @@ pub use model::HandshakeRequest;
 pub use model::OffboardRequest;
 pub use model::OnboardClusterRequest;
 pub use model::OnboardingState;
+pub use phase2_repository::Phase2Repository;
 pub use repository::PostgresRepository;
 
 pub const DEFAULT_CONTROL_PLANE_PORT: u16 = 8090;

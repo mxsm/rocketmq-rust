@@ -21,6 +21,7 @@ import type {
   ModelCapabilitiesResponse,
   OnboardClusterRequest,
   OnboardOutcome,
+  Phase2ContractManifest,
   PromoteInvestigationRequest,
   Recommendation,
   RecommendationDispositionRequest,
@@ -136,6 +137,9 @@ export interface SreApi {
   getCapabilities: (
     signal?: AbortSignal,
   ) => Promise<CapabilityCatalogResponse>;
+  getPhase2Contract: (
+    signal?: AbortSignal,
+  ) => Promise<Phase2ContractManifest>;
   getCoverage: (signal?: AbortSignal) => Promise<CoverageMatrix>;
   getHealth: (signal?: AbortSignal) => Promise<ServiceStatus>;
   getReadiness: (signal?: AbortSignal) => Promise<ServiceStatus>;
@@ -268,6 +272,11 @@ export function createHttpSreApi(auth?: ApiRequestContext): SreApi {
       ),
     getCapabilities: (signal) =>
       get<CapabilityCatalogResponse>("/v1/capabilities", signal),
+    getPhase2Contract: (signal) =>
+      get<Phase2ContractManifest>(
+        "/v1/capabilities/phase2-contract",
+        signal,
+      ),
     getCoverage: (signal) =>
       get<CoverageMatrix>("/v1/capabilities/coverage", signal),
     getHealth: (signal) => get<ServiceStatus>("/healthz", signal),

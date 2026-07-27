@@ -92,6 +92,35 @@ uuid_id!(KnowledgeChunkId, "Stable identifier for a retrievable knowledge chunk.
 uuid_id!(ModelProfileId, "Stable identifier for a configured model profile.");
 uuid_id!(ModelInvocationId, "Stable identifier for a model invocation.");
 uuid_id!(ConnectorSessionId, "Stable identifier for a connector session.");
+uuid_id!(AlertEventId, "Stable identifier for an ingested alert event.");
+uuid_id!(
+    IncidentRelationId,
+    "Stable identifier for a relation between incidents."
+);
+uuid_id!(
+    TopologySnapshotId,
+    "Stable identifier for an immutable topology snapshot."
+);
+uuid_id!(ForecastId, "Stable identifier for a capacity or backlog forecast.");
+uuid_id!(BaselineId, "Stable identifier for an anomaly baseline.");
+uuid_id!(ChangePointId, "Stable identifier for a detected change point.");
+uuid_id!(SimulationId, "Stable identifier for a read-only what-if simulation.");
+uuid_id!(
+    ReadinessReportId,
+    "Stable identifier for an immutable readiness report."
+);
+uuid_id!(NotificationTargetId, "Stable identifier for a notification target.");
+uuid_id!(
+    NotificationDeliveryId,
+    "Stable identifier for one notification delivery."
+);
+uuid_id!(OnCallOwnerId, "Stable identifier for an on-call owner mapping.");
+uuid_id!(PostmortemId, "Stable identifier for a postmortem.");
+uuid_id!(
+    PostmortemRevisionId,
+    "Stable identifier for an immutable postmortem revision."
+);
+uuid_id!(ActionItemId, "Stable identifier for a postmortem action item.");
 
 #[cfg(test)]
 mod tests {

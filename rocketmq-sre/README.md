@@ -6,6 +6,10 @@ foundation. Phase 01 adds durable operator workflows, eight deterministic
 diagnostic packs, a bounded multi-provider Model Gateway, Evidence and
 knowledge services, asset/topology inventory, inspections, recommendations,
 Shadow evaluation, and the independent desktop AI SRE workspace.
+Phase 02 is being delivered in bounded increments. P2-01 adds typed alert,
+correlation, topology, forecast, simulation, readiness, notification,
+postmortem, and action-item contracts together with forward-only PostgreSQL
+migrations and a generated Phase 02 OpenAPI/UI contract.
 
 ## Workspace boundaries
 
@@ -33,6 +37,8 @@ python scripts/check_source_layout.py
 cargo check --locked --workspace
 cargo test --locked --workspace --all-features
 cargo run --locked -p rocketmq-sre-eval --bin schema-export -- schemas
+node scripts/export_phase2_openapi.mjs
+npm --prefix ui run check:api
 ```
 
 The workspace uses Rust 2024's modern source layout: `foo.rs` owns child
@@ -100,6 +106,7 @@ See:
 - [Control Plane connector-channel mTLS](docs/control-plane-connector-mtls.md)
 - [Connector transport ADR](docs/connector-control-plane-transport-adr.md)
 - [Compatibility](docs/compatibility.md)
+- [Phase 02 contracts and persistence](docs/phase02-contracts-and-persistence.md)
 - [Local stack](deploy/dev/README.md)
 
 ## Kind acceptance

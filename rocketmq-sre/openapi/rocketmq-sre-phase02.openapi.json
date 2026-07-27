@@ -1,0 +1,4014 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "RocketMQ Rust AI SRE API",
+    "version": "2.0.0",
+    "description": "Canonical checked-in Phase 02 Control Plane and UI contract. Phase 02 adds typed alert, topology, forecast, simulation, readiness, notification and postmortem schemas while preserving the read-only RocketMQ boundary."
+  },
+  "servers": [
+    {
+      "url": "/"
+    }
+  ],
+  "security": [
+    {
+      "oidc": [
+        "rocketmq:read"
+      ]
+    }
+  ],
+  "paths": {
+    "/healthz": {
+      "get": {
+        "operationId": "getHealth",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Process health",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "operationId": "getReadiness",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Dependency readiness",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/clusters": {
+      "get": {
+        "operationId": "listClusters",
+        "responses": {
+          "200": {
+            "description": "Authorized clusters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/JsonObject"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/clusters/onboard": {
+      "post": {
+        "operationId": "onboardCluster",
+        "security": [
+          {
+            "oidc": [
+              "rocketmq:onboard"
+            ]
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OnboardClusterRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          },
+          "201": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/clusters/{id}": {
+      "get": {
+        "operationId": "getCluster",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/clusters/{id}/handshake": {
+      "post": {
+        "operationId": "recordClusterHandshake",
+        "x-internal-operation": true,
+        "security": [
+          {
+            "internalToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HandshakeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/clusters/{id}/capabilities": {
+      "get": {
+        "operationId": "getClusterCapabilities",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/clusters/{id}/offboard": {
+      "post": {
+        "operationId": "offboardCluster",
+        "x-internal-operation": true,
+        "security": [
+          {
+            "internalToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OffboardRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/clusters/{id}/connector": {
+      "get": {
+        "operationId": "getClusterConnectorStatus",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/clusters/{id}/inventory/latest": {
+      "get": {
+        "operationId": "getLatestClusterInventory",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/capabilities": {
+      "get": {
+        "operationId": "getCapabilities",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/capabilities/coverage": {
+      "get": {
+        "operationId": "getCoverage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/assets": {
+      "get": {
+        "operationId": "listAssets",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClusterId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/assets/dashboard-link": {
+      "get": {
+        "operationId": "getAssetDashboardLink",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClusterId"
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "external_key",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/topology": {
+      "get": {
+        "operationId": "getTopology",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClusterId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/topology/diff": {
+      "get": {
+        "operationId": "getTopologyDiff",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClusterId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/conversations": {
+      "get": {
+        "operationId": "listConversations",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClusterId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/WorkflowPage"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createConversation",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateConversationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/conversations/{id}": {
+      "get": {
+        "operationId": "getConversation",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/investigations": {
+      "get": {
+        "operationId": "listInvestigations",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClusterId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/WorkflowPage"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createInvestigation",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInvestigationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/investigations/{id}": {
+      "get": {
+        "operationId": "getInvestigation",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/investigations/{id}/promote": {
+      "post": {
+        "operationId": "promoteInvestigation",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PromoteInvestigationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/incidents": {
+      "get": {
+        "operationId": "listIncidents",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClusterId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/WorkflowPage"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createIncident",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateIncidentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/incidents/{id}": {
+      "get": {
+        "operationId": "getIncident",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/incidents/{id}/diagnose": {
+      "post": {
+        "operationId": "diagnoseIncident",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Queued read-only diagnosis",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosisDispatch"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/inspections": {
+      "get": {
+        "operationId": "listInspections",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClusterId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/WorkflowPage"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createInspection",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInspectionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Created or completed inspection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InspectionView"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/inspections/{id}": {
+      "get": {
+        "operationId": "getInspection",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Inspection detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InspectionView"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/inspections/{id}/run": {
+      "post": {
+        "operationId": "runInspection",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Completed inspection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InspectionView"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/inspections/{id}/report": {
+      "get": {
+        "operationId": "getInspectionReport",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "markdown",
+                "html"
+              ],
+              "default": "markdown"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Bounded report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InspectionReport"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/recommendations": {
+      "get": {
+        "operationId": "listRecommendations",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClusterId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/WorkflowPage"
+          }
+        }
+      }
+    },
+    "/v1/recommendations/{id}/disposition": {
+      "post": {
+        "operationId": "dispositionRecommendation",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecommendationDispositionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated recommendation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Recommendation"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/inventory/{id}": {
+      "get": {
+        "operationId": "getInventorySnapshot",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/evidence": {
+      "get": {
+        "operationId": "listEvidence",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClusterId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Canonical evidence page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidencePage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/evidence/{id}": {
+      "get": {
+        "operationId": "getEvidence",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Canonical evidence",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceSnapshot"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/evidence/{id}/content": {
+      "get": {
+        "operationId": "getEvidenceContent",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized bounded JSON content",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/message-journeys": {
+      "get": {
+        "operationId": "getMessageJourney",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClusterId"
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Metadata-only message journey",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageJourney"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/knowledge": {
+      "get": {
+        "operationId": "listKnowledge",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClusterId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/knowledge/import": {
+      "post": {
+        "operationId": "importKnowledge",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportKnowledgeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/knowledge/search": {
+      "get": {
+        "operationId": "searchKnowledge",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClusterId"
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "rocketmq_version",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "component",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20
+            }
+          },
+          {
+            "name": "include_unvalidated",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/knowledge/{id}": {
+      "get": {
+        "operationId": "getKnowledgeItem",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/knowledge/{id}/review": {
+      "post": {
+        "operationId": "reviewKnowledgeItem",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KnowledgeReviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/knowledge/{id}/feedback": {
+      "post": {
+        "operationId": "recordKnowledgeFeedback",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KnowledgeFeedbackRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/models/capabilities": {
+      "get": {
+        "operationId": "getModelCapabilities",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/models/status": {
+      "get": {
+        "operationId": "getModelStatus",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/models/invocations": {
+      "get": {
+        "operationId": "listModelInvocations",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClusterId"
+          },
+          {
+            "name": "incident_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/events/stream": {
+      "get": {
+        "operationId": "subscribeWorkflowEvents",
+        "responses": {
+          "200": {
+            "description": "SSE stream containing WorkflowStreamEvent data frames",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowStreamEvent"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/openapi.json": {
+      "get": {
+        "operationId": "getOpenApiDocument",
+        "responses": {
+          "200": {
+            "description": "This checked-in Phase 01 OpenAPI document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/capabilities/phase2-contract": {
+      "get": {
+        "operationId": "getPhase2ContractManifest",
+        "responses": {
+          "200": {
+            "description": "Phase 2 read-only contract manifest",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Phase2ContractManifest"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "oidc": {
+        "type": "openIdConnect",
+        "openIdConnectUrl": "/.well-known/openid-configuration"
+      },
+      "internalToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Internal SRE service token; accepted only by explicitly marked metadata operations."
+      }
+    },
+    "parameters": {
+      "Id": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "ClusterId": {
+        "name": "cluster_id",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      }
+    },
+    "responses": {
+      "JsonObject": {
+        "description": "Successful scoped response",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/JsonObject"
+            }
+          }
+        }
+      },
+      "WorkflowPage": {
+        "description": "Bounded workflow page",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/WorkflowPage"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "JsonObject": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "ServiceStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "healthy",
+              "ready",
+              "not_ready",
+              "unavailable"
+            ]
+          }
+        }
+      },
+      "WorkflowPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "items",
+          "next_cursor",
+          "partial",
+          "warnings",
+          "observed_at"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "rocketmq-sre.workflow-page.v1"
+          },
+          "items": {
+            "type": "array",
+            "items": {}
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "OnboardClusterRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tenant_id",
+          "external_cluster_key",
+          "environment",
+          "region",
+          "rocketmq_version",
+          "deployment_mode",
+          "owner"
+        ],
+        "properties": {
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "tenant_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "external_cluster_key": {
+            "type": "string",
+            "minLength": 1
+          },
+          "environment": {
+            "type": "string",
+            "minLength": 1
+          },
+          "region": {
+            "type": "string",
+            "minLength": 1
+          },
+          "rocketmq_version": {
+            "type": "string",
+            "minLength": 1
+          },
+          "deployment_mode": {
+            "type": "string",
+            "minLength": 1
+          },
+          "owner": {
+            "type": "string",
+            "minLength": 1
+          },
+          "actor_subject": {
+            "type": "string",
+            "minLength": 1,
+            "default": "rocketmq-sre-control-plane"
+          },
+          "correlation_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "HandshakeRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "connector_subject",
+          "connector_issuer",
+          "capability"
+        ],
+        "properties": {
+          "connector_subject": {
+            "type": "string",
+            "minLength": 1
+          },
+          "connector_issuer": {
+            "type": "string",
+            "minLength": 1
+          },
+          "correlation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "capability": {
+            "$ref": "#/components/schemas/HandshakeCapability"
+          },
+          "compatible": {
+            "type": "boolean",
+            "default": true
+          },
+          "incompatibility_code": {
+            "type": "string"
+          }
+        }
+      },
+      "HandshakeCapability": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "digest",
+          "protocol_version",
+          "schema_version",
+          "mutation_supported"
+        ],
+        "properties": {
+          "digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-fA-F]{64}$"
+          },
+          "protocol_version": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "mutation_supported": {
+            "type": "boolean"
+          },
+          "manifest": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "data_sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JsonObject"
+            }
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "OffboardRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "actor_subject": {
+            "type": "string",
+            "minLength": 1,
+            "default": "rocketmq-sre-control-plane"
+          },
+          "correlation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateConversationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "cluster_id",
+          "question",
+          "persist_investigation"
+        ],
+        "properties": {
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "question": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          },
+          "resource": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "persist_investigation": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CreateInvestigationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "cluster_id",
+          "title",
+          "symptom_family"
+        ],
+        "properties": {
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "conversation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "resource": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "symptom_family": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      },
+      "CreateIncidentRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "cluster_id",
+          "title",
+          "symptom_family"
+        ],
+        "properties": {
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "resource": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "symptom_family": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      },
+      "PromoteInvestigationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        }
+      },
+      "CreateInspectionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "cluster_id",
+          "template"
+        ],
+        "properties": {
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "template": {
+            "type": "string",
+            "enum": [
+              "cluster_health",
+              "consumer",
+              "broker",
+              "telemetry"
+            ]
+          },
+          "schedule": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      },
+      "RecommendationDispositionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "reason"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "acknowledged",
+              "assigned",
+              "dismissed",
+              "resolved",
+              "promoted"
+            ]
+          },
+          "assignee": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "promote_to": {
+            "type": "string",
+            "enum": [
+              "investigation",
+              "incident"
+            ]
+          }
+        }
+      },
+      "ImportKnowledgeRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "title",
+          "component",
+          "rocketmq_version_range",
+          "source_uri",
+          "source_version",
+          "owner",
+          "review_due_at",
+          "sensitivity",
+          "markdown"
+        ],
+        "properties": {
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "component": {
+            "type": "string",
+            "minLength": 1
+          },
+          "rocketmq_version_range": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_uri": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_version": {
+            "type": "string",
+            "minLength": 1
+          },
+          "valid_from": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "valid_until": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "owner": {
+            "type": "string",
+            "minLength": 1
+          },
+          "review_due_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "sensitivity": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "confidential",
+              "restricted"
+            ]
+          },
+          "review_status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "in_review",
+              "validated",
+              "deprecated",
+              "expired"
+            ],
+            "default": "draft"
+          },
+          "human_validated": {
+            "type": "boolean",
+            "default": false
+          },
+          "ai_generated": {
+            "type": "boolean",
+            "default": false
+          },
+          "markdown": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "KnowledgeReviewRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "reason"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "in_review",
+              "validated",
+              "deprecated",
+              "expired"
+            ]
+          },
+          "human_confirmed": {
+            "type": "boolean",
+            "default": false
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "KnowledgeFeedbackRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "useful",
+              "incorrect",
+              "outdated"
+            ]
+          },
+          "comment": {
+            "type": "string"
+          }
+        }
+      },
+      "Recommendation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "inspection_run_id",
+          "tenant_id",
+          "cluster_id",
+          "severity",
+          "title",
+          "rationale",
+          "evidence_ids",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "inspection_run_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "severity": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "rationale": {
+            "type": "string"
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "acknowledged",
+              "assigned",
+              "dismissed",
+              "resolved",
+              "promoted"
+            ]
+          },
+          "assignee": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "investigation_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "incident_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "InspectionRun": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "tenant_id",
+          "cluster_id",
+          "template",
+          "status",
+          "finding_count",
+          "partial",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "template": {
+            "type": "string",
+            "enum": [
+              "cluster_health",
+              "consumer",
+              "broker",
+              "telemetry"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "scheduled",
+              "running",
+              "needs_evidence",
+              "completed",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "schedule": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finding_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "InspectionView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "run",
+          "recommendations",
+          "pack_diffs"
+        ],
+        "properties": {
+          "run": {
+            "$ref": "#/components/schemas/InspectionRun"
+          },
+          "recommendations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Recommendation"
+            }
+          },
+          "pack_diffs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "pack_id",
+                "pack_version",
+                "diff"
+              ],
+              "properties": {
+                "pack_id": {
+                  "type": "string"
+                },
+                "pack_version": {
+                  "type": "string"
+                },
+                "diff": {}
+              }
+            }
+          }
+        }
+      },
+      "InspectionReport": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "media_type",
+          "file_name",
+          "content"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "rocketmq-sre.inspection-report.v1"
+          },
+          "media_type": {
+            "type": "string",
+            "enum": [
+              "text/markdown; charset=utf-8",
+              "text/html; charset=utf-8"
+            ]
+          },
+          "file_name": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          }
+        }
+      },
+      "SchemaVersion": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "family",
+          "major",
+          "minor"
+        ],
+        "properties": {
+          "family": {
+            "type": "string"
+          },
+          "major": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "minor": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "required_features": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "EvidenceReference": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "uri",
+          "digest",
+          "media_type",
+          "size_bytes"
+        ],
+        "properties": {
+          "uri": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "media_type": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "EvidenceContent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "storage",
+              "value"
+            ],
+            "properties": {
+              "storage": {
+                "type": "string",
+                "const": "inline"
+              },
+              "value": {}
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "storage",
+              "value"
+            ],
+            "properties": {
+              "storage": {
+                "type": "string",
+                "const": "reference"
+              },
+              "value": {
+                "$ref": "#/components/schemas/EvidenceReference"
+              }
+            }
+          }
+        ]
+      },
+      "EvidenceSnapshot": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema",
+          "evidence_id",
+          "query_id",
+          "correlation_id",
+          "tenant_id",
+          "cluster_id",
+          "source",
+          "resource",
+          "time_range",
+          "observed_at",
+          "freshness_seconds",
+          "partial",
+          "warnings",
+          "sensitivity",
+          "coverage",
+          "content",
+          "content_hash"
+        ],
+        "properties": {
+          "schema": {
+            "$ref": "#/components/schemas/SchemaVersion"
+          },
+          "evidence_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "query_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "correlation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "source": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "string"
+          },
+          "time_range": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "start",
+              "end"
+            ],
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "freshness_seconds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sensitivity": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "confidential",
+              "restricted"
+            ]
+          },
+          "coverage": {
+            "type": "string",
+            "enum": [
+              "available",
+              "partial",
+              "missing",
+              "not_production_verified"
+            ]
+          },
+          "content": {
+            "$ref": "#/components/schemas/EvidenceContent"
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          }
+        }
+      },
+      "EvidencePage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "next_cursor",
+          "partial"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EvidenceSnapshot"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "partial": {
+            "type": "boolean"
+          }
+        }
+      },
+      "MessageJourneyHop": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "stage",
+          "component",
+          "observed_at",
+          "status",
+          "evidence_id",
+          "detail"
+        ],
+        "properties": {
+          "stage": {
+            "type": "string",
+            "enum": [
+              "producer",
+              "proxy",
+              "broker",
+              "store",
+              "consumer"
+            ]
+          },
+          "component": {
+            "type": "string"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "observed",
+              "partial",
+              "missing"
+            ]
+          },
+          "latency_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "evidence_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "detail": {
+            "type": "string"
+          }
+        }
+      },
+      "MessageJourney": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "cluster_id",
+          "trace_fingerprint",
+          "topic",
+          "queue_id",
+          "message_body_available",
+          "partial",
+          "warnings",
+          "hops"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "rocketmq-sre.message-journey.v1"
+          },
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "trace_fingerprint": {
+            "type": "string"
+          },
+          "topic": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "queue_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "message_body_available": {
+            "type": "boolean",
+            "const": false
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "hops": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MessageJourneyHop"
+            }
+          }
+        }
+      },
+      "WorkflowStreamEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tenant_id",
+          "cluster_id",
+          "aggregate_type",
+          "aggregate_id",
+          "event_type",
+          "payload",
+          "correlation_id",
+          "occurred_at"
+        ],
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "aggregate_type": {
+            "type": "string",
+            "enum": [
+              "conversation",
+              "investigation",
+              "incident",
+              "inspection",
+              "recommendation"
+            ]
+          },
+          "aggregate_id": {
+            "type": "string"
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "correlation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "DiagnosisDispatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "incident_id",
+          "status",
+          "execution_eligible",
+          "correlation_id"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "string"
+          },
+          "incident_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "const": "queued"
+          },
+          "execution_eligible": {
+            "type": "boolean",
+            "const": false
+          },
+          "correlation_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "AlertEvent": {
+        "description": "Sanitized alert event persisted before correlation.",
+        "properties": {
+          "affected_resource": {
+            "$ref": "#/components/schemas/AlertEvent__ResourceRef"
+          },
+          "cluster_id": {
+            "$ref": "#/components/schemas/AlertEvent__ClusterId"
+          },
+          "correlation_key": {
+            "$ref": "#/components/schemas/AlertEvent__CorrelationKey"
+          },
+          "evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/AlertEvent__EvidenceId"
+            },
+            "type": "array"
+          },
+          "fingerprint": {
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/AlertEvent__AlertEventId"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "occurrence_count": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "received_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "sequence": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/AlertEvent__AlertSeverity"
+          },
+          "source": {
+            "$ref": "#/components/schemas/AlertEvent__AlertSource"
+          },
+          "source_event_id": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AlertEvent__AlertStatus"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "symptom_family": {
+            "$ref": "#/components/schemas/AlertEvent__SymptomFamily"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/AlertEvent__TenantId"
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "cluster_id",
+          "source",
+          "source_event_id",
+          "fingerprint",
+          "correlation_key",
+          "affected_resource",
+          "symptom_family",
+          "severity",
+          "status",
+          "summary",
+          "occurrence_count",
+          "sequence",
+          "occurred_at",
+          "received_at"
+        ],
+        "title": "AlertEvent",
+        "type": "object"
+      },
+      "AlertEvent__AlertEventId": {
+        "description": "Stable identifier for an ingested alert event.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "AlertEvent__AlertSeverity": {
+        "description": "Stable alert severity independent of an upstream provider's spelling.",
+        "enum": [
+          "info",
+          "warning",
+          "error",
+          "critical"
+        ],
+        "type": "string"
+      },
+      "AlertEvent__AlertSource": {
+        "description": "Source that supplied an alert-like event.",
+        "enum": [
+          "alertmanager",
+          "kubernetes_event",
+          "health_probe",
+          "operator_query",
+          "inspection",
+          "deployment",
+          "synthetic_probe"
+        ],
+        "type": "string"
+      },
+      "AlertEvent__AlertStatus": {
+        "description": "Normalized alert lifecycle.",
+        "enum": [
+          "firing",
+          "resolved"
+        ],
+        "type": "string"
+      },
+      "AlertEvent__ClusterId": {
+        "description": "Internal identifier for an onboarded cluster.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "AlertEvent__CorrelationKey": {
+        "description": "Deterministic first-pass key for bounded-window incident correlation.",
+        "properties": {
+          "cluster_id": {
+            "$ref": "#/components/schemas/AlertEvent__ClusterId"
+          },
+          "resource_key": {
+            "type": "string"
+          },
+          "resource_kind": {
+            "$ref": "#/components/schemas/AlertEvent__ResourceKind"
+          },
+          "symptom_family": {
+            "$ref": "#/components/schemas/AlertEvent__SymptomFamily"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/AlertEvent__TenantId"
+          },
+          "window_seconds": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "window_start": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "cluster_id",
+          "resource_kind",
+          "resource_key",
+          "symptom_family",
+          "window_start",
+          "window_seconds"
+        ],
+        "type": "object"
+      },
+      "AlertEvent__EvidenceId": {
+        "description": "Stable identifier for an evidence snapshot.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "AlertEvent__ResourceKind": {
+        "description": "Resource classes accepted by the Phase 2 correlation engine.",
+        "enum": [
+          "cluster",
+          "name_server",
+          "controller",
+          "broker",
+          "proxy",
+          "store",
+          "topic",
+          "queue",
+          "consumer_group",
+          "producer_group",
+          "pod",
+          "node",
+          "persistent_volume_claim",
+          "certificate",
+          "runtime",
+          "telemetry"
+        ],
+        "type": "string"
+      },
+      "AlertEvent__ResourceRef": {
+        "description": "Tenant-scoped resource identity used for correlation and topology lookup.",
+        "properties": {
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "key": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AlertEvent__ResourceKind"
+          }
+        },
+        "required": [
+          "kind",
+          "key"
+        ],
+        "type": "object"
+      },
+      "AlertEvent__SymptomFamily": {
+        "description": "Extensible symptom classifier. The value is a stable, lower snake-case ID.",
+        "type": "string"
+      },
+      "AlertEvent__TenantId": {
+        "description": "Stable tenant boundary identifier.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "TopologySnapshot": {
+        "description": "Immutable, bounded topology projection used by correlation and UI.",
+        "properties": {
+          "cluster_id": {
+            "$ref": "#/components/schemas/TopologySnapshot__ClusterId"
+          },
+          "content_hash": {
+            "type": "string"
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/TopologySnapshot__TopologyEdge"
+            },
+            "type": "array"
+          },
+          "freshness_seconds": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id": {
+            "$ref": "#/components/schemas/TopologySnapshot__TopologySnapshotId"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/TopologySnapshot__TopologyNode"
+            },
+            "type": "array"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TopologySnapshot__TenantId"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "cluster_id",
+          "nodes",
+          "edges",
+          "observed_at",
+          "freshness_seconds",
+          "partial",
+          "content_hash"
+        ],
+        "title": "TopologySnapshot",
+        "type": "object"
+      },
+      "TopologySnapshot__AssetKind": {
+        "description": "Asset classes normalized into the topology graph.",
+        "enum": [
+          "name_server",
+          "controller",
+          "broker",
+          "proxy",
+          "store",
+          "pod",
+          "node",
+          "persistent_volume_claim",
+          "pod_disruption_budget",
+          "topic",
+          "queue",
+          "producer",
+          "consumer",
+          "connection"
+        ],
+        "type": "string"
+      },
+      "TopologySnapshot__ClusterId": {
+        "description": "Internal identifier for an onboarded cluster.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "TopologySnapshot__TenantId": {
+        "description": "Stable tenant boundary identifier.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "TopologySnapshot__TopologyEdge": {
+        "description": "Directed edge between normalized assets.",
+        "properties": {
+          "cluster_id": {
+            "$ref": "#/components/schemas/TopologySnapshot__ClusterId"
+          },
+          "content_hash": {
+            "type": "string"
+          },
+          "freshness_seconds": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "from_key": {
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/TopologySnapshot__TopologyEdgeId"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "relation": {
+            "$ref": "#/components/schemas/TopologySnapshot__TopologyRelation"
+          },
+          "source": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TopologySnapshot__TenantId"
+          },
+          "to_key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "cluster_id",
+          "from_key",
+          "to_key",
+          "relation",
+          "source",
+          "observed_at",
+          "freshness_seconds",
+          "partial",
+          "content_hash"
+        ],
+        "type": "object"
+      },
+      "TopologySnapshot__TopologyEdgeId": {
+        "description": "Stable identifier for a versioned topology edge.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "TopologySnapshot__TopologyNode": {
+        "description": "One normalized node in a point-in-time topology snapshot.",
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/TopologySnapshot__AssetKind"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "kind",
+          "display_name",
+          "source",
+          "partial"
+        ],
+        "type": "object"
+      },
+      "TopologySnapshot__TopologyRelation": {
+        "description": "Versioned topology relationship.",
+        "enum": [
+          "contains",
+          "routes_to",
+          "stores_on",
+          "runs_on",
+          "connects_to",
+          "consumes_from",
+          "produces_to",
+          "replicates_to"
+        ],
+        "type": "string"
+      },
+      "TopologySnapshot__TopologySnapshotId": {
+        "description": "Stable identifier for an immutable topology snapshot.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "CapacityForecast": {
+        "description": "Capacity trend for one resource and metric.",
+        "properties": {
+          "algorithm_version": {
+            "type": "string"
+          },
+          "cluster_id": {
+            "$ref": "#/components/schemas/CapacityForecast__ClusterId"
+          },
+          "coverage_ratio": {
+            "format": "double",
+            "type": "number"
+          },
+          "evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/CapacityForecast__EvidenceId"
+            },
+            "type": "array"
+          },
+          "exhaustion_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "$ref": "#/components/schemas/CapacityForecast__ForecastId"
+          },
+          "metric": {
+            "type": "string"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/CapacityForecast__ForecastPoint"
+            },
+            "type": "array"
+          },
+          "quality": {
+            "$ref": "#/components/schemas/CapacityForecast__ForecastQuality"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/CapacityForecast__ResourceRef"
+          },
+          "sample_end": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "sample_start": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "slope_per_hour": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/CapacityForecast__ForecastStatus"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/CapacityForecast__TenantId"
+          },
+          "threshold": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "volatility": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "cluster_id",
+          "resource",
+          "metric",
+          "status",
+          "quality",
+          "algorithm_version",
+          "sample_start",
+          "sample_end",
+          "coverage_ratio",
+          "points",
+          "evidence_ids",
+          "observed_at"
+        ],
+        "title": "CapacityForecast",
+        "type": "object"
+      },
+      "CapacityForecast__ClusterId": {
+        "description": "Internal identifier for an onboarded cluster.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "CapacityForecast__EvidenceId": {
+        "description": "Stable identifier for an evidence snapshot.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "CapacityForecast__ForecastId": {
+        "description": "Stable identifier for a capacity or backlog forecast.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "CapacityForecast__ForecastPoint": {
+        "description": "One observed or projected point in a forecast series.",
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "projected": {
+            "type": "boolean"
+          },
+          "value": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "at",
+          "value",
+          "projected"
+        ],
+        "type": "object"
+      },
+      "CapacityForecast__ForecastQuality": {
+        "description": "Explainable quality assessment for a forecast.",
+        "enum": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "type": "string"
+      },
+      "CapacityForecast__ForecastStatus": {
+        "description": "Forecast availability and degradation state.",
+        "enum": [
+          "ready",
+          "insufficient_data",
+          "stale",
+          "unstable_trend",
+          "unsupported"
+        ],
+        "type": "string"
+      },
+      "CapacityForecast__ResourceKind": {
+        "description": "Resource classes accepted by the Phase 2 correlation engine.",
+        "enum": [
+          "cluster",
+          "name_server",
+          "controller",
+          "broker",
+          "proxy",
+          "store",
+          "topic",
+          "queue",
+          "consumer_group",
+          "producer_group",
+          "pod",
+          "node",
+          "persistent_volume_claim",
+          "certificate",
+          "runtime",
+          "telemetry"
+        ],
+        "type": "string"
+      },
+      "CapacityForecast__ResourceRef": {
+        "description": "Tenant-scoped resource identity used for correlation and topology lookup.",
+        "properties": {
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "key": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/CapacityForecast__ResourceKind"
+          }
+        },
+        "required": [
+          "kind",
+          "key"
+        ],
+        "type": "object"
+      },
+      "CapacityForecast__TenantId": {
+        "description": "Stable tenant boundary identifier.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "BacklogEta": {
+        "description": "Estimated drain time for a lag, retry, DLQ, POP, or timer backlog.",
+        "properties": {
+          "algorithm_version": {
+            "type": "string"
+          },
+          "arrival_rate_per_second": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "backlog_kind": {
+            "type": "string"
+          },
+          "cluster_id": {
+            "$ref": "#/components/schemas/BacklogEta__ClusterId"
+          },
+          "coverage_ratio": {
+            "format": "double",
+            "type": "number"
+          },
+          "current_value": {
+            "format": "double",
+            "type": "number"
+          },
+          "drain_rate_per_second": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "estimated_clear_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/BacklogEta__EvidenceId"
+            },
+            "type": "array"
+          },
+          "id": {
+            "$ref": "#/components/schemas/BacklogEta__ForecastId"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/BacklogEta__ResourceRef"
+          },
+          "status": {
+            "$ref": "#/components/schemas/BacklogEta__ForecastStatus"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/BacklogEta__TenantId"
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "cluster_id",
+          "resource",
+          "backlog_kind",
+          "status",
+          "current_value",
+          "coverage_ratio",
+          "algorithm_version",
+          "evidence_ids",
+          "observed_at"
+        ],
+        "title": "BacklogEta",
+        "type": "object"
+      },
+      "BacklogEta__ClusterId": {
+        "description": "Internal identifier for an onboarded cluster.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "BacklogEta__EvidenceId": {
+        "description": "Stable identifier for an evidence snapshot.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "BacklogEta__ForecastId": {
+        "description": "Stable identifier for a capacity or backlog forecast.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "BacklogEta__ForecastStatus": {
+        "description": "Forecast availability and degradation state.",
+        "enum": [
+          "ready",
+          "insufficient_data",
+          "stale",
+          "unstable_trend",
+          "unsupported"
+        ],
+        "type": "string"
+      },
+      "BacklogEta__ResourceKind": {
+        "description": "Resource classes accepted by the Phase 2 correlation engine.",
+        "enum": [
+          "cluster",
+          "name_server",
+          "controller",
+          "broker",
+          "proxy",
+          "store",
+          "topic",
+          "queue",
+          "consumer_group",
+          "producer_group",
+          "pod",
+          "node",
+          "persistent_volume_claim",
+          "certificate",
+          "runtime",
+          "telemetry"
+        ],
+        "type": "string"
+      },
+      "BacklogEta__ResourceRef": {
+        "description": "Tenant-scoped resource identity used for correlation and topology lookup.",
+        "properties": {
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "key": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/BacklogEta__ResourceKind"
+          }
+        },
+        "required": [
+          "kind",
+          "key"
+        ],
+        "type": "object"
+      },
+      "BacklogEta__TenantId": {
+        "description": "Stable tenant boundary identifier.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "WhatIfSimulation": {
+        "description": "Read-only what-if result. It never carries an executable action.",
+        "properties": {
+          "algorithm_version": {
+            "type": "string"
+          },
+          "assumptions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "blast_radius": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "bottlenecks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "cluster_id": {
+            "$ref": "#/components/schemas/WhatIfSimulation__ClusterId"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/WhatIfSimulation__EvidenceId"
+            },
+            "type": "array"
+          },
+          "id": {
+            "$ref": "#/components/schemas/WhatIfSimulation__SimulationId"
+          },
+          "input": true,
+          "kind": {
+            "$ref": "#/components/schemas/WhatIfSimulation__SimulationKind"
+          },
+          "missing_assumptions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "projected_utilization": true,
+          "status": {
+            "$ref": "#/components/schemas/WhatIfSimulation__SimulationStatus"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/WhatIfSimulation__TenantId"
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "cluster_id",
+          "kind",
+          "status",
+          "input",
+          "assumptions",
+          "projected_utilization",
+          "bottlenecks",
+          "blast_radius",
+          "missing_assumptions",
+          "evidence_ids",
+          "algorithm_version",
+          "created_by",
+          "created_at"
+        ],
+        "title": "WhatIfSimulation",
+        "type": "object"
+      },
+      "WhatIfSimulation__ClusterId": {
+        "description": "Internal identifier for an onboarded cluster.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "WhatIfSimulation__EvidenceId": {
+        "description": "Stable identifier for an evidence snapshot.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "WhatIfSimulation__SimulationId": {
+        "description": "Stable identifier for a read-only what-if simulation.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "WhatIfSimulation__SimulationKind": {
+        "description": "Supported deterministic Phase 2 what-if families.",
+        "enum": [
+          "broker_offline",
+          "proxy_offline",
+          "traffic_increase",
+          "broker_scale_out",
+          "proxy_scale_out",
+          "topic_queue_expand",
+          "version_upgrade",
+          "configuration_diff"
+        ],
+        "type": "string"
+      },
+      "WhatIfSimulation__SimulationStatus": {
+        "description": "Lifecycle of a read-only simulation.",
+        "enum": [
+          "completed",
+          "insufficient_data",
+          "unsupported"
+        ],
+        "type": "string"
+      },
+      "WhatIfSimulation__TenantId": {
+        "description": "Stable tenant boundary identifier.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "UpgradeReadinessReport": {
+        "description": "Immutable upgrade-readiness assessment.",
+        "properties": {
+          "cluster_id": {
+            "$ref": "#/components/schemas/UpgradeReadinessReport__ClusterId"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "findings": {
+            "items": {
+              "$ref": "#/components/schemas/UpgradeReadinessReport__ReadinessFinding"
+            },
+            "type": "array"
+          },
+          "id": {
+            "$ref": "#/components/schemas/UpgradeReadinessReport__ReadinessReportId"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "pack_versions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "status": {
+            "$ref": "#/components/schemas/UpgradeReadinessReport__ReadinessStatus"
+          },
+          "target_version": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/UpgradeReadinessReport__TenantId"
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "cluster_id",
+          "target_version",
+          "status",
+          "findings",
+          "pack_versions",
+          "observed_at",
+          "expires_at"
+        ],
+        "title": "UpgradeReadinessReport",
+        "type": "object"
+      },
+      "UpgradeReadinessReport__ClusterId": {
+        "description": "Internal identifier for an onboarded cluster.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "UpgradeReadinessReport__EvidenceId": {
+        "description": "Stable identifier for an evidence snapshot.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "UpgradeReadinessReport__ReadinessFinding": {
+        "description": "Explainable finding shared by upgrade and disaster-recovery reports.",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "component": {
+            "type": "string"
+          },
+          "evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/UpgradeReadinessReport__EvidenceId"
+            },
+            "type": "array"
+          },
+          "remediation_hint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "severity": {
+            "$ref": "#/components/schemas/UpgradeReadinessReport__ReadinessFindingSeverity"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "severity",
+          "component",
+          "summary",
+          "evidence_ids"
+        ],
+        "type": "object"
+      },
+      "UpgradeReadinessReport__ReadinessFindingSeverity": {
+        "description": "Severity of one deterministic readiness finding.",
+        "enum": [
+          "info",
+          "warning",
+          "blocker"
+        ],
+        "type": "string"
+      },
+      "UpgradeReadinessReport__ReadinessReportId": {
+        "description": "Stable identifier for an immutable readiness report.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "UpgradeReadinessReport__ReadinessStatus": {
+        "description": "Aggregate readiness result.",
+        "enum": [
+          "ready",
+          "ready_with_warnings",
+          "blocked",
+          "insufficient_data"
+        ],
+        "type": "string"
+      },
+      "UpgradeReadinessReport__TenantId": {
+        "description": "Stable tenant boundary identifier.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "DrReadinessReport": {
+        "description": "Immutable disaster-recovery readiness assessment.",
+        "properties": {
+          "cluster_id": {
+            "$ref": "#/components/schemas/DrReadinessReport__ClusterId"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "findings": {
+            "items": {
+              "$ref": "#/components/schemas/DrReadinessReport__ReadinessFinding"
+            },
+            "type": "array"
+          },
+          "id": {
+            "$ref": "#/components/schemas/DrReadinessReport__ReadinessReportId"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "requested_rpo_seconds": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "requested_rto_seconds": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DrReadinessReport__ReadinessStatus"
+          },
+          "target_region": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/DrReadinessReport__TenantId"
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "cluster_id",
+          "requested_rto_seconds",
+          "requested_rpo_seconds",
+          "status",
+          "findings",
+          "observed_at",
+          "expires_at"
+        ],
+        "title": "DrReadinessReport",
+        "type": "object"
+      },
+      "DrReadinessReport__ClusterId": {
+        "description": "Internal identifier for an onboarded cluster.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "DrReadinessReport__EvidenceId": {
+        "description": "Stable identifier for an evidence snapshot.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "DrReadinessReport__ReadinessFinding": {
+        "description": "Explainable finding shared by upgrade and disaster-recovery reports.",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "component": {
+            "type": "string"
+          },
+          "evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/DrReadinessReport__EvidenceId"
+            },
+            "type": "array"
+          },
+          "remediation_hint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "severity": {
+            "$ref": "#/components/schemas/DrReadinessReport__ReadinessFindingSeverity"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "severity",
+          "component",
+          "summary",
+          "evidence_ids"
+        ],
+        "type": "object"
+      },
+      "DrReadinessReport__ReadinessFindingSeverity": {
+        "description": "Severity of one deterministic readiness finding.",
+        "enum": [
+          "info",
+          "warning",
+          "blocker"
+        ],
+        "type": "string"
+      },
+      "DrReadinessReport__ReadinessReportId": {
+        "description": "Stable identifier for an immutable readiness report.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "DrReadinessReport__ReadinessStatus": {
+        "description": "Aggregate readiness result.",
+        "enum": [
+          "ready",
+          "ready_with_warnings",
+          "blocked",
+          "insufficient_data"
+        ],
+        "type": "string"
+      },
+      "DrReadinessReport__TenantId": {
+        "description": "Stable tenant boundary identifier.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "NotificationDelivery": {
+        "description": "One bounded, idempotent notification delivery.",
+        "properties": {
+          "attempt_count": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cluster_id": {
+            "$ref": "#/components/schemas/NotificationDelivery__ClusterId"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "deep_link": {
+            "type": "string"
+          },
+          "delivered_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "delivery_key": {
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/NotificationDelivery__NotificationDeliveryId"
+          },
+          "incident_id": {
+            "$ref": "#/components/schemas/NotificationDelivery__IncidentId"
+          },
+          "last_error_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "next_attempt_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sanitized_summary": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/NotificationDelivery__NotificationDeliveryStatus"
+          },
+          "target_id": {
+            "$ref": "#/components/schemas/NotificationDelivery__NotificationTargetId"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/NotificationDelivery__TenantId"
+          }
+        },
+        "required": [
+          "id",
+          "target_id",
+          "tenant_id",
+          "cluster_id",
+          "incident_id",
+          "delivery_key",
+          "status",
+          "sanitized_summary",
+          "deep_link",
+          "attempt_count",
+          "created_at"
+        ],
+        "title": "NotificationDelivery",
+        "type": "object"
+      },
+      "NotificationDelivery__ClusterId": {
+        "description": "Internal identifier for an onboarded cluster.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "NotificationDelivery__IncidentId": {
+        "description": "Stable identifier for an SRE incident.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "NotificationDelivery__NotificationDeliveryId": {
+        "description": "Stable identifier for one notification delivery.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "NotificationDelivery__NotificationDeliveryStatus": {
+        "description": "Durable delivery state for the transactional outbox.",
+        "enum": [
+          "pending",
+          "delivering",
+          "delivered",
+          "retry_scheduled",
+          "failed"
+        ],
+        "type": "string"
+      },
+      "NotificationDelivery__NotificationTargetId": {
+        "description": "Stable identifier for a notification target.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "NotificationDelivery__TenantId": {
+        "description": "Stable tenant boundary identifier.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "PostmortemDraft": {
+        "description": "Mutable postmortem head pointing at immutable revisions.",
+        "properties": {
+          "cluster_id": {
+            "$ref": "#/components/schemas/PostmortemDraft__ClusterId"
+          },
+          "confirmed_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "confirmed_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "current_revision": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id": {
+            "$ref": "#/components/schemas/PostmortemDraft__PostmortemId"
+          },
+          "incident_id": {
+            "$ref": "#/components/schemas/PostmortemDraft__IncidentId"
+          },
+          "published_knowledge_item_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PostmortemDraft__KnowledgeItemId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/PostmortemDraft__PostmortemStatus"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/PostmortemDraft__TenantId"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "cluster_id",
+          "incident_id",
+          "status",
+          "current_revision",
+          "created_by",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "PostmortemDraft",
+        "type": "object"
+      },
+      "PostmortemDraft__ClusterId": {
+        "description": "Internal identifier for an onboarded cluster.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "PostmortemDraft__IncidentId": {
+        "description": "Stable identifier for an SRE incident.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "PostmortemDraft__KnowledgeItemId": {
+        "description": "Stable identifier for a knowledge item.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "PostmortemDraft__PostmortemId": {
+        "description": "Stable identifier for a postmortem.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "PostmortemDraft__PostmortemStatus": {
+        "description": "Postmortem lifecycle. Publication always requires an explicit human actor.",
+        "enum": [
+          "draft",
+          "in_review",
+          "confirmed",
+          "published",
+          "archived"
+        ],
+        "type": "string"
+      },
+      "PostmortemDraft__TenantId": {
+        "description": "Stable tenant boundary identifier.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "PostmortemRevision": {
+        "description": "Immutable content revision with explicit Evidence citations.",
+        "properties": {
+          "contributing_factors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "detection": {
+            "type": "string"
+          },
+          "edited_by": {
+            "type": "string"
+          },
+          "effective_actions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/PostmortemRevision__EvidenceId"
+            },
+            "type": "array"
+          },
+          "human_confirmed": {
+            "type": "boolean"
+          },
+          "id": {
+            "$ref": "#/components/schemas/PostmortemRevision__PostmortemRevisionId"
+          },
+          "impact": {
+            "type": "string"
+          },
+          "ineffective_actions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "model_invocation_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PostmortemRevision__ModelInvocationId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "postmortem_id": {
+            "$ref": "#/components/schemas/PostmortemRevision__PostmortemId"
+          },
+          "recovery": {
+            "type": "string"
+          },
+          "revision": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "root_causes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "timeline": true
+        },
+        "required": [
+          "id",
+          "postmortem_id",
+          "revision",
+          "summary",
+          "impact",
+          "detection",
+          "timeline",
+          "root_causes",
+          "contributing_factors",
+          "recovery",
+          "effective_actions",
+          "ineffective_actions",
+          "evidence_ids",
+          "edited_by",
+          "human_confirmed",
+          "created_at"
+        ],
+        "title": "PostmortemRevision",
+        "type": "object"
+      },
+      "PostmortemRevision__EvidenceId": {
+        "description": "Stable identifier for an evidence snapshot.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "PostmortemRevision__ModelInvocationId": {
+        "description": "Stable identifier for a model invocation.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "PostmortemRevision__PostmortemId": {
+        "description": "Stable identifier for a postmortem.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "PostmortemRevision__PostmortemRevisionId": {
+        "description": "Stable identifier for an immutable postmortem revision.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "ActionItem": {
+        "description": "Independently tracked postmortem follow-up.",
+        "properties": {
+          "cluster_id": {
+            "$ref": "#/components/schemas/ActionItem__ClusterId"
+          },
+          "completed_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "due_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/ActionItem__EvidenceId"
+            },
+            "type": "array"
+          },
+          "execution_journal": true,
+          "id": {
+            "$ref": "#/components/schemas/ActionItem__ActionItemId"
+          },
+          "incident_id": {
+            "$ref": "#/components/schemas/ActionItem__IncidentId"
+          },
+          "owner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "postmortem_id": {
+            "$ref": "#/components/schemas/ActionItem__PostmortemId"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ActionItem__ActionItemStatus"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/ActionItem__TenantId"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "verification": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "cluster_id",
+          "postmortem_id",
+          "incident_id",
+          "title",
+          "status",
+          "evidence_ids",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ActionItem",
+        "type": "object"
+      },
+      "ActionItem__ActionItemId": {
+        "description": "Stable identifier for a postmortem action item.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "ActionItem__ActionItemStatus": {
+        "description": "Action-item lifecycle.",
+        "enum": [
+          "open",
+          "assigned",
+          "in_progress",
+          "blocked",
+          "completed",
+          "reopened",
+          "cancelled"
+        ],
+        "type": "string"
+      },
+      "ActionItem__ClusterId": {
+        "description": "Internal identifier for an onboarded cluster.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "ActionItem__EvidenceId": {
+        "description": "Stable identifier for an evidence snapshot.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "ActionItem__IncidentId": {
+        "description": "Stable identifier for an SRE incident.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "ActionItem__PostmortemId": {
+        "description": "Stable identifier for a postmortem.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "ActionItem__TenantId": {
+        "description": "Stable tenant boundary identifier.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "Phase2ContractManifest": {
+        "description": "Capability marker returned alongside the Phase 2 API schema.",
+        "properties": {
+          "cluster_mutation_supported": {
+            "type": "boolean"
+          },
+          "effective_access": {
+            "type": "string"
+          },
+          "operations": {
+            "items": {
+              "$ref": "#/components/schemas/Phase2ContractManifest__ReadOnlyOperation"
+            },
+            "type": "array"
+          },
+          "schema_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "effective_access",
+          "cluster_mutation_supported",
+          "operations"
+        ],
+        "title": "Phase2ContractManifest",
+        "type": "object"
+      },
+      "Phase2ContractManifest__ReadOnlyOperation": {
+        "description": "Read-only operations frozen into the Phase 2 public contract.",
+        "enum": [
+          "read_alerts",
+          "read_topology",
+          "read_forecasts",
+          "run_simulation",
+          "read_readiness",
+          "manage_postmortem_metadata",
+          "manage_action_item_metadata"
+        ],
+        "type": "string"
+      }
+    }
+  },
+  "x-rocketmq-phase": "01",
+  "x-rocketmq-effective-access": "read_only",
+  "x-rocketmq-cluster-mutation-supported": false,
+  "x-rocketmq-sre-phase": 2,
+  "x-rocketmq-phase2-contracts": [
+    "AlertEvent",
+    "TopologySnapshot",
+    "CapacityForecast",
+    "BacklogEta",
+    "WhatIfSimulation",
+    "UpgradeReadinessReport",
+    "DrReadinessReport",
+    "NotificationDelivery",
+    "PostmortemDraft",
+    "PostmortemRevision",
+    "ActionItem",
+    "Phase2ContractManifest"
+  ]
+}

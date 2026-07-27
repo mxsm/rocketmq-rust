@@ -1,6 +1,9 @@
 import type { components as GeneratedComponents } from "./generated";
 
-type Phase1ApiSchemas = GeneratedComponents["schemas"];
+type ApiSchemas = GeneratedComponents["schemas"];
+
+export type Phase2ContractManifest =
+  ApiSchemas["Phase2ContractManifest"];
 
 export type OnboardingState =
   | "pending"
@@ -381,13 +384,13 @@ export interface TopologySnapshot {
   warnings: string[];
 }
 
-export type EvidenceSchemaVersion = Phase1ApiSchemas["SchemaVersion"];
+export type EvidenceSchemaVersion = ApiSchemas["SchemaVersion"];
 export type EvidenceCoverage =
-  Phase1ApiSchemas["EvidenceSnapshot"]["coverage"];
-export type EvidenceContent = Phase1ApiSchemas["EvidenceContent"];
-export type EvidenceRecord = Phase1ApiSchemas["EvidenceSnapshot"];
-export type MessageJourneyHop = Phase1ApiSchemas["MessageJourneyHop"];
-export type MessageJourney = Phase1ApiSchemas["MessageJourney"];
+  ApiSchemas["EvidenceSnapshot"]["coverage"];
+export type EvidenceContent = ApiSchemas["EvidenceContent"];
+export type EvidenceRecord = ApiSchemas["EvidenceSnapshot"];
+export type MessageJourneyHop = ApiSchemas["MessageJourneyHop"];
+export type MessageJourney = ApiSchemas["MessageJourney"];
 
 export type KnowledgeReviewStatus =
   | "draft"
@@ -440,7 +443,7 @@ export interface ModelCapabilitiesResponse {
   profiles?: ModelProfile[];
 }
 
-export type WorkflowStreamEvent = Phase1ApiSchemas["WorkflowStreamEvent"] & {
+export type WorkflowStreamEvent = ApiSchemas["WorkflowStreamEvent"] & {
   event_id?: string;
 };
 
@@ -461,12 +464,12 @@ export interface OnboardOutcome {
 }
 
 export type CreateConversationRequest =
-  Phase1ApiSchemas["CreateConversationRequest"];
+  ApiSchemas["CreateConversationRequest"];
 export type CreateInspectionRequest =
-  Phase1ApiSchemas["CreateInspectionRequest"];
+  ApiSchemas["CreateInspectionRequest"];
 export type PromoteInvestigationRequest =
-  Phase1ApiSchemas["PromoteInvestigationRequest"];
+  ApiSchemas["PromoteInvestigationRequest"];
 export type RecommendationDispositionRequest =
-  Phase1ApiSchemas["RecommendationDispositionRequest"];
-export type InspectionReport = Phase1ApiSchemas["InspectionReport"];
-export type DiagnosisDispatch = Phase1ApiSchemas["DiagnosisDispatch"];
+  ApiSchemas["RecommendationDispositionRequest"];
+export type InspectionReport = ApiSchemas["InspectionReport"];
+export type DiagnosisDispatch = ApiSchemas["DiagnosisDispatch"];

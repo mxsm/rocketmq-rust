@@ -740,6 +740,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/capabilities/phase2-contract": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getPhase2ContractManifest"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1063,6 +1079,707 @@ export interface components {
             /** Format: uuid */
             correlation_id: string;
         };
+        /**
+         * AlertEvent
+         * @description Sanitized alert event persisted before correlation.
+         */
+        AlertEvent: {
+            affected_resource: components["schemas"]["AlertEvent__ResourceRef"];
+            cluster_id: components["schemas"]["AlertEvent__ClusterId"];
+            correlation_key: components["schemas"]["AlertEvent__CorrelationKey"];
+            evidence_ids?: components["schemas"]["AlertEvent__EvidenceId"][];
+            fingerprint: string;
+            id: components["schemas"]["AlertEvent__AlertEventId"];
+            labels?: {
+                [key: string]: string;
+            };
+            /** Format: date-time */
+            occurred_at: string;
+            /** Format: uint32 */
+            occurrence_count: number;
+            /** Format: date-time */
+            received_at: string;
+            /** Format: uint64 */
+            sequence: number;
+            severity: components["schemas"]["AlertEvent__AlertSeverity"];
+            source: components["schemas"]["AlertEvent__AlertSource"];
+            source_event_id: string;
+            status: components["schemas"]["AlertEvent__AlertStatus"];
+            summary: string;
+            symptom_family: components["schemas"]["AlertEvent__SymptomFamily"];
+            tenant_id: components["schemas"]["AlertEvent__TenantId"];
+        };
+        /**
+         * Format: uuid
+         * @description Stable identifier for an ingested alert event.
+         */
+        AlertEvent__AlertEventId: string;
+        /**
+         * @description Stable alert severity independent of an upstream provider's spelling.
+         * @enum {string}
+         */
+        AlertEvent__AlertSeverity: "info" | "warning" | "error" | "critical";
+        /**
+         * @description Source that supplied an alert-like event.
+         * @enum {string}
+         */
+        AlertEvent__AlertSource: "alertmanager" | "kubernetes_event" | "health_probe" | "operator_query" | "inspection" | "deployment" | "synthetic_probe";
+        /**
+         * @description Normalized alert lifecycle.
+         * @enum {string}
+         */
+        AlertEvent__AlertStatus: "firing" | "resolved";
+        /**
+         * Format: uuid
+         * @description Internal identifier for an onboarded cluster.
+         */
+        AlertEvent__ClusterId: string;
+        /** @description Deterministic first-pass key for bounded-window incident correlation. */
+        AlertEvent__CorrelationKey: {
+            cluster_id: components["schemas"]["AlertEvent__ClusterId"];
+            resource_key: string;
+            resource_kind: components["schemas"]["AlertEvent__ResourceKind"];
+            symptom_family: components["schemas"]["AlertEvent__SymptomFamily"];
+            tenant_id: components["schemas"]["AlertEvent__TenantId"];
+            /** Format: uint32 */
+            window_seconds: number;
+            /** Format: date-time */
+            window_start: string;
+        };
+        /**
+         * Format: uuid
+         * @description Stable identifier for an evidence snapshot.
+         */
+        AlertEvent__EvidenceId: string;
+        /**
+         * @description Resource classes accepted by the Phase 2 correlation engine.
+         * @enum {string}
+         */
+        AlertEvent__ResourceKind: "cluster" | "name_server" | "controller" | "broker" | "proxy" | "store" | "topic" | "queue" | "consumer_group" | "producer_group" | "pod" | "node" | "persistent_volume_claim" | "certificate" | "runtime" | "telemetry";
+        /** @description Tenant-scoped resource identity used for correlation and topology lookup. */
+        AlertEvent__ResourceRef: {
+            display_name?: string | null;
+            key: string;
+            kind: components["schemas"]["AlertEvent__ResourceKind"];
+        };
+        /** @description Extensible symptom classifier. The value is a stable, lower snake-case ID. */
+        AlertEvent__SymptomFamily: string;
+        /**
+         * Format: uuid
+         * @description Stable tenant boundary identifier.
+         */
+        AlertEvent__TenantId: string;
+        /**
+         * TopologySnapshot
+         * @description Immutable, bounded topology projection used by correlation and UI.
+         */
+        TopologySnapshot: {
+            cluster_id: components["schemas"]["TopologySnapshot__ClusterId"];
+            content_hash: string;
+            edges: components["schemas"]["TopologySnapshot__TopologyEdge"][];
+            /** Format: uint64 */
+            freshness_seconds: number;
+            id: components["schemas"]["TopologySnapshot__TopologySnapshotId"];
+            nodes: components["schemas"]["TopologySnapshot__TopologyNode"][];
+            /** Format: date-time */
+            observed_at: string;
+            partial: boolean;
+            tenant_id: components["schemas"]["TopologySnapshot__TenantId"];
+            warnings?: string[];
+        };
+        /**
+         * @description Asset classes normalized into the topology graph.
+         * @enum {string}
+         */
+        TopologySnapshot__AssetKind: "name_server" | "controller" | "broker" | "proxy" | "store" | "pod" | "node" | "persistent_volume_claim" | "pod_disruption_budget" | "topic" | "queue" | "producer" | "consumer" | "connection";
+        /**
+         * Format: uuid
+         * @description Internal identifier for an onboarded cluster.
+         */
+        TopologySnapshot__ClusterId: string;
+        /**
+         * Format: uuid
+         * @description Stable tenant boundary identifier.
+         */
+        TopologySnapshot__TenantId: string;
+        /** @description Directed edge between normalized assets. */
+        TopologySnapshot__TopologyEdge: {
+            cluster_id: components["schemas"]["TopologySnapshot__ClusterId"];
+            content_hash: string;
+            /** Format: uint64 */
+            freshness_seconds: number;
+            from_key: string;
+            id: components["schemas"]["TopologySnapshot__TopologyEdgeId"];
+            /** Format: date-time */
+            observed_at: string;
+            partial: boolean;
+            relation: components["schemas"]["TopologySnapshot__TopologyRelation"];
+            source: string;
+            tenant_id: components["schemas"]["TopologySnapshot__TenantId"];
+            to_key: string;
+        };
+        /**
+         * Format: uuid
+         * @description Stable identifier for a versioned topology edge.
+         */
+        TopologySnapshot__TopologyEdgeId: string;
+        /** @description One normalized node in a point-in-time topology snapshot. */
+        TopologySnapshot__TopologyNode: {
+            display_name: string;
+            key: string;
+            kind: components["schemas"]["TopologySnapshot__AssetKind"];
+            labels?: {
+                [key: string]: string;
+            };
+            partial: boolean;
+            source: string;
+        };
+        /**
+         * @description Versioned topology relationship.
+         * @enum {string}
+         */
+        TopologySnapshot__TopologyRelation: "contains" | "routes_to" | "stores_on" | "runs_on" | "connects_to" | "consumes_from" | "produces_to" | "replicates_to";
+        /**
+         * Format: uuid
+         * @description Stable identifier for an immutable topology snapshot.
+         */
+        TopologySnapshot__TopologySnapshotId: string;
+        /**
+         * CapacityForecast
+         * @description Capacity trend for one resource and metric.
+         */
+        CapacityForecast: {
+            algorithm_version: string;
+            cluster_id: components["schemas"]["CapacityForecast__ClusterId"];
+            /** Format: double */
+            coverage_ratio: number;
+            evidence_ids: components["schemas"]["CapacityForecast__EvidenceId"][];
+            /** Format: date-time */
+            exhaustion_at?: string | null;
+            id: components["schemas"]["CapacityForecast__ForecastId"];
+            metric: string;
+            /** Format: date-time */
+            observed_at: string;
+            points: components["schemas"]["CapacityForecast__ForecastPoint"][];
+            quality: components["schemas"]["CapacityForecast__ForecastQuality"];
+            resource: components["schemas"]["CapacityForecast__ResourceRef"];
+            /** Format: date-time */
+            sample_end: string;
+            /** Format: date-time */
+            sample_start: string;
+            /** Format: double */
+            slope_per_hour?: number | null;
+            status: components["schemas"]["CapacityForecast__ForecastStatus"];
+            tenant_id: components["schemas"]["CapacityForecast__TenantId"];
+            /** Format: double */
+            threshold?: number | null;
+            /** Format: double */
+            volatility?: number | null;
+        };
+        /**
+         * Format: uuid
+         * @description Internal identifier for an onboarded cluster.
+         */
+        CapacityForecast__ClusterId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an evidence snapshot.
+         */
+        CapacityForecast__EvidenceId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for a capacity or backlog forecast.
+         */
+        CapacityForecast__ForecastId: string;
+        /** @description One observed or projected point in a forecast series. */
+        CapacityForecast__ForecastPoint: {
+            /** Format: date-time */
+            at: string;
+            projected: boolean;
+            /** Format: double */
+            value: number;
+        };
+        /**
+         * @description Explainable quality assessment for a forecast.
+         * @enum {string}
+         */
+        CapacityForecast__ForecastQuality: "low" | "medium" | "high";
+        /**
+         * @description Forecast availability and degradation state.
+         * @enum {string}
+         */
+        CapacityForecast__ForecastStatus: "ready" | "insufficient_data" | "stale" | "unstable_trend" | "unsupported";
+        /**
+         * @description Resource classes accepted by the Phase 2 correlation engine.
+         * @enum {string}
+         */
+        CapacityForecast__ResourceKind: "cluster" | "name_server" | "controller" | "broker" | "proxy" | "store" | "topic" | "queue" | "consumer_group" | "producer_group" | "pod" | "node" | "persistent_volume_claim" | "certificate" | "runtime" | "telemetry";
+        /** @description Tenant-scoped resource identity used for correlation and topology lookup. */
+        CapacityForecast__ResourceRef: {
+            display_name?: string | null;
+            key: string;
+            kind: components["schemas"]["CapacityForecast__ResourceKind"];
+        };
+        /**
+         * Format: uuid
+         * @description Stable tenant boundary identifier.
+         */
+        CapacityForecast__TenantId: string;
+        /**
+         * BacklogEta
+         * @description Estimated drain time for a lag, retry, DLQ, POP, or timer backlog.
+         */
+        BacklogEta: {
+            algorithm_version: string;
+            /** Format: double */
+            arrival_rate_per_second?: number | null;
+            backlog_kind: string;
+            cluster_id: components["schemas"]["BacklogEta__ClusterId"];
+            /** Format: double */
+            coverage_ratio: number;
+            /** Format: double */
+            current_value: number;
+            /** Format: double */
+            drain_rate_per_second?: number | null;
+            /** Format: date-time */
+            estimated_clear_at?: string | null;
+            evidence_ids: components["schemas"]["BacklogEta__EvidenceId"][];
+            id: components["schemas"]["BacklogEta__ForecastId"];
+            /** Format: date-time */
+            observed_at: string;
+            resource: components["schemas"]["BacklogEta__ResourceRef"];
+            status: components["schemas"]["BacklogEta__ForecastStatus"];
+            tenant_id: components["schemas"]["BacklogEta__TenantId"];
+        };
+        /**
+         * Format: uuid
+         * @description Internal identifier for an onboarded cluster.
+         */
+        BacklogEta__ClusterId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an evidence snapshot.
+         */
+        BacklogEta__EvidenceId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for a capacity or backlog forecast.
+         */
+        BacklogEta__ForecastId: string;
+        /**
+         * @description Forecast availability and degradation state.
+         * @enum {string}
+         */
+        BacklogEta__ForecastStatus: "ready" | "insufficient_data" | "stale" | "unstable_trend" | "unsupported";
+        /**
+         * @description Resource classes accepted by the Phase 2 correlation engine.
+         * @enum {string}
+         */
+        BacklogEta__ResourceKind: "cluster" | "name_server" | "controller" | "broker" | "proxy" | "store" | "topic" | "queue" | "consumer_group" | "producer_group" | "pod" | "node" | "persistent_volume_claim" | "certificate" | "runtime" | "telemetry";
+        /** @description Tenant-scoped resource identity used for correlation and topology lookup. */
+        BacklogEta__ResourceRef: {
+            display_name?: string | null;
+            key: string;
+            kind: components["schemas"]["BacklogEta__ResourceKind"];
+        };
+        /**
+         * Format: uuid
+         * @description Stable tenant boundary identifier.
+         */
+        BacklogEta__TenantId: string;
+        /**
+         * WhatIfSimulation
+         * @description Read-only what-if result. It never carries an executable action.
+         */
+        WhatIfSimulation: {
+            algorithm_version: string;
+            assumptions: string[];
+            blast_radius: string[];
+            bottlenecks: string[];
+            cluster_id: components["schemas"]["WhatIfSimulation__ClusterId"];
+            /** Format: date-time */
+            created_at: string;
+            created_by: string;
+            evidence_ids: components["schemas"]["WhatIfSimulation__EvidenceId"][];
+            id: components["schemas"]["WhatIfSimulation__SimulationId"];
+            input: unknown;
+            kind: components["schemas"]["WhatIfSimulation__SimulationKind"];
+            missing_assumptions: string[];
+            projected_utilization: unknown;
+            status: components["schemas"]["WhatIfSimulation__SimulationStatus"];
+            tenant_id: components["schemas"]["WhatIfSimulation__TenantId"];
+        };
+        /**
+         * Format: uuid
+         * @description Internal identifier for an onboarded cluster.
+         */
+        WhatIfSimulation__ClusterId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an evidence snapshot.
+         */
+        WhatIfSimulation__EvidenceId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for a read-only what-if simulation.
+         */
+        WhatIfSimulation__SimulationId: string;
+        /**
+         * @description Supported deterministic Phase 2 what-if families.
+         * @enum {string}
+         */
+        WhatIfSimulation__SimulationKind: "broker_offline" | "proxy_offline" | "traffic_increase" | "broker_scale_out" | "proxy_scale_out" | "topic_queue_expand" | "version_upgrade" | "configuration_diff";
+        /**
+         * @description Lifecycle of a read-only simulation.
+         * @enum {string}
+         */
+        WhatIfSimulation__SimulationStatus: "completed" | "insufficient_data" | "unsupported";
+        /**
+         * Format: uuid
+         * @description Stable tenant boundary identifier.
+         */
+        WhatIfSimulation__TenantId: string;
+        /**
+         * UpgradeReadinessReport
+         * @description Immutable upgrade-readiness assessment.
+         */
+        UpgradeReadinessReport: {
+            cluster_id: components["schemas"]["UpgradeReadinessReport__ClusterId"];
+            /** Format: date-time */
+            expires_at: string;
+            findings: components["schemas"]["UpgradeReadinessReport__ReadinessFinding"][];
+            id: components["schemas"]["UpgradeReadinessReport__ReadinessReportId"];
+            /** Format: date-time */
+            observed_at: string;
+            pack_versions: string[];
+            status: components["schemas"]["UpgradeReadinessReport__ReadinessStatus"];
+            target_version: string;
+            tenant_id: components["schemas"]["UpgradeReadinessReport__TenantId"];
+        };
+        /**
+         * Format: uuid
+         * @description Internal identifier for an onboarded cluster.
+         */
+        UpgradeReadinessReport__ClusterId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an evidence snapshot.
+         */
+        UpgradeReadinessReport__EvidenceId: string;
+        /** @description Explainable finding shared by upgrade and disaster-recovery reports. */
+        UpgradeReadinessReport__ReadinessFinding: {
+            code: string;
+            component: string;
+            evidence_ids: components["schemas"]["UpgradeReadinessReport__EvidenceId"][];
+            remediation_hint?: string | null;
+            severity: components["schemas"]["UpgradeReadinessReport__ReadinessFindingSeverity"];
+            summary: string;
+        };
+        /**
+         * @description Severity of one deterministic readiness finding.
+         * @enum {string}
+         */
+        UpgradeReadinessReport__ReadinessFindingSeverity: "info" | "warning" | "blocker";
+        /**
+         * Format: uuid
+         * @description Stable identifier for an immutable readiness report.
+         */
+        UpgradeReadinessReport__ReadinessReportId: string;
+        /**
+         * @description Aggregate readiness result.
+         * @enum {string}
+         */
+        UpgradeReadinessReport__ReadinessStatus: "ready" | "ready_with_warnings" | "blocked" | "insufficient_data";
+        /**
+         * Format: uuid
+         * @description Stable tenant boundary identifier.
+         */
+        UpgradeReadinessReport__TenantId: string;
+        /**
+         * DrReadinessReport
+         * @description Immutable disaster-recovery readiness assessment.
+         */
+        DrReadinessReport: {
+            cluster_id: components["schemas"]["DrReadinessReport__ClusterId"];
+            /** Format: date-time */
+            expires_at: string;
+            findings: components["schemas"]["DrReadinessReport__ReadinessFinding"][];
+            id: components["schemas"]["DrReadinessReport__ReadinessReportId"];
+            /** Format: date-time */
+            observed_at: string;
+            /** Format: uint64 */
+            requested_rpo_seconds: number;
+            /** Format: uint64 */
+            requested_rto_seconds: number;
+            status: components["schemas"]["DrReadinessReport__ReadinessStatus"];
+            target_region?: string | null;
+            tenant_id: components["schemas"]["DrReadinessReport__TenantId"];
+        };
+        /**
+         * Format: uuid
+         * @description Internal identifier for an onboarded cluster.
+         */
+        DrReadinessReport__ClusterId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an evidence snapshot.
+         */
+        DrReadinessReport__EvidenceId: string;
+        /** @description Explainable finding shared by upgrade and disaster-recovery reports. */
+        DrReadinessReport__ReadinessFinding: {
+            code: string;
+            component: string;
+            evidence_ids: components["schemas"]["DrReadinessReport__EvidenceId"][];
+            remediation_hint?: string | null;
+            severity: components["schemas"]["DrReadinessReport__ReadinessFindingSeverity"];
+            summary: string;
+        };
+        /**
+         * @description Severity of one deterministic readiness finding.
+         * @enum {string}
+         */
+        DrReadinessReport__ReadinessFindingSeverity: "info" | "warning" | "blocker";
+        /**
+         * Format: uuid
+         * @description Stable identifier for an immutable readiness report.
+         */
+        DrReadinessReport__ReadinessReportId: string;
+        /**
+         * @description Aggregate readiness result.
+         * @enum {string}
+         */
+        DrReadinessReport__ReadinessStatus: "ready" | "ready_with_warnings" | "blocked" | "insufficient_data";
+        /**
+         * Format: uuid
+         * @description Stable tenant boundary identifier.
+         */
+        DrReadinessReport__TenantId: string;
+        /**
+         * NotificationDelivery
+         * @description One bounded, idempotent notification delivery.
+         */
+        NotificationDelivery: {
+            /** Format: uint16 */
+            attempt_count: number;
+            cluster_id: components["schemas"]["NotificationDelivery__ClusterId"];
+            /** Format: date-time */
+            created_at: string;
+            deep_link: string;
+            /** Format: date-time */
+            delivered_at?: string | null;
+            delivery_key: string;
+            id: components["schemas"]["NotificationDelivery__NotificationDeliveryId"];
+            incident_id: components["schemas"]["NotificationDelivery__IncidentId"];
+            last_error_code?: string | null;
+            /** Format: date-time */
+            next_attempt_at?: string | null;
+            sanitized_summary: string;
+            status: components["schemas"]["NotificationDelivery__NotificationDeliveryStatus"];
+            target_id: components["schemas"]["NotificationDelivery__NotificationTargetId"];
+            tenant_id: components["schemas"]["NotificationDelivery__TenantId"];
+        };
+        /**
+         * Format: uuid
+         * @description Internal identifier for an onboarded cluster.
+         */
+        NotificationDelivery__ClusterId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an SRE incident.
+         */
+        NotificationDelivery__IncidentId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for one notification delivery.
+         */
+        NotificationDelivery__NotificationDeliveryId: string;
+        /**
+         * @description Durable delivery state for the transactional outbox.
+         * @enum {string}
+         */
+        NotificationDelivery__NotificationDeliveryStatus: "pending" | "delivering" | "delivered" | "retry_scheduled" | "failed";
+        /**
+         * Format: uuid
+         * @description Stable identifier for a notification target.
+         */
+        NotificationDelivery__NotificationTargetId: string;
+        /**
+         * Format: uuid
+         * @description Stable tenant boundary identifier.
+         */
+        NotificationDelivery__TenantId: string;
+        /**
+         * PostmortemDraft
+         * @description Mutable postmortem head pointing at immutable revisions.
+         */
+        PostmortemDraft: {
+            cluster_id: components["schemas"]["PostmortemDraft__ClusterId"];
+            /** Format: date-time */
+            confirmed_at?: string | null;
+            confirmed_by?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            created_by: string;
+            /** Format: uint32 */
+            current_revision: number;
+            id: components["schemas"]["PostmortemDraft__PostmortemId"];
+            incident_id: components["schemas"]["PostmortemDraft__IncidentId"];
+            published_knowledge_item_id?: components["schemas"]["PostmortemDraft__KnowledgeItemId"] | null;
+            status: components["schemas"]["PostmortemDraft__PostmortemStatus"];
+            tenant_id: components["schemas"]["PostmortemDraft__TenantId"];
+            /** Format: date-time */
+            updated_at: string;
+        };
+        /**
+         * Format: uuid
+         * @description Internal identifier for an onboarded cluster.
+         */
+        PostmortemDraft__ClusterId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an SRE incident.
+         */
+        PostmortemDraft__IncidentId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for a knowledge item.
+         */
+        PostmortemDraft__KnowledgeItemId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for a postmortem.
+         */
+        PostmortemDraft__PostmortemId: string;
+        /**
+         * @description Postmortem lifecycle. Publication always requires an explicit human actor.
+         * @enum {string}
+         */
+        PostmortemDraft__PostmortemStatus: "draft" | "in_review" | "confirmed" | "published" | "archived";
+        /**
+         * Format: uuid
+         * @description Stable tenant boundary identifier.
+         */
+        PostmortemDraft__TenantId: string;
+        /**
+         * PostmortemRevision
+         * @description Immutable content revision with explicit Evidence citations.
+         */
+        PostmortemRevision: {
+            contributing_factors: string[];
+            /** Format: date-time */
+            created_at: string;
+            detection: string;
+            edited_by: string;
+            effective_actions: string[];
+            evidence_ids: components["schemas"]["PostmortemRevision__EvidenceId"][];
+            human_confirmed: boolean;
+            id: components["schemas"]["PostmortemRevision__PostmortemRevisionId"];
+            impact: string;
+            ineffective_actions: string[];
+            model_invocation_id?: components["schemas"]["PostmortemRevision__ModelInvocationId"] | null;
+            postmortem_id: components["schemas"]["PostmortemRevision__PostmortemId"];
+            recovery: string;
+            /** Format: uint32 */
+            revision: number;
+            root_causes: string[];
+            summary: string;
+            timeline: unknown;
+        };
+        /**
+         * Format: uuid
+         * @description Stable identifier for an evidence snapshot.
+         */
+        PostmortemRevision__EvidenceId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for a model invocation.
+         */
+        PostmortemRevision__ModelInvocationId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for a postmortem.
+         */
+        PostmortemRevision__PostmortemId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an immutable postmortem revision.
+         */
+        PostmortemRevision__PostmortemRevisionId: string;
+        /**
+         * ActionItem
+         * @description Independently tracked postmortem follow-up.
+         */
+        ActionItem: {
+            cluster_id: components["schemas"]["ActionItem__ClusterId"];
+            /** Format: date-time */
+            completed_at?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            due_at?: string | null;
+            evidence_ids: components["schemas"]["ActionItem__EvidenceId"][];
+            execution_journal?: unknown;
+            id: components["schemas"]["ActionItem__ActionItemId"];
+            incident_id: components["schemas"]["ActionItem__IncidentId"];
+            owner?: string | null;
+            postmortem_id: components["schemas"]["ActionItem__PostmortemId"];
+            status: components["schemas"]["ActionItem__ActionItemStatus"];
+            tenant_id: components["schemas"]["ActionItem__TenantId"];
+            title: string;
+            /** Format: date-time */
+            updated_at: string;
+            verification?: string | null;
+        };
+        /**
+         * Format: uuid
+         * @description Stable identifier for a postmortem action item.
+         */
+        ActionItem__ActionItemId: string;
+        /**
+         * @description Action-item lifecycle.
+         * @enum {string}
+         */
+        ActionItem__ActionItemStatus: "open" | "assigned" | "in_progress" | "blocked" | "completed" | "reopened" | "cancelled";
+        /**
+         * Format: uuid
+         * @description Internal identifier for an onboarded cluster.
+         */
+        ActionItem__ClusterId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an evidence snapshot.
+         */
+        ActionItem__EvidenceId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an SRE incident.
+         */
+        ActionItem__IncidentId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for a postmortem.
+         */
+        ActionItem__PostmortemId: string;
+        /**
+         * Format: uuid
+         * @description Stable tenant boundary identifier.
+         */
+        ActionItem__TenantId: string;
+        /**
+         * Phase2ContractManifest
+         * @description Capability marker returned alongside the Phase 2 API schema.
+         */
+        Phase2ContractManifest: {
+            cluster_mutation_supported: boolean;
+            effective_access: string;
+            operations: components["schemas"]["Phase2ContractManifest__ReadOnlyOperation"][];
+            schema_version: string;
+        };
+        /**
+         * @description Read-only operations frozen into the Phase 2 public contract.
+         * @enum {string}
+         */
+        Phase2ContractManifest__ReadOnlyOperation: "read_alerts" | "read_topology" | "read_forecasts" | "run_simulation" | "read_readiness" | "manage_postmortem_metadata" | "manage_action_item_metadata";
     };
     responses: {
         /** @description Successful scoped response */
@@ -1941,6 +2658,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JsonObject"];
+                };
+            };
+        };
+    };
+    getPhase2ContractManifest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Phase 2 read-only contract manifest */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Phase2ContractManifest"];
                 };
             };
         };

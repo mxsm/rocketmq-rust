@@ -20,7 +20,7 @@ describe("stateLabel", () => {
     expect(stateLabel("offboarded")).toBe("已下线");
   });
 
-  it("uses the versioned Phase 1 workflow and evidence routes", async () => {
+  it("uses the versioned workflow, evidence and Phase 2 contract routes", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockImplementation(async () =>
@@ -44,6 +44,7 @@ describe("stateLabel", () => {
     await api.getEvidence("evidence/id");
     await api.getEvidenceContent("evidence/id");
     await api.listKnowledge("cluster/id");
+    await api.getPhase2Contract();
 
     expect(
       fetchMock.mock.calls.map(([input]) => String(input)),
@@ -55,6 +56,7 @@ describe("stateLabel", () => {
       "/v1/evidence/evidence%2Fid",
       "/v1/evidence/evidence%2Fid/content",
       "/v1/knowledge?cluster_id=cluster%2Fid",
+      "/v1/capabilities/phase2-contract",
     ]);
     expect(
       JSON.parse(

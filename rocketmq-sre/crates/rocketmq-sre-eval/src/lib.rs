@@ -21,10 +21,22 @@ use std::fs;
 use std::path::Path;
 
 use rocketmq_sre_contracts::ActionDescriptor;
+use rocketmq_sre_contracts::ActionItem;
+use rocketmq_sre_contracts::AlertEvent;
+use rocketmq_sre_contracts::BacklogEta;
+use rocketmq_sre_contracts::CapacityForecast;
 use rocketmq_sre_contracts::Descriptor;
+use rocketmq_sre_contracts::DrReadinessReport;
 use rocketmq_sre_contracts::EvidenceQuery;
 use rocketmq_sre_contracts::EvidenceSnapshot;
 use rocketmq_sre_contracts::Incident;
+use rocketmq_sre_contracts::NotificationDelivery;
+use rocketmq_sre_contracts::Phase2ContractManifest;
+use rocketmq_sre_contracts::PostmortemDraft;
+use rocketmq_sre_contracts::PostmortemRevision;
+use rocketmq_sre_contracts::TopologySnapshot;
+use rocketmq_sre_contracts::UpgradeReadinessReport;
+use rocketmq_sre_contracts::WhatIfSimulation;
 use rocketmq_sre_model_gateway::CanonicalModelRequest;
 use rocketmq_sre_model_gateway::CanonicalModelResponse;
 use schemars::JsonSchema;
@@ -203,6 +215,54 @@ fn generated_schemas() -> Result<Vec<(&'static str, serde_json::Value)>, EvalErr
         (
             "model-response.schema.json",
             serde_json::to_value(schema_for!(CanonicalModelResponse))?,
+        ),
+        (
+            "alert-event.schema.json",
+            serde_json::to_value(schema_for!(AlertEvent))?,
+        ),
+        (
+            "topology-snapshot.schema.json",
+            serde_json::to_value(schema_for!(TopologySnapshot))?,
+        ),
+        (
+            "capacity-forecast.schema.json",
+            serde_json::to_value(schema_for!(CapacityForecast))?,
+        ),
+        (
+            "backlog-eta.schema.json",
+            serde_json::to_value(schema_for!(BacklogEta))?,
+        ),
+        (
+            "what-if-simulation.schema.json",
+            serde_json::to_value(schema_for!(WhatIfSimulation))?,
+        ),
+        (
+            "upgrade-readiness-report.schema.json",
+            serde_json::to_value(schema_for!(UpgradeReadinessReport))?,
+        ),
+        (
+            "dr-readiness-report.schema.json",
+            serde_json::to_value(schema_for!(DrReadinessReport))?,
+        ),
+        (
+            "notification-delivery.schema.json",
+            serde_json::to_value(schema_for!(NotificationDelivery))?,
+        ),
+        (
+            "postmortem-draft.schema.json",
+            serde_json::to_value(schema_for!(PostmortemDraft))?,
+        ),
+        (
+            "postmortem-revision.schema.json",
+            serde_json::to_value(schema_for!(PostmortemRevision))?,
+        ),
+        (
+            "action-item.schema.json",
+            serde_json::to_value(schema_for!(ActionItem))?,
+        ),
+        (
+            "phase2-contract-manifest.schema.json",
+            serde_json::to_value(schema_for!(Phase2ContractManifest))?,
         ),
     ])
 }
@@ -436,6 +496,54 @@ signals:
             (
                 "model-response.schema.json",
                 include_str!("../../../schemas/model-response.schema.json"),
+            ),
+            (
+                "alert-event.schema.json",
+                include_str!("../../../schemas/alert-event.schema.json"),
+            ),
+            (
+                "topology-snapshot.schema.json",
+                include_str!("../../../schemas/topology-snapshot.schema.json"),
+            ),
+            (
+                "capacity-forecast.schema.json",
+                include_str!("../../../schemas/capacity-forecast.schema.json"),
+            ),
+            (
+                "backlog-eta.schema.json",
+                include_str!("../../../schemas/backlog-eta.schema.json"),
+            ),
+            (
+                "what-if-simulation.schema.json",
+                include_str!("../../../schemas/what-if-simulation.schema.json"),
+            ),
+            (
+                "upgrade-readiness-report.schema.json",
+                include_str!("../../../schemas/upgrade-readiness-report.schema.json"),
+            ),
+            (
+                "dr-readiness-report.schema.json",
+                include_str!("../../../schemas/dr-readiness-report.schema.json"),
+            ),
+            (
+                "notification-delivery.schema.json",
+                include_str!("../../../schemas/notification-delivery.schema.json"),
+            ),
+            (
+                "postmortem-draft.schema.json",
+                include_str!("../../../schemas/postmortem-draft.schema.json"),
+            ),
+            (
+                "postmortem-revision.schema.json",
+                include_str!("../../../schemas/postmortem-revision.schema.json"),
+            ),
+            (
+                "action-item.schema.json",
+                include_str!("../../../schemas/action-item.schema.json"),
+            ),
+            (
+                "phase2-contract-manifest.schema.json",
+                include_str!("../../../schemas/phase2-contract-manifest.schema.json"),
             ),
         ];
         let generated = generated_schemas().expect("schemas should encode");

@@ -1,0 +1,44 @@
+{
+  "$defs": {
+    "ReadOnlyOperation": {
+      "description": "Read-only operations frozen into the Phase 2 public contract.",
+      "enum": [
+        "read_alerts",
+        "read_topology",
+        "read_forecasts",
+        "run_simulation",
+        "read_readiness",
+        "manage_postmortem_metadata",
+        "manage_action_item_metadata"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Capability marker returned alongside the Phase 2 API schema.",
+  "properties": {
+    "cluster_mutation_supported": {
+      "type": "boolean"
+    },
+    "effective_access": {
+      "type": "string"
+    },
+    "operations": {
+      "items": {
+        "$ref": "#/$defs/ReadOnlyOperation"
+      },
+      "type": "array"
+    },
+    "schema_version": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "effective_access",
+    "cluster_mutation_supported",
+    "operations"
+  ],
+  "title": "Phase2ContractManifest",
+  "type": "object"
+}

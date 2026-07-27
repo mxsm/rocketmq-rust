@@ -1,0 +1,206 @@
+{
+  "$defs": {
+    "AssetKind": {
+      "description": "Asset classes normalized into the topology graph.",
+      "enum": [
+        "name_server",
+        "controller",
+        "broker",
+        "proxy",
+        "store",
+        "pod",
+        "node",
+        "persistent_volume_claim",
+        "pod_disruption_budget",
+        "topic",
+        "queue",
+        "producer",
+        "consumer",
+        "connection"
+      ],
+      "type": "string"
+    },
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TopologyEdge": {
+      "description": "Directed edge between normalized assets.",
+      "properties": {
+        "cluster_id": {
+          "$ref": "#/$defs/ClusterId"
+        },
+        "content_hash": {
+          "type": "string"
+        },
+        "freshness_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "from_key": {
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/TopologyEdgeId"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "partial": {
+          "type": "boolean"
+        },
+        "relation": {
+          "$ref": "#/$defs/TopologyRelation"
+        },
+        "source": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/TenantId"
+        },
+        "to_key": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "tenant_id",
+        "cluster_id",
+        "from_key",
+        "to_key",
+        "relation",
+        "source",
+        "observed_at",
+        "freshness_seconds",
+        "partial",
+        "content_hash"
+      ],
+      "type": "object"
+    },
+    "TopologyEdgeId": {
+      "description": "Stable identifier for a versioned topology edge.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TopologyNode": {
+      "description": "One normalized node in a point-in-time topology snapshot.",
+      "properties": {
+        "display_name": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/AssetKind"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "partial": {
+          "type": "boolean"
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "kind",
+        "display_name",
+        "source",
+        "partial"
+      ],
+      "type": "object"
+    },
+    "TopologyRelation": {
+      "description": "Versioned topology relationship.",
+      "enum": [
+        "contains",
+        "routes_to",
+        "stores_on",
+        "runs_on",
+        "connects_to",
+        "consumes_from",
+        "produces_to",
+        "replicates_to"
+      ],
+      "type": "string"
+    },
+    "TopologySnapshotId": {
+      "description": "Stable identifier for an immutable topology snapshot.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Immutable, bounded topology projection used by correlation and UI.",
+  "properties": {
+    "cluster_id": {
+      "$ref": "#/$defs/ClusterId"
+    },
+    "content_hash": {
+      "type": "string"
+    },
+    "edges": {
+      "items": {
+        "$ref": "#/$defs/TopologyEdge"
+      },
+      "type": "array"
+    },
+    "freshness_seconds": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "id": {
+      "$ref": "#/$defs/TopologySnapshotId"
+    },
+    "nodes": {
+      "items": {
+        "$ref": "#/$defs/TopologyNode"
+      },
+      "type": "array"
+    },
+    "observed_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "partial": {
+      "type": "boolean"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    },
+    "warnings": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "id",
+    "tenant_id",
+    "cluster_id",
+    "nodes",
+    "edges",
+    "observed_at",
+    "freshness_seconds",
+    "partial",
+    "content_hash"
+  ],
+  "title": "TopologySnapshot",
+  "type": "object"
+}
