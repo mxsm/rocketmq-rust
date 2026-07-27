@@ -1799,6 +1799,14 @@ function Get-SchedulerDisposition {
         }
     }
 
+    if ($path -eq "rocketmq-sre/crates/rocketmq-sre-probe/src/rocketmq_driver.rs") {
+        return [pscustomobject]@{
+            Disposition = "sre-bounded-probe-rate-pacing"
+            ActionRequired = $false
+            Reason = "Allowed request-local probe send pacing; message count and interval are validated against hard limits, the whole scenario has a deadline, and no background task or scheduler is created."
+        }
+    }
+
     return [pscustomobject]@{
         Disposition = "unclassified-follow-up"
         ActionRequired = $true
