@@ -240,8 +240,15 @@ foreach ($serviceProperty in $profile.services.PSObject.Properties) {
         throw "$serviceName binary returned a non-canonical SHA-256 digest"
     }
 
-    $packageOutput = Invoke-Captured docker run --rm --entrypoint dpkg-query $imageReference `
-        -W '-f=${Package}\t${Version}\t${Architecture}\n'
+    $packageOutput = Invoke-Captured -Executable docker -Arguments @(
+        "run",
+        "--rm",
+        "--entrypoint",
+        "dpkg-query",
+        $imageReference,
+        "-W",
+        '-f=${Package}\t${Version}\t${Architecture}\n'
+    )
     $components = [System.Collections.Generic.List[object]]::new()
     foreach ($line in ($packageOutput -split "`r?`n")) {
         if ([string]::IsNullOrWhiteSpace($line)) {

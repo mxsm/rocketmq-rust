@@ -102,6 +102,7 @@ class ProductionReleaseStateTests(unittest.TestCase):
         self.assertNotIn("--push", self.builder)
         self.assertIn("production images must be built from a clean checkout", self.builder)
         self.assertIn('imageReference = "rocketmq-rust/$serviceName`:$shortCommit"', self.builder)
+        self.assertIn("Invoke-Captured -Executable docker -Arguments @(", self.builder)
         for field in (
             "source_commit",
             "rust_toolchain",
