@@ -22,6 +22,19 @@
         "defaults": {
           "max": 1,
           "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0.999
+              }
+            ]
+          },
           "unit": "percentunit"
         },
         "overrides": []
@@ -32,6 +45,7 @@
         "x": 0,
         "y": 0
       },
+      "description": "Five-minute delivered/accepted message ratio. The production objective is at least 0.999.",
       "id": 1,
       "targets": [
         {
@@ -50,6 +64,19 @@
       },
       "fieldConfig": {
         "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1000
+              }
+            ]
+          },
           "unit": "ms"
         },
         "overrides": []
@@ -60,6 +87,7 @@
         "x": 12,
         "y": 0
       },
+      "description": "Five-minute p99 send-message latency. The production objective is at most 1000 ms.",
       "id": 2,
       "targets": [
         {
@@ -78,6 +106,19 @@
       },
       "fieldConfig": {
         "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 10000
+              }
+            ]
+          },
           "unit": "short"
         },
         "overrides": []
@@ -88,6 +129,7 @@
         "x": 0,
         "y": 8
       },
+      "description": "Maximum consumer lag. The production objective is at most 10000 messages.",
       "id": 3,
       "targets": [
         {
@@ -106,6 +148,19 @@
       },
       "fieldConfig": {
         "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 67108864
+              }
+            ]
+          },
           "unit": "bytes"
         },
         "overrides": []
@@ -116,6 +171,7 @@
         "x": 12,
         "y": 8
       },
+      "description": "Store flush and dispatch backlog. Flush-behind must remain at or below 64 MiB.",
       "id": 4,
       "targets": [
         {
@@ -139,6 +195,19 @@
       },
       "fieldConfig": {
         "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 67108864
+              }
+            ]
+          },
           "unit": "bytes"
         },
         "overrides": []
@@ -149,6 +218,7 @@
         "x": 0,
         "y": 16
       },
+      "description": "Maximum Broker HA replication lag. The production objective is at most 64 MiB.",
       "id": 5,
       "targets": [
         {
@@ -161,15 +231,46 @@
       "type": "timeseries"
     },
     {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Exactly one low-cardinality release identity should be active for each service instance.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
       "gridPos": {
         "h": 8,
-        "w": 6,
+        "w": 12,
         "x": 12,
         "y": 16
       },
       "id": 6,
+      "targets": [
+        {
+          "expr": "max by (service, release_commit, release_nonce) (rocketmq_release_info)",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{service}} {{release_commit}} {{release_nonce}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Release Identity Registration",
+      "type": "table"
+    },
+    {
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "id": 7,
       "options": {
-        "content": "The release evidence must include the M11-11 `collector_outage` scenario with a successful message round trip below 30 seconds. A dashboard cannot replace the signed fault artifact.",
+        "content": "The release evidence must include the `collector_outage` scenario with a successful message round trip below 30 seconds. Admission is non-blocking and bounded to 2048 records, 8 MiB total, and 64 KiB per record; drops are reported through `rocketmq.exporter.drop`. A dashboard cannot replace the signed fault artifact.",
         "mode": "markdown"
       },
       "title": "Collector Outage Budget",
@@ -178,11 +279,11 @@
     {
       "gridPos": {
         "h": 8,
-        "w": 6,
-        "x": 18,
-        "y": 16
+        "w": 12,
+        "x": 12,
+        "y": 24
       },
-      "id": 7,
+      "id": 8,
       "options": {
         "content": "The release evidence must report zero `FailedPreStopHook` events and prove baseline image/chart restoration without deleting PVCs or WAL.",
         "mode": "markdown"
@@ -223,6 +324,6 @@
   "timezone": "utc",
   "title": "RocketMQ Architecture Production Readiness",
   "uid": "rocketmq-architecture-production-readiness",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }

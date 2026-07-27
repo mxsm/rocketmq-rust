@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "registry_version": "1.0.0",
+  "registry_version": "1.1.0",
   "fixtures": [
     {
       "id": "unknown-signal",
@@ -42,7 +42,7 @@
       "operation": "delete",
       "path": [
         "signals",
-        129,
+        132,
         "sampling",
         "max_per_second"
       ],
@@ -53,7 +53,7 @@
       "operation": "set",
       "path": [
         "signals",
-        129,
+        132,
         "deprecation"
       ],
       "value": {

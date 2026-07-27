@@ -1,5 +1,6 @@
 {
   "schema_version": 1,
+  "contract_version": "1.0.0",
   "milestone": "M11-12",
   "execution_unit": "R24",
   "minimum_soak_seconds": 21600,
@@ -14,76 +15,299 @@
     "secret_rotation",
     "acknowledged_message_recovery"
   ],
+  "release_identity_contract": {
+    "metric": "rocketmq_release_info",
+    "kind": "gauge",
+    "unit": "1",
+    "owner": "observability",
+    "allowed_labels": [
+      "service",
+      "release_commit",
+      "release_nonce"
+    ],
+    "cardinality_budget": 64,
+    "privacy": "operational",
+    "dashboard_panel": "Release Identity Registration",
+    "alert": "RocketMQReleaseIdentityConflict",
+    "runbook_anchor": "release-identity"
+  },
+  "readiness_contract": {
+    "probe_path": "/readyz",
+    "ready_status": 200,
+    "not_ready_status": 503,
+    "identity_required_when_metrics_enabled": true,
+    "services": [
+      {
+        "service": "broker",
+        "identity_service": "rocketmq-broker",
+        "requirements": [
+          "security_bootstrap",
+          "message_store_writable",
+          "request_processors_started",
+          "nameserver_registration",
+          "release_identity"
+        ],
+        "source_contracts": [
+          {
+            "path": "rocketmq-broker/src/bin/broker_bootstrap_server.rs",
+            "required_markers": [
+              "validate_broker_security",
+              "register_broker_release_identity",
+              "boot_with_lifecycle"
+            ]
+          },
+          {
+            "path": "rocketmq-broker/src/broker_bootstrap.rs",
+            "required_markers": [
+              "release_identity_registered",
+              "lifecycle.mark_ready"
+            ]
+          },
+          {
+            "path": "rocketmq-broker/src/lifecycle/components.rs",
+            "required_markers": [
+              "store_writable",
+              "processors_started",
+              "security_ready",
+              "registration_ready"
+            ]
+          }
+        ]
+      },
+      {
+        "service": "namesrv",
+        "identity_service": "rocketmq-namesrv",
+        "requirements": [
+          "security_bootstrap",
+          "route_processor_started",
+          "embedded_controller_started_when_configured",
+          "release_identity"
+        ],
+        "source_contracts": [
+          {
+            "path": "rocketmq-namesrv/src/bin/namesrv_bootstrap_server.rs",
+            "required_markers": [
+              "validate_namesrv_security",
+              "register_namesrv_release_identity",
+              "boot_with_lifecycle"
+            ]
+          },
+          {
+            "path": "rocketmq-namesrv/src/bootstrap.rs",
+            "required_markers": [
+              "route_info_manager().start",
+              "controller_manager.start",
+              "RuntimeState::Running",
+              "lifecycle.mark_ready"
+            ]
+          }
+        ]
+      },
+      {
+        "service": "controller",
+        "identity_service": "rocketmq-controller",
+        "requirements": [
+          "security_bootstrap",
+          "storage_recovered",
+          "raft_listener_started",
+          "cluster_recovery",
+          "release_identity"
+        ],
+        "source_contracts": [
+          {
+            "path": "rocketmq-controller/src/bin/controller_bootstrap.rs",
+            "required_markers": [
+              "validate_controller_security",
+              "register_controller_release_identity",
+              "wait_for_cluster_recovery",
+              "release_identity_registered",
+              "lifecycle.mark_ready"
+            ]
+          }
+        ]
+      },
+      {
+        "service": "proxy",
+        "identity_service": "rocketmq-proxy",
+        "requirements": [
+          "security_bootstrap",
+          "metadata_route_ready",
+          "all_configured_listeners_bound",
+          "release_identity"
+        ],
+        "source_contracts": [
+          {
+            "path": "rocketmq-proxy/src/bin/rocketmq-proxy-rust.rs",
+            "required_markers": [
+              "validate_proxy_security",
+              "register_proxy_release_identity",
+              "serve_with_lifecycle"
+            ]
+          },
+          {
+            "path": "rocketmq-proxy/src/bootstrap.rs",
+            "required_markers": [
+              "verify_cluster_route_and_security",
+              "remaining_listeners",
+              "lifecycle.mark_ready"
+            ]
+          }
+        ]
+      },
+      {
+        "service": "mcp",
+        "identity_service": "rocketmq-mcp",
+        "requirements": [
+          "security_bootstrap",
+          "application_initialized",
+          "transport_listener_ready",
+          "release_identity"
+        ],
+        "source_contracts": [
+          {
+            "path": "rocketmq-tools/rocketmq-mcp/src/main.rs",
+            "required_markers": [
+              "validate_mcp_security",
+              "McpApp::bootstrap_typed",
+              "start_lifecycle",
+              "mark_ready()"
+            ]
+          },
+          {
+            "path": "rocketmq-tools/rocketmq-mcp/src/app.rs",
+            "required_markers": [
+              "register_mcp_release_identity",
+              "release_identity_registered"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "collector_outage_contract": {
+    "registry": "scripts/telemetry-semantic-registry.json",
+    "max_queue_items": 2048,
+    "max_queue_bytes": 8388608,
+    "max_record_bytes": 65536,
+    "enqueue": "try_enqueue",
+    "overflow": "drop_newest",
+    "data_plane_blocking": false,
+    "recovery_objective_seconds": 30,
+    "drop_signal": "rocketmq.exporter.drop",
+    "shutdown_signal": "rocketmq.exporter.shutdown",
+    "required_measurements": [
+      "accepted",
+      "drained",
+      "dropped_by_reason",
+      "queued_items",
+      "queued_bytes"
+    ]
+  },
   "objectives": [
     {
       "id": "message_delivery_ratio",
       "source": "rocketmq_messages_out_total",
+      "owner": "broker",
+      "allowed_query_labels": [],
+      "source_unit": "{message}",
       "query": "sum(rate(rocketmq_messages_out_total[5m])) / clamp_min(sum(rate(rocketmq_messages_in_total[5m])), 0.000001)",
       "operator": "gte",
       "target": 0.999,
       "unit": "ratio",
+      "dashboard_unit": "percentunit",
       "dashboard_panel": "Message Delivery Ratio",
-      "alert": "RocketMQMessageDeliveryRatioBurn"
+      "alert": "RocketMQMessageDeliveryRatioBurn",
+      "runbook_anchor": "message-availability"
     },
     {
       "id": "send_message_p99_millis",
       "source": "rocketmq_send_message_latency",
+      "owner": "broker",
+      "allowed_query_labels": [],
+      "source_unit": "ms",
       "query": "histogram_quantile(0.99, sum(rate(rocketmq_send_message_latency_bucket[5m])) by (le))",
       "operator": "lte",
       "target": 1000,
       "unit": "ms",
+      "dashboard_unit": "ms",
       "dashboard_panel": "Send Message P99 Latency",
-      "alert": "RocketMQSendMessageP99High"
+      "alert": "RocketMQSendMessageP99High",
+      "runbook_anchor": "send-latency"
     },
     {
       "id": "consumer_lag_messages",
       "source": "rocketmq_consumer_lag_messages",
+      "owner": "broker",
+      "allowed_query_labels": [],
+      "source_unit": "{message}",
       "query": "max(rocketmq_consumer_lag_messages)",
       "operator": "lte",
       "target": 10000,
       "unit": "{message}",
+      "dashboard_unit": "short",
       "dashboard_panel": "Consumer Lag",
-      "alert": "RocketMQConsumerLagHigh"
+      "alert": "RocketMQConsumerLagHigh",
+      "runbook_anchor": "consumer-lag"
     },
     {
       "id": "flush_behind_bytes",
       "source": "rocketmq_storage_flush_behind_bytes",
+      "owner": "store",
+      "allowed_query_labels": [],
+      "source_unit": "By",
       "query": "max(rocketmq_storage_flush_behind_bytes)",
       "operator": "lte",
       "target": 67108864,
       "unit": "By",
+      "dashboard_unit": "bytes",
       "dashboard_panel": "Store Flush and Dispatch Lag",
-      "alert": "RocketMQStoreFlushBehindHigh"
+      "alert": "RocketMQStoreFlushBehindHigh",
+      "runbook_anchor": "store-flush"
     },
     {
       "id": "ha_replication_lag_bytes",
       "source": "rocketmq_store_ha_replication_lag_bytes",
+      "owner": "store",
+      "allowed_query_labels": [],
+      "source_unit": "By",
       "query": "max(rocketmq_store_ha_replication_lag_bytes)",
       "operator": "lte",
       "target": 67108864,
       "unit": "By",
+      "dashboard_unit": "bytes",
       "dashboard_panel": "HA Replication Lag",
-      "alert": "RocketMQHaReplicationLagHigh"
+      "alert": "RocketMQHaReplicationLagHigh",
+      "runbook_anchor": "ha-replication"
     },
     {
       "id": "collector_outage_roundtrip_seconds",
       "source": "fault_evidence",
+      "owner": "observability",
+      "allowed_query_labels": [],
+      "source_unit": null,
       "query": null,
       "operator": "lte",
       "target": 30,
       "unit": "s",
+      "dashboard_unit": null,
       "dashboard_panel": "Collector Outage Budget",
-      "alert": null
+      "alert": null,
+      "runbook_anchor": "collector-outage-budget"
     },
     {
       "id": "drain_failed_prestop_events",
       "source": "fault_evidence",
+      "owner": "release-engineering",
+      "allowed_query_labels": [],
+      "source_unit": null,
       "query": null,
       "operator": "lte",
       "target": 0,
       "unit": "{event}",
+      "dashboard_unit": null,
       "dashboard_panel": "Drain and Rollback Health",
-      "alert": null
+      "alert": null,
+      "runbook_anchor": "drain-and-rollback-health"
     }
   ],
   "release_artifacts": {

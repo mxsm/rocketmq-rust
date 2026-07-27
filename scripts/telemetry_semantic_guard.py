@@ -39,6 +39,7 @@ REQUIRED_FAMILIES = {
     "connection-bytes",
     "task",
     "recovery-cache",
+    "release-identity",
     "auth-mcp",
     "exporter",
 }

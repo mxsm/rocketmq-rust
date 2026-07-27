@@ -9,6 +9,8 @@ groups:
           < 0.999
         for: 10m
         labels:
+          contract: production-readiness-v1
+          owner: broker
           severity: critical
           slo: message-availability
         annotations:
@@ -23,6 +25,8 @@ groups:
           ) > 1000
         for: 10m
         labels:
+          contract: production-readiness-v1
+          owner: broker
           severity: critical
           slo: send-latency
         annotations:
@@ -33,6 +37,8 @@ groups:
         expr: max(rocketmq_consumer_lag_messages) > 10000
         for: 15m
         labels:
+          contract: production-readiness-v1
+          owner: broker
           severity: warning
           slo: consumer-lag
         annotations:
@@ -43,6 +49,8 @@ groups:
         expr: max(rocketmq_storage_flush_behind_bytes) > 67108864
         for: 10m
         labels:
+          contract: production-readiness-v1
+          owner: store
           severity: critical
           slo: store-flush
         annotations:
@@ -53,8 +61,27 @@ groups:
         expr: max(rocketmq_store_ha_replication_lag_bytes) > 67108864
         for: 10m
         labels:
+          contract: production-readiness-v1
+          owner: store
           severity: critical
           slo: ha-replication
         annotations:
           summary: RocketMQ HA replication lag exceeds 64 MiB
           runbook_url: https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-doc/en/architecture-production-readiness-runbook.md#ha-replication
+
+      - alert: RocketMQReleaseIdentityConflict
+        expr: |
+          count by (service) (
+            count by (service, release_commit, release_nonce) (
+              rocketmq_release_info
+            )
+          ) > 1
+        for: 5m
+        labels:
+          contract: production-readiness-v1
+          owner: observability
+          severity: critical
+          slo: release-identity
+        annotations:
+          summary: More than one release identity is active for a RocketMQ service
+          runbook_url: https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-doc/en/architecture-production-readiness-runbook.md#release-identity
