@@ -100,9 +100,11 @@ class ProductionReleaseStateTests(unittest.TestCase):
         self.assertIn("docker buildx build", self.builder)
         self.assertIn("--load", self.builder)
         self.assertNotIn("--push", self.builder)
+        self.assertNotIn("[System.IO.Path]::GetRelativePath", self.builder)
         self.assertIn("production images must be built from a clean checkout", self.builder)
         self.assertIn('imageReference = "rocketmq-rust/$serviceName`:$shortCommit"', self.builder)
         self.assertIn("Invoke-Captured -Executable docker -Arguments @(", self.builder)
+        self.assertIn(".MakeRelativeUri(", self.builder)
         for field in (
             "source_commit",
             "rust_toolchain",

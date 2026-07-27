@@ -97,7 +97,16 @@ function Get-RepositoryRelativePath {
         [Parameter(Mandatory)][string]$Path
     )
 
-    return [System.IO.Path]::GetRelativePath($Root, $Path).Replace("\", "/")
+    $rootPath = [System.IO.Path]::GetFullPath($Root).TrimEnd("\", "/") +
+        [System.IO.Path]::DirectorySeparatorChar
+    $artifactPath = [System.IO.Path]::GetFullPath($Path)
+    if (-not $artifactPath.StartsWith($rootPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "release artifact must remain under the repository root: $artifactPath"
+    }
+
+    $rootUri = [System.Uri]::new($rootPath)
+    $artifactUri = [System.Uri]::new($artifactPath)
+    return [System.Uri]::UnescapeDataString($rootUri.MakeRelativeUri($artifactUri).ToString())
 }
 
 if (-not $Load) {
