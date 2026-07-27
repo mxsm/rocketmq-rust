@@ -8,7 +8,7 @@ Provide some command-line tools to read data from RocketMQ files.
 
 ### Requirements
 
-1. rust toolchain MSRV is 1.75.(stable,nightly)
+1. Stable Rust `1.95.0`, using the pinned repository toolchain.
 
 ## Run rocketmq-rust cli
 

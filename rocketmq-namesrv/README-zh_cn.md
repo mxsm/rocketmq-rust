@@ -47,7 +47,7 @@ broker；启用内嵌 controller 时，`ControllerManager` 会随 NameServer 生
 
 ## 环境要求
 
-- Rust `1.85.0` 或更新版本。
+- Stable Rust `1.95.0`，使用仓库固定的工具链。
 - 使用仓库中的 [`../rust-toolchain.toml`](../rust-toolchain.toml) 工具链。
 - 正常启动二进制时必须设置 `ROCKETMQ_HOME` 或传入 `--rocketmqHome`。
 - 默认 NameServer 监听端口为 `9876`。

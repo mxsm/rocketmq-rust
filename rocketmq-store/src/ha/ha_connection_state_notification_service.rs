@@ -168,9 +168,9 @@ async fn fail_matching_request(
     remote_addr: &str,
 ) -> bool {
     let mut request_guard = request_slot.lock().await;
-    if !request_guard
+    if request_guard
         .as_ref()
-        .is_some_and(|request| request.remote_addr() == remote_addr)
+        .is_none_or(|request| request.remote_addr() != remote_addr)
     {
         return false;
     }

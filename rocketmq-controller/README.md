@@ -56,9 +56,8 @@ The binary requires a non-empty `rocketmqHome` value after configuration loading
 
 ## Requirements
 
-- Rust `1.85.0` or newer is the workspace minimum.
-- Build this crate with the repository toolchain from [`../rust-toolchain.toml`](../rust-toolchain.toml). The crate
-  currently enables a nightly Rust feature.
+- Stable Rust `1.95.0` is the workspace minimum and the repository build toolchain.
+- Build this crate with the pinned repository toolchain from [`../rust-toolchain.toml`](../rust-toolchain.toml).
 - `ROCKETMQ_HOME` or `rocketmqHome` must be set before starting the controller binary.
 - Use `storageBackend = "File"` with the default feature set. Use `storageBackend = "RocksDB"` only when building with
   `storage-rocksdb`.

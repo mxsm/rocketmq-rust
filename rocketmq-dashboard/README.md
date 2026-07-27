@@ -14,7 +14,7 @@ Important: `rocketmq-dashboard` itself is not a Cargo workspace root. You cannot
 
 ## Prerequisites
 
-- Rust toolchain 1.85.0 or later
+- Stable Rust toolchain 1.95.0
 - For `rocketmq-dashboard-tauri`: Node.js and npm
 - Tauri platform prerequisites for your OS
 

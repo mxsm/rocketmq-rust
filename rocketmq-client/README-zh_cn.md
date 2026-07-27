@@ -51,7 +51,7 @@ ACL hook、路由管理、延迟容错、消息轨迹以及面向热路径的 be
 
 ## 环境要求
 
-- Rust `1.85.0` 或更新版本。
+- Stable Rust `1.95.0`，使用仓库固定的工具链。
 - 真实 producer、consumer 和 admin 流量需要可访问的 RocketMQ NameServer。
 - 除非通过 admin API 创建 topic，否则 broker 侧需要提前准备目标 topic。
 

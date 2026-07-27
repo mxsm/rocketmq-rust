@@ -90,7 +90,7 @@ Broker 管理端点。
 
 ## 环境要求
 
-- Rust `1.85.0` 或更高版本，与 workspace toolchain 保持一致。
+- Stable Rust `1.95.0`，与 workspace 固定工具链保持一致。
 - Cluster 模式需要可访问的 RocketMQ NameServer。
 - Local 模式和基于文件的 auth metadata 需要可写本地存储。
 - 可选：启用 `observability` feature 时需要 OpenTelemetry 指标管线。

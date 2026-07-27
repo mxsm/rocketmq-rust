@@ -118,7 +118,7 @@ This mirrors the intent of Java RocketMQ's `@CFNotNull` annotation. Missing requ
 
 ## Requirements
 
-- Rust `1.85.0` or newer.
+- Stable Rust `1.95.0`, using the pinned repository toolchain.
 - The repository toolchain from [`../rust-toolchain.toml`](../rust-toolchain.toml).
 - A consuming crate with compatible `crate::protocol` module paths for generated protocol trait implementations.
 

@@ -7,7 +7,7 @@
 
 ## 前置条件
 
-- Rust 1.85.0 或更高版本。
+- Stable Rust 1.95.0，使用仓库固定的工具链。
 - 已启动 RocketMQ Namesrv 和 Broker。
 - 示例默认 Namesrv 地址为 `127.0.0.1:9876`。
 - 运行示例前先创建 topic 和 consumer group。示例本身不自动创建 broker 资源。

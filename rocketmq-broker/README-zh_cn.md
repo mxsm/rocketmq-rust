@@ -54,7 +54,7 @@ Broker 从 `rocketmq-broker-rust` 启动，先解析 CLI 和配置输入，再�
 
 ## 环境要求
 
-- Rust `1.85.0` 或更新版本。
+- Stable Rust `1.95.0`，使用仓库固定的工具链。
 - 启动 broker 前必须设置 `ROCKETMQ_HOME`。如果 `$ROCKETMQ_HOME/conf/broker.toml` 存在，会作为默认配置文件。
 - 正常 broker 注册建议提供可访问的 NameServer。未提供地址时，默认使用 `127.0.0.1:9876`。
 

@@ -51,7 +51,7 @@ Unsupported request codes return `RequestCodeNotSupported` from the default proc
 
 ## Requirements
 
-- Rust `1.85.0` or newer.
+- Stable Rust `1.95.0`, using the pinned repository toolchain.
 - The repository toolchain from [`../rust-toolchain.toml`](../rust-toolchain.toml).
 - `ROCKETMQ_HOME` or `--rocketmqHome` must be set for a normal binary startup.
 - Port `9876` is the default NameServer listen port.

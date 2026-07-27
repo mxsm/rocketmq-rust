@@ -13,7 +13,7 @@ RocketMQ-Rust 详细开发指南。
 
 ### 前置要求
 
-- **Rust**：nightly 工具链
+- **Rust**：stable 1.95.0 工具链
 - **Git**：用于版本控制
 - **IDE**：VS Code、RustRover 或类似工具
 
@@ -32,20 +32,17 @@ RocketMQ-Rust 详细开发指南。
 
 RustRover 内置 Rust 支持。无需额外插件。
 
-### 安装 Rust Nightly
+### 安装固定的 Stable 工具链
 
 ```bash
 # 如果尚未安装 rustup
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-# 安装 nightly 工具链
-rustup toolchain install nightly
+# 安装仓库指定的精确工具链和必需组件
+rustup toolchain install 1.95.0 --profile minimal --component rustfmt,clippy
 
-# 设置 nightly 为默认（可选）
-rustup default nightly
-
-# 或仅为该项目使用 nightly
-rustup override set nightly
+# 进入仓库后，rust-toolchain.toml 会自动选择该版本
+rustc --version
 ```
 
 ### 从源代码构建

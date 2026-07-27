@@ -192,7 +192,8 @@ mod tests {
             RemotingSysResponseCode::TransactionFailed
         );
         assert_eq!(RemotingSysResponseCode::from(16), RemotingSysResponseCode::NoPermission);
-        assert_eq!(RemotingSysResponseCode::from(999), RemotingSysResponseCode::SystemError); // Edge case - unknown code defaults to SystemError
+        assert_eq!(RemotingSysResponseCode::from(999), RemotingSysResponseCode::SystemError);
+        // Edge case - unknown code defaults to SystemError
     }
 
     #[test]

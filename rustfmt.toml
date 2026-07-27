@@ -13,12 +13,6 @@
 # limitations under the License.
 
 
-#https://rust-lang.github.io/rustfmt/?version=v1.6.0&search=
-format_code_in_doc_comments = true
-format_strings              = true
-wrap_comments               = true
-format_macro_bodies         = true
-format_macro_matchers       = true
-imports_granularity         = "Item"
-comment_width               = 100
-max_width                   = 120
+# Stable rustfmt options only. Nightly-only formatting options would make the
+# repository's pinned stable toolchain silently use a different configuration.
+max_width = 120

@@ -32,7 +32,7 @@ EXPECTED_SERVICES: dict[str, dict[str, Any]] = {
         "binary": "rocketmq-broker-rust",
         "config_path": "/etc/rocketmq/broker.toml",
         "data_path": "/var/lib/rocketmq/broker",
-        "ports": [8088, 10911, 10912],
+        "ports": [5557, 8088, 10911, 10912],
         "command": ["--configFile", "/etc/rocketmq/broker.toml"],
     },
     "namesrv": {
@@ -41,7 +41,7 @@ EXPECTED_SERVICES: dict[str, dict[str, Any]] = {
         "binary": "rocketmq-namesrv-rust",
         "config_path": "/etc/rocketmq/namesrv.toml",
         "data_path": "/var/lib/rocketmq/namesrv",
-        "ports": [8088, 9876],
+        "ports": [5557, 8088, 9876],
         "command": ["--configFile", "/etc/rocketmq/namesrv.toml"],
     },
     "controller": {
@@ -50,7 +50,7 @@ EXPECTED_SERVICES: dict[str, dict[str, Any]] = {
         "binary": "rocketmq-controller-rust",
         "config_path": "/etc/rocketmq/controller.toml",
         "data_path": "/var/lib/rocketmq/controller",
-        "ports": [8088, 60109, 60110],
+        "ports": [5557, 8088, 60109, 60110],
         "command": ["--config-file", "/etc/rocketmq/controller.toml"],
     },
     "proxy": {
@@ -59,7 +59,7 @@ EXPECTED_SERVICES: dict[str, dict[str, Any]] = {
         "binary": "rocketmq-proxy-rust",
         "config_path": "/etc/rocketmq/proxy.toml",
         "data_path": "/var/lib/rocketmq/proxy",
-        "ports": [8080, 8081, 8088],
+        "ports": [5557, 8080, 8081, 8088],
         "command": ["--config", "/etc/rocketmq/proxy.toml"],
     },
     "mcp": {
@@ -68,7 +68,7 @@ EXPECTED_SERVICES: dict[str, dict[str, Any]] = {
         "binary": "rocketmq-mcp",
         "config_path": "/etc/rocketmq/mcp.toml",
         "data_path": "/var/lib/rocketmq/mcp",
-        "ports": [8088, 8089],
+        "ports": [5557, 8088, 8089],
         "command": ["--config", "/etc/rocketmq/mcp.toml", "--transport", "stdio"],
     },
 }
@@ -134,6 +134,7 @@ def audit_foundation(
         f"ARG RUNTIME_IMAGE={runtime_ref}",
         f"ARG DEBIAN_SNAPSHOT={policy['build']['debian_snapshot']}",
         f"ARG ROCKETMQ_RUST_TOOLCHAIN={policy['build']['rust_toolchain']}",
+        "RUST_VERSION=${ROCKETMQ_RUST_TOOLCHAIN}",
         "AS builder-base",
         "AS runtime-base",
         "AS runtime-base-smoke",

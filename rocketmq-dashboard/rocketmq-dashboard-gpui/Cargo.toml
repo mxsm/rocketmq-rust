@@ -17,26 +17,27 @@
 # This is a standalone project, not part of the parent workspace
 
 [package]
-name        = "rocketmq-dashboard-gpui"
-version     = "0.1.0"
-description = "RocketMQ-Rust Dashboard Desktop App (GPUI)"
-authors     = ["mxsm <mxsm@apache.org>"]
-edition     = "2024"
-license     = "Apache-2.0"
-publish     = false
-keywords    = ["dashboard", "rocketmq", "gpui", "gui"]
-categories  = ["development-tools", "gui"]
-readme      = "README.md"
-resolver    = "3"
+name         = "rocketmq-dashboard-gpui"
+version      = "0.1.0"
+description  = "RocketMQ-Rust Dashboard Desktop App (GPUI)"
+authors      = ["mxsm <mxsm@apache.org>"]
+edition      = "2024"
+rust-version = "1.95.0"
+license      = "Apache-2.0"
+publish      = false
+keywords     = ["dashboard", "rocketmq", "gpui", "gui"]
+categories   = ["development-tools", "gui"]
+readme       = "README.md"
+resolver     = "3"
 
 [dependencies]
 # Shared common code
-rocketmq-dashboard-common = { path = "../rocketmq-dashboard-common" }
-rocketmq-observability = { path = "../../rocketmq-observability" }
+rocketmq-dashboard-common = { version = "1.0.0", path = "../rocketmq-dashboard-common" }
+rocketmq-observability = { version = "1.0.0", path = "../../rocketmq-observability" }
 
 # GPUI framework
 gpui           = { version = "0.2.2" }
-gpui-component = { version = "0.5.0" }
+gpui-component = { version = "0.5.1" }
 # Async runtime
 tokio        = { version = "1.49", features = ["full"] }
 tokio-util   = { version = "0.7.18", features = ["full"] }
@@ -52,9 +53,9 @@ serde              = { version = "1.0", features = ["derive"] }
 serde_json         = "1.0"
 serde_yaml         = "0.9"
 serde_json_any_key = "2.0.0"
-anyhow             = "1.0.100"
+anyhow             = "1.0.103"
 bytes              = "1.11.0"
-rand               = "0.9.2"
+rand               = "0.9.3"
 num_cpus           = "1.17"
 
 config = "0.15.19"
@@ -67,4 +68,4 @@ mockall = "0.14.0"
 cfg-if  = "1.0.4"
 
 [build-dependencies]
-anyhow = "1.0.100"
+anyhow = "1.0.103"

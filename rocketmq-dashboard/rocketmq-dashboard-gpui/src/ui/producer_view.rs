@@ -599,17 +599,17 @@ impl ProducerView {
 
     /// Render just the modal content without backdrop (for use in render_page)
     fn render_modal_content_only(&self, cx: &mut Context<Self>) -> Div {
-        if let Some(index) = self.modal_producer_index {
-            if let Some(client) = self.producer_clients.get(index) {
-                return div()
-                    .absolute()
-                    .inset_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .bg(rgba(0x000000AA))
-                    .child(self.render_modal_content(client, cx));
-            }
+        if let Some(index) = self.modal_producer_index
+            && let Some(client) = self.producer_clients.get(index)
+        {
+            return div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(rgba(0x000000AA))
+                .child(self.render_modal_content(client, cx));
         }
         div()
     }
@@ -654,12 +654,7 @@ impl ProducerView {
                             .justify_center()
                             .rounded(px(12.0))
                             .bg(client.icon_bg)
-                            .child(
-                                div()
-                                    .text_2xl()
-                                    .text_color(client.icon_color)
-                                    .child("\u{1F4E4}"), // send icon emoji ✈️
-                            ),
+                            .child(div().text_2xl().text_color(client.icon_color).child("\u{1F4E4}")), // send icon emoji ✈️
                     )
                     .child(
                         div()
@@ -677,10 +672,7 @@ impl ProducerView {
                                 div()
                                     .text_sm()
                                     .text_color(rgb(0x86868B))
-                                    .child(format!(
-                                        "{} / {}",
-                                        client.producer_group, client.topic
-                                    )),
+                                    .child(format!("{} / {}", client.producer_group, client.topic)),
                             ),
                     ),
             )

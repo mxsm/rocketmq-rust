@@ -114,21 +114,22 @@ class StableSurfaceGuardTests(unittest.TestCase):
 
 
 class RepositoryStableSurfaceContracts(unittest.TestCase):
-    def test_remoting_and_controller_no_longer_enable_retired_features(self) -> None:
+    def test_transport_and_controller_no_longer_enable_retired_features(self) -> None:
         sources = {
-            "remoting crate": REPO_ROOT / "rocketmq-remoting" / "src" / "lib.rs",
-            "remoting integration test": REPO_ROOT / "rocketmq-remoting" / "tests" / "processor_v2_tests.rs",
-            "remoting example": REPO_ROOT / "rocketmq-remoting" / "examples" / "processor_v2_complete_example.rs",
+            "transport crate": REPO_ROOT / "rocketmq-transport" / "src" / "lib.rs",
+            "transport processor": REPO_ROOT / "rocketmq-transport" / "src" / "runtime" / "processor_v2.rs",
+            "transport integration test": REPO_ROOT / "rocketmq-transport" / "tests" / "processor_v2.rs",
             "controller crate": REPO_ROOT / "rocketmq-controller" / "src" / "lib.rs",
         }
         for label, path in sources.items():
             with self.subTest(label=label):
+                self.assertTrue(path.is_file(), path)
                 source = path.read_text(encoding="utf-8")
                 self.assertNotIn("#![feature(impl_trait_in_assoc_type)]", source)
                 self.assertNotIn("#![feature(arbitrary_self_types)]", source)
 
-    def test_remoting_builtin_processors_keep_concrete_zero_allocation_futures(self) -> None:
-        source = (REPO_ROOT / "rocketmq-remoting" / "src" / "runtime" / "processor_v2.rs").read_text(
+    def test_transport_builtin_processors_keep_concrete_zero_allocation_futures(self) -> None:
+        source = (REPO_ROOT / "rocketmq-transport" / "src" / "runtime" / "processor_v2.rs").read_text(
             encoding="utf-8"
         )
         self.assertEqual(source.count("= Ready<RocketMQResult<Option<RemotingCommand>>>"), 3)
@@ -145,13 +146,15 @@ class RepositoryStableSurfaceContracts(unittest.TestCase):
         self.assertIn("(task_fn)(token).await", scheduler)
 
     def test_arc_mut_compatibility_no_longer_requires_nightly(self) -> None:
-        crate_root = (REPO_ROOT / "rocketmq" / "src" / "lib.rs").read_text(encoding="utf-8")
-        arc_mut = (REPO_ROOT / "rocketmq" / "src" / "arc_mut.rs").read_text(encoding="utf-8")
         retired_benchmark = REPO_ROOT / "rocketmq-broker" / "benches" / "syncunsafecell_mut.rs"
-        self.assertNotIn("#![feature(sync_unsafe_cell)]", crate_root)
-        self.assertNotIn("std::cell::SyncUnsafeCell", arc_mut)
-        self.assertIn("Arc<RwLock<T>>", arc_mut)
+
+        self.assertFalse((REPO_ROOT / "rocketmq").exists())
         self.assertFalse(retired_benchmark.exists())
+        for crate in REPO_ROOT.glob("rocketmq-*"):
+            for source_path in crate.rglob("*.rs"):
+                source = source_path.read_text(encoding="utf-8")
+                self.assertNotIn("#![feature(sync_unsafe_cell)]", source, source_path)
+                self.assertNotIn("std::cell::SyncUnsafeCell", source, source_path)
 
 
 if __name__ == "__main__":

@@ -53,7 +53,7 @@ The crate keeps Java-facing names for common concepts while exposing Rust async 
 
 ## Requirements
 
-- Rust `1.85.0` or newer.
+- Stable Rust `1.95.0`, using the pinned repository toolchain.
 - A reachable RocketMQ NameServer for real producer, consumer, and admin traffic.
 - A broker with the target topics configured, unless your scenario creates topics through admin APIs.
 

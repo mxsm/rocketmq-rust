@@ -54,9 +54,8 @@ storage、snapshot，以及可选 metrics exporter。
 
 ## 环境要求
 
-- workspace 最低 Rust 版本为 `1.85.0`。
-- 请使用仓库根目录的 [`../rust-toolchain.toml`](../rust-toolchain.toml) 指定的 toolchain 构建。该 crate 当前启用了
-  nightly Rust feature。
+- workspace 最低 Rust 版本和仓库构建工具链均为 stable Rust `1.95.0`。
+- 请使用仓库根目录的 [`../rust-toolchain.toml`](../rust-toolchain.toml) 指定的固定 stable toolchain 构建。
 - 启动 Controller 二进制前，必须设置 `ROCKETMQ_HOME` 或在配置文件中设置 `rocketmqHome`。
 - 默认 feature 组合下请使用 `storageBackend = "File"`。只有在启用 `storage-rocksdb` feature 后，才使用
   `storageBackend = "RocksDB"`。
