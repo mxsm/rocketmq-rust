@@ -221,14 +221,27 @@ impl TlsServerRuntime {
         stream: TcpStream,
         remote_addr: SocketAddr,
     ) -> Option<NegotiatedConnection> {
-        let is_tls_handshake = match peek_tls_handshake(&stream).await {
-            Ok(value) => value,
+        let is_tls_handshake = self.detect_tls_handshake(&stream, remote_addr).await?;
+        self.negotiate_detected_connection(stream, remote_addr, is_tls_handshake)
+            .await
+    }
+
+    pub(crate) async fn detect_tls_handshake(&self, stream: &TcpStream, remote_addr: SocketAddr) -> Option<bool> {
+        match peek_tls_handshake(stream).await {
+            Ok(value) => Some(value),
             Err(error) => {
                 warn!("failed to inspect TLS handshake byte from {remote_addr}: {error}");
-                return None;
+                None
             }
-        };
+        }
+    }
 
+    pub(crate) async fn negotiate_detected_connection(
+        &self,
+        stream: TcpStream,
+        remote_addr: SocketAddr,
+        is_tls_handshake: bool,
+    ) -> Option<NegotiatedConnection> {
         match self.mode {
             TlsMode::Disabled => {
                 if is_tls_handshake {
