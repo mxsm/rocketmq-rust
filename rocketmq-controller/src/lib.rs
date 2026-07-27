@@ -117,6 +117,7 @@ pub use manager::replicas_info_manager::ReplicasInfoManager;
 pub use manager::ControllerManager;
 pub use metrics::controller_metrics_constant::*;
 pub use metrics::controller_metrics_manager::ControllerMetricsManager;
+pub use openraft::validate_snapshot_payload;
 pub use openraft::GrpcRaftService;
 pub use openraft::LogStore;
 pub use openraft::RaftNodeManager;

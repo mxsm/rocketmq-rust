@@ -346,10 +346,9 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         }
 
         // SAFETY: the caller holds `write_state`, which is the only mapped-file mutation
-        // sequencer. The checked target range is live and in bounds, and the staging allocation
-        // cannot overlap the mmap allocation.
+        // sequencer. The staging allocation cannot overlap the mapped allocation.
         unsafe {
-            std::ptr::copy_nonoverlapping(data.as_ptr(), mapped_memory.as_mut_ptr().add(start), data.len());
+            mapped_memory.copy_from_slice(start, data)?;
         }
         Ok(())
     }

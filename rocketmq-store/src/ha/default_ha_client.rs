@@ -322,7 +322,18 @@ impl HAClient for DefaultHAClient {
 
                             // use reader/writer to send errors back to main loop
                             let (err_tx, mut err_rx) = mpsc::channel::<HAClientError>(HA_ERROR_CHANNEL_CAPACITY);
-                            let connection_group = service_loop_group.child("ha-client-connection");
+                            let connection_group =
+                                match service_loop_group.try_child_lease("ha-client-connection") {
+                                    Ok(connection_group) => connection_group,
+                                    Err(error) => {
+                                        warn!("HAClient connection task group not started: {error}");
+                                        client.change_current_state(HAConnectionState::Ready).await;
+                                        if client.wait_reconnect_delay().await {
+                                            break;
+                                        }
+                                        continue;
+                                    }
+                                };
 
                             // reader task: read data from master and dispatch to message store
                             let reader_shutdown = client.shutdown_notify.clone();

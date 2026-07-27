@@ -154,6 +154,11 @@ impl<T: StorageBackend + ?Sized> StorageBackendExt for T {}
 
 /// Create a storage backend based on configuration
 pub async fn create_storage(config: StorageConfig, storage_io: BlockingExecutor) -> Result<SharedStorageBackend> {
+    // The uniform factory contract carries the executor even when the selected feature profile
+    // contains no backend that performs blocking I/O.
+    #[cfg(not(feature = "storage-rocksdb"))]
+    let _ = storage_io;
+
     match config {
         #[cfg(feature = "storage-rocksdb")]
         StorageConfig::RocksDB { path } => {

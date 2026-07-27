@@ -28,7 +28,7 @@ fn tui_facade_does_not_reach_into_cli_modules() {
         std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/commands.rs")).expect("read src/commands.rs");
 
     assert!(
-        facade_rs.contains("rocketmq_admin_core::core::"),
+        facade_rs.contains("rocketmq_admin_core::client_adapter::"),
         "TuiAdminFacade should be backed by admin-core DTOs and services"
     );
     assert!(

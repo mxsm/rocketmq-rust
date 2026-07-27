@@ -294,14 +294,27 @@ mod tests {
         let mut context = DefaultAuthenticationContext::new();
         context.set_username(CheetahString::from("unknown"));
 
-        let result = handler.handle(&context).await;
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        // The error message includes "Failed to get user: User not found: unknown"
+        let error = handler
+            .handle(&context)
+            .await
+            .expect_err("unknown user must be rejected");
+        let AuthError::Operation { operation, source } = &error else {
+            panic!("user lookup failure must preserve its typed operation source: {error:?}");
+        };
+        assert_eq!(*operation, "load authentication user");
+        let source = source
+            .downcast_ref::<RocketMQError>()
+            .expect("metadata-provider error must remain typed");
         assert!(
-            err_msg.contains("unknown"),
-            "Expected error message to contain 'unknown', got: {}",
-            err_msg
+            matches!(
+                source,
+                RocketMQError::Authentication(AuthError::UserNotFound(username)) if username == "unknown"
+            ),
+            "unexpected user lookup source: {source:?}"
+        );
+        assert!(
+            !error.to_string().contains("unknown"),
+            "top-level error must remain redacted"
         );
     }
 

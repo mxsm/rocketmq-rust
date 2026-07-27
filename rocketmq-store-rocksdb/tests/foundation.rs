@@ -12,7 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::env;
+use std::io::BufRead;
+use std::io::BufReader;
+use std::io::Write;
 use std::path::PathBuf;
+use std::process::Command;
+use std::process::Stdio;
+use std::sync::mpsc;
+use std::time::Duration;
 
 use rocketmq_store_rocksdb::column_family::RocksDbColumnFamily;
 use rocketmq_store_rocksdb::config::RocksDbConfig;
@@ -20,6 +28,9 @@ use rocketmq_store_rocksdb::config::RocksDbConfigSource;
 use rocketmq_store_rocksdb::store::KeyValueStore;
 use rocketmq_store_rocksdb::store::RocksDbStore;
 use tempfile::TempDir;
+
+const WAL_CRASH_ROOT_ENV: &str = "ROCKETMQ_ROCKSDB_WAL_CRASH_ROOT";
+const WAL_SYNCED_ACK: &str = "ROCKETMQ_ROCKSDB_WAL_SYNCED";
 
 struct TestConfigSource {
     root: PathBuf,
@@ -110,5 +121,93 @@ fn native_store_snapshot_and_reopen_preserve_column_family_data() {
             .expect("read reopened store")
             .as_deref(),
         Some(b"value".as_slice())
+    );
+}
+
+#[test]
+#[ignore = "subprocess helper; the parent test terminates it after the WAL is synchronized"]
+fn synchronized_wal_crash_writer_helper() {
+    let path = env::var_os(WAL_CRASH_ROOT_ENV).expect("WAL crash root");
+    let config = RocksDbConfig {
+        enabled: true,
+        path: PathBuf::from(path),
+        wal_enabled: true,
+        sync_write: false,
+        manual_wal_flush: true,
+        ..RocksDbConfig::default()
+    };
+    let store = RocksDbStore::open(config).expect("open crash-writer RocksDB");
+    store
+        .put_cf(RocksDbColumnFamily::Default.name(), b"wal-key", b"wal-value")
+        .expect("write WAL-backed value");
+    store.flush_wal(true).expect("synchronize WAL");
+    println!("{WAL_SYNCED_ACK}");
+    std::io::stdout().flush().expect("flush WAL acknowledgement");
+    loop {
+        std::thread::park();
+    }
+}
+
+#[test]
+fn synchronized_wal_recovers_after_process_termination() {
+    let root = TempDir::new().expect("create WAL crash root");
+    let database_path = root.path().join("rocksdb");
+    let executable = env::current_exe().expect("resolve foundation test executable");
+    let mut child = Command::new(executable)
+        .args([
+            "--exact",
+            "synchronized_wal_crash_writer_helper",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(WAL_CRASH_ROOT_ENV, &database_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("spawn WAL crash writer");
+    let stdout = child.stdout.take().expect("capture WAL crash writer stdout");
+    let (sender, receiver) = mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            if sender.send(line).is_err() {
+                break;
+            }
+        }
+    });
+
+    loop {
+        match receiver.recv_timeout(Duration::from_secs(30)) {
+            Ok(Ok(line)) if line.contains(WAL_SYNCED_ACK) => break,
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                let _ = child.kill();
+                panic!("read WAL crash-writer output: {error}");
+            }
+            Err(error) => {
+                let _ = child.kill();
+                panic!("WAL crash writer did not acknowledge durable WAL: {error}");
+            }
+        }
+    }
+    child.kill().expect("terminate WAL crash writer");
+    child.wait().expect("reap WAL crash writer");
+    reader.join().expect("join WAL output reader");
+
+    let config = RocksDbConfig {
+        enabled: true,
+        path: database_path,
+        wal_enabled: true,
+        sync_write: false,
+        manual_wal_flush: true,
+        ..RocksDbConfig::default()
+    };
+    let recovered = RocksDbStore::open_with_existing_column_families(config).expect("recover RocksDB from WAL");
+    assert_eq!(
+        recovered
+            .get_cf(RocksDbColumnFamily::Default.name(), b"wal-key")
+            .expect("read WAL-recovered value")
+            .as_deref(),
+        Some(b"wal-value".as_slice())
     );
 }

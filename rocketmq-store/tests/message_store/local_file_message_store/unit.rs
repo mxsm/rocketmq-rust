@@ -762,8 +762,9 @@ fn local_store_owned_wiring_does_not_retain_its_complete_root_handle() {
     assert!(wiring.contains("self.consume_queue_store.set_context(self.consume_queue_context());"));
     assert!(wiring.contains("TimerMessageStore::new_with_store_context("));
     assert!(wiring.contains("self.timer_store_context()"));
-    assert!(wiring.contains("DefaultHAService::new("));
+    assert!(wiring.contains("DefaultHAService::new_with_store_metrics("));
     assert!(wiring.contains("self.runtime_scope.clone()"));
+    assert!(wiring.contains("self.telemetry.store().clone()"));
     assert!(wiring.contains("PendingHAService::AutoSwitch"));
     assert!(wiring.contains("PendingHAService::Default"));
     assert!(wiring.contains("PendingHAService::Default(Box::new("));

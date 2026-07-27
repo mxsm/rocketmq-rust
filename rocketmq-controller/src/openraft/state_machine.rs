@@ -607,6 +607,19 @@ fn validate_snapshot_bytes(bytes: &[u8]) -> Result<SnapshotData, std::io::Error>
     Ok(data)
 }
 
+/// Validates a serialized controller snapshot without installing it.
+///
+/// The validator enforces the production size limit, schema, format version, required membership,
+/// and checksum. It is suitable for offline inspection and fuzzing because it never mutates live
+/// controller state.
+///
+/// # Errors
+///
+/// Returns [`std::io::ErrorKind::InvalidData`] when the payload violates any snapshot contract.
+pub fn validate_snapshot_payload(bytes: &[u8]) -> Result<(), std::io::Error> {
+    validate_snapshot_bytes(bytes).map(|_| ())
+}
+
 impl RaftSnapshotBuilder<TypeConfig> for StateMachine {
     async fn build_snapshot(&mut self) -> Result<Snapshot, std::io::Error> {
         let _state_guard = self.state_lock.lock().await;

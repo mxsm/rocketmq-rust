@@ -28,6 +28,7 @@ pub use grpc_server::GrpcRaftService;
 pub use log_store::LogStore;
 pub use network::NetworkFactory;
 pub use node::RaftNodeManager;
+pub use state_machine::validate_snapshot_payload;
 pub use state_machine::StateMachine;
 pub use state_machine::StateMachineReadView;
 pub use storage::Store;

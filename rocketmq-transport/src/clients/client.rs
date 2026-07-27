@@ -122,11 +122,14 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportConnectionHandler f
     ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         let cmd_handler = self.cmd_handler.clone();
         Box::pin(async move {
-            let Some((_, context)) = self.sessions.remove(&session.session_id()) else {
+            let Some(context) = self
+                .sessions
+                .get(&session.session_id())
+                .map(|entry| Arc::clone(entry.value()))
+            else {
                 return;
             };
             cmd_handler.process_message_received(&context, command).await;
-            self.sessions.insert(session.session_id(), context);
         })
     }
 

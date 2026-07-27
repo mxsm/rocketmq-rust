@@ -1,0 +1,80 @@
+# Copyright 2023 The RocketMQ Rust Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+[package]
+name = "rocketmq-rust-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+rust-version = "1.95.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+[features]
+default = []
+protocol_decode = ["dep:bytes", "dep:rocketmq-protocol"]
+raw_broker_config = ["dep:rocketmq-broker", "dep:serde_json", "pinned_openraft_runtime"]
+controller_snapshot = ["dep:rocketmq-controller", "pinned_openraft_runtime"]
+store_recovery_record = ["dep:bytes", "dep:rocketmq-store-local"]
+pinned_openraft_runtime = ["dep:openraft-macros", "dep:openraft-rt", "dep:openraft-rt-tokio"]
+
+[dependencies]
+bytes = { version = "1.12.1", optional = true }
+libfuzzer-sys = "0.4.12"
+# openraft 0.10.0-alpha.21 uses prerelease-compatible transitive ranges. Keep this standalone
+# workspace on the exact runtime and macro versions selected by the production workspace lockfile.
+openraft-macros = { version = "=0.10.0-alpha.21", optional = true }
+openraft-rt = { version = "=0.10.0-alpha.21", optional = true }
+openraft-rt-tokio = { version = "=0.10.0-alpha.21", optional = true }
+rocketmq-broker = { path = "../rocketmq-broker", optional = true }
+rocketmq-controller = { path = "../rocketmq-controller", default-features = false, features = ["storage-file"], optional = true }
+rocketmq-protocol = { path = "../rocketmq-protocol", optional = true }
+rocketmq-store-local = { path = "../rocketmq-store-local", optional = true }
+serde_json = { version = "1.0", optional = true }
+
+[[bin]]
+name = "protocol_decode"
+path = "fuzz_targets/protocol_decode.rs"
+test = false
+doc = false
+bench = false
+required-features = ["protocol_decode"]
+
+[[bin]]
+name = "raw_broker_config"
+path = "fuzz_targets/raw_broker_config.rs"
+test = false
+doc = false
+bench = false
+required-features = ["raw_broker_config"]
+
+[[bin]]
+name = "controller_snapshot"
+path = "fuzz_targets/controller_snapshot.rs"
+test = false
+doc = false
+bench = false
+required-features = ["controller_snapshot"]
+
+[[bin]]
+name = "store_recovery_record"
+path = "fuzz_targets/store_recovery_record.rs"
+test = false
+doc = false
+bench = false
+required-features = ["store_recovery_record"]
+
+[workspace]
+members = ["."]

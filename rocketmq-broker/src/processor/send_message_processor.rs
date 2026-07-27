@@ -1283,9 +1283,7 @@ fn map_store_api_error(error: rocketmq_store_api::StoreError) -> RocketMQError {
         (_, StoreErrorKind::Unsupported) => {
             RocketMQError::broker_operation_failed(operation_name, -1, "unsupported store operation")
         }
-        (_, StoreErrorKind::Internal) => {
-            RocketMQError::invariant_violated("store capability returned an internal failure")
-        }
+        (_, StoreErrorKind::Internal) => RocketMQError::internal(operation_name, error),
     }
 }
 
@@ -1890,21 +1888,28 @@ mod tests {
 
     #[test]
     fn broker_receive_spans_bind_remote_parent_before_instrumentation() {
-        let source = include_str!("send_message_processor.rs");
+        let source = include_str!("send_message_processor.rs").replace("\r\n", "\n");
+        let production = source
+            .split_once("#[cfg(test)]\nmod tests")
+            .map(|(production, _)| production)
+            .expect("SendMessageProcessor production section");
         let parent_with_handle = concat!("set_span_parent_from_properties", "_with_handle");
         let late_parent_with_handle = concat!("set_current_span_parent_from_properties", "_with_handle");
         let record_with_handle = concat!("record_message_properties", "_with_handle");
         let late_record_with_handle = concat!("record_current_message_properties", "_with_handle");
 
-        assert_eq!(source.matches("receive_span_with_remote_parent(request)").count(), 2);
-        assert_eq!(source.matches(parent_with_handle).count(), 1);
-        assert_eq!(source.matches(late_parent_with_handle).count(), 0);
-        assert_eq!(source.matches(record_with_handle).count(), 1);
-        assert_eq!(source.matches(late_record_with_handle).count(), 1);
-        assert!(!source.contains(concat!("set_current_span_parent_from_", "properties(")));
-        assert!(!source.contains(concat!("record_current_message_", "properties(")));
-        assert_eq!(source.matches("trace::broker::receive_send_span").count(), 1);
-        assert!(!source.contains("name = \"RocketMQ BROKER RECEIVE_SEND\""));
+        assert_eq!(
+            production.matches("receive_span_with_remote_parent(request)").count(),
+            2
+        );
+        assert_eq!(production.matches(parent_with_handle).count(), 1);
+        assert_eq!(production.matches(late_parent_with_handle).count(), 0);
+        assert_eq!(production.matches(record_with_handle).count(), 1);
+        assert_eq!(production.matches(late_record_with_handle).count(), 1);
+        assert!(!production.contains(concat!("set_current_span_parent_from_", "properties(")));
+        assert!(!production.contains(concat!("record_current_message_", "properties(")));
+        assert_eq!(production.matches("trace::broker::receive_send_span").count(), 1);
+        assert!(!production.contains("name = \"RocketMQ BROKER RECEIVE_SEND\""));
     }
 
     struct CapabilityStore {

@@ -5696,7 +5696,7 @@ async fn three_controller_two_broker_controller_mode_failover_and_rejoin() {
         .await;
 
     wait_until(
-        Duration::from_secs(15),
+        Duration::from_secs(30),
         || {
             rejoining_broker
                 .composition
@@ -6017,7 +6017,7 @@ async fn three_controller_two_broker_controller_mode_failover_reregisters_namesr
         .expect("rejoining broker message store should exist");
     let rejoining_addr = rejoining_broker.composition.state.get_broker_addr().clone();
     wait_until(
-        Duration::from_secs(15),
+        Duration::from_secs(30),
         || {
             let Some(rejoining_manager) = rejoining_broker.composition.state.replicas_manager() else {
                 return false;

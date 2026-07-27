@@ -130,9 +130,12 @@ impl EncodedFrame {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use bytes::BufMut;
     use bytes::Bytes;
     use bytes::BytesMut;
+    use cheetah_string::CheetahString;
 
     use super::EncodedFrame;
     use crate::protocol::header::client_request_header::GetRouteInfoRequestHeader;
@@ -191,5 +194,43 @@ mod tests {
         assert!(!header.is_empty());
         assert_eq!(encoded_body, body.as_ref());
         assert_eq!(frame.encoded_len(), prefix.len() + header.len() + encoded_body.len());
+    }
+
+    #[test]
+    fn encoded_frame_canonicalizes_ext_field_order_for_all_protocols() {
+        for serialize_type in [SerializeType::JSON, SerializeType::ROCKETMQ] {
+            let first = HashMap::from([
+                (
+                    CheetahString::from_static_str("zeta"),
+                    CheetahString::from_static_str("last"),
+                ),
+                (
+                    CheetahString::from_static_str("alpha"),
+                    CheetahString::from_static_str("first"),
+                ),
+            ]);
+            let second = HashMap::from([
+                (
+                    CheetahString::from_static_str("alpha"),
+                    CheetahString::from_static_str("first"),
+                ),
+                (
+                    CheetahString::from_static_str("zeta"),
+                    CheetahString::from_static_str("last"),
+                ),
+            ]);
+            let encode = |ext_fields| {
+                EncodedFrame::from_command(
+                    RemotingCommand::create_remoting_command(108)
+                        .set_opaque(76)
+                        .set_serialize_type(serialize_type)
+                        .set_ext_fields(ext_fields),
+                )
+                .expect("command should encode")
+                .into_bytes()
+            };
+
+            assert_eq!(encode(first), encode(second));
+        }
     }
 }

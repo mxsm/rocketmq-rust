@@ -24,8 +24,10 @@ use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use rocketmq_model::version::RocketMqVersion;
+use serde::ser::SerializeMap;
 use serde::Deserialize;
 use serde::Serialize;
+use serde::Serializer;
 
 use super::RemotingCommandType;
 use super::SerializeType;
@@ -42,6 +44,25 @@ pub const REMOTING_VERSION_KEY: &str = "rocketmq.remoting.version";
 
 static REQUEST_ID: std::sync::LazyLock<Arc<AtomicI32>> = std::sync::LazyLock::new(|| Arc::new(AtomicI32::new(0)));
 
+fn serialize_ext_fields<S>(
+    ext_fields: &Option<HashMap<CheetahString, CheetahString>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let Some(ext_fields) = ext_fields else {
+        return serializer.serialize_none();
+    };
+    let mut entries = ext_fields.iter().collect::<Vec<_>>();
+    entries.sort_unstable_by(|(left, _), (right, _)| left.as_str().cmp(right.as_str()));
+    let mut map = serializer.serialize_map(Some(entries.len()))?;
+    for (key, value) in entries {
+        map.serialize_entry(key, value)?;
+    }
+    map.end()
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct RemotingCommand {
     code: i32,
@@ -57,7 +78,7 @@ pub struct RemotingCommand {
     flag: i32,
     remark: Option<CheetahString>,
 
-    #[serde(rename = "extFields")]
+    #[serde(rename = "extFields", serialize_with = "serialize_ext_fields")]
     ext_fields: Option<HashMap<CheetahString, CheetahString>>,
 
     #[serde(skip)]
