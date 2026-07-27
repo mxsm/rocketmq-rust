@@ -16,6 +16,12 @@
 //!
 //! This crate intentionally has no RocketMQ Admin or mutation dependency.
 
+pub mod cleanup;
+pub mod consumer;
+pub mod evidence;
+pub mod producer;
+pub mod scenario;
+
 use std::env;
 use std::fmt;
 use std::fs;
@@ -38,6 +44,7 @@ pub const PROBE_GROUP_PREFIX: &str = "SRE_PROBE_G_";
 pub const MAX_MESSAGES_LIMIT: u16 = 100;
 pub const MAX_PAYLOAD_BYTES_LIMIT: u32 = 4_096;
 pub const MAX_DURATION_SECONDS_LIMIT: u16 = 300;
+pub const MAX_MESSAGES_PER_SECOND_LIMIT: u16 = 20;
 pub const MAX_SECRET_KEY_FILE_BYTES: usize = 65_536;
 const MAX_SECRET_KEY_FILE_BYTES_U64: u64 = 65_536;
 pub const PROBE_ACCESS_KEY_ENV: &str = "ROCKETMQ_SRE_PROBE_ACCESS_KEY";
@@ -176,6 +183,7 @@ where
 pub struct ProbeConfig {
     pub cluster_id: ClusterId,
     pub max_messages: u16,
+    pub max_messages_per_second: u16,
     pub max_payload_bytes: u32,
     pub max_duration_seconds: u16,
 }
@@ -191,8 +199,11 @@ pub struct ProbeIdentity {
 /// A validated Phase 00 probe plan.
 #[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
 pub struct ProbePlan {
+    pub cluster_id: ClusterId,
+    pub run_id: Uuid,
     pub identity: ProbeIdentity,
     pub max_messages: u16,
+    pub max_messages_per_second: u16,
     pub max_payload_bytes: u32,
     pub max_duration_seconds: u16,
     /// Topic provisioning is deliberately external because this crate has no
@@ -207,6 +218,8 @@ pub enum ProbeConfigError {
     MessagesOutOfRange,
     #[error("max_payload_bytes must be between 1 and {MAX_PAYLOAD_BYTES_LIMIT}")]
     PayloadOutOfRange,
+    #[error("max_messages_per_second must be between 1 and {MAX_MESSAGES_PER_SECOND_LIMIT}")]
+    RateOutOfRange,
     #[error("max_duration_seconds must be between 1 and {MAX_DURATION_SECONDS_LIMIT}")]
     DurationOutOfRange,
 }
@@ -224,22 +237,76 @@ impl ProbeConfig {
         if !(1..=MAX_PAYLOAD_BYTES_LIMIT).contains(&self.max_payload_bytes) {
             return Err(ProbeConfigError::PayloadOutOfRange);
         }
+        if !(1..=MAX_MESSAGES_PER_SECOND_LIMIT).contains(&self.max_messages_per_second) {
+            return Err(ProbeConfigError::RateOutOfRange);
+        }
         if !(1..=MAX_DURATION_SECONDS_LIMIT).contains(&self.max_duration_seconds) {
             return Err(ProbeConfigError::DurationOutOfRange);
         }
         let cluster = self.cluster_id.as_uuid().simple();
         let run = run_id.simple();
         Ok(ProbePlan {
+            cluster_id: self.cluster_id,
+            run_id,
             identity: ProbeIdentity {
                 topic: format!("{PROBE_TOPIC_PREFIX}{cluster}_{run}"),
                 producer_group: format!("{PROBE_GROUP_PREFIX}P_{cluster}_{run}"),
                 consumer_group: format!("{PROBE_GROUP_PREFIX}C_{cluster}_{run}"),
             },
             max_messages: self.max_messages,
+            max_messages_per_second: self.max_messages_per_second,
             max_payload_bytes: self.max_payload_bytes,
             max_duration_seconds: self.max_duration_seconds,
             requires_preprovisioned_topic: true,
         })
+    }
+}
+
+impl ProbePlan {
+    /// Replaces derived names with externally pre-provisioned probe resources.
+    ///
+    /// All names remain inside the dedicated probe namespaces. This supports
+    /// POP groups and short-retention Topics that must be provisioned outside
+    /// the probe because this crate has no Admin capability.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when any resource is outside the probe namespace.
+    pub fn with_preprovisioned_identity(mut self, identity: ProbeIdentity) -> Result<Self, ProbeIdentityError> {
+        identity.validate()?;
+        self.identity = identity;
+        Ok(self)
+    }
+}
+
+/// Dedicated resource namespace validation error.
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+pub enum ProbeIdentityError {
+    #[error("probe Topic must use the {PROBE_TOPIC_PREFIX} namespace")]
+    TopicOutsideNamespace,
+    #[error("probe producer group must use the {PROBE_GROUP_PREFIX} namespace")]
+    ProducerGroupOutsideNamespace,
+    #[error("probe consumer group must use the {PROBE_GROUP_PREFIX} namespace")]
+    ConsumerGroupOutsideNamespace,
+}
+
+impl ProbeIdentity {
+    /// Validates that no business Topic or Group can be selected.
+    ///
+    /// # Errors
+    ///
+    /// Returns the exact resource whose namespace is invalid.
+    pub fn validate(&self) -> Result<(), ProbeIdentityError> {
+        if !self.topic.starts_with(PROBE_TOPIC_PREFIX) {
+            return Err(ProbeIdentityError::TopicOutsideNamespace);
+        }
+        if !self.producer_group.starts_with(PROBE_GROUP_PREFIX) {
+            return Err(ProbeIdentityError::ProducerGroupOutsideNamespace);
+        }
+        if !self.consumer_group.starts_with(PROBE_GROUP_PREFIX) {
+            return Err(ProbeIdentityError::ConsumerGroupOutsideNamespace);
+        }
+        Ok(())
     }
 }
 
@@ -359,6 +426,7 @@ mod tests {
         let config = ProbeConfig {
             cluster_id: ClusterId::new(),
             max_messages: MAX_MESSAGES_LIMIT,
+            max_messages_per_second: MAX_MESSAGES_PER_SECOND_LIMIT,
             max_payload_bytes: MAX_PAYLOAD_BYTES_LIMIT,
             max_duration_seconds: MAX_DURATION_SECONDS_LIMIT,
         };
@@ -368,7 +436,30 @@ mod tests {
         assert!(plan.identity.topic.starts_with(PROBE_TOPIC_PREFIX));
         assert!(plan.identity.producer_group.starts_with(PROBE_GROUP_PREFIX));
         assert!(plan.identity.consumer_group.starts_with(PROBE_GROUP_PREFIX));
+        assert_eq!(plan.cluster_id, config.cluster_id);
+        assert_eq!(plan.run_id, Uuid::nil());
         assert!(plan.requires_preprovisioned_topic);
+    }
+
+    #[test]
+    fn rejects_business_resources_from_preprovisioned_overrides() {
+        let config = ProbeConfig {
+            cluster_id: ClusterId::new(),
+            max_messages: 1,
+            max_messages_per_second: 1,
+            max_payload_bytes: 1,
+            max_duration_seconds: 1,
+        };
+        let plan = config.plan(Uuid::nil()).expect("plan should validate");
+
+        assert_eq!(
+            plan.with_preprovisioned_identity(ProbeIdentity {
+                topic: "orders".to_owned(),
+                producer_group: "SRE_PROBE_G_P".to_owned(),
+                consumer_group: "SRE_PROBE_G_C".to_owned(),
+            }),
+            Err(ProbeIdentityError::TopicOutsideNamespace)
+        );
     }
 
     #[test]
@@ -376,10 +467,24 @@ mod tests {
         let config = ProbeConfig {
             cluster_id: ClusterId::new(),
             max_messages: MAX_MESSAGES_LIMIT + 1,
+            max_messages_per_second: 1,
             max_payload_bytes: 1,
             max_duration_seconds: 1,
         };
 
         assert_eq!(config.plan(Uuid::nil()), Err(ProbeConfigError::MessagesOutOfRange));
+    }
+
+    #[test]
+    fn rejects_an_unbounded_send_rate() {
+        let config = ProbeConfig {
+            cluster_id: ClusterId::new(),
+            max_messages: 1,
+            max_messages_per_second: MAX_MESSAGES_PER_SECOND_LIMIT + 1,
+            max_payload_bytes: 1,
+            max_duration_seconds: 1,
+        };
+
+        assert_eq!(config.plan(Uuid::nil()), Err(ProbeConfigError::RateOutOfRange));
     }
 }

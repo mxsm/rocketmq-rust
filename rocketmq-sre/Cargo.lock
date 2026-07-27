@@ -3528,6 +3528,7 @@ dependencies = [
 name = "rocketmq-sre-probe"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "rocketmq-client-rust",
  "rocketmq-error",
  "rocketmq-model",

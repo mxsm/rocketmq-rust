@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod rocketmq_driver;
+
 use std::env;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
@@ -32,17 +34,26 @@ use rocketmq_model::common::message::message_single::Message;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_sre_contracts::ClusterId;
+use rocketmq_sre_contracts::CorrelationId;
+use rocketmq_sre_contracts::TenantId;
 use rocketmq_sre_probe::ProbeAclConfig;
 use rocketmq_sre_probe::ProbeConfig;
+use rocketmq_sre_probe::ProbeIdentity;
 use rocketmq_sre_probe::ProbePlan;
+use rocketmq_sre_probe::evidence::capture_probe_evidence;
 use rocketmq_sre_probe::load_probe_acl_config;
+use rocketmq_sre_probe::scenario::ProbeScenario;
+use rocketmq_sre_probe::scenario::run_scenario;
 use thiserror::Error;
 use tokio::sync::Notify;
 use uuid::Uuid;
 
+use crate::rocketmq_driver::RocketMqScenarioDriver;
+
 const DEFAULT_CLUSTER_ID: &str = "00000000-0000-4000-8000-000000000001";
 const DEFAULT_RUN_ID: &str = "00000000-0000-0000-0000-000000000000";
 const DEFAULT_NAMESRV_ADDR: &str = "namesrv:9876";
+const DEFAULT_TENANT_ID: &str = "00000000-0000-4000-8000-000000000001";
 const PROBE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug)]
@@ -51,6 +62,7 @@ enum Command {
     Register,
     Send,
     Consume,
+    Run(ProbeScenario),
 }
 
 impl Command {
@@ -60,13 +72,17 @@ impl Command {
             Self::Register => "register",
             Self::Send => "send",
             Self::Consume => "consume",
+            Self::Run(scenario) => scenario.as_str(),
         }
     }
 }
 
 #[derive(Debug, Error)]
 enum ProbeRunError {
-    #[error("usage: rocketmq-sre-probe <plan|register|send|consume>")]
+    #[error(
+        "usage: rocketmq-sre-probe <plan|register|send|consume|run \
+         <send-consume-ack|proxy-path|transaction-commit|delayed-timer|pop-ack>>"
+    )]
     Usage,
     #[error("probe environment `{name}` is invalid")]
     InvalidEnvironment { name: &'static str },
@@ -80,6 +96,10 @@ enum ProbeRunError {
     Timeout,
     #[error("probe plan could not be encoded")]
     Encoding(#[from] serde_json::Error),
+    #[error("probe resource identity is invalid")]
+    InvalidIdentity(#[from] rocketmq_sre_probe::ProbeIdentityError),
+    #[error("probe Evidence could not be captured")]
+    Evidence(#[from] rocketmq_sre_probe::evidence::ProbeEvidenceError),
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -103,22 +123,36 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             shutdown_timeout: PROBE_SHUTDOWN_TIMEOUT,
         },
     );
-    let operation_result = runtime_owner.block_on(async {
-        match tokio::time::timeout(
-            operation_timeout,
-            run_command(command, Arc::clone(&client_runtime), plan, namesrv_addr, acl_config),
-        )
-        .await
-        {
-            Ok(result) => result,
-            Err(_) => Err(ProbeRunError::Timeout),
-        }
-    });
+    let operation_result = if matches!(command, Command::Run(_)) {
+        runtime_owner.block_on(run_command(
+            command,
+            Arc::clone(&client_runtime),
+            plan,
+            namesrv_addr,
+            acl_config,
+        ))
+    } else {
+        runtime_owner.block_on(async {
+            match tokio::time::timeout(
+                operation_timeout,
+                run_command(command, Arc::clone(&client_runtime), plan, namesrv_addr, acl_config),
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => Err(ProbeRunError::Timeout),
+            }
+        })
+    };
     let client_shutdown =
         runtime_owner.block_on(async { tokio::time::timeout(PROBE_SHUTDOWN_TIMEOUT, client_runtime.shutdown()).await });
     let runtime_shutdown = runtime_owner.shutdown_runtime_blocking();
 
-    let mut cleanup_partial = operation_result?;
+    let operation_result = operation_result?;
+    let mut cleanup_partial = operation_result.cleanup_partial;
+    if let Some(evidence) = operation_result.evidence {
+        println!("{}", serde_json::to_string(&evidence)?);
+    }
     cleanup_partial |= match client_shutdown {
         Ok(report) => {
             let unhealthy = !report.is_healthy();
@@ -145,11 +179,18 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 }
 
 fn parse_command() -> Result<Command, ProbeRunError> {
-    match env::args().nth(1).as_deref() {
+    let mut arguments = env::args().skip(1);
+    match arguments.next().as_deref() {
         Some("plan") => Ok(Command::Plan),
         Some("register") => Ok(Command::Register),
         Some("send") => Ok(Command::Send),
         Some("consume") => Ok(Command::Consume),
+        Some("run") => arguments
+            .next()
+            .ok_or(ProbeRunError::Usage)?
+            .parse()
+            .map(Command::Run)
+            .map_err(|_| ProbeRunError::Usage),
         _ => Err(ProbeRunError::Usage),
     }
 }
@@ -170,10 +211,29 @@ fn load_plan() -> Result<(ProbePlan, String), ProbeRunError> {
     let config = ProbeConfig {
         cluster_id,
         max_messages: parse_env("ROCKETMQ_SRE_PROBE_MAX_MESSAGES", 10)?,
+        max_messages_per_second: parse_env("ROCKETMQ_SRE_PROBE_MAX_MESSAGES_PER_SECOND", 5)?,
         max_payload_bytes: parse_env("ROCKETMQ_SRE_PROBE_PAYLOAD_BYTES", 64)?,
         max_duration_seconds: parse_env("ROCKETMQ_SRE_PROBE_DURATION_SECONDS", 30)?,
     };
-    let plan = config.plan(run_id)?;
+    let mut plan = config.plan(run_id)?;
+    let topic = optional_env("ROCKETMQ_SRE_PROBE_TOPIC")?;
+    let producer_group = optional_env("ROCKETMQ_SRE_PROBE_PRODUCER_GROUP")?;
+    let consumer_group = optional_env("ROCKETMQ_SRE_PROBE_CONSUMER_GROUP")?;
+    match (topic, producer_group, consumer_group) {
+        (None, None, None) => {}
+        (Some(topic), Some(producer_group), Some(consumer_group)) => {
+            plan = plan.with_preprovisioned_identity(ProbeIdentity {
+                topic,
+                producer_group,
+                consumer_group,
+            })?;
+        }
+        _ => {
+            return Err(ProbeRunError::InvalidEnvironment {
+                name: "ROCKETMQ_SRE_PROBE_TOPIC/PRODUCER_GROUP/CONSUMER_GROUP",
+            });
+        }
+    }
     let namesrv_addr = env::var("ROCKETMQ_NAMESRV_ADDR").unwrap_or_else(|_| DEFAULT_NAMESRV_ADDR.to_owned());
     if namesrv_addr.trim().is_empty() {
         return Err(ProbeRunError::InvalidEnvironment {
@@ -181,6 +241,15 @@ fn load_plan() -> Result<(ProbePlan, String), ProbeRunError> {
         });
     }
     Ok((plan, namesrv_addr))
+}
+
+fn optional_env(name: &'static str) -> Result<Option<String>, ProbeRunError> {
+    match env::var(name) {
+        Ok(value) if !value.trim().is_empty() => Ok(Some(value)),
+        Ok(_) => Err(ProbeRunError::InvalidEnvironment { name }),
+        Err(env::VarError::NotPresent) => Ok(None),
+        Err(_) => Err(ProbeRunError::InvalidEnvironment { name }),
+    }
 }
 
 fn parse_env<T>(name: &'static str, default: T) -> Result<T, ProbeRunError>
@@ -194,19 +263,64 @@ where
     }
 }
 
+struct CommandResult {
+    cleanup_partial: bool,
+    evidence: Option<rocketmq_sre_contracts::EvidenceSnapshot>,
+}
+
 async fn run_command(
     command: Command,
     client_runtime: Arc<ClientRuntime>,
     plan: ProbePlan,
     namesrv_addr: String,
     acl_config: Option<ProbeAclConfig>,
-) -> Result<bool, ProbeRunError> {
+) -> Result<CommandResult, ProbeRunError> {
     println!("probe_stage command={} stage=operation status=begin", command.as_str());
     match command {
-        Command::Plan => Ok(false),
-        Command::Register => register(client_runtime, &plan, &namesrv_addr, acl_config.as_ref()).await,
-        Command::Send => send(client_runtime, &plan, &namesrv_addr, acl_config.as_ref()).await,
-        Command::Consume => consume(client_runtime, &plan, &namesrv_addr, acl_config.as_ref()).await,
+        Command::Plan => Ok(legacy_result(false)),
+        Command::Register => register(client_runtime, &plan, &namesrv_addr, acl_config.as_ref())
+            .await
+            .map(legacy_result),
+        Command::Send => send(client_runtime, &plan, &namesrv_addr, acl_config.as_ref())
+            .await
+            .map(legacy_result),
+        Command::Consume => consume(client_runtime, &plan, &namesrv_addr, acl_config.as_ref())
+            .await
+            .map(legacy_result),
+        Command::Run(scenario) => {
+            let endpoint = if scenario == ProbeScenario::ProxyPath {
+                env::var("ROCKETMQ_SRE_PROBE_PROXY_ADDR").map_err(|_| ProbeRunError::InvalidEnvironment {
+                    name: "ROCKETMQ_SRE_PROBE_PROXY_ADDR",
+                })?
+            } else {
+                namesrv_addr
+            };
+            if endpoint.trim().is_empty() {
+                return Err(ProbeRunError::InvalidEnvironment {
+                    name: "ROCKETMQ_SRE_PROBE_PROXY_ADDR",
+                });
+            }
+            let mut driver = RocketMqScenarioDriver::new(client_runtime, endpoint, acl_config);
+            let result = run_scenario(&mut driver, &plan, scenario).await;
+            let tenant_id = env::var("ROCKETMQ_SRE_PROBE_TENANT_ID")
+                .unwrap_or_else(|_| DEFAULT_TENANT_ID.to_owned())
+                .parse::<TenantId>()
+                .map_err(|_| ProbeRunError::InvalidEnvironment {
+                    name: "ROCKETMQ_SRE_PROBE_TENANT_ID",
+                })?;
+            let evidence = capture_probe_evidence(tenant_id, CorrelationId::new(), &plan, &result)?;
+            Ok(CommandResult {
+                cleanup_partial: result.cleanup.partial,
+                evidence: Some(evidence),
+            })
+        }
+    }
+}
+
+const fn legacy_result(cleanup_partial: bool) -> CommandResult {
+    CommandResult {
+        cleanup_partial,
+        evidence: None,
     }
 }
 

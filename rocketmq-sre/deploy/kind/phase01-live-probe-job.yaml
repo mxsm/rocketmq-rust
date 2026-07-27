@@ -86,6 +86,7 @@ spec:
             - {name: ROCKETMQ_SRE_PROBE_CLUSTER_ID, value: "00000000-0000-4000-8000-000000000001"}
             - {name: ROCKETMQ_SRE_PROBE_RUN_ID, value: "00000000-0000-0000-0000-000000000000"}
             - {name: ROCKETMQ_SRE_PROBE_MAX_MESSAGES, value: "10"}
+            - {name: ROCKETMQ_SRE_PROBE_MAX_MESSAGES_PER_SECOND, value: "5"}
             - {name: ROCKETMQ_SRE_PROBE_PAYLOAD_BYTES, value: "64"}
             - {name: ROCKETMQ_SRE_PROBE_DURATION_SECONDS, value: "60"}
             - name: ROCKETMQ_SRE_PROBE_ACCESS_KEY

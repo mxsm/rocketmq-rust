@@ -54,6 +54,7 @@ function Assert-StaticContract {
         @{ Text = $manifest; Value = 'rocketmq-rust/fault-driver:local' }
         @{ Text = $manifest; Value = 'rocketmq-rust/sre-probe:phase00-local' }
         @{ Text = $manifest; Value = 'ROCKETMQ_SRE_PROBE_MAX_MESSAGES, value: "10"' }
+        @{ Text = $manifest; Value = 'ROCKETMQ_SRE_PROBE_MAX_MESSAGES_PER_SECOND, value: "5"' }
         @{ Text = $manifest; Value = 'ROCKETMQ_SRE_PROBE_PAYLOAD_BYTES, value: "64"' }
         @{ Text = $manifest; Value = 'ROCKETMQ_SRE_PROBE_DURATION_SECONDS, value: "60"' }
         @{ Text = $kindRunnerText; Value = "'sre-probe' = 'rocketmq-rust/sre-probe:phase00-local'" }

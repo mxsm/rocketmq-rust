@@ -24,6 +24,7 @@ rust-version.workspace = true
 description = "Bounded synthetic probe configuration for RocketMQ Rust AI SRE"
 
 [dependencies]
+chrono.workspace = true
 rocketmq-client-rust.workspace = true
 rocketmq-error.workspace = true
 rocketmq-model.workspace = true

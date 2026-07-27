@@ -210,6 +210,7 @@ function Assert-ProbeManifestBoundary {
         'rocketmq-rust/sre-probe:phase00-local',
         'SRE_PROBE_00000000000040008000000000000001_00000000000000000000000000000000',
         'ROCKETMQ_SRE_PROBE_MAX_MESSAGES, value: "10"',
+        'ROCKETMQ_SRE_PROBE_MAX_MESSAGES_PER_SECOND, value: "5"',
         'ROCKETMQ_SRE_PROBE_PAYLOAD_BYTES, value: "64"',
         'ROCKETMQ_SRE_PROBE_DURATION_SECONDS, value: "60"',
         'key: probe-secret-key'

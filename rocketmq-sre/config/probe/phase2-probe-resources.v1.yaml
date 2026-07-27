@@ -1,0 +1,39 @@
+schema_version: rocketmq.sre.probe-resources.v1
+provisioning: external
+retention_hours: 1
+hard_limits:
+  max_messages: 100
+  max_messages_per_second: 20
+  max_payload_bytes: 4096
+  max_duration_seconds: 300
+resources:
+  send-consume-ack:
+    topic: SRE_PROBE_PHASE2
+    producer_group: SRE_PROBE_G_P_PHASE2
+    consumer_group: SRE_PROBE_G_C_ACK
+    consumer_mode: push
+  proxy-path:
+    topic: SRE_PROBE_PHASE2
+    producer_group: SRE_PROBE_G_P_PROXY
+    consumer_group: SRE_PROBE_G_C_PROXY
+    consumer_mode: push
+  transaction-commit:
+    topic: SRE_PROBE_PHASE2
+    producer_group: SRE_PROBE_G_P_TX
+    consumer_group: SRE_PROBE_G_C_TX
+    consumer_mode: push
+  delayed-timer:
+    topic: SRE_PROBE_PHASE2
+    producer_group: SRE_PROBE_G_P_TIMER
+    consumer_group: SRE_PROBE_G_C_TIMER
+    consumer_mode: push
+  pop-ack:
+    topic: SRE_PROBE_PHASE2
+    producer_group: SRE_PROBE_G_P_POP
+    consumer_group: SRE_PROBE_G_C_POP
+    consumer_mode: pop
+    requires_preconfigured_request_mode: true
+cleanup:
+  probe_may_delete_topic: false
+  probe_may_delete_group: false
+  external_owner: rocketmq-platform
