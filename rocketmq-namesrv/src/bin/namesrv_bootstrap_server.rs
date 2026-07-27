@@ -42,9 +42,10 @@ use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ServiceLifecycle;
 use rocketmq_runtime::ServiceLifecycleState;
 use rocketmq_runtime::ShutdownReason;
+use rocketmq_security_api::SecurityBootstrap;
 use rocketmq_security_api::SecurityBootstrapConfig;
+use rocketmq_security_api::SecurityBootstrapOutcome;
 use rocketmq_security_api::SecurityBootstrapProfile;
-use rocketmq_security_api::ValidatedSecurityBootstrap;
 use rocketmq_transport::ServerConfig;
 use serde::Deserialize;
 use tracing::info;
@@ -130,18 +131,12 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     let process_telemetry =
         rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig::from_process_env("rocketmq-namesrv")
             .context("invalid NameServer process telemetry configuration")?;
-    let security_config =
+    let security_bootstrap =
         SecurityBootstrapConfig::from_env().context("failed to load NameServer security bootstrap configuration")?;
-    let controller_raft_bind_addr = controller_config
-        .as_ref()
-        .map(|config| resolve_controller_raft_bind_addr(config.local_raft_addr()))
-        .transpose()
-        .context("failed to resolve embedded Controller Raft listener address")?;
     let validated_security = validate_namesrv_security(
-        &security_config,
+        &security_bootstrap,
         &server_config,
         controller_config.as_ref(),
-        controller_raft_bind_addr,
         process_telemetry.prometheus_listener_addr(),
         lifecycle.config().probe_bind_addr,
     )
@@ -248,13 +243,15 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
 }
 
 fn validate_namesrv_security(
-    security_config: &SecurityBootstrapConfig,
+    security_bootstrap: &SecurityBootstrap,
     server_config: &ServerConfig,
     controller_config: Option<&ControllerConfig>,
-    controller_raft_bind_addr: Option<SocketAddr>,
     prometheus_bind_addr: Option<SocketAddr>,
     probe_bind_addr: Option<SocketAddr>,
-) -> Result<ValidatedSecurityBootstrap> {
+) -> Result<SecurityBootstrapOutcome> {
+    if !security_bootstrap.is_enabled() {
+        return security_bootstrap.validate(&[]).map_err(anyhow::Error::from);
+    }
     let bind_ip = server_config
         .bind_address
         .parse::<IpAddr>()
@@ -263,8 +260,10 @@ fn validate_namesrv_security(
     let mut listeners = vec![SocketAddr::new(bind_ip, listen_port)];
     if let Some(controller_config) = controller_config {
         listeners.push(controller_config.listen_addr);
-        listeners
-            .push(controller_raft_bind_addr.context("embedded Controller Raft listener address must be resolved")?);
+        listeners.push(
+            resolve_controller_raft_bind_addr(controller_config.local_raft_addr())
+                .context("failed to resolve embedded Controller Raft listener address")?,
+        );
     }
     if let Some(prometheus_bind_addr) = prometheus_bind_addr {
         listeners.push(prometheus_bind_addr);
@@ -272,21 +271,26 @@ fn validate_namesrv_security(
     if let Some(probe_bind_addr) = probe_bind_addr {
         listeners.push(probe_bind_addr);
     }
-    security_config.validate(&listeners).map_err(anyhow::Error::from)
+    security_bootstrap.validate(&listeners).map_err(anyhow::Error::from)
 }
 
-fn log_security_bootstrap(validated: ValidatedSecurityBootstrap) {
-    match validated.profile() {
-        SecurityBootstrapProfile::DevelopmentInsecureLoopback => tracing::warn!(
-            profile = validated.profile().as_str(),
-            listener_count = validated.listener_count(),
-            "NameServer development-insecure security profile is active; every listener is restricted to loopback"
-        ),
-        SecurityBootstrapProfile::SecureEnforced => info!(
-            profile = validated.profile().as_str(),
-            listener_count = validated.listener_count(),
-            "NameServer secure bootstrap completed before listener bind"
-        ),
+fn log_security_bootstrap(outcome: SecurityBootstrapOutcome) {
+    match outcome {
+        SecurityBootstrapOutcome::Disabled => {
+            tracing::warn!("NameServer security bootstrap is disabled because no security profile is configured")
+        }
+        SecurityBootstrapOutcome::Validated(validated) => match validated.profile() {
+            SecurityBootstrapProfile::DevelopmentInsecureLoopback => tracing::warn!(
+                profile = validated.profile().as_str(),
+                listener_count = validated.listener_count(),
+                "NameServer development-insecure security profile is active; every listener is restricted to loopback"
+            ),
+            SecurityBootstrapProfile::SecureEnforced => info!(
+                profile = validated.profile().as_str(),
+                listener_count = validated.listener_count(),
+                "NameServer secure bootstrap completed before listener bind"
+            ),
+        },
     }
 }
 
@@ -760,8 +764,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn disabled_security_bootstrap_allows_default_namesrv_listeners() {
+        let outcome = validate_namesrv_security(
+            &rocketmq_security_api::SecurityBootstrap::Disabled,
+            &ServerConfig::default(),
+            None,
+            None,
+            None,
+        )
+        .expect("disabled security bootstrap should not restrict NameServer listeners");
+
+        assert_eq!(outcome, rocketmq_security_api::SecurityBootstrapOutcome::Disabled);
+    }
+
+    #[test]
     fn security_bootstrap_precedes_namesrv_listener_bind() {
-        let security = SecurityBootstrapConfig::new(SecurityBootstrapProfile::DevelopmentInsecureLoopback);
+        let security = rocketmq_security_api::SecurityBootstrap::Enabled(SecurityBootstrapConfig::new(
+            SecurityBootstrapProfile::DevelopmentInsecureLoopback,
+        ));
         let mut server = ServerConfig {
             bind_address: "127.0.0.1".to_string(),
             listen_port: 9876,
@@ -773,18 +793,19 @@ mod tests {
             &server,
             None,
             None,
-            None,
             Some(SocketAddr::from(([127, 0, 0, 1], 8088))),
         )
         .expect("loopback-only NameServer bootstrap should pass");
 
         server.bind_address = "0.0.0.0".to_string();
-        assert!(validate_namesrv_security(&security, &server, None, None, None, None).is_err());
+        assert!(validate_namesrv_security(&security, &server, None, None, None).is_err());
     }
 
     #[test]
     fn development_security_rejects_public_prometheus_listener() {
-        let security = SecurityBootstrapConfig::new(SecurityBootstrapProfile::DevelopmentInsecureLoopback);
+        let security = rocketmq_security_api::SecurityBootstrap::Enabled(SecurityBootstrapConfig::new(
+            SecurityBootstrapProfile::DevelopmentInsecureLoopback,
+        ));
         let server = ServerConfig {
             bind_address: "127.0.0.1".to_string(),
             listen_port: 9876,
@@ -797,7 +818,6 @@ mod tests {
             None,
             None,
             Some(SocketAddr::from(([0, 0, 0, 0], 5557))),
-            None,
         )
         .is_err());
     }

@@ -113,6 +113,26 @@ class KubernetesAssetsGuardTests(unittest.TestCase):
         result = self.run_guard(expect_success=False)
         self.assertIn("missing security/topology contract - ALL", result.stderr)
 
+    def test_missing_security_bootstrap_environment_is_rejected(self) -> None:
+        expected_environment = (
+            ("ROCKETMQ_SECURITY_PROFILE", "secure-enforced"),
+            ("ROCKETMQ_SECURITY_TRUST_ANCHOR", "/var/run/secrets/rocketmq/ca.crt"),
+            ("ROCKETMQ_SECURITY_TLS_CERT", "/var/run/secrets/rocketmq/tls.crt"),
+            ("ROCKETMQ_SECURITY_TLS_KEY", "/var/run/secrets/rocketmq/tls.key"),
+            ("ROCKETMQ_SECURITY_SECRET_PROVIDER", "mounted-files"),
+            ("ROCKETMQ_SECURITY_ADMIN_IDENTITY", "/var/run/secrets/rocketmq/admin.identity"),
+            ("ROCKETMQ_SECURITY_REQUEST_POLICY", "/var/run/secrets/rocketmq/request-policy.json"),
+        )
+        for name, value in expected_environment:
+            self.mutate_text(
+                "distribution/kubernetes/base/manifest.yaml",
+                f'            - {{name: {name}, value: "{value}"}}\n',
+                "",
+            )
+        result = self.run_guard(expect_success=False)
+        for name, _ in expected_environment:
+            self.assertIn(name, result.stderr)
+
     def test_secure_overlay_placeholder_digest_is_rejected(self) -> None:
         self.mutate_text(
             "distribution/kubernetes/overlays/secure/kustomization.yaml",

@@ -35,9 +35,10 @@ use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ServiceLifecycle;
 use rocketmq_runtime::ShutdownReason;
+use rocketmq_security_api::SecurityBootstrap;
 use rocketmq_security_api::SecurityBootstrapConfig;
+use rocketmq_security_api::SecurityBootstrapOutcome;
 use rocketmq_security_api::SecurityBootstrapProfile;
-use rocketmq_security_api::ValidatedSecurityBootstrap;
 use rocketmq_store::MessageStoreConfig;
 #[cfg(test)]
 use rocketmq_transport::ServerConfig;
@@ -135,10 +136,10 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     process_telemetry.apply_to(&mut bootstrap_config.observability);
     bootstrap_config.logging.reload = logging_overrides.logging.reload;
 
-    let security_config =
+    let security_bootstrap =
         SecurityBootstrapConfig::from_env().context("failed to load broker security bootstrap configuration")?;
     let validated_security = validate_broker_security(
-        &security_config,
+        &security_bootstrap,
         broker_config,
         message_store_config,
         &bootstrap_config.observability,
@@ -209,12 +210,15 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
 }
 
 fn validate_broker_security(
-    security_config: &SecurityBootstrapConfig,
+    security_bootstrap: &SecurityBootstrap,
     broker_config: &BrokerConfig,
     message_store_config: &MessageStoreConfig,
     observability_config: &rocketmq_observability::ObservabilityConfig,
     probe_bind_addr: Option<SocketAddr>,
-) -> Result<ValidatedSecurityBootstrap> {
+) -> Result<SecurityBootstrapOutcome> {
+    if !security_bootstrap.is_enabled() {
+        return security_bootstrap.validate(&[]).map_err(anyhow::Error::from);
+    }
     let bind_ip = broker_config
         .broker_server_config
         .bind_address
@@ -248,7 +252,7 @@ fn validate_broker_security(
     if let Some(probe_bind_addr) = probe_bind_addr {
         listeners.push(probe_bind_addr);
     }
-    security_config.validate(&listeners).map_err(anyhow::Error::from)
+    security_bootstrap.validate(&listeners).map_err(anyhow::Error::from)
 }
 
 fn register_broker_release_identity(
@@ -277,18 +281,23 @@ fn register_broker_release_identity(
     }
 }
 
-fn log_security_bootstrap(validated: ValidatedSecurityBootstrap) {
-    match validated.profile() {
-        SecurityBootstrapProfile::DevelopmentInsecureLoopback => warn!(
-            profile = validated.profile().as_str(),
-            listener_count = validated.listener_count(),
-            "broker development-insecure security profile is active; every listener is restricted to loopback"
-        ),
-        SecurityBootstrapProfile::SecureEnforced => info!(
-            profile = validated.profile().as_str(),
-            listener_count = validated.listener_count(),
-            "broker secure bootstrap completed before listener bind"
-        ),
+fn log_security_bootstrap(outcome: SecurityBootstrapOutcome) {
+    match outcome {
+        SecurityBootstrapOutcome::Disabled => {
+            warn!("broker security bootstrap is disabled because no security profile is configured")
+        }
+        SecurityBootstrapOutcome::Validated(validated) => match validated.profile() {
+            SecurityBootstrapProfile::DevelopmentInsecureLoopback => warn!(
+                profile = validated.profile().as_str(),
+                listener_count = validated.listener_count(),
+                "broker development-insecure security profile is active; every listener is restricted to loopback"
+            ),
+            SecurityBootstrapProfile::SecureEnforced => info!(
+                profile = validated.profile().as_str(),
+                listener_count = validated.listener_count(),
+                "broker secure bootstrap completed before listener bind"
+            ),
+        },
     }
 }
 
@@ -563,8 +572,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn disabled_security_bootstrap_allows_default_broker_listeners() {
+        let broker = BrokerConfig::default();
+        let observability = build_broker_telemetry_bootstrap_config(&broker).observability;
+        let outcome = validate_broker_security(
+            &rocketmq_security_api::SecurityBootstrap::Disabled,
+            &broker,
+            &MessageStoreConfig::default(),
+            &observability,
+            None,
+        )
+        .expect("disabled security bootstrap should not restrict Broker listeners");
+
+        assert_eq!(outcome, rocketmq_security_api::SecurityBootstrapOutcome::Disabled);
+    }
+
+    #[test]
     fn security_bootstrap_precedes_broker_listener_bind() {
-        let security = SecurityBootstrapConfig::new(SecurityBootstrapProfile::DevelopmentInsecureLoopback);
+        let security = rocketmq_security_api::SecurityBootstrap::Enabled(SecurityBootstrapConfig::new(
+            SecurityBootstrapProfile::DevelopmentInsecureLoopback,
+        ));
         let mut broker = BrokerConfig {
             broker_server_config: ServerConfig {
                 bind_address: "127.0.0.1".to_string(),

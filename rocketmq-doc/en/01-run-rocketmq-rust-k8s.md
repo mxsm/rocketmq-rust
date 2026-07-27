@@ -153,10 +153,16 @@ validates the complete material set before starting its lifecycle listener.
 The `dev-single` Kubernetes profile remains secure because Pod listeners bind
 non-loopback addresses.
 
-For a process run directly on a developer workstation, insecure startup must be
-selected explicitly and every configured listener, including the health
-listener, must use a loopback address. A Broker configuration must also set
-`haListenAddress = "127.0.0.1"`:
+For a process run directly outside the managed Kubernetes deployment, omitting
+all `ROCKETMQ_SECURITY_*` variables disables pre-bind security bootstrap and
+emits a startup warning. Configuring any bootstrap field without
+`ROCKETMQ_SECURITY_PROFILE` is rejected instead of being silently ignored.
+Production operators must select `secure-enforced` explicitly.
+
+To opt into loopback-only development security, select
+`development-insecure-loopback`. Every configured listener, including the
+health listener, must then use a loopback address. A Broker configuration must
+also set `haListenAddress = "127.0.0.1"`:
 
 ```powershell
 $env:ROCKETMQ_SECURITY_PROFILE = "development-insecure-loopback"
