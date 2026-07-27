@@ -756,6 +756,118 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/incidents/{id}/timeline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getIncidentTimeline"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/incidents/{id}/notes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["addIncidentNote"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/incidents/{id}/topology": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getIncidentTopology"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/integrations/alertmanager/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["ingestAlertmanagerEvents"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/integrations/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["ingestIntegrationEvent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/integrations/webhook/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["testNotificationWebhook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/clusters/{id}/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getClusterIncidentHealth"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1851,6 +1963,158 @@ export interface components {
             /** Format: date-time */
             start: string;
         };
+        AlertmanagerAlertRequest: {
+            /** @enum {string} */
+            status: "firing" | "resolved";
+            labels?: {
+                [key: string]: string;
+            };
+            annotations?: {
+                [key: string]: string;
+            };
+            /** Format: date-time */
+            startsAt: string;
+            endsAt?: string | null;
+            fingerprint?: string;
+        };
+        AlertmanagerWebhookRequest: {
+            /** @constant */
+            version: "4";
+            /** Format: uuid */
+            clusterId: string;
+            /** @enum {string} */
+            status: "firing" | "resolved";
+            receiver?: string;
+            groupKey?: string;
+            commonLabels?: {
+                [key: string]: string;
+            };
+            alerts: components["schemas"]["AlertmanagerAlertRequest"][];
+        };
+        /** @enum {string} */
+        IntegrationAlertSource: "kubernetes_event" | "health_probe" | "operator_query" | "inspection" | "deployment" | "synthetic_probe";
+        IntegrationEventRequest: {
+            /** Format: uuid */
+            cluster_id: string;
+            source: components["schemas"]["IntegrationAlertSource"];
+            source_event_id: string;
+            resource_kind: components["schemas"]["AlertEvent__ResourceKind"];
+            resource_key: string;
+            display_name?: string;
+            symptom_family: string;
+            severity: components["schemas"]["AlertEvent__AlertSeverity"];
+            status: components["schemas"]["AlertEvent__AlertStatus"];
+            summary: string;
+            labels?: {
+                [key: string]: string;
+            };
+            evidence_ids?: string[];
+            /** Format: uint64 */
+            sequence: number;
+            /** Format: date-time */
+            occurred_at: string;
+        };
+        AlertIngestionOutcome: {
+            /** @constant */
+            schema_version: "rocketmq-sre.alert-ingestion.v1";
+            /** Format: uuid */
+            incident_id: string;
+            alert_ids: string[];
+            created: boolean;
+            recurrence: boolean;
+            /** Format: uint32 */
+            occurrence_count: number;
+            owner: string;
+            severity: components["schemas"]["AlertEvent__AlertSeverity"];
+            partial: boolean;
+            warnings: string[];
+        };
+        IncidentTimelineActor: {
+            subject: string;
+            display_name?: string;
+        };
+        IncidentTimelineEvent: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            tenant_id: string;
+            /** Format: uuid */
+            cluster_id: string;
+            /** Format: uuid */
+            investigation_id?: string;
+            /** Format: uuid */
+            incident_id?: string;
+            event_type: string;
+            summary: string;
+            details: {
+                [key: string]: unknown;
+            };
+            /** Format: uuid */
+            correlation_id: string;
+            actor: components["schemas"]["IncidentTimelineActor"];
+            /** Format: date-time */
+            occurred_at: string;
+        };
+        IncidentNoteRequest: {
+            note: string;
+        };
+        IncidentTopologyNode: {
+            key: string;
+            kind: string;
+            display_name: string;
+            /** Format: uint32 */
+            alert_count: number;
+        };
+        IncidentTopologyEdge: {
+            from: string;
+            to: string;
+            relation: string;
+        };
+        IncidentTopologyView: {
+            /** @constant */
+            schema_version: "rocketmq-sre.incident-topology.v1";
+            /** Format: uuid */
+            incident_id: string;
+            nodes: components["schemas"]["IncidentTopologyNode"][];
+            edges: components["schemas"]["IncidentTopologyEdge"][];
+            partial: boolean;
+            warnings: string[];
+        };
+        ClusterIncidentHealth: {
+            /** @constant */
+            schema_version: "rocketmq-sre.cluster-incident-health.v1";
+            /** Format: uuid */
+            cluster_id: string;
+            /** @enum {string} */
+            status: "healthy" | "degraded" | "critical";
+            /** Format: uint32 */
+            active_incidents: number;
+            /** Format: uint32 */
+            critical_incidents: number;
+            /** Format: uint32 */
+            unassigned_incidents: number;
+            last_alert_at?: string | null;
+            /** Format: date-time */
+            observed_at: string;
+        };
+        NotificationTestRequest: {
+            /** Format: uuid */
+            cluster_id: string;
+            /** Format: uuid */
+            incident_id: string;
+            /** Format: uuid */
+            target_id: string;
+        };
+        NotificationTestResponse: {
+            /** @constant */
+            schema_version: "rocketmq-sre.notification-test.v1";
+            /** Format: uuid */
+            delivery_id: string;
+            queued: boolean;
+            sanitized_summary: string;
+            /** Format: uri */
+            deep_link: string;
+        };
     };
     responses: {
         /** @description Successful scoped response */
@@ -2749,6 +3013,170 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Phase2ContractManifest"];
+                };
+            };
+        };
+    };
+    getIncidentTimeline: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Append-only incident timeline */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IncidentTimelineEvent"][];
+                };
+            };
+        };
+    };
+    addIncidentNote: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IncidentNoteRequest"];
+            };
+        };
+        responses: {
+            /** @description Durable operator timeline note */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IncidentTimelineEvent"];
+                };
+            };
+        };
+    };
+    getIncidentTopology: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded topology projection for correlated resources */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IncidentTopologyView"];
+                };
+            };
+        };
+    };
+    ingestAlertmanagerEvents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlertmanagerWebhookRequest"];
+            };
+        };
+        responses: {
+            /** @description Idempotent alert ingestion outcomes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertIngestionOutcome"][];
+                };
+            };
+        };
+    };
+    ingestIntegrationEvent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IntegrationEventRequest"];
+            };
+        };
+        responses: {
+            /** @description Idempotent canonical event ingestion outcome */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertIngestionOutcome"];
+                };
+            };
+        };
+    };
+    testNotificationWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationTestRequest"];
+            };
+        };
+        responses: {
+            /** @description Queued notification target test */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationTestResponse"];
+                };
+            };
+        };
+    };
+    getClusterIncidentHealth: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Incident-derived cluster health */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClusterIncidentHealth"];
                 };
             };
         };

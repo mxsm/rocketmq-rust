@@ -62,6 +62,10 @@ impl WorkflowService {
         self.events.subscribe()
     }
 
+    pub(crate) fn publish_external(&self, event: WorkflowStreamEvent) {
+        self.events.publish(event);
+    }
+
     pub(crate) async fn create_conversation(
         &self,
         auth: &AuthContext,

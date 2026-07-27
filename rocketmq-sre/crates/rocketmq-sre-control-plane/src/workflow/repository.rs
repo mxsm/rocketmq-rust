@@ -534,7 +534,10 @@ impl PostgresRepository {
 
     pub(crate) async fn incident(&self, auth: &AuthContext, id: IncidentId) -> Result<IncidentView, ControlPlaneError> {
         let row = sqlx::query(
-            "SELECT id, tenant_id, cluster_id, investigation_id, title, status, created_at, updated_at
+            "SELECT id, tenant_id, cluster_id, investigation_id, title, resource,
+                    symptom_family, fingerprint, status, severity, owner_name,
+                    occurrence_count, last_alert_at, reopened_from_incident_id,
+                    created_at, updated_at
              FROM sre_incidents
              WHERE id = $1 AND tenant_id = $2",
         )
@@ -573,7 +576,10 @@ impl PostgresRepository {
         let limit = query.bounded_limit()?;
         let cursor = query.cursor_uuid()?;
         let rows = sqlx::query(
-            "SELECT i.id, i.tenant_id, i.cluster_id, i.title, i.status, i.created_at, i.updated_at
+            "SELECT i.id, i.tenant_id, i.cluster_id, i.title, i.resource,
+                    i.symptom_family, i.fingerprint, i.status, i.severity,
+                    i.owner_name, i.occurrence_count, i.last_alert_at,
+                    i.reopened_from_incident_id, i.created_at, i.updated_at
              FROM sre_incidents i
              WHERE i.tenant_id = $1 AND i.cluster_id = $2
                AND (
@@ -614,7 +620,10 @@ impl PostgresRepository {
     ) -> Result<IncidentView, ControlPlaneError> {
         let mut transaction = self.pool.begin().await?;
         let row = sqlx::query(
-            "SELECT id, tenant_id, cluster_id, investigation_id, title, status, created_at, updated_at
+            "SELECT id, tenant_id, cluster_id, investigation_id, title, resource,
+                    symptom_family, fingerprint, status, severity, owner_name,
+                    occurrence_count, last_alert_at, reopened_from_incident_id,
+                    created_at, updated_at
              FROM sre_incidents
              WHERE id = $1 AND tenant_id = $2
              FOR UPDATE",
@@ -714,7 +723,10 @@ impl PostgresRepository {
     ) -> Result<DiagnosisRevision, ControlPlaneError> {
         let mut transaction = self.pool.begin().await?;
         let row = sqlx::query(
-            "SELECT id, tenant_id, cluster_id, investigation_id, title, status, created_at, updated_at
+            "SELECT id, tenant_id, cluster_id, investigation_id, title, resource,
+                    symptom_family, fingerprint, status, severity, owner_name,
+                    occurrence_count, last_alert_at, reopened_from_incident_id,
+                    created_at, updated_at
              FROM sre_incidents
              WHERE id = $1 AND tenant_id = $2
              FOR UPDATE",
@@ -1848,11 +1860,29 @@ fn investigation_from_row(row: &PgRow) -> Result<Investigation, ControlPlaneErro
 }
 
 fn incident_from_row(row: &PgRow) -> Result<Incident, ControlPlaneError> {
+    let occurrence_count: i32 = row.try_get("occurrence_count")?;
     Ok(Incident {
         id: IncidentId::from_uuid(row.try_get("id")?),
         tenant_id: TenantId::from_uuid(row.try_get("tenant_id")?),
         cluster_id: ClusterId::from_uuid(row.try_get("cluster_id")?),
         title: row.try_get("title")?,
+        resource: row.try_get("resource")?,
+        symptom_family: row.try_get("symptom_family")?,
+        fingerprint: row.try_get("fingerprint")?,
+        severity: row
+            .try_get::<Option<String>, _>("severity")?
+            .map(|value| {
+                serde_json::from_value(serde_json::Value::String(value))
+                    .map_err(|_| ControlPlaneError::configuration("stored incident severity is invalid"))
+            })
+            .transpose()?,
+        owner: row.try_get("owner_name")?,
+        occurrence_count: u32::try_from(occurrence_count)
+            .map_err(|_| ControlPlaneError::configuration("stored incident occurrence count is negative"))?,
+        last_alert_at: row.try_get("last_alert_at")?,
+        reopened_from_incident_id: row
+            .try_get::<Option<Uuid>, _>("reopened_from_incident_id")?
+            .map(IncidentId::from_uuid),
         status: parse_incident_status(row.try_get("status")?)?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,

@@ -48,6 +48,7 @@ mod tests {
         "/v1/clusters/{id}/capabilities",
         "/v1/clusters/{id}/connector",
         "/v1/clusters/{id}/handshake",
+        "/v1/clusters/{id}/health",
         "/v1/clusters/{id}/inventory/latest",
         "/v1/clusters/{id}/offboard",
         "/v1/conversations",
@@ -59,6 +60,12 @@ mod tests {
         "/v1/incidents",
         "/v1/incidents/{id}",
         "/v1/incidents/{id}/diagnose",
+        "/v1/incidents/{id}/notes",
+        "/v1/incidents/{id}/timeline",
+        "/v1/incidents/{id}/topology",
+        "/v1/integrations/alertmanager/events",
+        "/v1/integrations/events",
+        "/v1/integrations/webhook/test",
         "/v1/inspections",
         "/v1/inspections/{id}",
         "/v1/inspections/{id}/report",
@@ -170,6 +177,53 @@ mod tests {
             schemas["EvidenceSnapshot__EvidenceExposure"]
                 .to_string()
                 .contains("runtime_diagnostics")
+        );
+    }
+
+    #[test]
+    fn alert_correlation_surface_has_typed_bounded_contracts() {
+        let document = document();
+        let paths = document["paths"].as_object().expect("OpenAPI paths must be an object");
+
+        assert_eq!(
+            paths["/v1/integrations/alertmanager/events"]["post"]["requestBody"]["content"]["application/json"]
+                ["schema"]["$ref"],
+            "#/components/schemas/AlertmanagerWebhookRequest"
+        );
+        assert_eq!(
+            paths["/v1/integrations/alertmanager/events"]["post"]["x-max-body-bytes"],
+            262_144
+        );
+        assert_eq!(
+            paths["/v1/integrations/events"]["post"]["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/IntegrationEventRequest"
+        );
+        assert_eq!(
+            paths["/v1/incidents/{id}/topology"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+                ["$ref"],
+            "#/components/schemas/IncidentTopologyView"
+        );
+        assert_eq!(
+            paths["/v1/clusters/{id}/health"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+                ["$ref"],
+            "#/components/schemas/ClusterIncidentHealth"
+        );
+
+        let schemas = document["components"]["schemas"]
+            .as_object()
+            .expect("OpenAPI schemas must be an object");
+        assert_eq!(
+            schemas["AlertmanagerWebhookRequest"]["properties"]["alerts"]["maxItems"],
+            128
+        );
+        assert_eq!(schemas["IncidentTopologyView"]["properties"]["nodes"]["maxItems"], 128);
+        assert_eq!(schemas["IncidentTopologyView"]["properties"]["edges"]["maxItems"], 256);
+        assert!(
+            !schemas["IntegrationAlertSource"]["enum"]
+                .as_array()
+                .expect("integration source enum")
+                .iter()
+                .any(|source| source == "alertmanager")
         );
     }
 }

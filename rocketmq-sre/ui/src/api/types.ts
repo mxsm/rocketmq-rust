@@ -228,9 +228,16 @@ export interface Incident {
   tenant_id: string;
   cluster_id: string;
   title: string;
+  resource?: string;
+  symptom_family?: string;
+  fingerprint?: string;
   status: IncidentStatus;
   summary?: string;
-  severity?: "info" | "warning" | "critical";
+  severity?: "info" | "warning" | "error" | "critical";
+  owner?: string;
+  occurrence_count: number;
+  last_alert_at?: string;
+  reopened_from_incident_id?: string;
   created_at: string;
   updated_at: string;
 }

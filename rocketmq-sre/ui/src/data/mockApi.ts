@@ -308,6 +308,8 @@ export function createMockSreApi(auth?: ApiRequestContext): SreApi {
           status: "new",
           summary: input.reason,
           severity: "warning",
+          owner: "unassigned",
+          occurrence_count: 0,
           created_at: now,
           updated_at: now,
         },

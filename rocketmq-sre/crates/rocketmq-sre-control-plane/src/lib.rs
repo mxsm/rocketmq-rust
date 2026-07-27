@@ -17,6 +17,7 @@
 //! Phase 00 owns cluster onboarding and compatibility history. It deliberately
 //! exposes no RocketMQ mutation, approval, or execution endpoint.
 
+mod alerting;
 mod api;
 mod assets;
 mod auth;

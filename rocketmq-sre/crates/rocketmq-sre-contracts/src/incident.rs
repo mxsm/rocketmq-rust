@@ -18,6 +18,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::AlertSeverity;
 use crate::ClusterId;
 use crate::ContractError;
 use crate::Hypothesis;
@@ -82,6 +83,22 @@ pub struct Incident {
     pub tenant_id: TenantId,
     pub cluster_id: ClusterId,
     pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symptom_family: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub severity: Option<AlertSeverity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    #[serde(default)]
+    pub occurrence_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_alert_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reopened_from_incident_id: Option<IncidentId>,
     pub status: IncidentStatus,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -103,6 +120,14 @@ impl Incident {
             tenant_id,
             cluster_id,
             title: title.into(),
+            resource: None,
+            symptom_family: None,
+            fingerprint: None,
+            severity: None,
+            owner: None,
+            occurrence_count: 0,
+            last_alert_at: None,
+            reopened_from_incident_id: None,
             status: IncidentStatus::New,
             created_at,
             updated_at: created_at,

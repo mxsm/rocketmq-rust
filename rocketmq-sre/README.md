@@ -9,7 +9,11 @@ Shadow evaluation, and the independent desktop AI SRE workspace.
 Phase 02 is being delivered in bounded increments. P2-01 adds typed alert,
 correlation, topology, forecast, simulation, readiness, notification,
 postmortem, and action-item contracts together with forward-only PostgreSQL
-migrations and a generated Phase 02 OpenAPI/UI contract.
+migrations and a generated Phase 02 OpenAPI/UI contract. P2-04 adds
+authenticated Alertmanager and provider-neutral event ingestion, deterministic
+cross-topology Incident correlation, owner routing, recurrence-safe terminal
+handling, operator notes, transactional notifications and durable SSE-backed
+timeline updates.
 
 ## Workspace boundaries
 
@@ -109,6 +113,7 @@ See:
 - [Phase 02 contracts and persistence](docs/phase02-contracts-and-persistence.md)
 - [Phase 02 diagnostic evidence sources](docs/phase02-evidence-sources.md)
 - [Phase 02 DiagnosticPack catalog](docs/phase02-diagnostic-packs.md)
+- [Phase 02 alert correlation and notification](docs/phase02-alert-correlation.md)
 - [Local stack](deploy/dev/README.md)
 
 ## Kind acceptance

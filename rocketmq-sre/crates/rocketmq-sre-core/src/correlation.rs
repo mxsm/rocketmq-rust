@@ -1,4 +1,4 @@
-// Copyright 2023 The RocketMQ Rust Authors
+// Copyright 2026 The RocketMQ Rust Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,14 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Provider-neutral coordination primitives for RocketMQ AI SRE.
+//! Deterministic, tenant-safe primitives used by the Phase 2 correlation engine.
 
-pub mod correlation;
-pub mod diagnostics;
-mod incident_manager;
-mod registry;
+mod fingerprint;
+mod graph;
+mod merge;
+mod window;
 
-pub use incident_manager::IncidentManager;
-pub use incident_manager::IncidentManagerError;
-pub use registry::DescriptorRegistry;
-pub use registry::RegistryError;
+pub use fingerprint::CorrelationFingerprintMaterial;
+pub use graph::ResourceGraph;
+pub use merge::CorrelationCandidate;
+pub use merge::select_candidate;
+pub use window::DEFAULT_CORRELATION_WINDOW_SECONDS;
+pub use window::bounded_window_start_epoch;

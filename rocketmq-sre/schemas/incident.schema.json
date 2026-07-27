@@ -1,5 +1,15 @@
 {
   "$defs": {
+    "AlertSeverity": {
+      "description": "Stable alert severity independent of an upstream provider's spelling.",
+      "enum": [
+        "info",
+        "warning",
+        "error",
+        "critical"
+      ],
+      "type": "string"
+    },
     "ClusterId": {
       "description": "Internal identifier for an onboarded cluster.",
       "format": "uuid",
@@ -122,6 +132,12 @@
       "format": "date-time",
       "type": "string"
     },
+    "fingerprint": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "hypotheses": {
       "items": {
         "$ref": "#/$defs/Hypothesis"
@@ -131,8 +147,59 @@
     "id": {
       "$ref": "#/$defs/IncidentId"
     },
+    "last_alert_at": {
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "occurrence_count": {
+      "default": 0,
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "owner": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reopened_from_incident_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/IncidentId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "resource": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "severity": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AlertSeverity"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "status": {
       "$ref": "#/$defs/IncidentStatus"
+    },
+    "symptom_family": {
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "tenant_id": {
       "$ref": "#/$defs/TenantId"

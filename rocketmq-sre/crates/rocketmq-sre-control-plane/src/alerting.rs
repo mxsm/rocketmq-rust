@@ -1,4 +1,4 @@
-// Copyright 2023 The RocketMQ Rust Authors
+// Copyright 2026 The RocketMQ Rust Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,14 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Provider-neutral coordination primitives for RocketMQ AI SRE.
+mod model;
+mod notification;
+mod repository;
+mod service;
 
-pub mod correlation;
-pub mod diagnostics;
-mod incident_manager;
-mod registry;
-
-pub use incident_manager::IncidentManager;
-pub use incident_manager::IncidentManagerError;
-pub use registry::DescriptorRegistry;
-pub use registry::RegistryError;
+pub(crate) use model::AlertIngestionOutcome;
+pub(crate) use model::AlertmanagerWebhook;
+pub(crate) use model::ClusterIncidentHealth;
+pub(crate) use model::IncidentNoteRequest;
+pub(crate) use model::IncidentTopologyView;
+pub(crate) use model::IntegrationEventRequest;
+pub(crate) use model::NotificationTestRequest;
+pub(crate) use model::NotificationTestResponse;
+pub(crate) use notification::NotificationOutboxWorker;
+pub(crate) use service::AlertingService;

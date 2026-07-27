@@ -50,6 +50,8 @@ use crate::HandshakeRequest;
 use crate::OffboardRequest;
 use crate::OnboardClusterRequest;
 use crate::PostgresRepository;
+use crate::alerting::AlertingService;
+use crate::alerting::NotificationOutboxWorker;
 use crate::assets::AssetTopologyService;
 use crate::assets::DashboardDeepLinkPolicy;
 use crate::auth::AuthService;
@@ -510,6 +512,7 @@ pub(crate) struct AppState {
     pub(crate) documents: CapabilityDocuments,
     pub(crate) internal_token: Arc<str>,
     pub(crate) auth: AuthService,
+    pub(crate) alerting: AlertingService,
     pub(crate) assets: AssetTopologyService,
     pub(crate) connector_channel: PostgresConnectorChannelService,
     pub(crate) evidence: EvidenceService,
@@ -560,6 +563,7 @@ fn build_routers_with_auth(
     model_gateway: ModelGatewayService,
     workflow: WorkflowService,
 ) -> Result<ControlPlaneRouters, ControlPlaneError> {
+    let alerting = AlertingService::new(repository.clone(), workflow.clone())?;
     let evidence = EvidenceService::new(repository.clone(), evidence_blobs);
     let assets = AssetTopologyService::new(repository.clone(), dashboard_links);
     let knowledge = KnowledgeService::new(repository.clone());
@@ -577,6 +581,7 @@ fn build_routers_with_auth(
         documents,
         internal_token,
         auth,
+        alerting,
         assets,
         connector_channel,
         evidence,
@@ -631,6 +636,23 @@ pub async fn run(config: ControlPlaneConfig, service_context: ChildServiceContex
         service_context.metadata_io().clone(),
     )?;
     let workflow = WorkflowService::new(repository.clone(), WorkflowEventBus::new(1_024));
+    let notification_worker = NotificationOutboxWorker::new(repository.clone())?;
+    let notification_tasks = service_context.scheduled_tasks("notification-outbox");
+    let mut notification_schedule =
+        ScheduledTaskConfig::fixed_rate_no_overlap("phase2-notification-outbox", std::time::Duration::from_secs(5));
+    notification_schedule.initial_delay = std::time::Duration::from_secs(2);
+    notification_schedule.max_run_time = Some(std::time::Duration::from_secs(20));
+    notification_schedule.shutdown_timeout = config.shutdown_timeout();
+    notification_tasks
+        .schedule_fixed_rate_no_overlap(notification_schedule, move || {
+            let worker = notification_worker.clone();
+            async move {
+                worker.run_due().await;
+            }
+        })
+        .map_err(|error| {
+            ControlPlaneError::configuration(format!("notification outbox worker could not be started: {error}"))
+        })?;
     let scheduler_evidence = EvidenceService::new(repository.clone(), evidence_blobs.clone());
     let scheduled_inspections = InspectionService::new(repository.clone(), workflow.clone(), scheduler_evidence)?;
     let scheduled_tasks = service_context.scheduled_tasks("inspection-scheduler");

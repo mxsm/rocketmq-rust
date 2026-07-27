@@ -18,6 +18,7 @@ use std::time::Duration;
 use axum::Json;
 use axum::Router;
 use axum::body::Body;
+use axum::extract::DefaultBodyLimit;
 use axum::extract::Path;
 use axum::extract::Query;
 use axum::extract::State;
@@ -52,6 +53,14 @@ use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
 use crate::ControlPlaneError;
+use crate::alerting::AlertIngestionOutcome;
+use crate::alerting::AlertmanagerWebhook;
+use crate::alerting::ClusterIncidentHealth;
+use crate::alerting::IncidentNoteRequest;
+use crate::alerting::IncidentTopologyView;
+use crate::alerting::IntegrationEventRequest;
+use crate::alerting::NotificationTestRequest;
+use crate::alerting::NotificationTestResponse;
 use crate::api::AppState;
 use crate::assets::AssetKey;
 use crate::assets::AssetKind;
@@ -107,6 +116,25 @@ pub(crate) fn public_routes() -> Router<AppState> {
         .route("/v1/incidents", get(list_incidents).post(create_incident))
         .route("/v1/incidents/{id}", get(get_incident))
         .route("/v1/incidents/{id}/diagnose", post(diagnose_incident))
+        .route("/v1/incidents/{id}/timeline", get(get_incident_timeline))
+        .route("/v1/incidents/{id}/topology", get(get_incident_topology))
+        .route(
+            "/v1/incidents/{id}/notes",
+            post(add_incident_note).layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route(
+            "/v1/integrations/alertmanager/events",
+            post(ingest_alertmanager).layer(DefaultBodyLimit::max(256 * 1024)),
+        )
+        .route(
+            "/v1/integrations/events",
+            post(ingest_integration_event).layer(DefaultBodyLimit::max(64 * 1024)),
+        )
+        .route(
+            "/v1/integrations/webhook/test",
+            post(test_notification_webhook).layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route("/v1/clusters/{id}/health", get(get_cluster_incident_health))
         .route("/v1/inspections", get(list_inspections).post(create_inspection))
         .route("/v1/inspections/{id}", get(get_inspection))
         .route("/v1/inspections/{id}/run", post(run_inspection))
@@ -606,6 +634,83 @@ async fn get_incident(
 ) -> Result<Json<IncidentView>, ControlPlaneError> {
     let auth = state.auth.authorize(&headers, None).await?;
     state.workflow.incident(&auth, parse_incident_id(&id)?).await.map(Json)
+}
+
+async fn ingest_alertmanager(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<AlertmanagerWebhook>,
+) -> Result<Json<Vec<AlertIngestionOutcome>>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
+    state
+        .alerting
+        .ingest_alertmanager(&auth, &request, correlation_id(&headers))
+        .await
+        .map(Json)
+}
+
+async fn ingest_integration_event(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<IntegrationEventRequest>,
+) -> Result<Json<AlertIngestionOutcome>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
+    state
+        .alerting
+        .ingest_integration_event(&auth, &request, correlation_id(&headers))
+        .await
+        .map(Json)
+}
+
+async fn get_incident_timeline(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<rocketmq_sre_contracts::TimelineEvent>>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, None).await?;
+    state.alerting.timeline(&auth, parse_incident_id(&id)?).await.map(Json)
+}
+
+async fn get_incident_topology(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<IncidentTopologyView>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, None).await?;
+    state.alerting.topology(&auth, parse_incident_id(&id)?).await.map(Json)
+}
+
+async fn add_incident_note(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<IncidentNoteRequest>,
+) -> Result<Json<rocketmq_sre_contracts::TimelineEvent>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, None).await?;
+    state
+        .alerting
+        .add_note(&auth, parse_incident_id(&id)?, &request, correlation_id(&headers))
+        .await
+        .map(Json)
+}
+
+async fn get_cluster_incident_health(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<ClusterIncidentHealth>, ControlPlaneError> {
+    let cluster_id = parse_cluster_id(&id)?;
+    let auth = state.auth.authorize(&headers, Some(cluster_id)).await?;
+    state.alerting.cluster_health(&auth, cluster_id).await.map(Json)
+}
+
+async fn test_notification_webhook(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<NotificationTestRequest>,
+) -> Result<Json<NotificationTestResponse>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
+    state.alerting.test_notification(&auth, &request).await.map(Json)
 }
 
 async fn diagnose_incident(
