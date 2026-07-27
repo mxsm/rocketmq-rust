@@ -12,10 +12,12 @@ global:
     fsGroup: 10001
 
 releaseIdentity:
-  # Required: exact non-zero 40-character source revision embedded in all five images.
-  commit: ""
-  # Required: stable 1..=63 character lowercase identifier for this rollout.
-  nonce: ""
+  # Local validation fixture. The reconciler replaces the complete identity from ReleaseState.
+  commit: "1111111111111111111111111111111111111111"
+  nonce: local-validation
+  configDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+  secretVersion: local-reference-1
+  storageGeneration: 1
 
 metrics:
   enabled: true

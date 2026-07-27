@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rocketmq.apache.org/schemas/local-image-provenance-v1.json",
+  "title": "RocketMQ Rust local image provenance",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "release_id",
+    "generated_at",
+    "source_commit",
+    "rust_toolchain",
+    "cargo_lock_sha256",
+    "feature_profile_sha256",
+    "config_digest",
+    "local_only",
+    "remote_push_performed",
+    "images"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "release_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "rust_toolchain": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "cargo_lock_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "feature_profile_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "config_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "local_only": {
+      "const": true
+    },
+    "remote_push_performed": {
+      "const": false
+    },
+    "images": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "service",
+          "reference",
+          "image_id",
+          "image_config_digest",
+          "binary_sha256",
+          "resolved_features",
+          "sbom_path",
+          "sbom_sha256"
+        ],
+        "properties": {
+          "service": {
+            "enum": [
+              "broker",
+              "namesrv",
+              "controller",
+              "proxy",
+              "mcp"
+            ]
+          },
+          "reference": {
+            "type": "string",
+            "pattern": "^rocketmq-rust/(broker|namesrv|controller|proxy|mcp):[0-9a-f]{7,12}$"
+          },
+          "image_id": {
+            "$ref": "#/$defs/digest"
+          },
+          "image_config_digest": {
+            "$ref": "#/$defs/digest"
+          },
+          "binary_sha256": {
+            "$ref": "#/$defs/sha256"
+          },
+          "resolved_features": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "sbom_path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sbom_sha256": {
+            "$ref": "#/$defs/sha256"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

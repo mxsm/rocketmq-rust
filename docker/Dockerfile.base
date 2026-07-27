@@ -19,6 +19,9 @@ ARG RUNTIME_IMAGE=docker.io/library/ubuntu:noble@sha256:4fbb8e6a8395de5a7550b335
 ARG DEBIAN_SNAPSHOT=20260717T000000Z
 ARG ROCKETMQ_RUST_TOOLCHAIN=1.95.0
 ARG SOURCE_REVISION
+ARG CARGO_LOCK_SHA256
+ARG PRODUCTION_FEATURE_PROFILE_SHA256
+ARG RELEASE_CONFIG_SHA256
 
 FROM ${BUILDER_IMAGE} AS ca-bundle
 
@@ -159,11 +162,11 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/workspace/target,sharing=locked <<EOF
 set -eux
-cargo build --locked --release --package rocketmq-broker --features production-observability --bin rocketmq-broker-rust
-cargo build --locked --release --package rocketmq-namesrv --features production-observability --bin rocketmq-namesrv-rust
-cargo build --locked --release --package rocketmq-controller --features production-observability --bin rocketmq-controller-rust
-cargo build --locked --release --package rocketmq-proxy --features production-observability --bin rocketmq-proxy-rust
-cargo build --locked --release --package rocketmq-mcp --features streamable-http,production-observability --bin rocketmq-mcp
+cargo build --locked --release --package rocketmq-broker --no-default-features --features production --bin rocketmq-broker-rust
+cargo build --locked --release --package rocketmq-namesrv --no-default-features --features production --bin rocketmq-namesrv-rust
+cargo build --locked --release --package rocketmq-controller --no-default-features --features production --bin rocketmq-controller-rust
+cargo build --locked --release --package rocketmq-proxy --no-default-features --features production --bin rocketmq-proxy-rust
+cargo build --locked --release --package rocketmq-mcp --no-default-features --features production --bin rocketmq-mcp
 install -d /opt/rocketmq-binaries
 for binary in \
     rocketmq-broker-rust \
@@ -177,6 +180,12 @@ done
 EOF
 
 FROM runtime-base AS service-runtime
+
+ARG ROCKETMQ_RUST_TOOLCHAIN
+ARG SOURCE_REVISION
+ARG CARGO_LOCK_SHA256
+ARG PRODUCTION_FEATURE_PROFILE_SHA256
+ARG RELEASE_CONFIG_SHA256
 
 USER 0:0
 RUN <<EOF
@@ -195,6 +204,12 @@ ENV HOME=/var/lib/rocketmq \
     ROCKETMQ_HEALTH_BIND_ADDR=0.0.0.0:8088 \
     ROCKETMQ_LIVENESS_STALE_SECONDS=30 \
     ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS=45
+
+LABEL org.opencontainers.image.revision=${SOURCE_REVISION} \
+    io.rocketmq.build.rust-toolchain=${ROCKETMQ_RUST_TOOLCHAIN} \
+    io.rocketmq.build.cargo-lock-sha256=${CARGO_LOCK_SHA256} \
+    io.rocketmq.build.production-feature-profile-sha256=${PRODUCTION_FEATURE_PROFILE_SHA256} \
+    io.rocketmq.release.config-digest=${RELEASE_CONFIG_SHA256}
 
 VOLUME ["/var/lib/rocketmq"]
 USER 10001:10001

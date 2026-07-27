@@ -56,6 +56,7 @@ _site
 !.claude/glossary/**
 !.claude/glossary
 .codex
+.rocketmq/
 
 # Tauri
 **/src-tauri/target

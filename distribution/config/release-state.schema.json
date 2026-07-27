@@ -1,0 +1,349 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rocketmq.apache.org/schemas/release-state-v1.json",
+  "title": "RocketMQ Rust ReleaseState",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "release_id",
+    "created_at",
+    "source_commit",
+    "images",
+    "config_bundle",
+    "secret_references",
+    "identity",
+    "storage_generation",
+    "cluster_import"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "release_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "source_commit": {
+      "$ref": "#/$defs/commit"
+    },
+    "images": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "broker",
+        "namesrv",
+        "controller",
+        "proxy",
+        "mcp"
+      ],
+      "properties": {
+        "broker": {
+          "$ref": "#/$defs/image"
+        },
+        "namesrv": {
+          "$ref": "#/$defs/image"
+        },
+        "controller": {
+          "$ref": "#/$defs/image"
+        },
+        "proxy": {
+          "$ref": "#/$defs/image"
+        },
+        "mcp": {
+          "$ref": "#/$defs/image"
+        }
+      }
+    },
+    "config_bundle": {
+      "$ref": "#/$defs/config_bundle"
+    },
+    "secret_references": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/secret_reference"
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "commit",
+        "nonce",
+        "config_digest",
+        "secret_version",
+        "storage_generation"
+      ],
+      "properties": {
+        "commit": {
+          "$ref": "#/$defs/commit"
+        },
+        "nonce": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 63,
+          "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+        },
+        "config_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "secret_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "storage_generation": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "storage_generation": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "cluster_import": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "name"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "none",
+            "kind",
+            "k3d"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 63,
+          "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$",
+      "not": {
+        "const": "0000000000000000000000000000000000000000"
+      }
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "relative_path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(?![A-Za-z]:)(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+$"
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relative_path"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "format": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      }
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "service",
+        "reference",
+        "image_id",
+        "image_config_digest",
+        "binary_sha256",
+        "source_commit",
+        "rust_toolchain",
+        "cargo_lock_sha256",
+        "feature_profile_sha256",
+        "resolved_features",
+        "config_digest",
+        "sbom",
+        "provenance"
+      ],
+      "properties": {
+        "service": {
+          "enum": [
+            "broker",
+            "namesrv",
+            "controller",
+            "proxy",
+            "mcp"
+          ]
+        },
+        "reference": {
+          "type": "string",
+          "pattern": "^rocketmq-rust/(broker|namesrv|controller|proxy|mcp):[0-9a-f]{7,12}$"
+        },
+        "image_id": {
+          "$ref": "#/$defs/digest"
+        },
+        "image_config_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "binary_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "source_commit": {
+          "$ref": "#/$defs/commit"
+        },
+        "rust_toolchain": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "cargo_lock_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "feature_profile_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "resolved_features": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_-]+$"
+          }
+        },
+        "config_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "sbom": {
+          "$ref": "#/$defs/artifact"
+        },
+        "provenance": {
+          "$ref": "#/$defs/artifact"
+        }
+      }
+    },
+    "config_file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relative_path"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "config_bundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "digest",
+        "files",
+        "helm_values",
+        "config_map_template",
+        "schema"
+      ],
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "files": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/config_file"
+          }
+        },
+        "helm_values": {
+          "$ref": "#/$defs/relative_path"
+        },
+        "config_map_template": {
+          "$ref": "#/$defs/relative_path"
+        },
+        "schema": {
+          "$ref": "#/$defs/relative_path"
+        }
+      }
+    },
+    "secret_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "namespace",
+        "provider",
+        "version",
+        "mount_path"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253,
+          "pattern": "^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$"
+        },
+        "namespace": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 63,
+          "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+        },
+        "provider": {
+          "enum": [
+            "kubernetes",
+            "external-secrets",
+            "secrets-store-csi"
+          ]
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "mount_path": {
+          "type": "string",
+          "const": "/var/run/secrets/rocketmq"
+        }
+      }
+    }
+  }
+}

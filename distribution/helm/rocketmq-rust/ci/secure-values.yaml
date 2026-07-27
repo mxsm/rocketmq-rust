@@ -3,6 +3,9 @@ releaseIdentity:
   # Real repository revision used only to keep the canonical render non-null.
   commit: "698f053f149784be1be1ddda403270b579607089"
   nonce: render-fixture
+  configDigest: "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+  secretVersion: render-fixture-1
+  storageGeneration: 1
 
 global:
   secretRefs:

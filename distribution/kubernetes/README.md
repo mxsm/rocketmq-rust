@@ -11,18 +11,18 @@ rocketmq-rust/proxy:local
 rocketmq-rust/mcp:local
 ```
 
-Every workload sets `imagePullPolicy: Never`. Build with
-`docker buildx build --load` and, when the Kubernetes nodes do not share the
-host Docker image store, load the images with the cluster-specific `kind` or
-`k3d` command. No registry login or remote push is part of this deployment
-mode.
+Every workload sets `imagePullPolicy: Never`. The committed `local` tags are a
+rendering fixture; deployable images use `rocketmq-rust/<service>:<commit>`.
+`scripts/build-production-images.ps1 -Load` builds all five images from a clean
+checkout, records their image and binary digests, and writes a complete local
+`ReleaseState` under `.rocketmq/candidate/`. No registry login or remote push is
+part of this deployment mode.
 
-Service image builds require an explicit non-zero 40-character
-`SOURCE_REVISION`. Capture it once with `git rev-parse HEAD`, use it for every
-Docker build, and pass the same value to Helm as
-`--set-string releaseIdentity.commit=...`. A rollout nonce is also required;
-pass it as `--set-string releaseIdentity.nonce=...`. All five processes reject
-a null or mismatched release identity before readiness.
+`ReleaseState` binds the five images to one configuration digest, Secret
+reference and version, rollout nonce, and storage generation.
+`scripts/set-architecture-release-state.ps1` validates that complete state,
+imports the same image set with Kind or K3d, applies it in policy order, waits
+for readiness, and compensates completed steps in reverse order after failure.
 
 The three `10.96.0.20x` Controller ClusterIPs are example reservations. Replace
 them with unused addresses from the target cluster's Service CIDR before
@@ -63,47 +63,25 @@ endpoints, disabled required persistence, and a non-RocksDB Controller backend.
 
 ## Local validation
 
-Run from the repository root:
+Build and validate a local candidate from the repository root:
 
 ```powershell
-$sourceRevision = (git rev-parse HEAD).Trim()
-$rolloutNonce = $env:ROCKETMQ_ROLLOUT_NONCE
-if (
-  $sourceRevision -notmatch '^[0-9a-f]{40}$' -or
-  $sourceRevision -match '^0{40}$' -or
-  [string]::IsNullOrWhiteSpace($rolloutNonce) -or
-  $rolloutNonce -notmatch '^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$'
-) {
-  throw "A real source revision and canonical ROCKETMQ_ROLLOUT_NONCE are required"
-}
-$releaseIdentityArgs = @(
-  '--set-string', "releaseIdentity.commit=$sourceRevision",
-  '--set-string', "releaseIdentity.nonce=$rolloutNonce"
-)
-
-helm lint .\distribution\helm\rocketmq-rust --strict `
-  -f .\distribution\helm\rocketmq-rust\values-dev-single.yaml @releaseIdentityArgs
-helm lint .\distribution\helm\rocketmq-rust --strict `
-  -f .\distribution\helm\rocketmq-rust\values-production-controller-ha.yaml @releaseIdentityArgs
-
+.\scripts\build-production-images.ps1 -Load
+.\scripts\set-architecture-release-state.ps1 -ValidateOnly
+helm lint .\distribution\helm\rocketmq-rust --strict
 helm template rocketmq .\distribution\helm\rocketmq-rust `
   --namespace rocketmq `
-  -f .\distribution\helm\rocketmq-rust\values-dev-single.yaml `
-  @releaseIdentityArgs > $null
-helm template rocketmq .\distribution\helm\rocketmq-rust `
-  --namespace rocketmq `
-  -f .\distribution\helm\rocketmq-rust\values-production-controller-ha.yaml `
-  @releaseIdentityArgs > $null
+  -f .\distribution\helm\rocketmq-rust\values-production-controller-ha.yaml > $null
 ```
 
-The bare chart defaults intentionally remain fail-closed until deployable
-images, a real release commit, and a rollout nonce are supplied.
+The chart defaults are local validation fixtures. The reconciler replaces the
+complete release identity and every image reference from the validated
+candidate; operators must not deploy the fixture values directly.
 
 To update `base/manifest.yaml`, render the production profile as UTF-8 and
 replace the file only after the local lint and schema checks pass. The committed
-base uses the non-deployable secure rendering fixture's explicit release
-identity; a deployable render must carry the exact revision embedded in its
-service images and a deliberate rollout nonce.
+base remains a non-deployable local rendering fixture. A deployable render must
+come from a complete validated `ReleaseState`.
 
 See `rocketmq-doc/en/01-run-rocketmq-rust-k8s.md` for local image builds,
 installation, upgrade, and recovery procedures.

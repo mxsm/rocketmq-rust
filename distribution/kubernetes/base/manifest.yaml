@@ -1350,8 +1350,11 @@ spec:
   template:
     metadata:
       annotations:
-        rocketmq.apache.org/release-commit: "698f053f149784be1be1ddda403270b579607089"
-        rocketmq.apache.org/release-nonce: "render-fixture"
+        rocketmq.apache.org/release-commit: "1111111111111111111111111111111111111111"
+        rocketmq.apache.org/release-nonce: "local-validation"
+        rocketmq.apache.org/release-config-digest: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        rocketmq.apache.org/release-secret-version: "local-reference-1"
+        rocketmq.apache.org/storage-generation: "1"
       labels:
         app.kubernetes.io/name: rocketmq-proxy
         app.kubernetes.io/instance: rocketmq
@@ -1407,8 +1410,11 @@ spec:
             - {name: ROCKETMQ_SECURITY_SECRET_PROVIDER, value: "mounted-files"}
             - {name: ROCKETMQ_SECURITY_ADMIN_IDENTITY, value: "/var/run/secrets/rocketmq/admin.identity"}
             - {name: ROCKETMQ_SECURITY_REQUEST_POLICY, value: "/var/run/secrets/rocketmq/request-policy.json"}
-            - {name: ROCKETMQ_RELEASE_COMMIT, value: "698f053f149784be1be1ddda403270b579607089"}
-            - {name: ROCKETMQ_RELEASE_NONCE, value: "render-fixture"}
+            - {name: ROCKETMQ_RELEASE_COMMIT, value: "1111111111111111111111111111111111111111"}
+            - {name: ROCKETMQ_RELEASE_NONCE, value: "local-validation"}
+            - {name: ROCKETMQ_RELEASE_CONFIG_DIGEST, value: "sha256:1111111111111111111111111111111111111111111111111111111111111111"}
+            - {name: ROCKETMQ_RELEASE_SECRET_VERSION, value: "local-reference-1"}
+            - {name: ROCKETMQ_STORAGE_GENERATION, value: "1"}
             - {name: ROCKETMQ_METRICS_ENABLED, value: "true"}
             - {name: ROCKETMQ_METRICS_EXPORTER, value: "prometheus"}
             - {name: ROCKETMQ_METRICS_BIND_ADDR, value: "0.0.0.0:5557"}
@@ -1511,8 +1517,11 @@ spec:
   template:
     metadata:
       annotations:
-        rocketmq.apache.org/release-commit: "698f053f149784be1be1ddda403270b579607089"
-        rocketmq.apache.org/release-nonce: "render-fixture"
+        rocketmq.apache.org/release-commit: "1111111111111111111111111111111111111111"
+        rocketmq.apache.org/release-nonce: "local-validation"
+        rocketmq.apache.org/release-config-digest: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        rocketmq.apache.org/release-secret-version: "local-reference-1"
+        rocketmq.apache.org/storage-generation: "1"
       labels:
         app.kubernetes.io/name: rocketmq-mcp
         app.kubernetes.io/instance: rocketmq
@@ -1549,8 +1558,11 @@ spec:
             - {name: ROCKETMQ_SECURITY_SECRET_PROVIDER, value: "mounted-files"}
             - {name: ROCKETMQ_SECURITY_ADMIN_IDENTITY, value: "/var/run/secrets/rocketmq/admin.identity"}
             - {name: ROCKETMQ_SECURITY_REQUEST_POLICY, value: "/var/run/secrets/rocketmq/request-policy.json"}
-            - {name: ROCKETMQ_RELEASE_COMMIT, value: "698f053f149784be1be1ddda403270b579607089"}
-            - {name: ROCKETMQ_RELEASE_NONCE, value: "render-fixture"}
+            - {name: ROCKETMQ_RELEASE_COMMIT, value: "1111111111111111111111111111111111111111"}
+            - {name: ROCKETMQ_RELEASE_NONCE, value: "local-validation"}
+            - {name: ROCKETMQ_RELEASE_CONFIG_DIGEST, value: "sha256:1111111111111111111111111111111111111111111111111111111111111111"}
+            - {name: ROCKETMQ_RELEASE_SECRET_VERSION, value: "local-reference-1"}
+            - {name: ROCKETMQ_STORAGE_GENERATION, value: "1"}
             - {name: ROCKETMQ_METRICS_ENABLED, value: "true"}
             - {name: ROCKETMQ_METRICS_EXPORTER, value: "prometheus"}
             - {name: ROCKETMQ_METRICS_BIND_ADDR, value: "0.0.0.0:5557"}
@@ -1659,8 +1671,11 @@ spec:
   template:
     metadata:
       annotations:
-        rocketmq.apache.org/release-commit: "698f053f149784be1be1ddda403270b579607089"
-        rocketmq.apache.org/release-nonce: "render-fixture"
+        rocketmq.apache.org/release-commit: "1111111111111111111111111111111111111111"
+        rocketmq.apache.org/release-nonce: "local-validation"
+        rocketmq.apache.org/release-config-digest: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        rocketmq.apache.org/release-secret-version: "local-reference-1"
+        rocketmq.apache.org/storage-generation: "1"
       labels:
         app.kubernetes.io/name: rocketmq-broker
         app.kubernetes.io/instance: rocketmq
@@ -1716,8 +1731,11 @@ spec:
             - {name: ROCKETMQ_SECURITY_SECRET_PROVIDER, value: "mounted-files"}
             - {name: ROCKETMQ_SECURITY_ADMIN_IDENTITY, value: "/var/run/secrets/rocketmq/admin.identity"}
             - {name: ROCKETMQ_SECURITY_REQUEST_POLICY, value: "/var/run/secrets/rocketmq/request-policy.json"}
-            - {name: ROCKETMQ_RELEASE_COMMIT, value: "698f053f149784be1be1ddda403270b579607089"}
-            - {name: ROCKETMQ_RELEASE_NONCE, value: "render-fixture"}
+            - {name: ROCKETMQ_RELEASE_COMMIT, value: "1111111111111111111111111111111111111111"}
+            - {name: ROCKETMQ_RELEASE_NONCE, value: "local-validation"}
+            - {name: ROCKETMQ_RELEASE_CONFIG_DIGEST, value: "sha256:1111111111111111111111111111111111111111111111111111111111111111"}
+            - {name: ROCKETMQ_RELEASE_SECRET_VERSION, value: "local-reference-1"}
+            - {name: ROCKETMQ_STORAGE_GENERATION, value: "1"}
             - {name: ROCKETMQ_METRICS_ENABLED, value: "true"}
             - {name: ROCKETMQ_METRICS_EXPORTER, value: "prometheus"}
             - {name: ROCKETMQ_METRICS_BIND_ADDR, value: "0.0.0.0:5557"}
@@ -1846,8 +1864,11 @@ spec:
   template:
     metadata:
       annotations:
-        rocketmq.apache.org/release-commit: "698f053f149784be1be1ddda403270b579607089"
-        rocketmq.apache.org/release-nonce: "render-fixture"
+        rocketmq.apache.org/release-commit: "1111111111111111111111111111111111111111"
+        rocketmq.apache.org/release-nonce: "local-validation"
+        rocketmq.apache.org/release-config-digest: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        rocketmq.apache.org/release-secret-version: "local-reference-1"
+        rocketmq.apache.org/storage-generation: "1"
       labels:
         app.kubernetes.io/name: rocketmq-namesrv
         app.kubernetes.io/instance: rocketmq
@@ -1903,8 +1924,11 @@ spec:
             - {name: ROCKETMQ_SECURITY_SECRET_PROVIDER, value: "mounted-files"}
             - {name: ROCKETMQ_SECURITY_ADMIN_IDENTITY, value: "/var/run/secrets/rocketmq/admin.identity"}
             - {name: ROCKETMQ_SECURITY_REQUEST_POLICY, value: "/var/run/secrets/rocketmq/request-policy.json"}
-            - {name: ROCKETMQ_RELEASE_COMMIT, value: "698f053f149784be1be1ddda403270b579607089"}
-            - {name: ROCKETMQ_RELEASE_NONCE, value: "render-fixture"}
+            - {name: ROCKETMQ_RELEASE_COMMIT, value: "1111111111111111111111111111111111111111"}
+            - {name: ROCKETMQ_RELEASE_NONCE, value: "local-validation"}
+            - {name: ROCKETMQ_RELEASE_CONFIG_DIGEST, value: "sha256:1111111111111111111111111111111111111111111111111111111111111111"}
+            - {name: ROCKETMQ_RELEASE_SECRET_VERSION, value: "local-reference-1"}
+            - {name: ROCKETMQ_STORAGE_GENERATION, value: "1"}
             - {name: ROCKETMQ_METRICS_ENABLED, value: "true"}
             - {name: ROCKETMQ_METRICS_EXPORTER, value: "prometheus"}
             - {name: ROCKETMQ_METRICS_BIND_ADDR, value: "0.0.0.0:5557"}
@@ -2025,8 +2049,11 @@ spec:
   template:
     metadata:
       annotations:
-        rocketmq.apache.org/release-commit: "698f053f149784be1be1ddda403270b579607089"
-        rocketmq.apache.org/release-nonce: "render-fixture"
+        rocketmq.apache.org/release-commit: "1111111111111111111111111111111111111111"
+        rocketmq.apache.org/release-nonce: "local-validation"
+        rocketmq.apache.org/release-config-digest: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        rocketmq.apache.org/release-secret-version: "local-reference-1"
+        rocketmq.apache.org/storage-generation: "1"
       labels:
         app.kubernetes.io/name: rocketmq-controller
         app.kubernetes.io/instance: rocketmq
@@ -2090,8 +2117,11 @@ spec:
             - {name: ROCKETMQ_SECURITY_SECRET_PROVIDER, value: "mounted-files"}
             - {name: ROCKETMQ_SECURITY_ADMIN_IDENTITY, value: "/var/run/secrets/rocketmq/admin.identity"}
             - {name: ROCKETMQ_SECURITY_REQUEST_POLICY, value: "/var/run/secrets/rocketmq/request-policy.json"}
-            - {name: ROCKETMQ_RELEASE_COMMIT, value: "698f053f149784be1be1ddda403270b579607089"}
-            - {name: ROCKETMQ_RELEASE_NONCE, value: "render-fixture"}
+            - {name: ROCKETMQ_RELEASE_COMMIT, value: "1111111111111111111111111111111111111111"}
+            - {name: ROCKETMQ_RELEASE_NONCE, value: "local-validation"}
+            - {name: ROCKETMQ_RELEASE_CONFIG_DIGEST, value: "sha256:1111111111111111111111111111111111111111111111111111111111111111"}
+            - {name: ROCKETMQ_RELEASE_SECRET_VERSION, value: "local-reference-1"}
+            - {name: ROCKETMQ_STORAGE_GENERATION, value: "1"}
             - {name: ROCKETMQ_METRICS_ENABLED, value: "true"}
             - {name: ROCKETMQ_METRICS_EXPORTER, value: "prometheus"}
             - {name: ROCKETMQ_METRICS_BIND_ADDR, value: "0.0.0.0:5557"}
