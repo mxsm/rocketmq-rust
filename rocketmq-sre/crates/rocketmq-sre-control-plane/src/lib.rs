@@ -18,10 +18,24 @@
 //! exposes no RocketMQ mutation, approval, or execution endpoint.
 
 mod api;
+mod assets;
+mod auth;
 mod config;
+mod connector_channel;
+mod coverage;
 mod error;
+mod evidence;
+mod inspection;
+mod knowledge;
 mod model;
+mod models;
+pub mod observability;
+mod openapi;
+mod orchestrator;
+mod phase1_api;
+mod read_audit;
 mod repository;
+mod workflow;
 
 pub use api::CapabilityDocuments;
 pub use api::build_router;
@@ -40,5 +54,6 @@ pub use model::OnboardingState;
 pub use repository::PostgresRepository;
 
 pub const DEFAULT_CONTROL_PLANE_PORT: u16 = 8090;
+pub const DEFAULT_CONNECTOR_CHANNEL_PORT: u16 = 8093;
 pub const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 pub const MCP_BUSINESS_SCHEMA: &str = "rocketmq-mcp.v2";

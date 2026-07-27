@@ -19,19 +19,29 @@ use std::net::IpAddr;
 #[cfg(test)]
 use std::net::Ipv4Addr;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::time::Duration;
+use url::Url;
 
 use crate::ControlPlaneError;
+use crate::DEFAULT_CONNECTOR_CHANNEL_PORT;
 use crate::DEFAULT_CONTROL_PLANE_PORT;
 
 /// Process configuration loaded from explicit environment variables.
 #[derive(Clone)]
 pub struct ControlPlaneConfig {
     bind_addr: SocketAddr,
+    connector_bind_addr: SocketAddr,
     database_url: String,
     database_max_connections: u32,
     shutdown_timeout: Duration,
     internal_token: String,
+    dev_auth_enabled: bool,
+    oidc_issuer: Option<String>,
+    oidc_audience: Option<String>,
+    oidc_jwks_url: Option<Url>,
+    oidc_ca_path: Option<PathBuf>,
+    dashboard_deep_link_origins: Vec<String>,
 }
 
 impl ControlPlaneConfig {
@@ -46,6 +56,17 @@ impl ControlPlaneConfig {
             .unwrap_or_else(|_| format!("0.0.0.0:{DEFAULT_CONTROL_PLANE_PORT}"))
             .parse()
             .map_err(|error| ControlPlaneError::configuration(format!("ROCKETMQ_SRE_BIND_ADDR is invalid: {error}")))?;
+        let connector_bind_addr = std::env::var("ROCKETMQ_SRE_CONNECTOR_BIND_ADDR")
+            .unwrap_or_else(|_| format!("127.0.0.1:{DEFAULT_CONNECTOR_CHANNEL_PORT}"))
+            .parse()
+            .map_err(|error| {
+                ControlPlaneError::configuration(format!("ROCKETMQ_SRE_CONNECTOR_BIND_ADDR is invalid: {error}"))
+            })?;
+        if bind_addr == connector_bind_addr {
+            return Err(ControlPlaneError::configuration(
+                "public and Connector-only listeners must use different addresses",
+            ));
+        }
         let database_url = std::env::var("DATABASE_URL")
             .map_err(|_| ControlPlaneError::configuration("DATABASE_URL must be configured"))?;
         if database_url.trim().is_empty() {
@@ -70,18 +91,58 @@ impl ControlPlaneConfig {
                 "ROCKETMQ_SRE_INTERNAL_TOKEN must not be empty",
             ));
         }
+        let dev_auth_enabled = parse_env("ROCKETMQ_SRE_DEV_AUTH", false)?;
+        let oidc_issuer = optional_env("ROCKETMQ_SRE_OIDC_ISSUER");
+        let oidc_audience = optional_env("ROCKETMQ_SRE_OIDC_AUDIENCE");
+        let oidc_jwks_url = optional_env("ROCKETMQ_SRE_OIDC_JWKS_URL")
+            .map(|value| {
+                value.parse().map_err(|error| {
+                    ControlPlaneError::configuration(format!("ROCKETMQ_SRE_OIDC_JWKS_URL is invalid: {error}"))
+                })
+            })
+            .transpose()?;
+        let oidc_ca_path = optional_env("ROCKETMQ_SRE_OIDC_CA_PATH").map(PathBuf::from);
+        let dashboard_deep_link_origins = optional_env("ROCKETMQ_SRE_DASHBOARD_ORIGINS")
+            .map(|value| {
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|origin| !origin.is_empty())
+                    .map(ToOwned::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !dev_auth_enabled && (oidc_issuer.is_none() || oidc_audience.is_none() || oidc_jwks_url.is_none()) {
+            return Err(ControlPlaneError::configuration(
+                "production mode requires ROCKETMQ_SRE_OIDC_ISSUER, ROCKETMQ_SRE_OIDC_AUDIENCE, and \
+                 ROCKETMQ_SRE_OIDC_JWKS_URL",
+            ));
+        }
         Ok(Self {
             bind_addr,
+            connector_bind_addr,
             database_url,
             database_max_connections,
             shutdown_timeout: Duration::from_secs(shutdown_seconds),
             internal_token,
+            dev_auth_enabled,
+            oidc_issuer,
+            oidc_audience,
+            oidc_jwks_url,
+            oidc_ca_path,
+            dashboard_deep_link_origins,
         })
     }
 
     #[must_use]
     pub const fn bind_addr(&self) -> SocketAddr {
         self.bind_addr
+    }
+
+    /// Returns the private listener used only behind the mTLS Connector proxy.
+    #[must_use]
+    pub const fn connector_bind_addr(&self) -> SocketAddr {
+        self.connector_bind_addr
     }
 
     #[must_use]
@@ -104,14 +165,51 @@ impl ControlPlaneConfig {
         &self.internal_token
     }
 
+    #[must_use]
+    pub const fn dev_auth_enabled(&self) -> bool {
+        self.dev_auth_enabled
+    }
+
+    #[must_use]
+    pub fn oidc_issuer(&self) -> Option<&str> {
+        self.oidc_issuer.as_deref()
+    }
+
+    #[must_use]
+    pub fn oidc_audience(&self) -> Option<&str> {
+        self.oidc_audience.as_deref()
+    }
+
+    #[must_use]
+    pub const fn oidc_jwks_url(&self) -> Option<&Url> {
+        self.oidc_jwks_url.as_ref()
+    }
+
+    #[must_use]
+    pub fn oidc_ca_path(&self) -> Option<&std::path::Path> {
+        self.oidc_ca_path.as_deref()
+    }
+
+    #[must_use]
+    pub fn dashboard_deep_link_origins(&self) -> &[String] {
+        &self.dashboard_deep_link_origins
+    }
+
     #[cfg(test)]
     pub(crate) fn test_config() -> Self {
         Self {
             bind_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+            connector_bind_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 1),
             database_url: "postgres://redacted".to_owned(),
             database_max_connections: 1,
             shutdown_timeout: Duration::from_secs(1),
             internal_token: "test-internal-token".to_owned(),
+            dev_auth_enabled: true,
+            oidc_issuer: None,
+            oidc_audience: None,
+            oidc_jwks_url: None,
+            oidc_ca_path: None,
+            dashboard_deep_link_origins: Vec::new(),
         }
     }
 }
@@ -121,12 +219,26 @@ impl Debug for ControlPlaneConfig {
         formatter
             .debug_struct("ControlPlaneConfig")
             .field("bind_addr", &self.bind_addr)
+            .field("connector_bind_addr", &self.connector_bind_addr)
             .field("database_url", &"[REDACTED]")
             .field("database_max_connections", &self.database_max_connections)
             .field("shutdown_timeout", &self.shutdown_timeout)
             .field("internal_token", &"[REDACTED]")
+            .field("dev_auth_enabled", &self.dev_auth_enabled)
+            .field("oidc_issuer", &self.oidc_issuer)
+            .field("oidc_audience", &self.oidc_audience)
+            .field("oidc_jwks_url", &self.oidc_jwks_url)
+            .field("oidc_ca_path", &self.oidc_ca_path)
+            .field(
+                "dashboard_deep_link_origin_count",
+                &self.dashboard_deep_link_origins.len(),
+            )
             .finish()
     }
+}
+
+fn optional_env(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|value| !value.trim().is_empty())
 }
 
 fn parse_env<T>(name: &str, default: T) -> Result<T, ControlPlaneError>
@@ -151,11 +263,14 @@ mod tests {
 
     #[test]
     fn debug_output_redacts_database_credentials() {
-        let config = ControlPlaneConfig::test_config();
+        let mut config = ControlPlaneConfig::test_config();
+        config.dashboard_deep_link_origins = vec!["https://internal-dashboard.example.test".to_owned()];
         let debug = format!("{config:?}");
 
         assert!(debug.contains("[REDACTED]"));
         assert!(!debug.contains("postgres://redacted"));
         assert!(!debug.contains("test-internal-token"));
+        assert!(!debug.contains("internal-dashboard"));
+        assert!(debug.contains("dashboard_deep_link_origin_count"));
     }
 }

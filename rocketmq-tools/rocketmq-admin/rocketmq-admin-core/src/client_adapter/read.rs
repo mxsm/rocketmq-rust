@@ -14,6 +14,7 @@
 //! RocketMQ Client-backed adapter with no mutation traits in its public API.
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::sync::Arc;
@@ -29,7 +30,9 @@ use rocketmq_error::RocketMQError;
 use rocketmq_model::common::key_builder::KeyBuilder;
 use rocketmq_model::topic::DLQ_GROUP_TOPIC_PREFIX;
 use rocketmq_model::topic::RETRY_GROUP_TOPIC_PREFIX;
+use rocketmq_protocol::protocol::body::consumer_connection::ConsumerConnection;
 use rocketmq_protocol::protocol::body::kv_table::KVTable;
+use rocketmq_protocol::protocol::body::producer_table_info::ProducerTableInfo;
 use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
@@ -40,6 +43,13 @@ use crate::core::broker::ListBrokersRequest;
 use crate::core::broker::ListBrokersResult;
 use crate::core::broker::ProbeBrokerRuntimeRequest;
 use crate::core::broker::ProbeBrokerRuntimeResult;
+use crate::core::client_connection::ClientConnectionObservation;
+use crate::core::client_connection::ClientConnectionQueryAdmin;
+use crate::core::client_connection::ListProducerConnectionsRequest;
+use crate::core::client_connection::ListProducerConnectionsResult;
+use crate::core::client_connection::ProducerConnectionObservation;
+use crate::core::client_connection::QueryConsumerConnectionsRequest;
+use crate::core::client_connection::QueryConsumerConnectionsResult;
 use crate::core::clock::Clock;
 use crate::core::consumer;
 use crate::core::consumer::ConsumerQueryAdmin;
@@ -362,6 +372,120 @@ impl BrokerQueryAdmin for ReadAdminSession {
                 result.failures.push(format!("code=other;count={overflow}"));
             }
             Ok(result)
+        })
+    }
+}
+
+impl ClientConnectionQueryAdmin for ReadAdminSession {
+    fn query_consumer_connections<'a>(
+        &'a mut self,
+        request: &'a QueryConsumerConnectionsRequest,
+    ) -> AdminFuture<'a, QueryConsumerConnectionsResult> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            let targets = cluster_broker_targets(&self.inner, &request.cluster).await?;
+            let mut connections = BTreeMap::new();
+            let mut failed_brokers = BTreeSet::new();
+            let mut queried_brokers = BTreeSet::new();
+            let mut truncated = false;
+            for (broker_name, broker_addr) in targets {
+                if request
+                    .broker_name
+                    .as_ref()
+                    .is_some_and(|expected| expected != &broker_name)
+                {
+                    continue;
+                }
+                queried_brokers.insert(broker_name.clone());
+                match self
+                    .inner
+                    .examine_consumer_connection_info(
+                        CheetahString::from(request.consumer_group.as_str()),
+                        Some(broker_addr),
+                    )
+                    .await
+                {
+                    Ok(connection) => {
+                        for row in consumer_connection_rows(&broker_name, connection) {
+                            let identity = client_connection_identity(&row);
+                            connections.entry(identity).or_insert(row);
+                            if connections.len() > request.max_connections {
+                                truncated = true;
+                                break;
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        failed_brokers.insert(broker_name);
+                    }
+                }
+                if truncated {
+                    break;
+                }
+            }
+            let connections = connections
+                .into_values()
+                .take(request.max_connections)
+                .collect::<Vec<_>>();
+            Ok(QueryConsumerConnectionsResult {
+                consumer_group: request.consumer_group.clone(),
+                connections,
+                queried_broker_count: queried_brokers.len(),
+                failed_brokers: failed_brokers.into_iter().collect(),
+                truncated,
+            })
+        })
+    }
+
+    fn list_producer_connections<'a>(
+        &'a mut self,
+        request: &'a ListProducerConnectionsRequest,
+    ) -> AdminFuture<'a, ListProducerConnectionsResult> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            let targets = cluster_broker_targets(&self.inner, &request.cluster).await?;
+            let mut connections = BTreeMap::new();
+            let mut failed_brokers = BTreeSet::new();
+            let mut queried_brokers = BTreeSet::new();
+            let mut truncated = false;
+            for (broker_name, broker_addr) in targets {
+                if request
+                    .broker_name
+                    .as_ref()
+                    .is_some_and(|expected| expected != &broker_name)
+                {
+                    continue;
+                }
+                queried_brokers.insert(broker_name.clone());
+                match self.inner.get_all_producer_info(broker_addr).await {
+                    Ok(table) => {
+                        for row in producer_connection_rows(&broker_name, table, request.producer_group.as_deref()) {
+                            let identity = (row.producer_group.clone(), client_connection_identity(&row.connection));
+                            connections.entry(identity).or_insert(row);
+                            if connections.len() > request.max_connections {
+                                truncated = true;
+                                break;
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        failed_brokers.insert(broker_name);
+                    }
+                }
+                if truncated {
+                    break;
+                }
+            }
+            let connections = connections
+                .into_values()
+                .take(request.max_connections)
+                .collect::<Vec<_>>();
+            Ok(ListProducerConnectionsResult {
+                connections,
+                queried_broker_count: queried_brokers.len(),
+                failed_brokers: failed_brokers.into_iter().collect(),
+                truncated,
+            })
         })
     }
 }
@@ -709,6 +833,108 @@ fn map_topic_route(route: TopicRouteData) -> TopicRoute {
     TopicRoute { brokers, queues }
 }
 
+async fn cluster_broker_targets(admin: &DefaultMQAdminExt, cluster: &str) -> AdminResult<Vec<(String, CheetahString)>> {
+    let cluster_info = admin
+        .examine_broker_cluster_info()
+        .await
+        .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
+    let broker_names = cluster_info
+        .cluster_addr_table
+        .as_ref()
+        .and_then(|table| table.get(cluster))
+        .cloned()
+        .unwrap_or_default();
+    let broker_table = cluster_info.broker_addr_table.unwrap_or_default();
+    let mut targets = Vec::new();
+    for broker_name in broker_names {
+        let Some(broker) = broker_table.get(&broker_name) else {
+            continue;
+        };
+        targets.extend(
+            broker
+                .broker_addrs()
+                .iter()
+                .map(|(broker_id, address)| (broker_name.to_string(), *broker_id, address.clone())),
+        );
+    }
+    targets.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then(left.1.cmp(&right.1))
+            .then(left.2.cmp(&right.2))
+    });
+    Ok(targets
+        .into_iter()
+        .map(|(broker_name, _, address)| (broker_name, address))
+        .collect())
+}
+
+fn producer_connection_rows(
+    broker_name: &str,
+    table: ProducerTableInfo,
+    producer_group: Option<&str>,
+) -> Vec<ProducerConnectionObservation> {
+    let mut groups = table.data().iter().collect::<Vec<_>>();
+    groups.sort_by(|left, right| left.0.cmp(right.0));
+    let mut rows = Vec::new();
+    for (group, producers) in groups {
+        if producer_group.is_some_and(|expected| expected != group.as_str()) {
+            continue;
+        }
+        let mut producers = producers.iter().collect::<Vec<_>>();
+        producers.sort_by(|left, right| {
+            left.client_id()
+                .cmp(right.client_id())
+                .then(left.remote_ip().cmp(right.remote_ip()))
+                .then(left.version().cmp(&right.version()))
+                .then(left.last_update_timestamp().cmp(&right.last_update_timestamp()))
+        });
+        rows.extend(producers.into_iter().map(|producer| ProducerConnectionObservation {
+            producer_group: group.clone(),
+            connection: ClientConnectionObservation {
+                broker_name: broker_name.to_owned(),
+                client_id: producer.client_id().to_owned(),
+                client_addr: producer.remote_ip().to_owned(),
+                language: producer.language().to_string(),
+                version: producer.version(),
+                last_update_timestamp: Some(producer.last_update_timestamp()),
+            },
+        }));
+    }
+    rows
+}
+
+fn consumer_connection_rows(broker_name: &str, connection: ConsumerConnection) -> Vec<ClientConnectionObservation> {
+    let mut rows = connection
+        .get_connection_set()
+        .iter()
+        .map(|item| ClientConnectionObservation {
+            broker_name: broker_name.to_owned(),
+            client_id: item.get_client_id().to_string(),
+            client_addr: item.get_client_addr().to_string(),
+            language: item.get_language().to_string(),
+            version: item.get_version(),
+            last_update_timestamp: None,
+        })
+        .collect::<Vec<_>>();
+    sort_client_connections(&mut rows);
+    rows
+}
+
+fn sort_client_connections(rows: &mut [ClientConnectionObservation]) {
+    rows.sort_by_key(client_connection_identity);
+}
+
+fn client_connection_identity(connection: &ClientConnectionObservation) -> (String, String, String, String, i32) {
+    (
+        connection.broker_name.clone(),
+        connection.client_id.clone(),
+        connection.client_addr.clone(),
+        connection.language.clone(),
+        connection.version,
+    )
+}
+
 fn build_broker_summary(
     cluster: String,
     broker_name: String,
@@ -777,4 +1003,69 @@ fn backend_error(operation: &'static str, error: RocketMQError) -> AdminError {
         view.http().status.as_u16(),
         view.is_retryable(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use rocketmq_protocol::protocol::body::connection::Connection;
+    use rocketmq_protocol::protocol::body::producer_info::ProducerInfo;
+    use rocketmq_protocol::protocol::LanguageCode;
+
+    use super::*;
+
+    #[test]
+    fn producer_rows_are_deterministic_and_filter_exact_groups() {
+        let table = ProducerTableInfo::new(HashMap::from([
+            (
+                "producer-z".to_owned(),
+                vec![ProducerInfo::new(
+                    "client-z",
+                    "10.0.0.9:12000",
+                    LanguageCode::RUST,
+                    2,
+                    20,
+                )],
+            ),
+            (
+                "producer-a".to_owned(),
+                vec![
+                    ProducerInfo::new("client-b", "10.0.0.2:12000", LanguageCode::JAVA, 2, 12),
+                    ProducerInfo::new("client-a", "10.0.0.1:12000", LanguageCode::RUST, 1, 11),
+                ],
+            ),
+        ]));
+
+        let rows = producer_connection_rows("broker-a", table, Some("producer-a"));
+
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|row| row.producer_group == "producer-a"));
+        assert_eq!(rows[0].connection.client_id, "client-a");
+        assert_eq!(rows[1].connection.client_id, "client-b");
+        assert_eq!(rows[0].connection.broker_name, "broker-a");
+    }
+
+    #[test]
+    fn consumer_rows_are_sorted_and_keep_only_observed_protocol_fields() {
+        let mut connection = ConsumerConnection::new();
+        connection.insert_connection(protocol_connection("client-z", "10.0.0.9:12000", LanguageCode::JAVA, 2));
+        connection.insert_connection(protocol_connection("client-a", "10.0.0.1:12000", LanguageCode::RUST, 1));
+
+        let rows = consumer_connection_rows("broker-a", connection);
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].client_id, "client-a");
+        assert_eq!(rows[1].client_id, "client-z");
+        assert!(rows.iter().all(|row| row.last_update_timestamp.is_none()));
+    }
+
+    fn protocol_connection(client_id: &str, client_addr: &str, language: LanguageCode, version: i32) -> Connection {
+        let mut connection = Connection::new();
+        connection.set_client_id(CheetahString::from(client_id));
+        connection.set_client_addr(CheetahString::from(client_addr));
+        connection.set_language(language);
+        connection.set_version(version);
+        connection
+    }
 }

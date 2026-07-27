@@ -1,0 +1,35 @@
+{
+  "pack": "cluster-topology.v1",
+  "scenario": "normal",
+  "expected_status": "healthy",
+  "expected_reason_codes": ["TOPOLOGY_HEALTHY"],
+  "evidence": [
+    {
+      "evidence_id": "00000000-0000-4000-8001-000000000101",
+      "source": "topology",
+      "resource": "asset-graph/cluster-a",
+      "content": {
+        "components": 7,
+        "brokers": 2,
+        "topics": 3,
+        "queues": 12,
+        "clients": 4,
+        "broken_edges": 0,
+        "orphan_assets": 0,
+        "topology_changed": false
+      }
+    },
+    {
+      "evidence_id": "00000000-0000-4000-8001-000000000111",
+      "source": "kubernetes",
+      "resource": "live-resources/rocketmq",
+      "content": { "unready_workloads": 0 }
+    },
+    {
+      "evidence_id": "00000000-0000-4000-8001-000000000112",
+      "source": "admin-query",
+      "resource": "client-connections/cluster-a",
+      "content": { "disconnected_clients": 0 }
+    }
+  ]
+}

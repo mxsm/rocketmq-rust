@@ -1783,6 +1783,22 @@ function Get-SchedulerDisposition {
         }
     }
 
+    if ($path -eq "rocketmq-sre/crates/rocketmq-sre-connector/src/channel.rs") {
+        return [pscustomobject]@{
+            Disposition = "sre-connector-owned-channel-timer"
+            ActionRequired = $false
+            Reason = "Allowed reverse-channel retry and heartbeat timers; the enclosing connector task is rooted in ChildServiceContext, observes its TaskGroup cancellation token, and cancels outstanding commands before exit."
+        }
+    }
+
+    if ($path -eq "rocketmq-sre/crates/rocketmq-sre-probe/src/main.rs") {
+        return [pscustomobject]@{
+            Disposition = "sre-bounded-synthetic-probe-timer"
+            ActionRequired = $false
+            Reason = "Allowed bounded synthetic-probe registration delay; the command is wrapped by the configured operation timeout, runs inside RuntimeOwner, and shuts down both ClientRuntime and RuntimeOwner before exit."
+        }
+    }
+
     return [pscustomobject]@{
         Disposition = "unclassified-follow-up"
         ActionRequired = $true

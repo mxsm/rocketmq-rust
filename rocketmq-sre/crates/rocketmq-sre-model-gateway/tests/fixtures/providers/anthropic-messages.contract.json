@@ -1,0 +1,62 @@
+{
+  "text": {
+    "status": 200,
+    "body": {
+      "id": "msg-anthropic-text",
+      "model": "test-model",
+      "content": [
+        {
+          "type": "text",
+          "text": "broker is healthy"
+        }
+      ],
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 11,
+        "output_tokens": 4
+      }
+    }
+  },
+  "json": {
+    "status": 200,
+    "body": {
+      "id": "msg-anthropic-json",
+      "model": "test-model",
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"status\":\"healthy\"}"
+        }
+      ],
+      "stop_reason": "end_turn"
+    }
+  },
+  "tool": {
+    "status": 200,
+    "body": {
+      "id": "msg-anthropic-tool",
+      "model": "test-model",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "call-1",
+          "name": "query_consumer_lag",
+          "input": {
+            "group": "synthetic-group"
+          }
+        }
+      ],
+      "stop_reason": "tool_use"
+    }
+  },
+  "error": {
+    "status": 429,
+    "body": {
+      "type": "error",
+      "error": {
+        "type": "rate_limit_error",
+        "message": "rate limit"
+      }
+    }
+  }
+}

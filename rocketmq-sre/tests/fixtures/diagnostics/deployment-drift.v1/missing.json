@@ -1,0 +1,14 @@
+{
+  "pack": "deployment-drift.v1",
+  "scenario": "missing",
+  "expected_status": "inconclusive",
+  "expected_reason_codes": [],
+  "evidence": [
+    {
+      "evidence_id": "00000000-0000-4000-8008-000000000103",
+      "source": "runtime",
+      "resource": "build-info/broker-a",
+      "content": { "image_revision": "sha256:image-a", "feature_set_digest": "sha256:features-a" }
+    }
+  ]
+}

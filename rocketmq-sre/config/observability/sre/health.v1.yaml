@@ -1,0 +1,69 @@
+# Copyright 2023 The RocketMQ Rust Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+
+schema_version: rocketmq.sre.health-policy.v1
+response_schema: rocketmq.sre.health.v1
+authenticated_endpoint: /readyz
+states: [healthy, unknown, degraded, unavailable]
+
+dependencies:
+  database:
+    details:
+      - status
+      - latency_ms
+      - active_connections
+      - idle_connections
+      - max_connections
+      - reason
+    readiness:
+      healthy: ready
+      degraded: ready
+      unknown: not_ready
+      unavailable: not_ready
+
+  providers:
+    grouping: provider_family
+    details:
+      - configured
+      - status_counts
+      - maximum_latency_ms
+      - bounded_reason_codes
+    readiness:
+      effect: non_blocking
+      rationale: Deterministic diagnostic packs remain available in rules-only mode.
+
+  connectors:
+    grouping: aggregate_only
+    details:
+      - configured
+      - status_counts
+      - oldest_heartbeat_age_seconds
+      - queryable_source_count
+      - bounded_reason_codes
+    readiness:
+      effect: non_blocking_process_health
+      diagnostic_effect: evidence_collection_available_false_when_no_connector_is_serving
+
+  telemetry:
+    schema: rocketmq.observability-status.v1
+    source: rocketmq-observability
+    details:
+      - compiled_features
+      - initialization
+      - export
+      - queue
+      - drops
+      - shutdown
+
+privacy:
+  free_form_errors: forbidden
+  provider_endpoint: forbidden
+  connector_identity: forbidden
+  cluster_identity: forbidden
+  database_url: forbidden
+  credentials: forbidden

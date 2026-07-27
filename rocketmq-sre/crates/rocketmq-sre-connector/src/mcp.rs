@@ -111,6 +111,10 @@ pub(crate) trait McpGateway: Send + Sync + 'static {
         operation: &EvidenceOperation,
     ) -> impl Future<Output = Result<WireEvidenceEnvelope, ConnectorError>> + Send;
 
+    fn read_system_resource(&self, _uri: &str) -> impl Future<Output = Result<Value, ConnectorError>> + Send {
+        async { Err(ConnectorError::source("MCP System Resource is unavailable")) }
+    }
+
     fn ensure_cluster_active(&self, _cluster: &str) -> impl Future<Output = Result<(), ConnectorError>> + Send {
         async { Ok(()) }
     }
@@ -136,12 +140,44 @@ struct SessionSnapshot {
 pub(crate) struct RmcpGateway {
     config: Arc<ConnectorConfig>,
     http: reqwest::Client,
+    control_plane_http: Option<reqwest::Client>,
     tokens: TokenProvider,
     session: Mutex<Option<RmcpSession>>,
     verified_digests: Mutex<BTreeMap<String, String>>,
     last_verified: Mutex<BTreeMap<String, VerifiedCapability>>,
     next_generation: AtomicU64,
     concurrency: Semaphore,
+}
+
+fn build_control_plane_client(config: &ConnectorConfig) -> Result<Option<reqwest::Client>, ConnectorError> {
+    let Some(control_plane) = &config.control_plane else {
+        return Ok(None);
+    };
+    let mut builder = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(config.request_timeout)
+        .pool_max_idle_per_host(2)
+        .http2_adaptive_window(true)
+        .user_agent(concat!("rocketmq-sre-connector/", env!("CARGO_PKG_VERSION")));
+    if control_plane.base_url.scheme() == "http" {
+        builder = builder.http2_prior_knowledge();
+    }
+    if !control_plane.ca_pem.is_empty() {
+        let certificates = reqwest::Certificate::from_pem_bundle(&control_plane.ca_pem)
+            .map_err(|_| ConnectorError::configuration("control-plane CA bundle is invalid"))?;
+        for certificate in certificates {
+            builder = builder.add_root_certificate(certificate);
+        }
+    }
+    if !control_plane.client_identity_pem.is_empty() {
+        let identity = reqwest::Identity::from_pem(&control_plane.client_identity_pem)
+            .map_err(|_| ConnectorError::configuration("control-plane client identity PEM is invalid"))?;
+        builder = builder.identity(identity);
+    }
+    builder
+        .build()
+        .map(Some)
+        .map_err(|_| ConnectorError::configuration("control-plane mTLS HTTP client cannot be built"))
 }
 
 impl RmcpGateway {
@@ -167,11 +203,13 @@ impl RmcpGateway {
         let http = builder
             .build()
             .map_err(|error| ConnectorError::configuration(format!("TLS HTTP client cannot be built: {error}")))?;
+        let control_plane_http = build_control_plane_client(&config)?;
         let tokens = TokenProvider::new(config.auth.clone(), http.clone(), config.request_timeout);
         Ok(Self {
             concurrency: Semaphore::new(config.max_concurrency),
             config,
             http,
+            control_plane_http,
             tokens,
             session: Mutex::new(None),
             verified_digests: Mutex::new(BTreeMap::new()),
@@ -642,6 +680,41 @@ impl RmcpGateway {
         validate_wire_envelope(&snapshot.output_schema, value, cluster).map_err(QueryFailure::Other)
     }
 
+    async fn read_system_resource_once(&self, uri: &str) -> Result<Value, ConnectorError> {
+        if self.session.lock().await.is_none() {
+            self.handshake().await?;
+        }
+        let peer = {
+            let guard = self.session.lock().await;
+            guard
+                .as_ref()
+                .map(|session| session.service.peer().clone())
+                .ok_or_else(|| ConnectorError::source("MCP session has not completed handshaking"))?
+        };
+        let result = timeout_service(
+            self.config.request_timeout,
+            peer.read_resource(ReadResourceRequestParams::new(uri.to_owned())),
+            "resources/read system diagnostics",
+        )
+        .await?;
+        let text = extract_text_resource(result.contents, uri)?;
+        let (kind, schema) = match uri {
+            RUNTIME_RESOURCE_URI => ("runtime", "rocketmq.runtime-diagnostics.v1"),
+            OBSERVABILITY_RESOURCE_URI => ("observability", "rocketmq.observability-status.v1"),
+            _ => {
+                return Err(ConnectorError::new(
+                    ConnectorErrorCode::InvalidEvidenceQuery,
+                    false,
+                    "only fixed Phase 00 System Resources may be queried",
+                ));
+            }
+        };
+        validate_system_resource(&text, uri, kind, schema, self.config.max_response_bytes)?;
+        let envelope: SystemResourceEnvelope =
+            serde_json::from_str(&text).map_err(|_| ConnectorError::source("MCP System Resource is not valid JSON"))?;
+        Ok(envelope.data)
+    }
+
     async fn reconnect_after_unauthorized(&self, failed_generation: u64) -> Result<(), ConnectorError> {
         let current_generation = self.session.lock().await.as_ref().map(|session| session.generation);
         if current_generation.is_some_and(|value| value != failed_generation) {
@@ -662,6 +735,10 @@ impl RmcpGateway {
         let Some(control_plane) = &self.config.control_plane else {
             return Ok(());
         };
+        let client = self
+            .control_plane_http
+            .as_ref()
+            .ok_or_else(|| ConnectorError::configuration("control-plane mTLS HTTP client is not configured"))?;
         let report_digest = capability_report_digest(capability, data_sources);
         #[derive(Serialize)]
         struct Capability<'a> {
@@ -698,12 +775,16 @@ impl RmcpGateway {
         };
         let endpoint = control_plane
             .base_url
-            .join(&format!("/v1/clusters/{}/handshake", control_plane.cluster_id))
+            .join(&format!(
+                "/internal/v1/connectors/v1/clusters/{}/handshake",
+                control_plane.cluster_id
+            ))
             .map_err(|_| ConnectorError::configuration("control-plane handshake URL cannot be constructed"))?;
-        let response = self
-            .http
+        let response = client
             .post(endpoint)
             .bearer_auth(self.config.internal_token())
+            .header("x-rocketmq-connector-subject", &control_plane.connector_subject)
+            .header("x-rocketmq-connector-issuer", &control_plane.connector_issuer)
             .json(&report)
             .send()
             .await
@@ -738,6 +819,10 @@ impl RmcpGateway {
         let Some(control_plane) = &self.config.control_plane else {
             return Ok(());
         };
+        let client = self
+            .control_plane_http
+            .as_ref()
+            .ok_or_else(|| ConnectorError::configuration("control-plane mTLS HTTP client is not configured"))?;
         if self.config.cluster_ids.get(cluster) != Some(&control_plane.cluster_id) {
             return Err(ConnectorError::new(
                 ConnectorErrorCode::ClusterNotAllowed,
@@ -748,12 +833,16 @@ impl RmcpGateway {
 
         let endpoint = control_plane
             .base_url
-            .join(&format!("/v1/clusters/{}", control_plane.cluster_id))
+            .join(&format!(
+                "/internal/v1/connectors/v1/clusters/{}",
+                control_plane.cluster_id
+            ))
             .map_err(|_| ConnectorError::configuration("control-plane cluster URL cannot be constructed"))?;
-        let response = self
-            .http
+        let response = client
             .get(endpoint)
             .bearer_auth(self.config.internal_token())
+            .header("x-rocketmq-connector-subject", &control_plane.connector_subject)
+            .header("x-rocketmq-connector-issuer", &control_plane.connector_issuer)
             .send()
             .await
             .map_err(|_| ConnectorError::source("control-plane cluster status is unavailable"))?;
@@ -878,6 +967,10 @@ impl McpGateway for RmcpGateway {
                 }
             }
         }
+    }
+
+    async fn read_system_resource(&self, uri: &str) -> Result<Value, ConnectorError> {
+        self.read_system_resource_once(uri).await
     }
 
     async fn ensure_cluster_active(&self, cluster: &str) -> Result<(), ConnectorError> {

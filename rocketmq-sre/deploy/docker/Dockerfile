@@ -21,7 +21,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     && install -m 0555 rocketmq-sre/target/release/rocketmq-sre-control-plane /opt/rocketmq-sre-binaries/ \
     && install -m 0555 rocketmq-sre/target/release/rocketmq-sre-connector /opt/rocketmq-sre-binaries/ \
     && install -m 0555 rocketmq-sre/target/release/rocketmq-sre-probe /opt/rocketmq-sre-binaries/ \
-    && install -m 0555 rocketmq-sre/target/release/phase00-dev-issuer /opt/rocketmq-sre-binaries/
+    && install -m 0555 rocketmq-sre/target/release/phase00-dev-issuer /opt/rocketmq-sre-binaries/ \
+    && install -m 0555 rocketmq-sre/target/release/phase01-model-mock /opt/rocketmq-sre-binaries/
 
 FROM ${RUNTIME_IMAGE} AS runtime-base
 
@@ -29,7 +30,8 @@ RUN apt-get update \
     && apt-get install --yes --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
-RUN useradd --system --uid 10001 --create-home rocketmq-sre
+RUN useradd --system --uid 10001 --create-home rocketmq-sre \
+    && install -d -o rocketmq-sre -g rocketmq-sre -m 0700 /var/lib/rocketmq-sre/evidence
 USER 10001:10001
 WORKDIR /opt/rocketmq-sre
 
@@ -56,3 +58,8 @@ FROM runtime-base AS dev-issuer
 COPY --from=builder /opt/rocketmq-sre-binaries/phase00-dev-issuer /usr/local/bin/phase00-dev-issuer
 EXPOSE 8092
 ENTRYPOINT ["/usr/local/bin/phase00-dev-issuer"]
+
+FROM runtime-base AS model-mock
+COPY --from=builder /opt/rocketmq-sre-binaries/phase01-model-mock /usr/local/bin/phase01-model-mock
+EXPOSE 8094
+ENTRYPOINT ["/usr/local/bin/phase01-model-mock"]

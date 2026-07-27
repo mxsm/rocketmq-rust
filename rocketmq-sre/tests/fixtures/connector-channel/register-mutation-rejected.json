@@ -1,0 +1,16 @@
+{
+  "schema": {
+    "family": "rocketmq-sre.connector-channel",
+    "major": 1,
+    "minor": 0
+  },
+  "session_id": "10000000-0000-4000-8000-000000000002",
+  "tenant_id": "20000000-0000-4000-8000-000000000001",
+  "cluster_id": "30000000-0000-4000-8000-000000000001",
+  "subject": "connector.fixture",
+  "capability": {
+    "mutation_supported": true,
+    "sources": []
+  },
+  "observed_at": "2026-07-27T00:00:00Z"
+}

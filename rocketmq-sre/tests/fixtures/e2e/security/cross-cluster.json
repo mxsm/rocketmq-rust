@@ -1,0 +1,6 @@
+{
+  "_license": "Copyright 2023 The RocketMQ Rust Authors; SPDX-License-Identifier: Apache-2.0",
+  "authorized_cluster_id": "00000000-0000-4000-8000-000000000002",
+  "requested_cluster_id": "00000000-0000-4000-8000-000000000003",
+  "expected_error": "cluster_not_allowed"
+}

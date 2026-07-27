@@ -20,6 +20,15 @@ $topic = 'SRE_PROBE_00000000000040008000000000000001_000000000000000000000000000
 $group = 'SRE_PROBE_G_C_00000000000040008000000000000001_00000000000000000000000000000000'
 $internalToken = 'phase00-internal-token'
 
+function Get-PublicApiHeaders {
+    @{
+        Authorization = "Bearer $internalToken"
+        'x-rocketmq-tenant' = $tenantId
+        'x-rocketmq-clusters' = $clusterId
+        'x-rocketmq-subject' = 'phase00-smoke'
+    }
+}
+
 function Require-Command([string]$Name) {
     if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
         throw "Required command '$Name' was not found."
@@ -161,14 +170,14 @@ function Wait-LagBelow([long]$UpperBound, [int]$Seconds = 60) {
 function Get-ClusterState {
     Invoke-RestMethod `
         -Uri "http://127.0.0.1:8090/v1/clusters/$clusterId" `
-        -Headers @{ Authorization = "Bearer $internalToken" } `
+        -Headers (Get-PublicApiHeaders) `
         -TimeoutSec 15
 }
 
 function Get-ClusterCapability {
     Invoke-RestMethod `
         -Uri "http://127.0.0.1:8090/v1/clusters/$clusterId/capabilities" `
-        -Headers @{ Authorization = "Bearer $internalToken" } `
+        -Headers (Get-PublicApiHeaders) `
         -TimeoutSec 15
 }
 
@@ -187,6 +196,27 @@ function Wait-ClusterReady([int]$Seconds = 90) {
         Start-Sleep -Seconds 2
     } while ([DateTime]::UtcNow -lt $deadline)
     throw 'Timed out waiting for the persisted cluster to reach ready_read_only.'
+}
+
+function Wait-ConnectorChannelOnline([int]$Seconds = 90) {
+    $deadline = [DateTime]::UtcNow.AddSeconds($Seconds)
+    $headers = Get-PublicApiHeaders
+    do {
+        try {
+            $channel = Invoke-RestMethod `
+                -Uri "http://127.0.0.1:8090/v1/clusters/$clusterId/connector" `
+                -Headers $headers `
+                -TimeoutSec 15
+            if ($channel.status.liveness -eq 'online') {
+                return $channel
+            }
+        }
+        catch {
+            # The HTTP/2 mTLS registration races initial MCP handshaking.
+        }
+        Start-Sleep -Seconds 2
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw 'Timed out waiting for the authenticated Connector mTLS channel to become online.'
 }
 
 function Assert-QueryableDataSources {
@@ -423,6 +453,8 @@ Require-Command docker
 Wait-Http 'http://127.0.0.1:8090/readyz' | Out-Null
 Wait-Http 'http://127.0.0.1:8091/readyz' | Out-Null
 Wait-ClusterReady | Out-Null
+Wait-ConnectorChannelOnline | Out-Null
+Write-Host 'Connector HTTP/2 mTLS channel registered with certificate-derived identity.'
 Assert-QueryableDataSources
 
 Invoke-Docker (Compose-Arguments @('--profile', 'smoke', 'run', '--rm', 'probe-topic-bootstrap'))

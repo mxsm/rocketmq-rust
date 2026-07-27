@@ -1,0 +1,74 @@
+{
+  "text": {
+    "status": 200,
+    "body": {
+      "id": "chatcmpl-openai-text",
+      "model": "test-model",
+      "choices": [
+        {
+          "message": {
+            "role": "assistant",
+            "content": "broker is healthy"
+          },
+          "finish_reason": "stop"
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 11,
+        "completion_tokens": 4,
+        "total_tokens": 15
+      }
+    }
+  },
+  "json": {
+    "status": 200,
+    "body": {
+      "id": "chatcmpl-openai-json",
+      "model": "test-model",
+      "choices": [
+        {
+          "message": {
+            "role": "assistant",
+            "content": "{\"status\":\"healthy\"}"
+          },
+          "finish_reason": "stop"
+        }
+      ]
+    }
+  },
+  "tool": {
+    "status": 200,
+    "body": {
+      "id": "chatcmpl-openai-tool",
+      "model": "test-model",
+      "choices": [
+        {
+          "message": {
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [
+              {
+                "id": "call-1",
+                "type": "function",
+                "function": {
+                  "name": "query_consumer_lag",
+                  "arguments": "{\"group\":\"synthetic-group\"}"
+                }
+              }
+            ]
+          },
+          "finish_reason": "tool_calls"
+        }
+      ]
+    }
+  },
+  "error": {
+    "status": 429,
+    "body": {
+      "error": {
+        "message": "rate limit",
+        "type": "rate_limit_error"
+      }
+    }
+  }
+}

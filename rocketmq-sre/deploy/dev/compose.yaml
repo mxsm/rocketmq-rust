@@ -137,7 +137,28 @@ services:
       - postgres-data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
-    networks: [rocketmq-sre]
+    networks: [rocketmq-sre, control-plane-backend]
+
+  sre-model-mock:
+    build:
+      context: ../../..
+      dockerfile: rocketmq-sre/deploy/docker/Dockerfile
+      target: model-mock
+    environment:
+      RUST_LOG: info
+      ROCKETMQ_SRE_MODEL_MOCK_BIND_ADDR: 0.0.0.0:8094
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8094/readyz"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    networks: [model-backend]
 
   sre-control-plane:
     build:
@@ -147,14 +168,26 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      sre-model-mock:
+        condition: service_healthy
     environment:
       <<: *otel-environment
       OTEL_SERVICE_NAME: rocketmq-sre-control-plane
       ROCKETMQ_SRE_BIND_ADDR: 0.0.0.0:8090
+      ROCKETMQ_SRE_CONNECTOR_BIND_ADDR: 127.0.0.1:8093
       ROCKETMQ_SRE_CONFIG_DIR: /opt/rocketmq-sre/config
       ROCKETMQ_SRE_MIGRATIONS_DIR: /opt/rocketmq-sre/migrations
       ROCKETMQ_SRE_INTERNAL_TOKEN: phase00-internal-token
+      ROCKETMQ_SRE_DEV_AUTH: "true"
+      ROCKETMQ_SRE_OBJECT_STORE_LOCAL_PATH: /var/lib/rocketmq-sre/evidence
+      ROCKETMQ_SRE_MODEL_ENABLED: "true"
+      ROCKETMQ_SRE_MODEL_LOCAL_ENDPOINT: http://sre-model-mock:8094/v1
+      ROCKETMQ_SRE_MODEL_LOCAL_NAME: phase01-read-only-fixture
+      ROCKETMQ_SRE_MODEL_SECRET_PROVIDER: none
+      ROCKETMQ_SRE_MODEL_ALLOW_INSECURE_HTTP: "true"
       DATABASE_URL: postgres://rocketmq_sre:rocketmq_sre@postgres:5432/rocketmq_sre
+    volumes:
+      - evidence-objects:/var/lib/rocketmq-sre/evidence
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8090/readyz"]
       interval: 3s
@@ -162,7 +195,34 @@ services:
       retries: 30
     ports:
       - "8090:8090"
-    networks: [rocketmq-sre]
+      - "127.0.0.1:8444:8444"
+    networks: [rocketmq-sre, control-plane-backend, model-backend]
+
+  sre-control-plane-mtls:
+    image: nginx:1.29-alpine
+    network_mode: "service:sre-control-plane"
+    depends_on:
+      sre-control-plane:
+        condition: service_healthy
+    entrypoint: ["nginx"]
+    command: ["-g", "daemon off;", "-c", "/etc/nginx/nginx.conf"]
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ./control-plane-mtls-nginx.conf:/etc/nginx/nginx.conf:ro
+      - ../../../target/phase00-certs/control-plane-server-cert.pem:/etc/rocketmq/sre-channel/control-plane-server-cert.pem:ro
+      - ../../../target/phase00-certs/control-plane-server-key.pem:/etc/rocketmq/sre-channel/control-plane-server-key.pem:ro
+      - ../../../target/phase00-certs/connector-client-ca-cert.pem:/etc/rocketmq/sre-channel/connector-client-ca-cert.pem:ro
+    healthcheck:
+      test: ["CMD", "nginx", "-t", "-c", "/etc/nginx/nginx.conf"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
 
   sre-onboarding-bootstrap:
     build:
@@ -177,11 +237,14 @@ services:
       - |
         curl --fail --silent --show-error \
           --header 'Authorization: Bearer phase00-internal-token' \
+          --header 'x-rocketmq-tenant: 00000000-0000-4000-8000-000000000002' \
+          --header 'x-rocketmq-clusters: 00000000-0000-4000-8000-000000000001' \
+          --header 'x-rocketmq-subject: phase00-compose-bootstrap' \
           --header 'Content-Type: application/json' \
           --data '{"cluster_id":"00000000-0000-4000-8000-000000000001","tenant_id":"00000000-0000-4000-8000-000000000002","external_cluster_key":"sre-dev","environment":"development","region":"local","rocketmq_version":"1.0.0-dev","deployment_mode":"controller","owner":"rocketmq-sre-dev","actor_subject":"phase00-compose-bootstrap"}' \
           http://sre-control-plane:8090/v1/clusters/onboard
     restart: "no"
-    networks: [rocketmq-sre]
+    networks: [control-plane-backend]
 
   dev-issuer:
     build:
@@ -281,13 +344,19 @@ services:
     depends_on:
       sre-onboarding-bootstrap:
         condition: service_completed_successfully
+      sre-control-plane-mtls:
+        condition: service_healthy
       mcp:
         condition: service_started
     environment:
       <<: *otel-environment
       OTEL_SERVICE_NAME: rocketmq-sre-connector
       ROCKETMQ_SRE_CONNECTOR_BIND_ADDR: 0.0.0.0:8091
-      ROCKETMQ_SRE_CONTROL_PLANE_URL: http://sre-control-plane:8090
+      ROCKETMQ_SRE_CONTROL_PLANE_URL: https://sre-control-plane:8444
+      ROCKETMQ_SRE_CONTROL_PLANE_CA_PATH: /etc/rocketmq/sre-channel/control-plane-server-ca-cert.pem
+      ROCKETMQ_SRE_CONTROL_PLANE_CLIENT_IDENTITY_PATH: /etc/rocketmq/sre-channel/connector-client-identity.pem
+      ROCKETMQ_SRE_CONNECTOR_SUBJECT: "CN=rocketmq-sre-connector"
+      ROCKETMQ_SRE_CONNECTOR_ISSUER: "CN=RocketMQ SRE Connector Development CA"
       ROCKETMQ_SRE_MCP_URL: https://127.0.0.1:8089/mcp
       ROCKETMQ_SRE_MCP_CA_PATH: /etc/rocketmq/tls/ca-cert.pem
       ROCKETMQ_SRE_OAUTH_TOKEN_ENDPOINT: https://dev-issuer-tls:8443/oauth/token
@@ -297,15 +366,22 @@ services:
       ROCKETMQ_SRE_OAUTH_AUDIENCE: rocketmq-mcp
       ROCKETMQ_SRE_OAUTH_SCOPE: "rocketmq:read rocketmq:diagnose"
       ROCKETMQ_SRE_INTERNAL_TOKEN: phase00-internal-token
-      ROCKETMQ_SRE_CONNECTOR_ISSUER: *dev-issuer-url
       ROCKETMQ_SRE_CLUSTER_ID: 00000000-0000-4000-8000-000000000001
       ROCKETMQ_SRE_CLUSTER_ALLOWLIST: sre-dev
       ROCKETMQ_SRE_TENANT_ID: 00000000-0000-4000-8000-000000000002
       ROCKETMQ_SRE_PROMETHEUS_URL: http://prometheus:9090
       ROCKETMQ_SRE_LOKI_URL: http://loki:3100
       ROCKETMQ_SRE_TEMPO_URL: http://tempo:3200
+      ROCKETMQ_SRE_ADMIN_NAMESRV_ADDR: namesrv:9876
+      ROCKETMQ_SRE_ADMIN_USE_TLS: "false"
+      ROCKETMQ_SRE_ADMIN_ACCESS_KEY_ENV: ROCKETMQ_SRE_ADMIN_ACCESS_KEY
+      ROCKETMQ_SRE_ADMIN_SECRET_KEY_ENV: ROCKETMQ_SRE_ADMIN_SECRET_KEY
+    env_file:
+      - ../../../target/phase00-certs/admin-read.env
     volumes:
       - ../../../target/phase00-certs/ca-cert.pem:/etc/rocketmq/tls/ca-cert.pem:ro
+      - ../../../target/phase00-certs/control-plane-server-ca-cert.pem:/etc/rocketmq/sre-channel/control-plane-server-ca-cert.pem:ro
+      - ../../../target/phase00-certs/connector-client-identity.pem:/etc/rocketmq/sre-channel/connector-client-identity.pem:ro
 
   sre-probe:
     profiles: ["smoke"]
@@ -365,12 +441,20 @@ services:
     build:
       context: ../../..
       dockerfile: rocketmq-sre/deploy/docker/ui.Dockerfile
+      args:
+        VITE_SRE_AUTH_MODE: development
+        VITE_SRE_DEV_SUBJECT: phase00-compose-ui
+        VITE_SRE_DEV_DISPLAY_NAME: RocketMQ SRE Dev Operator
+        VITE_SRE_DEV_TENANT: 00000000-0000-4000-8000-000000000002
+        VITE_SRE_DEV_CLUSTERS: 00000000-0000-4000-8000-000000000001
+        VITE_SRE_DEV_ROLES: "rocketmq:read rocketmq:diagnose"
+        VITE_SRE_DEV_TOKEN: phase00-internal-token
     depends_on:
       sre-control-plane:
         condition: service_healthy
     ports:
       - "3004:3004"
-    networks: [rocketmq-sre]
+    networks: [rocketmq-sre, control-plane-backend]
 
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.130.1
@@ -385,7 +469,7 @@ services:
     depends_on:
       - loki
       - tempo
-    networks: [rocketmq-sre]
+    networks: [rocketmq-sre, control-plane-backend]
 
   prometheus:
     image: prom/prometheus:v3.5.0
@@ -424,6 +508,12 @@ services:
 networks:
   rocketmq-sre:
     name: rocketmq-sre-phase00
+  control-plane-backend:
+    name: rocketmq-sre-phase00-control-plane
+    internal: true
+  model-backend:
+    name: rocketmq-sre-phase01-model
+    internal: true
 
 volumes:
   namesrv-data:
@@ -431,6 +521,7 @@ volumes:
   broker-data:
   mcp-data:
   postgres-data:
+  evidence-objects:
   prometheus-data:
   loki-data:
   tempo-data:

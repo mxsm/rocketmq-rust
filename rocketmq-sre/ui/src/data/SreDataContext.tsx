@@ -8,14 +8,7 @@ import {
   useState,
 } from "react";
 
-import {
-  getCapabilities,
-  getClusterCapabilities,
-  getCoverage,
-  getHealth,
-  getReadiness,
-  listClusters,
-} from "@/api/client";
+import { createHttpSreApi, type SreApi } from "@/api/client";
 import type {
   CapabilityCatalogResponse,
   CapabilitySnapshot,
@@ -23,12 +16,8 @@ import type {
   CoverageMatrix,
   ServiceStatus,
 } from "@/api/types";
-import {
-  demoCapabilities,
-  demoCatalog,
-  demoClusters,
-  demoCoverage,
-} from "@/data/demo";
+import { useAuth } from "@/auth/AuthContext";
+import { createMockSreApi } from "@/data/mockApi";
 
 interface SreData {
   clusters: ClusterSummary[];
@@ -37,6 +26,7 @@ interface SreData {
   loading: boolean;
   error?: string;
   demoMode: boolean;
+  api: SreApi;
   refresh: () => Promise<void>;
   capability: (
     clusterId: string,
@@ -52,6 +42,9 @@ function isDemoMode() {
   if (!import.meta.env.DEV) {
     return false;
   }
+  if (import.meta.env.VITE_SRE_API_MODE === "mock") {
+    return true;
+  }
   const requested =
     import.meta.env.VITE_SRE_DEMO_MODE === "true" ||
     new URLSearchParams(window.location.search).get("demo") === "1";
@@ -62,7 +55,15 @@ function isDemoMode() {
 }
 
 export function SreDataProvider({ children }: PropsWithChildren) {
+  const auth = useAuth();
   const demoMode = useMemo(isDemoMode, []);
+  const api = useMemo(
+    () =>
+      demoMode
+        ? createMockSreApi(auth.requestContext)
+        : createHttpSreApi(auth.requestContext),
+    [auth.requestContext, demoMode],
+  );
   const [clusters, setClusters] = useState<ClusterSummary[]>([]);
   const [health, setHealth] =
     useState<ServiceStatus["status"]>("unavailable");
@@ -74,22 +75,19 @@ export function SreDataProvider({ children }: PropsWithChildren) {
   const refresh = useCallback(async () => {
     setLoading(true);
     setError(undefined);
-    if (demoMode) {
-      setClusters(demoClusters);
-      setHealth("healthy");
-      setReadiness("ready");
-      setLoading(false);
-      return;
-    }
     const controller = new AbortController();
     const results = await Promise.allSettled([
-      listClusters(controller.signal),
-      getHealth(controller.signal),
-      getReadiness(controller.signal),
+      api.listClusters(controller.signal),
+      api.getHealth(controller.signal),
+      api.getReadiness(controller.signal),
     ]);
     const [clusterResult, healthResult, readinessResult] = results;
     if (clusterResult.status === "fulfilled") {
-      setClusters(clusterResult.value);
+      setClusters(
+        clusterResult.value.filter((cluster) =>
+          auth.hasClusterScope(cluster.id),
+        ),
+      );
     }
     if (healthResult.status === "fulfilled") {
       setHealth(healthResult.value.status);
@@ -101,7 +99,7 @@ export function SreDataProvider({ children }: PropsWithChildren) {
       setError("部分只读数据源暂不可用；未返回的数据不会按 0 处理。");
     }
     setLoading(false);
-  }, [demoMode]);
+  }, [api, auth]);
 
   useEffect(() => {
     void refresh();
@@ -115,24 +113,16 @@ export function SreDataProvider({ children }: PropsWithChildren) {
       loading,
       error,
       demoMode,
+      api,
       refresh,
-      capability: async (clusterId, signal) => {
-        if (demoMode) {
-          const capability = demoCapabilities[clusterId];
-          if (!capability) {
-            throw new Error("该集群没有可用的 capability snapshot");
-          }
-          return capability;
-        }
-        return getClusterCapabilities(clusterId, signal);
-      },
-      coverage: (signal) =>
-        demoMode ? Promise.resolve(demoCoverage) : getCoverage(signal),
-      catalog: (signal) =>
-        demoMode ? Promise.resolve(demoCatalog) : getCapabilities(signal),
+      capability: (clusterId, signal) =>
+        api.getClusterCapabilities(clusterId, signal),
+      coverage: (signal) => api.getCoverage(signal),
+      catalog: (signal) => api.getCapabilities(signal),
     }),
     [
       clusters,
+      api,
       demoMode,
       error,
       health,

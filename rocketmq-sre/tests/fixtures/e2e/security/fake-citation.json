@@ -1,0 +1,10 @@
+{
+  "_license": "Copyright 2023 The RocketMQ Rust Authors; SPDX-License-Identifier: Apache-2.0",
+  "authorized_evidence_ids": [
+    "00000000-0000-4000-8000-000000000101"
+  ],
+  "claimed_evidence_ids": [
+    "00000000-0000-4000-8000-000000000999"
+  ],
+  "expected_error": "invalid_evidence_citation"
+}

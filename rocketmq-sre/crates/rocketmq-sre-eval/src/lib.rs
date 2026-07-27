@@ -14,6 +14,8 @@
 
 //! Deterministic schema export and signal-coverage manifest loading.
 
+pub mod phase1_shadow;
+
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;

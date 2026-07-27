@@ -1,0 +1,155 @@
+# Copyright 2023 The RocketMQ Rust Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#     Unless required by applicable law or agreed to in writing, software
+#     distributed under the License is distributed on an "AS IS" BASIS,
+#     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#     See the License for the specific language governing permissions and
+#     limitations under the License.
+
+schema_version: rocketmq.sre.observability-metrics.v1
+owner: rocketmq-sre-control-plane
+cardinality_policy:
+  arbitrary_label_values: forbidden
+  unknown_value: other
+  forbidden_labels:
+    - tenant_id
+    - cluster_id
+    - incident_id
+    - investigation_id
+    - evidence_id
+    - correlation_id
+    - connector_id
+    - model
+    - endpoint
+    - prompt
+    - tool_name
+    - tool_arguments
+    - token
+    - secret
+  latency_buckets_seconds:
+    - 0.001
+    - 0.005
+    - 0.010
+    - 0.025
+    - 0.050
+    - 0.100
+    - 0.250
+    - 0.500
+    - 1
+    - 5
+
+metrics:
+  - name: rocketmq_sre_incidents_total
+    type: counter
+    unit: "{incident}"
+    labels: [outcome]
+    allowed_values:
+      outcome: [started, completed, failed, rules_only, cancelled]
+
+  - name: rocketmq_sre_incidents_active
+    type: gauge
+    unit: "{incident}"
+    labels: []
+
+  - name: rocketmq_sre_evidence_queries_total
+    type: counter
+    unit: "{query}"
+    labels: [source, result]
+
+  - name: rocketmq_sre_evidence_query_errors_total
+    type: counter
+    unit: "{error}"
+    labels: [source, result]
+
+  - name: rocketmq_sre_evidence_query_duration_seconds
+    type: histogram
+    unit: s
+    labels: [source]
+    allowed_values:
+      source: [mcp, admin_query, prometheus, loki, tempo, kubernetes, runtime, topology, other]
+
+  - name: rocketmq_sre_diagnostic_evaluations_total
+    type: counter
+    unit: "{evaluation}"
+    labels: [pack, result]
+
+  - name: rocketmq_sre_diagnostic_evaluation_duration_seconds
+    type: histogram
+    unit: s
+    labels: [pack]
+    allowed_values:
+      pack:
+        - consumer_lag
+        - consumer_runtime
+        - producer_connectivity
+        - broker_health
+        - message_path
+        - telemetry_pipeline
+        - deployment_drift
+        - cluster_topology
+        - other
+
+  - name: rocketmq_sre_model_requests_total
+    type: counter
+    unit: "{request}"
+    labels: [provider, purpose, result]
+
+  - name: rocketmq_sre_model_errors_total
+    type: counter
+    unit: "{error}"
+    labels: [provider, result]
+
+  - name: rocketmq_sre_model_request_duration_seconds
+    type: histogram
+    unit: s
+    labels: [provider]
+
+  - name: rocketmq_sre_model_tokens_total
+    type: counter
+    unit: "{token}"
+    labels: [provider, direction]
+    allowed_values:
+      direction: [input, output]
+
+  - name: rocketmq_sre_model_cost_microusd_total
+    type: counter
+    unit: micro_usd
+    labels: [provider]
+    notes:
+      - The value is an estimate supplied by the selected model profile.
+      - Billing account, API key, model name, and endpoint are never labels.
+
+  - name: rocketmq_sre_tool_calls_total
+    type: counter
+    unit: "{call}"
+    labels: [tool_class, result]
+    allowed_values:
+      tool_class: [cluster, topic, broker, consumer, message_metadata, runtime, observability, other]
+
+shared_allowed_values:
+  result:
+    - success
+    - timeout
+    - rate_limited
+    - unauthorized
+    - unavailable
+    - invalid_response
+    - cancelled
+    - other_error
+  provider:
+    - openai_compatible
+    - anthropic
+    - gemini
+    - bedrock
+    - deepseek
+    - zhipu_glm
+    - moonshot_kimi
+    - local
+    - spi
+    - other
+  purpose: [diagnosis, retrieval, summarization, classification, other]

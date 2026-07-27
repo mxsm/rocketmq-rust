@@ -1,0 +1,36 @@
+{
+  "pack": "producer-connectivity.v1",
+  "scenario": "fault",
+  "expected_status": "fault",
+  "expected_reason_codes": [
+    "PRODUCER_CONNECTION_LOST",
+    "PRODUCER_ROUTE_STALE",
+    "PRODUCER_SEND_FAILURES",
+    "PRODUCER_QUEUE_SELECTION_FAILED",
+    "PRODUCER_BACKPRESSURE",
+    "PRODUCER_CLIENT_VERSION_UNSUPPORTED"
+  ],
+  "evidence": [
+    {
+      "evidence_id": "00000000-0000-4000-8004-000000000102",
+      "source": "admin-query",
+      "resource": "producer-connectivity/producer-a",
+      "content": {
+        "connected": false,
+        "route_age_seconds": 900,
+        "send_error_rate_percent": 15,
+        "retry_rate_percent": 25,
+        "timeout_rate_percent": 8,
+        "queue_selection_failures": 12,
+        "backpressure": true,
+        "client_version_supported": false
+      }
+    },
+    {
+      "evidence_id": "00000000-0000-4000-8004-000000000121",
+      "source": "rocketmq-mcp",
+      "resource": "topic-route/topic-a",
+      "content": { "route_available": false, "queue_count": 0 }
+    }
+  ]
+}

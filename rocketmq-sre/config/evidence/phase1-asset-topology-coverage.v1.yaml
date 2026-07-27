@@ -1,0 +1,81 @@
+# Copyright 2023 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0.
+
+schema_version: rocketmq-sre.asset-topology-coverage.v1
+phase: 1
+runtime_contract: rocketmq-sre.inventory-coverage.v1
+strict_read_only: true
+limits:
+  detail_queries_per_snapshot: 32
+  client_connection_rows_per_snapshot: 200
+  consumer_connection_groups_per_snapshot: 32
+  upload_max_bytes: 524288
+  dangling_edges: removed
+assets:
+  name_server:
+    sources: [kubernetes_pod_service_label]
+    missing_status: not_production_verified
+  controller:
+    sources: [kubernetes_pod_service_label]
+    missing_status: not_production_verified
+  broker:
+    sources: [mcp_cluster_overview, admin_broker_list, kubernetes_pod_service_label]
+    missing_status: not_production_verified
+  proxy:
+    sources: [kubernetes_pod_service_label]
+    missing_status: not_production_verified
+  store:
+    sources: [mcp_broker_runtime_summary, admin_broker_runtime_summary, kubernetes_broker_pod]
+    missing_status: not_production_verified
+  topic:
+    sources: [mcp_topic_list, admin_topic_list]
+    missing_status: not_production_verified
+  queue:
+    sources: [mcp_topic_description, admin_topic_route, consumer_lag_queue]
+    missing_status: not_production_verified
+  consumer:
+    sources: [mcp_consumer_group_list, admin_consumer_group_list, topic_consumer_association]
+    missing_status: not_production_verified
+  producer:
+    sources: [admin_read_broker_producer_table]
+    missing_status: not_production_verified
+    reason_code: producer_connection_query_not_observed
+  connection:
+    sources: [admin_read_broker_producer_table, admin_read_consumer_connection]
+    identity: tenant_cluster_keyed_pseudonym
+    missing_status: not_production_verified
+    reason_code: client_connection_query_not_observed
+  pod:
+    sources: [kubernetes_pods]
+    missing_status: not_production_verified
+  node:
+    sources: [kubernetes_nodes, kubernetes_pod_scheduling]
+    identity: tenant_cluster_pseudonym
+    missing_status: not_production_verified
+  persistent_volume_claim:
+    sources: [kubernetes_persistent_volume_claims, kubernetes_pod_volume]
+    missing_status: not_production_verified
+  pod_disruption_budget:
+    sources: [kubernetes_policy_v1_pod_disruption_budgets]
+    missing_status: not_production_verified
+paths:
+  topic_queue_broker_store_kubernetes:
+    required: Topic -> Queue -> Broker -> Store -> Pod/Node/PVC
+    no_inference: true
+    broker_pod_join_requires_label: rocketmq.apache.org/broker-name
+  client_connection_broker:
+    required: Producer/Consumer -> Connection -> Broker
+    status: available_when_observed
+    source: read_client_adapter
+    raw_client_identity_exported: false
+    missing_reason_code: client_connection_query_not_observed
+forbidden_content:
+  - message_body
+  - message_payload
+  - access_token
+  - secret
+  - private_key
+  - acl_material
+  - tls_material
+  - client_ip
+  - internal_address

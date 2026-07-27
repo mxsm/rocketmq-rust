@@ -43,6 +43,7 @@ use uuid::Uuid;
 const DEFAULT_CLUSTER_ID: &str = "00000000-0000-4000-8000-000000000001";
 const DEFAULT_RUN_ID: &str = "00000000-0000-0000-0000-000000000000";
 const DEFAULT_NAMESRV_ADDR: &str = "namesrv:9876";
+const PROBE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug)]
 enum Command {
@@ -50,6 +51,17 @@ enum Command {
     Register,
     Send,
     Consume,
+}
+
+impl Command {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Plan => "plan",
+            Self::Register => "register",
+            Self::Send => "send",
+            Self::Consume => "consume",
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -66,8 +78,6 @@ enum ProbeRunError {
     RocketMq(#[from] rocketmq_error::RocketMQError),
     #[error("probe timed out before the bounded operation completed")]
     Timeout,
-    #[error("client runtime did not shut down cleanly")]
-    ClientShutdown,
     #[error("probe plan could not be encoded")]
     Encoding(#[from] serde_json::Error),
 }
@@ -80,30 +90,57 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         return Ok(());
     }
     let acl_config = load_probe_acl_config()?;
+    let operation_timeout = Duration::from_secs(u64::from(plan.max_duration_seconds));
 
     let runtime_owner = RuntimeOwner::new(RuntimeConfig {
         thread_name: "rocketmq-sre-probe".to_owned(),
+        shutdown_timeout: PROBE_SHUTDOWN_TIMEOUT,
         ..RuntimeConfig::default()
     })?;
     let client_runtime = ClientRuntime::new(
         runtime_owner.root_context().child("probe.client"),
-        ClientRuntimeConfig::default(),
+        ClientRuntimeConfig {
+            shutdown_timeout: PROBE_SHUTDOWN_TIMEOUT,
+        },
     );
-    let operation_result = runtime_owner.block_on(run_command(
-        command,
-        Arc::clone(&client_runtime),
-        plan,
-        namesrv_addr,
-        acl_config,
-    ));
-    let client_shutdown = runtime_owner.block_on(client_runtime.shutdown());
+    let operation_result = runtime_owner.block_on(async {
+        match tokio::time::timeout(
+            operation_timeout,
+            run_command(command, Arc::clone(&client_runtime), plan, namesrv_addr, acl_config),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => Err(ProbeRunError::Timeout),
+        }
+    });
+    let client_shutdown =
+        runtime_owner.block_on(async { tokio::time::timeout(PROBE_SHUTDOWN_TIMEOUT, client_runtime.shutdown()).await });
     let runtime_shutdown = runtime_owner.shutdown_runtime_blocking();
 
-    operation_result?;
-    if !client_shutdown.is_healthy() {
-        return Err(Box::new(ProbeRunError::ClientShutdown));
+    let mut cleanup_partial = operation_result?;
+    cleanup_partial |= match client_shutdown {
+        Ok(report) => {
+            let unhealthy = !report.is_healthy();
+            if unhealthy {
+                eprintln!("level=warn stage=client_runtime_shutdown cleanup_partial=true reason=unhealthy");
+            }
+            unhealthy
+        }
+        Err(_) => {
+            eprintln!("level=warn stage=client_runtime_shutdown cleanup_partial=true reason=timeout");
+            true
+        }
+    };
+    let runtime_shutdown = runtime_shutdown?;
+    if !runtime_shutdown.is_healthy() {
+        eprintln!("level=warn stage=runtime_owner_shutdown cleanup_partial=true reason=unhealthy");
+        cleanup_partial = true;
     }
-    runtime_shutdown?;
+    println!(
+        "probe_result command={} cleanup_partial={cleanup_partial}",
+        command.as_str()
+    );
     Ok(())
 }
 
@@ -163,9 +200,10 @@ async fn run_command(
     plan: ProbePlan,
     namesrv_addr: String,
     acl_config: Option<ProbeAclConfig>,
-) -> Result<(), ProbeRunError> {
+) -> Result<bool, ProbeRunError> {
+    println!("probe_stage command={} stage=operation status=begin", command.as_str());
     match command {
-        Command::Plan => Ok(()),
+        Command::Plan => Ok(false),
         Command::Register => register(client_runtime, &plan, &namesrv_addr, acl_config.as_ref()).await,
         Command::Send => send(client_runtime, &plan, &namesrv_addr, acl_config.as_ref()).await,
         Command::Consume => consume(client_runtime, &plan, &namesrv_addr, acl_config.as_ref()).await,
@@ -177,7 +215,7 @@ async fn register(
     plan: &ProbePlan,
     namesrv_addr: &str,
     acl_config: Option<&ProbeAclConfig>,
-) -> Result<(), ProbeRunError> {
+) -> Result<bool, ProbeRunError> {
     let builder = DefaultMQPushConsumer::builder(Arc::clone(&client_runtime))
         .consumer_group(plan.identity.consumer_group.clone())
         .name_server_addr(namesrv_addr.to_owned());
@@ -188,15 +226,24 @@ async fn register(
     let mut consumer = builder.build();
     consumer.subscribe(&plan.identity.topic, "*").await?;
     consumer.register_message_listener_concurrently(CountingListener::default());
+    println!("probe_stage command=register stage=consumer_start status=begin");
     consumer.start().await?;
+    println!("probe_stage command=register stage=consumer_start status=end");
     let cancellation = client_runtime.service_context().task_group().cancellation_token();
-    let _ = tokio::time::timeout(Duration::from_secs(1), cancellation.cancelled()).await;
-    consumer.shutdown().await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    cancellation.cancel();
+    let cleanup_partial = tokio::time::timeout(PROBE_SHUTDOWN_TIMEOUT, consumer.shutdown())
+        .await
+        .is_err();
+    if cleanup_partial {
+        eprintln!("level=warn stage=consumer_shutdown cleanup_partial=true reason=timeout");
+    }
     println!(
-        "registered topic={} group={}",
-        plan.identity.topic, plan.identity.consumer_group
+        "registered topic={} group={} cleanup_partial={cleanup_partial}",
+        plan.identity.topic, plan.identity.consumer_group,
     );
-    Ok(())
+    println!("probe_stage command=register stage=operation status=end");
+    Ok(cleanup_partial)
 }
 
 async fn send(
@@ -204,8 +251,8 @@ async fn send(
     plan: &ProbePlan,
     namesrv_addr: &str,
     acl_config: Option<&ProbeAclConfig>,
-) -> Result<(), ProbeRunError> {
-    let builder = DefaultMQProducer::builder(client_runtime)
+) -> Result<bool, ProbeRunError> {
+    let builder = DefaultMQProducer::builder(Arc::clone(&client_runtime))
         .producer_group(plan.identity.producer_group.clone())
         .name_server_addr(namesrv_addr.to_owned());
     let builder = match acl_config {
@@ -213,8 +260,11 @@ async fn send(
         None => builder,
     };
     let mut producer = builder.build();
+    println!("probe_stage command=send stage=producer_start status=begin");
     producer.start().await?;
+    println!("probe_stage command=send stage=producer_start status=end");
     let payload = vec![b'x'; plan.max_payload_bytes as usize];
+    println!("probe_stage command=send stage=message_batch status=begin");
     for sequence in 0..plan.max_messages {
         let message = Message::builder()
             .topic(plan.identity.topic.clone())
@@ -224,12 +274,26 @@ async fn send(
             .build_unchecked();
         producer.send_with_timeout(message, 2_000).await?;
     }
-    producer.shutdown().await;
+    println!("probe_stage command=send stage=message_batch status=end");
+    println!("probe_stage command=send stage=producer_shutdown status=begin");
+    let cleanup_partial = tokio::time::timeout(PROBE_SHUTDOWN_TIMEOUT, producer.shutdown())
+        .await
+        .is_err();
+    println!("probe_stage command=send stage=producer_shutdown status=end");
+    client_runtime
+        .service_context()
+        .task_group()
+        .cancellation_token()
+        .cancel();
+    if cleanup_partial {
+        eprintln!("level=warn stage=producer_shutdown cleanup_partial=true reason=timeout");
+    }
     println!(
-        "sent={} topic={} payload_bytes={}",
-        plan.max_messages, plan.identity.topic, plan.max_payload_bytes
+        "sent={} topic={} payload_bytes={} cleanup_partial={cleanup_partial}",
+        plan.max_messages, plan.identity.topic, plan.max_payload_bytes,
     );
-    Ok(())
+    println!("probe_stage command=send stage=operation status=end");
+    Ok(cleanup_partial)
 }
 
 async fn consume(
@@ -237,11 +301,11 @@ async fn consume(
     plan: &ProbePlan,
     namesrv_addr: &str,
     acl_config: Option<&ProbeAclConfig>,
-) -> Result<(), ProbeRunError> {
+) -> Result<bool, ProbeRunError> {
     let listener = CountingListener::default();
     let observed = Arc::clone(&listener.observed);
     let notification = Arc::clone(&listener.notification);
-    let builder = DefaultMQPushConsumer::builder(client_runtime)
+    let builder = DefaultMQPushConsumer::builder(Arc::clone(&client_runtime))
         .consumer_group(plan.identity.consumer_group.clone())
         .name_server_addr(namesrv_addr.to_owned());
     let builder = match acl_config {
@@ -251,7 +315,9 @@ async fn consume(
     let mut consumer = builder.build();
     consumer.subscribe(&plan.identity.topic, "*").await?;
     consumer.register_message_listener_concurrently(listener);
+    println!("probe_stage command=consume stage=consumer_start status=begin");
     consumer.start().await?;
+    println!("probe_stage command=consume stage=consumer_start status=end");
     let expected = usize::from(plan.max_messages);
     let wait = async {
         while observed.load(Ordering::Acquire) < expected {
@@ -259,15 +325,26 @@ async fn consume(
         }
     };
     let result = tokio::time::timeout(Duration::from_secs(u64::from(plan.max_duration_seconds)), wait).await;
-    consumer.shutdown().await;
+    client_runtime
+        .service_context()
+        .task_group()
+        .cancellation_token()
+        .cancel();
+    let cleanup_partial = tokio::time::timeout(PROBE_SHUTDOWN_TIMEOUT, consumer.shutdown())
+        .await
+        .is_err();
+    if cleanup_partial {
+        eprintln!("level=warn stage=consumer_shutdown cleanup_partial=true reason=timeout");
+    }
     result.map_err(|_| ProbeRunError::Timeout)?;
     println!(
-        "consumed={} topic={} group={}",
+        "consumed={} topic={} group={} cleanup_partial={cleanup_partial}",
         observed.load(Ordering::Acquire),
         plan.identity.topic,
-        plan.identity.consumer_group
+        plan.identity.consumer_group,
     );
-    Ok(())
+    println!("probe_stage command=consume stage=operation status=end");
+    Ok(cleanup_partial)
 }
 
 #[derive(Clone, Default)]

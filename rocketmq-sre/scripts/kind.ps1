@@ -42,10 +42,14 @@ $localImages = [ordered]@{
     mcp = 'rocketmq-rust/mcp:local'
     'sre-control-plane' = 'rocketmq-rust/sre-control-plane:phase00-local'
     'sre-connector' = 'rocketmq-rust/sre-connector:phase00-local'
+    'sre-probe' = 'rocketmq-rust/sre-probe:phase00-local'
+    'sre-model-mock' = 'rocketmq-rust/sre-model-mock:phase00-local'
     'sre-ui' = 'rocketmq-rust/sre-ui:phase00-local'
+    'fault-driver' = 'rocketmq-rust/fault-driver:local'
 }
 $supportImages = @(
     'postgres:17-alpine',
+    'nginx:1.29-alpine',
     'otel/opentelemetry-collector-contrib:0.130.1',
     'prom/prometheus:v3.5.0',
     'grafana/loki:3.5.2',
@@ -151,6 +155,30 @@ function Write-Utf8File([string]$Path, [string]$Content) {
     [IO.File]::WriteAllText($Path, $Content, [Text.UTF8Encoding]::new($false))
 }
 
+function Ensure-AdminReadCredentialFixtures {
+    $accessKeyPath = Join-Path $artifactRoot 'admin-read-access-key'
+    $secretKeyPath = Join-Path $artifactRoot 'admin-read-secret-key'
+    if (
+        (Test-Path -LiteralPath $accessKeyPath -PathType Leaf) -and
+        (Test-Path -LiteralPath $secretKeyPath -PathType Leaf)
+    ) {
+        return
+    }
+
+    $credentialsPath = Join-Path $artifactRoot 'mcp-rmq-credentials.yml'
+    if (-not (Test-Path -LiteralPath $credentialsPath -PathType Leaf)) {
+        throw 'Read-only Admin credential fixtures cannot be derived because the MCP reader credential file is missing.'
+    }
+    $credentials = Get-Content -Raw -LiteralPath $credentialsPath
+    $accessKey = [regex]::Match($credentials, '(?m)^access_key:\s*([^\s]+)\s*$')
+    $secretKey = [regex]::Match($credentials, '(?m)^secret_key:\s*([^\s]+)\s*$')
+    if (-not $accessKey.Success -or -not $secretKey.Success) {
+        throw 'The MCP reader credential file is malformed and cannot seed the read-only Admin source.'
+    }
+    Write-Utf8File $accessKeyPath $accessKey.Groups[1].Value
+    Write-Utf8File $secretKeyPath $secretKey.Groups[1].Value
+}
+
 function New-RandomSecret {
     $bytes = New-Object byte[] 32
     $generator = [Security.Cryptography.RandomNumberGenerator]::Create()
@@ -172,8 +200,13 @@ function Ensure-Kubeconfig {
 
 function Build-Images {
     foreach ($entry in $localImages.GetEnumerator()) {
-        if ($entry.Key -in @('sre-control-plane', 'sre-connector')) {
-            $target = if ($entry.Key -eq 'sre-control-plane') { 'control-plane' } else { 'connector' }
+        if ($entry.Key -in @('sre-control-plane', 'sre-connector', 'sre-probe', 'sre-model-mock')) {
+            $target = switch ($entry.Key) {
+                'sre-control-plane' { 'control-plane' }
+                'sre-connector' { 'connector' }
+                'sre-probe' { 'probe' }
+                'sre-model-mock' { 'model-mock' }
+            }
             Invoke-Native docker @(
                 'build',
                 '--file', (Join-Path $sreRoot 'deploy/docker/Dockerfile'),
@@ -186,6 +219,13 @@ function Build-Images {
             Invoke-Native docker @(
                 'build',
                 '--file', (Join-Path $sreRoot 'deploy/docker/ui.Dockerfile'),
+                '--build-arg', 'VITE_SRE_AUTH_MODE=development',
+                '--build-arg', 'VITE_SRE_DEV_SUBJECT=phase00-kind-ui',
+                '--build-arg', 'VITE_SRE_DEV_DISPLAY_NAME=RocketMQ SRE Kind Operator',
+                '--build-arg', 'VITE_SRE_DEV_TENANT=00000000-0000-4000-8000-000000000002',
+                '--build-arg', 'VITE_SRE_DEV_CLUSTERS=00000000-0000-4000-8000-000000000001',
+                '--build-arg', 'VITE_SRE_DEV_ROLES=rocketmq:read rocketmq:diagnose',
+                '--build-arg', 'VITE_SRE_DEV_TOKEN=phase00-internal-token',
                 '--tag', $entry.Value,
                 $repositoryRoot
             ) | Out-Null
@@ -257,15 +297,31 @@ function New-SecretMaterial([switch]$ExistingCluster) {
     New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
 
     $devScript = Join-Path $scriptDirectory 'dev.ps1'
-    $missingCertificateMaterial = @(
+    $missingBaseCertificates = @(
         @('ca-cert.pem', 'server-cert.pem', 'server-key.pem') |
             Where-Object { -not (Test-Path -LiteralPath (Join-Path $certificateRoot $_) -PathType Leaf) }
     )
-    if ($missingCertificateMaterial.Count -gt 0) {
+    if ($missingBaseCertificates.Count -gt 0) {
         if ($ExistingCluster) {
             throw "Kind certificate fixtures are incomplete for existing cluster '$ClusterName'. Run -Action Down before regenerating them."
         }
         & $devScript -Action Certs
+    }
+    $missingChannelCertificates = @(
+        @(
+            'control-plane-server-ca-cert.pem',
+            'control-plane-server-cert.pem',
+            'control-plane-server-key.pem',
+            'connector-client-ca-cert.pem',
+            'connector-client-identity.pem'
+        ) |
+            Where-Object { -not (Test-Path -LiteralPath (Join-Path $certificateRoot $_) -PathType Leaf) }
+    )
+    if ($missingChannelCertificates.Count -gt 0) {
+        if ($ExistingCluster) {
+            throw "Kind connector-channel mTLS fixtures are incomplete for existing cluster '$ClusterName'. Run -Action Down before regenerating them."
+        }
+        & $devScript -Action ChannelCerts
     }
 
     $secretFixtureNames = @(
@@ -290,6 +346,7 @@ function New-SecretMaterial([switch]$ExistingCluster) {
             Where-Object { Test-Path -LiteralPath (Join-Path $artifactRoot $_) -PathType Leaf }
     )
     if ($existingSecretFixtures.Count -eq $secretFixtureNames.Count) {
+        Ensure-AdminReadCredentialFixtures
         Write-Host "Reusing existing Kind credential fixtures from $artifactRoot."
         return
     }
@@ -355,6 +412,8 @@ function New-SecretMaterial([switch]$ExistingCluster) {
         'broker-acl.yml' = $brokerAcl
         'proxy-acl.yml' = $bootstrapAcl
         'mcp-rmq-credentials.yml' = "access_key: $mcpAccessKey`nsecret_key: $mcpSecretKey`n"
+        'admin-read-access-key' = $mcpAccessKey
+        'admin-read-secret-key' = $mcpSecretKey
         'probe-access-key' = $probeAccessKey
         'probe-secret-key' = $probeSecretKey
         'bootstrap-access-key' = $bootstrapAccessKey
@@ -411,10 +470,21 @@ function Apply-Secrets {
         "--from-file=probe-access-key=$(Join-Path $artifactRoot 'probe-access-key')",
         "--from-file=probe-secret-key=$(Join-Path $artifactRoot 'probe-secret-key')",
         "--from-file=bootstrap-access-key=$(Join-Path $artifactRoot 'bootstrap-access-key')",
-        "--from-file=bootstrap-secret-key=$(Join-Path $artifactRoot 'bootstrap-secret-key')"
+        "--from-file=bootstrap-secret-key=$(Join-Path $artifactRoot 'bootstrap-secret-key')",
+        "--from-file=admin-read-access-key=$(Join-Path $artifactRoot 'admin-read-access-key')",
+        "--from-file=admin-read-secret-key=$(Join-Path $artifactRoot 'admin-read-secret-key')"
     )
     Apply-GeneratedSecret $sreNamespace 'rocketmq-sre-kind-secrets' @(
         "--from-file=internal-token=$(Join-Path $artifactRoot 'internal-token')"
+    )
+    Apply-GeneratedSecret $sreNamespace 'rocketmq-sre-control-plane-channel-server' @(
+        "--from-file=control-plane-server-cert.pem=$(Join-Path $certificateRoot 'control-plane-server-cert.pem')",
+        "--from-file=control-plane-server-key.pem=$(Join-Path $certificateRoot 'control-plane-server-key.pem')",
+        "--from-file=connector-client-ca-cert.pem=$(Join-Path $certificateRoot 'connector-client-ca-cert.pem')"
+    )
+    Apply-GeneratedSecret $rocketmqNamespace 'rocketmq-sre-control-plane-channel-client' @(
+        "--from-file=control-plane-server-ca-cert.pem=$(Join-Path $certificateRoot 'control-plane-server-ca-cert.pem')",
+        "--from-file=connector-client-identity.pem=$(Join-Path $certificateRoot 'connector-client-identity.pem')"
     )
     Apply-GeneratedSecret $sreNamespace 'rocketmq-sre-postgres' @(
         "--from-file=postgres-user=$(Join-Path $artifactRoot 'postgres-user')",
@@ -550,6 +620,7 @@ switch ($Action) {
         Invoke-Kubectl @('apply', '--kustomize', $kindDirectory) | Out-Null
 
         Wait-Rollout $sreNamespace 'statefulset/postgres'
+        Wait-Rollout $sreNamespace 'deployment/sre-model-mock'
         Wait-Rollout $sreNamespace 'deployment/sre-control-plane'
         Invoke-Kubectl @(
             '--namespace', $sreNamespace,
@@ -570,7 +641,8 @@ switch ($Action) {
             '--create-namespace',
             '--values', $devValues,
             '--values', $kindValues,
-            '--wait=false'
+            '--force-conflicts',
+            '--wait=hookOnly'
         ) | Out-Null
         Invoke-Kubectl @('apply', '--filename', (Join-Path $kindDirectory 'mcp-config.yaml')) | Out-Null
         Invoke-Kubectl @(

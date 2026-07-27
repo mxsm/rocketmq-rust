@@ -15,18 +15,24 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use axum::Json;
 use axum::Router;
 use axum::extract::Path;
+use axum::extract::Query;
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::http::StatusCode;
+use axum::middleware;
 use axum::routing::get;
 use axum::routing::post;
 use chrono::SecondsFormat;
 use chrono::Utc;
+use rocketmq_observability::ObservabilityStatusHandle;
 use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::wait_for_signal_result;
 use rocketmq_sre_contracts::ClusterId;
 use serde::Deserialize;
@@ -43,9 +49,31 @@ use crate::HandshakeRequest;
 use crate::OffboardRequest;
 use crate::OnboardClusterRequest;
 use crate::PostgresRepository;
+use crate::assets::AssetTopologyService;
+use crate::assets::DashboardDeepLinkPolicy;
+use crate::auth::AuthService;
+use crate::connector_channel;
+use crate::connector_channel::PostgresConnectorChannelService;
+use crate::evidence::EvidenceBlobStore;
+use crate::evidence::EvidenceService;
+use crate::inspection::InspectionService;
+use crate::knowledge::KnowledgeService;
 use crate::model::HandshakeOutcome;
 use crate::model::OnboardOutcome;
+use crate::models::ModelGatewayService;
+use crate::observability::ConnectorHealthSample;
+use crate::observability::DatabaseHealthSample;
+use crate::observability::DependencyStatus;
+use crate::observability::HealthAggregator;
+use crate::observability::HealthReasonCode;
+use crate::observability::ProviderFamilyLabel;
+use crate::observability::ProviderHealthSample;
+use crate::observability::SreHealthViewV1;
+use crate::observability::SreMetrics;
+use crate::observability::SreObservability;
 use crate::repository::ClusterRepository;
+use crate::workflow::WorkflowEventBus;
+use crate::workflow::WorkflowService;
 
 const CAPABILITY_CATALOG: &str = include_str!("../../../config/capabilities/rocketmq-capability-catalog.v1.yaml");
 const COVERAGE: &str = include_str!("../../../config/evidence/capability-to-signal-coverage.v1.yaml");
@@ -72,7 +100,7 @@ const PACK_ORDER: [&str; 6] = [
 #[derive(Clone, Debug)]
 pub struct CapabilityDocuments {
     catalog: Arc<Value>,
-    coverage_matrix: Arc<Value>,
+    pub(crate) coverage_matrix: Arc<Value>,
     data_classification: Arc<Value>,
     required_source_profiles: Arc<Value>,
 }
@@ -476,10 +504,20 @@ fn parse_yaml(name: &str, input: &str) -> Result<Value, ControlPlaneError> {
 }
 
 #[derive(Clone)]
-struct AppState {
-    repository: PostgresRepository,
-    documents: CapabilityDocuments,
-    internal_token: Arc<str>,
+pub(crate) struct AppState {
+    pub(crate) repository: PostgresRepository,
+    pub(crate) documents: CapabilityDocuments,
+    pub(crate) internal_token: Arc<str>,
+    pub(crate) auth: AuthService,
+    pub(crate) assets: AssetTopologyService,
+    pub(crate) connector_channel: PostgresConnectorChannelService,
+    pub(crate) evidence: EvidenceService,
+    pub(crate) knowledge: KnowledgeService,
+    pub(crate) model_gateway: ModelGatewayService,
+    pub(crate) observability: SreObservability,
+    pub(crate) observability_status: ObservabilityStatusHandle,
+    pub(crate) sre_metrics: Arc<SreMetrics>,
+    pub(crate) workflow: WorkflowService,
 }
 
 /// Builds the production API router.
@@ -487,10 +525,71 @@ pub fn build_router(
     repository: PostgresRepository,
     documents: CapabilityDocuments,
     internal_token: impl Into<Arc<str>>,
-) -> Router {
-    Router::new()
+) -> Result<Router, ControlPlaneError> {
+    let internal_token = internal_token.into();
+    let auth = AuthService::development(internal_token.clone());
+    let model_gateway = ModelGatewayService::disabled(repository.clone());
+    let workflow = WorkflowService::new(repository.clone(), WorkflowEventBus::new(1_024));
+    let evidence_blobs = EvidenceBlobStore::from_env(true)?;
+    Ok(build_routers_with_auth(
+        repository,
+        documents,
+        internal_token,
+        auth,
+        evidence_blobs,
+        DashboardDeepLinkPolicy::disabled(),
+        model_gateway,
+        workflow,
+    )?
+    .public)
+}
+
+struct ControlPlaneRouters {
+    public: Router,
+    connector: Router,
+}
+
+fn build_routers_with_auth(
+    repository: PostgresRepository,
+    documents: CapabilityDocuments,
+    internal_token: Arc<str>,
+    auth: AuthService,
+    evidence_blobs: EvidenceBlobStore,
+    dashboard_links: DashboardDeepLinkPolicy,
+    model_gateway: ModelGatewayService,
+    workflow: WorkflowService,
+) -> Result<ControlPlaneRouters, ControlPlaneError> {
+    let evidence = EvidenceService::new(repository.clone(), evidence_blobs);
+    let assets = AssetTopologyService::new(repository.clone(), dashboard_links);
+    let knowledge = KnowledgeService::new(repository.clone());
+    let connector_channel = PostgresConnectorChannelService::postgres(repository.clone(), internal_token.clone())?;
+    let connector_routes = connector_channel::router::<AppState>(connector_channel.clone());
+    let connector_control_routes = Router::new()
+        .route(
+            "/internal/v1/connectors/v1/clusters/{id}/handshake",
+            post(connector_handshake),
+        )
+        .route("/internal/v1/connectors/v1/clusters/{id}", get(connector_cluster_state));
+    let (observability, sre_metrics) = SreObservability::with_prometheus_metrics();
+    let state = AppState {
+        repository,
+        documents,
+        internal_token,
+        auth,
+        assets,
+        connector_channel,
+        evidence,
+        knowledge,
+        model_gateway,
+        observability,
+        observability_status: ObservabilityStatusHandle::default(),
+        sre_metrics,
+        workflow,
+    };
+    let public = Router::new()
         .route("/healthz", get(health))
         .route("/readyz", get(ready))
+        .route("/metrics", get(metrics))
         .route("/v1/clusters/onboard", post(onboard))
         .route("/v1/clusters", get(list_clusters))
         .route("/v1/clusters/{id}", get(get_cluster))
@@ -499,11 +598,17 @@ pub fn build_router(
         .route("/v1/clusters/{id}/offboard", post(offboard))
         .route("/v1/capabilities", get(capabilities))
         .route("/v1/capabilities/coverage", get(coverage))
-        .with_state(AppState {
-            repository,
-            documents,
-            internal_token: internal_token.into(),
-        })
+        .merge(crate::phase1_api::public_routes())
+        .with_state(state.clone())
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::read_audit::middleware,
+        ));
+    let connector = connector_routes
+        .merge(connector_control_routes)
+        .merge(crate::phase1_api::connector_ingest_routes())
+        .with_state(state);
+    Ok(ControlPlaneRouters { public, connector })
 }
 
 /// Connects the production repository, binds the HTTP endpoint, and drains on
@@ -515,25 +620,107 @@ pub fn build_router(
 pub async fn run(config: ControlPlaneConfig, service_context: ChildServiceContext) -> Result<(), ControlPlaneError> {
     let repository = PostgresRepository::connect(config.database_url(), config.database_max_connections()).await?;
     let documents = CapabilityDocuments::embedded()?;
-    let listener = tokio::net::TcpListener::bind(config.bind_addr()).await?;
-    let local_addr = listener.local_addr()?;
+    let auth = AuthService::from_config(&config).await?;
+    let evidence_blobs = EvidenceBlobStore::from_env(config.dev_auth_enabled())?;
+    let dashboard_links = DashboardDeepLinkPolicy::from_allowlist(config.dashboard_deep_link_origins().iter())?;
+    let model_gateway = ModelGatewayService::from_env(
+        repository.clone(),
+        config.dev_auth_enabled(),
+        service_context.metadata_io().clone(),
+    )?;
+    let workflow = WorkflowService::new(repository.clone(), WorkflowEventBus::new(1_024));
+    let scheduler_evidence = EvidenceService::new(repository.clone(), evidence_blobs.clone());
+    let scheduled_inspections = InspectionService::new(repository.clone(), workflow.clone(), scheduler_evidence)?;
+    let scheduled_tasks = service_context.scheduled_tasks("inspection-scheduler");
+    let mut schedule =
+        ScheduledTaskConfig::fixed_rate_no_overlap("phase1-inspection-scan", std::time::Duration::from_secs(30));
+    schedule.initial_delay = std::time::Duration::from_secs(5);
+    schedule.max_run_time = Some(std::time::Duration::from_secs(25));
+    schedule.shutdown_timeout = config.shutdown_timeout();
+    scheduled_tasks
+        .schedule_fixed_rate_no_overlap(schedule, move || {
+            let inspections = scheduled_inspections.clone();
+            async move {
+                inspections.run_due().await;
+            }
+        })
+        .map_err(|error| {
+            ControlPlaneError::configuration(format!("inspection scheduler could not be started: {error}"))
+        })?;
+    let public_listener = tokio::net::TcpListener::bind(config.bind_addr()).await?;
+    let public_addr = public_listener.local_addr()?;
+    let connector_listener = tokio::net::TcpListener::bind(config.connector_bind_addr()).await?;
+    let connector_addr = connector_listener.local_addr()?;
     tracing::info!(
-        bind_addr = %local_addr,
+        bind_addr = %public_addr,
         scope = service_context.name(),
         effective_access = "read_only",
         "RocketMQ AI SRE control plane is ready"
     );
-    axum::serve(
-        listener,
-        build_router(repository, documents, Arc::<str>::from(config.internal_token())),
-    )
-    .with_graceful_shutdown(async {
-        if let Err(error) = wait_for_signal_result().await {
-            tracing::warn!(error = %error, "shutdown signal watcher failed");
-        }
-    })
-    .await
-    .map_err(ControlPlaneError::Io)
+    tracing::info!(
+        bind_addr = %connector_addr,
+        scope = service_context.name(),
+        transport_boundary = "mtls_proxy_only",
+        "RocketMQ AI SRE Connector-only listener is ready"
+    );
+    let routers = build_routers_with_auth(
+        repository,
+        documents,
+        Arc::<str>::from(config.internal_token()),
+        auth,
+        evidence_blobs,
+        dashboard_links,
+        model_gateway,
+        workflow,
+    )?;
+    let ControlPlaneRouters { public, connector } = routers;
+    let connector_shutdown = service_context.task_group().cancellation_token();
+    let connector_failure = connector_shutdown.clone();
+    let connector_failed = Arc::new(AtomicBool::new(false));
+    let connector_failed_task = connector_failed.clone();
+    service_context
+        .spawn_service("rocketmq-sre-control-plane.connector-listener", async move {
+            let result = axum::serve(connector_listener, connector)
+                .with_graceful_shutdown(async move {
+                    connector_shutdown.cancelled().await;
+                })
+                .await;
+            if let Err(error) = result {
+                connector_failed_task.store(true, Ordering::Release);
+                tracing::error!(
+                    error = %error,
+                    "Connector-only listener failed and is stopping the control plane"
+                );
+                connector_failure.cancel();
+            }
+        })
+        .map_err(|error| {
+            ControlPlaneError::configuration(format!(
+                "Connector-only listener could not be owned by TaskGroup: {error}"
+            ))
+        })?;
+    let public_shutdown = service_context.task_group().cancellation_token();
+    let server_result = axum::serve(public_listener, public)
+        .with_graceful_shutdown(async move {
+            tokio::select! {
+                () = public_shutdown.cancelled() => {}
+                result = wait_for_signal_result() => {
+                    if let Err(error) = result {
+                        tracing::warn!(error = %error, "shutdown signal watcher failed");
+                    }
+                }
+            }
+        })
+        .await;
+    service_context.task_group().cancel();
+    let report = service_context.task_group().shutdown(config.shutdown_timeout()).await;
+    report.log_if_unhealthy();
+    if connector_failed.load(Ordering::Acquire) {
+        return Err(ControlPlaneError::Io(std::io::Error::other(
+            "Connector-only listener failed",
+        )));
+    }
+    server_result.map_err(ControlPlaneError::Io)
 }
 
 #[derive(Serialize)]
@@ -545,10 +732,94 @@ async fn health() -> Json<ServiceStatus> {
     Json(ServiceStatus { status: "healthy" })
 }
 
-async fn ready(State(state): State<AppState>) -> (StatusCode, Json<ServiceStatus>) {
-    readiness(&state.repository).await
+async fn ready(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
+    if !state.auth.ready().await {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "schemaVersion": SreHealthViewV1::SCHEMA_VERSION,
+                "ready": false,
+                "overallStatus": "unavailable",
+                "reason": "authentication_failed",
+                "rulesOnlyAvailable": false,
+                "evidenceCollectionAvailable": false,
+            })),
+        );
+    }
+    let started = std::time::Instant::now();
+    let database = match state.repository.ping().await {
+        Ok(()) => DatabaseHealthSample::healthy(
+            started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+            state
+                .repository
+                .pool
+                .size()
+                .saturating_sub(u32::try_from(state.repository.pool.num_idle()).unwrap_or(u32::MAX)),
+            u32::try_from(state.repository.pool.num_idle()).unwrap_or(u32::MAX),
+            state.repository.pool.options().get_max_connections(),
+        ),
+        Err(error) => {
+            tracing::warn!(error = %error, "control-plane readiness database probe failed");
+            DatabaseHealthSample::unavailable(HealthReasonCode::QueryFailed)
+        }
+    };
+    let connector_samples = match state.connector_channel.health_samples(256).await {
+        Ok(samples) => samples,
+        Err(error) => {
+            tracing::warn!(error = %error, "control-plane readiness connector probe failed");
+            vec![ConnectorHealthSample::new(
+                DependencyStatus::Unavailable,
+                None,
+                0,
+                Some(HealthReasonCode::QueryFailed),
+            )]
+        }
+    };
+    let provider_samples = match state.model_gateway.health_samples(256).await {
+        Ok(samples) => samples,
+        Err(error) => {
+            tracing::warn!(error = %error, "control-plane readiness provider probe failed");
+            vec![ProviderHealthSample::new(
+                ProviderFamilyLabel::Other,
+                DependencyStatus::Unavailable,
+                None,
+                Some(HealthReasonCode::QueryFailed),
+            )]
+        }
+    };
+    let view = HealthAggregator::aggregate(
+        database,
+        provider_samples,
+        connector_samples,
+        state.observability_status.view(),
+    );
+    let status = if view.ready() {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    match serde_json::to_value(view) {
+        Ok(value) => (status, Json(value)),
+        Err(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "schemaVersion": SreHealthViewV1::SCHEMA_VERSION,
+                "ready": false,
+                "overallStatus": "unavailable",
+                "reason": "unknown",
+            })),
+        ),
+    }
 }
 
+async fn metrics(State(state): State<AppState>) -> ([(&'static str, &'static str); 1], String) {
+    (
+        [("content-type", "text/plain; version=0.0.4; charset=utf-8")],
+        state.sre_metrics.render_prometheus(),
+    )
+}
+
+#[cfg(test)]
 async fn readiness<R>(repository: &R) -> (StatusCode, Json<ServiceStatus>)
 where
     R: ClusterRepository,
@@ -570,7 +841,24 @@ async fn onboard(
     headers: HeaderMap,
     Json(request): Json<OnboardClusterRequest>,
 ) -> Result<(StatusCode, Json<OnboardOutcome>), ControlPlaneError> {
-    authorize_mutation(&headers, &state.internal_token)?;
+    let auth = state.auth.authorize(&headers, None).await?;
+    if !auth.roles.iter().any(|role| {
+        matches!(
+            role.as_str(),
+            "rocketmq:onboard" | "rocketmq:sre" | "sre-admin" | "admin"
+        )
+    }) {
+        return Err(ControlPlaneError::forbidden(
+            "unauthorized_scope",
+            "cluster onboarding requires the rocketmq:onboard role",
+        ));
+    }
+    if request.tenant_id != auth.tenant_id.to_string() || request.actor_subject != auth.subject {
+        return Err(ControlPlaneError::forbidden(
+            "tenant_mismatch",
+            "onboarding tenant and actor must match the authenticated identity",
+        ));
+    }
     request.validate()?;
     let outcome = state.repository.onboard(&request).await?;
     let status = if outcome.created {
@@ -581,15 +869,31 @@ async fn onboard(
     Ok((status, Json(outcome)))
 }
 
-async fn list_clusters(State(state): State<AppState>) -> Result<Json<Vec<Cluster>>, ControlPlaneError> {
-    state.repository.list().await.map(Json)
+async fn list_clusters(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<Cluster>>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, None).await?;
+    let clusters = state
+        .repository
+        .list()
+        .await?
+        .into_iter()
+        .filter(|cluster| cluster.tenant_id == auth.tenant_id.to_string() && auth.clusters.contains(&cluster.id))
+        .collect();
+    Ok(Json(clusters))
 }
 
 async fn get_cluster(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    headers: HeaderMap,
 ) -> Result<Json<Cluster>, ControlPlaneError> {
-    state.repository.get(parse_cluster_id(&id)?).await.map(Json)
+    let id = parse_cluster_id(&id)?;
+    let auth = state.auth.authorize(&headers, Some(id)).await?;
+    let cluster = state.repository.get(id).await?;
+    ensure_cluster_authorized(&auth, &cluster)?;
+    Ok(Json(cluster))
 }
 
 async fn handshake(
@@ -604,11 +908,54 @@ async fn handshake(
     state.repository.handshake(id, &request, &decision).await.map(Json)
 }
 
+async fn connector_handshake(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<HandshakeRequest>,
+) -> Result<Json<HandshakeOutcome>, ControlPlaneError> {
+    let principal = state.connector_channel.authenticate(&headers)?;
+    if request.connector_subject != principal.subject || request.connector_issuer != principal.issuer {
+        return Err(ControlPlaneError::forbidden(
+            "unauthorized_scope",
+            "connector handshake identity does not match the mTLS principal",
+        ));
+    }
+    let id = parse_cluster_id(&id)?;
+    let decision = request.validate()?;
+    state.repository.handshake(id, &request, &decision).await.map(Json)
+}
+
+async fn connector_cluster_state(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Cluster>, ControlPlaneError> {
+    let principal = state.connector_channel.authenticate(&headers)?;
+    let id = parse_cluster_id(&id)?;
+    if !state
+        .repository
+        .connector_identity_known(id, &principal.subject, &principal.issuer)
+        .await?
+    {
+        return Err(ControlPlaneError::forbidden(
+            "unauthorized_scope",
+            "connector identity is not registered for the requested cluster",
+        ));
+    }
+    state.repository.get(id).await.map(Json)
+}
+
 async fn get_capability(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    headers: HeaderMap,
 ) -> Result<Json<CapabilitySnapshot>, ControlPlaneError> {
-    state.repository.capability(parse_cluster_id(&id)?).await.map(Json)
+    let id = parse_cluster_id(&id)?;
+    let auth = state.auth.authorize(&headers, Some(id)).await?;
+    let cluster = state.repository.get(id).await?;
+    ensure_cluster_authorized(&auth, &cluster)?;
+    state.repository.capability(id).await.map(Json)
 }
 
 async fn offboard(
@@ -625,24 +972,30 @@ async fn offboard(
         .map(Json)
 }
 
-async fn capabilities(State(state): State<AppState>) -> Json<Value> {
+async fn capabilities(State(state): State<AppState>, headers: HeaderMap) -> Result<Json<Value>, ControlPlaneError> {
+    let _auth = state.auth.authorize(&headers, None).await?;
     let providers = rocketmq_sre_model_gateway::phase00_provider_descriptors();
-    Json(json!({
+    Ok(Json(json!({
         "schema_version": "rocketmq-sre.capabilities.v1",
-        "phase": "00",
+        "phase": "01",
         "effective_access_profile": "read_only",
         "execution_supported": false,
         "approval_supported": false,
-        "provider_network_calls_supported": false,
+        "provider_network_calls_supported": true,
         "providers": providers,
         "catalog": state.documents.catalog.as_ref(),
         "data_classification": state.documents.data_classification.as_ref(),
         "required_source_profiles": state.documents.required_source_profiles.as_ref()
-    }))
+    })))
 }
 
-async fn coverage(State(state): State<AppState>) -> Json<Value> {
-    Json(state.documents.coverage_matrix.as_ref().clone())
+async fn coverage(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<crate::coverage::CoverageQuery>,
+) -> Result<Json<Value>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, None).await?;
+    crate::coverage::matrix(&state, &auth, query).await.map(Json)
 }
 
 fn parse_cluster_id(value: &str) -> Result<ClusterId, ControlPlaneError> {
@@ -665,8 +1018,23 @@ fn authorize_mutation(headers: &HeaderMap, expected_token: &str) -> Result<(), C
     }
 }
 
+fn ensure_cluster_authorized(auth: &crate::auth::AuthContext, cluster: &Cluster) -> Result<(), ControlPlaneError> {
+    if cluster.tenant_id != auth.tenant_id.to_string() || !auth.clusters.contains(&cluster.id) {
+        return Err(ControlPlaneError::forbidden(
+            "tenant_mismatch",
+            "cluster is outside the authenticated tenant scope",
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    use axum::body::Body;
+    use axum::http::Request;
+    use sqlx::postgres::PgPoolOptions;
+    use tower::ServiceExt;
+
     use super::*;
     use crate::repository::memory::InMemoryRepository;
 
@@ -799,6 +1167,67 @@ mod tests {
 
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body.0.status, "ready");
+    }
+
+    #[tokio::test]
+    async fn public_listener_does_not_mount_connector_internal_routes() {
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+            .expect("lazy PostgreSQL pool");
+        let repository = PostgresRepository::from_pool(pool);
+        let documents = CapabilityDocuments::embedded().expect("capability documents");
+        let internal_token = Arc::<str>::from("test-internal-token");
+        let auth = AuthService::development(internal_token.clone());
+        let model_gateway = ModelGatewayService::disabled(repository.clone());
+        let workflow = WorkflowService::new(repository.clone(), WorkflowEventBus::new(16));
+        let routers = build_routers_with_auth(
+            repository,
+            documents,
+            internal_token,
+            auth,
+            EvidenceBlobStore::in_memory(64 * 1024),
+            DashboardDeepLinkPolicy::disabled(),
+            model_gateway,
+            workflow,
+        )
+        .expect("router pair");
+        for (method, path) in [
+            ("POST", "/internal/v1/connectors/v1/register"),
+            (
+                "POST",
+                "/internal/v1/connectors/v1/clusters/00000000-0000-4000-8000-000000000001/handshake",
+            ),
+            (
+                "GET",
+                "/internal/v1/connectors/v1/clusters/00000000-0000-4000-8000-000000000001",
+            ),
+            ("POST", "/internal/v1/inventory"),
+            ("POST", "/internal/v1/evidence"),
+        ] {
+            let request = || {
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .body(Body::empty())
+                    .expect("request")
+            };
+
+            let public_response = routers
+                .public
+                .clone()
+                .oneshot(request())
+                .await
+                .expect("public response");
+            assert_eq!(public_response.status(), StatusCode::NOT_FOUND, "{path}");
+
+            let connector_response = routers
+                .connector
+                .clone()
+                .oneshot(request())
+                .await
+                .expect("connector response");
+            assert_ne!(connector_response.status(), StatusCode::NOT_FOUND, "{path}");
+        }
     }
 
     #[test]

@@ -76,6 +76,22 @@ uuid_id!(QueryId, "Stable identifier for an evidence query.");
 uuid_id!(CorrelationId, "Identifier propagated across one logical SRE operation.");
 uuid_id!(ClusterId, "Internal identifier for an onboarded cluster.");
 uuid_id!(TenantId, "Stable tenant boundary identifier.");
+uuid_id!(ConversationId, "Stable identifier for an operator conversation.");
+uuid_id!(InvestigationId, "Stable identifier for a multi-step investigation.");
+uuid_id!(TimelineEventId, "Stable identifier for a workflow timeline event.");
+uuid_id!(
+    DiagnosisRevisionId,
+    "Stable identifier for an immutable diagnosis revision."
+);
+uuid_id!(InspectionRunId, "Stable identifier for an inspection run.");
+uuid_id!(RecommendationId, "Stable identifier for a read-only recommendation.");
+uuid_id!(AssetSnapshotId, "Stable identifier for an asset snapshot.");
+uuid_id!(TopologyEdgeId, "Stable identifier for a versioned topology edge.");
+uuid_id!(KnowledgeItemId, "Stable identifier for a knowledge item.");
+uuid_id!(KnowledgeChunkId, "Stable identifier for a retrievable knowledge chunk.");
+uuid_id!(ModelProfileId, "Stable identifier for a configured model profile.");
+uuid_id!(ModelInvocationId, "Stable identifier for a model invocation.");
+uuid_id!(ConnectorSessionId, "Stable identifier for a connector session.");
 
 #[cfg(test)]
 mod tests {

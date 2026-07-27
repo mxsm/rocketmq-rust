@@ -1,0 +1,41 @@
+{
+  "pack": "cluster-topology.v1",
+  "scenario": "fault",
+  "expected_status": "fault",
+  "expected_reason_codes": [
+    "TOPOLOGY_BROKEN_DEPENDENCY",
+    "TOPOLOGY_ORPHAN_ASSET",
+    "TOPOLOGY_CHANGED",
+    "TOPOLOGY_WORKLOAD_UNREADY",
+    "TOPOLOGY_CLIENT_DISCONNECTED"
+  ],
+  "evidence": [
+    {
+      "evidence_id": "00000000-0000-4000-8001-000000000102",
+      "source": "topology",
+      "resource": "asset-graph/cluster-a",
+      "content": {
+        "components": 7,
+        "brokers": 2,
+        "topics": 3,
+        "queues": 12,
+        "clients": 4,
+        "broken_edges": 2,
+        "orphan_assets": 1,
+        "topology_changed": true
+      }
+    },
+    {
+      "evidence_id": "00000000-0000-4000-8001-000000000121",
+      "source": "kubernetes",
+      "resource": "live-resources/rocketmq",
+      "content": { "unready_workloads": 1 }
+    },
+    {
+      "evidence_id": "00000000-0000-4000-8001-000000000122",
+      "source": "admin-query",
+      "resource": "client-connections/cluster-a",
+      "content": { "disconnected_clients": 2 }
+    }
+  ]
+}

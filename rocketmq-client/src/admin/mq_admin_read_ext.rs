@@ -26,6 +26,8 @@ use rocketmq_protocol::protocol::body::broker_body::cluster_info::ClusterInfo;
 use rocketmq_protocol::protocol::body::consumer_connection::ConsumerConnection;
 use rocketmq_protocol::protocol::body::group_list::GroupList;
 use rocketmq_protocol::protocol::body::kv_table::KVTable;
+use rocketmq_protocol::protocol::body::producer_connection::ProducerConnection;
+use rocketmq_protocol::protocol::body::producer_table_info::ProducerTableInfo;
 use rocketmq_protocol::protocol::body::topic::topic_list::TopicList;
 use rocketmq_protocol::protocol::header::get_consume_stats_request_header::GetConsumeStatsRequestHeader;
 use rocketmq_protocol::protocol::header::query_topic_consume_by_who_request_header::QueryTopicConsumeByWhoRequestHeader;
@@ -65,6 +67,17 @@ pub trait MQAdminReadExt: Send {
         consumer_group: CheetahString,
         broker_addr: Option<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<ConsumerConnection>;
+
+    async fn examine_producer_connection_info(
+        &self,
+        producer_group: CheetahString,
+        topic: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<ProducerConnection>;
+
+    async fn get_all_producer_info(
+        &self,
+        broker_addr: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<ProducerTableInfo>;
 
     async fn query_topic_consume_by_who(&self, topic: CheetahString) -> rocketmq_error::RocketMQResult<GroupList>;
 }
@@ -203,6 +216,46 @@ impl MQAdminReadExt for DefaultMQAdminExt {
             ));
         }
         Ok(result)
+    }
+
+    async fn examine_producer_connection_info(
+        &self,
+        producer_group: CheetahString,
+        topic: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<ProducerConnection> {
+        let timeout = self.inner().remoting_timeout_millis()?;
+        let route = self
+            .inner()
+            .mq_client_api()?
+            .get_topic_route_info_from_name_server(&topic, timeout)
+            .await?;
+        let mut result = ProducerConnection::new();
+        if let Some(broker_addr) = route.and_then(|route| {
+            route
+                .broker_datas
+                .choose(&mut rand::rng())
+                .and_then(BrokerDataExt::select_broker_addr)
+        }) {
+            result = self
+                .inner()
+                .mq_client_api()?
+                .get_producer_connection_list(broker_addr.as_str(), producer_group, timeout)
+                .await?;
+        }
+        if result.connection_set().is_empty() {
+            return Err(crate::mq_client_err!("Not found the producer group connection"));
+        }
+        Ok(result)
+    }
+
+    async fn get_all_producer_info(
+        &self,
+        broker_addr: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<ProducerTableInfo> {
+        self.inner()
+            .mq_client_api()?
+            .get_all_producer_info(broker_addr.as_str(), self.inner().remoting_timeout_millis()?)
+            .await
     }
 
     async fn query_topic_consume_by_who(&self, topic: CheetahString) -> rocketmq_error::RocketMQResult<GroupList> {

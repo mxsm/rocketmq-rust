@@ -5,13 +5,172 @@
       "format": "uuid",
       "type": "string"
     },
+    "ModelContentPart": {
+      "description": "One typed content part in a canonical message.",
+      "oneOf": [
+        {
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "const": "text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "json",
+              "type": "string"
+            },
+            "value": true
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "media_type": {
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/ModelImageSource"
+            },
+            "type": {
+              "const": "image",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "media_type",
+            "source"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "call": {
+              "$ref": "#/$defs/ModelToolCall"
+            },
+            "type": {
+              "const": "tool_call",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "call"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "content": true,
+            "is_error": {
+              "type": "boolean"
+            },
+            "tool_call_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "tool_result",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "tool_call_id",
+            "content",
+            "is_error"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "const": "reasoning",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ModelImageSource": {
+      "description": "A provider-neutral image reference.\n\nData URLs are intentionally represented as references. The gateway's\nevidence preparation layer remains responsible for bounding and redacting\nimage data before it reaches this contract.",
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "const": "url",
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "url"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "reference": {
+              "type": "string"
+            },
+            "type": {
+              "const": "data_reference",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "reference"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "ModelMessage": {
-      "description": "Provider-neutral model message.",
+      "description": "Provider-neutral model message.\n\n`content` is retained as a compatibility convenience for text-only Phase 00\ncallers. New integrations should use typed `parts`; adapters merge the text\nfield and typed text parts deterministically.",
       "properties": {
         "content": {
           "type": "string"
         },
         "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parts": {
+          "items": {
+            "$ref": "#/$defs/ModelContentPart"
+          },
+          "type": "array"
+        },
+        "reasoning_content": {
+          "description": "Provider-neutral reasoning channel. Profiles decide whether the\nprovider can receive or return this field.",
           "type": [
             "string",
             "null"
@@ -25,12 +184,28 @@
             "string",
             "null"
           ]
+        },
+        "tool_calls": {
+          "items": {
+            "$ref": "#/$defs/ModelToolCall"
+          },
+          "type": "array"
         }
       },
       "required": [
-        "role",
-        "content"
+        "role"
       ],
+      "type": "object"
+    },
+    "ModelRequestExtensions": {
+      "description": "Explicit provider-profile-gated extensions.",
+      "properties": {
+        "kimi_mfjs": {
+          "default": false,
+          "description": "Kimi/Moonshot's MFJS mode. This is rejected unless the selected profile\nexplicitly declares MFJS support.",
+          "type": "boolean"
+        }
+      },
       "type": "object"
     },
     "ModelRole": {
@@ -51,11 +226,15 @@
         },
         "input_schema": true,
         "mutates_cluster": {
-          "description": "Phase 00 requires every model-visible tool to remain false.",
+          "description": "AI SRE model-visible tools must remain false in the read-only baseline.",
           "type": "boolean"
         },
         "name": {
           "type": "string"
+        },
+        "strict": {
+          "default": false,
+          "type": "boolean"
         }
       },
       "required": [
@@ -63,6 +242,24 @@
         "description",
         "input_schema",
         "mutates_cluster"
+      ],
+      "type": "object"
+    },
+    "ModelToolCall": {
+      "description": "Provider-neutral tool call selected by a model.",
+      "properties": {
+        "arguments": true,
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "arguments"
       ],
       "type": "object"
     },
@@ -99,6 +296,10 @@
               "type": "string"
             },
             "schema": true,
+            "strict": {
+              "default": false,
+              "type": "boolean"
+            },
             "type": {
               "const": "json_schema",
               "type": "string"
@@ -145,6 +346,63 @@
         "minor"
       ],
       "type": "object"
+    },
+    "ToolChoice": {
+      "description": "Provider-neutral tool selection policy.",
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "const": "auto",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "none",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "required",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "type": {
+              "const": "specific",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "name"
+          ],
+          "type": "object"
+        }
+      ]
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -152,6 +410,12 @@
   "properties": {
     "correlation_id": {
       "$ref": "#/$defs/CorrelationId"
+    },
+    "extensions": {
+      "$ref": "#/$defs/ModelRequestExtensions",
+      "default": {
+        "kimi_mfjs": false
+      }
     },
     "max_output_tokens": {
       "format": "uint32",
@@ -170,11 +434,22 @@
     "model": {
       "type": "string"
     },
+    "reasoning": {
+      "default": false,
+      "type": "boolean"
+    },
     "response_format": {
-      "$ref": "#/$defs/ResponseFormat"
+      "$ref": "#/$defs/ResponseFormat",
+      "default": {
+        "type": "text"
+      }
     },
     "schema": {
       "$ref": "#/$defs/SchemaVersion"
+    },
+    "stream": {
+      "default": false,
+      "type": "boolean"
     },
     "temperature_milli": {
       "format": "uint16",
@@ -184,6 +459,12 @@
         "integer",
         "null"
       ]
+    },
+    "tool_choice": {
+      "$ref": "#/$defs/ToolChoice",
+      "default": {
+        "type": "auto"
+      }
     },
     "tools": {
       "items": {
@@ -196,8 +477,7 @@
     "schema",
     "correlation_id",
     "model",
-    "messages",
-    "response_format"
+    "messages"
   ],
   "title": "CanonicalModelRequest",
   "type": "object"

@@ -84,9 +84,14 @@ jobs:
           --health-retries 10
     env:
       DATABASE_URL: postgres://rocketmq_sre:rocketmq_sre@127.0.0.1:5432/rocketmq_sre
+      ROCKETMQ_SRE_TEST_DATABASE_URL: postgres://rocketmq_sre:rocketmq_sre@127.0.0.1:5432/rocketmq_sre
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      - name: Validate Phase 01 Kind read-only E2E contract
+        shell: pwsh
+        run: ./rocketmq-sre/scripts/phase01-kind-smoke.ps1 -ValidateOnly
 
       - name: Set up Rust nightly
         uses: dtolnay/rust-toolchain@nightly
@@ -100,6 +105,9 @@ jobs:
 
       - name: Check metadata
         run: cargo metadata --manifest-path rocketmq-sre/Cargo.toml --locked --no-deps
+
+      - name: Check Rust 2024 source layout
+        run: python rocketmq-sre/scripts/check_source_layout.py
 
       - name: Check formatting
         run: |
@@ -117,6 +125,9 @@ jobs:
 
       - name: Test
         run: cargo test --manifest-path rocketmq-sre/Cargo.toml --locked --workspace --all-features
+
+      - name: Test PostgreSQL repositories
+        run: cargo test --manifest-path rocketmq-sre/Cargo.toml --locked -p rocketmq-sre-control-plane -- --include-ignored
 
       - name: Clippy
         run: cargo clippy --manifest-path rocketmq-sre/Cargo.toml --locked --workspace --all-targets --all-features -- -D warnings
@@ -167,6 +178,12 @@ jobs:
 
       - name: Install
         run: npm ci
+
+      - name: Check OpenAPI client drift
+        run: npm run check:api
+
+      - name: Lint
+        run: npm run lint
 
       - name: Unit tests
         run: npm run test -- --run

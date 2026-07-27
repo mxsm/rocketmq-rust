@@ -29,12 +29,18 @@ pub enum ControlPlaneError {
     Validation { code: &'static str, detail: String },
     #[error("request is unauthorized")]
     Unauthorized,
-    #[error("cluster was not found")]
+    #[error("request is forbidden")]
+    Forbidden { code: &'static str, detail: String },
+    #[error("resource was not found")]
     NotFound,
     #[error("operation conflicts with cluster state")]
     Conflict { detail: String },
     #[error("persistent state is unavailable")]
     Database(#[source] sqlx::Error),
+    #[error("identity provider is unavailable")]
+    IdentityProvider(#[source] reqwest::Error),
+    #[error("evidence object storage is unavailable")]
+    ObjectStore,
     #[error("capability document is invalid")]
     CapabilityDocument { detail: String },
     #[error("service I/O failed")]
@@ -57,6 +63,13 @@ impl ControlPlaneError {
         Self::Conflict { detail: detail.into() }
     }
 
+    pub(crate) fn forbidden(code: &'static str, detail: impl Into<String>) -> Self {
+        Self::Forbidden {
+            code,
+            detail: detail.into(),
+        }
+    }
+
     fn status_and_code(&self) -> (StatusCode, &'static str, bool) {
         match self {
             Self::Configuration { .. } | Self::CapabilityDocument { .. } => {
@@ -64,9 +77,12 @@ impl ControlPlaneError {
             }
             Self::Validation { code, .. } => (StatusCode::BAD_REQUEST, code, false),
             Self::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized_scope", false),
+            Self::Forbidden { code, .. } => (StatusCode::FORBIDDEN, code, false),
             Self::NotFound => (StatusCode::NOT_FOUND, "source_unavailable", false),
             Self::Conflict { .. } => (StatusCode::CONFLICT, "capability_mismatch", false),
-            Self::Database(_) | Self::Io(_) => (StatusCode::SERVICE_UNAVAILABLE, "source_unavailable", true),
+            Self::Database(_) | Self::IdentityProvider(_) | Self::ObjectStore | Self::Io(_) => {
+                (StatusCode::SERVICE_UNAVAILABLE, "source_unavailable", true)
+            }
         }
     }
 
@@ -74,11 +90,14 @@ impl ControlPlaneError {
         match self {
             Self::Configuration { detail }
             | Self::Validation { detail, .. }
+            | Self::Forbidden { detail, .. }
             | Self::Conflict { detail }
             | Self::CapabilityDocument { detail } => detail.clone(),
-            Self::NotFound => "cluster was not found".to_owned(),
+            Self::NotFound => "resource was not found".to_owned(),
             Self::Unauthorized => "an authenticated internal identity is required".to_owned(),
             Self::Database(_) => "persistent state is temporarily unavailable".to_owned(),
+            Self::IdentityProvider(_) => "identity provider is temporarily unavailable".to_owned(),
+            Self::ObjectStore => "evidence object storage is temporarily unavailable".to_owned(),
             Self::Io(_) => "service endpoint is temporarily unavailable".to_owned(),
         }
     }
@@ -96,8 +115,15 @@ impl From<std::io::Error> for ControlPlaneError {
     }
 }
 
+impl From<reqwest::Error> for ControlPlaneError {
+    fn from(error: reqwest::Error) -> Self {
+        Self::IdentityProvider(error)
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct ErrorEnvelope {
+    schema_version: &'static str,
     code: &'static str,
     message: String,
     retryable: bool,
@@ -108,6 +134,7 @@ impl IntoResponse for ControlPlaneError {
     fn into_response(self) -> Response {
         let (status, code, retryable) = self.status_and_code();
         let body = ErrorEnvelope {
+            schema_version: "rocketmq-sre.error.v1",
             code,
             message: self.safe_message(),
             retryable,

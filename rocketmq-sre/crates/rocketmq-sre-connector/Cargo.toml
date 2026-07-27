@@ -28,13 +28,15 @@ axum.workspace = true
 chrono.workspace = true
 http.workspace = true
 jsonschema = { version = "0.47.0", default-features = false }
-reqwest = { version = "0.13.2", default-features = false, features = ["form", "json", "rustls"] }
+reqwest = { workspace = true, features = ["form", "query"] }
 rmcp = { version = "2.2.0", default-features = false, features = ["client", "transport-streamable-http-client-reqwest"] }
+rocketmq-admin-core = { path = "../../../rocketmq-tools/rocketmq-admin/rocketmq-admin-core", default-features = false, features = ["read-client-adapter"] }
 rocketmq-observability.workspace = true
 rocketmq-sre-contracts.workspace = true
 rocketmq-sre-core.workspace = true
 rocketmq-runtime.workspace = true
 serde.workspace = true
+serde_jcs.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 subtle.workspace = true
@@ -42,7 +44,7 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-url = { version = "2.5.4", features = ["serde"] }
+url.workspace = true
 
 [dev-dependencies]
 tower.workspace = true

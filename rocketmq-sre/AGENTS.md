@@ -7,6 +7,9 @@ repository instructions also apply unless this file is more specific.
 
 ## Architecture boundaries
 
+- This standalone workspace uses Rust 2024 and the modern module layout.
+  Represent a module as `foo.rs` with child modules under `foo/`; do not add
+  `foo/mod.rs`.
 - `rocketmq-sre-contracts` stays independent of networking, async runtimes,
   databases, model SDKs, and RocketMQ implementation crates.
 - `rocketmq-sre-core` depends only on `rocketmq-sre-contracts`.
@@ -29,6 +32,7 @@ cargo check --locked --workspace
 cargo test --locked --workspace --all-features
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo doc --locked --workspace --no-deps
+python scripts/check_source_layout.py
 ```
 
 Schema artifacts are generated deliberately, not as part of a normal build:

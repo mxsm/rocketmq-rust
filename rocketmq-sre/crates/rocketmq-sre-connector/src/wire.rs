@@ -27,7 +27,7 @@ use crate::MCP_BUSINESS_SCHEMA;
 const MAX_PAGE_LIMIT: u32 = 200;
 const MAX_IDENTIFIER_BYTES: usize = 255;
 
-/// Supported Phase 00 read operations. Every variant maps to a fixed,
+/// Supported read operations. Every variant maps to a fixed,
 /// non-mutating MCP tool.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -43,6 +43,14 @@ pub enum EvidenceOperation {
     },
     TopicDescribe {
         topic: String,
+        #[serde(default)]
+        limit: Option<u32>,
+        #[serde(default)]
+        cursor: Option<String>,
+    },
+    ConsumerGroupList {
+        #[serde(default)]
+        filter: Option<String>,
         #[serde(default)]
         limit: Option<u32>,
         #[serde(default)]
@@ -68,6 +76,7 @@ impl EvidenceOperation {
             Self::ClusterOverview => "rocketmq_get_cluster_overview",
             Self::TopicList { .. } => "rocketmq_list_topics",
             Self::TopicDescribe { .. } => "rocketmq_describe_topic",
+            Self::ConsumerGroupList { .. } => "rocketmq_list_consumer_groups",
             Self::BrokerDescribe { .. } => "rocketmq_describe_broker",
             Self::ConsumerLag { .. } => "rocketmq_get_consumer_lag",
         }
@@ -79,6 +88,7 @@ impl EvidenceOperation {
             Self::ClusterOverview => "cluster/overview".to_owned(),
             Self::TopicList { .. } => "topics".to_owned(),
             Self::TopicDescribe { topic, .. } => format!("topics/{topic}"),
+            Self::ConsumerGroupList { .. } => "consumer-groups".to_owned(),
             Self::BrokerDescribe { broker_name } => {
                 format!("brokers/{broker_name}")
             }
@@ -103,6 +113,10 @@ impl EvidenceOperation {
             }
             Self::TopicDescribe { topic, limit, cursor } => {
                 validate_identifier("topic", topic)?;
+                validate_page(*limit, cursor.as_deref())
+            }
+            Self::ConsumerGroupList { filter, limit, cursor } => {
+                validate_optional_identifier("filter", filter.as_deref())?;
                 validate_page(*limit, cursor.as_deref())
             }
             Self::BrokerDescribe { broker_name } => validate_identifier("broker_name", broker_name),
@@ -137,6 +151,12 @@ impl EvidenceOperation {
             Self::TopicDescribe { topic, limit, cursor } => json!({
                 "cluster": cluster,
                 "topic": topic,
+                "limit": limit,
+                "cursor": cursor
+            }),
+            Self::ConsumerGroupList { filter, limit, cursor } => json!({
+                "cluster": cluster,
+                "filter": filter,
                 "limit": limit,
                 "cursor": cursor
             }),
@@ -300,9 +320,7 @@ fn is_sensitive_key(key: &str) -> bool {
         || normalized.contains("aclconfig")
         || normalized.contains("plainaccessconfig")
         || normalized.contains("certificate")
-        || normalized == "body"
-        || normalized.ends_with("messagebody")
-        || normalized.ends_with("rawbody")
+        || is_message_body_key(&normalized)
         || normalized.ends_with("clientip")
         || matches!(
             normalized.as_str(),
@@ -317,6 +335,18 @@ fn is_sensitive_key(key: &str) -> bool {
                 | "localaddress"
                 | "storehost"
         )
+}
+
+fn is_message_body_key(normalized: &str) -> bool {
+    matches!(normalized, "body" | "bodybase64" | "payload" | "payloadbase64")
+        || normalized.ends_with("messagebody")
+        || normalized.ends_with("messagebodybase64")
+        || normalized.ends_with("rawbody")
+        || normalized.ends_with("rawbodybase64")
+        || normalized.ends_with("messagepayload")
+        || normalized.ends_with("messagepayloadbase64")
+        || normalized.ends_with("rawpayload")
+        || normalized.ends_with("rawpayloadbase64")
 }
 
 #[cfg(test)]
@@ -390,6 +420,36 @@ mod tests {
             result.expect_err("sensitive field").code,
             ConnectorErrorCode::CapabilityMismatch
         );
+    }
+
+    #[test]
+    fn rejects_all_message_body_aliases_after_schema_validation() {
+        for key in [
+            "body",
+            "body_base64",
+            "messageBody",
+            "message_body_base64",
+            "decoded_message_body",
+            "compressed_message_body_base64",
+            "raw-body",
+            "payload",
+            "payloadBase64",
+            "message_payload",
+            "raw_payload_base64",
+        ] {
+            let mut message = Map::new();
+            message.insert(key.to_owned(), Value::String("must-never-enter-evidence".to_owned()));
+            let result = validate_wire_envelope(
+                &envelope_schema(),
+                envelope(json!({"nested": Value::Object(message)})),
+                "local",
+            );
+            assert_eq!(
+                result.expect_err(key).code,
+                ConnectorErrorCode::CapabilityMismatch,
+                "{key}"
+            );
+        }
     }
 
     #[test]

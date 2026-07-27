@@ -34,6 +34,10 @@ pub enum ConnectorErrorCode {
     OutputTooLarge,
     SourceUnavailable,
     InvalidEvidenceQuery,
+    DeadlineExceeded,
+    QueryCancelled,
+    RateLimited,
+    ChannelUnavailable,
 }
 
 impl ConnectorErrorCode {
@@ -51,6 +55,10 @@ impl ConnectorErrorCode {
             Self::OutputTooLarge => "output_too_large",
             Self::SourceUnavailable => "source_unavailable",
             Self::InvalidEvidenceQuery => "invalid_evidence_query",
+            Self::DeadlineExceeded => "deadline_exceeded",
+            Self::QueryCancelled => "query_cancelled",
+            Self::RateLimited => "rate_limited",
+            Self::ChannelUnavailable => "channel_unavailable",
         }
     }
 
@@ -61,7 +69,10 @@ impl ConnectorErrorCode {
             Self::TenantMismatch | Self::ClusterNotAllowed => StatusCode::FORBIDDEN,
             Self::OutputTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::SchemaDigestMismatch | Self::CapabilityMismatch => StatusCode::CONFLICT,
-            Self::SourceUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+            Self::SourceUnavailable | Self::ChannelUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+            Self::DeadlineExceeded => StatusCode::GATEWAY_TIMEOUT,
+            Self::QueryCancelled => StatusCode::CONFLICT,
+            Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             Self::InvalidConfiguration
             | Self::UnsupportedSchemaMajor
             | Self::MissingRequiredFeature
@@ -132,6 +143,10 @@ impl ConnectorError {
             ConnectorErrorCode::OutputTooLarge => "the MCP response exceeds the configured output bound",
             ConnectorErrorCode::SourceUnavailable => "the MCP evidence source is unavailable",
             ConnectorErrorCode::InvalidEvidenceQuery => "the evidence query is invalid",
+            ConnectorErrorCode::DeadlineExceeded => "the evidence query deadline was exceeded",
+            ConnectorErrorCode::QueryCancelled => "the evidence query was cancelled",
+            ConnectorErrorCode::RateLimited => "the connector evidence budget is exhausted",
+            ConnectorErrorCode::ChannelUnavailable => "the control-plane connector channel is unavailable",
         }
     }
 }

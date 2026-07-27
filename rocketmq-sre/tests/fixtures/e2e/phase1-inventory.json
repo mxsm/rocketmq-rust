@@ -1,0 +1,200 @@
+{
+  "cluster_id": "10000000-0000-4000-8000-000000000001",
+  "observed_at": "2026-07-27T08:00:00Z",
+  "partial": false,
+  "assets": [
+    {
+      "kind": "cluster",
+      "external_key": "phase1",
+      "display_name": "Phase 1 Test Cluster",
+      "source": "topology",
+      "attributes": { "environment": "test" },
+      "observed_at": "2026-07-27T08:00:00Z",
+      "freshness_seconds": 0
+    },
+    {
+      "kind": "name_server",
+      "external_key": "nameserver-a",
+      "display_name": "NameServer A",
+      "source": "mcp",
+      "attributes": { "role": "route_registry" },
+      "observed_at": "2026-07-27T08:00:00Z",
+      "freshness_seconds": 5
+    },
+    {
+      "kind": "controller",
+      "external_key": "controller-a",
+      "display_name": "Controller A",
+      "source": "mcp",
+      "attributes": { "role": "leader" },
+      "observed_at": "2026-07-27T08:00:00Z",
+      "freshness_seconds": 5
+    },
+    {
+      "kind": "broker",
+      "external_key": "broker-a",
+      "display_name": "Broker A",
+      "source": "admin",
+      "attributes": { "broker_id": 0, "role": "master" },
+      "observed_at": "2026-07-27T08:00:00Z",
+      "freshness_seconds": 5
+    },
+    {
+      "kind": "proxy",
+      "external_key": "proxy-a",
+      "display_name": "Proxy A",
+      "source": "mcp",
+      "attributes": { "protocol": "grpc" },
+      "observed_at": "2026-07-27T08:00:00Z",
+      "freshness_seconds": 5
+    },
+    {
+      "kind": "store",
+      "external_key": "store-a",
+      "display_name": "Store A",
+      "source": "runtime",
+      "attributes": { "engine": "commitlog" },
+      "observed_at": "2026-07-27T08:00:00Z",
+      "freshness_seconds": 10
+    },
+    {
+      "kind": "pod",
+      "external_key": "rocketmq/broker-a-0",
+      "display_name": "broker-a-0",
+      "source": "kubernetes",
+      "attributes": { "namespace": "rocketmq", "ready": true },
+      "observed_at": "2026-07-27T08:00:00Z",
+      "freshness_seconds": 10
+    },
+    {
+      "kind": "node",
+      "external_key": "node-a",
+      "display_name": "Node A",
+      "source": "kubernetes",
+      "attributes": { "ready": true },
+      "observed_at": "2026-07-27T08:00:00Z",
+      "freshness_seconds": 10
+    },
+    {
+      "kind": "persistent_volume_claim",
+      "external_key": "rocketmq/broker-a-store",
+      "display_name": "broker-a-store",
+      "source": "kubernetes",
+      "attributes": { "phase": "Bound", "storage_class": "local-path" },
+      "observed_at": "2026-07-27T08:00:00Z",
+      "freshness_seconds": 10
+    },
+    {
+      "kind": "pod_disruption_budget",
+      "external_key": "rocketmq/broker",
+      "display_name": "broker",
+      "source": "kubernetes",
+      "attributes": { "desired_healthy": 1, "current_healthy": 1 },
+      "observed_at": "2026-07-27T08:00:00Z",
+      "freshness_seconds": 10
+    },
+    {
+      "kind": "topic",
+      "external_key": "phase1-orders",
+      "display_name": "phase1-orders",
+      "source": "mcp",
+      "attributes": { "read_queues": 4, "write_queues": 4 },
+      "observed_at": "2026-07-27T08:00:00Z",
+      "freshness_seconds": 5
+    },
+    {
+      "kind": "queue",
+      "external_key": "phase1-orders/0",
+      "display_name": "phase1-orders queue 0",
+      "source": "admin",
+      "attributes": { "queue_id": 0 },
+      "observed_at": "2026-07-27T08:00:00Z",
+      "freshness_seconds": 5
+    },
+    {
+      "kind": "consumer_group",
+      "external_key": "phase1-consumer-group",
+      "display_name": "phase1-consumer-group",
+      "source": "admin",
+      "attributes": { "consume_type": "push" },
+      "observed_at": "2026-07-27T08:00:00Z",
+      "freshness_seconds": 5
+    },
+    {
+      "kind": "producer_group",
+      "external_key": "phase1-producer-group",
+      "display_name": "phase1-producer-group",
+      "source": "admin",
+      "attributes": { "client_count": 1 },
+      "observed_at": "2026-07-27T08:00:00Z",
+      "freshness_seconds": 5
+    },
+    {
+      "kind": "producer",
+      "external_key": "producer-fingerprint-a",
+      "display_name": "Producer A",
+      "source": "admin",
+      "attributes": { "group": "phase1-producer-group" },
+      "observed_at": "2026-07-27T08:00:00Z",
+      "freshness_seconds": 5
+    },
+    {
+      "kind": "consumer",
+      "external_key": "consumer-fingerprint-a",
+      "display_name": "Consumer A",
+      "source": "admin",
+      "attributes": { "group": "phase1-consumer-group" },
+      "observed_at": "2026-07-27T08:00:00Z",
+      "freshness_seconds": 5
+    },
+    {
+      "kind": "connection",
+      "external_key": "connection-fingerprint-a",
+      "display_name": "Client connection A",
+      "source": "admin",
+      "attributes": { "transport": "remoting", "state": "active" },
+      "observed_at": "2026-07-27T08:00:00Z",
+      "freshness_seconds": 5
+    },
+    {
+      "kind": "client",
+      "external_key": "client-fingerprint-a",
+      "display_name": "Client A",
+      "source": "admin",
+      "attributes": { "sdk": "rocketmq-rust" },
+      "observed_at": "2026-07-27T08:00:00Z",
+      "freshness_seconds": 5
+    },
+    {
+      "kind": "config_version",
+      "external_key": "broker-a/config",
+      "display_name": "Broker A config",
+      "source": "runtime",
+      "attributes": {
+        "version": "phase1",
+        "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "observed_at": "2026-07-27T08:00:00Z",
+      "freshness_seconds": 10
+    }
+  ],
+  "edges": [
+    { "from": { "kind": "cluster", "external_key": "phase1" }, "to": { "kind": "name_server", "external_key": "nameserver-a" }, "relation": "contains", "source": "topology", "observed_at": "2026-07-27T08:00:00Z", "freshness_seconds": 5 },
+    { "from": { "kind": "cluster", "external_key": "phase1" }, "to": { "kind": "controller", "external_key": "controller-a" }, "relation": "contains", "source": "topology", "observed_at": "2026-07-27T08:00:00Z", "freshness_seconds": 5 },
+    { "from": { "kind": "cluster", "external_key": "phase1" }, "to": { "kind": "broker", "external_key": "broker-a" }, "relation": "contains", "source": "topology", "observed_at": "2026-07-27T08:00:00Z", "freshness_seconds": 5 },
+    { "from": { "kind": "cluster", "external_key": "phase1" }, "to": { "kind": "proxy", "external_key": "proxy-a" }, "relation": "contains", "source": "topology", "observed_at": "2026-07-27T08:00:00Z", "freshness_seconds": 5 },
+    { "from": { "kind": "topic", "external_key": "phase1-orders" }, "to": { "kind": "queue", "external_key": "phase1-orders/0" }, "relation": "contains", "source": "topology", "observed_at": "2026-07-27T08:00:00Z", "freshness_seconds": 5 },
+    { "from": { "kind": "queue", "external_key": "phase1-orders/0" }, "to": { "kind": "broker", "external_key": "broker-a" }, "relation": "routes_to", "source": "topology", "observed_at": "2026-07-27T08:00:00Z", "freshness_seconds": 5 },
+    { "from": { "kind": "broker", "external_key": "broker-a" }, "to": { "kind": "store", "external_key": "store-a" }, "relation": "stores_on", "source": "topology", "observed_at": "2026-07-27T08:00:00Z", "freshness_seconds": 5 },
+    { "from": { "kind": "store", "external_key": "store-a" }, "to": { "kind": "pod", "external_key": "rocketmq/broker-a-0" }, "relation": "runs_on", "source": "topology", "observed_at": "2026-07-27T08:00:00Z", "freshness_seconds": 10 },
+    { "from": { "kind": "pod", "external_key": "rocketmq/broker-a-0" }, "to": { "kind": "node", "external_key": "node-a" }, "relation": "runs_on", "source": "kubernetes", "observed_at": "2026-07-27T08:00:00Z", "freshness_seconds": 10 },
+    { "from": { "kind": "store", "external_key": "store-a" }, "to": { "kind": "persistent_volume_claim", "external_key": "rocketmq/broker-a-store" }, "relation": "connected_to", "source": "kubernetes", "observed_at": "2026-07-27T08:00:00Z", "freshness_seconds": 10 },
+    { "from": { "kind": "pod_disruption_budget", "external_key": "rocketmq/broker" }, "to": { "kind": "pod", "external_key": "rocketmq/broker-a-0" }, "relation": "configures", "source": "kubernetes", "observed_at": "2026-07-27T08:00:00Z", "freshness_seconds": 10 },
+    { "from": { "kind": "producer", "external_key": "producer-fingerprint-a" }, "to": { "kind": "connection", "external_key": "connection-fingerprint-a" }, "relation": "connected_to", "source": "topology", "observed_at": "2026-07-27T08:00:00Z", "freshness_seconds": 5 },
+    { "from": { "kind": "consumer", "external_key": "consumer-fingerprint-a" }, "to": { "kind": "connection", "external_key": "connection-fingerprint-a" }, "relation": "connected_to", "source": "topology", "observed_at": "2026-07-27T08:00:00Z", "freshness_seconds": 5 },
+    { "from": { "kind": "connection", "external_key": "connection-fingerprint-a" }, "to": { "kind": "broker", "external_key": "broker-a" }, "relation": "connected_to", "source": "topology", "observed_at": "2026-07-27T08:00:00Z", "freshness_seconds": 5 },
+    { "from": { "kind": "producer_group", "external_key": "phase1-producer-group" }, "to": { "kind": "topic", "external_key": "phase1-orders" }, "relation": "produces_to", "source": "admin", "observed_at": "2026-07-27T08:00:00Z", "freshness_seconds": 5 },
+    { "from": { "kind": "consumer_group", "external_key": "phase1-consumer-group" }, "to": { "kind": "topic", "external_key": "phase1-orders" }, "relation": "consumes_from", "source": "admin", "observed_at": "2026-07-27T08:00:00Z", "freshness_seconds": 5 },
+    { "from": { "kind": "config_version", "external_key": "broker-a/config" }, "to": { "kind": "broker", "external_key": "broker-a" }, "relation": "configures", "source": "runtime", "observed_at": "2026-07-27T08:00:00Z", "freshness_seconds": 10 }
+  ]
+}

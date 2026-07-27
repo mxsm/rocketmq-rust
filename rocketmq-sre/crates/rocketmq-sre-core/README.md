@@ -13,12 +13,20 @@ transitions and the lifecycle of registered extension descriptors.
   providers, and integrations.
 - Support descriptor upgrade, disable, deprecate, and rollback operations.
 - Fail closed for unknown schema majors and unsupported required capabilities.
+- Register and run versioned, deterministic Wave A `DiagnosticPack`
+  implementations without network access.
+- Derive confidence from evidence coverage, supporting signals,
+  counter-evidence, and partial state; packs cannot supply their own score.
+- Replay saved evidence fixtures for topology, consumers, producers, brokers,
+  message paths, telemetry, and deployment drift.
 
-## Phase 00 boundary
+## Runtime boundary
 
 The crate depends only on `rocketmq-sre-contracts` at runtime. It has no
 network, database, RocketMQ client, model provider, or service-runtime behavior,
-and it does not execute actions.
+and it does not execute actions. Diagnostic conclusions fail closed on invalid
+hashes, mixed tenant/cluster scope, unknown citations, local-only required
+evidence, and message content.
 
 ## Validation
 
@@ -28,5 +36,6 @@ Run from `rocketmq-sre/`:
 cargo test --locked -p rocketmq-sre-core
 ```
 
-The tests cover incident transitions, duplicate registration, compatible
-upgrades, unsupported features, disabling, deprecation, and rollback.
+The tests also replay normal, fault, and missing-evidence fixtures for all eight
+Wave A packs, verify deterministic results and citations, enforce low
+confidence for incomplete evidence, and reject message bodies.

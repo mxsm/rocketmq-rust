@@ -1,0 +1,8 @@
+# Copyright 2023 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0.
+
+provider_mode: outage
+expected_model_mode: rules_only
+expected_execution_eligible: false
+expected_mutation_calls: 0
+expected_executor_calls: 0

@@ -275,8 +275,8 @@ spec:
             httpGet: {path: /ready, port: http}
             periodSeconds: 3
           resources:
-            requests: {cpu: 50m, memory: 64Mi}
-            limits: {cpu: 500m, memory: 512Mi}
+            requests: {cpu: 50m, memory: 256Mi}
+            limits: {cpu: 500m, memory: 1Gi}
           volumeMounts:
             - {name: config, mountPath: /etc/tempo/tempo.yaml, subPath: tempo.yaml}
             - {name: data, mountPath: /var/tempo}

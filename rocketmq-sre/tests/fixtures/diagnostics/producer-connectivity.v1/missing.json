@@ -1,0 +1,14 @@
+{
+  "pack": "producer-connectivity.v1",
+  "scenario": "missing",
+  "expected_status": "inconclusive",
+  "expected_reason_codes": [],
+  "evidence": [
+    {
+      "evidence_id": "00000000-0000-4000-8004-000000000103",
+      "source": "rocketmq-mcp",
+      "resource": "topic-route/topic-a",
+      "content": { "route_available": true, "queue_count": 8 }
+    }
+  ]
+}

@@ -8,3 +8,14 @@ resources:
   - sre-stack.yaml
   - observability.yaml
   - connector-service.yaml
+  - connector-rbac.yaml
+  - control-plane-network-policy.yaml
+
+configMapGenerator:
+  - name: sre-control-plane-mtls-proxy
+    namespace: rocketmq-sre
+    files:
+      - nginx.conf=control-plane-mtls-nginx.conf
+
+generatorOptions:
+  disableNameSuffixHash: true

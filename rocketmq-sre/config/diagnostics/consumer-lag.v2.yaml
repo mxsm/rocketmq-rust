@@ -1,0 +1,34 @@
+schema: rocketmq-sre.diagnostic-pack.v1
+id: consumer-lag
+version: 2.0.0
+qualified_id: consumer-lag.v2
+owner: rocketmq-sre
+components: [consumer, broker, store, nameserver]
+output_schema: rocketmq-sre.diagnostic-result.v1
+required_evidence:
+  - key: consumer-lag
+    source: rocketmq-mcp
+    resource_prefix: consumer-lag/
+    fields: [total_lag, lag_slope_per_min, queue_skew_ratio, consume_rate_per_sec, produce_rate_per_sec]
+optional_evidence:
+  - { key: consumer-runtime, source: admin-query, resource_prefix: consumer-runtime/ }
+  - { key: broker-store, source: rocketmq-mcp, resource_prefix: broker-runtime/ }
+rules:
+  - reason_code: CONSUMER_THROUGHPUT_DEFICIT
+    when: "total_lag > 0 && lag_slope_per_min > 0 && produce_rate_per_sec > consume_rate_per_sec"
+    severity: critical
+  - { reason_code: CONSUMER_QUEUE_SKEW, when: "queue_skew_ratio >= 2", severity: warning }
+  - { reason_code: CONSUMER_RUNTIME_UNAVAILABLE, when: "paused || connected_clients == 0", severity: critical }
+  - reason_code: CONSUMER_BROKER_STORE_DEPENDENCY
+    when: "!broker_ready || !store_healthy"
+    severity: critical
+  - { reason_code: CONSUMER_LAG_HEALTHY, when: "all fault rules are false", severity: info }
+  - { reason_code: CONSUMER_LAG_EVIDENCE_INCOMPLETE, when: "required fields are absent", severity: warning }
+missing_behavior: inconclusive
+confidence:
+  implementation: deterministic_engine
+  missing_required_cap: 49
+  unsupported_required_cap: 24
+follow_up:
+  - admin-query:consumer-runtime/{group}
+  - mcp:broker-runtime/{broker}

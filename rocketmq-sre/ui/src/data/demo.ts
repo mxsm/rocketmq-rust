@@ -370,7 +370,7 @@ export const demoCatalog: CapabilityCatalogResponse = {
   effective_access_profile: "read_only",
   execution_supported: false,
   approval_supported: false,
-  provider_network_calls_supported: false,
+  provider_network_calls_supported: true,
   providers: [
     "openai",
     "anthropic",

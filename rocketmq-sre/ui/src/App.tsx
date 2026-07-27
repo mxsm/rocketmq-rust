@@ -1,22 +1,129 @@
+import { Suspense, lazy } from "react";
 import { Navigate, RouterProvider, createBrowserRouter } from "react-router-dom";
 
 import { AppLayout } from "./layouts/AppLayout";
 import { ClusterDetailPage } from "./pages/ClusterDetailPage";
 import { ClustersPage } from "./pages/ClustersPage";
 import { CoverageMatrixPage } from "./pages/CoverageMatrixPage";
-import { EvidenceWorkbenchPage } from "./pages/EvidenceWorkbenchPage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { SystemStatusPage } from "./pages/SystemStatusPage";
 
+const AssetsPage = lazy(() =>
+  import("./pages/AssetsTopologyPages").then((module) => ({
+    default: module.AssetsPage,
+  })),
+);
+const OnboardingPage = lazy(() =>
+  import("./pages/AssetsTopologyPages").then((module) => ({
+    default: module.OnboardingPage,
+  })),
+);
+const TopologyPage = lazy(() =>
+  import("./pages/AssetsTopologyPages").then((module) => ({
+    default: module.TopologyPage,
+  })),
+);
+const EvidenceExplorerPage = lazy(() =>
+  import("./pages/InsightsPages").then((module) => ({
+    default: module.EvidenceExplorerPage,
+  })),
+);
+const KnowledgePage = lazy(() =>
+  import("./pages/InsightsPages").then((module) => ({
+    default: module.KnowledgePage,
+  })),
+);
+const MessageJourneyPage = lazy(() =>
+  import("./pages/InsightsPages").then((module) => ({
+    default: module.MessageJourneyPage,
+  })),
+);
+const ModelsPage = lazy(() =>
+  import("./pages/InsightsPages").then((module) => ({
+    default: module.ModelsPage,
+  })),
+);
+const AskSrePage = lazy(() =>
+  import("./pages/WorkflowPages").then((module) => ({
+    default: module.AskSrePage,
+  })),
+);
+const ConversationDetailPage = lazy(() =>
+  import("./pages/WorkflowPages").then((module) => ({
+    default: module.ConversationDetailPage,
+  })),
+);
+const IncidentDetailPage = lazy(() =>
+  import("./pages/WorkflowPages").then((module) => ({
+    default: module.IncidentDetailPage,
+  })),
+);
+const IncidentsPage = lazy(() =>
+  import("./pages/WorkflowPages").then((module) => ({
+    default: module.IncidentsPage,
+  })),
+);
+const InspectionDetailPage = lazy(() =>
+  import("./pages/WorkflowPages").then((module) => ({
+    default: module.InspectionDetailPage,
+  })),
+);
+const InspectionsPage = lazy(() =>
+  import("./pages/WorkflowPages").then((module) => ({
+    default: module.InspectionsPage,
+  })),
+);
+const InvestigationDetailPage = lazy(() =>
+  import("./pages/WorkflowPages").then((module) => ({
+    default: module.InvestigationDetailPage,
+  })),
+);
+
+function RouteLoading() {
+  return (
+    <div className="page">
+      <div className="state-panel" role="status">
+        正在加载 SRE 工作区…
+      </div>
+    </div>
+  );
+}
+
 const router = createBrowserRouter([
   {
-    element: <AppLayout />,
+    element: (
+      <Suspense fallback={<RouteLoading />}>
+        <AppLayout />
+      </Suspense>
+    ),
     children: [
       { index: true, element: <OverviewPage /> },
       { path: "clusters", element: <ClustersPage /> },
+      { path: "clusters/onboard", element: <OnboardingPage /> },
       { path: "clusters/:clusterId", element: <ClusterDetailPage /> },
-      { path: "evidence", element: <EvidenceWorkbenchPage /> },
+      { path: "assets", element: <AssetsPage /> },
+      { path: "topology", element: <TopologyPage /> },
+      { path: "ask", element: <AskSrePage /> },
+      {
+        path: "conversations/:conversationId",
+        element: <ConversationDetailPage />,
+      },
+      {
+        path: "investigations/:investigationId",
+        element: <InvestigationDetailPage />,
+      },
+      { path: "incidents", element: <IncidentsPage /> },
+      { path: "incidents/:incidentId", element: <IncidentDetailPage /> },
+      { path: "inspections", element: <InspectionsPage /> },
+      {
+        path: "inspections/:inspectionId",
+        element: <InspectionDetailPage />,
+      },
+      { path: "evidence", element: <EvidenceExplorerPage /> },
+      { path: "journeys", element: <MessageJourneyPage /> },
       { path: "coverage", element: <CoverageMatrixPage /> },
+      { path: "knowledge", element: <KnowledgePage /> },
+      { path: "models", element: <ModelsPage /> },
       { path: "system", element: <SystemStatusPage /> },
       { path: "*", element: <Navigate replace to="/" /> },
     ],
@@ -24,10 +131,5 @@ const router = createBrowserRouter([
 ]);
 
 export function App() {
-  return (
-    <RouterProvider
-      future={{ v7_startTransition: true }}
-      router={router}
-    />
-  );
+  return <RouterProvider router={router} />;
 }

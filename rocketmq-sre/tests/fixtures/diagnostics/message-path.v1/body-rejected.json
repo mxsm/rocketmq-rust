@@ -1,0 +1,17 @@
+{
+  "pack": "message-path.v1",
+  "scenario": "body-rejected",
+  "expected_error": "message_body_rejected",
+  "evidence": [
+    {
+      "evidence_id": "00000000-0000-4000-8006-000000000104",
+      "source": "admin-query",
+      "resource": "message-metadata/id-hash-a",
+      "content": {
+        "message_id_hash": "sha256:id-a",
+        "body": "this value must never enter a diagnostic report",
+        "stages": { "send": true, "route": true, "store": true, "deliver": true, "ack": true }
+      }
+    }
+  ]
+}

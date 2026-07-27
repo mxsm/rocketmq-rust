@@ -15,12 +15,38 @@ The runner uses the repository-pinned versions:
 PostgreSQL runs inside the cluster with an ephemeral `emptyDir`. The overlay
 also starts the SRE Control Plane and UI, places the Connector beside MCP as a
 loopback-only sidecar, and adds OTel Collector, Prometheus, Loki, and Tempo.
-All development credentials and certificates are generated into
-`target/phase00-kind`; they are not production credentials.
+The development Control Plane alone mounts a private 1 GiB `emptyDir` for
+large Evidence objects. It survives a Control Plane container restart within
+the Pod, but is intentionally ephemeral with the Kind cluster; production
+deployments must configure the HTTPS S3-compatible backend instead.
+The Control Plane Pod has a non-root mTLS Nginx sidecar on `8444`. The
+Connector trusts a dedicated Control Plane server CA and presents a separate
+combined client identity. Nginx validates the client certificate, derives and
+overwrites the connector subject/issuer headers, and proxies only the bounded
+Connector POST surface to Axum on loopback. A NetworkPolicy allows the
+Connector Pod to reach `8444` but prevents it from bypassing the proxy on
+`8090`. The public listener does not mount Connector routes; the sidecar is the
+only process that can reach the separate `127.0.0.1:8093` upstream.
+Development credentials are generated into `target/phase00-kind`; the shared
+RocketMQ and Connector-channel certificates are generated into
+`target/phase00-certs`. They are not production credentials.
 The runner creates separate MCP reader, bounded Probe, and one-shot bootstrap
 identities. The MCP Pod receives only its reader credential secret; the Broker
 ACL and bootstrap credential remain in the RocketMQ namespace secret, and the
 reader cannot perform Topic, Group, or cluster mutations.
+Although MCP and Connector share a Pod, the Connector mounts a separate Secret
+projection containing only MCP's public `ca.crt`; it cannot read MCP's TLS
+private key, admin identity, request policy, or RocketMQ reader credential
+file. Its RocketMQ Admin source receives the same read-only RocketMQ identity
+through individual Secret keys, without mounting MCP's credential file.
+
+The Connector uses the dedicated `rocketmq-sre-connector` ServiceAccount with
+automatic token mounting disabled. A bounded projected volume supplies only a
+rotating Kubernetes API token and the cluster CA. Namespaced RBAC permits
+`get`/`list` for Pods, Events, PVCs, and PDBs in `rocketmq-system`; cluster
+RBAC permits only `get`/`list` for Nodes. It has no watch, Secret access, or
+mutation verb. The token is reread on every bounded Kubernetes request, so
+projected-token rotation does not require a Pod restart.
 The runner also keeps a dedicated kubeconfig there and passes it explicitly to
 Kind, kubectl, and Helm, so it does not replace the user's current kubectl
 context.
@@ -43,8 +69,11 @@ kubectl --kubeconfig .\target\phase00-kind\kubeconfig `
   port-forward service/sre-ui 3004:3004
 ```
 
-The internal SRE ports are Control Plane `8090`, Connector `8091`, and UI
-`3004`; MCP remains loopback-only on `8089` inside its Pod.
+The internal SRE ports are Control Plane API `8090`, Connector mTLS `8444`,
+Connector-only loopback upstream `8093`, Connector diagnostics `8091`, and UI
+`3004`; MCP remains loopback-only on `8089` inside its Pod. The Phase 01 model
+fixture is a separate ClusterIP-only workload on `8094`. Its NetworkPolicy
+allows ingress only from the Control Plane and denies all egress.
 
 `Up` builds and loads all local RocketMQ/SRE images. Use `-SkipBuild` only when
 every required image already exists in the local Docker engine. Re-running
@@ -57,17 +86,75 @@ requires non-empty RocketMQ service metrics, log entries, and MCP traces,
 checks the persisted `ready_read_only`/`read_only` onboarding state, validates
 all six required data sources (including the versioned MCP Runtime and
 Observability resources), confirms the mutation-disabled capability contract,
-and requests a canonical inline Topic-list Evidence response. The longer
+and confirms that the Connector is online through the Control Plane. Connector
+readiness is not reported until its HTTP/2 mTLS registration succeeds, so this
+smoke verifies the deployed reverse channel without reopening Connector inbound
+query endpoints. The Phase 01 live smoke below exercises a real MCP query and
+persists its canonical Evidence through that channel. The longer
 Probe/Lag, PostgreSQL and Control Plane restart, Collector outage, token
 rotation, and offboarding lifecycle remains the Compose smoke; this Kind check
 is its bounded deployment-parity subset.
 
+## Phase 01 live read-only E2E
+
+The Phase 01 acceptance builds on the same runner and cluster. `kind.ps1 Up`
+also builds and loads the test-only fault driver and the SRE probe image. After
+the Phase 00 parity Job passes, run:
+
+```powershell
+.\rocketmq-sre\scripts\phase01-kind-smoke.ps1
+```
+
+For a fast local contract check that does not require a cluster:
+
+```powershell
+.\rocketmq-sre\scripts\phase01-kind-smoke.ps1 -ValidateOnly
+```
+
+The live runner opens one temporary loopback-only `kubectl port-forward` for
+the Control Plane and always terminates it before returning. It never calls the
+Connector diagnostics service or disabled inbound query endpoints. It then
+runs `phase01-live-probe-job.yaml`, whose service-account token is disabled.
+Its bootstrap init container can create or update exactly one fixed
+`SRE_PROBE_` Topic. Its separate probe identity can only register the matching
+`SRE_PROBE_G_` Group and send at most 10 messages of 64 bytes within 60
+seconds. Neither identity is shared with MCP, Connector, Control Plane, or any
+business Topic.
+
+The acceptance requires a positive real Consumer Lag result from MCP converted
+to canonical Evidence, normalized inventory, an online mTLS Connector,
+Conversation → Investigation → Incident diagnosis with persisted citations,
+inspection plus Markdown/HTML reports, Diagnostic Coverage, cross-cluster
+denial, append-only read audit, and a mutation-disabled MCP/OpenAPI surface.
+In addition, the deployed acceptance now requires a `model_assisted` result,
+persists the selected OpenAI-compatible fixture lineage, and verifies that its
+conclusion cites the positive live Consumer Lag Evidence. The model fixture is
+read-only and cannot make an outbound network call.
+Re-running it deletes and recreates only the named probe Job; the Topic update
+is idempotent and the consumer registration advances any prior probe backlog
+before the next bounded send.
+
 For static checks without a cluster:
 
 ```powershell
+.\rocketmq-sre\scripts\verify-mtls-deployment.ps1
 kubectl kustomize .\rocketmq-sre\deploy\kind > $null
 helm template rocketmq .\distribution\helm\rocketmq-rust `
   --namespace rocketmq-system `
   -f .\distribution\helm\rocketmq-rust\values-dev-single.yaml `
   -f .\rocketmq-sre\deploy\kind\helm-values.yaml > $null
 ```
+
+## Phase 01 Shadow Job
+
+After the Kind cluster exists, the Phase 01 evaluator can be built, loaded, and
+run as a one-shot Job:
+
+```powershell
+.\scripts\phase01-shadow.ps1 -Target Kind -Provider Mock
+```
+
+Its manifests are under `phase1-shadow/`. The Job has no service-account token,
+RBAC, ingress, egress, or Executor reference. It evaluates committed Evidence
+only and succeeds only when all 24 Wave A runs pass with
+`mutation_calls=0` and `executor_calls=0`.

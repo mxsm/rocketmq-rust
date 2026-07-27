@@ -1,0 +1,30 @@
+{
+  "pack": "broker-health.v1",
+  "scenario": "normal",
+  "expected_status": "healthy",
+  "expected_reason_codes": ["BROKER_HEALTHY"],
+  "evidence": [
+    {
+      "evidence_id": "00000000-0000-4000-8005-000000000101",
+      "source": "prometheus",
+      "resource": "broker-health/broker-a",
+      "content": {
+        "ready": true,
+        "request_error_rate_percent": 0.2,
+        "active_connections": 120,
+        "cpu_percent": 35,
+        "rss_bytes": 1073741824,
+        "disk_used_percent": 45,
+        "flush_latency_ms": 12,
+        "dispatch_backlog": 0,
+        "ha_lag_bytes": 4096
+      }
+    },
+    {
+      "evidence_id": "00000000-0000-4000-8005-000000000111",
+      "source": "rocketmq-mcp",
+      "resource": "broker-runtime/broker-a",
+      "content": { "broker_up": true }
+    }
+  ]
+}

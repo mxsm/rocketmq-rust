@@ -95,20 +95,11 @@ spec:
                 echo "$compact_tempo" | grep -Eq '"traceID":"[0-9a-fA-F]{16,32}"'
               }
 
-              echo "checking connector capabilities"
-              capabilities="$(curl --fail --silent \
-                --header "Authorization: Bearer $INTERNAL_TOKEN" \
-                http://rocketmq-sre-connector:8091/internal/v1/capabilities)"
-              echo "$capabilities" | grep -Eq '"ready"[[:space:]]*:[[:space:]]*true'
-              echo "$capabilities" | grep -q '"mcp_protocol_version":"2025-11-25"'
-              echo "$capabilities" | grep -q '"mcp_business_schema":"rocketmq-mcp.v2"'
-              echo "$capabilities" | grep -q '"mutation_supported":false'
-              echo "$capabilities" | grep -q '"rocketmq://system/runtime/v1"'
-              echo "$capabilities" | grep -q '"rocketmq://system/observability/v1"'
-
               check_cluster_ready() {
                 persisted_cluster="$(curl --fail --silent \
                   --header "Authorization: Bearer $INTERNAL_TOKEN" \
+                  --header 'x-rocketmq-tenant: 00000000-0000-4000-8000-000000000002' \
+                  --header 'x-rocketmq-clusters: 00000000-0000-4000-8000-000000000001' \
                   http://sre-control-plane.rocketmq-sre.svc.cluster.local:8090/v1/clusters/00000000-0000-4000-8000-000000000001)"
                 compact_cluster="$(echo "$persisted_cluster" | tr -d '[:space:]')"
                 echo "$compact_cluster" | grep -q '"id":"00000000-0000-4000-8000-000000000001"' || return 1
@@ -118,9 +109,23 @@ spec:
               echo "checking persisted onboarding state"
               retry check_cluster_ready
 
+              check_connector_channel() {
+                channel_status="$(curl --fail --silent \
+                  --header "Authorization: Bearer $INTERNAL_TOKEN" \
+                  --header 'x-rocketmq-tenant: 00000000-0000-4000-8000-000000000002' \
+                  --header 'x-rocketmq-clusters: 00000000-0000-4000-8000-000000000001' \
+                  http://sre-control-plane.rocketmq-sre.svc.cluster.local:8090/v1/clusters/00000000-0000-4000-8000-000000000001/connector)" || return 1
+                compact_channel="$(echo "$channel_status" | tr -d '[:space:]')"
+                echo "$compact_channel" | grep -q '"liveness":"online"'
+              }
+              echo "checking HTTP/2 mTLS connector registration"
+              retry check_connector_channel
+
               check_data_sources() {
                 persisted_capability="$(curl --fail --silent \
                   --header "Authorization: Bearer $INTERNAL_TOKEN" \
+                  --header 'x-rocketmq-tenant: 00000000-0000-4000-8000-000000000002' \
+                  --header 'x-rocketmq-clusters: 00000000-0000-4000-8000-000000000001' \
                   http://sre-control-plane.rocketmq-sre.svc.cluster.local:8090/v1/clusters/00000000-0000-4000-8000-000000000001/capabilities)"
                 compact_capability="$(echo "$persisted_capability" | tr -d '[:space:]')"
                 echo "$compact_capability" | grep -q '"cluster_id":"00000000-0000-4000-8000-000000000001"' || return 1
@@ -136,29 +141,6 @@ spec:
               echo "$persisted_capability" | grep -q 'rocketmq.runtime-diagnostics.v1'
               echo "$persisted_capability" | grep -q 'rocketmq.observability-status.v1'
 
-              check_evidence() {
-                at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-                evidence_payload="{\"query\":{\"query_id\":\"00000000-0000-4000-8000-000000000011\",\"correlation_id\":\"00000000-0000-4000-8000-000000000012\",\"tenant_id\":\"00000000-0000-4000-8000-000000000002\",\"cluster_id\":\"00000000-0000-4000-8000-000000000001\",\"source\":\"rocketmq-mcp\",\"resource\":\"topics\",\"time_range\":{\"start\":\"$at\",\"end\":\"$at\"}},\"mcp_cluster\":\"rocketmq-rust\",\"operation\":{\"kind\":\"topic_list\",\"limit\":10}}"
-                evidence_response="$(curl --silent --show-error \
-                  --write-out '\n%{http_code}' \
-                  --request POST \
-                  --header "Authorization: Bearer $INTERNAL_TOKEN" \
-                  --header 'Content-Type: application/json' \
-                  --data "$evidence_payload" \
-                  http://rocketmq-sre-connector:8091/internal/v1/evidence/query)" || return 1
-                evidence_status="$(printf '%s\n' "$evidence_response" | tail -n 1)"
-                evidence="$(printf '%s\n' "$evidence_response" | sed '$d')"
-                if [ "$evidence_status" != "200" ]; then
-                  echo "evidence query failed with HTTP $evidence_status: $evidence" >&2
-                  return 1
-                fi
-                echo "$evidence" | grep -Eq '"content_hash":"sha256:[0-9a-f]{64}"'
-              }
-              echo "checking canonical evidence"
-              retry check_evidence
-              echo "$evidence" | grep -Eq '"content_hash":"sha256:[0-9a-f]{64}"'
-              echo "$evidence" | grep -q '"family":"rocketmq-sre.evidence"'
-              echo "$evidence" | grep -q '"storage":"inline"'
               echo "checking non-empty Prometheus, Loki, and Tempo evidence"
               retry check_observability_evidence
               echo "PHASE00_KIND_SMOKE_OK"

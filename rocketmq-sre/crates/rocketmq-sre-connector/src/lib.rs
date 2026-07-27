@@ -18,13 +18,17 @@
 //! The connector imports only the generic `rmcp` client and public wire
 //! contracts. It never links the RocketMQ MCP server crate or its Rust DTOs.
 
+#![recursion_limit = "256"]
+
 mod api;
 mod auth;
 mod capability;
+mod channel;
 mod config;
 mod engine;
 mod error;
 mod mcp;
+mod sources;
 mod wire;
 
 pub use api::run;

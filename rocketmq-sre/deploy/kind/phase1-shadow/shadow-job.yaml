@@ -1,0 +1,67 @@
+# Copyright 2023 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0.
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: rocketmq-sre-phase1-shadow
+  labels:
+    app.kubernetes.io/name: rocketmq-sre-phase1-shadow
+    rocketmq.sre/access-profile: read-only
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rocketmq-sre-phase1-shadow
+        rocketmq.sre/access-profile: read-only
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: shadow-eval
+          image: rocketmq-rust/sre-phase1-shadow:local
+          imagePullPolicy: Never
+          env:
+            - name: ROCKETMQ_SRE_SHADOW_PROVIDER_MODE
+              valueFrom:
+                configMapKeyRef:
+                  name: rocketmq-sre-phase1-shadow
+                  key: provider-mode
+            - name: ROCKETMQ_SRE_MUTATION_SUPPORTED
+              valueFrom:
+                configMapKeyRef:
+                  name: rocketmq-sre-phase1-shadow
+                  key: mutation-supported
+            - name: ROCKETMQ_SRE_EXECUTOR_CONNECTED
+              valueFrom:
+                configMapKeyRef:
+                  name: rocketmq-sre-phase1-shadow
+                  key: executor-connected
+          args:
+            - --manifest
+            - tests/fixtures/e2e/wave-a-manifest.v1.yaml
+            - --fixtures-root
+            - tests/fixtures
+            - --compact
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi

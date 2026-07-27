@@ -24,10 +24,30 @@ rust-version.workspace = true
 description = "Provider-neutral model contracts for RocketMQ Rust AI SRE"
 
 [dependencies]
+cap-std = "4.0.2"
+chrono.workspace = true
+hmac.workspace = true
+prost.workspace = true
+reqwest.workspace = true
 rocketmq-sre-contracts.workspace = true
+rustls.workspace = true
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+tokio = { workspace = true, features = ["io-util", "rt"] }
+tokio-stream.workspace = true
+tonic.workspace = true
+tonic-prost.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+rcgen = "0.14.8"
+
+[build-dependencies]
+protoc-bin-vendored = "3.2.0"
+tonic-prost-build = "0.14.6"
 
 [lints]
 workspace = true

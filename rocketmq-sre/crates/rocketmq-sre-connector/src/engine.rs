@@ -14,14 +14,16 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use chrono::DateTime;
 use chrono::Utc;
-use rocketmq_sre_contracts::CoverageStatus;
-use rocketmq_sre_contracts::EvidenceContent;
+use rocketmq_runtime::ChildServiceContext;
+use rocketmq_sre_contracts::ConnectorCapabilityState;
+use rocketmq_sre_contracts::ConnectorSourceCapability;
 use rocketmq_sre_contracts::EvidenceQuery;
 use rocketmq_sre_contracts::EvidenceSnapshot;
-use rocketmq_sre_contracts::current_evidence_schema;
 use serde::Deserialize;
 use serde::Serialize;
 use subtle::ConstantTimeEq;
@@ -36,6 +38,9 @@ use crate::MCP_BUSINESS_SCHEMA;
 use crate::MCP_PROTOCOL_VERSION;
 use crate::VerifiedCapability;
 use crate::mcp::McpGateway;
+use crate::sources::CancelSignal;
+use crate::sources::InventoryUpload;
+use crate::sources::SourceManager;
 
 /// Request accepted by the protected evidence endpoint.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -55,6 +60,7 @@ pub struct ConnectorCapabilitiesView {
     pub mutation_supported: bool,
     pub observed_at: Option<DateTime<Utc>>,
     pub clusters: BTreeMap<String, CapabilityManifest>,
+    pub sources: Vec<ConnectorSourceCapability>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error_code: Option<&'static str>,
 }
@@ -71,19 +77,29 @@ struct HandshakeState {
 pub(crate) struct ConnectorEngine<G> {
     config: Arc<ConnectorConfig>,
     gateway: Arc<G>,
+    sources: SourceManager<G>,
     handshake: RwLock<HandshakeState>,
+    channel_ready: AtomicBool,
 }
 
 impl<G> ConnectorEngine<G>
 where
     G: McpGateway,
 {
-    pub(crate) fn new(config: Arc<ConnectorConfig>, gateway: Arc<G>) -> Self {
-        Self {
+    pub(crate) fn new(config: Arc<ConnectorConfig>, gateway: Arc<G>) -> Result<Self, ConnectorError> {
+        let sources = SourceManager::new(config.clone(), gateway.clone())?;
+        let channel_ready = config.control_plane.is_none();
+        Ok(Self {
             config,
             gateway,
+            sources,
             handshake: RwLock::new(HandshakeState::default()),
-        }
+            channel_ready: AtomicBool::new(channel_ready),
+        })
+    }
+
+    pub(crate) async fn initialize_sources(&self, context: ChildServiceContext) {
+        self.sources.initialize(context).await;
     }
 
     pub(crate) fn authorize(&self, authorization_header: Option<&str>) -> Result<(), ConnectorError> {
@@ -106,6 +122,10 @@ where
             ));
         }
         Ok(())
+    }
+
+    pub(crate) fn reverse_channel_enabled(&self) -> bool {
+        self.config.control_plane.is_some()
     }
 
     pub(crate) async fn reconcile(&self) -> Result<(), ConnectorError> {
@@ -159,14 +179,23 @@ where
     }
 
     pub(crate) async fn is_ready(&self) -> bool {
+        self.handshake.read().await.ready && self.channel_ready.load(Ordering::Acquire)
+    }
+
+    async fn is_mcp_ready(&self) -> bool {
         self.handshake.read().await.ready
+    }
+
+    pub(crate) fn set_channel_ready(&self, ready: bool) {
+        self.channel_ready.store(ready, Ordering::Release);
     }
 
     pub(crate) async fn capabilities(&self) -> ConnectorCapabilitiesView {
         let state = self.handshake.read().await;
+        let source_capability = self.sources.capabilities().await;
         ConnectorCapabilitiesView {
             schema_version: "rocketmq-sre.connector-capabilities.v1",
-            ready: state.ready,
+            ready: state.ready && self.channel_ready.load(Ordering::Acquire),
             mcp_protocol_version: MCP_PROTOCOL_VERSION,
             mcp_business_schema: MCP_BUSINESS_SCHEMA,
             mutation_supported: false,
@@ -176,58 +205,106 @@ where
                 .iter()
                 .map(|(cluster, capability)| (cluster.clone(), capability.manifest.clone()))
                 .collect(),
+            sources: source_capability.sources,
             last_error_code: state.last_error_code.map(ConnectorErrorCode::as_str),
         }
     }
 
+    pub(crate) async fn sources_capability(&self) -> ConnectorCapabilityState {
+        self.sources.capabilities().await
+    }
+
     pub(crate) async fn evidence(&self, request: EvidenceQueryRequest) -> Result<EvidenceSnapshot, ConnectorError> {
         self.validate_request(&request)?;
-        if !self.is_ready().await {
+        let deadline = Utc::now()
+            + chrono::Duration::from_std(self.config.request_timeout).unwrap_or_else(|_| chrono::Duration::seconds(15));
+        self.collect(
+            request.query,
+            &request.mcp_cluster,
+            Some(&request.operation),
+            deadline,
+            &CancelSignal::default(),
+        )
+        .await
+    }
+
+    pub(crate) async fn collect_contract_query(
+        &self,
+        query: EvidenceQuery,
+        deadline: DateTime<Utc>,
+        cancel: &CancelSignal,
+    ) -> Result<EvidenceSnapshot, ConnectorError> {
+        let external_cluster = self
+            .config
+            .cluster_ids
+            .iter()
+            .find_map(|(cluster, id)| (*id == query.cluster_id).then_some(cluster.clone()))
+            .ok_or_else(|| {
+                ConnectorError::new(
+                    ConnectorErrorCode::ClusterNotAllowed,
+                    false,
+                    "query cluster identifier has no configured external cluster",
+                )
+                .with_correlation_id(query.correlation_id)
+            })?;
+        self.validate_query_boundary(&query, &external_cluster)?;
+        self.collect(query, &external_cluster, None, deadline, cancel).await
+    }
+
+    pub(crate) async fn inventory(
+        &self,
+        cluster_id: rocketmq_sre_contracts::ClusterId,
+    ) -> Result<InventoryUpload, ConnectorError> {
+        let external_cluster = self
+            .config
+            .cluster_ids
+            .iter()
+            .find_map(|(cluster, id)| (*id == cluster_id).then_some(cluster.as_str()))
+            .ok_or_else(|| {
+                ConnectorError::new(
+                    ConnectorErrorCode::ClusterNotAllowed,
+                    false,
+                    "inventory cluster identifier has no configured external cluster",
+                )
+            })?;
+        if !self.is_mcp_ready().await {
+            self.reconcile().await?;
+        }
+        if let Err(error) = self.gateway.ensure_cluster_active(external_cluster).await {
+            self.record_collection_block(error.code).await;
+            return Err(error);
+        }
+        let deadline = Utc::now()
+            + chrono::Duration::from_std(self.config.request_timeout).unwrap_or_else(|_| chrono::Duration::seconds(15));
+        self.sources
+            .inventory(cluster_id, external_cluster, deadline, &CancelSignal::default())
+            .await
+    }
+
+    async fn collect(
+        &self,
+        query: EvidenceQuery,
+        external_cluster: &str,
+        operation: Option<&EvidenceOperation>,
+        deadline: DateTime<Utc>,
+        cancel: &CancelSignal,
+    ) -> Result<EvidenceSnapshot, ConnectorError> {
+        let requires_mcp = matches!(
+            query.source.as_str(),
+            "rocketmq-mcp" | "mcp" | "rocketmq_mcp" | "runtime" | "runtime-diagnostics" | "topology"
+        );
+        if requires_mcp && !self.is_mcp_ready().await {
             self.reconcile()
                 .await
-                .map_err(|error| error.with_correlation_id(request.query.correlation_id))?;
+                .map_err(|error| error.with_correlation_id(query.correlation_id))?;
         }
-        if let Err(error) = self.gateway.ensure_cluster_active(&request.mcp_cluster).await {
+        if let Err(error) = self.gateway.ensure_cluster_active(external_cluster).await {
             self.record_collection_block(error.code).await;
-            return Err(error.with_correlation_id(request.query.correlation_id));
+            return Err(error.with_correlation_id(query.correlation_id));
         }
-        let wire = self
-            .gateway
-            .query(&request.mcp_cluster, &request.operation)
+        self.sources
+            .query(query, external_cluster, operation, deadline, cancel)
             .await
-            .map_err(|error| error.with_correlation_id(request.query.correlation_id))?;
-        let correlation_id = request.query.correlation_id;
-        let mut snapshot = EvidenceSnapshot::capture(
-            request.query,
-            current_evidence_schema(),
-            wire.observed_at,
-            EvidenceContent::Inline(wire.data),
-        )
-        .map_err(|error| {
-            ConnectorError::new(
-                ConnectorErrorCode::InvalidEvidenceQuery,
-                false,
-                format!("canonical evidence capture failed: {error}"),
-            )
-            .with_correlation_id(correlation_id)
-        })?;
-        snapshot.freshness_seconds = wire.freshness_ms.saturating_add(999) / 1000;
-        snapshot.partial = wire.partial;
-        // Source warning text is not propagated because an upstream failure
-        // could otherwise smuggle sensitive values through an unstructured
-        // string. Stable connector-owned warnings retain the semantics.
-        if !wire.warnings.is_empty() {
-            snapshot.warnings.push("rocketmq_mcp_source_warning".to_owned());
-        }
-        if wire.partial {
-            snapshot.warnings.push("rocketmq_mcp_partial_response".to_owned());
-        }
-        snapshot.coverage = if snapshot.partial {
-            CoverageStatus::Partial
-        } else {
-            CoverageStatus::Available
-        };
-        Ok(snapshot)
     }
 
     fn validate_request(&self, request: &EvidenceQueryRequest) -> Result<(), ConnectorError> {
@@ -269,19 +346,15 @@ where
             )
             .with_correlation_id(correlation_id));
         }
-        if request.query.source != "rocketmq-mcp" {
-            return Err(ConnectorError::new(
-                ConnectorErrorCode::InvalidEvidenceQuery,
-                false,
-                "evidence source must be rocketmq-mcp",
-            )
-            .with_correlation_id(correlation_id));
+        if matches!(request.query.source.as_str(), "rocketmq-mcp" | "mcp" | "rocketmq_mcp") {
+            request
+                .operation
+                .validate()
+                .map_err(|error| error.with_correlation_id(correlation_id))?;
         }
-        request
-            .operation
-            .validate()
-            .map_err(|error| error.with_correlation_id(correlation_id))?;
-        if request.query.resource != request.operation.resource() {
+        if matches!(request.query.source.as_str(), "rocketmq-mcp" | "mcp" | "rocketmq_mcp")
+            && request.query.resource != request.operation.resource()
+        {
             return Err(ConnectorError::new(
                 ConnectorErrorCode::InvalidEvidenceQuery,
                 false,
@@ -300,7 +373,31 @@ where
         Ok(())
     }
 
+    fn validate_query_boundary(&self, query: &EvidenceQuery, external_cluster: &str) -> Result<(), ConnectorError> {
+        let correlation_id = query.correlation_id;
+        if query.tenant_id != self.config.tenant_id {
+            return Err(ConnectorError::new(
+                ConnectorErrorCode::TenantMismatch,
+                false,
+                "query tenant differs from configured tenant",
+            )
+            .with_correlation_id(correlation_id));
+        }
+        if self.config.cluster_ids.get(external_cluster) != Some(&query.cluster_id)
+            || !self.config.cluster_allowlist.contains(external_cluster)
+        {
+            return Err(ConnectorError::new(
+                ConnectorErrorCode::ClusterNotAllowed,
+                false,
+                "query cluster differs from the configured connector boundary",
+            )
+            .with_correlation_id(correlation_id));
+        }
+        Ok(())
+    }
+
     pub(crate) async fn close(&self) {
+        self.sources.shutdown().await;
         self.gateway.close().await;
     }
 }
@@ -317,6 +414,7 @@ mod tests {
     use chrono::TimeZone;
     use rocketmq_sre_contracts::ClusterId;
     use rocketmq_sre_contracts::CorrelationId;
+    use rocketmq_sre_contracts::CoverageStatus;
     use rocketmq_sre_contracts::QueryId;
     use rocketmq_sre_contracts::TimeRange;
     use serde_json::json;
@@ -385,6 +483,9 @@ mod tests {
             prometheus_url: None,
             loki_url: None,
             tempo_url: None,
+            admin_source: None,
+            kubernetes_source: None,
+            source_limits: crate::config::test_source_limits(1, 4096),
             internal_token_env: "TEST_INTERNAL_TOKEN".to_owned(),
             internal_token: SecretValue::new("internal-token".to_owned()),
             control_plane: None,
@@ -427,7 +528,8 @@ mod tests {
     async fn mock_gateway_becomes_ready_and_emits_canonical_evidence() {
         let tenant_id = rocketmq_sre_contracts::TenantId::new();
         let cluster_id = ClusterId::new();
-        let engine = ConnectorEngine::new(config(tenant_id, cluster_id), gateway());
+        let gateway = gateway();
+        let engine = ConnectorEngine::new(config(tenant_id, cluster_id), gateway.clone()).expect("engine");
         let at = Utc.with_ymd_and_hms(2026, 7, 26, 7, 55, 0).single().expect("time");
         let request = EvidenceQueryRequest {
             query: EvidenceQuery {
@@ -448,19 +550,22 @@ mod tests {
             },
         };
 
-        let evidence = engine.evidence(request).await.expect("evidence");
+        let evidence = engine.evidence(request.clone()).await.expect("evidence");
+        let cached = engine.evidence(request).await.expect("cached evidence");
         assert!(engine.is_ready().await);
         assert_eq!(evidence.freshness_seconds, 2);
         assert!(evidence.partial);
         assert_eq!(evidence.coverage, CoverageStatus::Partial);
         evidence.verify_content_hash().expect("content hash");
+        cached.verify_content_hash().expect("cached content hash");
+        assert_eq!(gateway.query_count.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
     async fn tenant_and_internal_token_mismatches_fail_closed() {
         let tenant_id = rocketmq_sre_contracts::TenantId::new();
         let cluster_id = ClusterId::new();
-        let engine = ConnectorEngine::new(config(tenant_id, cluster_id), gateway());
+        let engine = ConnectorEngine::new(config(tenant_id, cluster_id), gateway()).expect("engine");
         assert!(engine.authorize(Some("Bearer internal-token")).is_ok());
         assert_eq!(
             engine
@@ -495,7 +600,7 @@ mod tests {
         let tenant_id = rocketmq_sre_contracts::TenantId::new();
         let cluster_id = ClusterId::new();
         let gateway = gateway();
-        let engine = ConnectorEngine::new(config(tenant_id, cluster_id), gateway.clone());
+        let engine = ConnectorEngine::new(config(tenant_id, cluster_id), gateway.clone()).expect("engine");
         let at = Utc::now();
         let request = EvidenceQueryRequest {
             query: EvidenceQuery {
@@ -526,5 +631,38 @@ mod tests {
         assert_eq!(gateway.query_count.load(Ordering::SeqCst), 1);
         assert!(!engine.is_ready().await);
         assert!(engine.capabilities().await.clusters.is_empty());
+    }
+
+    #[tokio::test]
+    async fn unavailable_optional_source_returns_explicit_missing_evidence() {
+        let tenant_id = rocketmq_sre_contracts::TenantId::new();
+        let cluster_id = ClusterId::new();
+        let engine = ConnectorEngine::new(config(tenant_id, cluster_id), gateway()).expect("engine");
+        let at = Utc::now();
+        let request = EvidenceQueryRequest {
+            query: EvidenceQuery {
+                query_id: QueryId::new(),
+                correlation_id: CorrelationId::new(),
+                tenant_id,
+                cluster_id,
+                source: "prometheus".to_owned(),
+                resource: "metrics/rocketmq_broker_up".to_owned(),
+                time_range: TimeRange::new(at, at).expect("range"),
+            },
+            mcp_cluster: "local".to_owned(),
+            operation: EvidenceOperation::ClusterOverview,
+        };
+
+        let evidence = engine.evidence(request).await.expect("missing evidence");
+        assert!(evidence.partial);
+        assert_eq!(evidence.coverage, CoverageStatus::Missing);
+        assert_eq!(
+            evidence.content,
+            rocketmq_sre_contracts::EvidenceContent::Inline(serde_json::json!({
+                "status": "missing",
+                "source": "prometheus",
+                "error_code": "source_unavailable"
+            }))
+        );
     }
 }

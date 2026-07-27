@@ -1,0 +1,68 @@
+{
+  "text": {
+    "status": 200,
+    "body": {
+      "output": {
+        "message": {
+          "role": "assistant",
+          "content": [
+            {
+              "text": "broker is healthy"
+            }
+          ]
+        }
+      },
+      "stopReason": "end_turn",
+      "usage": {
+        "inputTokens": 11,
+        "outputTokens": 4,
+        "totalTokens": 15
+      }
+    }
+  },
+  "json": {
+    "status": 200,
+    "body": {
+      "output": {
+        "message": {
+          "role": "assistant",
+          "content": [
+            {
+              "text": "{\"status\":\"healthy\"}"
+            }
+          ]
+        }
+      },
+      "stopReason": "end_turn"
+    }
+  },
+  "tool": {
+    "status": 200,
+    "body": {
+      "output": {
+        "message": {
+          "role": "assistant",
+          "content": [
+            {
+              "toolUse": {
+                "toolUseId": "call-1",
+                "name": "query_consumer_lag",
+                "input": {
+                  "group": "synthetic-group"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "stopReason": "tool_use"
+    }
+  },
+  "error": {
+    "status": 429,
+    "body": {
+      "message": "rate limit",
+      "__type": "ThrottlingException"
+    }
+  }
+}

@@ -1,0 +1,79 @@
+{
+  "text": {
+    "status": 200,
+    "body": {
+      "candidates": [
+        {
+          "content": {
+            "role": "model",
+            "parts": [
+              {
+                "text": "broker is healthy"
+              }
+            ]
+          },
+          "finishReason": "STOP"
+        }
+      ],
+      "usageMetadata": {
+        "promptTokenCount": 11,
+        "candidatesTokenCount": 4,
+        "totalTokenCount": 15
+      },
+      "modelVersion": "test-model"
+    }
+  },
+  "json": {
+    "status": 200,
+    "body": {
+      "candidates": [
+        {
+          "content": {
+            "role": "model",
+            "parts": [
+              {
+                "text": "{\"status\":\"healthy\"}"
+              }
+            ]
+          },
+          "finishReason": "STOP"
+        }
+      ],
+      "modelVersion": "test-model"
+    }
+  },
+  "tool": {
+    "status": 200,
+    "body": {
+      "candidates": [
+        {
+          "content": {
+            "role": "model",
+            "parts": [
+              {
+                "functionCall": {
+                  "name": "query_consumer_lag",
+                  "args": {
+                    "group": "synthetic-group"
+                  }
+                }
+              }
+            ]
+          },
+          "finishReason": "STOP"
+        }
+      ],
+      "modelVersion": "test-model"
+    }
+  },
+  "error": {
+    "status": 429,
+    "body": {
+      "error": {
+        "code": 429,
+        "message": "rate limit",
+        "status": "RESOURCE_EXHAUSTED"
+      }
+    }
+  }
+}

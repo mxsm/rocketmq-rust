@@ -1,0 +1,36 @@
+{
+  "pack": "consumer-lag.v2",
+  "scenario": "fault",
+  "expected_status": "fault",
+  "expected_reason_codes": [
+    "CONSUMER_THROUGHPUT_DEFICIT",
+    "CONSUMER_QUEUE_SKEW",
+    "CONSUMER_RUNTIME_UNAVAILABLE"
+  ],
+  "evidence": [
+    {
+      "evidence_id": "00000000-0000-4000-8002-000000000102",
+      "source": "rocketmq-mcp",
+      "resource": "consumer-lag/group-a",
+      "content": {
+        "total_lag": 50000,
+        "lag_slope_per_min": 400,
+        "queue_skew_ratio": 5.5,
+        "consume_rate_per_sec": 50,
+        "produce_rate_per_sec": 500
+      }
+    },
+    {
+      "evidence_id": "00000000-0000-4000-8002-000000000121",
+      "source": "admin-query",
+      "resource": "consumer-runtime/group-a",
+      "content": { "connected_clients": 0, "paused": true, "allocated_queues": 0 }
+    },
+    {
+      "evidence_id": "00000000-0000-4000-8002-000000000122",
+      "source": "rocketmq-mcp",
+      "resource": "broker-runtime/broker-a",
+      "content": { "broker_ready": true, "store_healthy": true }
+    }
+  ]
+}

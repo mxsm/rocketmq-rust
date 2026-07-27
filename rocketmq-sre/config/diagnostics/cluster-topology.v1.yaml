@@ -1,0 +1,31 @@
+schema: rocketmq-sre.diagnostic-pack.v1
+id: cluster-topology
+version: 1.0.0
+qualified_id: cluster-topology.v1
+owner: rocketmq-sre
+components: [broker, nameserver, controller, proxy, client, kubernetes]
+output_schema: rocketmq-sre.diagnostic-result.v1
+required_evidence:
+  - key: topology
+    source: topology
+    resource_prefix: asset-graph/
+    fields: [broken_edges, orphan_assets, topology_changed]
+optional_evidence:
+  - { key: kubernetes, source: kubernetes, resource_prefix: live-resources/ }
+  - { key: client-connections, source: admin-query, resource_prefix: client-connections/ }
+rules:
+  - { reason_code: TOPOLOGY_BROKEN_DEPENDENCY, when: "broken_edges > 0", severity: critical }
+  - { reason_code: TOPOLOGY_ORPHAN_ASSET, when: "orphan_assets > 0", severity: warning }
+  - { reason_code: TOPOLOGY_CHANGED, when: "topology_changed == true", severity: warning }
+  - { reason_code: TOPOLOGY_WORKLOAD_UNREADY, when: "unready_workloads > 0", severity: critical }
+  - { reason_code: TOPOLOGY_CLIENT_DISCONNECTED, when: "disconnected_clients > 0", severity: warning }
+  - { reason_code: TOPOLOGY_HEALTHY, when: "all required rules are false", severity: info }
+  - { reason_code: TOPOLOGY_EVIDENCE_INCOMPLETE, when: "required fields are absent", severity: warning }
+missing_behavior: inconclusive
+confidence:
+  implementation: deterministic_engine
+  missing_required_cap: 49
+  unsupported_required_cap: 24
+follow_up:
+  - kubernetes:live-resources/{namespace}
+  - admin-query:client-connections/{cluster}

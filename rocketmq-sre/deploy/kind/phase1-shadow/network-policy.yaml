@@ -1,0 +1,14 @@
+# Copyright 2023 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0.
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rocketmq-sre-phase1-shadow-deny-all
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: rocketmq-sre-phase1-shadow
+  policyTypes:
+    - Ingress
+    - Egress

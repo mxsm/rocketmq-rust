@@ -36,6 +36,7 @@ use crate::ConnectorError;
 use crate::EvidenceQueryRequest;
 use crate::McpGateway;
 use crate::RmcpGateway;
+use crate::channel::ControlPlaneChannel;
 
 const MAX_INTERNAL_REQUEST_BYTES: usize = 64 * 1024;
 
@@ -48,13 +49,21 @@ fn router<G>(engine: Arc<ConnectorEngine<G>>) -> Router
 where
     G: McpGateway,
 {
-    Router::new()
+    let router = Router::new()
         .route("/healthz", get(health))
         .route("/readyz", get(ready::<G>))
-        .route("/internal/v1/evidence/query", post(evidence_query::<G>))
-        .route("/internal/v1/capabilities", get(capabilities::<G>))
-        .layer(DefaultBodyLimit::max(MAX_INTERNAL_REQUEST_BYTES))
-        .with_state(engine)
+        .layer(DefaultBodyLimit::max(MAX_INTERNAL_REQUEST_BYTES));
+    if engine.reverse_channel_enabled() {
+        // In normal Phase 01 operation the connector exposes no inbound
+        // evidence or capability API. Commands arrive only on the active,
+        // authenticated HTTP/2 reverse channel.
+        router.with_state(engine)
+    } else {
+        router
+            .route("/internal/v1/evidence/query", post(evidence_query::<G>))
+            .route("/internal/v1/capabilities", get(capabilities::<G>))
+            .with_state(engine)
+    }
 }
 
 /// Runs the connector, including an owned capability reconciler and graceful
@@ -67,7 +76,10 @@ where
 pub async fn run(config: ConnectorConfig, service_context: ChildServiceContext) -> Result<(), ConnectorError> {
     let config = Arc::new(config);
     let gateway = Arc::new(RmcpGateway::new(config.clone())?);
-    let engine = Arc::new(ConnectorEngine::new(config.clone(), gateway));
+    let engine = Arc::new(ConnectorEngine::new(config.clone(), gateway)?);
+    engine
+        .initialize_sources(service_context.child("evidence-sources"))
+        .await;
 
     if let Err(error) = engine.reconcile().await {
         tracing::warn!(
@@ -75,6 +87,23 @@ pub async fn run(config: ConnectorConfig, service_context: ChildServiceContext) 
             retryable = error.retryable,
             "initial MCP compatibility handshake did not complete"
         );
+    }
+
+    if let Some(channel) = ControlPlaneChannel::new(engine.clone(), config.clone())? {
+        let channel_context = service_context.child("control-plane-reverse-channel");
+        let channel = Arc::new(channel);
+        service_context
+            .spawn_service("rocketmq-sre-connector.control-plane-channel", {
+                let channel = channel.clone();
+                async move {
+                    channel.run(channel_context).await;
+                }
+            })
+            .map_err(|error| {
+                ConnectorError::source(format!(
+                    "control-plane channel could not be owned by TaskGroup: {error}"
+                ))
+            })?;
     }
 
     let reconciler = engine.clone();
@@ -209,6 +238,7 @@ mod tests {
     use crate::VerifiedCapability;
     use crate::WireEvidenceEnvelope;
     use crate::config::ConnectorAuth;
+    use crate::config::ControlPlaneConfig;
     use crate::config::SecretValue;
 
     struct FakeGateway;
@@ -244,8 +274,8 @@ mod tests {
         async fn close(&self) {}
     }
 
-    fn test_engine() -> Arc<ConnectorEngine<FakeGateway>> {
-        let config = ConnectorConfig {
+    fn test_config() -> ConnectorConfig {
+        ConnectorConfig {
             bind_addr: "127.0.0.1:8091".parse().expect("socket"),
             mcp_url: Url::parse("http://127.0.0.1:8089/mcp").expect("URL"),
             mcp_ca_path: Some(PathBuf::from("ca.pem")),
@@ -266,11 +296,32 @@ mod tests {
             prometheus_url: None,
             loki_url: None,
             tempo_url: None,
+            admin_source: None,
+            kubernetes_source: None,
+            source_limits: crate::config::test_source_limits(1, 4096),
             internal_token_env: "TEST_INTERNAL_TOKEN".to_owned(),
             internal_token: SecretValue::new("internal-token".to_owned()),
             control_plane: None,
-        };
-        Arc::new(ConnectorEngine::new(Arc::new(config), Arc::new(FakeGateway)))
+        }
+    }
+
+    fn test_engine() -> Arc<ConnectorEngine<FakeGateway>> {
+        Arc::new(ConnectorEngine::new(Arc::new(test_config()), Arc::new(FakeGateway)).expect("test engine"))
+    }
+
+    fn reverse_channel_engine() -> Arc<ConnectorEngine<FakeGateway>> {
+        let mut config = test_config();
+        config.control_plane = Some(ControlPlaneConfig {
+            base_url: Url::parse("http://127.0.0.1:8090").expect("URL"),
+            cluster_id: *config.cluster_ids.values().next().expect("cluster"),
+            connector_subject: "connector".to_owned(),
+            connector_issuer: "test".to_owned(),
+            ca_pem: Vec::new(),
+            client_identity_pem: Vec::new(),
+            poll_wait: Duration::from_secs(1),
+            heartbeat_interval: Duration::from_secs(1),
+        });
+        Arc::new(ConnectorEngine::new(Arc::new(config), Arc::new(FakeGateway)).expect("test engine"))
     }
 
     #[tokio::test]
@@ -321,5 +372,22 @@ mod tests {
             .await
             .expect("authorized response");
         assert_eq!(authorized.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn reverse_channel_mode_has_no_inbound_evidence_api() {
+        let app = router(reverse_channel_engine());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/internal/v1/evidence/query")
+                    .header("authorization", "Bearer internal-token")
+                    .body(Body::from("{}"))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }

@@ -1,0 +1,27 @@
+{
+  "schema": {
+    "family": "rocketmq-sre.connector-channel",
+    "major": 1,
+    "minor": 0
+  },
+  "session_id": "10000000-0000-4000-8000-000000000001",
+  "tenant_id": "20000000-0000-4000-8000-000000000001",
+  "cluster_id": "30000000-0000-4000-8000-000000000001",
+  "subject": "connector.fixture",
+  "capability": {
+    "mutation_supported": false,
+    "sources": [
+      {
+        "source": "consumer_lag",
+        "schema_major": 1,
+        "status": "queryable",
+        "max_rows": 100,
+        "max_bytes": 65536,
+        "max_time_range_seconds": 300,
+        "last_success_at": null,
+        "freshness_seconds": 15
+      }
+    ]
+  },
+  "observed_at": "2026-07-27T00:00:00Z"
+}

@@ -29,6 +29,7 @@ base64.workspace = true
 chrono.workspace = true
 jsonwebtoken.workspace = true
 rocketmq-sre-contracts.workspace = true
+rocketmq-sre-core.workspace = true
 rocketmq-sre-model-gateway.workspace = true
 rocketmq-runtime.workspace = true
 schemars.workspace = true
@@ -40,9 +41,6 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
-[dev-dependencies]
-rocketmq-sre-core.workspace = true
-
 [lints]
 workspace = true
 
@@ -53,3 +51,11 @@ path = "src/bin/schema_export.rs"
 [[bin]]
 name = "phase00-dev-issuer"
 path = "src/bin/phase00_dev_issuer.rs"
+
+[[bin]]
+name = "phase01-shadow-eval"
+path = "src/bin/phase01_shadow_eval.rs"
+
+[[bin]]
+name = "phase01-model-mock"
+path = "src/bin/phase01_model_mock.rs"

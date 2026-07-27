@@ -1,0 +1,13 @@
+# Copyright 2023 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rocketmq-sre-phase1-shadow
+data:
+  provider-mode: mock
+  mutation-supported: "false"
+  executor-connected: "false"
+  connector-identity: read_only
+  manifest-schema: rocketmq-sre.shadow-eval.v1

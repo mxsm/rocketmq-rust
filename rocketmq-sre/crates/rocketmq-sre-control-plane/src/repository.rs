@@ -57,7 +57,7 @@ pub(crate) trait ClusterRepository: Clone + Send + Sync + 'static {
 /// Production PostgreSQL repository. No plaintext connector secret is stored.
 #[derive(Clone, Debug)]
 pub struct PostgresRepository {
-    pool: PgPool,
+    pub(crate) pool: PgPool,
 }
 
 impl PostgresRepository {
@@ -82,6 +82,27 @@ impl PostgresRepository {
     #[must_use]
     pub fn from_pool(pool: PgPool) -> Self {
         Self { pool }
+    }
+
+    pub(crate) async fn connector_identity_known(
+        &self,
+        cluster_id: ClusterId,
+        subject: &str,
+        issuer: &str,
+    ) -> Result<bool, ControlPlaneError> {
+        sqlx::query_scalar(
+            "SELECT EXISTS (
+                SELECT 1
+                FROM connector_identities
+                WHERE cluster_id = $1 AND subject = $2 AND issuer = $3
+            )",
+        )
+        .bind(cluster_id.as_uuid())
+        .bind(subject)
+        .bind(issuer)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(ControlPlaneError::from)
     }
 }
 
@@ -198,7 +219,7 @@ impl ClusterRepository for PostgresRepository {
         if current.state == effective_decision.state
             && existing_capability
                 .as_ref()
-                .is_some_and(|snapshot| snapshot.digest == request.capability.digest)
+                .is_some_and(|snapshot| capability_matches_request(snapshot, request))
         {
             transaction.commit().await?;
             return Ok(HandshakeOutcome {
@@ -234,7 +255,7 @@ impl ClusterRepository for PostgresRepository {
                     schema_version, mutation_supported, manifest, data_sources,
                     observed_at
                  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                 ON CONFLICT (cluster_id, manifest_digest) DO NOTHING",
+                ",
             )
             .bind(Uuid::new_v4())
             .bind(id.as_uuid())
@@ -244,9 +265,14 @@ impl ClusterRepository for PostgresRepository {
             .bind(&request.capability.schema_version)
             .bind(request.capability.mutation_supported)
             .bind(&request.capability.manifest)
-            .bind(serde_json::to_value(&request.capability.data_sources).map_err(|error| {
-                ControlPlaneError::validation("capability_mismatch", format!("data source status is invalid: {error}"))
-            })?)
+            .bind(
+                serde_json::to_value(normalized_data_sources(&request.capability.data_sources)).map_err(|error| {
+                    ControlPlaneError::validation(
+                        "capability_mismatch",
+                        format!("data source status is invalid: {error}"),
+                    )
+                })?,
+            )
             .bind(request.capability.observed_at)
             .execute(&mut *transaction)
             .await?;
@@ -498,6 +524,54 @@ fn enforce_tool_surface_pin(
     }
 }
 
+fn capability_matches_request(snapshot: &CapabilitySnapshot, request: &HandshakeRequest) -> bool {
+    snapshot.digest == request.capability.digest
+        && snapshot.tool_surface_digest
+            == request
+                .capability
+                .manifest
+                .get("tool_surface_digest")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+        && snapshot.protocol_version == request.capability.protocol_version
+        && snapshot.schema_version == request.capability.schema_version
+        && snapshot.mutation_supported == request.capability.mutation_supported
+        && snapshot.manifest == request.capability.manifest
+        && data_source_states_match(&snapshot.data_sources, &request.capability.data_sources)
+}
+
+fn data_source_states_match(left: &[crate::DataSourceStatus], right: &[crate::DataSourceStatus]) -> bool {
+    let left = normalized_data_sources(left);
+    let right = normalized_data_sources(right);
+    left.len() == right.len()
+        && left.iter().zip(right).all(|(left, right)| {
+            left.id == right.id && left.availability == right.availability && left.detail == right.detail
+        })
+}
+
+fn normalized_data_sources(sources: &[crate::DataSourceStatus]) -> Vec<crate::DataSourceStatus> {
+    let mut normalized = sources.to_vec();
+    normalized.sort_by(|left, right| {
+        left.id
+            .cmp(&right.id)
+            .then_with(|| {
+                data_source_availability_rank(left.availability).cmp(&data_source_availability_rank(right.availability))
+            })
+            .then_with(|| left.freshness_ms.cmp(&right.freshness_ms))
+            .then_with(|| left.detail.cmp(&right.detail))
+    });
+    normalized
+}
+
+const fn data_source_availability_rank(availability: crate::DataSourceAvailability) -> u8 {
+    match availability {
+        crate::DataSourceAvailability::Existing => 0,
+        crate::DataSourceAvailability::MissingInstrumentation => 1,
+        crate::DataSourceAvailability::InProcessOnly => 2,
+        crate::DataSourceAvailability::Queryable => 3,
+    }
+}
+
 async fn append_event(
     transaction: &mut Transaction<'_, Postgres>,
     cluster_id: ClusterId,
@@ -639,7 +713,7 @@ pub(crate) mod memory {
             if current.state == effective_decision.state
                 && existing_capability
                     .as_ref()
-                    .is_some_and(|capability| capability.digest == request.capability.digest)
+                    .is_some_and(|capability| capability_matches_request(capability, request))
             {
                 return Ok(HandshakeOutcome {
                     cluster: current,
@@ -657,12 +731,15 @@ pub(crate) mod memory {
                 schema_version: request.capability.schema_version.clone(),
                 mutation_supported: request.capability.mutation_supported,
                 observed_at: request.capability.observed_at,
-                data_sources: request.capability.data_sources.clone(),
+                data_sources: normalized_data_sources(&request.capability.data_sources),
                 manifest: request.capability.manifest.clone(),
             });
             if let Some(capability) = &capability {
                 let capabilities = state.capabilities.entry(id).or_default();
-                if !capabilities.iter().any(|stored| stored.digest == capability.digest) {
+                if !capabilities
+                    .last()
+                    .is_some_and(|stored| capability_matches_request(stored, request))
+                {
                     capabilities.push(capability.clone());
                 }
             }
@@ -827,9 +904,14 @@ mod tests {
             .expect("initial handshake should complete");
 
         let mut source_change = first.clone();
-        source_change.capability.digest = format!("sha256:{}", "2".repeat(64));
         source_change.capability.data_sources.push(crate::DataSourceStatus {
             id: "prometheus".to_owned(),
+            availability: crate::DataSourceAvailability::Queryable,
+            freshness_ms: Some(0),
+            detail: Some("source recovered".to_owned()),
+        });
+        source_change.capability.data_sources.push(crate::DataSourceStatus {
+            id: "loki".to_owned(),
             availability: crate::DataSourceAvailability::Queryable,
             freshness_ms: Some(0),
             detail: Some("source recovered".to_owned()),
@@ -847,6 +929,25 @@ mod tests {
             outcome.capability.expect("latest capability").tool_surface_digest,
             format!("sha256:{}", "a".repeat(64))
         );
+
+        let events_after_change = repository.event_count().await;
+        source_change.capability.data_sources.reverse();
+        repository
+            .handshake(cluster.id, &source_change, &source_decision)
+            .await
+            .expect("source ordering alone should be idempotent");
+        assert_eq!(repository.capability_count(cluster.id).await, 2);
+        assert_eq!(repository.event_count().await, events_after_change);
+
+        for source in &mut source_change.capability.data_sources {
+            source.freshness_ms = Some(999);
+        }
+        repository
+            .handshake(cluster.id, &source_change, &source_decision)
+            .await
+            .expect("freshness alone should be carried by source history");
+        assert_eq!(repository.capability_count(cluster.id).await, 2);
+        assert_eq!(repository.event_count().await, events_after_change);
     }
 
     #[tokio::test]

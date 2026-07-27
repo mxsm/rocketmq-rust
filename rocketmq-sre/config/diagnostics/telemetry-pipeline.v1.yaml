@@ -1,0 +1,49 @@
+schema: rocketmq-sre.diagnostic-pack.v1
+id: telemetry-pipeline
+version: 1.0.0
+qualified_id: telemetry-pipeline.v1
+owner: rocketmq-sre
+components: [broker, nameserver, controller, proxy, mcp, runtime, otel-collector]
+output_schema: rocketmq-sre.diagnostic-result.v1
+required_evidence:
+  - key: runtime-observability
+    source: runtime
+    resource_prefix: observability/
+    fields:
+      - build_feature_enabled
+      - exporter_enabled
+      - last_export_success_age_seconds
+      - queue_depth
+      - dropped_items
+      - collector_reachable
+      - backend_reachable
+optional_evidence:
+  - { key: collector-metrics, source: prometheus, resource_prefix: telemetry-pipeline/ }
+  - { key: collector-workload, source: kubernetes, resource_prefix: otel-collector/ }
+rules:
+  - reason_code: TELEMETRY_BUILD_FEATURE_DISABLED
+    when: "!build_feature_enabled"
+    severity: critical
+  - { reason_code: TELEMETRY_EXPORTER_DISABLED, when: "!exporter_enabled", severity: critical }
+  - reason_code: TELEMETRY_EXPORT_STALE
+    when: "last_export_success_age_seconds >= 300"
+    severity: critical
+  - reason_code: TELEMETRY_QUEUE_DROPPING
+    when: "queue_depth >= 1000 || dropped_items > 0"
+    severity: critical
+  - reason_code: TELEMETRY_COLLECTOR_UNAVAILABLE
+    when: "!collector_reachable"
+    severity: critical
+  - reason_code: TELEMETRY_BACKEND_UNAVAILABLE
+    when: "!backend_reachable"
+    severity: warning
+  - { reason_code: TELEMETRY_PIPELINE_HEALTHY, when: "all fault rules are false", severity: info }
+  - { reason_code: TELEMETRY_EVIDENCE_INCOMPLETE, when: "required fields are absent", severity: warning }
+missing_behavior: inconclusive
+confidence:
+  implementation: deterministic_engine
+  missing_required_cap: 49
+  unsupported_required_cap: 24
+follow_up:
+  - prometheus:telemetry-pipeline/{collector}
+  - kubernetes:otel-collector/{namespace}

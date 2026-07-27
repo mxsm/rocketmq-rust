@@ -4,10 +4,33 @@ spec:
       labels:
         rocketmq.apache.org/sre-connector: "true"
     spec:
+      serviceAccountName: rocketmq-sre-connector
+      automountServiceAccountToken: false
       volumes:
         - name: runtime-secrets
           secret:
             secretName: rocketmq-mcp-runtime-secrets
+        - name: mcp-server-ca
+          secret:
+            secretName: rocketmq-mcp-runtime-secrets
+            defaultMode: 0444
+            items:
+              - {key: ca.crt, path: ca.crt}
+        - name: control-plane-channel-client
+          secret:
+            secretName: rocketmq-sre-control-plane-channel-client
+            defaultMode: 0444
+        - name: kubernetes-api-credentials
+          projected:
+            defaultMode: 0444
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - {key: ca.crt, path: ca.crt}
       containers:
         - name: mcp
           env:
@@ -22,7 +45,11 @@ spec:
           imagePullPolicy: Never
           env:
             - {name: ROCKETMQ_SRE_CONNECTOR_BIND_ADDR, value: "0.0.0.0:8091"}
-            - {name: ROCKETMQ_SRE_CONTROL_PLANE_URL, value: "http://sre-control-plane.rocketmq-sre.svc.cluster.local:8090"}
+            - {name: ROCKETMQ_SRE_CONTROL_PLANE_URL, value: "https://sre-control-plane.rocketmq-sre.svc.cluster.local:8444"}
+            - {name: ROCKETMQ_SRE_CONTROL_PLANE_CA_PATH, value: "/var/run/secrets/rocketmq-sre-channel/control-plane-server-ca-cert.pem"}
+            - {name: ROCKETMQ_SRE_CONTROL_PLANE_CLIENT_IDENTITY_PATH, value: "/var/run/secrets/rocketmq-sre-channel/connector-client-identity.pem"}
+            - {name: ROCKETMQ_SRE_CONNECTOR_SUBJECT, value: "CN=rocketmq-sre-connector"}
+            - {name: ROCKETMQ_SRE_CONNECTOR_ISSUER, value: "CN=RocketMQ SRE Connector Development CA"}
             - {name: ROCKETMQ_SRE_MCP_URL, value: "https://127.0.0.1:8089/mcp"}
             - {name: ROCKETMQ_SRE_MCP_CA_PATH, value: "/var/run/secrets/rocketmq/ca.crt"}
             - {name: ROCKETMQ_SRE_MCP_STATIC_TOKEN_ENV, value: "ROCKETMQ_SRE_MCP_STATIC_TOKEN"}
@@ -42,6 +69,24 @@ spec:
             - {name: ROCKETMQ_SRE_PROMETHEUS_URL, value: "http://prometheus.observability.svc.cluster.local:9090"}
             - {name: ROCKETMQ_SRE_LOKI_URL, value: "http://loki.observability.svc.cluster.local:3100"}
             - {name: ROCKETMQ_SRE_TEMPO_URL, value: "http://tempo.observability.svc.cluster.local:3200"}
+            - {name: ROCKETMQ_SRE_ADMIN_NAMESRV_ADDR, value: "rocketmq-namesrv:9876"}
+            - {name: ROCKETMQ_SRE_ADMIN_USE_TLS, value: "false"}
+            - {name: ROCKETMQ_SRE_ADMIN_ACCESS_KEY_ENV, value: "ROCKETMQ_SRE_ADMIN_ACCESS_KEY"}
+            - name: ROCKETMQ_SRE_ADMIN_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-sre-kind-secrets
+                  key: admin-read-access-key
+            - {name: ROCKETMQ_SRE_ADMIN_SECRET_KEY_ENV, value: "ROCKETMQ_SRE_ADMIN_SECRET_KEY"}
+            - name: ROCKETMQ_SRE_ADMIN_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-sre-kind-secrets
+                  key: admin-read-secret-key
+            - {name: ROCKETMQ_SRE_KUBERNETES_API_URL, value: "https://kubernetes.default.svc"}
+            - {name: ROCKETMQ_SRE_KUBERNETES_NAMESPACE, value: "rocketmq-system"}
+            - {name: ROCKETMQ_SRE_KUBERNETES_TOKEN_PATH, value: "/var/run/secrets/rocketmq-sre-kubernetes/token"}
+            - {name: ROCKETMQ_SRE_KUBERNETES_CA_PATH, value: "/var/run/secrets/rocketmq-sre-kubernetes/ca.crt"}
             - {name: ROCKETMQ_SRE_HANDSHAKE_INTERVAL_SECONDS, value: "5"}
             - {name: OTEL_SERVICE_NAME, value: "rocketmq-sre-connector"}
             - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.observability.svc.cluster.local:4317"}
@@ -68,4 +113,6 @@ spec:
             runAsGroup: 10001
             capabilities: {drop: ["ALL"]}
           volumeMounts:
-            - {name: runtime-secrets, mountPath: /var/run/secrets/rocketmq, readOnly: true}
+            - {name: mcp-server-ca, mountPath: /var/run/secrets/rocketmq, readOnly: true}
+            - {name: control-plane-channel-client, mountPath: /var/run/secrets/rocketmq-sre-channel, readOnly: true}
+            - {name: kubernetes-api-credentials, mountPath: /var/run/secrets/rocketmq-sre-kubernetes, readOnly: true}

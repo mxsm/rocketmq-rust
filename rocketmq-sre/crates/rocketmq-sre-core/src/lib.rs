@@ -14,6 +14,7 @@
 
 //! Provider-neutral coordination primitives for RocketMQ AI SRE.
 
+pub mod diagnostics;
 mod incident_manager;
 mod registry;
 

@@ -1,18 +1,39 @@
 import {
   Activity,
+  BookOpenCheck,
+  Bot,
   Boxes,
   CircleHelp,
   Clock3,
   DatabaseZap,
+  GitBranch,
   Gauge,
+  ListChecks,
+  LogOut,
+  MessageSquareText,
   Network,
+  PackageSearch,
   RadioTower,
+  SearchCode,
   ShieldCheck,
+  Siren,
+  UserRound,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { NavLink, Outlet } from "react-router-dom";
+import {
+  NavLink,
+  Outlet,
+  useLocation,
+  useNavigate,
+} from "react-router-dom";
 
+import { useAuth } from "@/auth/AuthContext";
 import { Badge } from "@/components/ui/badge";
+import { useSreData } from "@/data/SreDataContext";
+import {
+  parseReadOnlyUrlContext,
+  withoutReadOnlyUrlContext,
+} from "@/hooks/useClusterScope";
 import {
   Tooltip,
   TooltipContent,
@@ -20,21 +41,89 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 
-const items = [
-  { to: "/", label: "总览", icon: Gauge, end: true },
-  { to: "/clusters", label: "集群", icon: RadioTower },
-  { to: "/evidence", label: "证据工作台", icon: DatabaseZap },
-  { to: "/coverage", label: "证据覆盖", icon: Boxes },
-  { to: "/system", label: "系统状态", icon: Activity },
+const groups = [
+  {
+    label: "态势",
+    items: [
+      { to: "/", label: "总览", icon: Gauge, end: true },
+      { to: "/clusters", label: "集群接入", icon: RadioTower },
+      { to: "/assets", label: "资产视图", icon: PackageSearch },
+      { to: "/topology", label: "拓扑关系", icon: GitBranch },
+    ],
+  },
+  {
+    label: "诊断",
+    items: [
+      { to: "/ask", label: "Ask SRE", icon: MessageSquareText },
+      { to: "/incidents", label: "事件诊断", icon: Siren },
+      { to: "/inspections", label: "巡检建议", icon: ListChecks },
+    ],
+  },
+  {
+    label: "证据",
+    items: [
+      { to: "/evidence", label: "证据浏览器", icon: DatabaseZap },
+      { to: "/journeys", label: "消息旅程", icon: SearchCode },
+      { to: "/coverage", label: "诊断覆盖", icon: Boxes },
+      { to: "/knowledge", label: "知识库", icon: BookOpenCheck },
+    ],
+  },
+  {
+    label: "平台",
+    items: [
+      { to: "/models", label: "模型能力", icon: Bot },
+      { to: "/system", label: "系统状态", icon: Activity },
+    ],
+  },
 ];
 
 export function AppLayout() {
+  const auth = useAuth();
+  const { clusters, loading } = useSreData();
+  const location = useLocation();
+  const navigate = useNavigate();
   const [now, setNow] = useState(() => new Date());
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 30_000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (loading) {
+      return;
+    }
+    const result = parseReadOnlyUrlContext(
+      location.search,
+      clusters.map((cluster) => cluster.id),
+    );
+    if (result.status === "invalid") {
+      navigate(
+        {
+          pathname: location.pathname,
+          search: withoutReadOnlyUrlContext(location.search),
+        },
+        { replace: true },
+      );
+      return;
+    }
+    if (
+      result.status === "valid" &&
+      location.pathname !== "/assets" &&
+      location.pathname !== "/ask"
+    ) {
+      navigate(
+        {
+          pathname:
+            result.context.resourceKind === "cluster"
+              ? "/ask"
+              : "/assets",
+          search: location.search,
+        },
+        { replace: true },
+      );
+    }
+  }, [clusters, loading, location.pathname, location.search, navigate]);
 
   return (
     <TooltipProvider delayDuration={250}>
@@ -50,19 +139,24 @@ export function AppLayout() {
             </span>
           </div>
 
-          <nav aria-label="主导航">
-            {items.map(({ to, label, icon: Icon, end }) => (
-              <NavLink
-                className={({ isActive }) =>
-                  `nav-item${isActive ? " active" : ""}`
-                }
-                end={end}
-                key={to}
-                to={to}
-              >
-                <Icon aria-hidden="true" size={17} />
-                <span>{label}</span>
-              </NavLink>
+          <nav aria-label="主导航" className="sidebar-navigation">
+            {groups.map((group) => (
+              <section className="nav-group" key={group.label}>
+                <h2>{group.label}</h2>
+                {group.items.map(({ to, label, icon: Icon, end }) => (
+                  <NavLink
+                    className={({ isActive }) =>
+                      `nav-item${isActive ? " active" : ""}`
+                    }
+                    end={end}
+                    key={to}
+                    to={to}
+                  >
+                    <Icon aria-hidden="true" size={17} />
+                    <span>{label}</span>
+                  </NavLink>
+                ))}
+              </section>
             ))}
           </nav>
 
@@ -70,12 +164,12 @@ export function AppLayout() {
           <div className="boundary-note">
             <ShieldCheck aria-hidden="true" size={16} />
             <div>
-              <strong>只读模式</strong>
-              <span>Phase 00 不提供任何变更或执行能力。</span>
+              <strong>诊断只读边界</strong>
+              <span>不提供审批、执行或 RocketMQ 资源变更能力。</span>
             </div>
           </div>
           <div className="sidebar-meta">
-            <span>v0.1.0 · Phase 00</span>
+            <span>v0.2.0 · Phase 01</span>
             <span>execution_supported=false</span>
           </div>
         </aside>
@@ -87,6 +181,16 @@ export function AppLayout() {
               <span>独立 AI SRE 运维面</span>
             </div>
             <div className="utility-actions">
+              <span className="utility-identity">
+                <UserRound aria-hidden="true" size={14} />
+                <span>
+                  <strong>{auth.session?.displayName ?? "未登录"}</strong>
+                  <small>
+                    {auth.mode === "development" ? "DEV" : "OIDC"} ·{" "}
+                    {auth.session?.clusterIds.length ?? 0} clusters
+                  </small>
+                </span>
+              </span>
               <span>
                 <Clock3 aria-hidden="true" size={14} />
                 {now.toLocaleString("zh-CN", {
@@ -108,6 +212,21 @@ export function AppLayout() {
                   数据只用于观测和诊断，不会修改 RocketMQ。
                 </TooltipContent>
               </Tooltip>
+              {auth.mode === "oidc" && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      aria-label="退出登录"
+                      className="icon-button"
+                      onClick={() => void auth.signOut()}
+                      type="button"
+                    >
+                      <LogOut size={16} />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>退出当前 OIDC 会话</TooltipContent>
+                </Tooltip>
+              )}
             </div>
           </header>
           <main className="main-content">

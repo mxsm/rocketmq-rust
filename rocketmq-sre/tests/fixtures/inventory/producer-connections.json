@@ -1,0 +1,18 @@
+{
+  "connections": [
+    {
+      "producer_group": "orders-producer",
+      "connection": {
+        "broker_name": "broker-a",
+        "client_id": "orders-client@10.0.0.8",
+        "client_addr": "10.0.0.8:41200",
+        "language": "RUST",
+        "version": 50302,
+        "last_update_timestamp": 1785139200000
+      }
+    }
+  ],
+  "queried_broker_count": 1,
+  "failed_brokers": [],
+  "truncated": false
+}

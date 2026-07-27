@@ -23,6 +23,7 @@ use std::pin::Pin;
 
 pub mod admin;
 pub mod broker;
+pub mod client_connection;
 pub mod clock;
 pub mod consumer;
 pub mod dashboard;

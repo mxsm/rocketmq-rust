@@ -1,6 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { stateLabel } from "./client";
+import {
+  createHttpSreApi,
+  parseWorkflowSseFrame,
+  stateLabel,
+} from "./client";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("stateLabel", () => {
   it("renders every onboarding state without exposing implementation names", () => {
@@ -10,5 +18,75 @@ describe("stateLabel", () => {
     expect(stateLabel("read_only_degraded")).toBe("只读降级");
     expect(stateLabel("rejected")).toBe("已拒绝");
     expect(stateLabel("offboarded")).toBe("已下线");
+  });
+
+  it("uses the versioned Phase 1 workflow and evidence routes", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () =>
+        new Response(JSON.stringify({}), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        }),
+      );
+    const api = createHttpSreApi();
+
+    await api.promoteInvestigation("investigation/id", {
+      reason: "bounded reason",
+    });
+    await api.runInspection("inspection/id");
+    await api.getInspectionReport("inspection/id", "markdown");
+    await api.dispositionRecommendation("recommendation/id", {
+      status: "promoted",
+      reason: "operator confirmed",
+      promote_to: "incident",
+    });
+    await api.getEvidence("evidence/id");
+    await api.getEvidenceContent("evidence/id");
+    await api.listKnowledge("cluster/id");
+
+    expect(
+      fetchMock.mock.calls.map(([input]) => String(input)),
+    ).toEqual([
+      "/v1/investigations/investigation%2Fid/promote",
+      "/v1/inspections/inspection%2Fid/run",
+      "/v1/inspections/inspection%2Fid/report?format=markdown",
+      "/v1/recommendations/recommendation%2Fid/disposition",
+      "/v1/evidence/evidence%2Fid",
+      "/v1/evidence/evidence%2Fid/content",
+      "/v1/knowledge?cluster_id=cluster%2Fid",
+    ]);
+    expect(
+      JSON.parse(
+        String(
+          (fetchMock.mock.calls[3]?.[1] as RequestInit | undefined)?.body,
+        ),
+      ),
+    ).toMatchObject({
+      status: "promoted",
+      promote_to: "incident",
+    });
+  });
+
+  it("parses backend SSE payloads with an optional transport event id", () => {
+    const data = {
+      tenant_id: "tenant",
+      cluster_id: "cluster",
+      aggregate_type: "inspection",
+      aggregate_id: "inspection",
+      event_type: "inspection_created",
+      payload: { status: "scheduled" },
+      correlation_id: "correlation",
+      occurred_at: "2026-07-27T08:42:10Z",
+    };
+
+    expect(
+      parseWorkflowSseFrame(`event: inspection_created\ndata: ${JSON.stringify(data)}`),
+    ).toEqual(data);
+    expect(
+      parseWorkflowSseFrame(
+        `id: stream-42\nevent: inspection_created\ndata: ${JSON.stringify(data)}`,
+      ),
+    ).toMatchObject({ event_id: "stream-42", payload: data.payload });
   });
 });

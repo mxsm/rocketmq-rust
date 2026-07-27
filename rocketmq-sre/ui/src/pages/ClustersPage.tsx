@@ -1,4 +1,4 @@
-import { ChevronRight, RefreshCw, ServerCrash } from "lucide-react";
+import { ChevronRight, Plus, RefreshCw, ServerCrash } from "lucide-react";
 import { Link } from "react-router-dom";
 
 import { PageHeader } from "@/components/PageHeader";
@@ -16,17 +16,25 @@ export function ClustersPage() {
         title="集群接入"
         description="展示只读身份、MCP 契约和数据源握手结果。"
         actions={
-          <Button
-            disabled={loading}
-            onClick={() => void refresh()}
-            variant="outline"
-          >
-            <RefreshCw
-              className={loading ? "spin" : undefined}
-              size={15}
-            />
-            刷新
-          </Button>
+          <>
+            <Button asChild>
+              <Link to="/clusters/onboard">
+                <Plus size={15} />
+                登记只读集群
+              </Link>
+            </Button>
+            <Button
+              disabled={loading}
+              onClick={() => void refresh()}
+              variant="outline"
+            >
+              <RefreshCw
+                className={loading ? "spin" : undefined}
+                size={15}
+              />
+              刷新
+            </Button>
+          </>
         }
       />
 
