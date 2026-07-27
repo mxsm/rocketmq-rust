@@ -75,6 +75,7 @@ use rocketmq_model::utils::cleanup_policy_utils::get_delete_policy_arc_mut;
 use rocketmq_model::utils::queue_type_utils::QueueTypeUtils;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
+use rocketmq_protocol::protocol::body::release_checkpoint::ReleaseCheckpointOffsets;
 use rocketmq_runtime::common::file_utils::string_to_file;
 use rocketmq_runtime::common::system_clock::SystemClock;
 use rocketmq_runtime::common::time_utils::current_millis;
@@ -84,8 +85,10 @@ use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
+use rocketmq_runtime::ShutdownDeadline;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
+use tokio::sync::OwnedMutexGuard;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 use tracing::info;
@@ -547,6 +550,10 @@ pub struct LocalFileMessageStore {
     last_recovery_report: Option<RecoveryReport>,
 }
 
+pub(crate) struct LocalReleaseCheckpointWriteLease {
+    _write_guard: OwnedMutexGuard<()>,
+}
+
 fn notify_message_arrive_for_multi_dispatch(
     message_store_config: &MessageStoreConfig,
     message_arriving_listener: &(dyn MessageArrivingListener + Sync + Send + 'static),
@@ -614,6 +621,92 @@ impl Drop for LocalFileMessageStore {
         // }
     }
 }
+
+impl LocalFileMessageStore {
+    pub(crate) async fn begin_release_checkpoint(
+        &self,
+        deadline: ShutdownDeadline,
+    ) -> Result<(ReleaseCheckpointOffsets, LocalReleaseCheckpointWriteLease), StoreError> {
+        let write_lock = self.commit_log.release_checkpoint_write_lock();
+        let write_guard = tokio::time::timeout_at(
+            tokio::time::Instant::from_std(deadline.instant()),
+            write_lock.lock_owned(),
+        )
+        .await
+        .map_err(|_| {
+            StoreError::new(StoreErrorKind::Timeout, StoreOperation::Flush)
+                .in_component(StoreComponent::CommitLog)
+                .with_detail("release-checkpoint write barrier deadline expired")
+        })?;
+
+        self.reput_message_service.new_message_notify.notify_one();
+        if !self
+            .reput_message_service
+            .wait_until_release_checkpoint_drained(deadline)
+            .await
+        {
+            return Err(StoreError::new(StoreErrorKind::Timeout, StoreOperation::Flush)
+                .with_detail("release-checkpoint derived-state barrier deadline expired"));
+        }
+
+        let appended_offset = self.commit_log.get_max_offset();
+        let commit_log_flush = self.commit_log.release_checkpoint_flush_handle();
+        let consume_queue_store = self.consume_queue_store.clone();
+        let store_checkpoint = self
+            .store_checkpoint
+            .clone()
+            .ok_or_else(|| StoreError::invalid_state(StoreOperation::Flush, "Store checkpoint is unavailable"))?;
+        let index_service = self.index_service.clone();
+        let (durable_offset, index_offset) = self
+            .runtime_scope
+            .spawn_io_until("local-store.release-checkpoint-flush", deadline, move || {
+                let durable_offset = commit_log_flush
+                    .try_flush(0)
+                    .map_err(|error| StoreError::mapped_file(StoreOperation::Flush, error))?
+                    .durable;
+                FlushConsumeQueueService::flush_once_blocking(&consume_queue_store, &store_checkpoint, 0);
+                let index_offset = index_service
+                    .flush_release_checkpoint()
+                    .map_err(|error| StoreError::mapped_file(StoreOperation::Flush, error))?;
+                Ok::<_, StoreError>((durable_offset, index_offset))
+            })
+            .await
+            .map_err(|error| {
+                StoreError::new(StoreErrorKind::Timeout, StoreOperation::Flush)
+                    .with_detail("release-checkpoint blocking flush failed")
+                    .with_source(error)
+            })??;
+        if durable_offset != appended_offset {
+            return Err(StoreError::storage(
+                StoreOperation::Flush,
+                format!("release-checkpoint flush stopped at {durable_offset}, expected {appended_offset}"),
+            ));
+        }
+
+        let consume_queue_offset = self
+            .dispatcher
+            .min_dispatch_progress_offset(self.commit_log.get_min_offset().max(0))
+            .unwrap_or(durable_offset);
+        let offsets = ReleaseCheckpointOffsets {
+            appended_offset,
+            durable_offset,
+            consume_queue_offset,
+            index_offset,
+        };
+        offsets.validate().map_err(|error| {
+            StoreError::new(StoreErrorKind::Corruption, StoreOperation::Flush)
+                .with_detail("release-checkpoint offsets violate Store ordering")
+                .with_source(error)
+        })?;
+        Ok((
+            offsets,
+            LocalReleaseCheckpointWriteLease {
+                _write_guard: write_guard,
+            },
+        ))
+    }
+}
+
 #[allow(unused_variables)]
 #[allow(unused_assignments)]
 impl MessageStore for LocalFileMessageStore {

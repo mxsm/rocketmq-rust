@@ -592,6 +592,10 @@ impl<MS: MessageStore> BrokerRuntimeState<MS> {
         self.message_store.as_deref()
     }
 
+    pub(crate) fn message_store_weak(&self) -> Option<Weak<MS>> {
+        self.message_store.as_ref().map(Arc::downgrade)
+    }
+
     #[inline]
     pub fn lite_subscription_registry(&self) -> &LiteSubscriptionRegistry {
         self.lite_subscription_registry.as_ref()
@@ -1223,6 +1227,7 @@ impl BrokerRuntime {
             notification_processor: None,
             query_assignment_processor: None,
             auth_runtime: None,
+            maintenance_authorizer: None,
             auth_admin_service: None,
             metadata_io,
             broker_attached_plugins: vec![],

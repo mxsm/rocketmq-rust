@@ -73,6 +73,7 @@ pub mod list_acl_request_header;
 pub mod list_users_request_header;
 pub mod lite_subscription_ctl_request_header;
 pub mod lock_batch_mq_request_header;
+pub mod maintenance_request_header;
 pub mod message_operation_header;
 pub mod namesrv;
 pub mod notification_request_header;

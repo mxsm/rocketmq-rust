@@ -12,8 +12,10 @@
   "config_bundle_files": [
     "distribution/config/image-provenance.schema.json",
     "distribution/config/image-sbom.schema.json",
+    "distribution/config/maintenance-policy.json",
     "distribution/config/production-feature-profile.json",
     "distribution/config/release-state.schema.json",
+    "distribution/helm/rocketmq-rust/files/maintenance-policy.json",
     "distribution/helm/rocketmq-rust/templates/_helpers.tpl",
     "distribution/helm/rocketmq-rust/templates/configmaps.yaml",
     "distribution/helm/rocketmq-rust/templates/networkpolicies.yaml",
@@ -24,7 +26,8 @@
     "distribution/helm/rocketmq-rust/values.schema.json",
     "distribution/helm/rocketmq-rust/values.yaml",
     "distribution/kubernetes/base/manifest.yaml",
-    "distribution/kubernetes/release-state-transition-policy.json"
+    "distribution/kubernetes/release-state-transition-policy.json",
+    "distribution/kubernetes/rollback-policy.json"
   ],
   "services": {
     "broker": {

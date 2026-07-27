@@ -516,6 +516,26 @@ mod defaults {
         false
     }
 
+    pub fn maintenance_enabled() -> bool {
+        false
+    }
+
+    pub fn maintenance_policy_path() -> CheetahString {
+        CheetahString::new()
+    }
+
+    pub fn maintenance_policy_version() -> u64 {
+        0
+    }
+
+    pub fn maintenance_policy_sha256() -> CheetahString {
+        CheetahString::new()
+    }
+
+    pub fn maintenance_checkpoint_root() -> CheetahString {
+        CheetahString::new()
+    }
+
     pub fn authorization_provider() -> CheetahString {
         CheetahString::new()
     }
@@ -1261,6 +1281,21 @@ pub struct BrokerConfig {
     #[serde(default = "defaults::authorization_whitelist")]
     pub authorization_whitelist: CheetahString,
 
+    #[serde(default = "defaults::maintenance_enabled")]
+    pub maintenance_enabled: bool,
+
+    #[serde(default = "defaults::maintenance_policy_path")]
+    pub maintenance_policy_path: CheetahString,
+
+    #[serde(default = "defaults::maintenance_policy_version")]
+    pub maintenance_policy_version: u64,
+
+    #[serde(default = "defaults::maintenance_policy_sha256")]
+    pub maintenance_policy_sha256: CheetahString,
+
+    #[serde(default = "defaults::maintenance_checkpoint_root")]
+    pub maintenance_checkpoint_root: CheetahString,
+
     #[serde(default = "defaults::init_authentication_user")]
     pub init_authentication_user: CheetahString,
 
@@ -1320,6 +1355,11 @@ impl fmt::Debug for BrokerConfig {
             .field("listen_port", &self.listen_port)
             .field("authentication_enabled", &self.authentication_enabled)
             .field("authorization_enabled", &self.authorization_enabled)
+            .field("maintenance_enabled", &self.maintenance_enabled)
+            .field("maintenance_policy_path", &self.maintenance_policy_path)
+            .field("maintenance_policy_version", &self.maintenance_policy_version)
+            .field("maintenance_policy_sha256", &self.maintenance_policy_sha256)
+            .field("maintenance_checkpoint_root", &self.maintenance_checkpoint_root)
             .field(
                 "init_authentication_user",
                 &redacted_if_not_empty(&self.init_authentication_user),
@@ -1532,6 +1572,11 @@ impl Default for BrokerConfig {
             authorization_strategy: defaults::authorization_strategy(),
             authentication_whitelist: defaults::authentication_whitelist(),
             authorization_whitelist: defaults::authorization_whitelist(),
+            maintenance_enabled: defaults::maintenance_enabled(),
+            maintenance_policy_path: defaults::maintenance_policy_path(),
+            maintenance_policy_version: defaults::maintenance_policy_version(),
+            maintenance_policy_sha256: defaults::maintenance_policy_sha256(),
+            maintenance_checkpoint_root: defaults::maintenance_checkpoint_root(),
             init_authentication_user: defaults::init_authentication_user(),
             inner_client_authentication_credentials: defaults::inner_client_authentication_credentials(),
             signature_algorithm: defaults::signature_algorithm(),
@@ -2074,6 +2119,17 @@ impl BrokerConfig {
         properties.insert("authorizationStrategy".into(), self.authorization_strategy.clone());
         properties.insert("authenticationWhitelist".into(), self.authentication_whitelist.clone());
         properties.insert("authorizationWhitelist".into(), self.authorization_whitelist.clone());
+        properties.insert("maintenanceEnabled".into(), self.maintenance_enabled.to_string().into());
+        properties.insert("maintenancePolicyPath".into(), self.maintenance_policy_path.clone());
+        properties.insert(
+            "maintenancePolicyVersion".into(),
+            self.maintenance_policy_version.to_string().into(),
+        );
+        properties.insert("maintenancePolicySha256".into(), self.maintenance_policy_sha256.clone());
+        properties.insert(
+            "maintenanceCheckpointRoot".into(),
+            self.maintenance_checkpoint_root.clone(),
+        );
         properties.insert("initAuthenticationUser".into(), self.init_authentication_user.clone());
         properties.insert(
             "innerClientAuthenticationCredentials".into(),

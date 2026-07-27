@@ -26,6 +26,7 @@ pub mod maintenance;
 pub mod message;
 pub mod message_store;
 pub mod options;
+pub mod release_checkpoint;
 #[doc(hidden)]
 pub mod runtime;
 pub mod snapshot;

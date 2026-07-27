@@ -55,6 +55,7 @@ observability-traces = ["rocketmq-observability/otel-traces"]
 
 
 [dependencies]
+rocketmq-auth     = { workspace = true }
 rocketmq-error    = { workspace = true }
 rocketmq-model    = { workspace = true }
 rocketmq-protocol = { workspace = true }

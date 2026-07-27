@@ -30,4 +30,6 @@ default = []
 [dependencies]
 rocketmq-model.workspace = true
 rocketmq-error.workspace = true
+rocketmq-auth.workspace = true
+rocketmq-protocol.workspace = true
 bytes.workspace = true

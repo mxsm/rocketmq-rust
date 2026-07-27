@@ -416,6 +416,63 @@ automountServiceAccountToken: false
 apiVersion: v1
 kind: ConfigMap
 metadata:
+  name: rocketmq-maintenance-policy-v1
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-maintenance
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: maintenance
+    rocketmq.apache.org/architecture-milestone: P0-05
+  annotations:
+    rocketmq.apache.org/maintenance-policy-version: "1"
+    rocketmq.apache.org/maintenance-policy-sha256: "328683f40a3aadcca0592c889196294eab10037271b0671de7d1c77287fa51c8"
+immutable: true
+data:
+  maintenance-policy.json: |-
+    {
+      "schema_version": 1,
+      "policy_id": "rocketmq.production-maintenance",
+      "policy_version": 1,
+      "require_authentication": true,
+      "require_authorization": true,
+      "require_fencing_token": true,
+      "max_request_lifetime_millis": 300000,
+      "resource_budget": {
+        "max_checkpoint_bytes": 68719476736,
+        "max_store_members": 64,
+        "max_concurrent_operations": 1
+      },
+      "principal_bindings": [
+        {
+          "principal": "rocketmq-administrator",
+          "roles": [
+            "administrator"
+          ]
+        },
+        {
+          "principal": "rocketmq-release-operator",
+          "roles": [
+            "release_operator"
+          ]
+        }
+      ],
+      "role_grants": [
+        {
+          "role": "release_operator",
+          "capabilities": [
+            "release_checkpoint"
+          ]
+        }
+      ]
+    }
+---
+# Source: rocketmq-rust/templates/configmaps.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
   name: rocketmq-broker-config
   namespace: rocketmq
   labels:
@@ -432,17 +489,22 @@ data:
     listenPort = 10911
     brokerIp1 = "rocketmq-broker-0.rocketmq-broker-headless.rocketmq.svc.cluster.local"
     brokerIp2 = "rocketmq-broker-0.rocketmq-broker-headless.rocketmq.svc.cluster.local"
-    storePathRootDir = "/var/lib/rocketmq/broker"
+    storePathRootDir = "/var/lib/rocketmq/store"
     namesrvAddr = "rocketmq-namesrv-0.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876;rocketmq-namesrv-1.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876;rocketmq-namesrv-2.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876"
     autoCreateTopicEnable = false
     enableControllerMode = true
     controllerAddr = "10.96.0.201:60109;10.96.0.202:60109;10.96.0.203:60109"
-    authConfigPath = "/var/lib/rocketmq/broker/auth"
+    authConfigPath = "/etc/rocketmq/auth"
     aclFile = "/var/run/secrets/rocketmq/broker-acl.yml"
     aclFileWatchEnabled = true
     authenticationEnabled = true
     authorizationEnabled = true
     signatureAlgorithm = "HmacSHA256"
+    maintenanceEnabled = true
+    maintenancePolicyPath = "maintenance-policy.json"
+    maintenancePolicyVersion = 1
+    maintenancePolicySha256 = "328683f40a3aadcca0592c889196294eab10037271b0671de7d1c77287fa51c8"
+    maintenanceCheckpointRoot = "/var/lib/rocketmq/checkpoints"
 
     [broker.brokerIdentity]
     brokerName = "rocketmq-broker"
@@ -452,24 +514,29 @@ data:
     [store]
     haListenAddress = "0.0.0.0"
     haListenPort = 10912
-    storePathRootDir = "/var/lib/rocketmq/broker"
-    storePathBrokerIdentity = "/var/lib/rocketmq/broker/brokerIdentity.json"
+    storePathRootDir = "/var/lib/rocketmq/store"
+    storePathBrokerIdentity = "/var/lib/rocketmq/store/brokerIdentity.json"
   rocketmq-broker-1.toml: |-
     [broker]
     listenPort = 10911
     brokerIp1 = "rocketmq-broker-1.rocketmq-broker-headless.rocketmq.svc.cluster.local"
     brokerIp2 = "rocketmq-broker-1.rocketmq-broker-headless.rocketmq.svc.cluster.local"
-    storePathRootDir = "/var/lib/rocketmq/broker"
+    storePathRootDir = "/var/lib/rocketmq/store"
     namesrvAddr = "rocketmq-namesrv-0.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876;rocketmq-namesrv-1.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876;rocketmq-namesrv-2.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876"
     autoCreateTopicEnable = false
     enableControllerMode = true
     controllerAddr = "10.96.0.201:60109;10.96.0.202:60109;10.96.0.203:60109"
-    authConfigPath = "/var/lib/rocketmq/broker/auth"
+    authConfigPath = "/etc/rocketmq/auth"
     aclFile = "/var/run/secrets/rocketmq/broker-acl.yml"
     aclFileWatchEnabled = true
     authenticationEnabled = true
     authorizationEnabled = true
     signatureAlgorithm = "HmacSHA256"
+    maintenanceEnabled = true
+    maintenancePolicyPath = "maintenance-policy.json"
+    maintenancePolicyVersion = 1
+    maintenancePolicySha256 = "328683f40a3aadcca0592c889196294eab10037271b0671de7d1c77287fa51c8"
+    maintenanceCheckpointRoot = "/var/lib/rocketmq/checkpoints"
 
     [broker.brokerIdentity]
     brokerName = "rocketmq-broker"
@@ -479,24 +546,29 @@ data:
     [store]
     haListenAddress = "0.0.0.0"
     haListenPort = 10912
-    storePathRootDir = "/var/lib/rocketmq/broker"
-    storePathBrokerIdentity = "/var/lib/rocketmq/broker/brokerIdentity.json"
+    storePathRootDir = "/var/lib/rocketmq/store"
+    storePathBrokerIdentity = "/var/lib/rocketmq/store/brokerIdentity.json"
   rocketmq-broker-2.toml: |-
     [broker]
     listenPort = 10911
     brokerIp1 = "rocketmq-broker-2.rocketmq-broker-headless.rocketmq.svc.cluster.local"
     brokerIp2 = "rocketmq-broker-2.rocketmq-broker-headless.rocketmq.svc.cluster.local"
-    storePathRootDir = "/var/lib/rocketmq/broker"
+    storePathRootDir = "/var/lib/rocketmq/store"
     namesrvAddr = "rocketmq-namesrv-0.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876;rocketmq-namesrv-1.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876;rocketmq-namesrv-2.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876"
     autoCreateTopicEnable = false
     enableControllerMode = true
     controllerAddr = "10.96.0.201:60109;10.96.0.202:60109;10.96.0.203:60109"
-    authConfigPath = "/var/lib/rocketmq/broker/auth"
+    authConfigPath = "/etc/rocketmq/auth"
     aclFile = "/var/run/secrets/rocketmq/broker-acl.yml"
     aclFileWatchEnabled = true
     authenticationEnabled = true
     authorizationEnabled = true
     signatureAlgorithm = "HmacSHA256"
+    maintenanceEnabled = true
+    maintenancePolicyPath = "maintenance-policy.json"
+    maintenancePolicyVersion = 1
+    maintenancePolicySha256 = "328683f40a3aadcca0592c889196294eab10037271b0671de7d1c77287fa51c8"
+    maintenanceCheckpointRoot = "/var/lib/rocketmq/checkpoints"
 
     [broker.brokerIdentity]
     brokerName = "rocketmq-broker"
@@ -506,8 +578,8 @@ data:
     [store]
     haListenAddress = "0.0.0.0"
     haListenPort = 10912
-    storePathRootDir = "/var/lib/rocketmq/broker"
-    storePathBrokerIdentity = "/var/lib/rocketmq/broker/brokerIdentity.json"
+    storePathRootDir = "/var/lib/rocketmq/store"
+    storePathBrokerIdentity = "/var/lib/rocketmq/store/brokerIdentity.json"
 ---
 # Source: rocketmq-rust/templates/configmaps.yaml
 apiVersion: v1
@@ -571,7 +643,7 @@ data:
     metricsPromExporterHost = ""
     metricsLabel = ""
     metricsInDelta = false
-    configBlackList = "configBlackList;configStorePath"
+    configBlackList = "configBlackList;configStorePath;maintenanceCheckpointRoot"
     nodeId = 1
     listenAddr = "0.0.0.0:60109"
     electionTimeoutMs = 1000
@@ -579,6 +651,15 @@ data:
     storagePath = "/var/lib/rocketmq/controller/node-1"
     storageBackend = "RocksDB"
     enableElectUncleanMasterLocal = false
+    authenticationEnabled = true
+    authorizationEnabled = true
+    authConfigPath = "/etc/rocketmq/auth"
+    aclFile = "/var/run/secrets/rocketmq/controller-acl.yml"
+    maintenanceEnabled = true
+    maintenancePolicyPath = "maintenance-policy.json"
+    maintenancePolicyVersion = 1
+    maintenancePolicySha256 = "328683f40a3aadcca0592c889196294eab10037271b0671de7d1c77287fa51c8"
+    maintenanceCheckpointRoot = "/var/lib/rocketmq/controller/checkpoints/node-1"
 
     [[raftPeers]]
     id = 1
@@ -628,7 +709,7 @@ data:
     metricsPromExporterHost = ""
     metricsLabel = ""
     metricsInDelta = false
-    configBlackList = "configBlackList;configStorePath"
+    configBlackList = "configBlackList;configStorePath;maintenanceCheckpointRoot"
     nodeId = 2
     listenAddr = "0.0.0.0:60109"
     electionTimeoutMs = 1000
@@ -636,6 +717,15 @@ data:
     storagePath = "/var/lib/rocketmq/controller/node-2"
     storageBackend = "RocksDB"
     enableElectUncleanMasterLocal = false
+    authenticationEnabled = true
+    authorizationEnabled = true
+    authConfigPath = "/etc/rocketmq/auth"
+    aclFile = "/var/run/secrets/rocketmq/controller-acl.yml"
+    maintenanceEnabled = true
+    maintenancePolicyPath = "maintenance-policy.json"
+    maintenancePolicyVersion = 1
+    maintenancePolicySha256 = "328683f40a3aadcca0592c889196294eab10037271b0671de7d1c77287fa51c8"
+    maintenanceCheckpointRoot = "/var/lib/rocketmq/controller/checkpoints/node-2"
 
     [[raftPeers]]
     id = 1
@@ -685,7 +775,7 @@ data:
     metricsPromExporterHost = ""
     metricsLabel = ""
     metricsInDelta = false
-    configBlackList = "configBlackList;configStorePath"
+    configBlackList = "configBlackList;configStorePath;maintenanceCheckpointRoot"
     nodeId = 3
     listenAddr = "0.0.0.0:60109"
     electionTimeoutMs = 1000
@@ -693,6 +783,15 @@ data:
     storagePath = "/var/lib/rocketmq/controller/node-3"
     storageBackend = "RocksDB"
     enableElectUncleanMasterLocal = false
+    authenticationEnabled = true
+    authorizationEnabled = true
+    authConfigPath = "/etc/rocketmq/auth"
+    aclFile = "/var/run/secrets/rocketmq/controller-acl.yml"
+    maintenanceEnabled = true
+    maintenancePolicyPath = "maintenance-policy.json"
+    maintenancePolicyVersion = 1
+    maintenancePolicySha256 = "328683f40a3aadcca0592c889196294eab10037271b0671de7d1c77287fa51c8"
+    maintenanceCheckpointRoot = "/var/lib/rocketmq/controller/checkpoints/node-3"
 
     [[raftPeers]]
     id = 1
@@ -1799,13 +1898,23 @@ spec:
               mountPath: /etc/rocketmq/broker.toml
               subPathExpr: $(POD_NAME).toml
               readOnly: true
-            - {name: data, mountPath: /var/lib/rocketmq/broker}
+            - name: maintenance-policy
+              mountPath: /etc/rocketmq/auth/maintenance-policy.json
+              subPath: maintenance-policy.json
+              readOnly: true
+            - {name: data, mountPath: /var/lib/rocketmq}
             - {name: runtime-secrets, mountPath: /var/run/secrets/rocketmq, readOnly: true}
             - {name: tmp, mountPath: /tmp/rocketmq}
       volumes:
         - name: config
           configMap:
             name: rocketmq-broker-config
+        - name: maintenance-policy
+          configMap:
+            name: rocketmq-maintenance-policy-v1
+            items:
+              - key: maintenance-policy.json
+                path: maintenance-policy.json
         - name: runtime-secrets
           secret:
             secretName: "rocketmq-runtime-secrets"
@@ -2187,6 +2296,10 @@ spec:
               mountPath: /etc/rocketmq/controller.toml
               subPathExpr: $(POD_NAME).toml
               readOnly: true
+            - name: maintenance-policy
+              mountPath: /etc/rocketmq/auth/maintenance-policy.json
+              subPath: maintenance-policy.json
+              readOnly: true
             - {name: data, mountPath: /var/lib/rocketmq/controller}
             - {name: runtime-secrets, mountPath: /var/run/secrets/rocketmq, readOnly: true}
             - {name: tmp, mountPath: /tmp/rocketmq}
@@ -2194,6 +2307,12 @@ spec:
         - name: config
           configMap:
             name: rocketmq-controller-config
+        - name: maintenance-policy
+          configMap:
+            name: rocketmq-maintenance-policy-v1
+            items:
+              - key: maintenance-policy.json
+                path: maintenance-policy.json
         - name: runtime-secrets
           secret:
             secretName: "rocketmq-runtime-secrets"

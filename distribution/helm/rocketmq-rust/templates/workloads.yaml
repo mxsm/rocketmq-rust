@@ -71,13 +71,27 @@ spec:
               mountPath: /etc/rocketmq/broker.toml
               subPathExpr: $(POD_NAME).toml
               readOnly: true
-            - {name: data, mountPath: /var/lib/rocketmq/broker}
+{{- if .Values.maintenance.enabled }}
+            - name: maintenance-policy
+              mountPath: {{ .Values.maintenance.mountPath }}
+              subPath: {{ .Values.maintenance.policyKey }}
+              readOnly: true
+{{- end }}
+            - {name: data, mountPath: /var/lib/rocketmq}
             - {name: runtime-secrets, mountPath: /var/run/secrets/rocketmq, readOnly: true}
             - {name: tmp, mountPath: /tmp/rocketmq}
       volumes:
         - name: config
           configMap:
             name: rocketmq-broker-config
+{{- if .Values.maintenance.enabled }}
+        - name: maintenance-policy
+          configMap:
+            name: {{ .Values.maintenance.configMapName }}
+            items:
+              - key: {{ .Values.maintenance.policyKey }}
+                path: {{ .Values.maintenance.policyKey }}
+{{- end }}
 {{- if not .Values.services.broker.persistence.enabled }}
         - name: data
           emptyDir:
@@ -275,6 +289,12 @@ spec:
               mountPath: /etc/rocketmq/controller.toml
               subPathExpr: $(POD_NAME).toml
               readOnly: true
+{{- if .Values.maintenance.enabled }}
+            - name: maintenance-policy
+              mountPath: {{ .Values.maintenance.mountPath }}
+              subPath: {{ .Values.maintenance.policyKey }}
+              readOnly: true
+{{- end }}
             - {name: data, mountPath: /var/lib/rocketmq/controller}
             - {name: runtime-secrets, mountPath: /var/run/secrets/rocketmq, readOnly: true}
             - {name: tmp, mountPath: /tmp/rocketmq}
@@ -282,6 +302,14 @@ spec:
         - name: config
           configMap:
             name: rocketmq-controller-config
+{{- if .Values.maintenance.enabled }}
+        - name: maintenance-policy
+          configMap:
+            name: {{ .Values.maintenance.configMapName }}
+            items:
+              - key: {{ .Values.maintenance.policyKey }}
+                path: {{ .Values.maintenance.policyKey }}
+{{- end }}
 {{- if not .Values.services.controller.persistence.enabled }}
         - name: data
           emptyDir:

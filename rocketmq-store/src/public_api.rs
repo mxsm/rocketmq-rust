@@ -140,6 +140,8 @@ pub use crate::log_file::mapped_file::StoreMappedMemory;
 pub use crate::log_file::MAX_PULL_MSG_SIZE;
 pub use crate::message_store::local_file_message_store::LocalFileMessageStore;
 pub use crate::message_store::OwnedMessageStore;
+pub use crate::message_store::StoreReleaseCheckpointError;
+pub use crate::message_store::StoreReleaseCheckpointService;
 pub use crate::platform::classify_file_preallocate_result;
 pub use crate::platform::current_store_platform_capability;
 pub use crate::platform::preallocate_file;

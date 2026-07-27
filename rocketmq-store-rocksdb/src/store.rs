@@ -77,6 +77,7 @@ impl RocksDbStoreState {
 
 pub struct RocksDbStore {
     db: Arc<::rocksdb::DB>,
+    path: PathBuf,
     db_options: ::rocksdb::Options,
     state: AtomicU8,
     write_options: ::rocksdb::WriteOptions,
@@ -116,6 +117,7 @@ impl RocksDbStore {
         column_families: Vec<RocksDbColumnFamilyConfig>,
         otel_metrics: RocksDbMetricsRecorder,
     ) -> Result<Self, RocketMQError> {
+        let path = config.path.clone();
         let descriptors = column_families
             .iter()
             .map(|column_family| {
@@ -132,12 +134,18 @@ impl RocksDbStore {
 
         Ok(Self {
             db: Arc::new(db),
+            path,
             db_options,
             state: AtomicU8::new(RocksDbStoreState::Open.as_u8()),
             write_options: RocksDbOptionsFactory::write_options(config.write_profile()),
             metrics: Arc::new(RocksDbMetricsCollector::default()),
             otel_metrics,
         })
+    }
+
+    /// Returns the canonical configured database path.
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
     pub fn create_cf_if_missing(&self, column_family: RocksDbColumnFamilyConfig) -> Result<(), RocketMQError> {
@@ -427,6 +435,32 @@ impl RocksDbStore {
                 .create_checkpoint(target_dir)
                 .map_rocksdb(RocksDbErrorKind::Checkpoint)
         })
+        .await?;
+        self.record_result(&result, RocksDbMetricsCollector::record_checkpoint);
+        result
+    }
+
+    /// Creates a RocksDB checkpoint without admitting or waiting past `deadline`.
+    pub async fn create_checkpoint_until(
+        &self,
+        runtime_scope: &RocksDbRuntimeScope,
+        target_dir: PathBuf,
+        deadline: rocketmq_runtime::ShutdownDeadline,
+    ) -> Result<(), RocketMQError> {
+        self.ensure_open()?;
+        let db = Arc::clone(&self.db);
+        let result = crate::runtime::spawn_io_until(
+            runtime_scope,
+            "rocksdb.create_release_checkpoint",
+            deadline,
+            move || {
+                let checkpoint =
+                    ::rocksdb::checkpoint::Checkpoint::new(&db).map_rocksdb(RocksDbErrorKind::Checkpoint)?;
+                checkpoint
+                    .create_checkpoint(target_dir)
+                    .map_rocksdb(RocksDbErrorKind::Checkpoint)
+            },
+        )
         .await?;
         self.record_result(&result, RocksDbMetricsCollector::record_checkpoint);
         result

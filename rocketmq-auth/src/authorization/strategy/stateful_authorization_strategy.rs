@@ -477,6 +477,7 @@ mod tests {
             stateful_authorization_cache_max_num: 100,
             stateful_authorization_cache_expired_second: 60,
             stateful_authorization_cache_negative_enable: false,
+            ..AuthConfig::default()
         }
     }
 

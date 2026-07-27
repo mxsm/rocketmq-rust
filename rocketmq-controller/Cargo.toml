@@ -27,6 +27,7 @@ keywords             = ["rocketmq", "controller", "raft", "distributed", "messag
 categories           = ["network-programming", "asynchronous"]
 
 [dependencies]
+rocketmq-auth     = { workspace = true }
 rocketmq-error    = { workspace = true }
 rocketmq-model    = { workspace = true }
 rocketmq-protocol = { workspace = true }
@@ -52,6 +53,8 @@ tonic-prost = "0.14"
 # Serialization
 serde      = { workspace = true }
 serde_json = { workspace = true }
+sha2       = "0.11"
+hex        = "0.4"
 
 # Networking and protocols
 bytes        = { workspace = true }

@@ -62,6 +62,7 @@ pub mod query_consume_time_span_body;
 pub mod query_correction_offset_body;
 pub mod query_subscription_response_body;
 pub mod queue_time_span;
+pub mod release_checkpoint;
 pub mod request;
 pub mod response;
 pub mod set_message_request_mode_request_body;

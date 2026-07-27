@@ -27,6 +27,7 @@ mod namesrv;
 mod offset;
 mod producer;
 mod queue;
+mod release_checkpoint;
 mod stats;
 mod topic;
 
@@ -172,6 +173,11 @@ pub enum Commands {
     Queue(queue::QueueCommands),
 
     #[command(subcommand)]
+    #[command(about = "Authorized release checkpoint commands")]
+    #[command(name = "release-checkpoint")]
+    ReleaseCheckpoint(release_checkpoint::ReleaseCheckpointCommands),
+
+    #[command(subcommand)]
     #[command(about = "Stats commands")]
     #[command(name = "stats")]
     Stats(stats::StatsCommands),
@@ -206,6 +212,7 @@ impl CommandExecute for Commands {
             Commands::Offset(value) => value.execute(credentials, client_runtime.clone()).await,
             Commands::Producer(value) => value.execute(credentials, client_runtime.clone()).await,
             Commands::Queue(value) => value.execute(credentials, client_runtime.clone()).await,
+            Commands::ReleaseCheckpoint(value) => value.execute(credentials, client_runtime.clone()).await,
             Commands::Stats(value) => value.execute(credentials, client_runtime.clone()).await,
             Commands::Topic(value) => value.execute(credentials, client_runtime.clone()).await,
             Commands::Show(value) => value.execute(credentials, client_runtime.clone()).await,

@@ -25,6 +25,7 @@ pub mod index;
 pub mod mapped_file;
 pub mod message_store;
 pub mod pop;
+pub mod release_checkpoint;
 pub mod services;
 pub mod stats;
 pub mod timer;

@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "policy_id": "rocketmq.production-maintenance",
+  "policy_version": 1,
+  "require_authentication": true,
+  "require_authorization": true,
+  "require_fencing_token": true,
+  "max_request_lifetime_millis": 300000,
+  "resource_budget": {
+    "max_checkpoint_bytes": 68719476736,
+    "max_store_members": 64,
+    "max_concurrent_operations": 1
+  },
+  "principal_bindings": [
+    {
+      "principal": "rocketmq-administrator",
+      "roles": [
+        "administrator"
+      ]
+    },
+    {
+      "principal": "rocketmq-release-operator",
+      "roles": [
+        "release_operator"
+      ]
+    }
+  ],
+  "role_grants": [
+    {
+      "role": "release_operator",
+      "capabilities": [
+        "release_checkpoint"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "policy_id": "rocketmq.release-state-rollback",
+  "policy_version": 1,
+  "maintenance_policy": {
+    "path": "distribution/config/maintenance-policy.json",
+    "version": 1,
+    "sha256": "328683f40a3aadcca0592c889196294eab10037271b0671de7d1c77287fa51c8"
+  },
+  "checkpoint_schema_version": 1,
+  "lease": {
+    "api_version": "coordination.k8s.io/v1",
+    "name": "rocketmq-release-rollback",
+    "duration_seconds": 60,
+    "renew_interval_seconds": 20,
+    "fencing_annotation": "rocketmq.apache.org/fencing-token"
+  },
+  "journal": {
+    "api_version": "v1",
+    "config_map_name": "rocketmq-release-rollback-journal",
+    "data_key": "journal.json",
+    "schema_version": 1,
+    "cas_field": "metadata.resourceVersion",
+    "persistent": true
+  },
+  "apply_order": [
+    "controller",
+    "namesrv",
+    "broker",
+    "proxy",
+    "mcp"
+  ],
+  "compensation_order": [
+    "mcp",
+    "proxy",
+    "broker",
+    "namesrv",
+    "controller"
+  ],
+  "workloads": {
+    "controller": "statefulset/rocketmq-controller",
+    "namesrv": "statefulset/rocketmq-namesrv",
+    "broker": "statefulset/rocketmq-broker",
+    "proxy": "deployment/rocketmq-proxy",
+    "mcp": "deployment/rocketmq-mcp"
+  },
+  "timeouts": {
+    "operation": "30m",
+    "rollout": "10m"
+  },
+  "preservation": {
+    "reuse_persistent_volumes": true,
+    "retain_wal": true,
+    "verify_acknowledged_messages": true,
+    "verify_consumer_offsets": true,
+    "forbid_pvc_delete": true,
+    "forbid_helm_uninstall": true
+  },
+  "resume": {
+    "idempotent_completed_stages": true,
+    "resume_running": true,
+    "resume_compensating": true,
+    "reject_compensated_operation": true
+  }
+}

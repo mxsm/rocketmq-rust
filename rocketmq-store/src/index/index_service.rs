@@ -508,6 +508,17 @@ impl IndexServiceAdapter {
             let _ = self.store_checkpoint.flush();
         }
     }
+
+    pub(crate) fn flush_release_checkpoint(&self) -> std::io::Result<i64> {
+        let files = self.index_file_list.read().clone();
+        for index_file in &files {
+            index_file.flush();
+        }
+        let safe_offset = max_index_dispatch_offset(&files).unwrap_or_default().max(0);
+        self.store_checkpoint.advance_index_safe_phy_offset(safe_offset as u64);
+        self.store_checkpoint.flush()?;
+        Ok(safe_offset)
+    }
 }
 
 impl IndexServiceFile for IndexFile {

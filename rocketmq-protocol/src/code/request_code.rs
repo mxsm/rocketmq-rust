@@ -261,6 +261,13 @@ define_request_code! {
 
         SwitchTimerEngine = 5001,
 
+        // Privileged maintenance codes. These are not ordinary Admin actions.
+        MaintenanceGetCapabilities = 6001,
+        MaintenanceCreateControllerSnapshot = 6002,
+        MaintenanceCreateStoreCheckpoint = 6003,
+        MaintenanceVerifyCheckpoint = 6004,
+        MaintenanceRestoreVerify = 6005,
+
         Unknown = -9999999,
     }
 }
@@ -277,6 +284,7 @@ mod tests {
         assert_eq!(RequestCode::PopMessage.to_i32(), 200050);
         assert_eq!(RequestCode::ControllerAlterSyncStateSet.to_i32(), 1001);
         assert_eq!(RequestCode::AuthCreateUser.to_i32(), 3001);
+        assert_eq!(RequestCode::MaintenanceCreateControllerSnapshot.to_i32(), 6002);
         assert_eq!(RequestCode::Unknown.to_i32(), -9999999);
     }
 
@@ -288,6 +296,7 @@ mod tests {
         assert_eq!(RequestCode::from(200050), RequestCode::PopMessage);
         assert_eq!(RequestCode::from(1001), RequestCode::ControllerAlterSyncStateSet);
         assert_eq!(RequestCode::from(3001), RequestCode::AuthCreateUser);
+        assert_eq!(RequestCode::from(6003), RequestCode::MaintenanceCreateStoreCheckpoint);
         assert_eq!(RequestCode::from(-9999999), RequestCode::Unknown);
     }
 
@@ -333,6 +342,7 @@ mod tests {
             RequestCode::RegisterBroker,
             RequestCode::ControllerElectMaster,
             RequestCode::AuthCreateUser,
+            RequestCode::MaintenanceRestoreVerify,
             RequestCode::Unknown,
         ];
 
@@ -387,6 +397,10 @@ mod tests {
         // Test Auth codes (3001-3010)
         assert_eq!(RequestCode::from(3001), RequestCode::AuthCreateUser);
         assert_eq!(RequestCode::from(3010), RequestCode::AuthListAcl);
+
+        // Privileged maintenance codes (6001-6005)
+        assert_eq!(RequestCode::from(6001), RequestCode::MaintenanceGetCapabilities);
+        assert_eq!(RequestCode::from(6005), RequestCode::MaintenanceRestoreVerify);
 
         // Test Cold data flow codes (2001-2004)
         assert_eq!(RequestCode::from(2001), RequestCode::UpdateColdDataFlowCtrConfig);

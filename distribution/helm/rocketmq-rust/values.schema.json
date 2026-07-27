@@ -8,6 +8,7 @@
     "deploymentProfile",
     "global",
     "releaseIdentity",
+    "maintenance",
     "metrics",
     "namespace",
     "networkPolicy",
@@ -148,6 +149,43 @@
           "type": "integer",
           "description": "Monotonically increasing generation shared by the persisted release state.",
           "minimum": 1
+        }
+      }
+    },
+    "maintenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "configMapName",
+        "policyKey",
+        "mountPath",
+        "version",
+        "sha256"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "configMapName": {
+          "type": "string",
+          "pattern": "^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$"
+        },
+        "policyKey": {
+          "type": "string",
+          "const": "maintenance-policy.json"
+        },
+        "mountPath": {
+          "type": "string",
+          "const": "/etc/rocketmq/auth/maintenance-policy.json"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
         }
       }
     },
@@ -673,6 +711,13 @@
       },
       "then": {
         "properties": {
+          "maintenance": {
+            "properties": {
+              "enabled": {
+                "const": true
+              }
+            }
+          },
           "networkPolicy": {
             "properties": {
               "enabled": {

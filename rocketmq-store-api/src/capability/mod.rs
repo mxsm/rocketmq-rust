@@ -21,6 +21,7 @@ mod health;
 mod lifecycle;
 mod offset;
 mod reader;
+mod release_checkpoint;
 mod replication;
 
 pub use admin::AdminStore;
@@ -30,4 +31,5 @@ pub use health::StoreHealth;
 pub use lifecycle::StoreLifecycle;
 pub use offset::OffsetIndex;
 pub use reader::MessageReader;
+pub use release_checkpoint::ReleaseCheckpointStore;
 pub use replication::ReplicationControl;

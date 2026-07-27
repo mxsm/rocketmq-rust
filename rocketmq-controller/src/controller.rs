@@ -92,6 +92,7 @@ pub mod broker_housekeeping_service;
 pub mod controller_manager;
 pub mod open_raft_controller;
 pub mod raft_controller;
+pub mod release_snapshot;
 
 use std::sync::Arc;
 

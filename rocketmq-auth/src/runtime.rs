@@ -501,6 +501,21 @@ impl AuthRuntime {
             .authorize_remoting(channel_context, command)
             .await
     }
+
+    /// Authenticates a privileged maintenance request and returns the verified
+    /// identity consumed by the independent maintenance policy.
+    ///
+    /// Unlike the ordinary remoting path, this method never treats disabled
+    /// authentication or an authentication whitelist as success.
+    pub async fn authenticate_maintenance_principal(
+        &self,
+        command: &RemotingCommand,
+        channel_id: Option<&str>,
+    ) -> RocketMQResult<CheetahString> {
+        self.authentication_service
+            .authenticate_maintenance_principal(command, channel_id)
+            .await
+    }
 }
 
 #[derive(Clone)]
@@ -567,6 +582,36 @@ impl AuthenticationService {
             RocketMQError::authentication_failed(error.to_string())
         })?;
         self.provider.authenticate(&context).await
+    }
+
+    /// Authenticates a privileged maintenance request without a bypass path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an authentication error when authentication is disabled, the
+    /// request has no canonical identity, the signed context is malformed, or
+    /// credential verification fails.
+    pub async fn authenticate_maintenance_principal(
+        &self,
+        command: &RemotingCommand,
+        channel_id: Option<&str>,
+    ) -> RocketMQResult<CheetahString> {
+        if !self.config.authentication_enabled {
+            return Err(RocketMQError::authentication_failed(
+                "maintenance authentication is disabled",
+            ));
+        }
+        let context = self.builder.build_from_remoting(command, channel_id).map_err(|error| {
+            self.metrics.record_authentication_result(false);
+            RocketMQError::authentication_failed(error.to_string())
+        })?;
+        let principal = context
+            .username()
+            .filter(|username| !username.trim().is_empty())
+            .cloned()
+            .ok_or_else(|| RocketMQError::authentication_failed("maintenance request is anonymous"))?;
+        self.provider.authenticate(&context).await?;
+        Ok(principal)
     }
 }
 

@@ -620,6 +620,26 @@ pub fn validate_snapshot_payload(bytes: &[u8]) -> Result<(), std::io::Error> {
     validate_snapshot_bytes(bytes).map(|_| ())
 }
 
+/// Integrity-checked identity used to bind a release manifest to its payload.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub(crate) struct ValidatedSnapshotIdentity {
+    pub(crate) snapshot_id: String,
+    pub(crate) last_applied: Option<LogId>,
+    pub(crate) voter_ids: Vec<u64>,
+}
+
+/// Validates a payload and returns only the non-sensitive Raft identity needed
+/// by release checkpoint verification.
+pub(crate) fn inspect_snapshot_payload(bytes: &[u8]) -> Result<ValidatedSnapshotIdentity, std::io::Error> {
+    let data = validate_snapshot_bytes(bytes)?;
+    let voter_ids = data.last_membership.unwrap_or_default().voter_ids().collect();
+    Ok(ValidatedSnapshotIdentity {
+        snapshot_id: data.snapshot_id,
+        last_applied: data.last_applied,
+        voter_ids,
+    })
+}
+
 impl RaftSnapshotBuilder<TypeConfig> for StateMachine {
     async fn build_snapshot(&mut self) -> Result<Snapshot, std::io::Error> {
         let _state_guard = self.state_lock.lock().await;

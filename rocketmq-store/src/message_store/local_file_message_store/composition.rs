@@ -248,6 +248,7 @@ impl LocalFileMessageStore {
                 new_message_notify: Arc::new(Notify::new()),
                 dispatch_progress_notify: Arc::new(Notify::new()),
                 pending_messages: Arc::new(AtomicI64::new(0)),
+                inflight_dispatch_batches: Arc::new(AtomicU64::new(0)),
                 reput_from_offset: None,
                 dispatch_tx: None,
                 inner: None,

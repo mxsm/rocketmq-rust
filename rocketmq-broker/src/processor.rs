@@ -45,6 +45,7 @@ use crate::processor::consumer_manage_processor::ConsumerManageProcessor;
 use crate::processor::end_transaction_processor::EndTransactionProcessor;
 use crate::processor::lite_manager_processor::LiteManagerProcessor;
 use crate::processor::lite_subscription_ctl_processor::LiteSubscriptionCtlProcessor;
+use crate::processor::maintenance_request_processor::MaintenanceRequestProcessor;
 use crate::processor::notification_processor::NotificationProcessor;
 use crate::processor::peek_message_processor::PeekMessageProcessor;
 use crate::processor::polling_info_processor::PollingInfoProcessor;
@@ -68,6 +69,7 @@ pub(crate) mod default_pull_message_result_handler;
 pub(crate) mod end_transaction_processor;
 pub(crate) mod lite_manager_processor;
 pub(crate) mod lite_subscription_ctl_processor;
+pub(crate) mod maintenance_request_processor;
 pub(crate) mod notification_processor;
 pub(crate) mod peek_message_processor;
 pub(crate) mod polling_info_processor;
@@ -103,6 +105,7 @@ pub enum BrokerProcessorType<MS: MessageStore, TS> {
     LiteManager(Arc<LiteManagerProcessor<MS>>),
     LiteSubscriptionCtl(Arc<LiteSubscriptionCtlProcessor<MS>>),
     EndTransaction(Arc<EndTransactionProcessor<TS, MS>>),
+    Maintenance(Arc<MaintenanceRequestProcessor>),
     AdminBroker(Arc<Mutex<AdminBrokerProcessor<MS>>>),
 }
 
@@ -130,6 +133,7 @@ where
             Self::LiteManager(processor) => Self::LiteManager(processor.clone()),
             Self::LiteSubscriptionCtl(processor) => Self::LiteSubscriptionCtl(processor.clone()),
             Self::EndTransaction(processor) => Self::EndTransaction(processor.clone()),
+            Self::Maintenance(processor) => Self::Maintenance(processor.clone()),
             Self::AdminBroker(processor) => Self::AdminBroker(processor.clone()),
         }
     }
@@ -160,6 +164,7 @@ where
             BrokerProcessorType::LiteManager(_) => "LiteManager",
             BrokerProcessorType::LiteSubscriptionCtl(_) => "LiteSubscriptionCtl",
             BrokerProcessorType::EndTransaction(_) => "EndTransaction",
+            BrokerProcessorType::Maintenance(_) => "Maintenance",
             BrokerProcessorType::AdminBroker(_) => "AdminBroker",
         }
     }
@@ -215,6 +220,9 @@ where
             BrokerProcessorType::EndTransaction(processor) => {
                 processor.process_request_shared(channel, ctx, request).await
             }
+            BrokerProcessorType::Maintenance(processor) => {
+                processor.process_request_shared(channel, ctx, request).await
+            }
             BrokerProcessorType::AdminBroker(processor) => {
                 processor.lock().await.process_request(channel, ctx, request).await
             }
@@ -241,6 +249,7 @@ where
             BrokerProcessorType::LiteManager(processor) => processor.reject_request(code),
             BrokerProcessorType::LiteSubscriptionCtl(processor) => processor.reject_request(code),
             BrokerProcessorType::EndTransaction(processor) => processor.reject_request(code),
+            BrokerProcessorType::Maintenance(_) => (false, None),
             BrokerProcessorType::AdminBroker(_) => (false, None),
         }
     }
@@ -336,10 +345,30 @@ where
         ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        if let Some(auth_runtime) = &self.auth_runtime {
-            if let Err(error) = auth_runtime.check_remoting(&ctx, request).await {
-                let response = command_from_error_with_remark_and_opaque(&error, error.to_string(), request.opaque());
-                return Ok(Some(response));
+        let request_code = RequestCode::from(request.code());
+        let privileged_maintenance = is_privileged_maintenance_request(request_code);
+        if privileged_maintenance
+            && !matches!(
+                self.process_table.get(request.code_ref()),
+                Some(BrokerProcessorType::Maintenance(_))
+            )
+        {
+            let error = rocketmq_error::RocketMQError::authentication_failed(
+                "Broker maintenance API is disabled or unavailable",
+            );
+            return Ok(Some(command_from_error_with_remark_and_opaque(
+                &error,
+                error.to_string(),
+                request.opaque(),
+            )));
+        }
+        if !privileged_maintenance {
+            if let Some(auth_runtime) = &self.auth_runtime {
+                if let Err(error) = auth_runtime.check_remoting(&ctx, request).await {
+                    let response =
+                        command_from_error_with_remark_and_opaque(&error, error.to_string(), request.opaque());
+                    return Ok(Some(response));
+                }
             }
         }
 
@@ -391,6 +420,16 @@ where
     fn request_ordering(&self, request: &RemotingCommand) -> RequestOrdering {
         request_ordering::broker_request_ordering(request)
     }
+}
+
+const fn is_privileged_maintenance_request(request_code: RequestCode) -> bool {
+    matches!(
+        request_code,
+        RequestCode::MaintenanceGetCapabilities
+            | RequestCode::MaintenanceCreateStoreCheckpoint
+            | RequestCode::MaintenanceVerifyCheckpoint
+            | RequestCode::MaintenanceRestoreVerify
+    )
 }
 
 impl<MS, TS> BrokerRequestProcessor<MS, TS>
@@ -813,5 +852,25 @@ mod tests {
                 .is_some_and(|remark| remark.as_str().contains("username cannot be null")),
             "missing AccessKey should be reported as an authentication failure"
         );
+    }
+
+    #[tokio::test]
+    async fn unregistered_maintenance_request_fails_closed_before_admin_dispatch() {
+        let mut processor = TestBrokerRequestProcessor::new();
+        let mut request =
+            RemotingCommand::create_remoting_command(RequestCode::MaintenanceCreateStoreCheckpoint).set_opaque(19);
+        let harness = LocalRequestHarness::new(crate::test_task_group("maintenance-fail-closed"))
+            .await
+            .expect("local remoting harness should start");
+
+        let response = processor
+            .process_request(harness.channel(), harness.context(), &mut request)
+            .await
+            .expect("Broker should encode maintenance denial")
+            .expect("maintenance denial should return a response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::NoPermission);
+        assert_eq!(response.opaque(), 19);
+        assert!(response.remark().is_some_and(|remark| remark.contains("disabled")));
     }
 }

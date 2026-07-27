@@ -38,6 +38,9 @@ use crate::processor::controller_request_processor::ControllerRequestProcessor;
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
+use rocketmq_auth::AuthRuntime;
+use rocketmq_auth::AuthRuntimeBuilder;
+use rocketmq_auth::MaintenanceAuthorizer;
 use rocketmq_observability::TelemetryHandle;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
@@ -379,6 +382,12 @@ pub struct ControllerManager {
     manager_task_group: Arc<Mutex<Option<TaskGroup>>>,
     leadership_watch_tasks: Arc<Mutex<Option<ScheduledTaskGroup>>>,
 
+    /// Credential verifier loaded before the remoting listener can bind.
+    auth_runtime: Option<Arc<AuthRuntime>>,
+
+    /// Independent, pinned maintenance authorization policy.
+    maintenance_authorizer: Option<Arc<MaintenanceAuthorizer>>,
+
     /// Remoting client for outbound RPC calls
     remoting_client: Arc<RocketmqDefaultClient>,
 
@@ -424,6 +433,34 @@ impl ControllerManager {
         service_context: ChildServiceContext,
         telemetry_handle: TelemetryHandle,
     ) -> Result<Self> {
+        config.validate().map_err(ControllerError::ConfigError)?;
+        let auth_config = config.auth_config();
+        let maintenance_authorizer = auth_config
+            .maintenance_policy_reference()
+            .map_err(|error| {
+                ControllerError::runtime_source("validate Controller maintenance policy reference", error)
+            })?
+            .map(|reference| {
+                reference
+                    .load_from(&config.auth_config_path)
+                    .map(MaintenanceAuthorizer::new)
+                    .map(Arc::new)
+            })
+            .transpose()
+            .map_err(|error| ControllerError::runtime_source("load Controller maintenance policy", error))?;
+        let auth_runtime = if auth_config.authentication_enabled
+            || auth_config.authorization_enabled
+            || auth_config.maintenance_enabled
+        {
+            Some(Arc::new(
+                AuthRuntimeBuilder::new(auth_config, service_context.child("controller.auth"))
+                    .build()
+                    .await
+                    .map_err(|error| ControllerError::runtime_source("initialize Controller auth runtime", error))?,
+            ))
+        } else {
+            None
+        };
         let config = ControllerConfigHandle::new(config);
         let parent_task_group = service_context.task_group().clone();
 
@@ -497,6 +534,8 @@ impl ControllerManager {
             remoting_server_shutdown_tx: Arc::new(Mutex::new(None)),
             manager_task_group: Arc::new(Mutex::new(None)),
             leadership_watch_tasks: Arc::new(Mutex::new(None)),
+            auth_runtime,
+            maintenance_authorizer,
             remoting_client,
             #[cfg(feature = "metrics")]
             metrics_manager,
@@ -880,6 +919,20 @@ impl ControllerManager {
             info!("Heartbeat manager shut down");
         }
 
+        if let Some(auth_runtime) = &self.auth_runtime {
+            match tokio::time::timeout(deadline.remaining(), auth_runtime.shutdown()).await {
+                Ok(Ok(())) => info!("Controller auth runtime shut down"),
+                Ok(Err(error)) => {
+                    warn!(%error, "Controller auth runtime shutdown failed");
+                    failures.push(format!("auth runtime: {error}"));
+                }
+                Err(_) => {
+                    warn!("Timed out waiting for Controller auth runtime shutdown");
+                    failures.push("auth runtime shutdown timed out".to_string());
+                }
+            }
+        }
+
         // Shutdown remoting client
         {
             let report = self.remoting_client.shutdown_with_report(deadline.remaining()).await;
@@ -973,6 +1026,16 @@ impl ControllerManager {
     /// A reference to the controller configuration
     pub fn config(&self) -> Arc<ControllerConfig> {
         self.config.snapshot()
+    }
+
+    /// Returns the credential verifier for authenticated Controller requests.
+    pub fn auth_runtime(&self) -> Option<&Arc<AuthRuntime>> {
+        self.auth_runtime.as_ref()
+    }
+
+    /// Returns the pinned independent maintenance authorizer.
+    pub fn maintenance_authorizer(&self) -> Option<&Arc<MaintenanceAuthorizer>> {
+        self.maintenance_authorizer.as_ref()
     }
 
     pub(crate) async fn update_config(
