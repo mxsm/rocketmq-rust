@@ -103,7 +103,7 @@ fn broker_entrypoint_uses_runtime_owner_and_service_context() {
         "{entrypoint} must preserve the explicit blocking-thread cap"
     );
     assert!(
-        source.contains("Builder::new(service_context)"),
+        source.contains("Builder::new(service_context, telemetry_guard)"),
         "{entrypoint} must inject a ServiceContext into the broker bootstrap"
     );
     assert!(
@@ -130,7 +130,7 @@ fn namesrv_entrypoint_uses_runtime_owner_and_service_context() {
         "{entrypoint} must preserve the explicit blocking-thread cap"
     );
     assert!(
-        source.contains("Builder::new(service_context)"),
+        source.contains("Builder::new(service_context.clone(), telemetry_guard.handle())"),
         "{entrypoint} must inject a ServiceContext into the namesrv bootstrap"
     );
     assert!(

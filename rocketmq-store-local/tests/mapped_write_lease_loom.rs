@@ -44,3 +44,45 @@ fn position_publication_never_exposes_partially_copied_bytes() {
         reader.join().expect("reader");
     });
 }
+
+#[derive(Debug)]
+struct WriteState {
+    bytes: [u8; 4],
+    wrote_position: usize,
+}
+
+#[test]
+fn concurrent_write_leases_publish_contiguous_non_overlapping_ranges() {
+    loom::model(|| {
+        let state = Arc::new(Mutex::new(WriteState {
+            bytes: [0; 4],
+            wrote_position: 0,
+        }));
+        let starts = Arc::new(Mutex::new(Vec::with_capacity(2)));
+        let mut writers = Vec::with_capacity(2);
+
+        for payload in [*b"AA", *b"BB"] {
+            let state = Arc::clone(&state);
+            let starts = Arc::clone(&starts);
+            writers.push(thread::spawn(move || {
+                let mut state = state.lock().expect("write sequencer");
+                let start = state.wrote_position;
+                let end = start + payload.len();
+                state.bytes[start..end].copy_from_slice(&payload);
+                state.wrote_position = end;
+                starts.lock().expect("start positions").push(start);
+            }));
+        }
+
+        for writer in writers {
+            writer.join().expect("writer");
+        }
+
+        let state = state.lock().expect("final state");
+        let mut starts = starts.lock().expect("final starts").clone();
+        starts.sort_unstable();
+        assert_eq!(starts, vec![0, 2]);
+        assert_eq!(state.wrote_position, 4);
+        assert!(state.bytes == *b"AABB" || state.bytes == *b"BBAA");
+    });
+}

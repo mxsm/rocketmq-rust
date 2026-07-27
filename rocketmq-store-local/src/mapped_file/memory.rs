@@ -41,6 +41,37 @@ pub unsafe trait MappedMemory: Clone + Send + Sync + 'static {
     /// Dereferencing the pointer remains unsafe; the caller must serialize all mutable access.
     fn as_mut_ptr(&self) -> *mut u8;
 
+    /// Copies one disjoint source slice into a checked mapped range.
+    ///
+    /// # Safety
+    ///
+    /// The caller must serialize mutable access to the mapping and ensure `source` does not
+    /// overlap the mapped allocation. Implementors must uphold the pointer validity contract of
+    /// [`Self::as_mut_ptr`].
+    unsafe fn copy_from_slice(&self, offset: usize, source: &[u8]) -> io::Result<()> {
+        let mapping_len = self.as_slice().len();
+        let end = offset
+            .checked_add(source.len())
+            .filter(|end| *end <= mapping_len)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "mapped write range {offset}..+{} exceeds mapping length {mapping_len}",
+                        source.len()
+                    ),
+                )
+            })?;
+        debug_assert!(end <= mapping_len);
+
+        // SAFETY: the trait's caller contract requires exclusive mutation and disjoint source and
+        // destination allocations. The checked range proves the destination is live and in bounds.
+        unsafe {
+            std::ptr::copy_nonoverlapping(source.as_ptr(), self.as_mut_ptr().add(offset), source.len());
+        }
+        Ok(())
+    }
+
     /// Flushes the complete mapping.
     fn flush(&self) -> io::Result<()>;
 

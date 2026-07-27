@@ -31,6 +31,15 @@ fn decoding_error(required: usize, available: usize) -> rocketmq_error::RocketMQ
     })
 }
 
+fn sorted_ext_fields(map: &HashMap<CheetahString, CheetahString>) -> Vec<(&CheetahString, &CheetahString)> {
+    let mut entries = map
+        .iter()
+        .filter(|(key, value)| !key.is_empty() && !value.is_empty())
+        .collect::<Vec<_>>();
+    entries.sort_unstable_by(|(left, _), (right, _)| left.as_str().cmp(right.as_str()));
+    entries
+}
+
 pub struct RocketMQSerializable;
 
 impl RocketMQSerializable {
@@ -128,12 +137,9 @@ impl RocketMQSerializable {
 
         // Encode ext_fields map
         if let Some(ext_fields) = cmd.ext_fields() {
-            for (k, v) in ext_fields.iter() {
-                // Skip empty keys/values
-                if !k.is_empty() && !v.is_empty() {
-                    Self::write_str(buf, true, k.as_str());
-                    Self::write_str(buf, true, v.as_str());
-                }
+            for (key, value) in sorted_ext_fields(ext_fields) {
+                Self::write_str(buf, true, key.as_str());
+                Self::write_str(buf, false, value.as_str());
             }
         }
 
@@ -161,7 +167,7 @@ impl RocketMQSerializable {
         if let Some(ext) = cmd.ext_fields() {
             for (k, v) in ext.iter() {
                 if !k.is_empty() && !v.is_empty() {
-                    size += 2 + k.len() + 2 + v.len(); // short length prefix for both
+                    size += 2 + k.len() + 4 + v.len();
                 }
             }
         }
@@ -242,17 +248,15 @@ impl RocketMQSerializable {
         // Allocate exact capacity (avoid reallocations)
         let mut content = BytesMut::with_capacity(total_length);
 
-        // Serialize entries
-        for (key, value) in map.iter() {
-            if !key.is_empty() && !value.is_empty() {
-                // Write key: u16 length + bytes
-                content.put_u16(key.len() as u16);
-                content.put_slice(key.as_bytes());
+        // Serialize entries in canonical key order so equivalent maps produce identical frames.
+        for (key, value) in sorted_ext_fields(map) {
+            // Write key: u16 length + bytes
+            content.put_u16(key.len() as u16);
+            content.put_slice(key.as_bytes());
 
-                // Write value: i32 length + bytes
-                content.put_i32(value.len() as i32);
-                content.put_slice(value.as_bytes());
-            }
+            // Write value: i32 length + bytes
+            content.put_i32(value.len() as i32);
+            content.put_slice(value.as_bytes());
         }
 
         Some(content)

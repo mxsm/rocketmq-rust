@@ -1,0 +1,6 @@
+/artifacts/
+/coverage/
+/target/
+/corpus/*/*
+!/corpus/*/*.hex
+!/corpus/*/*.json
