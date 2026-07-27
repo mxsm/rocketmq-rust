@@ -20,8 +20,12 @@ parameter_schema:
     patch:
       type: object
       minProperties: 1
-      maxProperties: 8
+      maxProperties: 3
       additionalProperties: false
+      properties:
+        send_message_thread_pool_nums: { type: integer, minimum: 1, maximum: 512 }
+        pull_message_thread_pool_nums: { type: integer, minimum: 1, maximum: 512 }
+        flush_delay_offset_interval_ms: { type: integer, minimum: 1000, maximum: 60000 }
 status: active
 deprecation: null
 risk: r2

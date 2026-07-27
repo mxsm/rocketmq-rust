@@ -335,4 +335,47 @@ mod tests {
             .is_err()
         );
     }
+
+    #[test]
+    fn r2_patch_parameters_are_locally_allowlisted_and_range_checked() {
+        let catalog = ActionCatalog::embedded().expect("catalog");
+        let topic = catalog
+            .descriptor(ExecutionAction::TopicConfigPatchAllowlisted)
+            .expect("topic descriptor");
+        validate_parameters(
+            topic,
+            &json!({
+                "topic": "orders",
+                "expected_version": 7,
+                "patch": {"read_queue_nums": 16}
+            }),
+        )
+        .expect("valid topic patch");
+        assert!(
+            validate_parameters(
+                topic,
+                &json!({
+                    "topic": "orders",
+                    "expected_version": 7,
+                    "patch": {"read_queue_nums": 1024}
+                })
+            )
+            .is_err()
+        );
+
+        let broker = catalog
+            .descriptor(ExecutionAction::BrokerConfigPatchAllowlisted)
+            .expect("broker descriptor");
+        assert!(
+            validate_parameters(
+                broker,
+                &json!({
+                    "broker": "broker-a",
+                    "expected_generation": 9,
+                    "patch": {"raw_request_code": 25}
+                })
+            )
+            .is_err()
+        );
+    }
 }

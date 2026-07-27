@@ -17,6 +17,8 @@ use rocketmq_sre_contracts::CorrelationId;
 use rocketmq_sre_contracts::DiagnosisRevisionId;
 use rocketmq_sre_contracts::IncidentId;
 use rocketmq_sre_contracts::ModelInvocationId;
+use rocketmq_sre_contracts::ModelInvocationPurpose;
+use rocketmq_sre_contracts::ModelInvocationRecord;
 use rocketmq_sre_contracts::ModelProfileId;
 use rocketmq_sre_contracts::TenantId;
 use rocketmq_sre_model_gateway::ProviderHealth;
@@ -204,15 +206,16 @@ impl PostgresRepository {
                 cost_micros, rationale, error_code, correlation_id,
                 started_at, completed_at
              ) VALUES (
-                $1, $2, $3, $4, NULL, $5, $6, $7, $8, $9, $10, $11, $12,
-                $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23,
-                $24
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+                $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24,
+                $25
              )",
         )
         .bind(invocation.id.as_uuid())
         .bind(invocation.tenant_id.as_uuid())
         .bind(invocation.cluster_id.as_uuid())
         .bind(invocation.incident_id.as_uuid())
+        .bind(invocation.diagnosis_revision_id.map(DiagnosisRevisionId::as_uuid))
         .bind(invocation.parent_invocation_id.map(ModelInvocationId::as_uuid))
         .bind(invocation.purpose)
         .bind(invocation.requested_profile_id.as_uuid())
@@ -356,6 +359,53 @@ impl PostgresRepository {
             partial,
             observed_at: Utc::now(),
         })
+    }
+
+    pub(crate) async fn exact_primary_model_invocation(
+        &self,
+        auth: &AuthContext,
+        plan: &rocketmq_sre_contracts::ActionPlan,
+    ) -> Result<ModelInvocationRecord, ControlPlaneError> {
+        let row = sqlx::query(
+            "SELECT m.id, m.tenant_id, m.cluster_id, m.incident_id,
+                    m.diagnosis_revision_id, m.parent_invocation_id,
+                    m.requested_profile_id, m.actual_profile_id,
+                    m.provider_family, m.model_family, m.model_revision,
+                    m.endpoint_instance, m.fallback_chain, m.prompt_version,
+                    m.schema_version, m.input_tokens, m.output_tokens,
+                    m.cost_micros, m.rationale, m.started_at, m.completed_at
+             FROM model_invocations m
+             JOIN diagnosis_revisions d
+               ON d.id = m.diagnosis_revision_id
+              AND d.incident_id = m.incident_id
+              AND d.primary_model_invocation_id = m.id
+             JOIN action_plans p
+               ON p.id = $1
+              AND p.diagnosis_revision_id = d.id
+              AND p.primary_model_invocation_id = m.id
+             WHERE m.id = $2
+               AND m.tenant_id = $3
+               AND m.cluster_id = $4
+               AND m.incident_id = $5
+               AND m.diagnosis_revision_id = $6
+               AND m.purpose = 'primary_diagnosis'
+               AND m.error_code IS NULL",
+        )
+        .bind(plan.id.as_uuid())
+        .bind(plan.primary_model_invocation_id.as_uuid())
+        .bind(auth.tenant_id.as_uuid())
+        .bind(plan.cluster_id.as_uuid())
+        .bind(plan.incident_id.as_uuid())
+        .bind(plan.diagnosis_revision.as_uuid())
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| {
+            ControlPlaneError::conflict_code(
+                "primary_invocation_mismatch",
+                "plan primary invocation does not match the exact confirmed diagnosis revision",
+            )
+        })?;
+        contract_model_invocation_from_row(&row)
     }
 }
 
@@ -507,6 +557,57 @@ fn model_invocation_from_row(row: &PgRow) -> Result<ModelInvocationView, Control
     })
 }
 
+fn contract_model_invocation_from_row(row: &PgRow) -> Result<ModelInvocationRecord, ControlPlaneError> {
+    Ok(ModelInvocationRecord {
+        id: ModelInvocationId::from_uuid(row.try_get("id")?),
+        tenant_id: TenantId::from_uuid(row.try_get("tenant_id")?),
+        cluster_id: rocketmq_sre_contracts::ClusterId::from_uuid(row.try_get("cluster_id")?),
+        incident_id: row
+            .try_get::<Option<Uuid>, _>("incident_id")?
+            .map(IncidentId::from_uuid),
+        diagnosis_revision_id: row
+            .try_get::<Option<Uuid>, _>("diagnosis_revision_id")?
+            .map(DiagnosisRevisionId::from_uuid),
+        parent_invocation_id: row
+            .try_get::<Option<Uuid>, _>("parent_invocation_id")?
+            .map(ModelInvocationId::from_uuid),
+        purpose: ModelInvocationPurpose::PrimaryDiagnosis,
+        requested_profile_id: ModelProfileId::from_uuid(row.try_get("requested_profile_id")?),
+        actual_profile_id: ModelProfileId::from_uuid(row.try_get("actual_profile_id")?),
+        provider_family: row.try_get("provider_family")?,
+        model_family: row.try_get("model_family")?,
+        model_revision: row.try_get("model_revision")?,
+        endpoint_instance: row.try_get("endpoint_instance")?,
+        fallback_chain: row
+            .try_get::<Vec<Uuid>, _>("fallback_chain")?
+            .into_iter()
+            .map(ModelProfileId::from_uuid)
+            .collect(),
+        prompt_version: row.try_get("prompt_version")?,
+        schema_version: row.try_get("schema_version")?,
+        input_tokens: bounded_u32(row.try_get("input_tokens")?, "input token usage")?,
+        output_tokens: bounded_u32(row.try_get("output_tokens")?, "output token usage")?,
+        cost_micros: bounded_u64(row.try_get("cost_micros")?, "model cost")?,
+        rationale: row.try_get("rationale")?,
+        started_at: row.try_get("started_at")?,
+        completed_at: row.try_get("completed_at")?,
+    })
+}
+
+fn bounded_u32(value: Option<i32>, field: &'static str) -> Result<Option<u32>, ControlPlaneError> {
+    value
+        .map(u32::try_from)
+        .transpose()
+        .map_err(|_| ControlPlaneError::configuration(format!("stored {field} is invalid")))
+}
+
+fn bounded_u64(value: Option<i64>, field: &'static str) -> Result<Option<u64>, ControlPlaneError> {
+    value
+        .map(u64::try_from)
+        .transpose()
+        .map_err(|_| ControlPlaneError::configuration(format!("stored {field} is invalid")))
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -580,6 +681,7 @@ mod tests {
                 tenant_id,
                 cluster_id,
                 incident_id,
+                diagnosis_revision_id: None,
                 parent_invocation_id: None,
                 purpose: "primary_diagnosis",
                 requested_profile_id: configured[0].id,
@@ -674,6 +776,7 @@ mod tests {
                 tenant_id,
                 cluster_id,
                 incident_id: failed_incident_id,
+                diagnosis_revision_id: None,
                 parent_invocation_id: None,
                 purpose: "primary_diagnosis",
                 requested_profile_id: configured[0].id,
@@ -704,6 +807,7 @@ mod tests {
                 tenant_id,
                 cluster_id,
                 incident_id: failed_incident_id,
+                diagnosis_revision_id: None,
                 parent_invocation_id: Some(failed_invocation_id),
                 purpose: "schema_repair",
                 requested_profile_id: configured[0].id,

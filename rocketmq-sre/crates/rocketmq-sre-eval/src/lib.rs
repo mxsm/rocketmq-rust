@@ -37,7 +37,9 @@ use rocketmq_sre_contracts::BacklogEta;
 use rocketmq_sre_contracts::CapacityForecast;
 use rocketmq_sre_contracts::ClusterForecastReport;
 use rocketmq_sre_contracts::ClusterHealthReport;
+use rocketmq_sre_contracts::CriticAssessment;
 use rocketmq_sre_contracts::CriticFinding;
+use rocketmq_sre_contracts::CriticGateState;
 use rocketmq_sre_contracts::CriticReview;
 use rocketmq_sre_contracts::Descriptor;
 use rocketmq_sre_contracts::DrReadinessReport;
@@ -286,8 +288,16 @@ pub fn phase3_generated_schemas() -> Result<Vec<(&'static str, serde_json::Value
             serde_json::to_value(schema_for!(ApprovalGrant))?,
         ),
         (
+            "critic-assessment.schema.json",
+            serde_json::to_value(schema_for!(CriticAssessment))?,
+        ),
+        (
             "critic-finding.schema.json",
             serde_json::to_value(schema_for!(CriticFinding))?,
+        ),
+        (
+            "critic-gate-state.schema.json",
+            serde_json::to_value(schema_for!(CriticGateState))?,
         ),
         (
             "critic-review.schema.json",

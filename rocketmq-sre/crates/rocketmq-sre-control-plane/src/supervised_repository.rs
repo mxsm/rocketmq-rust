@@ -23,6 +23,7 @@ use rocketmq_sre_contracts::AuditEvent;
 use rocketmq_sre_contracts::CriticConclusion;
 use rocketmq_sre_contracts::CriticReview;
 use rocketmq_sre_contracts::CriticReviewStatus;
+use rocketmq_sre_contracts::ModelInvocationId;
 use rocketmq_sre_contracts::PlanStatus;
 use rocketmq_sre_contracts::PolicyDecision;
 use rocketmq_sre_contracts::PolicyEffect;
@@ -227,30 +228,31 @@ impl SupervisedRepository for PostgresRepository {
             .map_err(|error| ControlPlaneError::validation("invalid_critic_review", error.to_string()))?;
         sqlx::query(
             "INSERT INTO critic_reviews (
-                id, plan_id, plan_hash, primary_invocation_id,
+                id, plan_id, plan_hash, diagnosis_revision_id, primary_invocation_id,
                 critic_invocation_id, primary_model_family,
                 critic_model_family, critic_provider, critic_profile,
                 critic_model_revision, endpoint_instance, conclusion, status,
                 review_hash, review_snapshot, created_at
              ) VALUES (
-                $1, $2, $3, $4,
-                $5, $6,
-                $7, $8, $9,
-                $10, $11, $12, $13,
-                $14, $15, $16
+                $1, $2, $3, $4, $5,
+                $6, $7,
+                $8, $9, $10,
+                $11, $12, $13, $14,
+                $15, $16, $17
              )",
         )
         .bind(review.id.as_uuid())
         .bind(review.plan_id.as_uuid())
         .bind(&review.plan_hash)
+        .bind(review.diagnosis_revision_id.as_uuid())
         .bind(review.primary_invocation_id.as_uuid())
-        .bind(review.critic_invocation_id.as_uuid())
+        .bind(review.critic_invocation_id.map(ModelInvocationId::as_uuid))
         .bind(&review.primary_model_family)
-        .bind(&review.critic_model_family)
-        .bind(&review.critic_provider)
-        .bind(&review.critic_profile)
-        .bind(&review.critic_model_revision)
-        .bind(&review.endpoint_instance)
+        .bind(review.critic_model_family.as_deref())
+        .bind(review.critic_provider.as_deref())
+        .bind(review.critic_profile.as_deref())
+        .bind(review.critic_model_revision.as_deref())
+        .bind(review.endpoint_instance.as_deref())
         .bind(critic_conclusion_name(review.conclusion))
         .bind(critic_status_name(review.status))
         .bind(&review_hash)

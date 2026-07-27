@@ -20,8 +20,12 @@ parameter_schema:
     patch:
       type: object
       minProperties: 1
-      maxProperties: 6
+      maxProperties: 3
       additionalProperties: false
+      properties:
+        read_queue_nums: { type: integer, minimum: 1, maximum: 128 }
+        write_queue_nums: { type: integer, minimum: 1, maximum: 128 }
+        order: { type: boolean }
 status: active
 deprecation: null
 risk: r2

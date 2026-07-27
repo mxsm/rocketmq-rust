@@ -21,6 +21,8 @@ use rocketmq_sre_contracts::ApprovalGrant;
 use rocketmq_sre_contracts::ApprovalRecord;
 use rocketmq_sre_contracts::ClusterId;
 use rocketmq_sre_contracts::CorrelationId;
+use rocketmq_sre_contracts::CriticGateState;
+use rocketmq_sre_contracts::CriticReview;
 use rocketmq_sre_contracts::DiagnosisRevisionId;
 use rocketmq_sre_contracts::EvidenceId;
 use rocketmq_sre_contracts::ExecutionId;
@@ -73,8 +75,24 @@ pub(crate) enum CreatePlanResponse {
 pub(crate) struct ActionPlanView {
     pub(crate) plan: ActionPlan,
     pub(crate) risk: ActionRisk,
+    pub(crate) critic_state: CriticGateState,
+    pub(crate) latest_critic_review: Option<CriticReview>,
     pub(crate) latest_policy_decision: Option<PolicyDecision>,
     pub(crate) latest_approval: Option<ApprovalRecord>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CriticReviewRequest {
+    pub(crate) plan_hash: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct CriticReviewResponse {
+    pub(crate) plan: ActionPlan,
+    pub(crate) review: CriticReview,
+    pub(crate) review_hash: String,
+    pub(crate) critic_state: CriticGateState,
 }
 
 #[derive(Clone, Debug, Deserialize)]

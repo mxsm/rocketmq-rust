@@ -16,6 +16,9 @@ use chrono::DateTime;
 use chrono::Utc;
 use rocketmq_sre_contracts::ClusterId;
 use rocketmq_sre_contracts::CorrelationId;
+use rocketmq_sre_contracts::CriticAssessment;
+use rocketmq_sre_contracts::CriticConclusion;
+use rocketmq_sre_contracts::CriticReviewStatus;
 use rocketmq_sre_contracts::DiagnosisRevisionId;
 use rocketmq_sre_contracts::EvidenceId;
 use rocketmq_sre_contracts::IncidentId;
@@ -46,6 +49,7 @@ pub(super) struct PersistInvocation {
     pub(super) tenant_id: TenantId,
     pub(super) cluster_id: ClusterId,
     pub(super) incident_id: IncidentId,
+    pub(super) diagnosis_revision_id: Option<DiagnosisRevisionId>,
     pub(super) parent_invocation_id: Option<ModelInvocationId>,
     pub(super) purpose: &'static str,
     pub(super) requested_profile_id: ModelProfileId,
@@ -66,6 +70,29 @@ pub(super) struct PersistInvocation {
     pub(super) correlation_id: CorrelationId,
     pub(super) started_at: DateTime<Utc>,
     pub(super) completed_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct CriticInvocationIdentity {
+    pub(crate) id: ModelInvocationId,
+    pub(crate) provider_family: String,
+    pub(crate) model_family: String,
+    pub(crate) profile: String,
+    pub(crate) model_revision: String,
+    pub(crate) endpoint_instance: String,
+    pub(crate) fallback_chain: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ModelCriticDecision {
+    pub(crate) status: CriticReviewStatus,
+    pub(crate) conclusion: CriticConclusion,
+    pub(crate) assessment: Option<CriticAssessment>,
+    pub(crate) invocation: Option<CriticInvocationIdentity>,
+    pub(crate) payload_hash: String,
+    pub(crate) reason_code: &'static str,
+    pub(crate) prompt_version: &'static str,
+    pub(crate) schema_version: &'static str,
 }
 
 #[derive(Clone, Debug)]

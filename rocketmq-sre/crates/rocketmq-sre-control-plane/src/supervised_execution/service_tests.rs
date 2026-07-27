@@ -397,16 +397,16 @@ async fn postgres_phase3_seed_is_idempotent_and_cryptographically_valid() {
 }
 
 #[derive(Clone, Copy)]
-struct Fixture {
-    tenant_id: TenantId,
-    cluster_id: ClusterId,
-    incident_id: IncidentId,
-    diagnosis_id: DiagnosisRevisionId,
-    rules_only_diagnosis_id: DiagnosisRevisionId,
-    evidence_id: rocketmq_sre_contracts::EvidenceId,
+pub(super) struct Fixture {
+    pub(super) tenant_id: TenantId,
+    pub(super) cluster_id: ClusterId,
+    pub(super) incident_id: IncidentId,
+    pub(super) diagnosis_id: DiagnosisRevisionId,
+    pub(super) rules_only_diagnosis_id: DiagnosisRevisionId,
+    pub(super) evidence_id: rocketmq_sre_contracts::EvidenceId,
 }
 
-async fn seed_fixture(repository: &PostgresRepository) -> Fixture {
+pub(super) async fn seed_fixture(repository: &PostgresRepository) -> Fixture {
     let tenant_id = TenantId::new();
     let cluster_id = ClusterId::new();
     let incident_id = IncidentId::new();
@@ -625,7 +625,7 @@ async fn persist_changed_evidence(repository: &PostgresRepository, auth: &AuthCo
     latest.verify_content_hash().expect("latest changed evidence hash");
 }
 
-fn auth(tenant_id: TenantId, cluster_id: ClusterId, subject: &str, roles: &[&str]) -> AuthContext {
+pub(super) fn auth(tenant_id: TenantId, cluster_id: ClusterId, subject: &str, roles: &[&str]) -> AuthContext {
     AuthContext {
         tenant_id,
         subject: subject.to_owned(),
@@ -634,7 +634,7 @@ fn auth(tenant_id: TenantId, cluster_id: ClusterId, subject: &str, roles: &[&str
     }
 }
 
-fn error_code(error: &ControlPlaneError) -> &'static str {
+pub(super) fn error_code(error: &ControlPlaneError) -> &'static str {
     match error {
         ControlPlaneError::Validation { code, .. }
         | ControlPlaneError::Forbidden { code, .. }

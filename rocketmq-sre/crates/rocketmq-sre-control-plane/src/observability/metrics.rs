@@ -196,6 +196,7 @@ bounded_label! {
     /// Stable model invocation purposes.
     pub enum ModelPurposeLabel {
         Diagnosis => "diagnosis",
+        Critic => "critic",
         Retrieval => "retrieval",
         Summarization => "summarization",
         Classification => "classification",

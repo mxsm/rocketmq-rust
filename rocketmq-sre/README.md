@@ -23,7 +23,10 @@ execution contracts, a durable PostgreSQL execution journal, server-validated
 ActionPlan creation, deterministic policy evaluation, non-self human approval,
 service-signed ApprovalGrant issuance, execution submission, resource
 quarantine management, correlation-scoped Audit APIs, and a generated Phase 03
-OpenAPI/TypeScript contract. Target-side execution remains fail closed until
+OpenAPI/TypeScript contract. P3-04 adds a fail-closed heterogeneous Critic
+gate: R2 plans can advance to human approval only after an immutable review
+from a different normalized model family, with exact primary/Critic invocation
+lineage and fallback identity. Target-side execution remains fail closed until
 the dedicated Executor and Execution Agent are enabled in P3-05.
 
 ## Workspace boundaries
@@ -130,6 +133,7 @@ See:
 - [Phase 03 execution contracts](docs/phase03-execution-contracts.md)
 - [Phase 03 PostgreSQL recovery](docs/phase03-postgres-recovery.md)
 - [Phase 03 Plan, Policy, Approval, and Audit](docs/phase03-plan-policy-approval.md)
+- [Phase 03 heterogeneous Critic](docs/phase03-heterogeneous-critic.md)
 - [Local stack](deploy/dev/README.md)
 
 ## Kind acceptance

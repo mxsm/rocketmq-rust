@@ -603,6 +603,7 @@ fn build_routers_with_auth(
         repository.clone(),
         workflow.clone(),
         grant_signing_key.as_bytes(),
+        model_gateway.clone(),
     )?;
     let connector_routes = connector_channel::router::<AppState>(connector_channel.clone());
     let connector_control_routes = Router::new()

@@ -50,6 +50,8 @@ export type SloDimension =
 export type CreatePlanRequest = ApiSchemas["CreatePlanRequest"];
 export type CreatePlanResponse = ApiSchemas["CreatePlanResponse"];
 export type ActionPlanView = ApiSchemas["ActionPlanView"];
+export type CriticReviewRequest = ApiSchemas["CriticReviewRequest"];
+export type CriticReviewResponse = ApiSchemas["CriticReviewResponse"];
 export type ApprovalDecisionRequest =
   ApiSchemas["ApprovalDecisionRequest"];
 export type ApprovalDecisionResponse =

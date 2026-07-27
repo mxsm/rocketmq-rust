@@ -1964,6 +1964,105 @@
         }
       }
     },
+    "/v1/plans/{id}/critic": {
+      "post": {
+        "operationId": "reviewSupervisedPlanWithCriticV1",
+        "summary": "Run and persist the required heterogeneous Critic review for an R2 plan",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CriticReviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CriticReviewResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/plans/{id}/approve": {
       "post": {
         "operationId": "approveSupervisedPlanV1",
@@ -9851,6 +9950,262 @@
         "title": "AuditEvent",
         "type": "object"
       },
+      "CriticConclusion": {
+        "description": "Bounded deterministic Critic conclusion.",
+        "enum": [
+          "accept",
+          "needs_revision",
+          "reject"
+        ],
+        "type": "string"
+      },
+      "CriticFinding": {
+        "additionalProperties": false,
+        "description": "One structured finding returned by the Critic.",
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/CriticFindingCode"
+          },
+          "evidence_ids": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/EvidenceId"
+            },
+            "type": "array"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "type": "object"
+      },
+      "CriticFindingCode": {
+        "description": "Closed set of checks that a model Critic may report.",
+        "enum": [
+          "evidence_reference_invalid",
+          "counter_evidence_missing",
+          "parameter_out_of_range",
+          "missing_precondition",
+          "impact_scope_exceeded",
+          "rollback_unavailable"
+        ],
+        "type": "string"
+      },
+      "CriticAssessment": {
+        "additionalProperties": false,
+        "description": "Fixed, bounded model output accepted from the heterogeneous Critic.\n\nIt cannot replace descriptors, policy decisions, plan fields, or execution\nparameters. Those remain locally validated Control Plane inputs.",
+        "properties": {
+          "cited_evidence_ids": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/EvidenceId"
+            },
+            "type": "array"
+          },
+          "conclusion": {
+            "$ref": "#/components/schemas/CriticConclusion"
+          },
+          "counter_evidence_ids": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/EvidenceId"
+            },
+            "type": "array"
+          },
+          "findings": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/CriticFinding"
+            },
+            "type": "array"
+          },
+          "impact_scope_valid": {
+            "type": "boolean"
+          },
+          "missing_preconditions": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "parameter_ranges_valid": {
+            "type": "boolean"
+          },
+          "rationale": {
+            "type": "string"
+          },
+          "rollback_available": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "conclusion",
+          "parameter_ranges_valid",
+          "impact_scope_valid",
+          "rollback_available",
+          "rationale"
+        ],
+        "type": "object"
+      },
+      "CriticGateState": {
+        "description": "Operator-facing state of the optional or required Critic gate.",
+        "enum": [
+          "unreviewed_not_required",
+          "pending_required",
+          "accepted",
+          "needs_revision",
+          "rejected",
+          "invalid",
+          "unavailable",
+          "conflict"
+        ],
+        "title": "CriticGateState",
+        "type": "string"
+      },
+      "CriticReviewId": {
+        "description": "Stable identifier for an immutable critic review.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "CriticReviewStatus": {
+        "description": "Critic review availability and validation state.",
+        "enum": [
+          "pending",
+          "valid",
+          "invalid",
+          "unavailable",
+          "conflict"
+        ],
+        "type": "string"
+      },
+      "CriticReview": {
+        "additionalProperties": false,
+        "description": "Immutable heterogeneous model review bound to actual invocation identity.",
+        "properties": {
+          "assessment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CriticAssessment"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "conclusion": {
+            "$ref": "#/components/schemas/CriticConclusion"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "critic_invocation_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelInvocationId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "critic_model_family": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "critic_model_revision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "critic_profile": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "critic_provider": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "diagnosis_revision_id": {
+            "$ref": "#/components/schemas/DiagnosisRevisionId"
+          },
+          "endpoint_instance": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fallback_chain": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "findings": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/CriticFinding"
+            },
+            "type": "array"
+          },
+          "id": {
+            "$ref": "#/components/schemas/CriticReviewId"
+          },
+          "payload_hash": {
+            "type": "string"
+          },
+          "plan_hash": {
+            "type": "string"
+          },
+          "plan_id": {
+            "$ref": "#/components/schemas/ActionPlanId"
+          },
+          "primary_invocation_id": {
+            "$ref": "#/components/schemas/ModelInvocationId"
+          },
+          "primary_model_family": {
+            "type": "string"
+          },
+          "prompt_version": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CriticReviewStatus"
+          }
+        },
+        "required": [
+          "id",
+          "plan_id",
+          "plan_hash",
+          "diagnosis_revision_id",
+          "primary_invocation_id",
+          "primary_model_family",
+          "prompt_version",
+          "schema_version",
+          "payload_hash",
+          "status",
+          "conclusion",
+          "created_at"
+        ],
+        "title": "CriticReview",
+        "type": "object"
+      },
       "ExecutionId": {
         "description": "Stable identifier for a supervised execution.",
         "format": "uuid",
@@ -10332,6 +10687,8 @@
         "required": [
           "plan",
           "risk",
+          "critic_state",
+          "latest_critic_review",
           "latest_policy_decision",
           "latest_approval"
         ],
@@ -10341,6 +10698,19 @@
           },
           "risk": {
             "$ref": "#/components/schemas/ActionRisk"
+          },
+          "critic_state": {
+            "$ref": "#/components/schemas/CriticGateState"
+          },
+          "latest_critic_review": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CriticReview"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "latest_policy_decision": {
             "oneOf": [
@@ -10361,6 +10731,44 @@
                 "type": "null"
               }
             ]
+          }
+        }
+      },
+      "CriticReviewRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "plan_hash"
+        ],
+        "properties": {
+          "plan_hash": {
+            "type": "string",
+            "pattern": "^sha256:[0-9A-Fa-f]{64}$"
+          }
+        }
+      },
+      "CriticReviewResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "plan",
+          "review",
+          "review_hash",
+          "critic_state"
+        ],
+        "properties": {
+          "plan": {
+            "$ref": "#/components/schemas/ActionPlan"
+          },
+          "review": {
+            "$ref": "#/components/schemas/CriticReview"
+          },
+          "review_hash": {
+            "type": "string",
+            "pattern": "^sha256:[0-9A-Fa-f]{64}$"
+          },
+          "critic_state": {
+            "$ref": "#/components/schemas/CriticGateState"
           }
         }
       },
@@ -10582,6 +10990,9 @@
     "ApprovalGrant",
     "ApprovalRecord",
     "AuditEvent",
+    "CriticAssessment",
+    "CriticGateState",
+    "CriticReview",
     "ExecutionRequest",
     "ManualRunbookDraft",
     "PolicyDecision",

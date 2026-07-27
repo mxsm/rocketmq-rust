@@ -75,12 +75,15 @@ use super::signing::GrantSigner;
 use crate::ControlPlaneError;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
+use crate::models::ModelGatewayService;
 use crate::workflow::WorkflowService;
 use crate::workflow::WorkflowStreamEvent;
 
+mod critic;
 mod support;
 mod workflow;
 
+use critic::critic_gate_state;
 use support::*;
 
 const MAX_PLAN_STEPS: usize = 16;
@@ -96,6 +99,7 @@ pub(crate) struct SupervisedExecutionService {
     catalog: Arc<ActionCatalog>,
     policy: Arc<PolicyEvaluator>,
     signer: GrantSigner,
+    model_gateway: ModelGatewayService,
     workflow: WorkflowService,
     clock: Clock,
 }
@@ -113,8 +117,9 @@ impl SupervisedExecutionService {
         repository: PostgresRepository,
         workflow: WorkflowService,
         signing_key: impl AsRef<[u8]>,
+        model_gateway: ModelGatewayService,
     ) -> Result<Self, ControlPlaneError> {
-        Self::new_with_clock_inner(repository, workflow, signing_key, Arc::new(Utc::now))
+        Self::new_with_clock_inner(repository, workflow, signing_key, model_gateway, Arc::new(Utc::now))
     }
 
     #[cfg(test)]
@@ -124,13 +129,26 @@ impl SupervisedExecutionService {
         signing_key: impl AsRef<[u8]>,
         clock: Clock,
     ) -> Result<Self, ControlPlaneError> {
-        Self::new_with_clock_inner(repository, workflow, signing_key, clock)
+        let model_gateway = ModelGatewayService::disabled(repository.clone());
+        Self::new_with_clock_inner(repository, workflow, signing_key, model_gateway, clock)
+    }
+
+    #[cfg(test)]
+    pub(super) fn new_with_clock_and_model(
+        repository: PostgresRepository,
+        workflow: WorkflowService,
+        signing_key: impl AsRef<[u8]>,
+        model_gateway: ModelGatewayService,
+        clock: Clock,
+    ) -> Result<Self, ControlPlaneError> {
+        Self::new_with_clock_inner(repository, workflow, signing_key, model_gateway, clock)
     }
 
     fn new_with_clock_inner(
         repository: PostgresRepository,
         workflow: WorkflowService,
         signing_key: impl AsRef<[u8]>,
+        model_gateway: ModelGatewayService,
         clock: Clock,
     ) -> Result<Self, ControlPlaneError> {
         Ok(Self {
@@ -138,6 +156,7 @@ impl SupervisedExecutionService {
             catalog: Arc::new(ActionCatalog::embedded()?),
             policy: Arc::new(PolicyEvaluator::embedded()?),
             signer: GrantSigner::new(signing_key)?,
+            model_gateway,
             workflow,
             clock,
         })
@@ -308,11 +327,15 @@ impl SupervisedExecutionService {
 
     pub(crate) async fn plan(&self, auth: &AuthContext, id: ActionPlanId) -> Result<ActionPlanView, ControlPlaneError> {
         let projection = self.repository.supervised_plan(auth, id).await?;
+        let latest_critic_review = self.repository.latest_critic_review(auth, &projection.plan).await?;
+        let critic_state = critic_gate_state(projection.risk, latest_critic_review.as_ref());
         let latest_policy_decision = self.repository.latest_policy_decision(auth, &projection.plan).await?;
         let latest_approval = self.repository.latest_approval(auth, &projection.plan).await?;
         Ok(ActionPlanView {
             plan: projection.plan,
             risk: projection.risk,
+            critic_state,
+            latest_critic_review,
             latest_policy_decision,
             latest_approval,
         })

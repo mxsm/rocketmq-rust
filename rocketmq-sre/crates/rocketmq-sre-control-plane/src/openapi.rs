@@ -103,6 +103,7 @@ mod tests {
         "/v1/postmortems/{id}/publish",
         "/v1/plans",
         "/v1/plans/{id}",
+        "/v1/plans/{id}/critic",
         "/v1/plans/{id}/approve",
         "/v1/plans/{id}/reject",
         "/v1/recommendations",
@@ -188,10 +189,19 @@ mod tests {
             "ResourceQuarantine",
             "CreatePlanRequest",
             "ApprovalDecisionRequest",
+            "CriticReview",
+            "CriticReviewRequest",
+            "CriticReviewResponse",
+            "CriticGateState",
             "SubmitExecutionRequest",
         ] {
             assert!(schemas.contains_key(required), "missing Phase 3 schema {required}");
         }
+        assert_eq!(
+            document["paths"]["/v1/plans/{id}/critic"]["post"]["requestBody"]["content"]["application/json"]["schema"]
+                ["$ref"],
+            "#/components/schemas/CriticReviewRequest"
+        );
         assert_eq!(
             document["paths"]["/v1/plans/{id}/approve"]["post"]["requestBody"]["content"]["application/json"]["schema"]
                 ["$ref"],

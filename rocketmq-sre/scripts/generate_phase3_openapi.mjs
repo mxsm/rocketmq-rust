@@ -16,6 +16,9 @@ const contractSchemas = {
   ApprovalGrant: "approval-grant.schema.json",
   ApprovalRecord: "approval-record.schema.json",
   AuditEvent: "audit-event.schema.json",
+  CriticAssessment: "critic-assessment.schema.json",
+  CriticGateState: "critic-gate-state.schema.json",
+  CriticReview: "critic-review.schema.json",
   ExecutionRequest: "execution-request.schema.json",
   ManualRunbookDraft: "manual-runbook-draft.schema.json",
   PolicyDecision: "policy-decision.schema.json",
@@ -224,12 +227,21 @@ schemas.ActionPlanView = {
   required: [
     "plan",
     "risk",
+    "critic_state",
+    "latest_critic_review",
     "latest_policy_decision",
     "latest_approval",
   ],
   properties: {
     plan: { $ref: "#/components/schemas/ActionPlan" },
     risk: { $ref: "#/components/schemas/ActionRisk" },
+    critic_state: { $ref: "#/components/schemas/CriticGateState" },
+    latest_critic_review: {
+      oneOf: [
+        { $ref: "#/components/schemas/CriticReview" },
+        { type: "null" },
+      ],
+    },
     latest_policy_decision: {
       oneOf: [
         { $ref: "#/components/schemas/PolicyDecision" },
@@ -242,6 +254,25 @@ schemas.ActionPlanView = {
         { type: "null" },
       ],
     },
+  },
+};
+schemas.CriticReviewRequest = {
+  type: "object",
+  additionalProperties: false,
+  required: ["plan_hash"],
+  properties: {
+    plan_hash: digest,
+  },
+};
+schemas.CriticReviewResponse = {
+  type: "object",
+  additionalProperties: false,
+  required: ["plan", "review", "review_hash", "critic_state"],
+  properties: {
+    plan: { $ref: "#/components/schemas/ActionPlan" },
+    review: { $ref: "#/components/schemas/CriticReview" },
+    review_hash: digest,
+    critic_state: { $ref: "#/components/schemas/CriticGateState" },
   },
 };
 schemas.ApprovalDecisionRequest = {
@@ -360,6 +391,15 @@ document.paths["/v1/plans/{id}"] = {
     operationId: "getSupervisedPlanV1",
     summary: "Read a supervised plan projection",
     responseSchema: "ActionPlanView",
+    parameters: [pathParameter("id")],
+  }),
+};
+document.paths["/v1/plans/{id}/critic"] = {
+  post: operation({
+    operationId: "reviewSupervisedPlanWithCriticV1",
+    summary: "Run and persist the required heterogeneous Critic review for an R2 plan",
+    bodySchema: "CriticReviewRequest",
+    responseSchema: "CriticReviewResponse",
     parameters: [pathParameter("id")],
   }),
 };

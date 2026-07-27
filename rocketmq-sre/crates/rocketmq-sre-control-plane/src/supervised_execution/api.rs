@@ -34,6 +34,8 @@ use super::model::AuditPage;
 use super::model::ClearQuarantineRequest;
 use super::model::CreatePlanRequest;
 use super::model::CreatePlanResponse;
+use super::model::CriticReviewRequest;
+use super::model::CriticReviewResponse;
 use super::model::ExecutionSubmissionView;
 use super::model::QuarantineListQuery;
 use super::model::QuarantinePage;
@@ -46,6 +48,10 @@ pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/v1/plans", post(create_plan).layer(DefaultBodyLimit::max(256 * 1024)))
         .route("/v1/plans/{id}", get(get_plan))
+        .route(
+            "/v1/plans/{id}/critic",
+            post(review_plan_with_critic).layer(DefaultBodyLimit::max(32 * 1024)),
+        )
         .route(
             "/v1/plans/{id}/approve",
             post(approve_plan).layer(DefaultBodyLimit::max(32 * 1024)),
@@ -103,6 +109,20 @@ async fn approve_plan(
     state
         .supervised_execution
         .approve(&auth, parse_plan_id(&id)?, &request, correlation_id(&headers))
+        .await
+        .map(Json)
+}
+
+async fn review_plan_with_critic(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<CriticReviewRequest>,
+) -> Result<Json<CriticReviewResponse>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, None).await?;
+    state
+        .supervised_execution
+        .review_with_critic(&auth, parse_plan_id(&id)?, &request, correlation_id(&headers))
         .await
         .map(Json)
 }

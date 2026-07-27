@@ -21,6 +21,8 @@ mod service;
 mod signing;
 
 #[cfg(test)]
+mod critic_tests;
+#[cfg(test)]
 mod service_tests;
 
 pub(crate) use api::routes;

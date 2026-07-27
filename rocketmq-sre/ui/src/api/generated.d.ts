@@ -1126,6 +1126,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/plans/{id}/critic": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run and persist the required heterogeneous Critic review for an R2 plan */
+        post: operations["reviewSupervisedPlanWithCriticV1"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/plans/{id}/approve": {
         parameters: {
             query?: never;
@@ -3674,6 +3691,90 @@ export interface components {
             tenant_id: components["schemas"]["TenantId"];
         };
         /**
+         * @description Bounded deterministic Critic conclusion.
+         * @enum {string}
+         */
+        CriticConclusion: "accept" | "needs_revision" | "reject";
+        /** @description One structured finding returned by the Critic. */
+        CriticFinding: {
+            code: components["schemas"]["CriticFindingCode"];
+            /** @default [] */
+            evidence_ids: components["schemas"]["EvidenceId"][];
+            message: string;
+        };
+        /**
+         * @description Closed set of checks that a model Critic may report.
+         * @enum {string}
+         */
+        CriticFindingCode: "evidence_reference_invalid" | "counter_evidence_missing" | "parameter_out_of_range" | "missing_precondition" | "impact_scope_exceeded" | "rollback_unavailable";
+        /**
+         * @description Fixed, bounded model output accepted from the heterogeneous Critic.
+         *
+         *     It cannot replace descriptors, policy decisions, plan fields, or execution
+         *     parameters. Those remain locally validated Control Plane inputs.
+         */
+        CriticAssessment: {
+            /** @default [] */
+            cited_evidence_ids: components["schemas"]["EvidenceId"][];
+            conclusion: components["schemas"]["CriticConclusion"];
+            /** @default [] */
+            counter_evidence_ids: components["schemas"]["EvidenceId"][];
+            /** @default [] */
+            findings: components["schemas"]["CriticFinding"][];
+            impact_scope_valid: boolean;
+            /** @default [] */
+            missing_preconditions: string[];
+            parameter_ranges_valid: boolean;
+            rationale: string;
+            rollback_available: boolean;
+        };
+        /**
+         * CriticGateState
+         * @description Operator-facing state of the optional or required Critic gate.
+         * @enum {string}
+         */
+        CriticGateState: "unreviewed_not_required" | "pending_required" | "accepted" | "needs_revision" | "rejected" | "invalid" | "unavailable" | "conflict";
+        /**
+         * Format: uuid
+         * @description Stable identifier for an immutable critic review.
+         */
+        CriticReviewId: string;
+        /**
+         * @description Critic review availability and validation state.
+         * @enum {string}
+         */
+        CriticReviewStatus: "pending" | "valid" | "invalid" | "unavailable" | "conflict";
+        /**
+         * CriticReview
+         * @description Immutable heterogeneous model review bound to actual invocation identity.
+         */
+        CriticReview: {
+            assessment?: components["schemas"]["CriticAssessment"] | null;
+            conclusion: components["schemas"]["CriticConclusion"];
+            /** Format: date-time */
+            created_at: string;
+            critic_invocation_id?: components["schemas"]["ModelInvocationId"] | null;
+            critic_model_family?: string | null;
+            critic_model_revision?: string | null;
+            critic_profile?: string | null;
+            critic_provider?: string | null;
+            diagnosis_revision_id: components["schemas"]["DiagnosisRevisionId"];
+            endpoint_instance?: string | null;
+            /** @default [] */
+            fallback_chain: string[];
+            /** @default [] */
+            findings: components["schemas"]["CriticFinding"][];
+            id: components["schemas"]["CriticReviewId"];
+            payload_hash: string;
+            plan_hash: string;
+            plan_id: components["schemas"]["ActionPlanId"];
+            primary_invocation_id: components["schemas"]["ModelInvocationId"];
+            primary_model_family: string;
+            prompt_version: string;
+            schema_version: string;
+            status: components["schemas"]["CriticReviewStatus"];
+        };
+        /**
          * Format: uuid
          * @description Stable identifier for a supervised execution.
          */
@@ -3820,8 +3921,19 @@ export interface components {
         ActionPlanView: {
             plan: components["schemas"]["ActionPlan"];
             risk: components["schemas"]["ActionRisk"];
+            critic_state: components["schemas"]["CriticGateState"];
+            latest_critic_review: components["schemas"]["CriticReview"] | null;
             latest_policy_decision: components["schemas"]["PolicyDecision"] | null;
             latest_approval: components["schemas"]["ApprovalRecord"] | null;
+        };
+        CriticReviewRequest: {
+            plan_hash: string;
+        };
+        CriticReviewResponse: {
+            plan: components["schemas"]["ActionPlan"];
+            review: components["schemas"]["CriticReview"];
+            review_hash: string;
+            critic_state: components["schemas"]["CriticGateState"];
         };
         ApprovalDecisionRequest: {
             plan_hash: string;
@@ -5414,6 +5526,86 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ActionPlanView"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    reviewSupervisedPlanWithCriticV1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CriticReviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CriticReviewResponse"];
                 };
             };
             /** @description Sanitized stable error envelope */

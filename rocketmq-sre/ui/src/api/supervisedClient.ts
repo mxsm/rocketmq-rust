@@ -9,6 +9,8 @@ import type {
   ClearQuarantineRequest,
   CreatePlanRequest,
   CreatePlanResponse,
+  CriticReviewRequest,
+  CriticReviewResponse,
   ExecutionSubmissionView,
   QuarantinePage,
   ResourceQuarantine,
@@ -24,6 +26,11 @@ export interface SupervisedSreApi {
     id: string,
     signal?: AbortSignal,
   ) => Promise<ActionPlanView>;
+  reviewPlanWithCritic: (
+    id: string,
+    input: CriticReviewRequest,
+    signal?: AbortSignal,
+  ) => Promise<CriticReviewResponse>;
   approvePlan: (
     id: string,
     input: ApprovalDecisionRequest,
@@ -74,6 +81,12 @@ export function createSupervisedSreApi(
       post<CreatePlanResponse>("/v1/plans", input, signal),
     getPlan: (id, signal) =>
       get<ActionPlanView>(`/v1/plans/${encodeURIComponent(id)}`, signal),
+    reviewPlanWithCritic: (id, input, signal) =>
+      post<CriticReviewResponse>(
+        `/v1/plans/${encodeURIComponent(id)}/critic`,
+        input,
+        signal,
+      ),
     approvePlan: (id, input, signal) =>
       post<ApprovalDecisionResponse>(
         `/v1/plans/${encodeURIComponent(id)}/approve`,

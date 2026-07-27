@@ -49,6 +49,7 @@ use crate::ControlPlaneError;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
 
+mod critic;
 mod support;
 
 use support::*;

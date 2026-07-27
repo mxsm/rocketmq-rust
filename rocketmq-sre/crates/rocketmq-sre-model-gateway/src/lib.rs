@@ -25,6 +25,7 @@
 mod adapters;
 mod async_client;
 mod aws_sigv4;
+mod critic;
 mod error;
 mod fixtures;
 mod grpc_spi;
@@ -45,6 +46,8 @@ pub use adapters::GeminiNativeAdapter;
 pub use adapters::OpenAiCompatibleAdapter;
 pub use adapters::adapter_for_profile;
 pub use async_client::AsyncBuiltinProviderClient;
+pub use critic::heterogeneous_critic_profiles;
+pub use critic::normalize_model_family;
 pub use error::ProviderError;
 pub use error::ProviderErrorCode;
 pub use error::map_provider_status;

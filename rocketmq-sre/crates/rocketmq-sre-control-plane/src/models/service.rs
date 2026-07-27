@@ -107,6 +107,8 @@ const MAX_REPAIR_OUTPUT_CHARS: usize = 16 * 1_024;
 const PRIMARY_DIAGNOSIS_PURPOSE: &str = "primary_diagnosis";
 const SCHEMA_REPAIR_PURPOSE: &str = "schema_repair";
 
+mod critic;
+
 /// PostgreSQL-backed, reference-only model gateway integration.
 #[derive(Clone)]
 pub(crate) struct ModelGatewayService {
@@ -126,6 +128,32 @@ impl ModelGatewayService {
             repository,
             config: Arc::new(ModelRuntimeConfig::disabled()),
             transport: None,
+            secret_provider: Arc::new(DevSecretProvider::new(false, "ROCKETMQ_SRE_MODEL_", None)),
+            metadata_io: None,
+            observability: SreObservability::default(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_tests(
+        repository: PostgresRepository,
+        profiles: Vec<ProviderProfile>,
+        transport: Arc<dyn AsyncModelTransport>,
+    ) -> Self {
+        Self {
+            knowledge: KnowledgeService::new(repository.clone()),
+            repository,
+            config: Arc::new(ModelRuntimeConfig {
+                enabled: true,
+                profiles,
+                max_fallbacks: 3,
+                request_timeout: std::time::Duration::from_secs(5),
+                max_request_bytes: 256 * 1024,
+                max_response_bytes: 256 * 1024,
+                allow_insecure_non_loopback_http: true,
+                secret_provider: ModelSecretProviderConfig::None,
+            }),
+            transport: Some(transport),
             secret_provider: Arc::new(DevSecretProvider::new(false, "ROCKETMQ_SRE_MODEL_", None)),
             metadata_io: None,
             observability: SreObservability::default(),
@@ -755,6 +783,7 @@ impl ModelGatewayService {
                     tenant_id: auth.tenant_id,
                     cluster_id,
                     incident_id,
+                    diagnosis_revision_id: None,
                     parent_invocation_id,
                     purpose,
                     requested_profile_id,
@@ -913,6 +942,7 @@ impl ModelGatewayService {
                 tenant_id: auth.tenant_id,
                 cluster_id,
                 incident_id,
+                diagnosis_revision_id: None,
                 parent_invocation_id,
                 purpose,
                 requested_profile_id,
@@ -1046,6 +1076,7 @@ impl ModelGatewayService {
                 tenant_id: auth.tenant_id,
                 cluster_id,
                 incident_id,
+                diagnosis_revision_id: None,
                 parent_invocation_id,
                 purpose,
                 requested_profile_id,

@@ -1,5 +1,17 @@
 {
   "$defs": {
+    "CriticFindingCode": {
+      "description": "Closed set of checks that a model Critic may report.",
+      "enum": [
+        "evidence_reference_invalid",
+        "counter_evidence_missing",
+        "parameter_out_of_range",
+        "missing_precondition",
+        "impact_scope_exceeded",
+        "rollback_unavailable"
+      ],
+      "type": "string"
+    },
     "EvidenceId": {
       "description": "Stable identifier for an evidence snapshot.",
       "format": "uuid",
@@ -11,7 +23,7 @@
   "description": "One structured finding returned by the Critic.",
   "properties": {
     "code": {
-      "type": "string"
+      "$ref": "#/$defs/CriticFindingCode"
     },
     "evidence_ids": {
       "default": [],

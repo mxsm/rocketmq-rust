@@ -14,7 +14,7 @@ cargo +1.95.0 run --locked -p rocketmq-sre-control-plane
 ```
 
 The Control Plane applies forward-only migrations through
-`0028_supervised_workflow.sql` before readiness becomes true. PostgreSQL data
+`0029_heterogeneous_critic.sql` before readiness becomes true. PostgreSQL data
 is held in the Compose `postgres-data` volume.
 
 The optional development identity graph can be loaded after migration:

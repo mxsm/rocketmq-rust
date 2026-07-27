@@ -84,7 +84,7 @@ impl SupervisedExecutionService {
                 ));
             }
             ensure_live_ready(live.facts)?;
-            if plan.status == PlanStatus::NeedsCritic {
+            if persisted_risk == ActionRisk::R2 && self.repository.valid_critic_review(auth, &plan).await?.is_none() {
                 return Err(ControlPlaneError::conflict_code(
                     "critic_required",
                     "R2 plan requires a valid heterogeneous Critic review before approval",

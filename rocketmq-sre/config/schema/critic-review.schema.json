@@ -5,6 +5,63 @@
       "format": "uuid",
       "type": "string"
     },
+    "CriticAssessment": {
+      "additionalProperties": false,
+      "description": "Fixed, bounded model output accepted from the heterogeneous Critic.\n\nIt cannot replace descriptors, policy decisions, plan fields, or execution\nparameters. Those remain locally validated Control Plane inputs.",
+      "properties": {
+        "cited_evidence_ids": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          },
+          "type": "array"
+        },
+        "conclusion": {
+          "$ref": "#/$defs/CriticConclusion"
+        },
+        "counter_evidence_ids": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          },
+          "type": "array"
+        },
+        "findings": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/CriticFinding"
+          },
+          "type": "array"
+        },
+        "impact_scope_valid": {
+          "type": "boolean"
+        },
+        "missing_preconditions": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "parameter_ranges_valid": {
+          "type": "boolean"
+        },
+        "rationale": {
+          "type": "string"
+        },
+        "rollback_available": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "conclusion",
+        "parameter_ranges_valid",
+        "impact_scope_valid",
+        "rollback_available",
+        "rationale"
+      ],
+      "type": "object"
+    },
     "CriticConclusion": {
       "description": "Bounded deterministic Critic conclusion.",
       "enum": [
@@ -19,7 +76,7 @@
       "description": "One structured finding returned by the Critic.",
       "properties": {
         "code": {
-          "type": "string"
+          "$ref": "#/$defs/CriticFindingCode"
         },
         "evidence_ids": {
           "default": [],
@@ -38,6 +95,18 @@
       ],
       "type": "object"
     },
+    "CriticFindingCode": {
+      "description": "Closed set of checks that a model Critic may report.",
+      "enum": [
+        "evidence_reference_invalid",
+        "counter_evidence_missing",
+        "parameter_out_of_range",
+        "missing_precondition",
+        "impact_scope_exceeded",
+        "rollback_unavailable"
+      ],
+      "type": "string"
+    },
     "CriticReviewId": {
       "description": "Stable identifier for an immutable critic review.",
       "format": "uuid",
@@ -52,6 +121,11 @@
         "unavailable",
         "conflict"
       ],
+      "type": "string"
+    },
+    "DiagnosisRevisionId": {
+      "description": "Stable identifier for an immutable diagnosis revision.",
+      "format": "uuid",
       "type": "string"
     },
     "EvidenceId": {
@@ -69,6 +143,16 @@
   "additionalProperties": false,
   "description": "Immutable heterogeneous model review bound to actual invocation identity.",
   "properties": {
+    "assessment": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CriticAssessment"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "conclusion": {
       "$ref": "#/$defs/CriticConclusion"
     },
@@ -77,22 +161,47 @@
       "type": "string"
     },
     "critic_invocation_id": {
-      "$ref": "#/$defs/ModelInvocationId"
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ModelInvocationId"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "critic_model_family": {
-      "type": "string"
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "critic_model_revision": {
-      "type": "string"
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "critic_profile": {
-      "type": "string"
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "critic_provider": {
-      "type": "string"
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "diagnosis_revision_id": {
+      "$ref": "#/$defs/DiagnosisRevisionId"
     },
     "endpoint_instance": {
-      "type": "string"
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "fallback_chain": {
       "default": [],
@@ -140,14 +249,9 @@
     "id",
     "plan_id",
     "plan_hash",
+    "diagnosis_revision_id",
     "primary_invocation_id",
-    "critic_invocation_id",
     "primary_model_family",
-    "critic_model_family",
-    "critic_provider",
-    "critic_profile",
-    "critic_model_revision",
-    "endpoint_instance",
     "prompt_version",
     "schema_version",
     "payload_hash",

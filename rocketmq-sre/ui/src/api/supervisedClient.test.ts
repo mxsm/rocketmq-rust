@@ -6,6 +6,7 @@ import type {
   ApprovalDecisionRequest,
   ClearQuarantineRequest,
   CreatePlanRequest,
+  CriticReviewRequest,
   SubmitExecutionRequest,
 } from "./types";
 
@@ -38,6 +39,9 @@ describe("createSupervisedSreApi", () => {
       precondition_hash: "sha256:precondition",
       reason: "reviewed",
     } as ApprovalDecisionRequest;
+    const critic = {
+      plan_hash: "sha256:plan",
+    } as CriticReviewRequest;
     const execution = {
       plan_id: "plan/one",
     } as SubmitExecutionRequest;
@@ -48,6 +52,7 @@ describe("createSupervisedSreApi", () => {
 
     await api.createPlan(plan);
     await api.getPlan("plan/one");
+    await api.reviewPlanWithCritic("plan/one", critic);
     await api.approvePlan("plan/one", decision);
     await api.rejectPlan("plan/one", decision);
     await api.submitExecution(execution);
@@ -59,6 +64,7 @@ describe("createSupervisedSreApi", () => {
     expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
       "/v1/plans",
       "/v1/plans/plan%2Fone",
+      "/v1/plans/plan%2Fone/critic",
       "/v1/plans/plan%2Fone/approve",
       "/v1/plans/plan%2Fone/reject",
       "/v1/executions",
@@ -74,6 +80,9 @@ describe("createSupervisedSreApi", () => {
     expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("POST");
     expect(fetchMock.mock.calls[1]?.[1]?.method).toBe("GET");
     expect(JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body))).toEqual(
+      critic,
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[3]?.[1]?.body))).toEqual(
       decision,
     );
   });

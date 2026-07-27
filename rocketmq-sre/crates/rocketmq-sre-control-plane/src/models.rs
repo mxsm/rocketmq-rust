@@ -18,6 +18,7 @@ mod repository;
 mod service;
 
 pub(crate) use model::ModelCapabilitiesStatus;
+pub(crate) use model::ModelCriticDecision;
 pub(crate) use model::ModelDiagnosisDecision;
 pub(crate) use model::ModelInvocationListQuery;
 pub(crate) use model::ModelInvocationPage;
