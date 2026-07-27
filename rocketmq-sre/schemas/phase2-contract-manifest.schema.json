@@ -5,6 +5,7 @@
       "enum": [
         "read_alerts",
         "read_topology",
+        "read_slo_health",
         "read_forecasts",
         "run_simulation",
         "read_readiness",

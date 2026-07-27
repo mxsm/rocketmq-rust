@@ -852,6 +852,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/clusters/{id}/slo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getClusterSlo"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/clusters/{id}/health": {
         parameters: {
             query?: never;
@@ -859,7 +875,23 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["getClusterIncidentHealth"];
+        get: operations["getClusterHealth"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/fleet/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getFleetHealth"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1351,6 +1383,220 @@ export interface components {
          * @description Stable identifier for an immutable topology snapshot.
          */
         TopologySnapshot__TopologySnapshotId: string;
+        /**
+         * ClusterHealthReport
+         * @description Immutable, explainable health evaluation for one cluster.
+         */
+        ClusterHealthReport: {
+            algorithm_version: string;
+            cluster_id: components["schemas"]["ClusterHealthReport__ClusterId"];
+            data_quality: components["schemas"]["ClusterHealthReport__HealthDataQuality"];
+            dimensions: components["schemas"]["ClusterHealthReport__HealthDimensionScore"][];
+            evidence_ids?: components["schemas"]["ClusterHealthReport__EvidenceId"][];
+            execution_eligible: boolean;
+            id: components["schemas"]["ClusterHealthReport__HealthSnapshotId"];
+            incident_summary: components["schemas"]["ClusterHealthReport__IncidentHealthSummary"];
+            model_adjustment_supported: boolean;
+            /** Format: date-time */
+            observed_at: string;
+            operational_state: components["schemas"]["ClusterHealthReport__HealthOperationalState"];
+            recent_changes?: components["schemas"]["ClusterHealthReport__HealthRecentChange"][];
+            schema_version: string;
+            /** Format: uint8 */
+            score?: number | null;
+            slis: components["schemas"]["ClusterHealthReport__SliHealth"][];
+            status: components["schemas"]["ClusterHealthReport__HealthStatus"];
+            tenant_id: components["schemas"]["ClusterHealthReport__TenantId"];
+            triggered_sli_ids?: string[];
+        };
+        /**
+         * @description Severity assigned to a configured multi-window burn-rate trigger.
+         * @enum {string}
+         */
+        ClusterHealthReport__BurnRateSeverity: "warning" | "critical";
+        /** @description Evaluation of one configured short/long burn-rate window pair. */
+        ClusterHealthReport__BurnRateWindowResult: {
+            data_quality: components["schemas"]["ClusterHealthReport__HealthDataQuality"];
+            evidence_ids?: components["schemas"]["ClusterHealthReport__EvidenceId"][];
+            /** Format: double */
+            long_burn_rate?: number | null;
+            /** Format: uint64 */
+            long_window_seconds: number;
+            /** Format: date-time */
+            observed_at?: string | null;
+            reason_codes?: string[];
+            severity: components["schemas"]["ClusterHealthReport__BurnRateSeverity"];
+            /** Format: double */
+            short_burn_rate?: number | null;
+            /** Format: uint64 */
+            short_window_seconds: number;
+            /** Format: double */
+            threshold: number;
+            triggered: boolean;
+            window_id: string;
+        };
+        /**
+         * Format: uuid
+         * @description Internal identifier for an onboarded cluster.
+         */
+        ClusterHealthReport__ClusterId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an evidence snapshot.
+         */
+        ClusterHealthReport__EvidenceId: string;
+        /**
+         * @description Explicit quality of the data used by a health evaluation.
+         * @enum {string}
+         */
+        ClusterHealthReport__HealthDataQuality: "complete" | "partial" | "stale" | "missing";
+        /** @description Deterministic score and contributing SLIs for one health dimension. */
+        ClusterHealthReport__HealthDimensionScore: {
+            data_quality: components["schemas"]["ClusterHealthReport__HealthDataQuality"];
+            dimension: components["schemas"]["ClusterHealthReport__SloDimension"];
+            evidence_ids?: components["schemas"]["ClusterHealthReport__EvidenceId"][];
+            reason_codes?: string[];
+            /** Format: uint8 */
+            score?: number | null;
+            status: components["schemas"]["ClusterHealthReport__HealthStatus"];
+            triggered_sli_ids?: string[];
+            /** Format: uint8 */
+            weight: number;
+        };
+        /**
+         * @description Operational context is carried independently so maintenance or drills do
+         *     not hide the underlying health severity.
+         * @enum {string}
+         */
+        ClusterHealthReport__HealthOperationalState: "normal" | "maintenance" | "fault_drill";
+        /** @description Previous-to-current deterministic health transition. */
+        ClusterHealthReport__HealthRecentChange: {
+            /** Format: uint8 */
+            current_score?: number | null;
+            current_status: components["schemas"]["ClusterHealthReport__HealthStatus"];
+            /** Format: date-time */
+            occurred_at: string;
+            /** Format: uint8 */
+            previous_score?: number | null;
+            previous_status: components["schemas"]["ClusterHealthReport__HealthStatus"];
+            /** Format: int16 */
+            score_delta?: number | null;
+        };
+        /**
+         * Format: uuid
+         * @description Stable identifier for an immutable cluster health evaluation.
+         */
+        ClusterHealthReport__HealthSnapshotId: string;
+        /**
+         * @description Health result of an SLI, dimension, cluster, or fleet.
+         * @enum {string}
+         */
+        ClusterHealthReport__HealthStatus: "healthy" | "degraded" | "critical" | "unknown";
+        /** @description Incident counts incorporated into the cluster overview. */
+        ClusterHealthReport__IncidentHealthSummary: {
+            /** Format: uint32 */
+            active_incidents: number;
+            /** Format: uint32 */
+            critical_incidents: number;
+            /** Format: date-time */
+            last_alert_at?: string | null;
+            /** Format: uint32 */
+            unassigned_incidents: number;
+        };
+        /** @description Explainable multi-window result for one SLI. */
+        ClusterHealthReport__SliHealth: {
+            data_quality: components["schemas"]["ClusterHealthReport__HealthDataQuality"];
+            dimension: components["schemas"]["ClusterHealthReport__SloDimension"];
+            display_name: string;
+            evidence_ids?: components["schemas"]["ClusterHealthReport__EvidenceId"][];
+            id: string;
+            /** Format: double */
+            objective: number;
+            reason_codes?: string[];
+            status: components["schemas"]["ClusterHealthReport__HealthStatus"];
+            windows: components["schemas"]["ClusterHealthReport__BurnRateWindowResult"][];
+        };
+        /**
+         * @description Fixed health dimensions used by the deterministic Phase 2 score.
+         * @enum {string}
+         */
+        ClusterHealthReport__SloDimension: "traffic" | "consumer" | "broker" | "store" | "ha_controller" | "routing_proxy" | "security" | "platform";
+        /**
+         * Format: uuid
+         * @description Stable tenant boundary identifier.
+         */
+        ClusterHealthReport__TenantId: string;
+        /**
+         * FleetHealthReport
+         * @description Tenant/region fleet view whose score and status are determined by the
+         *     worst cluster rather than an average.
+         */
+        FleetHealthReport: {
+            aggregation: string;
+            /** Format: uint32 */
+            cluster_count: number;
+            clusters: components["schemas"]["FleetHealthReport__FleetClusterHealth"][];
+            critical_clusters: components["schemas"]["FleetHealthReport__ClusterId"][];
+            data_quality: components["schemas"]["FleetHealthReport__HealthDataQuality"];
+            /** Format: uint32 */
+            degraded_clusters: number;
+            fault_drill_clusters: components["schemas"]["FleetHealthReport__ClusterId"][];
+            /** Format: uint32 */
+            healthy_clusters: number;
+            maintenance_clusters: components["schemas"]["FleetHealthReport__ClusterId"][];
+            /** Format: date-time */
+            observed_at: string;
+            region?: string | null;
+            schema_version: string;
+            /** Format: uint8 */
+            score?: number | null;
+            status: components["schemas"]["FleetHealthReport__HealthStatus"];
+            tenant_id: components["schemas"]["FleetHealthReport__TenantId"];
+            unknown_clusters: components["schemas"]["FleetHealthReport__ClusterId"][];
+            worst_cluster_id?: components["schemas"]["FleetHealthReport__ClusterId"] | null;
+        };
+        /**
+         * Format: uuid
+         * @description Internal identifier for an onboarded cluster.
+         */
+        FleetHealthReport__ClusterId: string;
+        /** @description Bounded cluster summary used in fleet aggregation. */
+        FleetHealthReport__FleetClusterHealth: {
+            cluster_id: components["schemas"]["FleetHealthReport__ClusterId"];
+            /** Format: uint32 */
+            critical_incidents: number;
+            data_quality: components["schemas"]["FleetHealthReport__HealthDataQuality"];
+            external_cluster_key: string;
+            /** Format: date-time */
+            observed_at: string;
+            operational_state: components["schemas"]["FleetHealthReport__HealthOperationalState"];
+            region: string;
+            /** Format: uint8 */
+            score?: number | null;
+            status: components["schemas"]["FleetHealthReport__HealthStatus"];
+            triggered_sli_ids?: string[];
+        };
+        /**
+         * @description Explicit quality of the data used by a health evaluation.
+         * @enum {string}
+         */
+        FleetHealthReport__HealthDataQuality: "complete" | "partial" | "stale" | "missing";
+        /**
+         * @description Operational context is carried independently so maintenance or drills do
+         *     not hide the underlying health severity.
+         * @enum {string}
+         */
+        FleetHealthReport__HealthOperationalState: "normal" | "maintenance" | "fault_drill";
+        /**
+         * @description Health result of an SLI, dimension, cluster, or fleet.
+         * @enum {string}
+         */
+        FleetHealthReport__HealthStatus: "healthy" | "degraded" | "critical" | "unknown";
+        /**
+         * Format: uuid
+         * @description Stable tenant boundary identifier.
+         */
+        FleetHealthReport__TenantId: string;
         /**
          * CapacityForecast
          * @description Capacity trend for one resource and metric.
@@ -1886,7 +2132,7 @@ export interface components {
          * @description Read-only operations frozen into the Phase 2 public contract.
          * @enum {string}
          */
-        Phase2ContractManifest__ReadOnlyOperation: "read_alerts" | "read_topology" | "read_forecasts" | "run_simulation" | "read_readiness" | "manage_postmortem_metadata" | "manage_action_item_metadata";
+        Phase2ContractManifest__ReadOnlyOperation: "read_alerts" | "read_topology" | "read_slo_health" | "read_forecasts" | "run_simulation" | "read_readiness" | "manage_postmortem_metadata" | "manage_action_item_metadata";
         /**
          * Format: uuid
          * @description Internal identifier for an onboarded cluster.
@@ -3159,7 +3405,7 @@ export interface operations {
             };
         };
     };
-    getClusterIncidentHealth: {
+    getClusterSlo: {
         parameters: {
             query?: never;
             header?: never;
@@ -3170,13 +3416,57 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Incident-derived cluster health */
+            /** @description Explainable multi-window SLO and eight-dimension cluster score */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ClusterIncidentHealth"];
+                    "application/json": components["schemas"]["ClusterHealthReport"];
+                };
+            };
+        };
+    };
+    getClusterHealth: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deterministic cluster health including SLO, evidence, changes and incidents */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClusterHealthReport"];
+                };
+            };
+        };
+    };
+    getFleetHealth: {
+        parameters: {
+            query?: {
+                region?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Tenant and optional region health aggregated by worst cluster without averaging */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FleetHealthReport"];
                 };
             };
         };

@@ -29,7 +29,13 @@ describe("stateLabel", () => {
           status: 200,
         }),
       );
-    const api = createHttpSreApi();
+    const api = createHttpSreApi({
+      token: "bounded-test-token",
+      tenantId: "tenant-1",
+      clusterIds: ["cluster/id"],
+      subject: "test-operator",
+      roles: ["rocketmq:read"],
+    });
 
     await api.promoteInvestigation("investigation/id", {
       reason: "bounded reason",
@@ -45,6 +51,9 @@ describe("stateLabel", () => {
     await api.getEvidenceContent("evidence/id");
     await api.listKnowledge("cluster/id");
     await api.getPhase2Contract();
+    await api.getClusterSlo("cluster/id");
+    await api.getClusterHealth("cluster/id");
+    await api.getFleetHealth("cn/shanghai");
 
     expect(
       fetchMock.mock.calls.map(([input]) => String(input)),
@@ -57,7 +66,20 @@ describe("stateLabel", () => {
       "/v1/evidence/evidence%2Fid/content",
       "/v1/knowledge?cluster_id=cluster%2Fid",
       "/v1/capabilities/phase2-contract",
+      "/v1/clusters/cluster%2Fid/slo",
+      "/v1/clusters/cluster%2Fid/health",
+      "/v1/fleet/health?region=cn%2Fshanghai",
     ]);
+    const healthHeaders = new Headers(
+      fetchMock.mock.calls[9]?.[1]?.headers,
+    );
+    expect(healthHeaders.get("Authorization")).toBe(
+      "Bearer bounded-test-token",
+    );
+    expect(healthHeaders.get("X-RocketMQ-Tenant")).toBe("tenant-1");
+    expect(healthHeaders.get("X-RocketMQ-Clusters")).toBe(
+      "cluster/id",
+    );
     expect(
       JSON.parse(
         String(

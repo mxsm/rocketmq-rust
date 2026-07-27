@@ -55,7 +55,6 @@ use uuid::Uuid;
 use crate::ControlPlaneError;
 use crate::alerting::AlertIngestionOutcome;
 use crate::alerting::AlertmanagerWebhook;
-use crate::alerting::ClusterIncidentHealth;
 use crate::alerting::IncidentNoteRequest;
 use crate::alerting::IncidentTopologyView;
 use crate::alerting::IntegrationEventRequest;
@@ -134,7 +133,9 @@ pub(crate) fn public_routes() -> Router<AppState> {
             "/v1/integrations/webhook/test",
             post(test_notification_webhook).layer(DefaultBodyLimit::max(16 * 1024)),
         )
-        .route("/v1/clusters/{id}/health", get(get_cluster_incident_health))
+        .route("/v1/clusters/{id}/slo", get(get_cluster_slo))
+        .route("/v1/clusters/{id}/health", get(get_cluster_health))
+        .route("/v1/fleet/health", get(get_fleet_health))
         .route("/v1/inspections", get(list_inspections).post(create_inspection))
         .route("/v1/inspections/{id}", get(get_inspection))
         .route("/v1/inspections/{id}/run", post(run_inspection))
@@ -694,14 +695,36 @@ async fn add_incident_note(
         .map(Json)
 }
 
-async fn get_cluster_incident_health(
+async fn get_cluster_slo(
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-) -> Result<Json<ClusterIncidentHealth>, ControlPlaneError> {
+) -> Result<Json<rocketmq_sre_contracts::ClusterHealthReport>, ControlPlaneError> {
     let cluster_id = parse_cluster_id(&id)?;
     let auth = state.auth.authorize(&headers, Some(cluster_id)).await?;
-    state.alerting.cluster_health(&auth, cluster_id).await.map(Json)
+    state.slo.cluster_report(&auth, cluster_id).await.map(Json)
+}
+
+async fn get_cluster_health(
+    state: State<AppState>,
+    path: Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<rocketmq_sre_contracts::ClusterHealthReport>, ControlPlaneError> {
+    get_cluster_slo(state, path, headers).await
+}
+
+#[derive(Deserialize)]
+struct FleetHealthQuery {
+    region: Option<String>,
+}
+
+async fn get_fleet_health(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<FleetHealthQuery>,
+) -> Result<Json<rocketmq_sre_contracts::FleetHealthReport>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, None).await?;
+    state.slo.fleet_report(&auth, query.region.as_deref()).await.map(Json)
 }
 
 async fn test_notification_webhook(

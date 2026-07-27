@@ -478,6 +478,10 @@ mod tests {
                     "metric": {
                         "cluster": "local",
                         "node_id": "broker-a",
+                        "sli": "delivery_ratio",
+                        "dimension": "traffic",
+                        "window_pair": "fast",
+                        "window_role": "short",
                         "secret": "drop"
                     },
                     "values": [
@@ -495,7 +499,14 @@ mod tests {
             start,
             end,
             1,
-            &BTreeSet::from(["cluster".to_owned(), "node_id".to_owned()]),
+            &BTreeSet::from([
+                "cluster".to_owned(),
+                "node_id".to_owned(),
+                "sli".to_owned(),
+                "dimension".to_owned(),
+                "window_pair".to_owned(),
+                "window_role".to_owned(),
+            ]),
         )
         .expect("projection");
 
@@ -506,6 +517,8 @@ mod tests {
             projected.content["series"][0]["samples"].as_array().map(Vec::len),
             Some(1)
         );
+        assert_eq!(projected.content["series"][0]["labels"]["sli"], "delivery_ratio");
+        assert_eq!(projected.content["series"][0]["labels"]["window_role"], "short");
         assert!(projected.content["series"][0]["labels"].get("secret").is_none());
     }
 

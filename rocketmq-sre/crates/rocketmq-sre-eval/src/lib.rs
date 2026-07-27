@@ -25,10 +25,12 @@ use rocketmq_sre_contracts::ActionItem;
 use rocketmq_sre_contracts::AlertEvent;
 use rocketmq_sre_contracts::BacklogEta;
 use rocketmq_sre_contracts::CapacityForecast;
+use rocketmq_sre_contracts::ClusterHealthReport;
 use rocketmq_sre_contracts::Descriptor;
 use rocketmq_sre_contracts::DrReadinessReport;
 use rocketmq_sre_contracts::EvidenceQuery;
 use rocketmq_sre_contracts::EvidenceSnapshot;
+use rocketmq_sre_contracts::FleetHealthReport;
 use rocketmq_sre_contracts::Incident;
 use rocketmq_sre_contracts::NotificationDelivery;
 use rocketmq_sre_contracts::Phase2ContractManifest;
@@ -223,6 +225,14 @@ fn generated_schemas() -> Result<Vec<(&'static str, serde_json::Value)>, EvalErr
         (
             "topology-snapshot.schema.json",
             serde_json::to_value(schema_for!(TopologySnapshot))?,
+        ),
+        (
+            "cluster-health-report.schema.json",
+            serde_json::to_value(schema_for!(ClusterHealthReport))?,
+        ),
+        (
+            "fleet-health-report.schema.json",
+            serde_json::to_value(schema_for!(FleetHealthReport))?,
         ),
         (
             "capacity-forecast.schema.json",
@@ -504,6 +514,14 @@ signals:
             (
                 "topology-snapshot.schema.json",
                 include_str!("../../../schemas/topology-snapshot.schema.json"),
+            ),
+            (
+                "cluster-health-report.schema.json",
+                include_str!("../../../schemas/cluster-health-report.schema.json"),
+            ),
+            (
+                "fleet-health-report.schema.json",
+                include_str!("../../../schemas/fleet-health-report.schema.json"),
             ),
             (
                 "capacity-forecast.schema.json",

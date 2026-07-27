@@ -16,8 +16,10 @@
 
 pub mod correlation;
 pub mod diagnostics;
+pub mod health;
 mod incident_manager;
 mod registry;
+pub mod slo;
 
 pub use incident_manager::IncidentManager;
 pub use incident_manager::IncidentManagerError;

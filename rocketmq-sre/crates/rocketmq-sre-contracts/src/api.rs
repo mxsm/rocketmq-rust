@@ -34,6 +34,7 @@ pub mod v1 {
     pub enum ReadOnlyOperation {
         ReadAlerts,
         ReadTopology,
+        ReadSloHealth,
         ReadForecasts,
         RunSimulation,
         ReadReadiness,
@@ -59,6 +60,7 @@ pub mod v1 {
                 operations: vec![
                     ReadOnlyOperation::ReadAlerts,
                     ReadOnlyOperation::ReadTopology,
+                    ReadOnlyOperation::ReadSloHealth,
                     ReadOnlyOperation::ReadForecasts,
                     ReadOnlyOperation::RunSimulation,
                     ReadOnlyOperation::ReadReadiness,

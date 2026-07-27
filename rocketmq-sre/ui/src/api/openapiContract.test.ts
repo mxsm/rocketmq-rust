@@ -28,7 +28,16 @@ describe("checked-in Phase 2 OpenAPI", () => {
       "PostmortemRevision",
     );
     expect(specification.components.schemas.AlertEvent).toBeDefined();
+    expect(
+      specification.components.schemas.ClusterHealthReport,
+    ).toBeDefined();
+    expect(
+      specification.components.schemas.FleetHealthReport,
+    ).toBeDefined();
     expect(specification.components.schemas.CapacityForecast).toBeDefined();
     expect(specification.components.schemas.WhatIfSimulation).toBeDefined();
+    expect(specification.paths["/v1/clusters/{id}/slo"]).toBeDefined();
+    expect(specification.paths["/v1/clusters/{id}/health"]).toBeDefined();
+    expect(specification.paths["/v1/fleet/health"]).toBeDefined();
   });
 });

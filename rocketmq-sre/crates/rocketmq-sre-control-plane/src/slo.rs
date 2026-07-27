@@ -12,17 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod model;
-mod notification;
+mod policy;
 mod repository;
 mod service;
 
-pub(crate) use model::AlertIngestionOutcome;
-pub(crate) use model::AlertmanagerWebhook;
-pub(crate) use model::IncidentNoteRequest;
-pub(crate) use model::IncidentTopologyView;
-pub(crate) use model::IntegrationEventRequest;
-pub(crate) use model::NotificationTestRequest;
-pub(crate) use model::NotificationTestResponse;
-pub(crate) use notification::NotificationOutboxWorker;
-pub(crate) use service::AlertingService;
+pub(crate) use policy::SloConfiguration;
+pub(crate) use service::SloService;

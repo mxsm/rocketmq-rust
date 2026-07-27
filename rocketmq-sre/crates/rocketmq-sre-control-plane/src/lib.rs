@@ -37,6 +37,7 @@ mod phase1_api;
 mod phase2_repository;
 mod read_audit;
 mod repository;
+mod slo;
 mod workflow;
 
 pub use api::CapabilityDocuments;

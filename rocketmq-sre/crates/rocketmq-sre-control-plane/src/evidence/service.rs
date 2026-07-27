@@ -70,6 +70,39 @@ impl EvidenceService {
             .await
     }
 
+    pub(crate) async fn persist_cluster(
+        &self,
+        auth: &AuthContext,
+        evidence: EvidenceSnapshot,
+    ) -> Result<EvidenceSnapshot, ControlPlaneError> {
+        evidence
+            .verify_content_hash()
+            .map_err(|_| ControlPlaneError::validation("invalid_content_hash", "evidence content hash is invalid"))?;
+        if evidence.tenant_id != auth.tenant_id || !auth.clusters.contains(&evidence.cluster_id) {
+            return Err(ControlPlaneError::forbidden(
+                "cluster_not_allowed",
+                "evidence scope differs from the authenticated cluster scope",
+            ));
+        }
+        let snapshot = normalize_for_persistence(evidence)?;
+        let (snapshot, content_digest) = self.externalize_if_needed(snapshot).await?;
+        self.repository
+            .persist_evidence(auth, &snapshot, None, None, &content_digest)
+            .await
+    }
+
+    pub(crate) async fn latest_cluster_source(
+        &self,
+        auth: &AuthContext,
+        cluster_id: rocketmq_sre_contracts::ClusterId,
+        source: &str,
+        resource: &str,
+    ) -> Result<Option<EvidenceSnapshot>, ControlPlaneError> {
+        self.repository
+            .latest_cluster_source_evidence(auth, cluster_id, source, resource)
+            .await
+    }
+
     pub(crate) async fn get(&self, auth: &AuthContext, id: EvidenceId) -> Result<EvidenceSnapshot, ControlPlaneError> {
         self.repository.evidence(auth, id).await
     }
@@ -389,6 +422,74 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires ROCKETMQ_SRE_TEST_DATABASE_URL pointing to an isolated PostgreSQL database"]
+    async fn cluster_scoped_slo_evidence_persists_without_a_workflow_link() {
+        let database_url = std::env::var("ROCKETMQ_SRE_TEST_DATABASE_URL").expect("test database URL must be explicit");
+        let repository = PostgresRepository::connect(&database_url, 2)
+            .await
+            .expect("database and migrations");
+        let tenant_id = TenantId::new();
+        let cluster_id = ClusterId::new();
+        sqlx::query(
+            "INSERT INTO clusters (
+                id, tenant_id, external_cluster_key, environment, region,
+                rocketmq_version, deployment_mode, owner_name,
+                requested_access_profile, effective_access_profile, onboarding_state
+             ) VALUES (
+                $1, $2, $3, 'test', 'local', 'test', 'test', 'slo-evidence-test',
+                'read_only', 'read_only', 'ready_read_only'
+             )",
+        )
+        .bind(cluster_id.as_uuid())
+        .bind(tenant_id.to_string())
+        .bind(format!("slo-evidence-{cluster_id}"))
+        .execute(&repository.pool)
+        .await
+        .expect("test cluster");
+        let auth = AuthContext {
+            tenant_id,
+            subject: "slo-evidence-test".to_owned(),
+            clusters: BTreeSet::from([cluster_id]),
+            roles: BTreeSet::from(["diagnose".to_owned()]),
+        };
+        let at = Utc::now();
+        let query = EvidenceQuery {
+            query_id: QueryId::new(),
+            correlation_id: CorrelationId::new(),
+            tenant_id,
+            cluster_id,
+            source: "prometheus".to_owned(),
+            resource: "instant/rocketmq_sre_sli_burn_rate".to_owned(),
+            time_range: TimeRange::new(at, at).expect("time range"),
+        };
+        let evidence = EvidenceSnapshot::capture(
+            query,
+            current_evidence_schema(),
+            at,
+            EvidenceContent::Inline(json!({"series": []})),
+        )
+        .expect("snapshot");
+        let service = EvidenceService::new(repository.clone(), EvidenceBlobStore::in_memory(64 * 1024));
+
+        let persisted = service
+            .persist_cluster(&auth, evidence)
+            .await
+            .expect("persist cluster evidence");
+        let latest = service
+            .latest_cluster_source(&auth, cluster_id, "prometheus", "instant/rocketmq_sre_sli_burn_rate")
+            .await
+            .expect("latest evidence")
+            .expect("persisted evidence");
+        assert_eq!(latest.evidence_id, persisted.evidence_id);
+        let links: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM evidence_links WHERE evidence_id = $1")
+            .bind(persisted.evidence_id.as_uuid())
+            .fetch_one(&repository.pool)
+            .await
+            .expect("link count");
+        assert_eq!(links, 0);
     }
 
     struct ExternalizationHarness {

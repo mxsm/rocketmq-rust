@@ -4,6 +4,16 @@ type ApiSchemas = GeneratedComponents["schemas"];
 
 export type Phase2ContractManifest =
   ApiSchemas["Phase2ContractManifest"];
+export type ClusterHealthReport = ApiSchemas["ClusterHealthReport"];
+export type FleetHealthReport = ApiSchemas["FleetHealthReport"];
+export type HealthStatus =
+  ApiSchemas["ClusterHealthReport__HealthStatus"];
+export type HealthDataQuality =
+  ApiSchemas["ClusterHealthReport__HealthDataQuality"];
+export type HealthOperationalState =
+  ApiSchemas["ClusterHealthReport__HealthOperationalState"];
+export type SloDimension =
+  ApiSchemas["ClusterHealthReport__SloDimension"];
 
 export type OnboardingState =
   | "pending"

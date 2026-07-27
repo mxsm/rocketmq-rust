@@ -2616,6 +2616,426 @@ td small {
   }
 }
 
+.health-surface,
+.fleet-health-surface,
+.health-loading-surface {
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+
+.health-command-grid {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  border-bottom: 1px solid var(--border);
+}
+
+.health-score-card {
+  display: grid;
+  align-content: center;
+  min-height: 184px;
+  gap: 8px;
+  padding: 20px;
+  border-right: 1px solid var(--border);
+  background: #111111;
+}
+
+.health-score-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  margin-bottom: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #161616;
+}
+
+.health-score-card > span,
+.health-fact > span,
+.dimension-card span,
+.fleet-heading-status > span {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+
+.health-score-card > strong {
+  font-size: 38px;
+  font-weight: 620;
+  line-height: 1;
+  letter-spacing: -0.04em;
+}
+
+.health-score-card > small,
+.dimension-card > small {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+
+.health-score-card progress,
+.dimension-card progress {
+  width: 100%;
+  height: 5px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 999px;
+  accent-color: #d4d4d4;
+  background: #272727;
+}
+
+.health-score-card progress::-webkit-progress-bar,
+.dimension-card progress::-webkit-progress-bar {
+  background: #272727;
+}
+
+.health-healthy progress::-webkit-progress-value {
+  background: var(--success);
+}
+
+.health-degraded progress::-webkit-progress-value {
+  background: var(--warning);
+}
+
+.health-critical progress::-webkit-progress-value {
+  background: var(--destructive);
+}
+
+.health-unknown progress::-webkit-progress-value {
+  background: #737373;
+}
+
+.health-facts-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.health-fact {
+  display: grid;
+  align-content: center;
+  min-height: 92px;
+  gap: 7px;
+  padding: 14px 17px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.health-fact:nth-child(3n) {
+  border-right: 0;
+}
+
+.health-fact:nth-last-child(-n + 3) {
+  border-bottom: 0;
+}
+
+.health-fact > strong {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.health-fact.warning > strong {
+  color: var(--warning);
+}
+
+.dimension-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-bottom: 1px solid var(--border);
+}
+
+.dimension-card {
+  display: grid;
+  min-height: 150px;
+  gap: 9px;
+  padding: 15px 17px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: #101010;
+}
+
+.dimension-card:nth-child(4n) {
+  border-right: 0;
+}
+
+.dimension-card:nth-last-child(-n + 4) {
+  border-bottom: 0;
+}
+
+.dimension-card > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.dimension-card > strong {
+  font-size: 25px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.dimension-card > p {
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.health-status-badge.compact {
+  padding: 2px 6px;
+  font-size: 9px;
+}
+
+.health-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(280px, 0.8fr);
+}
+
+.health-detail-panel {
+  min-width: 0;
+  padding: 16px 17px;
+}
+
+.health-detail-panel + .health-detail-panel {
+  border-left: 1px solid var(--border);
+}
+
+.health-panel-title {
+  display: flex;
+  align-items: center;
+  min-height: 25px;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.health-panel-title strong {
+  font-size: 12px;
+}
+
+.health-panel-title > span {
+  margin-left: auto;
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+
+.burn-rate-list {
+  display: grid;
+  gap: 9px;
+}
+
+.burn-rate-item {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 1px);
+  background: #101010;
+}
+
+.burn-rate-item > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 10px;
+}
+
+.burn-rate-item > div:first-child > strong {
+  font-size: 12px;
+}
+
+.burn-rate-item > div:first-child > span {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+
+.burn-rate-item > div:first-child > .badge {
+  margin-left: auto;
+}
+
+.burn-window-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  overflow: hidden;
+}
+
+.burn-window-grid > div {
+  display: grid;
+  gap: 5px;
+  padding: 9px 11px;
+  border-right: 1px solid var(--border);
+}
+
+.burn-window-grid > div:last-child {
+  border-right: 0;
+}
+
+.burn-window-grid > div.triggered {
+  background: var(--warning-muted);
+  box-shadow: inset 0 2px 0 var(--warning);
+}
+
+.burn-window-grid span,
+.burn-window-grid small {
+  color: var(--muted-foreground);
+  font-size: 9px;
+}
+
+.burn-window-grid strong {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.health-policy-panel dl {
+  display: grid;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 1px);
+  overflow: hidden;
+}
+
+.health-policy-panel dl > div {
+  display: grid;
+  grid-template-columns: 90px minmax(0, 1fr);
+  gap: 10px;
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.health-policy-panel dl > div:last-child {
+  border-bottom: 0;
+}
+
+.health-policy-panel dt {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+
+.health-policy-panel dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+}
+
+.health-policy-panel > p,
+.fleet-aggregation-note {
+  color: var(--muted-foreground);
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.health-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 80px;
+  gap: 8px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.fleet-heading-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.fleet-health-layout {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+}
+
+.fleet-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-right: 1px solid var(--border);
+}
+
+.fleet-stat-grid .health-fact {
+  min-height: 82px;
+}
+
+.fleet-stat-grid .health-fact:nth-child(3n) {
+  border-right: 1px solid var(--border);
+}
+
+.fleet-stat-grid .health-fact:nth-child(2n) {
+  border-right: 0;
+}
+
+.fleet-stat-grid .health-fact:nth-last-child(-n + 3) {
+  border-bottom: 1px solid var(--border);
+}
+
+.fleet-stat-grid .health-fact:nth-last-child(-n + 2) {
+  border-bottom: 0;
+}
+
+.fleet-cluster-list {
+  min-width: 0;
+}
+
+.fleet-cluster-header,
+.fleet-cluster-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.2fr) 150px 70px minmax(180px, 1fr);
+  align-items: center;
+  min-height: 54px;
+  gap: 12px;
+  padding: 0 15px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+}
+
+.fleet-cluster-header {
+  min-height: 38px;
+  color: var(--muted-foreground);
+  background: #111111;
+  font-size: 9px;
+}
+
+.fleet-cluster-row:last-child {
+  border-bottom: 0;
+}
+
+.fleet-cluster-row.worst {
+  background: var(--danger-muted);
+  box-shadow: inset 2px 0 0 var(--destructive);
+}
+
+.fleet-cluster-row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fleet-cluster-row > span:first-child,
+.fleet-cluster-row > span:nth-child(2) {
+  display: grid;
+  gap: 4px;
+}
+
+.fleet-cluster-row small {
+  color: var(--muted-foreground);
+  font-size: 9px;
+}
+
+.fleet-aggregation-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 9px 15px;
+  border-top: 1px solid var(--border);
+  background: #101010;
+}
+
+.fleet-aggregation-note code {
+  color: var(--foreground);
+}
+
 @media (max-width: 1240px) {
   :root {
     --sidebar-width: 196px;

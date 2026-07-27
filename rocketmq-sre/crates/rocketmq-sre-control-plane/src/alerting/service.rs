@@ -218,6 +218,9 @@ impl AlertingService {
                 &self.public_base_url,
             )
             .await?;
+        self.repository
+            .append_latest_health_to_incident(auth, stored.event.cluster_id, result.incident_id, correlation_id)
+            .await?;
         self.workflow.publish_external(WorkflowStreamEvent {
             tenant_id: stored.event.tenant_id,
             cluster_id: stored.event.cluster_id,

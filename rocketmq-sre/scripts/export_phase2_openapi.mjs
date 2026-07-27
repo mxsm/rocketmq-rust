@@ -25,6 +25,8 @@ const schemasDirectory = join(workspace, "schemas");
 const schemaFiles = new Map([
   ["AlertEvent", "alert-event.schema.json"],
   ["TopologySnapshot", "topology-snapshot.schema.json"],
+  ["ClusterHealthReport", "cluster-health-report.schema.json"],
+  ["FleetHealthReport", "fleet-health-report.schema.json"],
   ["CapacityForecast", "capacity-forecast.schema.json"],
   ["BacklogEta", "backlog-eta.schema.json"],
   ["WhatIfSimulation", "what-if-simulation.schema.json"],
@@ -720,9 +722,9 @@ document.paths["/v1/integrations/webhook/test"] = {
   },
 };
 
-document.paths["/v1/clusters/{id}/health"] = {
+const healthOperation = (operationId, description) => ({
   get: {
-    operationId: "getClusterIncidentHealth",
+    operationId,
     parameters: [
       {
         $ref: "#/components/parameters/Id",
@@ -730,11 +732,51 @@ document.paths["/v1/clusters/{id}/health"] = {
     ],
     responses: {
       200: {
-        description: "Incident-derived cluster health",
+        description,
         content: {
           "application/json": {
             schema: {
-              $ref: "#/components/schemas/ClusterIncidentHealth",
+              $ref: "#/components/schemas/ClusterHealthReport",
+            },
+          },
+        },
+      },
+    },
+  },
+});
+
+document.paths["/v1/clusters/{id}/slo"] = healthOperation(
+  "getClusterSlo",
+  "Explainable multi-window SLO and eight-dimension cluster score",
+);
+
+document.paths["/v1/clusters/{id}/health"] = healthOperation(
+  "getClusterHealth",
+  "Deterministic cluster health including SLO, evidence, changes and incidents",
+);
+
+document.paths["/v1/fleet/health"] = {
+  get: {
+    operationId: "getFleetHealth",
+    parameters: [
+      {
+        name: "region",
+        in: "query",
+        required: false,
+        schema: {
+          type: "string",
+          maxLength: 128,
+        },
+      },
+    ],
+    responses: {
+      200: {
+        description:
+          "Tenant and optional region health aggregated by worst cluster without averaging",
+        content: {
+          "application/json": {
+            schema: {
+              $ref: "#/components/schemas/FleetHealthReport",
             },
           },
         },

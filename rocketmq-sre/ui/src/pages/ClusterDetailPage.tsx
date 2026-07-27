@@ -7,7 +7,11 @@ import {
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
-import type { CapabilitySnapshot } from "@/api/types";
+import type {
+  CapabilitySnapshot,
+  ClusterHealthReport,
+} from "@/api/types";
+import { ClusterHealthOverview } from "@/components/HealthOverview";
 import { PageHeader } from "@/components/PageHeader";
 import {
   AvailabilityBadge,
@@ -19,10 +23,12 @@ import { useSreData } from "@/data/SreDataContext";
 
 export function ClusterDetailPage() {
   const { clusterId = "" } = useParams();
-  const { clusters, capability } = useSreData();
+  const { clusters, capability, api } = useSreData();
   const cluster = clusters.find((item) => item.id === clusterId);
   const [snapshot, setSnapshot] = useState<CapabilitySnapshot>();
+  const [health, setHealth] = useState<ClusterHealthReport>();
   const [error, setError] = useState<string>();
+  const [healthError, setHealthError] = useState<string>();
 
   useEffect(() => {
     if (!clusterId) {
@@ -38,6 +44,29 @@ export function ClusterDetailPage() {
       );
     return () => controller.abort();
   }, [capability, clusterId]);
+
+  useEffect(() => {
+    if (!clusterId) {
+      return;
+    }
+    const controller = new AbortController();
+    setHealthError(undefined);
+    void api
+      .getClusterHealth(clusterId, controller.signal)
+      .then(setHealth)
+      .catch((cause: unknown) => {
+        if (
+          !(cause instanceof DOMException && cause.name === "AbortError")
+        ) {
+          setHealthError(
+            cause instanceof Error
+              ? cause.message
+              : "集群健康评分暂不可用",
+          );
+        }
+      });
+    return () => controller.abort();
+  }, [api, clusterId]);
 
   if (!cluster) {
     return (
@@ -76,6 +105,16 @@ export function ClusterDetailPage() {
           })}
         />
       </section>
+
+      {health ? (
+        <ClusterHealthOverview report={health} />
+      ) : (
+        <section className="data-surface health-loading-surface">
+          <div className="state-message">
+            {healthError ?? "正在读取集群健康评分…"}
+          </div>
+        </section>
+      )}
 
       <section className="data-surface">
         <div className="surface-heading">

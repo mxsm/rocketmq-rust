@@ -121,6 +121,10 @@ uuid_id!(
     "Stable identifier for an immutable postmortem revision."
 );
 uuid_id!(ActionItemId, "Stable identifier for a postmortem action item.");
+uuid_id!(
+    HealthSnapshotId,
+    "Stable identifier for an immutable cluster health evaluation."
+);
 
 #[cfg(test)]
 mod tests {

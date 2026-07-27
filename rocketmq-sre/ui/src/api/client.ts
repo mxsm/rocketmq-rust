@@ -12,6 +12,7 @@ import type {
   CreateInspectionRequest,
   DiagnosisDispatch,
   EvidenceRecord,
+  FleetHealthReport,
   IncidentView,
   InspectionReport,
   InspectionView,
@@ -22,6 +23,7 @@ import type {
   OnboardClusterRequest,
   OnboardOutcome,
   Phase2ContractManifest,
+  ClusterHealthReport,
   PromoteInvestigationRequest,
   Recommendation,
   RecommendationDispositionRequest,
@@ -143,6 +145,18 @@ export interface SreApi {
   getCoverage: (signal?: AbortSignal) => Promise<CoverageMatrix>;
   getHealth: (signal?: AbortSignal) => Promise<ServiceStatus>;
   getReadiness: (signal?: AbortSignal) => Promise<ServiceStatus>;
+  getClusterSlo: (
+    clusterId: string,
+    signal?: AbortSignal,
+  ) => Promise<ClusterHealthReport>;
+  getClusterHealth: (
+    clusterId: string,
+    signal?: AbortSignal,
+  ) => Promise<ClusterHealthReport>;
+  getFleetHealth: (
+    region?: string,
+    signal?: AbortSignal,
+  ) => Promise<FleetHealthReport>;
   onboardCluster: (
     input: OnboardClusterRequest,
     signal?: AbortSignal,
@@ -281,6 +295,21 @@ export function createHttpSreApi(auth?: ApiRequestContext): SreApi {
       get<CoverageMatrix>("/v1/capabilities/coverage", signal),
     getHealth: (signal) => get<ServiceStatus>("/healthz", signal),
     getReadiness: (signal) => get<ServiceStatus>("/readyz", signal),
+    getClusterSlo: (clusterId, signal) =>
+      get<ClusterHealthReport>(
+        `/v1/clusters/${encodeURIComponent(clusterId)}/slo`,
+        signal,
+      ),
+    getClusterHealth: (clusterId, signal) =>
+      get<ClusterHealthReport>(
+        `/v1/clusters/${encodeURIComponent(clusterId)}/health`,
+        signal,
+      ),
+    getFleetHealth: (region, signal) =>
+      get<FleetHealthReport>(
+        query("/v1/fleet/health", { region }),
+        signal,
+      ),
     onboardCluster: (input, signal) =>
       post<OnboardOutcome>("/v1/clusters/onboard", input, signal),
     listAssets: async (clusterId, signal) =>

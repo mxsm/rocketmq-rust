@@ -19,6 +19,8 @@ use std::time::Duration;
 use chrono::Utc;
 use rocketmq_sre_contracts::CorrelationId;
 use rocketmq_sre_contracts::EvidenceId;
+use rocketmq_sre_contracts::HealthDataQuality;
+use rocketmq_sre_contracts::HealthStatus;
 use rocketmq_sre_contracts::InspectionRunId;
 use rocketmq_sre_contracts::InspectionTemplate;
 use rocketmq_sre_core::diagnostics::DiagnosticEngine;
@@ -128,6 +130,47 @@ impl InspectionService {
         let mut pack_runs = Vec::new();
         let mut recommendations = Vec::new();
         let mut partial = page.partial;
+        if run.template == InspectionTemplate::ClusterHealth
+            && let Some(health) = self.repository.latest_health_snapshot(auth, run.cluster_id).await?
+        {
+            let at = Utc::now();
+            let health_partial = health.data_quality != HealthDataQuality::Complete;
+            partial |= health_partial;
+            if health.status != HealthStatus::Healthy {
+                recommendations.push(NewRecommendation {
+                    severity: match health.status {
+                        HealthStatus::Critical => "critical",
+                        HealthStatus::Degraded => "warning",
+                        HealthStatus::Unknown => "info",
+                        HealthStatus::Healthy => "info",
+                    }
+                    .to_owned(),
+                    title: "Review deterministic cluster health score".to_owned(),
+                    rationale: format!(
+                        "Cluster health is {:?} with score {}; inspect triggered SLIs and cited evidence before any \
+                         operator action",
+                        health.status,
+                        health
+                            .score
+                            .map_or_else(|| "unknown".to_owned(), |score| score.to_string())
+                    ),
+                    evidence_ids: health.evidence_ids.clone(),
+                });
+            }
+            pack_runs.push(InspectionPackRun {
+                pack_id: "cluster-health-score.v1".to_owned(),
+                pack_version: health.algorithm_version.clone(),
+                input_evidence_ids: health.evidence_ids.clone(),
+                output: json!({
+                    "schema_version": "rocketmq-sre.inspection-health-result.v1",
+                    "health": health,
+                    "execution_eligible": false,
+                }),
+                partial: health_partial,
+                started_at: at,
+                completed_at: at,
+            });
+        }
         for pack_id in template_packs(run.template) {
             let started_at = Utc::now();
             let report = self.diagnostics.evaluate(pack_id, &page.items).map_err(|error| {

@@ -31,6 +31,10 @@ import {
   phase1Topology,
   phase1WorkflowEvents,
 } from "./phase1Demo";
+import {
+  demoClusterHealth,
+  demoFleetHealth,
+} from "./phase2HealthDemo";
 
 const WAIT_MS = 90;
 
@@ -139,6 +143,7 @@ export function createMockSreApi(auth?: ApiRequestContext): SreApi {
           "read_alerts",
           "read_topology",
           "read_forecasts",
+          "read_slo_health",
           "run_simulation",
           "read_readiness",
           "manage_postmortem_metadata",
@@ -157,6 +162,24 @@ export function createMockSreApi(auth?: ApiRequestContext): SreApi {
     getReadiness: async (signal) => {
       await wait(signal);
       return { status: "ready" };
+    },
+    getClusterSlo: async (clusterId, signal) => {
+      await wait(signal);
+      scope(clusterId);
+      return clone(
+        demoClusterHealth[clusterId] ?? unavailable("cluster SLO"),
+      );
+    },
+    getClusterHealth: async (clusterId, signal) => {
+      await wait(signal);
+      scope(clusterId);
+      return clone(
+        demoClusterHealth[clusterId] ?? unavailable("cluster health"),
+      );
+    },
+    getFleetHealth: async (region, signal) => {
+      await wait(signal);
+      return clone(demoFleetHealth(auth?.clusterIds, region));
     },
     onboardCluster: async (input, signal) => {
       await wait(signal);

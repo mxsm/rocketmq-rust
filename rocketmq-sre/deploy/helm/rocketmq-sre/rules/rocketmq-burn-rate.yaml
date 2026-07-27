@@ -1,0 +1,148 @@
+# Copyright 2026 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0.
+
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: rocketmq-sre-burn-rate
+  labels:
+    app.kubernetes.io/name: rocketmq-sre
+spec:
+  groups:
+    - name: rocketmq-sre.sli-error-ratios
+      interval: 30s
+      rules:
+        - record: rocketmq_sre_sli_error_ratio
+          labels: { sli: delivery_ratio, dimension: traffic }
+          expr: clamp_min(1 - (sum by (cluster) (rate(rocketmq_messages_out_total[5m])) / clamp_min(sum by (cluster) (rate(rocketmq_messages_in_total[5m])), 1)), 0)
+        - record: rocketmq_sre_sli_error_ratio
+          labels: { sli: send_p99, dimension: traffic }
+          expr: clamp_min(histogram_quantile(0.99, sum by (cluster, le) (rate(rocketmq_send_message_latency_bucket[5m]))) / 500 - 1, 0)
+        - record: rocketmq_sre_sli_error_ratio
+          labels: { sli: consumer_backlog, dimension: consumer }
+          expr: clamp_max(max by (cluster) (rocketmq_consumer_lag_messages) / 100000, 1)
+        - record: rocketmq_sre_sli_error_ratio
+          labels: { sli: retry_backlog, dimension: consumer }
+          expr: clamp_max(sum by (cluster) (rocketmq_consumer_ready_messages{is_retry="true"}) / 10000, 1)
+        - record: rocketmq_sre_sli_error_ratio
+          labels: { sli: dlq_backlog, dimension: consumer }
+          expr: clamp_max(sum by (cluster) (rate(rocketmq_send_to_dlq_messages_total[5m])) / 10, 1)
+        - record: rocketmq_sre_sli_error_ratio
+          labels: { sli: pop_backlog, dimension: consumer }
+          expr: clamp_max(max by (cluster) (rocketmq_pop_revive_lag) / 10000, 1)
+        - record: rocketmq_sre_sli_error_ratio
+          labels: { sli: timer_backlog, dimension: consumer }
+          expr: clamp_max(max by (cluster) (rocketmq_timer_dequeue_lag) / 10000, 1)
+        - record: rocketmq_sre_sli_error_ratio
+          labels: { sli: broker_runtime, dimension: broker }
+          expr: 1 - min by (cluster) (rocketmq_broker_up)
+        - record: rocketmq_sre_sli_error_ratio
+          labels: { sli: flush_dispatch, dimension: store }
+          expr: clamp_max(max by (cluster) (rocketmq_storage_flush_behind_bytes + rocketmq_storage_dispatch_behind_bytes) / 1073741824, 1)
+        - record: rocketmq_sre_sli_error_ratio
+          labels: { sli: disk_capacity, dimension: store }
+          expr: clamp_min(max by (cluster) (rocketmq_store_disk_usage) - 0.80, 0)
+        - record: rocketmq_sre_sli_error_ratio
+          labels: { sli: broker_ha, dimension: ha_controller }
+          expr: clamp_max(max by (cluster) (rocketmq_store_ha_replication_lag_bytes) / 1073741824, 1)
+        - record: rocketmq_sre_sli_error_ratio
+          labels: { sli: controller_quorum, dimension: ha_controller }
+          expr: 1 - min by (cluster) (rocketmq_controller_quorum_health)
+        - record: rocketmq_sre_sli_error_ratio
+          labels: { sli: route_freshness, dimension: routing_proxy }
+          expr: clamp_min(histogram_quantile(0.99, sum by (cluster, le) (rate(rocketmq_namesrv_route_freshness_bucket[5m]))) / 30 - 1, 0)
+        - record: rocketmq_sre_sli_error_ratio
+          labels: { sli: proxy_connection, dimension: routing_proxy }
+          expr: clamp_max(sum by (cluster) (rate(rocketmq_proxy_grpc_errors_total[5m])) / clamp_min(sum by (cluster) (rate(rocketmq_proxy_grpc_requests_total[5m])), 1), 1)
+        - record: rocketmq_sre_sli_error_ratio
+          labels: { sli: certificate_expiry, dimension: security }
+          expr: clamp_min((1209600 - min by (cluster) (rocketmq_sre_certificate_valid_seconds)) / 1209600, 0)
+        - record: rocketmq_sre_sli_error_ratio
+          labels: { sli: auth_success, dimension: security }
+          expr: sum by (cluster) (rate(rocketmq_sre_auth_denied_total[5m])) / clamp_min(sum by (cluster) (rate(rocketmq_sre_auth_decisions_total[5m])), 1)
+        - record: rocketmq_sre_sli_error_ratio
+          labels: { sli: runtime_saturation, dimension: platform }
+          expr: clamp_max(max by (cluster) (rocketmq_runtime_blocking_queued) / 100, 1)
+        - record: rocketmq_sre_sli_error_ratio
+          labels: { sli: telemetry_freshness, dimension: platform }
+          expr: clamp_min(max by (cluster) (rocketmq_sre_telemetry_age_seconds) / 180 - 1, 0)
+
+    - name: rocketmq-sre.sli-objectives
+      interval: 5m
+      rules:
+        - record: rocketmq_sre_sli_objective
+          labels: { sli: delivery_ratio, dimension: traffic }
+          expr: vector(0.999)
+        - record: rocketmq_sre_sli_objective
+          labels: { sli: send_p99, dimension: traffic }
+          expr: vector(0.99)
+        - record: rocketmq_sre_sli_objective
+          labels: { sli: consumer_backlog, dimension: consumer }
+          expr: vector(0.99)
+        - record: rocketmq_sre_sli_objective
+          labels: { sli: retry_backlog, dimension: consumer }
+          expr: vector(0.99)
+        - record: rocketmq_sre_sli_objective
+          labels: { sli: dlq_backlog, dimension: consumer }
+          expr: vector(0.999)
+        - record: rocketmq_sre_sli_objective
+          labels: { sli: pop_backlog, dimension: consumer }
+          expr: vector(0.99)
+        - record: rocketmq_sre_sli_objective
+          labels: { sli: timer_backlog, dimension: consumer }
+          expr: vector(0.99)
+        - record: rocketmq_sre_sli_objective
+          labels: { sli: broker_runtime, dimension: broker }
+          expr: vector(0.999)
+        - record: rocketmq_sre_sli_objective
+          labels: { sli: flush_dispatch, dimension: store }
+          expr: vector(0.99)
+        - record: rocketmq_sre_sli_objective
+          labels: { sli: disk_capacity, dimension: store }
+          expr: vector(0.99)
+        - record: rocketmq_sre_sli_objective
+          labels: { sli: broker_ha, dimension: ha_controller }
+          expr: vector(0.999)
+        - record: rocketmq_sre_sli_objective
+          labels: { sli: controller_quorum, dimension: ha_controller }
+          expr: vector(0.999)
+        - record: rocketmq_sre_sli_objective
+          labels: { sli: route_freshness, dimension: routing_proxy }
+          expr: vector(0.999)
+        - record: rocketmq_sre_sli_objective
+          labels: { sli: proxy_connection, dimension: routing_proxy }
+          expr: vector(0.99)
+        - record: rocketmq_sre_sli_objective
+          labels: { sli: certificate_expiry, dimension: security }
+          expr: vector(0.999)
+        - record: rocketmq_sre_sli_objective
+          labels: { sli: auth_success, dimension: security }
+          expr: vector(0.999)
+        - record: rocketmq_sre_sli_objective
+          labels: { sli: runtime_saturation, dimension: platform }
+          expr: vector(0.99)
+        - record: rocketmq_sre_sli_objective
+          labels: { sli: telemetry_freshness, dimension: platform }
+          expr: vector(0.99)
+
+    - name: rocketmq-sre.multi-window-burn-rate
+      interval: 30s
+      rules:
+        - record: rocketmq_sre_sli_burn_rate
+          labels: { window_pair: fast, window_role: short }
+          expr: avg_over_time(rocketmq_sre_sli_error_ratio[5m]) / on(sli, dimension) group_left() clamp_min(1 - rocketmq_sre_sli_objective, 0.000001)
+        - record: rocketmq_sre_sli_burn_rate
+          labels: { window_pair: fast, window_role: long }
+          expr: avg_over_time(rocketmq_sre_sli_error_ratio[1h]) / on(sli, dimension) group_left() clamp_min(1 - rocketmq_sre_sli_objective, 0.000001)
+        - record: rocketmq_sre_sli_burn_rate
+          labels: { window_pair: medium, window_role: short }
+          expr: avg_over_time(rocketmq_sre_sli_error_ratio[30m]) / on(sli, dimension) group_left() clamp_min(1 - rocketmq_sre_sli_objective, 0.000001)
+        - record: rocketmq_sre_sli_burn_rate
+          labels: { window_pair: medium, window_role: long }
+          expr: avg_over_time(rocketmq_sre_sli_error_ratio[6h]) / on(sli, dimension) group_left() clamp_min(1 - rocketmq_sre_sli_objective, 0.000001)
+        - record: rocketmq_sre_sli_burn_rate
+          labels: { window_pair: slow, window_role: short }
+          expr: avg_over_time(rocketmq_sre_sli_error_ratio[6h]) / on(sli, dimension) group_left() clamp_min(1 - rocketmq_sre_sli_objective, 0.000001)
+        - record: rocketmq_sre_sli_burn_rate
+          labels: { window_pair: slow, window_role: long }
+          expr: avg_over_time(rocketmq_sre_sli_error_ratio[3d]) / on(sli, dimension) group_left() clamp_min(1 - rocketmq_sre_sli_objective, 0.000001)

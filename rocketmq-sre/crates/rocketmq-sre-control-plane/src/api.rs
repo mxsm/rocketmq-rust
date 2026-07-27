@@ -75,6 +75,7 @@ use crate::observability::SreHealthViewV1;
 use crate::observability::SreMetrics;
 use crate::observability::SreObservability;
 use crate::repository::ClusterRepository;
+use crate::slo::SloService;
 use crate::workflow::WorkflowEventBus;
 use crate::workflow::WorkflowService;
 
@@ -521,6 +522,7 @@ pub(crate) struct AppState {
     pub(crate) observability: SreObservability,
     pub(crate) observability_status: ObservabilityStatusHandle,
     pub(crate) sre_metrics: Arc<SreMetrics>,
+    pub(crate) slo: SloService,
     pub(crate) workflow: WorkflowService,
 }
 
@@ -551,6 +553,7 @@ pub fn build_router(
 struct ControlPlaneRouters {
     public: Router,
     connector: Router,
+    slo: SloService,
 }
 
 fn build_routers_with_auth(
@@ -568,6 +571,12 @@ fn build_routers_with_auth(
     let assets = AssetTopologyService::new(repository.clone(), dashboard_links);
     let knowledge = KnowledgeService::new(repository.clone());
     let connector_channel = PostgresConnectorChannelService::postgres(repository.clone(), internal_token.clone())?;
+    let slo = SloService::new(
+        repository.clone(),
+        connector_channel.clone(),
+        evidence.clone(),
+        alerting.clone(),
+    )?;
     let connector_routes = connector_channel::router::<AppState>(connector_channel.clone());
     let connector_control_routes = Router::new()
         .route(
@@ -590,6 +599,7 @@ fn build_routers_with_auth(
         observability,
         observability_status: ObservabilityStatusHandle::default(),
         sre_metrics,
+        slo: slo.clone(),
         workflow,
     };
     let public = Router::new()
@@ -615,7 +625,7 @@ fn build_routers_with_auth(
         .merge(connector_control_routes)
         .merge(crate::phase1_api::connector_ingest_routes())
         .with_state(state);
-    Ok(ControlPlaneRouters { public, connector })
+    Ok(ControlPlaneRouters { public, connector, slo })
 }
 
 /// Connects the production repository, binds the HTTP endpoint, and drains on
@@ -697,7 +707,26 @@ pub async fn run(config: ControlPlaneConfig, service_context: ChildServiceContex
         model_gateway,
         workflow,
     )?;
-    let ControlPlaneRouters { public, connector } = routers;
+    let slo_worker = routers.slo.clone();
+    let slo_tasks = service_context.scheduled_tasks("slo-evaluator");
+    let mut slo_schedule =
+        ScheduledTaskConfig::fixed_rate_no_overlap("phase2-slo-evaluator", slo_worker.worker_interval());
+    slo_schedule.initial_delay = std::time::Duration::from_secs(3);
+    slo_schedule.max_run_time = Some(std::time::Duration::from_secs(5 * 60));
+    slo_schedule.shutdown_timeout = config.shutdown_timeout();
+    slo_tasks
+        .schedule_fixed_rate_no_overlap(slo_schedule, move || {
+            let slo = slo_worker.clone();
+            async move {
+                slo.run_due().await;
+            }
+        })
+        .map_err(|error| ControlPlaneError::configuration(format!("SLO evaluator could not be started: {error}")))?;
+    let ControlPlaneRouters {
+        public,
+        connector,
+        slo: _,
+    } = routers;
     let connector_shutdown = service_context.task_group().cancellation_token();
     let connector_failure = connector_shutdown.clone();
     let connector_failed = Arc::new(AtomicBool::new(false));

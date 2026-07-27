@@ -73,4 +73,24 @@ describe("mock SRE API", () => {
     expect(snapshot.content_hash).toMatch(/^sha256:/);
     expect(content).toMatchObject({ lag: 1284 });
   });
+
+  it("keeps deterministic cluster and fleet health read-only and explainable", async () => {
+    const api = createMockSreApi(auth);
+
+    const cluster = await api.getClusterHealth(DEMO_CLUSTER_ID);
+    const slo = await api.getClusterSlo(DEMO_CLUSTER_ID);
+    const fleet = await api.getFleetHealth();
+
+    expect(cluster.algorithm_version).toBe(
+      "rocketmq-sre.health-score.v1",
+    );
+    expect(cluster.dimensions).toHaveLength(8);
+    expect(cluster.model_adjustment_supported).toBe(false);
+    expect(cluster.execution_eligible).toBe(false);
+    expect(slo.id).toBe(cluster.id);
+    expect(fleet.aggregation).toBe(
+      "worst_cluster_no_average_masking",
+    );
+    expect(fleet.clusters).toHaveLength(1);
+  });
 });

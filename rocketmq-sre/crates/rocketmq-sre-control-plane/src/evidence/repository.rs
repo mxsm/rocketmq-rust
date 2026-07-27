@@ -168,21 +168,53 @@ impl PostgresRepository {
             snapshot.clone()
         };
 
-        sqlx::query(
-            "INSERT INTO evidence_links (
-                id, evidence_id, investigation_id, incident_id, linked_at
-             ) VALUES ($1, $2, $3, $4, $5)
-             ON CONFLICT DO NOTHING",
-        )
-        .bind(Uuid::new_v4())
-        .bind(persisted.evidence_id.as_uuid())
-        .bind(investigation_id.map(InvestigationId::as_uuid))
-        .bind(incident_id.map(IncidentId::as_uuid))
-        .bind(Utc::now())
-        .execute(&mut *transaction)
-        .await?;
+        if investigation_id.is_some() || incident_id.is_some() {
+            sqlx::query(
+                "INSERT INTO evidence_links (
+                    id, evidence_id, investigation_id, incident_id, linked_at
+                 ) VALUES ($1, $2, $3, $4, $5)
+                 ON CONFLICT DO NOTHING",
+            )
+            .bind(Uuid::new_v4())
+            .bind(persisted.evidence_id.as_uuid())
+            .bind(investigation_id.map(InvestigationId::as_uuid))
+            .bind(incident_id.map(IncidentId::as_uuid))
+            .bind(Utc::now())
+            .execute(&mut *transaction)
+            .await?;
+        }
         transaction.commit().await?;
         Ok(persisted)
+    }
+
+    pub(crate) async fn latest_cluster_source_evidence(
+        &self,
+        auth: &AuthContext,
+        cluster_id: ClusterId,
+        source: &str,
+        resource: &str,
+    ) -> Result<Option<EvidenceSnapshot>, ControlPlaneError> {
+        if !auth.clusters.contains(&cluster_id) {
+            return Err(ControlPlaneError::forbidden(
+                "cluster_not_allowed",
+                "evidence cluster is outside the authenticated scope",
+            ));
+        }
+        let row = sqlx::query(&format!(
+            "{EVIDENCE_COLUMNS}
+             WHERE e.tenant_id = $1 AND e.cluster_id = $2
+               AND e.source = $3 AND e.resource = $4
+               AND (e.expires_at IS NULL OR e.expires_at > NOW())
+             ORDER BY e.observed_at DESC, e.id DESC
+             LIMIT 1"
+        ))
+        .bind(auth.tenant_id.as_uuid())
+        .bind(cluster_id.as_uuid())
+        .bind(source)
+        .bind(resource)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.as_ref().map(evidence_from_row).transpose()
     }
 
     pub(crate) async fn evidence(

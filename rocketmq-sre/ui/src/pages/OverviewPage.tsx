@@ -12,7 +12,9 @@ import { useEffect, useMemo, useState } from "react";
 import type {
   CapabilitySnapshot,
   ClusterSummary,
+  FleetHealthReport,
 } from "@/api/types";
+import { FleetHealthOverview } from "@/components/HealthOverview";
 import { PageHeader } from "@/components/PageHeader";
 import { ReadOnlyBoundary } from "@/components/ReadOnlyBoundary";
 import {
@@ -36,13 +38,15 @@ import {
 import { useSreData } from "@/data/SreDataContext";
 
 export function OverviewPage() {
-  const { clusters, loading, error, refresh, capability } = useSreData();
+  const { clusters, loading, error, refresh, capability, api } = useSreData();
   const [environment, setEnvironment] = useState("all");
   const [selectedId, setSelectedId] = useState<string>();
   const [capabilityMap, setCapabilityMap] = useState<
     Record<string, CapabilitySnapshot>
   >({});
   const [capabilityError, setCapabilityError] = useState<string>();
+  const [fleetHealth, setFleetHealth] = useState<FleetHealthReport>();
+  const [fleetHealthError, setFleetHealthError] = useState<string>();
 
   const filteredClusters = useMemo(
     () =>
@@ -101,6 +105,26 @@ export function OverviewPage() {
     });
     return () => controller.abort();
   }, [capability, filteredClusters]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setFleetHealthError(undefined);
+    void api
+      .getFleetHealth(undefined, controller.signal)
+      .then(setFleetHealth)
+      .catch((cause: unknown) => {
+        if (
+          !(cause instanceof DOMException && cause.name === "AbortError")
+        ) {
+          setFleetHealthError(
+            cause instanceof Error
+              ? cause.message
+              : "Fleet 健康评分暂不可用",
+          );
+        }
+      });
+    return () => controller.abort();
+  }, [api]);
 
   const selected = filteredClusters.find(
     (cluster) => cluster.id === selectedId,
@@ -178,6 +202,16 @@ export function OverviewPage() {
           safe={selectedCapability?.mutation_supported === false}
         />
       </section>
+
+      {fleetHealth ? (
+        <FleetHealthOverview report={fleetHealth} />
+      ) : (
+        <section className="data-surface health-loading-surface">
+          <div className="state-message">
+            {fleetHealthError ?? "正在读取 Fleet 健康评分…"}
+          </div>
+        </section>
+      )}
 
       <section className="data-surface cluster-surface">
         <div className="surface-heading">

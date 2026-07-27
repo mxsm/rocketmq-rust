@@ -1,0 +1,434 @@
+{
+  "$defs": {
+    "BurnRateSeverity": {
+      "description": "Severity assigned to a configured multi-window burn-rate trigger.",
+      "enum": [
+        "warning",
+        "critical"
+      ],
+      "type": "string"
+    },
+    "BurnRateWindowResult": {
+      "description": "Evaluation of one configured short/long burn-rate window pair.",
+      "properties": {
+        "data_quality": {
+          "$ref": "#/$defs/HealthDataQuality"
+        },
+        "evidence_ids": {
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          },
+          "type": "array"
+        },
+        "long_burn_rate": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "long_window_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason_codes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "severity": {
+          "$ref": "#/$defs/BurnRateSeverity"
+        },
+        "short_burn_rate": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "short_window_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "threshold": {
+          "format": "double",
+          "type": "number"
+        },
+        "triggered": {
+          "type": "boolean"
+        },
+        "window_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "window_id",
+        "short_window_seconds",
+        "long_window_seconds",
+        "threshold",
+        "severity",
+        "triggered",
+        "data_quality"
+      ],
+      "type": "object"
+    },
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "EvidenceId": {
+      "description": "Stable identifier for an evidence snapshot.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "HealthDataQuality": {
+      "description": "Explicit quality of the data used by a health evaluation.",
+      "enum": [
+        "complete",
+        "partial",
+        "stale",
+        "missing"
+      ],
+      "type": "string"
+    },
+    "HealthDimensionScore": {
+      "description": "Deterministic score and contributing SLIs for one health dimension.",
+      "properties": {
+        "data_quality": {
+          "$ref": "#/$defs/HealthDataQuality"
+        },
+        "dimension": {
+          "$ref": "#/$defs/SloDimension"
+        },
+        "evidence_ids": {
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          },
+          "type": "array"
+        },
+        "reason_codes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "score": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/HealthStatus"
+        },
+        "triggered_sli_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "weight": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "dimension",
+        "weight",
+        "status",
+        "data_quality"
+      ],
+      "type": "object"
+    },
+    "HealthOperationalState": {
+      "description": "Operational context is carried independently so maintenance or drills do\nnot hide the underlying health severity.",
+      "enum": [
+        "normal",
+        "maintenance",
+        "fault_drill"
+      ],
+      "type": "string"
+    },
+    "HealthRecentChange": {
+      "description": "Previous-to-current deterministic health transition.",
+      "properties": {
+        "current_score": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "current_status": {
+          "$ref": "#/$defs/HealthStatus"
+        },
+        "occurred_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "previous_score": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "previous_status": {
+          "$ref": "#/$defs/HealthStatus"
+        },
+        "score_delta": {
+          "format": "int16",
+          "maximum": 32767,
+          "minimum": -32768,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "previous_status",
+        "current_status",
+        "occurred_at"
+      ],
+      "type": "object"
+    },
+    "HealthSnapshotId": {
+      "description": "Stable identifier for an immutable cluster health evaluation.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "HealthStatus": {
+      "description": "Health result of an SLI, dimension, cluster, or fleet.",
+      "enum": [
+        "healthy",
+        "degraded",
+        "critical",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "IncidentHealthSummary": {
+      "description": "Incident counts incorporated into the cluster overview.",
+      "properties": {
+        "active_incidents": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "critical_incidents": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "last_alert_at": {
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unassigned_incidents": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "active_incidents",
+        "critical_incidents",
+        "unassigned_incidents"
+      ],
+      "type": "object"
+    },
+    "SliHealth": {
+      "description": "Explainable multi-window result for one SLI.",
+      "properties": {
+        "data_quality": {
+          "$ref": "#/$defs/HealthDataQuality"
+        },
+        "dimension": {
+          "$ref": "#/$defs/SloDimension"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "evidence_ids": {
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "objective": {
+          "format": "double",
+          "type": "number"
+        },
+        "reason_codes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "status": {
+          "$ref": "#/$defs/HealthStatus"
+        },
+        "windows": {
+          "items": {
+            "$ref": "#/$defs/BurnRateWindowResult"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "display_name",
+        "dimension",
+        "objective",
+        "status",
+        "data_quality",
+        "windows"
+      ],
+      "type": "object"
+    },
+    "SloDimension": {
+      "description": "Fixed health dimensions used by the deterministic Phase 2 score.",
+      "enum": [
+        "traffic",
+        "consumer",
+        "broker",
+        "store",
+        "ha_controller",
+        "routing_proxy",
+        "security",
+        "platform"
+      ],
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Immutable, explainable health evaluation for one cluster.",
+  "properties": {
+    "algorithm_version": {
+      "type": "string"
+    },
+    "cluster_id": {
+      "$ref": "#/$defs/ClusterId"
+    },
+    "data_quality": {
+      "$ref": "#/$defs/HealthDataQuality"
+    },
+    "dimensions": {
+      "items": {
+        "$ref": "#/$defs/HealthDimensionScore"
+      },
+      "type": "array"
+    },
+    "evidence_ids": {
+      "items": {
+        "$ref": "#/$defs/EvidenceId"
+      },
+      "type": "array"
+    },
+    "execution_eligible": {
+      "type": "boolean"
+    },
+    "id": {
+      "$ref": "#/$defs/HealthSnapshotId"
+    },
+    "incident_summary": {
+      "$ref": "#/$defs/IncidentHealthSummary"
+    },
+    "model_adjustment_supported": {
+      "type": "boolean"
+    },
+    "observed_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "operational_state": {
+      "$ref": "#/$defs/HealthOperationalState"
+    },
+    "recent_changes": {
+      "items": {
+        "$ref": "#/$defs/HealthRecentChange"
+      },
+      "type": "array"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "score": {
+      "format": "uint8",
+      "maximum": 255,
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "slis": {
+      "items": {
+        "$ref": "#/$defs/SliHealth"
+      },
+      "type": "array"
+    },
+    "status": {
+      "$ref": "#/$defs/HealthStatus"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    },
+    "triggered_sli_ids": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "id",
+    "tenant_id",
+    "cluster_id",
+    "status",
+    "data_quality",
+    "operational_state",
+    "dimensions",
+    "slis",
+    "incident_summary",
+    "algorithm_version",
+    "model_adjustment_supported",
+    "execution_eligible",
+    "observed_at"
+  ],
+  "title": "ClusterHealthReport",
+  "type": "object"
+}

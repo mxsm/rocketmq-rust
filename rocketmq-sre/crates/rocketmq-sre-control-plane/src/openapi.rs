@@ -51,12 +51,14 @@ mod tests {
         "/v1/clusters/{id}/health",
         "/v1/clusters/{id}/inventory/latest",
         "/v1/clusters/{id}/offboard",
+        "/v1/clusters/{id}/slo",
         "/v1/conversations",
         "/v1/conversations/{id}",
         "/v1/events/stream",
         "/v1/evidence",
         "/v1/evidence/{id}",
         "/v1/evidence/{id}/content",
+        "/v1/fleet/health",
         "/v1/incidents",
         "/v1/incidents/{id}",
         "/v1/incidents/{id}/diagnose",
@@ -156,6 +158,8 @@ mod tests {
         for required in [
             "AlertEvent",
             "TopologySnapshot",
+            "ClusterHealthReport",
+            "FleetHealthReport",
             "CapacityForecast",
             "BacklogEta",
             "WhatIfSimulation",
@@ -206,7 +210,7 @@ mod tests {
         assert_eq!(
             paths["/v1/clusters/{id}/health"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
                 ["$ref"],
-            "#/components/schemas/ClusterIncidentHealth"
+            "#/components/schemas/ClusterHealthReport"
         );
 
         let schemas = document["components"]["schemas"]

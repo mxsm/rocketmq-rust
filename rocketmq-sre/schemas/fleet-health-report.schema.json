@@ -1,0 +1,212 @@
+{
+  "$defs": {
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "FleetClusterHealth": {
+      "description": "Bounded cluster summary used in fleet aggregation.",
+      "properties": {
+        "cluster_id": {
+          "$ref": "#/$defs/ClusterId"
+        },
+        "critical_incidents": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "data_quality": {
+          "$ref": "#/$defs/HealthDataQuality"
+        },
+        "external_cluster_key": {
+          "type": "string"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "operational_state": {
+          "$ref": "#/$defs/HealthOperationalState"
+        },
+        "region": {
+          "type": "string"
+        },
+        "score": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/HealthStatus"
+        },
+        "triggered_sli_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "cluster_id",
+        "external_cluster_key",
+        "region",
+        "status",
+        "data_quality",
+        "operational_state",
+        "critical_incidents",
+        "observed_at"
+      ],
+      "type": "object"
+    },
+    "HealthDataQuality": {
+      "description": "Explicit quality of the data used by a health evaluation.",
+      "enum": [
+        "complete",
+        "partial",
+        "stale",
+        "missing"
+      ],
+      "type": "string"
+    },
+    "HealthOperationalState": {
+      "description": "Operational context is carried independently so maintenance or drills do\nnot hide the underlying health severity.",
+      "enum": [
+        "normal",
+        "maintenance",
+        "fault_drill"
+      ],
+      "type": "string"
+    },
+    "HealthStatus": {
+      "description": "Health result of an SLI, dimension, cluster, or fleet.",
+      "enum": [
+        "healthy",
+        "degraded",
+        "critical",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Tenant/region fleet view whose score and status are determined by the\nworst cluster rather than an average.",
+  "properties": {
+    "aggregation": {
+      "type": "string"
+    },
+    "cluster_count": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "clusters": {
+      "items": {
+        "$ref": "#/$defs/FleetClusterHealth"
+      },
+      "type": "array"
+    },
+    "critical_clusters": {
+      "items": {
+        "$ref": "#/$defs/ClusterId"
+      },
+      "type": "array"
+    },
+    "data_quality": {
+      "$ref": "#/$defs/HealthDataQuality"
+    },
+    "degraded_clusters": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "fault_drill_clusters": {
+      "items": {
+        "$ref": "#/$defs/ClusterId"
+      },
+      "type": "array"
+    },
+    "healthy_clusters": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "maintenance_clusters": {
+      "items": {
+        "$ref": "#/$defs/ClusterId"
+      },
+      "type": "array"
+    },
+    "observed_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "region": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "score": {
+      "format": "uint8",
+      "maximum": 255,
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "status": {
+      "$ref": "#/$defs/HealthStatus"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    },
+    "unknown_clusters": {
+      "items": {
+        "$ref": "#/$defs/ClusterId"
+      },
+      "type": "array"
+    },
+    "worst_cluster_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ClusterId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "tenant_id",
+    "status",
+    "data_quality",
+    "cluster_count",
+    "healthy_clusters",
+    "degraded_clusters",
+    "critical_clusters",
+    "unknown_clusters",
+    "maintenance_clusters",
+    "fault_drill_clusters",
+    "clusters",
+    "aggregation",
+    "observed_at"
+  ],
+  "title": "FleetHealthReport",
+  "type": "object"
+}
