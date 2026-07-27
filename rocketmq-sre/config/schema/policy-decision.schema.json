@@ -1,0 +1,90 @@
+{
+  "$defs": {
+    "ActionPlanId": {
+      "description": "Stable identifier for an immutable action plan.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "PolicyDecisionId": {
+      "description": "Stable identifier for an immutable policy decision.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "PolicyEffect": {
+      "description": "Deterministic effect produced by the versioned Rust policy evaluator.",
+      "enum": [
+        "allow",
+        "deny",
+        "require_approval"
+      ],
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Immutable policy evaluation bound to one exact plan and input digest.",
+  "properties": {
+    "cluster_id": {
+      "$ref": "#/$defs/ClusterId"
+    },
+    "effect": {
+      "$ref": "#/$defs/PolicyEffect"
+    },
+    "evaluated_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "evaluated_by": {
+      "type": "string"
+    },
+    "id": {
+      "$ref": "#/$defs/PolicyDecisionId"
+    },
+    "input_hash": {
+      "type": "string"
+    },
+    "plan_hash": {
+      "type": "string"
+    },
+    "plan_id": {
+      "$ref": "#/$defs/ActionPlanId"
+    },
+    "policy_version": {
+      "type": "string"
+    },
+    "reason_codes": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    }
+  },
+  "required": [
+    "id",
+    "tenant_id",
+    "cluster_id",
+    "plan_id",
+    "plan_hash",
+    "policy_version",
+    "input_hash",
+    "effect",
+    "evaluated_by",
+    "evaluated_at"
+  ],
+  "title": "PolicyDecision",
+  "type": "object"
+}

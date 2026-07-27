@@ -24,8 +24,17 @@ rust-version.workspace = true
 description = "Disabled Phase 00 execution boundary for RocketMQ Rust AI SRE"
 
 [dependencies]
+chrono.workspace = true
 rocketmq-sre-contracts.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
 thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+rocketmq-sre-execution-agent = { path = "../rocketmq-sre-execution-agent" }
+tokio.workspace = true
 
 [lints]
 workspace = true

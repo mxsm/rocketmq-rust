@@ -59,9 +59,11 @@ use rocketmq_sre_contracts::NotificationDelivery;
 use rocketmq_sre_contracts::OperationsReport;
 use rocketmq_sre_contracts::Phase2ContractManifest;
 use rocketmq_sre_contracts::PlanStep;
+use rocketmq_sre_contracts::PolicyDecision;
 use rocketmq_sre_contracts::PostmortemDraft;
 use rocketmq_sre_contracts::PostmortemRevision;
 use rocketmq_sre_contracts::ReconcileGrant;
+use rocketmq_sre_contracts::ResourceQuarantine;
 use rocketmq_sre_contracts::ShiftHandoffSummary;
 use rocketmq_sre_contracts::StepIntent;
 use rocketmq_sre_contracts::StepResult;
@@ -276,6 +278,10 @@ pub fn phase3_generated_schemas() -> Result<Vec<(&'static str, serde_json::Value
             serde_json::to_value(schema_for!(ApprovalRecord))?,
         ),
         (
+            "policy-decision.schema.json",
+            serde_json::to_value(schema_for!(PolicyDecision))?,
+        ),
+        (
             "approval-grant.schema.json",
             serde_json::to_value(schema_for!(ApprovalGrant))?,
         ),
@@ -331,6 +337,10 @@ pub fn phase3_generated_schemas() -> Result<Vec<(&'static str, serde_json::Value
         (
             "audit-event.schema.json",
             serde_json::to_value(schema_for!(AuditEvent))?,
+        ),
+        (
+            "resource-quarantine.schema.json",
+            serde_json::to_value(schema_for!(ResourceQuarantine))?,
         ),
     ])
 }

@@ -12,12 +12,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Disabled execution boundary.
+//! Durable but dispatch-disabled supervised execution boundary.
 //!
-//! No target driver, credential type, approval path, or mutation dependency is
-//! present in Phase 00.
+//! Phase 3 persistence can journal immutable requests, intents, results,
+//! resource locks, quarantines, and fenced executor leases. No target driver,
+//! credential type, external mutation call, or execution binary is present
+//! until the later handler milestones explicitly enable one.
+
+mod error;
+mod journal;
+mod lease;
+mod lock;
+mod reconcile;
 
 use thiserror::Error;
+
+pub use error::JournalError;
+pub use journal::ExecutionCreation;
+pub use journal::ExecutionJournal;
+pub use journal::PendingIntent;
+pub use lease::ExecutorLeaseRecord;
+pub use lease::LeaseCoordinator;
+pub use lock::ResourceLock;
+pub use lock::ResourceLockRequest;
+pub use lock::ResourceSafetyStore;
+pub use reconcile::LiveEffectState;
+pub use reconcile::ReconcileDisposition;
+pub use reconcile::ReconcilePlanner;
 
 /// Compile-time-visible execution availability.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -36,7 +57,7 @@ pub struct ExecutionDisabled;
 pub const fn availability() -> ExecutionAvailability {
     ExecutionAvailability {
         enabled: false,
-        reason: "approval, policy, and mutation drivers are intentionally absent",
+        reason: "durable fencing exists, but typed handlers and dispatch remain disabled",
     }
 }
 

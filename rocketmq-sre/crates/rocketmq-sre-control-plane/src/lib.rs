@@ -41,6 +41,7 @@ mod postmortem;
 mod read_audit;
 mod repository;
 mod slo;
+mod supervised_repository;
 mod workflow;
 
 pub use api::CapabilityDocuments;
@@ -59,6 +60,8 @@ pub use model::OnboardClusterRequest;
 pub use model::OnboardingState;
 pub use phase2_repository::Phase2Repository;
 pub use repository::PostgresRepository;
+pub use supervised_repository::StoredActionPlan;
+pub use supervised_repository::SupervisedRepository;
 
 pub const DEFAULT_CONTROL_PLANE_PORT: u16 = 8090;
 pub const DEFAULT_CONNECTOR_CHANNEL_PORT: u16 = 8093;

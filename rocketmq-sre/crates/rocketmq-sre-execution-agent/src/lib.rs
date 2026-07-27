@@ -12,7 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Disabled Phase 00 execution agent.
+//! Persisted fencing and effect ledger for the dispatch-disabled Agent.
+
+mod effect_store;
+mod error;
+
+pub use effect_store::AgentEffectRecord;
+pub use effect_store::AgentEffectStore;
+pub use effect_store::EffectCreation;
+pub use error::AgentStoreError;
 
 /// Static agent state exposed to readiness and capability APIs.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
