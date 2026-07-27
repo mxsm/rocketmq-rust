@@ -183,7 +183,7 @@ pub struct TieredDispatchDiagnostics {
     pub minimum_pinned_wal_segment: Option<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthSecurityDiagnostics {
     pub supported: bool,
     pub authentication_enabled: Option<bool>,
@@ -195,6 +195,24 @@ pub struct AuthSecurityDiagnostics {
     pub acl_reload_failures: Option<u64>,
     pub acl_reload_skipped: Option<u64>,
     pub credential_rotation_supported: bool,
+}
+
+impl std::fmt::Debug for AuthSecurityDiagnostics {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AuthSecurityDiagnostics")
+            .field("supported", &self.supported)
+            .field("authentication_enabled", &self.authentication_enabled)
+            .field("authorization_enabled", &self.authorization_enabled)
+            .field("acl_file_watch_enabled", &self.acl_file_watch_enabled)
+            .field("acl_generation", &self.acl_generation)
+            .field("acl_reload_attempts", &self.acl_reload_attempts)
+            .field("acl_reload_successes", &self.acl_reload_successes)
+            .field("acl_reload_failures", &self.acl_reload_failures)
+            .field("acl_reload_skipped", &self.acl_reload_skipped)
+            .field("credential_rotation_supported", &"[REDACTED]")
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
