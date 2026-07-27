@@ -31,7 +31,7 @@ use rocketmq_sre_core::diagnostics::DiagnosticStatus;
 use rocketmq_sre_core::diagnostics::EvidenceRequirement;
 use rocketmq_sre_core::diagnostics::FindingOutcome;
 use rocketmq_sre_core::diagnostics::Severity;
-use rocketmq_sre_core::diagnostics::wave_a_registry;
+use rocketmq_sre_core::diagnostics::full_registry;
 use serde::Serialize;
 use serde_json::Value;
 use serde_json::json;
@@ -95,8 +95,8 @@ impl OrchestratorService {
         evidence: EvidenceService,
         observability: SreObservability,
     ) -> Result<Self, ControlPlaneError> {
-        let registry = wave_a_registry().map_err(|error| {
-            ControlPlaneError::configuration(format!("Wave A diagnostic registry is invalid: {error}"))
+        let registry = full_registry().map_err(|error| {
+            ControlPlaneError::configuration(format!("built-in diagnostic registry is invalid: {error}"))
         })?;
         Ok(Self {
             workflow,
@@ -302,8 +302,8 @@ impl OrchestratorService {
         let Some(connector_channel) = &self.connector_channel else {
             return Ok((evidence, 1, 0));
         };
-        let registry = wave_a_registry().map_err(|error| {
-            ControlPlaneError::configuration(format!("Wave A diagnostic registry is invalid: {error}"))
+        let registry = full_registry().map_err(|error| {
+            ControlPlaneError::configuration(format!("built-in diagnostic registry is invalid: {error}"))
         })?;
         let pack = registry.resolve(pack_id).ok_or_else(|| {
             ControlPlaneError::configuration(format!("diagnostic pack `{pack_id}` is not registered"))
@@ -472,12 +472,60 @@ fn select_pack(incident: &IncidentView) -> &'static str {
         .to_ascii_lowercase()
         .replace(['_', ' '], "-");
 
-    if symptom.contains("consumer-lag") || symptom.contains("lag") {
+    if symptom.contains("retry") || symptom.contains("dlq") {
+        "retry-dlq.v1"
+    } else if symptom.contains("transaction") || symptom.contains("half-message") {
+        "transaction-message.v1"
+    } else if symptom.contains("pop") || symptom.contains("revive") {
+        "pop-revive.v1"
+    } else if symptom.contains("timer") {
+        "timer-backlog.v1"
+    } else if symptom.contains("queue-hotspot") || symptom.contains("skew") {
+        "queue-hotspot.v1"
+    } else if symptom.contains("consumer-lag") || symptom.contains("lag") {
         "consumer-lag.v2"
     } else if symptom.contains("consumer-runtime") || symptom.contains("rebalance") {
         "consumer-runtime.v1"
+    } else if symptom.contains("send-latency") || symptom.contains("latency") {
+        "send-latency.v1"
     } else if symptom.contains("producer") || symptom.contains("send") {
         "producer-connectivity.v1"
+    } else if symptom.contains("rocksdb") {
+        "rocksdb-health.v1"
+    } else if symptom.contains("cold-data") {
+        "cold-data-flow.v1"
+    } else if symptom.contains("tiered") {
+        "tiered-store.v1"
+    } else if symptom.contains("store-integrity") || symptom.contains("recovery") {
+        "store-integrity.v1"
+    } else if symptom.contains("store-pressure") || symptom.contains("disk") {
+        "store-pressure.v1"
+    } else if symptom.contains("broker-ha") || symptom.contains("replica") {
+        "broker-ha.v1"
+    } else if symptom.contains("controller") || symptom.contains("quorum") {
+        "controller-ha.v1"
+    } else if symptom.contains("static-topic") || symptom.contains("mapping-epoch") {
+        "static-topic-route.v1"
+    } else if symptom.contains("subscription-config") || symptom.contains("filter-drift") {
+        "topic-subscription-config.v1"
+    } else if symptom.contains("namesrv") || symptom.contains("route") {
+        "namesrv-route.v1"
+    } else if symptom.contains("proxy") || symptom.contains("grpc") {
+        "proxy-connectivity.v1"
+    } else if symptom.contains("auth") || symptom.contains("certificate") {
+        "auth-failure.v1"
+    } else if symptom.contains("runtime") || symptom.contains("blocking") {
+        "runtime-saturation.v1"
+    } else if symptom.contains("upgrade") {
+        "upgrade-readiness.v1"
+    } else if symptom.contains("capacity") || symptom.contains("runway") {
+        "capacity-runway.v1"
+    } else if symptom.contains("dr-readiness") || symptom.contains("disaster-recovery") {
+        "dr-readiness.v1"
+    } else if symptom.contains("security-posture") {
+        "security-posture.v1"
+    } else if symptom.contains("change-regression") {
+        "change-regression.v1"
     } else if symptom.contains("broker") || symptom.contains("store") {
         "broker-health.v1"
     } else if symptom.contains("message-path") || symptom.contains("journey") {
@@ -684,18 +732,28 @@ mod tests {
 
     #[test]
     fn pack_selection_is_deterministic_and_read_only() {
-        let pack = select_pack(&IncidentView {
-            incident: rocketmq_sre_contracts::Incident::new(
-                rocketmq_sre_contracts::TenantId::new(),
-                rocketmq_sre_contracts::ClusterId::new(),
-                "consumer lag is rising",
-                chrono::Utc::now(),
-            ),
-            investigation: None,
-            timeline: Vec::new(),
-            diagnosis_revisions: Vec::new(),
-        });
-        assert_eq!(pack, "consumer-lag.v2");
+        for (symptom, expected) in [
+            ("consumer lag is rising", "consumer-lag.v2"),
+            ("rocksdb read amplification", "rocksdb-health.v1"),
+            ("controller quorum lost", "controller-ha.v1"),
+            ("POP revive delay", "pop-revive.v1"),
+            ("static topic mapping epoch", "static-topic-route.v1"),
+            ("capacity runway", "capacity-runway.v1"),
+            ("change regression", "change-regression.v1"),
+        ] {
+            let pack = select_pack(&IncidentView {
+                incident: rocketmq_sre_contracts::Incident::new(
+                    rocketmq_sre_contracts::TenantId::new(),
+                    rocketmq_sre_contracts::ClusterId::new(),
+                    symptom,
+                    chrono::Utc::now(),
+                ),
+                investigation: None,
+                timeline: Vec::new(),
+                diagnosis_revisions: Vec::new(),
+            });
+            assert_eq!(pack, expected, "{symptom}");
+        }
     }
 
     #[test]

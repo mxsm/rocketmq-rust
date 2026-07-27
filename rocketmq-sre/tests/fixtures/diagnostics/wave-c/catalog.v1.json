@@ -1,0 +1,288 @@
+{
+  "schema": "rocketmq-sre.diagnostic-fixture-catalog.v1",
+  "wave": "C",
+  "fixtures": [
+    {
+      "pack": "upgrade-readiness.v1",
+      "scenario": "normal",
+      "expected_status": "healthy",
+      "expected_reason_codes": [
+        "UPGRADE_READY"
+      ],
+      "evidence": [
+        {
+          "source": "kubernetes",
+          "resource": "upgrade-readiness/fixture",
+          "coverage": "available",
+          "content": {
+            "protocol_compatible": true,
+            "quorum_and_pdb_safe": true,
+            "canary_and_rollback_ready": true
+          }
+        }
+      ]
+    },
+    {
+      "pack": "upgrade-readiness.v1",
+      "scenario": "fault",
+      "expected_status": "fault",
+      "expected_reason_codes": [
+        "UPGRADE_PROTOCOL_INCOMPATIBLE"
+      ],
+      "evidence": [
+        {
+          "source": "kubernetes",
+          "resource": "upgrade-readiness/fixture",
+          "coverage": "available",
+          "content": {
+            "protocol_compatible": false,
+            "quorum_and_pdb_safe": true,
+            "canary_and_rollback_ready": true
+          }
+        }
+      ]
+    },
+    {
+      "pack": "upgrade-readiness.v1",
+      "scenario": "missing",
+      "expected_status": "inconclusive",
+      "expected_reason_codes": [],
+      "evidence": []
+    },
+    {
+      "pack": "capacity-runway.v1",
+      "scenario": "normal",
+      "expected_status": "healthy",
+      "expected_reason_codes": [
+        "CAPACITY_RUNWAY_HEALTHY"
+      ],
+      "evidence": [
+        {
+          "source": "prometheus",
+          "resource": "capacity-runway/fixture",
+          "coverage": "available",
+          "content": {
+            "disk_runway_days": 60,
+            "backlog_runway_days": 14,
+            "connection_headroom_ratio": 0.5
+          }
+        }
+      ]
+    },
+    {
+      "pack": "capacity-runway.v1",
+      "scenario": "fault",
+      "expected_status": "fault",
+      "expected_reason_codes": [
+        "CAPACITY_DISK_RUNWAY_LOW"
+      ],
+      "evidence": [
+        {
+          "source": "prometheus",
+          "resource": "capacity-runway/fixture",
+          "coverage": "available",
+          "content": {
+            "disk_runway_days": 10,
+            "backlog_runway_days": 14,
+            "connection_headroom_ratio": 0.5
+          }
+        }
+      ]
+    },
+    {
+      "pack": "capacity-runway.v1",
+      "scenario": "missing",
+      "expected_status": "inconclusive",
+      "expected_reason_codes": [],
+      "evidence": []
+    },
+    {
+      "pack": "cold-data-flow.v1",
+      "scenario": "normal",
+      "expected_status": "healthy",
+      "expected_reason_codes": [
+        "COLD_DATA_FLOW_HEALTHY"
+      ],
+      "evidence": [
+        {
+          "source": "admin-query",
+          "resource": "cold-data-flow/fixture",
+          "coverage": "available",
+          "content": {
+            "cold_hit_ratio": 0.9,
+            "fallback_ratio": 0.05,
+            "local_retention_pressure": false
+          }
+        }
+      ]
+    },
+    {
+      "pack": "cold-data-flow.v1",
+      "scenario": "fault",
+      "expected_status": "fault",
+      "expected_reason_codes": [
+        "COLD_DATA_HIT_RATE_LOW"
+      ],
+      "evidence": [
+        {
+          "source": "admin-query",
+          "resource": "cold-data-flow/fixture",
+          "coverage": "available",
+          "content": {
+            "cold_hit_ratio": 0.5,
+            "fallback_ratio": 0.05,
+            "local_retention_pressure": false
+          }
+        }
+      ]
+    },
+    {
+      "pack": "cold-data-flow.v1",
+      "scenario": "missing",
+      "expected_status": "inconclusive",
+      "expected_reason_codes": [],
+      "evidence": []
+    },
+    {
+      "pack": "dr-readiness.v1",
+      "scenario": "normal",
+      "expected_status": "healthy",
+      "expected_reason_codes": [
+        "DR_READY"
+      ],
+      "evidence": [
+        {
+          "source": "admin-query",
+          "resource": "dr-readiness/fixture",
+          "coverage": "available",
+          "content": {
+            "backup_or_snapshot_stale": false,
+            "restore_verified": true,
+            "rto_rpo_met": true
+          }
+        }
+      ]
+    },
+    {
+      "pack": "dr-readiness.v1",
+      "scenario": "fault",
+      "expected_status": "fault",
+      "expected_reason_codes": [
+        "DR_BACKUP_OR_SNAPSHOT_STALE"
+      ],
+      "evidence": [
+        {
+          "source": "admin-query",
+          "resource": "dr-readiness/fixture",
+          "coverage": "available",
+          "content": {
+            "backup_or_snapshot_stale": true,
+            "restore_verified": true,
+            "rto_rpo_met": true
+          }
+        }
+      ]
+    },
+    {
+      "pack": "dr-readiness.v1",
+      "scenario": "missing",
+      "expected_status": "inconclusive",
+      "expected_reason_codes": [],
+      "evidence": []
+    },
+    {
+      "pack": "security-posture.v1",
+      "scenario": "normal",
+      "expected_status": "healthy",
+      "expected_reason_codes": [
+        "SECURITY_POSTURE_HEALTHY"
+      ],
+      "evidence": [
+        {
+          "source": "admin-query",
+          "resource": "security-posture/fixture",
+          "coverage": "available",
+          "content": {
+            "privilege_drift": false,
+            "credential_expiring": false,
+            "unapproved_change": false
+          }
+        }
+      ]
+    },
+    {
+      "pack": "security-posture.v1",
+      "scenario": "fault",
+      "expected_status": "fault",
+      "expected_reason_codes": [
+        "SECURITY_PRIVILEGE_DRIFT"
+      ],
+      "evidence": [
+        {
+          "source": "admin-query",
+          "resource": "security-posture/fixture",
+          "coverage": "available",
+          "content": {
+            "privilege_drift": true,
+            "credential_expiring": false,
+            "unapproved_change": false
+          }
+        }
+      ]
+    },
+    {
+      "pack": "security-posture.v1",
+      "scenario": "missing",
+      "expected_status": "inconclusive",
+      "expected_reason_codes": [],
+      "evidence": []
+    },
+    {
+      "pack": "change-regression.v1",
+      "scenario": "normal",
+      "expected_status": "healthy",
+      "expected_reason_codes": [
+        "CHANGE_NO_REGRESSION"
+      ],
+      "evidence": [
+        {
+          "source": "kubernetes",
+          "resource": "change-regression/fixture",
+          "coverage": "available",
+          "content": {
+            "slo_regressed": false,
+            "error_or_latency_regressed": false,
+            "impact_scope_expanded": false
+          }
+        }
+      ]
+    },
+    {
+      "pack": "change-regression.v1",
+      "scenario": "fault",
+      "expected_status": "fault",
+      "expected_reason_codes": [
+        "CHANGE_SLO_REGRESSION"
+      ],
+      "evidence": [
+        {
+          "source": "kubernetes",
+          "resource": "change-regression/fixture",
+          "coverage": "available",
+          "content": {
+            "slo_regressed": true,
+            "error_or_latency_regressed": false,
+            "impact_scope_expanded": false
+          }
+        }
+      ]
+    },
+    {
+      "pack": "change-regression.v1",
+      "scenario": "missing",
+      "expected_status": "inconclusive",
+      "expected_reason_codes": [],
+      "evidence": []
+    }
+  ]
+}

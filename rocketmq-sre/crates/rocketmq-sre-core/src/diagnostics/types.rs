@@ -249,6 +249,14 @@ pub trait DiagnosticPack: fmt::Debug + Send + Sync {
     /// Queries the orchestrator may issue after an inconclusive result.
     fn follow_up_queries(&self) -> &'static [FollowUpQuery];
 
+    /// Maximum acceptable age of evidence consumed by this pack.
+    ///
+    /// Evidence older than this bound is treated as missing so a stale
+    /// snapshot cannot produce a healthy or high-confidence conclusion.
+    fn max_evidence_freshness_seconds(&self) -> u64 {
+        300
+    }
+
     /// Versioned schema emitted by this pack.
     fn output_schema(&self) -> SchemaVersion {
         SchemaVersion::new(

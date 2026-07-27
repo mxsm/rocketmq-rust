@@ -53,6 +53,7 @@ impl<'a> DiagnosticContext<'a> {
     fn new(pack: &dyn DiagnosticPack, evidence: &'a [EvidenceSnapshot]) -> Self {
         let required = pack.required_evidence();
         let optional = pack.optional_evidence();
+        let max_freshness_seconds = pack.max_evidence_freshness_seconds();
         let mut matches = BTreeMap::new();
 
         for requirement in required.iter().chain(optional) {
@@ -60,6 +61,9 @@ impl<'a> DiagnosticContext<'a> {
             for snapshot in evidence.iter().filter(|snapshot| {
                 snapshot.source == requirement.source && snapshot.resource.starts_with(requirement.resource_prefix)
             }) {
+                if snapshot.freshness_seconds > max_freshness_seconds {
+                    continue;
+                }
                 match snapshot.coverage {
                     CoverageStatus::Available | CoverageStatus::Partial
                         if matches!(snapshot.content, EvidenceContent::Inline(_)) =>

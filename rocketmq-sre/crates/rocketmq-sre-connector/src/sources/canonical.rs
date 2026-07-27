@@ -132,7 +132,11 @@ fn resolve_mcp(resource: &str) -> Option<CanonicalResourceRoute> {
             },
         ));
     }
-    None
+    resolve_catalog_resource(
+        resource,
+        &["namesrv-route/", "static-topic-route/"],
+        "wave_b_mcp_projection_not_production_verified",
+    )
 }
 
 fn resolve_admin(resource: &str) -> Option<CanonicalResourceRoute> {
@@ -183,7 +187,22 @@ fn resolve_admin(resource: &str) -> Option<CanonicalResourceRoute> {
             },
         ));
     }
-    None
+    resolve_catalog_resource(
+        resource,
+        &[
+            "store-pressure/",
+            "store-integrity/",
+            "rocksdb-health/",
+            "tiered-store/",
+            "broker-ha/",
+            "topic-subscription-config/",
+            "auth-failure/",
+            "cold-data-flow/",
+            "dr-readiness/",
+            "security-posture/",
+        ],
+        "wave_b_admin_projection_not_production_verified",
+    )
 }
 
 fn resolve_prometheus(resource: &str) -> Option<CanonicalResourceRoute> {
@@ -229,13 +248,38 @@ fn resolve_prometheus(resource: &str) -> Option<CanonicalResourceRoute> {
             },
         ));
     }
-    None
+    resolve_catalog_resource(
+        resource,
+        &[
+            "store-trend/",
+            "ha-network/",
+            "controller-ha/",
+            "namesrv-network/",
+            "send-latency/",
+            "proxy-connectivity/",
+            "retry-dlq/",
+            "transaction-message/",
+            "pop-revive/",
+            "timer-backlog/",
+            "queue-hotspot/",
+            "auth-telemetry/",
+            "runtime-telemetry/",
+            "capacity-runway/",
+            "prevention-trend/",
+        ],
+        "wave_b_metric_projection_not_production_verified",
+    )
 }
 
 fn resolve_tempo(resource: &str) -> Option<CanonicalResourceRoute> {
-    resource
-        .starts_with("message-trace/")
-        .then(|| not_verified("pseudonymized_trace_identifier_is_not_queryable"))
+    if resource.starts_with("message-trace/") {
+        return Some(not_verified("pseudonymized_trace_identifier_is_not_queryable"));
+    }
+    resolve_catalog_resource(
+        resource,
+        &["routing-trace/"],
+        "wave_b_trace_projection_not_production_verified",
+    )
 }
 
 fn resolve_kubernetes(resource: &str) -> Option<CanonicalResourceRoute> {
@@ -272,7 +316,11 @@ fn resolve_kubernetes(resource: &str) -> Option<CanonicalResourceRoute> {
             },
         ));
     }
-    None
+    resolve_catalog_resource(
+        resource,
+        &["proxy-workload/", "upgrade-readiness/", "change-regression/"],
+        "wave_c_kubernetes_projection_not_production_verified",
+    )
 }
 
 fn resolve_runtime(resource: &str) -> Option<CanonicalResourceRoute> {
@@ -293,7 +341,11 @@ fn resolve_runtime(resource: &str) -> Option<CanonicalResourceRoute> {
             |_| not_verified("runtime_build_metadata_not_exposed"),
         ));
     }
-    None
+    resolve_catalog_resource(
+        resource,
+        &["runtime-saturation/"],
+        "wave_b_runtime_projection_not_production_verified",
+    )
 }
 
 fn resolve_topology(resource: &str) -> Option<CanonicalResourceRoute> {
@@ -316,6 +368,26 @@ const fn query(query: CanonicalQuery, projection: CanonicalProjection) -> Canoni
 
 const fn not_verified(reason_code: &'static str) -> CanonicalResourceRoute {
     CanonicalResourceRoute::NotProductionVerified { reason_code }
+}
+
+fn resolve_catalog_resource(
+    resource: &str,
+    prefixes: &[&str],
+    reason_code: &'static str,
+) -> Option<CanonicalResourceRoute> {
+    prefixes.iter().find_map(|prefix| {
+        resource.strip_prefix(prefix).map(|suffix| {
+            if safe_resource_path(suffix) {
+                not_verified(reason_code)
+            } else {
+                not_verified("canonical_resource_parameters_unavailable")
+            }
+        })
+    })
+}
+
+fn safe_resource_path(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 512 && value.split('/').all(|segment| identifier(segment).is_some())
 }
 
 fn exact_pair(value: &str) -> Option<(String, String)> {
@@ -342,25 +414,15 @@ mod tests {
     use std::collections::BTreeSet;
 
     use rocketmq_sre_core::diagnostics::EvidenceRequirement;
-    use rocketmq_sre_core::diagnostics::wave_a_registry;
+    use rocketmq_sre_core::diagnostics::full_pack_ids;
+    use rocketmq_sre_core::diagnostics::full_registry;
 
     use super::super::normalize_source;
     use super::*;
 
-    const EXPECTED_PACKS: [&str; 8] = [
-        "broker-health.v1",
-        "cluster-topology.v1",
-        "consumer-lag.v2",
-        "consumer-runtime.v1",
-        "deployment-drift.v1",
-        "message-path.v1",
-        "producer-connectivity.v1",
-        "telemetry-pipeline.v1",
-    ];
-
     #[test]
-    fn all_wave_a_evidence_contracts_have_explicit_query_or_fail_closed_routes() {
-        let registry = wave_a_registry().expect("Wave A registry");
+    fn all_builtin_evidence_contracts_have_explicit_query_or_fail_closed_routes() {
+        let registry = full_registry().expect("complete built-in registry");
         let mut pack_ids = BTreeSet::new();
         let mut requirement_count = 0;
         let mut query_count = 0;
@@ -388,10 +450,10 @@ mod tests {
             }
         }
 
-        assert_eq!(pack_ids, EXPECTED_PACKS.into_iter().map(str::to_owned).collect());
-        assert_eq!(requirement_count, 21);
+        assert_eq!(pack_ids, full_pack_ids().into_iter().collect());
+        assert_eq!(requirement_count, 69);
         assert_eq!(query_count, 18);
-        assert_eq!(unsupported_count, 3);
+        assert_eq!(unsupported_count, 51);
     }
 
     #[test]
@@ -493,8 +555,47 @@ mod tests {
             "observability/" => "mcp",
             "telemetry-pipeline/" => "collector-a",
             "otel-collector/" => "rocketmq",
-            prefix => panic!("unexpected Wave A resource prefix {prefix}"),
+            prefix if is_catalog_prefix(prefix) => "fixture",
+            prefix => panic!("unexpected diagnostic resource prefix {prefix}"),
         };
         format!("{}{suffix}", requirement.resource_prefix)
+    }
+
+    fn is_catalog_prefix(prefix: &str) -> bool {
+        [
+            "store-pressure/",
+            "store-integrity/",
+            "rocksdb-health/",
+            "tiered-store/",
+            "store-trend/",
+            "broker-ha/",
+            "controller-ha/",
+            "namesrv-route/",
+            "ha-network/",
+            "namesrv-network/",
+            "send-latency/",
+            "proxy-connectivity/",
+            "proxy-workload/",
+            "routing-trace/",
+            "static-topic-route/",
+            "topic-subscription-config/",
+            "retry-dlq/",
+            "transaction-message/",
+            "pop-revive/",
+            "timer-backlog/",
+            "queue-hotspot/",
+            "auth-failure/",
+            "auth-telemetry/",
+            "runtime-saturation/",
+            "runtime-telemetry/",
+            "upgrade-readiness/",
+            "capacity-runway/",
+            "prevention-trend/",
+            "cold-data-flow/",
+            "dr-readiness/",
+            "security-posture/",
+            "change-regression/",
+        ]
+        .contains(&prefix)
     }
 }

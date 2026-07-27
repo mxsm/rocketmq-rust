@@ -26,7 +26,7 @@ use rocketmq_sre_core::diagnostics::DiagnosticFinding;
 use rocketmq_sre_core::diagnostics::DiagnosticReport;
 use rocketmq_sre_core::diagnostics::DiagnosticStatus;
 use rocketmq_sre_core::diagnostics::FindingOutcome;
-use rocketmq_sre_core::diagnostics::wave_a_registry;
+use rocketmq_sre_core::diagnostics::full_registry;
 use serde::Serialize;
 use serde_json::Value;
 use serde_json::json;
@@ -71,8 +71,8 @@ impl InspectionService {
         workflow: WorkflowService,
         evidence: EvidenceService,
     ) -> Result<Self, ControlPlaneError> {
-        let registry = wave_a_registry().map_err(|error| {
-            ControlPlaneError::configuration(format!("Wave A diagnostic registry is invalid: {error}"))
+        let registry = full_registry().map_err(|error| {
+            ControlPlaneError::configuration(format!("built-in diagnostic registry is invalid: {error}"))
         })?;
         Ok(Self {
             repository,
@@ -216,10 +216,44 @@ impl InspectionService {
 
 fn template_packs(template: InspectionTemplate) -> &'static [&'static str] {
     match template {
-        InspectionTemplate::ClusterHealth => &["cluster-topology.v1", "deployment-drift.v1"],
-        InspectionTemplate::Consumer => &["consumer-lag.v2", "consumer-runtime.v1"],
-        InspectionTemplate::Broker => &["broker-health.v1"],
-        InspectionTemplate::Telemetry => &["telemetry-pipeline.v1"],
+        InspectionTemplate::ClusterHealth => &[
+            "cluster-topology.v1",
+            "deployment-drift.v1",
+            "namesrv-route.v1",
+            "controller-ha.v1",
+            "upgrade-readiness.v1",
+            "capacity-runway.v1",
+            "security-posture.v1",
+            "change-regression.v1",
+        ],
+        InspectionTemplate::Consumer => &[
+            "consumer-lag.v2",
+            "consumer-runtime.v1",
+            "retry-dlq.v1",
+            "transaction-message.v1",
+            "pop-revive.v1",
+            "timer-backlog.v1",
+            "queue-hotspot.v1",
+            "topic-subscription-config.v1",
+        ],
+        InspectionTemplate::Broker => &[
+            "broker-health.v1",
+            "store-pressure.v1",
+            "store-integrity.v1",
+            "rocksdb-health.v1",
+            "tiered-store.v1",
+            "broker-ha.v1",
+            "static-topic-route.v1",
+            "cold-data-flow.v1",
+            "dr-readiness.v1",
+        ],
+        InspectionTemplate::Telemetry => &[
+            "telemetry-pipeline.v1",
+            "runtime-saturation.v1",
+            "send-latency.v1",
+            "proxy-connectivity.v1",
+            "auth-failure.v1",
+        ],
     }
 }
 

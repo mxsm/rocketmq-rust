@@ -1502,12 +1502,41 @@ const fn data_class_for_sensitivity(sensitivity: Sensitivity) -> DataClass {
 }
 
 fn pack_component(pack_id: &str) -> Option<&'static str> {
-    if pack_id.starts_with("consumer-") {
+    if pack_id.starts_with("consumer-")
+        || pack_id.starts_with("retry-")
+        || pack_id.starts_with("transaction-")
+        || pack_id.starts_with("pop-")
+        || pack_id.starts_with("timer-")
+        || pack_id.starts_with("queue-")
+    {
         Some("consumer")
     } else if pack_id.starts_with("producer-") {
         Some("producer")
-    } else if pack_id.starts_with("broker-") {
+    } else if pack_id.starts_with("broker-")
+        || pack_id.starts_with("controller-")
+        || pack_id.starts_with("namesrv-")
+        || pack_id.starts_with("static-topic-")
+        || pack_id.starts_with("topic-subscription-")
+    {
         Some("broker")
+    } else if pack_id.starts_with("store-")
+        || pack_id.starts_with("rocksdb-")
+        || pack_id.starts_with("tiered-")
+        || pack_id.starts_with("cold-data-")
+    {
+        Some("store")
+    } else if pack_id.starts_with("proxy-") || pack_id.starts_with("send-") {
+        Some("proxy")
+    } else if pack_id.starts_with("auth-") || pack_id.starts_with("security-") {
+        Some("auth")
+    } else if pack_id.starts_with("runtime-") {
+        Some("runtime")
+    } else if pack_id.starts_with("upgrade-")
+        || pack_id.starts_with("capacity-")
+        || pack_id.starts_with("dr-")
+        || pack_id.starts_with("change-")
+    {
+        Some("platform")
     } else if pack_id.starts_with("message-") {
         Some("message")
     } else if pack_id.starts_with("telemetry-") {

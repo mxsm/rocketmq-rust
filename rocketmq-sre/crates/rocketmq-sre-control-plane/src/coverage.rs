@@ -20,7 +20,7 @@ use chrono::Utc;
 use rocketmq_sre_contracts::ClusterId;
 use rocketmq_sre_core::diagnostics::DiagnosticPack;
 use rocketmq_sre_core::diagnostics::EvidenceRequirement;
-use rocketmq_sre_core::diagnostics::wave_a_registry;
+use rocketmq_sre_core::diagnostics::full_registry;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -31,7 +31,7 @@ use crate::ControlPlaneError;
 use crate::api::AppState;
 use crate::auth::AuthContext;
 
-const PACK_ORDER: [&str; 8] = [
+const PACK_ORDER: [&str; 32] = [
     "cluster-topology.v1",
     "consumer-lag.v2",
     "consumer-runtime.v1",
@@ -40,9 +40,33 @@ const PACK_ORDER: [&str; 8] = [
     "message-path.v1",
     "telemetry-pipeline.v1",
     "deployment-drift.v1",
+    "store-pressure.v1",
+    "store-integrity.v1",
+    "rocksdb-health.v1",
+    "tiered-store.v1",
+    "broker-ha.v1",
+    "controller-ha.v1",
+    "namesrv-route.v1",
+    "send-latency.v1",
+    "proxy-connectivity.v1",
+    "retry-dlq.v1",
+    "transaction-message.v1",
+    "pop-revive.v1",
+    "timer-backlog.v1",
+    "queue-hotspot.v1",
+    "static-topic-route.v1",
+    "topic-subscription-config.v1",
+    "auth-failure.v1",
+    "runtime-saturation.v1",
+    "upgrade-readiness.v1",
+    "capacity-runway.v1",
+    "cold-data-flow.v1",
+    "dr-readiness.v1",
+    "security-posture.v1",
+    "change-regression.v1",
 ];
 
-const SOURCE_ORDER: [&str; 8] = [
+const SOURCE_ORDER: [&str; 9] = [
     "rocketmq-mcp",
     "admin-query",
     "prometheus",
@@ -51,6 +75,7 @@ const SOURCE_ORDER: [&str; 8] = [
     "kubernetes",
     "runtime",
     "topology",
+    "alertmanager",
 ];
 
 #[derive(Debug, Default, Deserialize)]
@@ -166,15 +191,15 @@ pub(crate) async fn matrix(
         .iter()
         .map(|state| (state.source.as_str(), state))
         .collect::<BTreeMap<_, _>>();
-    let registry = wave_a_registry().map_err(|error| {
-        ControlPlaneError::configuration(format!("Wave A diagnostic pack registry is invalid: {error}"))
+    let registry = full_registry().map_err(|error| {
+        ControlPlaneError::configuration(format!("built-in diagnostic pack registry is invalid: {error}"))
     })?;
     let packs = PACK_ORDER
         .iter()
         .map(|id| {
             registry
                 .resolve(id)
-                .ok_or_else(|| ControlPlaneError::configuration(format!("Wave A diagnostic pack `{id}` is missing")))
+                .ok_or_else(|| ControlPlaneError::configuration(format!("built-in diagnostic pack `{id}` is missing")))
         })
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -202,9 +227,9 @@ pub(crate) async fn matrix(
         .collect::<Vec<_>>();
     let pack_coverage = packs.iter().map(|pack| pack_coverage(*pack, &states)).collect();
 
-    let selected_pack = packs
-        .first()
-        .ok_or_else(|| ControlPlaneError::configuration("Wave A diagnostic pack registry contains no active packs"))?;
+    let selected_pack = packs.first().ok_or_else(|| {
+        ControlPlaneError::configuration("built-in diagnostic pack registry contains no active packs")
+    })?;
     let selected_source = "topology";
     let selected_requirements = matching_requirements(*selected_pack, selected_source)
         .map(|requirement| requirement_view(requirement, states.get(selected_source).copied()))
@@ -375,6 +400,30 @@ fn capability_source(source: &str) -> &str {
 
 fn pack_label(id: &str) -> &'static str {
     match id {
+        "store-pressure" => "Store pressure",
+        "store-integrity" => "Store integrity",
+        "rocksdb-health" => "RocksDB health",
+        "tiered-store" => "Tiered Store",
+        "broker-ha" => "Broker HA",
+        "controller-ha" => "Controller HA",
+        "namesrv-route" => "NameServer route",
+        "send-latency" => "Send latency",
+        "proxy-connectivity" => "Proxy connectivity",
+        "retry-dlq" => "Retry and DLQ",
+        "transaction-message" => "Transaction messages",
+        "pop-revive" => "POP revive",
+        "timer-backlog" => "Timer backlog",
+        "queue-hotspot" => "Queue hotspot",
+        "static-topic-route" => "Static Topic route",
+        "topic-subscription-config" => "Topic and subscription config",
+        "auth-failure" => "Auth failure",
+        "runtime-saturation" => "Runtime saturation",
+        "upgrade-readiness" => "Upgrade readiness",
+        "capacity-runway" => "Capacity runway",
+        "cold-data-flow" => "Cold-data flow",
+        "dr-readiness" => "DR readiness",
+        "security-posture" => "Security posture",
+        "change-regression" => "Change regression",
         "cluster-topology" => "集群拓扑",
         "consumer-lag" => "消费积压",
         "consumer-runtime" => "消费者运行态",
@@ -397,6 +446,7 @@ fn source_label(source: &str) -> &'static str {
         "kubernetes" => "Kubernetes",
         "runtime" => "Runtime",
         "topology" => "Topology",
+        "alertmanager" => "Alertmanager",
         _ => "Unknown",
     }
 }
@@ -425,12 +475,12 @@ mod tests {
 
     #[test]
     fn wave_a_matrix_contains_all_pack_and_source_contracts() {
-        let registry = wave_a_registry().expect("Wave A registry");
+        let registry = full_registry().expect("built-in registry");
         let packs = PACK_ORDER
             .iter()
             .map(|id| registry.resolve(id).expect("registered pack"))
             .collect::<Vec<_>>();
-        assert_eq!(packs.len(), 8);
+        assert_eq!(packs.len(), 32);
         let declared_sources = packs
             .iter()
             .flat_map(|pack| {
@@ -445,7 +495,7 @@ mod tests {
 
     #[test]
     fn missing_source_is_never_reported_as_zero_or_queryable() {
-        let registry = wave_a_registry().expect("Wave A registry");
+        let registry = full_registry().expect("built-in registry");
         let pack = registry.resolve("consumer-lag.v2").expect("consumer lag");
         assert!(matches!(
             cell_status(pack, "rocketmq-mcp", None),

@@ -108,6 +108,7 @@ See:
 - [Compatibility](docs/compatibility.md)
 - [Phase 02 contracts and persistence](docs/phase02-contracts-and-persistence.md)
 - [Phase 02 diagnostic evidence sources](docs/phase02-evidence-sources.md)
+- [Phase 02 DiagnosticPack catalog](docs/phase02-diagnostic-packs.md)
 - [Local stack](deploy/dev/README.md)
 
 ## Kind acceptance
