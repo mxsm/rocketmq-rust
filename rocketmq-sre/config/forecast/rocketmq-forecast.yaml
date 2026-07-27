@@ -1,0 +1,208 @@
+# Copyright 2026 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0.
+
+schema_version: rocketmq-sre.forecast-config.v1
+algorithm_version: rocketmq-sre.explainable-forecast.v1
+worker_interval_seconds: 60
+query_timeout_seconds: 20
+max_evaluations_per_run: 8
+max_response_points: 8192
+change_point_window_samples: 12
+change_point_score_threshold: 3.5
+anomaly_robust_z_threshold: 3.5
+windows:
+  - window: seven_days
+    window_seconds: 604800
+    expected_interval_seconds: 3600
+    min_samples: 120
+    min_coverage_ratio: 0.70
+    freshness_seconds: 7200
+    max_normalized_volatility: 0.15
+    min_absolute_slope_per_hour: 0.0001
+    projection_horizon_hours: 168
+    projection_points: 8
+  - window: thirty_days
+    window_seconds: 2592000
+    expected_interval_seconds: 3600
+    min_samples: 504
+    min_coverage_ratio: 0.70
+    freshness_seconds: 7200
+    max_normalized_volatility: 0.15
+    min_absolute_slope_per_hour: 0.0001
+    projection_horizon_hours: 720
+    projection_points: 12
+baselines:
+  - seasonality: hourly
+    period_seconds: 3600
+    bucket_width_seconds: 3600
+    history_window_seconds: 604800
+    min_samples: 120
+  - seasonality: daily
+    period_seconds: 86400
+    bucket_width_seconds: 3600
+    history_window_seconds: 2592000
+    min_samples: 14
+  - seasonality: weekly
+    period_seconds: 604800
+    bucket_width_seconds: 3600
+    history_window_seconds: 2592000
+    min_samples: 4
+targets:
+  - id: broker_disk
+    category: broker_disk
+    kind: capacity
+    metric: rocketmq_broker_disk_used_ratio
+    resource_kind: broker
+    aggregation: max
+    threshold: 0.85
+    threshold_direction: upper
+  - id: pvc_disk
+    category: pvc_disk
+    kind: capacity
+    metric: kubelet_volume_stats_used_bytes
+    resource_kind: persistent_volume_claim
+    aggregation: sum
+    threshold: 1.0e+12
+    threshold_direction: upper
+  - id: commitlog
+    category: commitlog
+    kind: capacity
+    metric: rocketmq_store_commitlog_bytes
+    resource_kind: store
+    aggregation: sum
+    threshold: 1.0e+12
+    threshold_direction: upper
+  - id: consume_queue
+    category: consume_queue
+    kind: capacity
+    metric: rocketmq_store_consumequeue_bytes
+    resource_kind: store
+    aggregation: sum
+    threshold: 5.0e+11
+    threshold_direction: upper
+  - id: tiered_store
+    category: tiered_store
+    kind: capacity
+    metric: rocketmq_tiered_store_bytes
+    resource_kind: store
+    aggregation: sum
+    threshold: 5.0e+12
+    threshold_direction: upper
+  - id: rocksdb
+    category: rocksdb
+    kind: capacity
+    metric: rocketmq_rocksdb_live_data_bytes
+    resource_kind: store
+    aggregation: sum
+    threshold: 5.0e+11
+    threshold_direction: upper
+  - id: proxy_capacity
+    category: proxy_capacity
+    kind: capacity
+    metric: rocketmq_proxy_capacity_utilization
+    resource_kind: proxy
+    aggregation: max
+    threshold: 0.80
+    threshold_direction: upper
+  - id: broker_capacity
+    category: broker_capacity
+    kind: capacity
+    metric: rocketmq_broker_capacity_utilization
+    resource_kind: broker
+    aggregation: max
+    threshold: 0.80
+    threshold_direction: upper
+  - id: controller_capacity
+    category: controller_capacity
+    kind: capacity
+    metric: rocketmq_controller_capacity_utilization
+    resource_kind: controller
+    aggregation: max
+    threshold: 0.80
+    threshold_direction: upper
+  - id: tps
+    category: tps
+    kind: capacity
+    metric: rocketmq_cluster_tps
+    resource_kind: cluster
+    aggregation: sum
+    threshold: 1000000
+    threshold_direction: upper
+  - id: connections
+    category: connections
+    kind: capacity
+    metric: rocketmq_client_connections
+    resource_kind: cluster
+    aggregation: sum
+    threshold: 100000
+    threshold_direction: upper
+  - id: consumer_lag
+    category: consumer_lag
+    kind: backlog
+    metric: rocketmq_consumer_lag
+    resource_kind: consumer_group
+    aggregation: sum
+  - id: retry_backlog
+    category: retry_backlog
+    kind: backlog
+    metric: rocketmq_retry_backlog
+    resource_kind: consumer_group
+    aggregation: sum
+  - id: dlq_backlog
+    category: dlq_backlog
+    kind: backlog
+    metric: rocketmq_dlq_backlog
+    resource_kind: consumer_group
+    aggregation: sum
+  - id: pop_backlog
+    category: pop_backlog
+    kind: backlog
+    metric: rocketmq_pop_revive_backlog
+    resource_kind: consumer_group
+    aggregation: sum
+  - id: timer_backlog
+    category: timer_backlog
+    kind: backlog
+    metric: rocketmq_timer_backlog
+    resource_kind: store
+    aggregation: sum
+  - id: certificate_expiry
+    category: certificate_expiry
+    kind: expiry
+    metric: rocketmq_certificate_seconds_until_expiry
+    resource_kind: certificate
+    aggregation: min
+    threshold: 0
+    threshold_direction: lower
+  - id: secret_expiry
+    category: secret_expiry
+    kind: expiry
+    metric: rocketmq_secret_seconds_until_expiry
+    resource_kind: cluster
+    aggregation: min
+    threshold: 0
+    threshold_direction: lower
+  - id: jwks_expiry
+    category: jwks_expiry
+    kind: expiry
+    metric: rocketmq_jwks_seconds_until_expiry
+    resource_kind: cluster
+    aggregation: min
+    threshold: 0
+    threshold_direction: lower
+  - id: knowledge_expiry
+    category: knowledge_expiry
+    kind: expiry
+    metric: rocketmq_sre_knowledge_seconds_until_review
+    resource_kind: cluster
+    aggregation: min
+    threshold: 0
+    threshold_direction: lower
+  - id: policy_expiry
+    category: policy_expiry
+    kind: expiry
+    metric: rocketmq_sre_policy_seconds_until_review
+    resource_kind: cluster
+    aggregation: min
+    threshold: 0
+    threshold_direction: lower

@@ -83,6 +83,9 @@
     "cluster_id": {
       "$ref": "#/$defs/ClusterId"
     },
+    "execution_eligible": {
+      "type": "boolean"
+    },
     "expires_at": {
       "format": "date-time",
       "type": "string"
@@ -124,6 +127,7 @@
     "status",
     "findings",
     "pack_versions",
+    "execution_eligible",
     "observed_at",
     "expires_at"
   ],

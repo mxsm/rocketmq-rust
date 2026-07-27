@@ -63,6 +63,7 @@ pub struct UpgradeReadinessReport {
     pub status: ReadinessStatus,
     pub findings: Vec<ReadinessFinding>,
     pub pack_versions: Vec<String>,
+    pub execution_eligible: bool,
     pub observed_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
 }
@@ -78,6 +79,7 @@ pub struct DrReadinessReport {
     pub requested_rpo_seconds: u64,
     pub status: ReadinessStatus,
     pub findings: Vec<ReadinessFinding>,
+    pub execution_eligible: bool,
     pub observed_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
 }

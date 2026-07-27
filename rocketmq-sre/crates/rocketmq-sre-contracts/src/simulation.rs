@@ -47,6 +47,26 @@ pub enum SimulationStatus {
     Unsupported,
 }
 
+/// Bounded structured input for one deterministic what-if simulation.
+#[derive(Clone, Debug, JsonSchema, PartialEq, Serialize, Deserialize)]
+pub struct WhatIfSimulationRequest {
+    pub cluster_id: ClusterId,
+    pub kind: SimulationKind,
+    pub current_utilization: Option<f64>,
+    pub current_instances: Option<u32>,
+    pub traffic_increase_percent: Option<u16>,
+    pub instance_delta: Option<u32>,
+    pub current_queue_count: Option<u32>,
+    pub queue_delta: Option<u32>,
+    pub target_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub configuration_changes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub affected_resource_keys: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_ids: Vec<EvidenceId>,
+}
+
 /// Read-only what-if result. It never carries an executable action.
 #[derive(Clone, Debug, JsonSchema, PartialEq, Serialize, Deserialize)]
 pub struct WhatIfSimulation {
@@ -64,5 +84,6 @@ pub struct WhatIfSimulation {
     pub evidence_ids: Vec<EvidenceId>,
     pub algorithm_version: String,
     pub created_by: String,
+    pub execution_eligible: bool,
     pub created_at: DateTime<Utc>,
 }

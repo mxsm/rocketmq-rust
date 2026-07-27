@@ -35,9 +35,25 @@ describe("checked-in Phase 2 OpenAPI", () => {
       specification.components.schemas.FleetHealthReport,
     ).toBeDefined();
     expect(specification.components.schemas.CapacityForecast).toBeDefined();
+    expect(
+      specification.components.schemas.ClusterForecastReport,
+    ).toBeDefined();
+    expect(
+      specification.components.schemas.WhatIfSimulationRequest,
+    ).toBeDefined();
     expect(specification.components.schemas.WhatIfSimulation).toBeDefined();
     expect(specification.paths["/v1/clusters/{id}/slo"]).toBeDefined();
     expect(specification.paths["/v1/clusters/{id}/health"]).toBeDefined();
     expect(specification.paths["/v1/fleet/health"]).toBeDefined();
+    expect(
+      specification.paths["/v1/clusters/{id}/forecasts"],
+    ).toBeDefined();
+    expect(specification.paths["/v1/simulations"]).toBeDefined();
+    expect(
+      specification.paths["/v1/clusters/{id}/readiness/upgrade"],
+    ).toBeDefined();
+    expect(
+      specification.paths["/v1/clusters/{id}/readiness/dr"],
+    ).toBeDefined();
   });
 });

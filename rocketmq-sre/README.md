@@ -13,7 +13,12 @@ migrations and a generated Phase 02 OpenAPI/UI contract. P2-04 adds
 authenticated Alertmanager and provider-neutral event ingestion, deterministic
 cross-topology Incident correlation, owner routing, recurrence-safe terminal
 handling, operator notes, transactional notifications and durable SSE-backed
-timeline updates.
+timeline updates. P2-05 adds deterministic multi-window SLO burn-rate and
+health scoring. P2-06 adds explainable 7-day/30-day capacity and backlog
+forecasting, seasonal anomaly and change-point hints, deterministic What-if
+simulation, Upgrade/DR readiness, persisted forecast outcomes, and a full-width
+desktop prediction workspace. Forecasts and simulations remain advisory-only
+and cannot create execution requests.
 
 ## Workspace boundaries
 

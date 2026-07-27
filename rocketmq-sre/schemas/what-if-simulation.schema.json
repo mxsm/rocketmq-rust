@@ -84,6 +84,9 @@
       },
       "type": "array"
     },
+    "execution_eligible": {
+      "type": "boolean"
+    },
     "id": {
       "$ref": "#/$defs/SimulationId"
     },
@@ -120,6 +123,7 @@
     "evidence_ids",
     "algorithm_version",
     "created_by",
+    "execution_eligible",
     "created_at"
   ],
   "title": "WhatIfSimulation",

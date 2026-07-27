@@ -5,12 +5,14 @@ import type {
   CapabilityCatalogResponse,
   CapabilitySnapshot,
   ClusterSummary,
+  ClusterForecastReport,
   CollectionEnvelope,
   ConversationView,
   CoverageMatrix,
   CreateConversationRequest,
   CreateInspectionRequest,
   DiagnosisDispatch,
+  DrReadinessReport,
   EvidenceRecord,
   FleetHealthReport,
   IncidentView,
@@ -29,6 +31,9 @@ import type {
   RecommendationDispositionRequest,
   ServiceStatus,
   TopologySnapshot,
+  UpgradeReadinessReport,
+  WhatIfSimulation,
+  WhatIfSimulationRequest,
   WorkflowStreamEvent,
 } from "./types";
 
@@ -157,6 +162,24 @@ export interface SreApi {
     region?: string,
     signal?: AbortSignal,
   ) => Promise<FleetHealthReport>;
+  getClusterForecasts: (
+    clusterId: string,
+    signal?: AbortSignal,
+  ) => Promise<ClusterForecastReport>;
+  runSimulation: (
+    input: WhatIfSimulationRequest,
+    signal?: AbortSignal,
+  ) => Promise<WhatIfSimulation>;
+  getUpgradeReadiness: (
+    clusterId: string,
+    targetVersion: string,
+    signal?: AbortSignal,
+  ) => Promise<UpgradeReadinessReport>;
+  getDrReadiness: (
+    clusterId: string,
+    targetRegion?: string,
+    signal?: AbortSignal,
+  ) => Promise<DrReadinessReport>;
   onboardCluster: (
     input: OnboardClusterRequest,
     signal?: AbortSignal,
@@ -308,6 +331,29 @@ export function createHttpSreApi(auth?: ApiRequestContext): SreApi {
     getFleetHealth: (region, signal) =>
       get<FleetHealthReport>(
         query("/v1/fleet/health", { region }),
+        signal,
+      ),
+    getClusterForecasts: (clusterId, signal) =>
+      get<ClusterForecastReport>(
+        `/v1/clusters/${encodeURIComponent(clusterId)}/forecasts`,
+        signal,
+      ),
+    runSimulation: (input, signal) =>
+      post<WhatIfSimulation>("/v1/simulations", input, signal),
+    getUpgradeReadiness: (clusterId, targetVersion, signal) =>
+      get<UpgradeReadinessReport>(
+        query(
+          `/v1/clusters/${encodeURIComponent(clusterId)}/readiness/upgrade`,
+          { target_version: targetVersion },
+        ),
+        signal,
+      ),
+    getDrReadiness: (clusterId, targetRegion, signal) =>
+      get<DrReadinessReport>(
+        query(
+          `/v1/clusters/${encodeURIComponent(clusterId)}/readiness/dr`,
+          { target_region: targetRegion },
+        ),
         signal,
       ),
     onboardCluster: (input, signal) =>

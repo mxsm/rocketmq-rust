@@ -42,6 +42,7 @@ use rocketmq_sre_contracts::InvestigationId;
 use rocketmq_sre_contracts::KnowledgeItem;
 use rocketmq_sre_contracts::KnowledgeItemId;
 use rocketmq_sre_contracts::RecommendationId;
+use rocketmq_sre_contracts::WhatIfSimulationRequest;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -136,6 +137,13 @@ pub(crate) fn public_routes() -> Router<AppState> {
         .route("/v1/clusters/{id}/slo", get(get_cluster_slo))
         .route("/v1/clusters/{id}/health", get(get_cluster_health))
         .route("/v1/fleet/health", get(get_fleet_health))
+        .route("/v1/clusters/{id}/forecasts", get(get_cluster_forecasts))
+        .route("/v1/clusters/{id}/readiness/upgrade", get(get_upgrade_readiness))
+        .route("/v1/clusters/{id}/readiness/dr", get(get_dr_readiness))
+        .route(
+            "/v1/simulations",
+            post(run_what_if_simulation).layer(DefaultBodyLimit::max(32 * 1024)),
+        )
         .route("/v1/inspections", get(list_inspections).post(create_inspection))
         .route("/v1/inspections/{id}", get(get_inspection))
         .route("/v1/inspections/{id}/run", post(run_inspection))
@@ -725,6 +733,83 @@ async fn get_fleet_health(
 ) -> Result<Json<rocketmq_sre_contracts::FleetHealthReport>, ControlPlaneError> {
     let auth = state.auth.authorize(&headers, None).await?;
     state.slo.fleet_report(&auth, query.region.as_deref()).await.map(Json)
+}
+
+async fn get_cluster_forecasts(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<rocketmq_sre_contracts::ClusterForecastReport>, ControlPlaneError> {
+    let cluster_id = parse_cluster_id(&id)?;
+    let auth = state.auth.authorize(&headers, Some(cluster_id)).await?;
+    state.forecast.cluster_report(&auth, cluster_id).await.map(Json)
+}
+
+#[derive(Deserialize)]
+struct UpgradeReadinessQuery {
+    target_version: String,
+}
+
+async fn get_upgrade_readiness(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Query(query): Query<UpgradeReadinessQuery>,
+) -> Result<Json<rocketmq_sre_contracts::UpgradeReadinessReport>, ControlPlaneError> {
+    let cluster_id = parse_cluster_id(&id)?;
+    let auth = state.auth.authorize(&headers, Some(cluster_id)).await?;
+    state
+        .forecast
+        .upgrade_readiness(&auth, cluster_id, &query.target_version)
+        .await
+        .map(Json)
+}
+
+#[derive(Deserialize)]
+struct DrReadinessQuery {
+    target_region: Option<String>,
+    #[serde(default = "default_rto_seconds")]
+    requested_rto_seconds: u64,
+    #[serde(default = "default_rpo_seconds")]
+    requested_rpo_seconds: u64,
+}
+
+const fn default_rto_seconds() -> u64 {
+    3_600
+}
+
+const fn default_rpo_seconds() -> u64 {
+    300
+}
+
+async fn get_dr_readiness(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Query(query): Query<DrReadinessQuery>,
+) -> Result<Json<rocketmq_sre_contracts::DrReadinessReport>, ControlPlaneError> {
+    let cluster_id = parse_cluster_id(&id)?;
+    let auth = state.auth.authorize(&headers, Some(cluster_id)).await?;
+    state
+        .forecast
+        .dr_readiness(
+            &auth,
+            cluster_id,
+            query.target_region.as_deref(),
+            query.requested_rto_seconds,
+            query.requested_rpo_seconds,
+        )
+        .await
+        .map(Json)
+}
+
+async fn run_what_if_simulation(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<WhatIfSimulationRequest>,
+) -> Result<Json<rocketmq_sre_contracts::WhatIfSimulation>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
+    state.forecast.run_simulation(&auth, request).await.map(Json)
 }
 
 async fn test_notification_webhook(

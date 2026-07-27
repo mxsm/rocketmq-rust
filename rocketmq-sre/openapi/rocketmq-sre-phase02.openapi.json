@@ -1297,6 +1297,144 @@
           }
         }
       }
+    },
+    "/v1/clusters/{id}/forecasts": {
+      "get": {
+        "operationId": "getClusterForecasts",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Explainable 7d/30d capacity, backlog ETA, seasonal anomaly, change-point and accuracy report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterForecastReport"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/simulations": {
+      "post": {
+        "operationId": "runWhatIfSimulation",
+        "x-max-body-bytes": 32768,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WhatIfSimulationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Deterministic advisory-only what-if result with no execution eligibility",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WhatIfSimulation"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/clusters/{id}/readiness/upgrade": {
+      "get": {
+        "operationId": "getUpgradeReadiness",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          },
+          {
+            "name": "target_version",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Evidence-backed advisory-only upgrade readiness report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeReadinessReport"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/clusters/{id}/readiness/dr": {
+      "get": {
+        "operationId": "getDrReadiness",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          },
+          {
+            "name": "target_region",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "requested_rto_seconds",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0,
+              "maximum": 2592000,
+              "default": 3600
+            }
+          },
+          {
+            "name": "requested_rpo_seconds",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0,
+              "maximum": 2592000,
+              "default": 300
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Evidence-backed advisory-only disaster-recovery readiness report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DrReadinessReport"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3587,8 +3725,17 @@
       "CapacityForecast": {
         "description": "Capacity trend for one resource and metric.",
         "properties": {
+          "advisories": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "algorithm_version": {
             "type": "string"
+          },
+          "backtest": {
+            "$ref": "#/components/schemas/CapacityForecast__ForecastBacktest"
           },
           "cluster_id": {
             "$ref": "#/components/schemas/CapacityForecast__ClusterId"
@@ -3602,6 +3749,9 @@
               "$ref": "#/components/schemas/CapacityForecast__EvidenceId"
             },
             "type": "array"
+          },
+          "execution_eligible": {
+            "type": "boolean"
           },
           "exhaustion_at": {
             "format": "date-time",
@@ -3660,12 +3810,18 @@
               "null"
             ]
           },
+          "trend": {
+            "$ref": "#/components/schemas/CapacityForecast__ForecastTrend"
+          },
           "volatility": {
             "format": "double",
             "type": [
               "number",
               "null"
             ]
+          },
+          "window": {
+            "$ref": "#/components/schemas/CapacityForecast__ForecastWindow"
           }
         },
         "required": [
@@ -3674,6 +3830,8 @@
           "cluster_id",
           "resource",
           "metric",
+          "window",
+          "trend",
           "status",
           "quality",
           "algorithm_version",
@@ -3681,7 +3839,9 @@
           "sample_end",
           "coverage_ratio",
           "points",
+          "backtest",
           "evidence_ids",
+          "execution_eligible",
           "observed_at"
         ],
         "title": "CapacityForecast",
@@ -3696,6 +3856,41 @@
         "description": "Stable identifier for an evidence snapshot.",
         "format": "uuid",
         "type": "string"
+      },
+      "CapacityForecast__ForecastBacktest": {
+        "description": "Deterministic holdout result used to monitor forecast accuracy.",
+        "properties": {
+          "bias": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "evaluated_points": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "interval_coverage_ratio": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "mean_absolute_error": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "evaluated_points"
+        ],
+        "type": "object"
       },
       "CapacityForecast__ForecastId": {
         "description": "Stable identifier for a capacity or backlog forecast.",
@@ -3741,6 +3936,25 @@
           "stale",
           "unstable_trend",
           "unsupported"
+        ],
+        "type": "string"
+      },
+      "CapacityForecast__ForecastTrend": {
+        "description": "Explainable direction of the fitted trend.",
+        "enum": [
+          "increasing",
+          "decreasing",
+          "stable",
+          "unstable",
+          "unknown"
+        ],
+        "type": "string"
+      },
+      "CapacityForecast__ForecastWindow": {
+        "description": "Historical window used to build a forecast.",
+        "enum": [
+          "seven_days",
+          "thirty_days"
         ],
         "type": "string"
       },
@@ -3793,6 +4007,763 @@
         "format": "uuid",
         "type": "string"
       },
+      "ClusterForecastReport": {
+        "description": "Bounded read-only projection returned by the cluster forecast API.",
+        "properties": {
+          "accuracy": {
+            "items": {
+              "$ref": "#/components/schemas/ClusterForecastReport__ForecastAccuracy"
+            },
+            "type": "array"
+          },
+          "anomalies": {
+            "items": {
+              "$ref": "#/components/schemas/ClusterForecastReport__AnomalyAssessment"
+            },
+            "type": "array"
+          },
+          "backlog_etas": {
+            "items": {
+              "$ref": "#/components/schemas/ClusterForecastReport__BacklogEta"
+            },
+            "type": "array"
+          },
+          "baselines": {
+            "items": {
+              "$ref": "#/components/schemas/ClusterForecastReport__AnomalyBaseline"
+            },
+            "type": "array"
+          },
+          "change_points": {
+            "items": {
+              "$ref": "#/components/schemas/ClusterForecastReport__ChangePoint"
+            },
+            "type": "array"
+          },
+          "cluster_id": {
+            "$ref": "#/components/schemas/ClusterForecastReport__ClusterId"
+          },
+          "execution_eligible": {
+            "type": "boolean"
+          },
+          "forecasts": {
+            "items": {
+              "$ref": "#/components/schemas/ClusterForecastReport__CapacityForecast"
+            },
+            "type": "array"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/ClusterForecastReport__TenantId"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "tenant_id",
+          "cluster_id",
+          "forecasts",
+          "backlog_etas",
+          "baselines",
+          "anomalies",
+          "change_points",
+          "accuracy",
+          "partial",
+          "execution_eligible",
+          "observed_at"
+        ],
+        "title": "ClusterForecastReport",
+        "type": "object"
+      },
+      "ClusterForecastReport__AnomalyAssessment": {
+        "description": "Result of robust z-score and empirical-quantile anomaly evaluation.",
+        "properties": {
+          "anomaly": {
+            "type": "boolean"
+          },
+          "baseline_median": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cluster_id": {
+            "$ref": "#/components/schemas/ClusterForecastReport__ClusterId"
+          },
+          "empirical_quantile": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/ClusterForecastReport__EvidenceId"
+            },
+            "type": "array"
+          },
+          "metric": {
+            "type": "string"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "observed_value": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "resource": {
+            "$ref": "#/components/schemas/ClusterForecastReport__ResourceRef"
+          },
+          "robust_z_score": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "seasonality": {
+            "$ref": "#/components/schemas/ClusterForecastReport__Seasonality"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ClusterForecastReport__ForecastStatus"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/ClusterForecastReport__TenantId"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "cluster_id",
+          "resource",
+          "metric",
+          "seasonality",
+          "status",
+          "anomaly",
+          "evidence_ids",
+          "observed_at"
+        ],
+        "type": "object"
+      },
+      "ClusterForecastReport__AnomalyBaseline": {
+        "description": "Seasonal baseline used for deterministic anomaly detection.",
+        "properties": {
+          "algorithm_version": {
+            "type": "string"
+          },
+          "cluster_id": {
+            "$ref": "#/components/schemas/ClusterForecastReport__ClusterId"
+          },
+          "coverage_ratio": {
+            "format": "double",
+            "type": "number"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ClusterForecastReport__BaselineId"
+          },
+          "median": {
+            "format": "double",
+            "type": "number"
+          },
+          "median_absolute_deviation": {
+            "format": "double",
+            "type": "number"
+          },
+          "metric": {
+            "type": "string"
+          },
+          "period_seconds": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/ClusterForecastReport__ResourceRef"
+          },
+          "sample_count": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "seasonality": {
+            "$ref": "#/components/schemas/ClusterForecastReport__Seasonality"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/ClusterForecastReport__TenantId"
+          },
+          "valid_from": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "valid_until": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "cluster_id",
+          "resource",
+          "metric",
+          "seasonality",
+          "period_seconds",
+          "median",
+          "median_absolute_deviation",
+          "sample_count",
+          "coverage_ratio",
+          "algorithm_version",
+          "valid_from",
+          "valid_until"
+        ],
+        "type": "object"
+      },
+      "ClusterForecastReport__BacklogEta": {
+        "description": "Estimated drain time for a lag, retry, DLQ, POP, or timer backlog.",
+        "properties": {
+          "algorithm_version": {
+            "type": "string"
+          },
+          "arrival_rate_per_second": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "backlog_kind": {
+            "type": "string"
+          },
+          "backtest": {
+            "$ref": "#/components/schemas/ClusterForecastReport__ForecastBacktest"
+          },
+          "cluster_id": {
+            "$ref": "#/components/schemas/ClusterForecastReport__ClusterId"
+          },
+          "coverage_ratio": {
+            "format": "double",
+            "type": "number"
+          },
+          "current_value": {
+            "format": "double",
+            "type": "number"
+          },
+          "drain_rate_per_second": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "estimated_clear_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/ClusterForecastReport__EvidenceId"
+            },
+            "type": "array"
+          },
+          "execution_eligible": {
+            "type": "boolean"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ClusterForecastReport__ForecastId"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "quality": {
+            "$ref": "#/components/schemas/ClusterForecastReport__ForecastQuality"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/ClusterForecastReport__ResourceRef"
+          },
+          "sample_end": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "sample_start": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "slope_per_hour": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/ClusterForecastReport__ForecastStatus"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/ClusterForecastReport__TenantId"
+          },
+          "trend": {
+            "$ref": "#/components/schemas/ClusterForecastReport__ForecastTrend"
+          },
+          "window": {
+            "$ref": "#/components/schemas/ClusterForecastReport__ForecastWindow"
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "cluster_id",
+          "resource",
+          "backlog_kind",
+          "window",
+          "trend",
+          "status",
+          "quality",
+          "current_value",
+          "sample_start",
+          "sample_end",
+          "coverage_ratio",
+          "algorithm_version",
+          "backtest",
+          "evidence_ids",
+          "execution_eligible",
+          "observed_at"
+        ],
+        "type": "object"
+      },
+      "ClusterForecastReport__BaselineId": {
+        "description": "Stable identifier for an anomaly baseline.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "ClusterForecastReport__CapacityForecast": {
+        "description": "Capacity trend for one resource and metric.",
+        "properties": {
+          "advisories": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "algorithm_version": {
+            "type": "string"
+          },
+          "backtest": {
+            "$ref": "#/components/schemas/ClusterForecastReport__ForecastBacktest"
+          },
+          "cluster_id": {
+            "$ref": "#/components/schemas/ClusterForecastReport__ClusterId"
+          },
+          "coverage_ratio": {
+            "format": "double",
+            "type": "number"
+          },
+          "evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/ClusterForecastReport__EvidenceId"
+            },
+            "type": "array"
+          },
+          "execution_eligible": {
+            "type": "boolean"
+          },
+          "exhaustion_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "$ref": "#/components/schemas/ClusterForecastReport__ForecastId"
+          },
+          "metric": {
+            "type": "string"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/ClusterForecastReport__ForecastPoint"
+            },
+            "type": "array"
+          },
+          "quality": {
+            "$ref": "#/components/schemas/ClusterForecastReport__ForecastQuality"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/ClusterForecastReport__ResourceRef"
+          },
+          "sample_end": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "sample_start": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "slope_per_hour": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/ClusterForecastReport__ForecastStatus"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/ClusterForecastReport__TenantId"
+          },
+          "threshold": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "trend": {
+            "$ref": "#/components/schemas/ClusterForecastReport__ForecastTrend"
+          },
+          "volatility": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "window": {
+            "$ref": "#/components/schemas/ClusterForecastReport__ForecastWindow"
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "cluster_id",
+          "resource",
+          "metric",
+          "window",
+          "trend",
+          "status",
+          "quality",
+          "algorithm_version",
+          "sample_start",
+          "sample_end",
+          "coverage_ratio",
+          "points",
+          "backtest",
+          "evidence_ids",
+          "execution_eligible",
+          "observed_at"
+        ],
+        "type": "object"
+      },
+      "ClusterForecastReport__ChangePoint": {
+        "description": "Non-causal change point emitted as an investigation hint.",
+        "properties": {
+          "after_value": {
+            "format": "double",
+            "type": "number"
+          },
+          "algorithm_version": {
+            "type": "string"
+          },
+          "before_value": {
+            "format": "double",
+            "type": "number"
+          },
+          "cluster_id": {
+            "$ref": "#/components/schemas/ClusterForecastReport__ClusterId"
+          },
+          "detected_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/ClusterForecastReport__EvidenceId"
+            },
+            "type": "array"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ClusterForecastReport__ChangePointId"
+          },
+          "metric": {
+            "type": "string"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/ClusterForecastReport__ResourceRef"
+          },
+          "score": {
+            "format": "double",
+            "type": "number"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/ClusterForecastReport__TenantId"
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "cluster_id",
+          "resource",
+          "metric",
+          "detected_at",
+          "before_value",
+          "after_value",
+          "score",
+          "algorithm_version",
+          "evidence_ids"
+        ],
+        "type": "object"
+      },
+      "ClusterForecastReport__ChangePointId": {
+        "description": "Stable identifier for a detected change point.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "ClusterForecastReport__ClusterId": {
+        "description": "Internal identifier for an onboarded cluster.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "ClusterForecastReport__EvidenceId": {
+        "description": "Stable identifier for an evidence snapshot.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "ClusterForecastReport__ForecastAccuracy": {
+        "description": "Accuracy calculated from persisted outcomes of earlier projections.",
+        "properties": {
+          "bias": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "evaluated_points": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "interval_coverage_ratio": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "mean_absolute_error": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "metric": {
+            "type": "string"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "window": {
+            "$ref": "#/components/schemas/ClusterForecastReport__ForecastWindow"
+          }
+        },
+        "required": [
+          "metric",
+          "window",
+          "evaluated_points",
+          "observed_at"
+        ],
+        "type": "object"
+      },
+      "ClusterForecastReport__ForecastBacktest": {
+        "description": "Deterministic holdout result used to monitor forecast accuracy.",
+        "properties": {
+          "bias": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "evaluated_points": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "interval_coverage_ratio": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "mean_absolute_error": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "evaluated_points"
+        ],
+        "type": "object"
+      },
+      "ClusterForecastReport__ForecastId": {
+        "description": "Stable identifier for a capacity or backlog forecast.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "ClusterForecastReport__ForecastPoint": {
+        "description": "One observed or projected point in a forecast series.",
+        "properties": {
+          "at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "projected": {
+            "type": "boolean"
+          },
+          "value": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "at",
+          "value",
+          "projected"
+        ],
+        "type": "object"
+      },
+      "ClusterForecastReport__ForecastQuality": {
+        "description": "Explainable quality assessment for a forecast.",
+        "enum": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "type": "string"
+      },
+      "ClusterForecastReport__ForecastStatus": {
+        "description": "Forecast availability and degradation state.",
+        "enum": [
+          "ready",
+          "insufficient_data",
+          "stale",
+          "unstable_trend",
+          "unsupported"
+        ],
+        "type": "string"
+      },
+      "ClusterForecastReport__ForecastTrend": {
+        "description": "Explainable direction of the fitted trend.",
+        "enum": [
+          "increasing",
+          "decreasing",
+          "stable",
+          "unstable",
+          "unknown"
+        ],
+        "type": "string"
+      },
+      "ClusterForecastReport__ForecastWindow": {
+        "description": "Historical window used to build a forecast.",
+        "enum": [
+          "seven_days",
+          "thirty_days"
+        ],
+        "type": "string"
+      },
+      "ClusterForecastReport__ResourceKind": {
+        "description": "Resource classes accepted by the Phase 2 correlation engine.",
+        "enum": [
+          "cluster",
+          "name_server",
+          "controller",
+          "broker",
+          "proxy",
+          "store",
+          "topic",
+          "queue",
+          "consumer_group",
+          "producer_group",
+          "pod",
+          "node",
+          "persistent_volume_claim",
+          "certificate",
+          "runtime",
+          "telemetry"
+        ],
+        "type": "string"
+      },
+      "ClusterForecastReport__ResourceRef": {
+        "description": "Tenant-scoped resource identity used for correlation and topology lookup.",
+        "properties": {
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "key": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ClusterForecastReport__ResourceKind"
+          }
+        },
+        "required": [
+          "kind",
+          "key"
+        ],
+        "type": "object"
+      },
+      "ClusterForecastReport__Seasonality": {
+        "description": "Seasonal period represented by a deterministic baseline.",
+        "enum": [
+          "hourly",
+          "daily",
+          "weekly"
+        ],
+        "type": "string"
+      },
+      "ClusterForecastReport__TenantId": {
+        "description": "Stable tenant boundary identifier.",
+        "format": "uuid",
+        "type": "string"
+      },
       "BacklogEta": {
         "description": "Estimated drain time for a lag, retry, DLQ, POP, or timer backlog.",
         "properties": {
@@ -3808,6 +4779,9 @@
           },
           "backlog_kind": {
             "type": "string"
+          },
+          "backtest": {
+            "$ref": "#/components/schemas/BacklogEta__ForecastBacktest"
           },
           "cluster_id": {
             "$ref": "#/components/schemas/BacklogEta__ClusterId"
@@ -3840,6 +4814,9 @@
             },
             "type": "array"
           },
+          "execution_eligible": {
+            "type": "boolean"
+          },
           "id": {
             "$ref": "#/components/schemas/BacklogEta__ForecastId"
           },
@@ -3847,14 +4824,38 @@
             "format": "date-time",
             "type": "string"
           },
+          "quality": {
+            "$ref": "#/components/schemas/BacklogEta__ForecastQuality"
+          },
           "resource": {
             "$ref": "#/components/schemas/BacklogEta__ResourceRef"
+          },
+          "sample_end": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "sample_start": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "slope_per_hour": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "status": {
             "$ref": "#/components/schemas/BacklogEta__ForecastStatus"
           },
           "tenant_id": {
             "$ref": "#/components/schemas/BacklogEta__TenantId"
+          },
+          "trend": {
+            "$ref": "#/components/schemas/BacklogEta__ForecastTrend"
+          },
+          "window": {
+            "$ref": "#/components/schemas/BacklogEta__ForecastWindow"
           }
         },
         "required": [
@@ -3863,11 +4864,18 @@
           "cluster_id",
           "resource",
           "backlog_kind",
+          "window",
+          "trend",
           "status",
+          "quality",
           "current_value",
+          "sample_start",
+          "sample_end",
           "coverage_ratio",
           "algorithm_version",
+          "backtest",
           "evidence_ids",
+          "execution_eligible",
           "observed_at"
         ],
         "title": "BacklogEta",
@@ -3883,9 +4891,53 @@
         "format": "uuid",
         "type": "string"
       },
+      "BacklogEta__ForecastBacktest": {
+        "description": "Deterministic holdout result used to monitor forecast accuracy.",
+        "properties": {
+          "bias": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "evaluated_points": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "interval_coverage_ratio": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "mean_absolute_error": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "evaluated_points"
+        ],
+        "type": "object"
+      },
       "BacklogEta__ForecastId": {
         "description": "Stable identifier for a capacity or backlog forecast.",
         "format": "uuid",
+        "type": "string"
+      },
+      "BacklogEta__ForecastQuality": {
+        "description": "Explainable quality assessment for a forecast.",
+        "enum": [
+          "low",
+          "medium",
+          "high"
+        ],
         "type": "string"
       },
       "BacklogEta__ForecastStatus": {
@@ -3896,6 +4948,25 @@
           "stale",
           "unstable_trend",
           "unsupported"
+        ],
+        "type": "string"
+      },
+      "BacklogEta__ForecastTrend": {
+        "description": "Explainable direction of the fitted trend.",
+        "enum": [
+          "increasing",
+          "decreasing",
+          "stable",
+          "unstable",
+          "unknown"
+        ],
+        "type": "string"
+      },
+      "BacklogEta__ForecastWindow": {
+        "description": "Historical window used to build a forecast.",
+        "enum": [
+          "seven_days",
+          "thirty_days"
         ],
         "type": "string"
       },
@@ -3948,6 +5019,119 @@
         "format": "uuid",
         "type": "string"
       },
+      "WhatIfSimulationRequest": {
+        "description": "Bounded structured input for one deterministic what-if simulation.",
+        "properties": {
+          "affected_resource_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "cluster_id": {
+            "$ref": "#/components/schemas/WhatIfSimulationRequest__ClusterId"
+          },
+          "configuration_changes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "current_instances": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "current_queue_count": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "current_utilization": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/WhatIfSimulationRequest__EvidenceId"
+            },
+            "type": "array"
+          },
+          "instance_delta": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/WhatIfSimulationRequest__SimulationKind"
+          },
+          "queue_delta": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "target_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "traffic_increase_percent": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "cluster_id",
+          "kind"
+        ],
+        "title": "WhatIfSimulationRequest",
+        "type": "object"
+      },
+      "WhatIfSimulationRequest__ClusterId": {
+        "description": "Internal identifier for an onboarded cluster.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "WhatIfSimulationRequest__EvidenceId": {
+        "description": "Stable identifier for an evidence snapshot.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "WhatIfSimulationRequest__SimulationKind": {
+        "description": "Supported deterministic Phase 2 what-if families.",
+        "enum": [
+          "broker_offline",
+          "proxy_offline",
+          "traffic_increase",
+          "broker_scale_out",
+          "proxy_scale_out",
+          "topic_queue_expand",
+          "version_upgrade",
+          "configuration_diff"
+        ],
+        "type": "string"
+      },
       "WhatIfSimulation": {
         "description": "Read-only what-if result. It never carries an executable action.",
         "properties": {
@@ -3988,6 +5172,9 @@
             },
             "type": "array"
           },
+          "execution_eligible": {
+            "type": "boolean"
+          },
           "id": {
             "$ref": "#/components/schemas/WhatIfSimulation__SimulationId"
           },
@@ -4024,6 +5211,7 @@
           "evidence_ids",
           "algorithm_version",
           "created_by",
+          "execution_eligible",
           "created_at"
         ],
         "title": "WhatIfSimulation",
@@ -4078,6 +5266,9 @@
           "cluster_id": {
             "$ref": "#/components/schemas/UpgradeReadinessReport__ClusterId"
           },
+          "execution_eligible": {
+            "type": "boolean"
+          },
           "expires_at": {
             "format": "date-time",
             "type": "string"
@@ -4119,6 +5310,7 @@
           "status",
           "findings",
           "pack_versions",
+          "execution_eligible",
           "observed_at",
           "expires_at"
         ],
@@ -4207,6 +5399,9 @@
           "cluster_id": {
             "$ref": "#/components/schemas/DrReadinessReport__ClusterId"
           },
+          "execution_eligible": {
+            "type": "boolean"
+          },
           "expires_at": {
             "format": "date-time",
             "type": "string"
@@ -4255,6 +5450,7 @@
           "requested_rpo_seconds",
           "status",
           "findings",
+          "execution_eligible",
           "observed_at",
           "expires_at"
         ],
@@ -5594,7 +6790,9 @@
     "ClusterHealthReport",
     "FleetHealthReport",
     "CapacityForecast",
+    "ClusterForecastReport",
     "BacklogEta",
+    "WhatIfSimulationRequest",
     "WhatIfSimulation",
     "UpgradeReadinessReport",
     "DrReadinessReport",

@@ -10,6 +10,41 @@
       "format": "uuid",
       "type": "string"
     },
+    "ForecastBacktest": {
+      "description": "Deterministic holdout result used to monitor forecast accuracy.",
+      "properties": {
+        "bias": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "evaluated_points": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "interval_coverage_ratio": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "mean_absolute_error": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "evaluated_points"
+      ],
+      "type": "object"
+    },
     "ForecastId": {
       "description": "Stable identifier for a capacity or backlog forecast.",
       "format": "uuid",
@@ -54,6 +89,25 @@
         "stale",
         "unstable_trend",
         "unsupported"
+      ],
+      "type": "string"
+    },
+    "ForecastTrend": {
+      "description": "Explainable direction of the fitted trend.",
+      "enum": [
+        "increasing",
+        "decreasing",
+        "stable",
+        "unstable",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "ForecastWindow": {
+      "description": "Historical window used to build a forecast.",
+      "enum": [
+        "seven_days",
+        "thirty_days"
       ],
       "type": "string"
     },
@@ -110,8 +164,17 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "Capacity trend for one resource and metric.",
   "properties": {
+    "advisories": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "algorithm_version": {
       "type": "string"
+    },
+    "backtest": {
+      "$ref": "#/$defs/ForecastBacktest"
     },
     "cluster_id": {
       "$ref": "#/$defs/ClusterId"
@@ -125,6 +188,9 @@
         "$ref": "#/$defs/EvidenceId"
       },
       "type": "array"
+    },
+    "execution_eligible": {
+      "type": "boolean"
     },
     "exhaustion_at": {
       "format": "date-time",
@@ -183,12 +249,18 @@
         "null"
       ]
     },
+    "trend": {
+      "$ref": "#/$defs/ForecastTrend"
+    },
     "volatility": {
       "format": "double",
       "type": [
         "number",
         "null"
       ]
+    },
+    "window": {
+      "$ref": "#/$defs/ForecastWindow"
     }
   },
   "required": [
@@ -197,6 +269,8 @@
     "cluster_id",
     "resource",
     "metric",
+    "window",
+    "trend",
     "status",
     "quality",
     "algorithm_version",
@@ -204,7 +278,9 @@
     "sample_end",
     "coverage_ratio",
     "points",
+    "backtest",
     "evidence_ids",
+    "execution_eligible",
     "observed_at"
   ],
   "title": "CapacityForecast",

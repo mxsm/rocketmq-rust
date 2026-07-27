@@ -6,6 +6,14 @@ export type Phase2ContractManifest =
   ApiSchemas["Phase2ContractManifest"];
 export type ClusterHealthReport = ApiSchemas["ClusterHealthReport"];
 export type FleetHealthReport = ApiSchemas["FleetHealthReport"];
+export type ClusterForecastReport =
+  ApiSchemas["ClusterForecastReport"];
+export type WhatIfSimulationRequest =
+  ApiSchemas["WhatIfSimulationRequest"];
+export type WhatIfSimulation = ApiSchemas["WhatIfSimulation"];
+export type UpgradeReadinessReport =
+  ApiSchemas["UpgradeReadinessReport"];
+export type DrReadinessReport = ApiSchemas["DrReadinessReport"];
 export type HealthStatus =
   ApiSchemas["ClusterHealthReport__HealthStatus"];
 export type HealthDataQuality =

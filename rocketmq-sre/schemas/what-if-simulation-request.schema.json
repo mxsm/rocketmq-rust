@@ -1,0 +1,116 @@
+{
+  "$defs": {
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "EvidenceId": {
+      "description": "Stable identifier for an evidence snapshot.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "SimulationKind": {
+      "description": "Supported deterministic Phase 2 what-if families.",
+      "enum": [
+        "broker_offline",
+        "proxy_offline",
+        "traffic_increase",
+        "broker_scale_out",
+        "proxy_scale_out",
+        "topic_queue_expand",
+        "version_upgrade",
+        "configuration_diff"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Bounded structured input for one deterministic what-if simulation.",
+  "properties": {
+    "affected_resource_keys": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "cluster_id": {
+      "$ref": "#/$defs/ClusterId"
+    },
+    "configuration_changes": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "current_instances": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "current_queue_count": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "current_utilization": {
+      "format": "double",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "evidence_ids": {
+      "items": {
+        "$ref": "#/$defs/EvidenceId"
+      },
+      "type": "array"
+    },
+    "instance_delta": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "kind": {
+      "$ref": "#/$defs/SimulationKind"
+    },
+    "queue_delta": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "target_version": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "traffic_increase_percent": {
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "cluster_id",
+    "kind"
+  ],
+  "title": "WhatIfSimulationRequest",
+  "type": "object"
+}

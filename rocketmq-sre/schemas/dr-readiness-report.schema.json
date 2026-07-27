@@ -83,6 +83,9 @@
     "cluster_id": {
       "$ref": "#/$defs/ClusterId"
     },
+    "execution_eligible": {
+      "type": "boolean"
+    },
     "expires_at": {
       "format": "date-time",
       "type": "string"
@@ -131,6 +134,7 @@
     "requested_rpo_seconds",
     "status",
     "findings",
+    "execution_eligible",
     "observed_at",
     "expires_at"
   ],

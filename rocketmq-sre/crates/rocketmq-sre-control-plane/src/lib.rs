@@ -26,6 +26,7 @@ mod connector_channel;
 mod coverage;
 mod error;
 mod evidence;
+mod forecast;
 mod inspection;
 mod knowledge;
 mod model;

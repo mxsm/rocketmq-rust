@@ -28,7 +28,9 @@ const schemaFiles = new Map([
   ["ClusterHealthReport", "cluster-health-report.schema.json"],
   ["FleetHealthReport", "fleet-health-report.schema.json"],
   ["CapacityForecast", "capacity-forecast.schema.json"],
+  ["ClusterForecastReport", "cluster-forecast-report.schema.json"],
   ["BacklogEta", "backlog-eta.schema.json"],
+  ["WhatIfSimulationRequest", "what-if-simulation-request.schema.json"],
   ["WhatIfSimulation", "what-if-simulation.schema.json"],
   ["UpgradeReadinessReport", "upgrade-readiness-report.schema.json"],
   ["DrReadinessReport", "dr-readiness-report.schema.json"],
@@ -777,6 +779,122 @@ document.paths["/v1/fleet/health"] = {
           "application/json": {
             schema: {
               $ref: "#/components/schemas/FleetHealthReport",
+            },
+          },
+        },
+      },
+    },
+  },
+};
+
+document.paths["/v1/clusters/{id}/forecasts"] = {
+  get: {
+    operationId: "getClusterForecasts",
+    parameters: [{ $ref: "#/components/parameters/Id" }],
+    responses: {
+      200: {
+        description:
+          "Explainable 7d/30d capacity, backlog ETA, seasonal anomaly, change-point and accuracy report",
+        content: {
+          "application/json": {
+            schema: {
+              $ref: "#/components/schemas/ClusterForecastReport",
+            },
+          },
+        },
+      },
+    },
+  },
+};
+
+document.paths["/v1/simulations"] = {
+  post: {
+    operationId: "runWhatIfSimulation",
+    "x-max-body-bytes": 32768,
+    requestBody: {
+      required: true,
+      content: {
+        "application/json": {
+          schema: {
+            $ref: "#/components/schemas/WhatIfSimulationRequest",
+          },
+        },
+      },
+    },
+    responses: {
+      200: {
+        description:
+          "Deterministic advisory-only what-if result with no execution eligibility",
+        content: {
+          "application/json": {
+            schema: {
+              $ref: "#/components/schemas/WhatIfSimulation",
+            },
+          },
+        },
+      },
+    },
+  },
+};
+
+document.paths["/v1/clusters/{id}/readiness/upgrade"] = {
+  get: {
+    operationId: "getUpgradeReadiness",
+    parameters: [
+      { $ref: "#/components/parameters/Id" },
+      {
+        name: "target_version",
+        in: "query",
+        required: true,
+        schema: { type: "string", minLength: 1, maxLength: 128 },
+      },
+    ],
+    responses: {
+      200: {
+        description: "Evidence-backed advisory-only upgrade readiness report",
+        content: {
+          "application/json": {
+            schema: {
+              $ref: "#/components/schemas/UpgradeReadinessReport",
+            },
+          },
+        },
+      },
+    },
+  },
+};
+
+document.paths["/v1/clusters/{id}/readiness/dr"] = {
+  get: {
+    operationId: "getDrReadiness",
+    parameters: [
+      { $ref: "#/components/parameters/Id" },
+      {
+        name: "target_region",
+        in: "query",
+        required: false,
+        schema: { type: "string", minLength: 1, maxLength: 128 },
+      },
+      {
+        name: "requested_rto_seconds",
+        in: "query",
+        required: false,
+        schema: { type: "integer", format: "uint64", minimum: 0, maximum: 2592000, default: 3600 },
+      },
+      {
+        name: "requested_rpo_seconds",
+        in: "query",
+        required: false,
+        schema: { type: "integer", format: "uint64", minimum: 0, maximum: 2592000, default: 300 },
+      },
+    ],
+    responses: {
+      200: {
+        description: "Evidence-backed advisory-only disaster-recovery readiness report",
+        content: {
+          "application/json": {
+            schema: {
+              $ref: "#/components/schemas/DrReadinessReport",
             },
           },
         },

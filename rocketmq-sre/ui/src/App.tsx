@@ -78,6 +78,11 @@ const InvestigationDetailPage = lazy(() =>
     default: module.InvestigationDetailPage,
   })),
 );
+const ForecastPage = lazy(() =>
+  import("./pages/ForecastPage").then((module) => ({
+    default: module.ForecastPage,
+  })),
+);
 
 function RouteLoading() {
   return (
@@ -115,6 +120,7 @@ const router = createBrowserRouter([
       { path: "incidents", element: <IncidentsPage /> },
       { path: "incidents/:incidentId", element: <IncidentDetailPage /> },
       { path: "inspections", element: <InspectionsPage /> },
+      { path: "forecasts", element: <ForecastPage /> },
       {
         path: "inspections/:inspectionId",
         element: <InspectionDetailPage />,

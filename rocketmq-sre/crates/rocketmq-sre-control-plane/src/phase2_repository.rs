@@ -221,15 +221,16 @@ impl Phase2Repository for PostgresRepository {
     }
 
     async fn store_capacity_forecast(&self, forecast: &CapacityForecast) -> Result<(), ControlPlaneError> {
+        let report = json_value(forecast)?;
         sqlx::query(
             "INSERT INTO capacity_forecasts (
                 id, tenant_id, cluster_id, resource, metric, status, quality,
                 algorithm_version, sample_start, sample_end, coverage_ratio,
                 slope_per_hour, volatility, threshold, exhaustion_at, points,
-                evidence_ids, observed_at
+                evidence_ids, observed_at, report
              ) VALUES (
                 $1, $2, $3, $4, $5, $6, $7, $8, $9,
-                $10, $11, $12, $13, $14, $15, $16, $17, $18
+                $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
              ) ON CONFLICT (id) DO NOTHING",
         )
         .bind(forecast.id.as_uuid())
@@ -250,20 +251,22 @@ impl Phase2Repository for PostgresRepository {
         .bind(json_value(&forecast.points)?)
         .bind(forecast.evidence_ids.iter().map(|id| id.as_uuid()).collect::<Vec<_>>())
         .bind(forecast.observed_at)
+        .bind(report)
         .execute(&self.pool)
         .await?;
         Ok(())
     }
 
     async fn store_backlog_eta(&self, forecast: &BacklogEta) -> Result<(), ControlPlaneError> {
+        let report = json_value(forecast)?;
         sqlx::query(
             "INSERT INTO backlog_eta_forecasts (
                 id, tenant_id, cluster_id, resource, backlog_kind, status,
                 current_value, arrival_rate_per_second, drain_rate_per_second,
                 estimated_clear_at, coverage_ratio, algorithm_version,
-                evidence_ids, observed_at
+                evidence_ids, observed_at, report
              ) VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
              ) ON CONFLICT (id) DO NOTHING",
         )
         .bind(forecast.id.as_uuid())
@@ -280,19 +283,23 @@ impl Phase2Repository for PostgresRepository {
         .bind(&forecast.algorithm_version)
         .bind(forecast.evidence_ids.iter().map(|id| id.as_uuid()).collect::<Vec<_>>())
         .bind(forecast.observed_at)
+        .bind(report)
         .execute(&self.pool)
         .await?;
         Ok(())
     }
 
     async fn store_simulation(&self, simulation: &WhatIfSimulation) -> Result<(), ControlPlaneError> {
+        let report = json_value(simulation)?;
         sqlx::query(
             "INSERT INTO what_if_simulations (
                 id, tenant_id, cluster_id, simulation_kind, status, input,
                 assumptions, projected_utilization, bottlenecks, blast_radius,
-                missing_assumptions, evidence_ids, algorithm_version, created_by, created_at
+                missing_assumptions, evidence_ids, algorithm_version, created_by,
+                created_at, report, execution_eligible
              ) VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+                $14, $15, $16, $17
              ) ON CONFLICT (id) DO NOTHING",
         )
         .bind(simulation.id.as_uuid())
@@ -316,17 +323,20 @@ impl Phase2Repository for PostgresRepository {
         .bind(&simulation.algorithm_version)
         .bind(&simulation.created_by)
         .bind(simulation.created_at)
+        .bind(report)
+        .bind(simulation.execution_eligible)
         .execute(&self.pool)
         .await?;
         Ok(())
     }
 
     async fn store_upgrade_readiness(&self, report: &UpgradeReadinessReport) -> Result<(), ControlPlaneError> {
+        let report_json = json_value(report)?;
         sqlx::query(
             "INSERT INTO upgrade_readiness_reports (
                 id, tenant_id, cluster_id, target_version, status, findings,
-                pack_versions, observed_at, expires_at
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                pack_versions, observed_at, expires_at, report, execution_eligible
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
              ON CONFLICT (id) DO NOTHING",
         )
         .bind(report.id.as_uuid())
@@ -338,17 +348,21 @@ impl Phase2Repository for PostgresRepository {
         .bind(json_value(&report.pack_versions)?)
         .bind(report.observed_at)
         .bind(report.expires_at)
+        .bind(report_json)
+        .bind(report.execution_eligible)
         .execute(&self.pool)
         .await?;
         Ok(())
     }
 
     async fn store_dr_readiness(&self, report: &DrReadinessReport) -> Result<(), ControlPlaneError> {
+        let report_json = json_value(report)?;
         sqlx::query(
             "INSERT INTO dr_readiness_reports (
                 id, tenant_id, cluster_id, target_region, requested_rto_seconds,
-                requested_rpo_seconds, status, findings, observed_at, expires_at
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                requested_rpo_seconds, status, findings, observed_at, expires_at,
+                report, execution_eligible
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
              ON CONFLICT (id) DO NOTHING",
         )
         .bind(report.id.as_uuid())
@@ -367,6 +381,8 @@ impl Phase2Repository for PostgresRepository {
         .bind(json_value(&report.findings)?)
         .bind(report.observed_at)
         .bind(report.expires_at)
+        .bind(report_json)
+        .bind(report.execution_eligible)
         .execute(&self.pool)
         .await?;
         Ok(())

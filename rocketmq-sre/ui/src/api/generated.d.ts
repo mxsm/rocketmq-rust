@@ -900,6 +900,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/clusters/{id}/forecasts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getClusterForecasts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/simulations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["runWhatIfSimulation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/clusters/{id}/readiness/upgrade": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getUpgradeReadiness"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/clusters/{id}/readiness/dr": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getDrReadiness"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1602,11 +1666,14 @@ export interface components {
          * @description Capacity trend for one resource and metric.
          */
         CapacityForecast: {
+            advisories?: string[];
             algorithm_version: string;
+            backtest: components["schemas"]["CapacityForecast__ForecastBacktest"];
             cluster_id: components["schemas"]["CapacityForecast__ClusterId"];
             /** Format: double */
             coverage_ratio: number;
             evidence_ids: components["schemas"]["CapacityForecast__EvidenceId"][];
+            execution_eligible: boolean;
             /** Format: date-time */
             exhaustion_at?: string | null;
             id: components["schemas"]["CapacityForecast__ForecastId"];
@@ -1626,8 +1693,10 @@ export interface components {
             tenant_id: components["schemas"]["CapacityForecast__TenantId"];
             /** Format: double */
             threshold?: number | null;
+            trend: components["schemas"]["CapacityForecast__ForecastTrend"];
             /** Format: double */
             volatility?: number | null;
+            window: components["schemas"]["CapacityForecast__ForecastWindow"];
         };
         /**
          * Format: uuid
@@ -1639,6 +1708,17 @@ export interface components {
          * @description Stable identifier for an evidence snapshot.
          */
         CapacityForecast__EvidenceId: string;
+        /** @description Deterministic holdout result used to monitor forecast accuracy. */
+        CapacityForecast__ForecastBacktest: {
+            /** Format: double */
+            bias?: number | null;
+            /** Format: uint32 */
+            evaluated_points: number;
+            /** Format: double */
+            interval_coverage_ratio?: number | null;
+            /** Format: double */
+            mean_absolute_error?: number | null;
+        };
         /**
          * Format: uuid
          * @description Stable identifier for a capacity or backlog forecast.
@@ -1663,6 +1743,16 @@ export interface components {
          */
         CapacityForecast__ForecastStatus: "ready" | "insufficient_data" | "stale" | "unstable_trend" | "unsupported";
         /**
+         * @description Explainable direction of the fitted trend.
+         * @enum {string}
+         */
+        CapacityForecast__ForecastTrend: "increasing" | "decreasing" | "stable" | "unstable" | "unknown";
+        /**
+         * @description Historical window used to build a forecast.
+         * @enum {string}
+         */
+        CapacityForecast__ForecastWindow: "seven_days" | "thirty_days";
+        /**
          * @description Resource classes accepted by the Phase 2 correlation engine.
          * @enum {string}
          */
@@ -1679,6 +1769,257 @@ export interface components {
          */
         CapacityForecast__TenantId: string;
         /**
+         * ClusterForecastReport
+         * @description Bounded read-only projection returned by the cluster forecast API.
+         */
+        ClusterForecastReport: {
+            accuracy: components["schemas"]["ClusterForecastReport__ForecastAccuracy"][];
+            anomalies: components["schemas"]["ClusterForecastReport__AnomalyAssessment"][];
+            backlog_etas: components["schemas"]["ClusterForecastReport__BacklogEta"][];
+            baselines: components["schemas"]["ClusterForecastReport__AnomalyBaseline"][];
+            change_points: components["schemas"]["ClusterForecastReport__ChangePoint"][];
+            cluster_id: components["schemas"]["ClusterForecastReport__ClusterId"];
+            execution_eligible: boolean;
+            forecasts: components["schemas"]["ClusterForecastReport__CapacityForecast"][];
+            /** Format: date-time */
+            observed_at: string;
+            partial: boolean;
+            schema_version: string;
+            tenant_id: components["schemas"]["ClusterForecastReport__TenantId"];
+            warnings?: string[];
+        };
+        /** @description Result of robust z-score and empirical-quantile anomaly evaluation. */
+        ClusterForecastReport__AnomalyAssessment: {
+            anomaly: boolean;
+            /** Format: double */
+            baseline_median?: number | null;
+            cluster_id: components["schemas"]["ClusterForecastReport__ClusterId"];
+            /** Format: double */
+            empirical_quantile?: number | null;
+            evidence_ids: components["schemas"]["ClusterForecastReport__EvidenceId"][];
+            metric: string;
+            /** Format: date-time */
+            observed_at: string;
+            /** Format: double */
+            observed_value?: number | null;
+            resource: components["schemas"]["ClusterForecastReport__ResourceRef"];
+            /** Format: double */
+            robust_z_score?: number | null;
+            seasonality: components["schemas"]["ClusterForecastReport__Seasonality"];
+            status: components["schemas"]["ClusterForecastReport__ForecastStatus"];
+            tenant_id: components["schemas"]["ClusterForecastReport__TenantId"];
+        };
+        /** @description Seasonal baseline used for deterministic anomaly detection. */
+        ClusterForecastReport__AnomalyBaseline: {
+            algorithm_version: string;
+            cluster_id: components["schemas"]["ClusterForecastReport__ClusterId"];
+            /** Format: double */
+            coverage_ratio: number;
+            id: components["schemas"]["ClusterForecastReport__BaselineId"];
+            /** Format: double */
+            median: number;
+            /** Format: double */
+            median_absolute_deviation: number;
+            metric: string;
+            /** Format: uint64 */
+            period_seconds: number;
+            resource: components["schemas"]["ClusterForecastReport__ResourceRef"];
+            /** Format: uint32 */
+            sample_count: number;
+            seasonality: components["schemas"]["ClusterForecastReport__Seasonality"];
+            tenant_id: components["schemas"]["ClusterForecastReport__TenantId"];
+            /** Format: date-time */
+            valid_from: string;
+            /** Format: date-time */
+            valid_until: string;
+        };
+        /** @description Estimated drain time for a lag, retry, DLQ, POP, or timer backlog. */
+        ClusterForecastReport__BacklogEta: {
+            algorithm_version: string;
+            /** Format: double */
+            arrival_rate_per_second?: number | null;
+            backlog_kind: string;
+            backtest: components["schemas"]["ClusterForecastReport__ForecastBacktest"];
+            cluster_id: components["schemas"]["ClusterForecastReport__ClusterId"];
+            /** Format: double */
+            coverage_ratio: number;
+            /** Format: double */
+            current_value: number;
+            /** Format: double */
+            drain_rate_per_second?: number | null;
+            /** Format: date-time */
+            estimated_clear_at?: string | null;
+            evidence_ids: components["schemas"]["ClusterForecastReport__EvidenceId"][];
+            execution_eligible: boolean;
+            id: components["schemas"]["ClusterForecastReport__ForecastId"];
+            /** Format: date-time */
+            observed_at: string;
+            quality: components["schemas"]["ClusterForecastReport__ForecastQuality"];
+            resource: components["schemas"]["ClusterForecastReport__ResourceRef"];
+            /** Format: date-time */
+            sample_end: string;
+            /** Format: date-time */
+            sample_start: string;
+            /** Format: double */
+            slope_per_hour?: number | null;
+            status: components["schemas"]["ClusterForecastReport__ForecastStatus"];
+            tenant_id: components["schemas"]["ClusterForecastReport__TenantId"];
+            trend: components["schemas"]["ClusterForecastReport__ForecastTrend"];
+            window: components["schemas"]["ClusterForecastReport__ForecastWindow"];
+        };
+        /**
+         * Format: uuid
+         * @description Stable identifier for an anomaly baseline.
+         */
+        ClusterForecastReport__BaselineId: string;
+        /** @description Capacity trend for one resource and metric. */
+        ClusterForecastReport__CapacityForecast: {
+            advisories?: string[];
+            algorithm_version: string;
+            backtest: components["schemas"]["ClusterForecastReport__ForecastBacktest"];
+            cluster_id: components["schemas"]["ClusterForecastReport__ClusterId"];
+            /** Format: double */
+            coverage_ratio: number;
+            evidence_ids: components["schemas"]["ClusterForecastReport__EvidenceId"][];
+            execution_eligible: boolean;
+            /** Format: date-time */
+            exhaustion_at?: string | null;
+            id: components["schemas"]["ClusterForecastReport__ForecastId"];
+            metric: string;
+            /** Format: date-time */
+            observed_at: string;
+            points: components["schemas"]["ClusterForecastReport__ForecastPoint"][];
+            quality: components["schemas"]["ClusterForecastReport__ForecastQuality"];
+            resource: components["schemas"]["ClusterForecastReport__ResourceRef"];
+            /** Format: date-time */
+            sample_end: string;
+            /** Format: date-time */
+            sample_start: string;
+            /** Format: double */
+            slope_per_hour?: number | null;
+            status: components["schemas"]["ClusterForecastReport__ForecastStatus"];
+            tenant_id: components["schemas"]["ClusterForecastReport__TenantId"];
+            /** Format: double */
+            threshold?: number | null;
+            trend: components["schemas"]["ClusterForecastReport__ForecastTrend"];
+            /** Format: double */
+            volatility?: number | null;
+            window: components["schemas"]["ClusterForecastReport__ForecastWindow"];
+        };
+        /** @description Non-causal change point emitted as an investigation hint. */
+        ClusterForecastReport__ChangePoint: {
+            /** Format: double */
+            after_value: number;
+            algorithm_version: string;
+            /** Format: double */
+            before_value: number;
+            cluster_id: components["schemas"]["ClusterForecastReport__ClusterId"];
+            /** Format: date-time */
+            detected_at: string;
+            evidence_ids: components["schemas"]["ClusterForecastReport__EvidenceId"][];
+            id: components["schemas"]["ClusterForecastReport__ChangePointId"];
+            metric: string;
+            resource: components["schemas"]["ClusterForecastReport__ResourceRef"];
+            /** Format: double */
+            score: number;
+            tenant_id: components["schemas"]["ClusterForecastReport__TenantId"];
+        };
+        /**
+         * Format: uuid
+         * @description Stable identifier for a detected change point.
+         */
+        ClusterForecastReport__ChangePointId: string;
+        /**
+         * Format: uuid
+         * @description Internal identifier for an onboarded cluster.
+         */
+        ClusterForecastReport__ClusterId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an evidence snapshot.
+         */
+        ClusterForecastReport__EvidenceId: string;
+        /** @description Accuracy calculated from persisted outcomes of earlier projections. */
+        ClusterForecastReport__ForecastAccuracy: {
+            /** Format: double */
+            bias?: number | null;
+            /** Format: uint32 */
+            evaluated_points: number;
+            /** Format: double */
+            interval_coverage_ratio?: number | null;
+            /** Format: double */
+            mean_absolute_error?: number | null;
+            metric: string;
+            /** Format: date-time */
+            observed_at: string;
+            window: components["schemas"]["ClusterForecastReport__ForecastWindow"];
+        };
+        /** @description Deterministic holdout result used to monitor forecast accuracy. */
+        ClusterForecastReport__ForecastBacktest: {
+            /** Format: double */
+            bias?: number | null;
+            /** Format: uint32 */
+            evaluated_points: number;
+            /** Format: double */
+            interval_coverage_ratio?: number | null;
+            /** Format: double */
+            mean_absolute_error?: number | null;
+        };
+        /**
+         * Format: uuid
+         * @description Stable identifier for a capacity or backlog forecast.
+         */
+        ClusterForecastReport__ForecastId: string;
+        /** @description One observed or projected point in a forecast series. */
+        ClusterForecastReport__ForecastPoint: {
+            /** Format: date-time */
+            at: string;
+            projected: boolean;
+            /** Format: double */
+            value: number;
+        };
+        /**
+         * @description Explainable quality assessment for a forecast.
+         * @enum {string}
+         */
+        ClusterForecastReport__ForecastQuality: "low" | "medium" | "high";
+        /**
+         * @description Forecast availability and degradation state.
+         * @enum {string}
+         */
+        ClusterForecastReport__ForecastStatus: "ready" | "insufficient_data" | "stale" | "unstable_trend" | "unsupported";
+        /**
+         * @description Explainable direction of the fitted trend.
+         * @enum {string}
+         */
+        ClusterForecastReport__ForecastTrend: "increasing" | "decreasing" | "stable" | "unstable" | "unknown";
+        /**
+         * @description Historical window used to build a forecast.
+         * @enum {string}
+         */
+        ClusterForecastReport__ForecastWindow: "seven_days" | "thirty_days";
+        /**
+         * @description Resource classes accepted by the Phase 2 correlation engine.
+         * @enum {string}
+         */
+        ClusterForecastReport__ResourceKind: "cluster" | "name_server" | "controller" | "broker" | "proxy" | "store" | "topic" | "queue" | "consumer_group" | "producer_group" | "pod" | "node" | "persistent_volume_claim" | "certificate" | "runtime" | "telemetry";
+        /** @description Tenant-scoped resource identity used for correlation and topology lookup. */
+        ClusterForecastReport__ResourceRef: {
+            display_name?: string | null;
+            key: string;
+            kind: components["schemas"]["ClusterForecastReport__ResourceKind"];
+        };
+        /**
+         * @description Seasonal period represented by a deterministic baseline.
+         * @enum {string}
+         */
+        ClusterForecastReport__Seasonality: "hourly" | "daily" | "weekly";
+        /**
+         * Format: uuid
+         * @description Stable tenant boundary identifier.
+         */
+        ClusterForecastReport__TenantId: string;
+        /**
          * BacklogEta
          * @description Estimated drain time for a lag, retry, DLQ, POP, or timer backlog.
          */
@@ -1687,6 +2028,7 @@ export interface components {
             /** Format: double */
             arrival_rate_per_second?: number | null;
             backlog_kind: string;
+            backtest: components["schemas"]["BacklogEta__ForecastBacktest"];
             cluster_id: components["schemas"]["BacklogEta__ClusterId"];
             /** Format: double */
             coverage_ratio: number;
@@ -1697,12 +2039,22 @@ export interface components {
             /** Format: date-time */
             estimated_clear_at?: string | null;
             evidence_ids: components["schemas"]["BacklogEta__EvidenceId"][];
+            execution_eligible: boolean;
             id: components["schemas"]["BacklogEta__ForecastId"];
             /** Format: date-time */
             observed_at: string;
+            quality: components["schemas"]["BacklogEta__ForecastQuality"];
             resource: components["schemas"]["BacklogEta__ResourceRef"];
+            /** Format: date-time */
+            sample_end: string;
+            /** Format: date-time */
+            sample_start: string;
+            /** Format: double */
+            slope_per_hour?: number | null;
             status: components["schemas"]["BacklogEta__ForecastStatus"];
             tenant_id: components["schemas"]["BacklogEta__TenantId"];
+            trend: components["schemas"]["BacklogEta__ForecastTrend"];
+            window: components["schemas"]["BacklogEta__ForecastWindow"];
         };
         /**
          * Format: uuid
@@ -1714,16 +2066,42 @@ export interface components {
          * @description Stable identifier for an evidence snapshot.
          */
         BacklogEta__EvidenceId: string;
+        /** @description Deterministic holdout result used to monitor forecast accuracy. */
+        BacklogEta__ForecastBacktest: {
+            /** Format: double */
+            bias?: number | null;
+            /** Format: uint32 */
+            evaluated_points: number;
+            /** Format: double */
+            interval_coverage_ratio?: number | null;
+            /** Format: double */
+            mean_absolute_error?: number | null;
+        };
         /**
          * Format: uuid
          * @description Stable identifier for a capacity or backlog forecast.
          */
         BacklogEta__ForecastId: string;
         /**
+         * @description Explainable quality assessment for a forecast.
+         * @enum {string}
+         */
+        BacklogEta__ForecastQuality: "low" | "medium" | "high";
+        /**
          * @description Forecast availability and degradation state.
          * @enum {string}
          */
         BacklogEta__ForecastStatus: "ready" | "insufficient_data" | "stale" | "unstable_trend" | "unsupported";
+        /**
+         * @description Explainable direction of the fitted trend.
+         * @enum {string}
+         */
+        BacklogEta__ForecastTrend: "increasing" | "decreasing" | "stable" | "unstable" | "unknown";
+        /**
+         * @description Historical window used to build a forecast.
+         * @enum {string}
+         */
+        BacklogEta__ForecastWindow: "seven_days" | "thirty_days";
         /**
          * @description Resource classes accepted by the Phase 2 correlation engine.
          * @enum {string}
@@ -1741,6 +2119,45 @@ export interface components {
          */
         BacklogEta__TenantId: string;
         /**
+         * WhatIfSimulationRequest
+         * @description Bounded structured input for one deterministic what-if simulation.
+         */
+        WhatIfSimulationRequest: {
+            affected_resource_keys?: string[];
+            cluster_id: components["schemas"]["WhatIfSimulationRequest__ClusterId"];
+            configuration_changes?: string[];
+            /** Format: uint32 */
+            current_instances?: number | null;
+            /** Format: uint32 */
+            current_queue_count?: number | null;
+            /** Format: double */
+            current_utilization?: number | null;
+            evidence_ids?: components["schemas"]["WhatIfSimulationRequest__EvidenceId"][];
+            /** Format: uint32 */
+            instance_delta?: number | null;
+            kind: components["schemas"]["WhatIfSimulationRequest__SimulationKind"];
+            /** Format: uint32 */
+            queue_delta?: number | null;
+            target_version?: string | null;
+            /** Format: uint16 */
+            traffic_increase_percent?: number | null;
+        };
+        /**
+         * Format: uuid
+         * @description Internal identifier for an onboarded cluster.
+         */
+        WhatIfSimulationRequest__ClusterId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an evidence snapshot.
+         */
+        WhatIfSimulationRequest__EvidenceId: string;
+        /**
+         * @description Supported deterministic Phase 2 what-if families.
+         * @enum {string}
+         */
+        WhatIfSimulationRequest__SimulationKind: "broker_offline" | "proxy_offline" | "traffic_increase" | "broker_scale_out" | "proxy_scale_out" | "topic_queue_expand" | "version_upgrade" | "configuration_diff";
+        /**
          * WhatIfSimulation
          * @description Read-only what-if result. It never carries an executable action.
          */
@@ -1754,6 +2171,7 @@ export interface components {
             created_at: string;
             created_by: string;
             evidence_ids: components["schemas"]["WhatIfSimulation__EvidenceId"][];
+            execution_eligible: boolean;
             id: components["schemas"]["WhatIfSimulation__SimulationId"];
             input: unknown;
             kind: components["schemas"]["WhatIfSimulation__SimulationKind"];
@@ -1798,6 +2216,7 @@ export interface components {
          */
         UpgradeReadinessReport: {
             cluster_id: components["schemas"]["UpgradeReadinessReport__ClusterId"];
+            execution_eligible: boolean;
             /** Format: date-time */
             expires_at: string;
             findings: components["schemas"]["UpgradeReadinessReport__ReadinessFinding"][];
@@ -1854,6 +2273,7 @@ export interface components {
          */
         DrReadinessReport: {
             cluster_id: components["schemas"]["DrReadinessReport__ClusterId"];
+            execution_eligible: boolean;
             /** Format: date-time */
             expires_at: string;
             findings: components["schemas"]["DrReadinessReport__ReadinessFinding"][];
@@ -3467,6 +3887,102 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FleetHealthReport"];
+                };
+            };
+        };
+    };
+    getClusterForecasts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Explainable 7d/30d capacity, backlog ETA, seasonal anomaly, change-point and accuracy report */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClusterForecastReport"];
+                };
+            };
+        };
+    };
+    runWhatIfSimulation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WhatIfSimulationRequest"];
+            };
+        };
+        responses: {
+            /** @description Deterministic advisory-only what-if result with no execution eligibility */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WhatIfSimulation"];
+                };
+            };
+        };
+    };
+    getUpgradeReadiness: {
+        parameters: {
+            query: {
+                target_version: string;
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Evidence-backed advisory-only upgrade readiness report */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpgradeReadinessReport"];
+                };
+            };
+        };
+    };
+    getDrReadiness: {
+        parameters: {
+            query?: {
+                target_region?: string;
+                requested_rto_seconds?: number;
+                requested_rpo_seconds?: number;
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Evidence-backed advisory-only disaster-recovery readiness report */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DrReadinessReport"];
                 };
             };
         };

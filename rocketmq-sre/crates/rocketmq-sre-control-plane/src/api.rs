@@ -59,6 +59,7 @@ use crate::connector_channel;
 use crate::connector_channel::PostgresConnectorChannelService;
 use crate::evidence::EvidenceBlobStore;
 use crate::evidence::EvidenceService;
+use crate::forecast::ForecastService;
 use crate::inspection::InspectionService;
 use crate::knowledge::KnowledgeService;
 use crate::model::HandshakeOutcome;
@@ -517,6 +518,7 @@ pub(crate) struct AppState {
     pub(crate) assets: AssetTopologyService,
     pub(crate) connector_channel: PostgresConnectorChannelService,
     pub(crate) evidence: EvidenceService,
+    pub(crate) forecast: ForecastService,
     pub(crate) knowledge: KnowledgeService,
     pub(crate) model_gateway: ModelGatewayService,
     pub(crate) observability: SreObservability,
@@ -553,6 +555,7 @@ pub fn build_router(
 struct ControlPlaneRouters {
     public: Router,
     connector: Router,
+    forecast: ForecastService,
     slo: SloService,
 }
 
@@ -577,6 +580,13 @@ fn build_routers_with_auth(
         evidence.clone(),
         alerting.clone(),
     )?;
+    let forecast = ForecastService::new(
+        repository.clone(),
+        connector_channel.clone(),
+        evidence.clone(),
+        assets.clone(),
+        slo.clone(),
+    )?;
     let connector_routes = connector_channel::router::<AppState>(connector_channel.clone());
     let connector_control_routes = Router::new()
         .route(
@@ -594,6 +604,7 @@ fn build_routers_with_auth(
         assets,
         connector_channel,
         evidence,
+        forecast: forecast.clone(),
         knowledge,
         model_gateway,
         observability,
@@ -625,7 +636,12 @@ fn build_routers_with_auth(
         .merge(connector_control_routes)
         .merge(crate::phase1_api::connector_ingest_routes())
         .with_state(state);
-    Ok(ControlPlaneRouters { public, connector, slo })
+    Ok(ControlPlaneRouters {
+        public,
+        connector,
+        forecast,
+        slo,
+    })
 }
 
 /// Connects the production repository, binds the HTTP endpoint, and drains on
@@ -722,9 +738,27 @@ pub async fn run(config: ControlPlaneConfig, service_context: ChildServiceContex
             }
         })
         .map_err(|error| ControlPlaneError::configuration(format!("SLO evaluator could not be started: {error}")))?;
+    let forecast_worker = routers.forecast.clone();
+    let forecast_tasks = service_context.scheduled_tasks("forecast-evaluator");
+    let mut forecast_schedule =
+        ScheduledTaskConfig::fixed_rate_no_overlap("phase2-forecast-evaluator", forecast_worker.worker_interval());
+    forecast_schedule.initial_delay = std::time::Duration::from_secs(7);
+    forecast_schedule.max_run_time = Some(std::time::Duration::from_secs(10 * 60));
+    forecast_schedule.shutdown_timeout = config.shutdown_timeout();
+    forecast_tasks
+        .schedule_fixed_rate_no_overlap(forecast_schedule, move || {
+            let forecast = forecast_worker.clone();
+            async move {
+                forecast.run_due().await;
+            }
+        })
+        .map_err(|error| {
+            ControlPlaneError::configuration(format!("forecast evaluator could not be started: {error}"))
+        })?;
     let ControlPlaneRouters {
         public,
         connector,
+        forecast: _,
         slo: _,
     } = routers;
     let connector_shutdown = service_context.task_group().cancellation_token();

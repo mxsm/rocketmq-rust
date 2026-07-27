@@ -10,9 +10,53 @@
       "format": "uuid",
       "type": "string"
     },
+    "ForecastBacktest": {
+      "description": "Deterministic holdout result used to monitor forecast accuracy.",
+      "properties": {
+        "bias": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "evaluated_points": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "interval_coverage_ratio": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "mean_absolute_error": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "evaluated_points"
+      ],
+      "type": "object"
+    },
     "ForecastId": {
       "description": "Stable identifier for a capacity or backlog forecast.",
       "format": "uuid",
+      "type": "string"
+    },
+    "ForecastQuality": {
+      "description": "Explainable quality assessment for a forecast.",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
       "type": "string"
     },
     "ForecastStatus": {
@@ -23,6 +67,25 @@
         "stale",
         "unstable_trend",
         "unsupported"
+      ],
+      "type": "string"
+    },
+    "ForecastTrend": {
+      "description": "Explainable direction of the fitted trend.",
+      "enum": [
+        "increasing",
+        "decreasing",
+        "stable",
+        "unstable",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "ForecastWindow": {
+      "description": "Historical window used to build a forecast.",
+      "enum": [
+        "seven_days",
+        "thirty_days"
       ],
       "type": "string"
     },
@@ -92,6 +155,9 @@
     "backlog_kind": {
       "type": "string"
     },
+    "backtest": {
+      "$ref": "#/$defs/ForecastBacktest"
+    },
     "cluster_id": {
       "$ref": "#/$defs/ClusterId"
     },
@@ -123,6 +189,9 @@
       },
       "type": "array"
     },
+    "execution_eligible": {
+      "type": "boolean"
+    },
     "id": {
       "$ref": "#/$defs/ForecastId"
     },
@@ -130,14 +199,38 @@
       "format": "date-time",
       "type": "string"
     },
+    "quality": {
+      "$ref": "#/$defs/ForecastQuality"
+    },
     "resource": {
       "$ref": "#/$defs/ResourceRef"
+    },
+    "sample_end": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "sample_start": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "slope_per_hour": {
+      "format": "double",
+      "type": [
+        "number",
+        "null"
+      ]
     },
     "status": {
       "$ref": "#/$defs/ForecastStatus"
     },
     "tenant_id": {
       "$ref": "#/$defs/TenantId"
+    },
+    "trend": {
+      "$ref": "#/$defs/ForecastTrend"
+    },
+    "window": {
+      "$ref": "#/$defs/ForecastWindow"
     }
   },
   "required": [
@@ -146,11 +239,18 @@
     "cluster_id",
     "resource",
     "backlog_kind",
+    "window",
+    "trend",
     "status",
+    "quality",
     "current_value",
+    "sample_start",
+    "sample_end",
     "coverage_ratio",
     "algorithm_version",
+    "backtest",
     "evidence_ids",
+    "execution_eligible",
     "observed_at"
   ],
   "title": "BacklogEta",

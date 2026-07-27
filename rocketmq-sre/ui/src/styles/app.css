@@ -16,6 +16,535 @@
     color 120ms ease;
 }
 
+/* Phase 02 desktop forecast workspace */
+.forecast-page {
+  width: 100%;
+  max-width: none;
+}
+
+.forecast-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.forecast-header-actions .cluster-select {
+  width: 260px;
+}
+
+.forecast-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+
+.forecast-summary-card {
+  display: flex;
+  min-height: 126px;
+  align-items: flex-start;
+  gap: 13px;
+  padding: 20px;
+  border-right: 1px solid var(--border-subtle);
+}
+
+.forecast-summary-card:last-child {
+  border-right: 0;
+}
+
+.forecast-summary-card.warning {
+  background:
+    linear-gradient(125deg, rgb(234 179 8 / 8%), transparent 70%),
+    var(--card);
+}
+
+.forecast-summary-icon {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted-foreground);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--secondary);
+}
+
+.forecast-summary-card > div {
+  display: grid;
+  gap: 5px;
+}
+
+.forecast-summary-card > div > span,
+.forecast-summary-card small {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.forecast-summary-card strong {
+  color: var(--foreground);
+  font-size: 26px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.04em;
+}
+
+.forecast-quality-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 13px 15px;
+  color: var(--warning);
+  border: 1px solid #4b4118;
+  border-radius: var(--radius);
+  background: var(--warning-muted);
+}
+
+.forecast-quality-banner > div {
+  display: grid;
+  gap: 3px;
+}
+
+.forecast-quality-banner span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.forecast-tabs {
+  width: max-content;
+  margin-bottom: 14px;
+}
+
+.forecast-tab-stack {
+  display: grid;
+  gap: 16px;
+}
+
+.forecast-table {
+  min-width: 1050px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: calc(var(--radius) - 1px);
+}
+
+.forecast-row {
+  display: grid;
+  grid-template-columns:
+    minmax(210px, 1.35fr)
+    minmax(130px, 0.75fr)
+    minmax(145px, 0.9fr)
+    minmax(130px, 0.75fr)
+    minmax(150px, 0.85fr)
+    minmax(130px, 0.8fr);
+  min-height: 68px;
+  align-items: center;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.forecast-row:last-child {
+  border-bottom: 0;
+}
+
+.forecast-row > * {
+  min-width: 0;
+  padding: 12px 14px;
+}
+
+.forecast-row > div {
+  display: grid;
+  gap: 5px;
+}
+
+.forecast-row strong {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.forecast-row small,
+.forecast-resource code {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.forecast-row-header {
+  min-height: 38px;
+  color: var(--muted-foreground);
+  background: var(--secondary);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.045em;
+}
+
+.trend-badge {
+  display: inline-flex;
+  width: max-content;
+  align-items: center;
+  gap: 3px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.trend-badge.increasing {
+  color: var(--warning);
+}
+
+.trend-badge.decreasing {
+  color: var(--success);
+}
+
+.forecast-sparkline {
+  width: 100%;
+  height: 40px;
+  overflow: visible;
+}
+
+.forecast-sparkline path {
+  fill: none;
+  stroke: var(--info);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.forecast-sparkline .projection-boundary {
+  stroke: var(--muted-foreground);
+  stroke-dasharray: 2 3;
+  stroke-width: 1;
+}
+
+.sparkline-empty {
+  padding: 12px 14px;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.backlog-grid,
+.anomaly-grid,
+.accuracy-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.backlog-card,
+.anomaly-card,
+.accuracy-grid article {
+  display: grid;
+  min-width: 0;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: calc(var(--radius) - 1px);
+  background: var(--secondary);
+}
+
+.backlog-card > div:first-child,
+.anomaly-card > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.backlog-card > strong {
+  font-size: 24px;
+  font-variant-numeric: tabular-nums;
+}
+
+.backlog-card dl,
+.anomaly-card dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.backlog-card dl div,
+.anomaly-card dl div {
+  display: grid;
+  gap: 3px;
+}
+
+.backlog-card dt,
+.anomaly-card dt {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+
+.backlog-card dd,
+.anomaly-card dd {
+  margin: 0;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.insufficient-note {
+  margin: 0;
+  padding-top: 9px;
+  color: var(--warning);
+  border-top: 1px solid var(--border-subtle);
+  font-size: 11px;
+}
+
+.accuracy-grid article {
+  gap: 5px;
+}
+
+.accuracy-grid code,
+.anomaly-card code {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accuracy-grid article > span,
+.accuracy-grid article > small {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.anomaly-card.active {
+  border-color: #572029;
+  background:
+    linear-gradient(145deg, rgb(244 63 94 / 8%), transparent 65%),
+    var(--secondary);
+}
+
+.change-point-list {
+  display: grid;
+  gap: 7px;
+}
+
+.change-point-list article {
+  display: grid;
+  grid-template-columns: 12px minmax(240px, 1.4fr) minmax(170px, 0.8fr) minmax(180px, 0.75fr);
+  min-height: 58px;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--secondary);
+}
+
+.change-point-list article > div {
+  display: grid;
+  gap: 4px;
+}
+
+.change-point-list article > div:nth-child(3) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.change-point-list code,
+.change-point-list small {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.change-point-marker {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warning);
+  box-shadow: 0 0 0 4px rgb(234 179 8 / 10%);
+}
+
+.simulation-layout,
+.readiness-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+.simulation-config,
+.simulation-result,
+.readiness-card {
+  min-height: 430px;
+}
+
+.simulation-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.simulation-form-grid label,
+.simulation-context {
+  display: grid;
+  gap: 7px;
+}
+
+.simulation-form-grid label > span,
+.simulation-context > span {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.simulation-form-grid .select-trigger {
+  width: 100%;
+}
+
+.simulation-context {
+  grid-column: 1 / -1;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--secondary);
+}
+
+.simulation-context small {
+  color: var(--muted-foreground);
+}
+
+.utilization-comparison {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+  padding: 18px;
+  border: 1px solid var(--border-subtle);
+  border-radius: calc(var(--radius) - 1px);
+  background: var(--secondary);
+}
+
+.utilization-comparison > div {
+  display: grid;
+  gap: 5px;
+}
+
+.utilization-comparison span {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.utilization-comparison strong {
+  font-size: 22px;
+  font-variant-numeric: tabular-nums;
+}
+
+.simulation-result-list {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  align-items: start;
+  gap: 10px;
+  padding: 11px 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.simulation-result-list > span {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.simulation-result-list > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.readiness-findings {
+  display: grid;
+  gap: 8px;
+}
+
+.readiness-findings article {
+  display: grid;
+  grid-template-columns: 8px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--secondary);
+}
+
+.readiness-findings article > div {
+  display: grid;
+  gap: 4px;
+}
+
+.readiness-findings article > div:last-child {
+  justify-items: end;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.readiness-findings code,
+.readiness-findings small {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+
+.finding-severity {
+  width: 6px;
+  height: 26px;
+  border-radius: 999px;
+  background: var(--muted-foreground);
+}
+
+.finding-severity.critical,
+.finding-severity.high {
+  background: var(--destructive);
+}
+
+.finding-severity.medium {
+  background: var(--warning);
+}
+
+.finding-severity.low,
+.finding-severity.info {
+  background: var(--info);
+}
+
+.readiness-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 13px;
+  color: var(--muted-foreground);
+  border-top: 1px solid var(--border-subtle);
+  font-size: 11px;
+}
+
+.read-only-footnote {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 11px 13px;
+  color: var(--muted-foreground);
+  border: 1px dashed var(--border);
+  border-radius: calc(var(--radius) - 1px);
+  font-size: 11px;
+}
+
+.empty-state.compact {
+  min-height: 110px;
+}
+
 .button:disabled {
   cursor: not-allowed;
   opacity: 0.5;

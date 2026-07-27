@@ -25,6 +25,7 @@ use rocketmq_sre_contracts::ActionItem;
 use rocketmq_sre_contracts::AlertEvent;
 use rocketmq_sre_contracts::BacklogEta;
 use rocketmq_sre_contracts::CapacityForecast;
+use rocketmq_sre_contracts::ClusterForecastReport;
 use rocketmq_sre_contracts::ClusterHealthReport;
 use rocketmq_sre_contracts::Descriptor;
 use rocketmq_sre_contracts::DrReadinessReport;
@@ -39,6 +40,7 @@ use rocketmq_sre_contracts::PostmortemRevision;
 use rocketmq_sre_contracts::TopologySnapshot;
 use rocketmq_sre_contracts::UpgradeReadinessReport;
 use rocketmq_sre_contracts::WhatIfSimulation;
+use rocketmq_sre_contracts::WhatIfSimulationRequest;
 use rocketmq_sre_model_gateway::CanonicalModelRequest;
 use rocketmq_sre_model_gateway::CanonicalModelResponse;
 use schemars::JsonSchema;
@@ -239,12 +241,20 @@ fn generated_schemas() -> Result<Vec<(&'static str, serde_json::Value)>, EvalErr
             serde_json::to_value(schema_for!(CapacityForecast))?,
         ),
         (
+            "cluster-forecast-report.schema.json",
+            serde_json::to_value(schema_for!(ClusterForecastReport))?,
+        ),
+        (
             "backlog-eta.schema.json",
             serde_json::to_value(schema_for!(BacklogEta))?,
         ),
         (
             "what-if-simulation.schema.json",
             serde_json::to_value(schema_for!(WhatIfSimulation))?,
+        ),
+        (
+            "what-if-simulation-request.schema.json",
+            serde_json::to_value(schema_for!(WhatIfSimulationRequest))?,
         ),
         (
             "upgrade-readiness-report.schema.json",
@@ -528,12 +538,20 @@ signals:
                 include_str!("../../../schemas/capacity-forecast.schema.json"),
             ),
             (
+                "cluster-forecast-report.schema.json",
+                include_str!("../../../schemas/cluster-forecast-report.schema.json"),
+            ),
+            (
                 "backlog-eta.schema.json",
                 include_str!("../../../schemas/backlog-eta.schema.json"),
             ),
             (
                 "what-if-simulation.schema.json",
                 include_str!("../../../schemas/what-if-simulation.schema.json"),
+            ),
+            (
+                "what-if-simulation-request.schema.json",
+                include_str!("../../../schemas/what-if-simulation-request.schema.json"),
             ),
             (
                 "upgrade-readiness-report.schema.json",

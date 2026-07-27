@@ -17,6 +17,7 @@ import {
   SearchCode,
   ShieldCheck,
   Siren,
+  TrendingUp,
   UserRound,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -57,6 +58,7 @@ const groups = [
       { to: "/ask", label: "Ask SRE", icon: MessageSquareText },
       { to: "/incidents", label: "事件诊断", icon: Siren },
       { to: "/inspections", label: "巡检建议", icon: ListChecks },
+      { to: "/forecasts", label: "容量预测", icon: TrendingUp },
     ],
   },
   {

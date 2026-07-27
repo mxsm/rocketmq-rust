@@ -35,6 +35,12 @@ import {
   demoClusterHealth,
   demoFleetHealth,
 } from "./phase2HealthDemo";
+import {
+  demoDrReadiness,
+  demoForecastReport,
+  demoSimulation,
+  demoUpgradeReadiness,
+} from "./phase2ForecastDemo";
 
 const WAIT_MS = 90;
 
@@ -180,6 +186,47 @@ export function createMockSreApi(auth?: ApiRequestContext): SreApi {
     getFleetHealth: async (region, signal) => {
       await wait(signal);
       return clone(demoFleetHealth(auth?.clusterIds, region));
+    },
+    getClusterForecasts: async (clusterId, signal) => {
+      await wait(signal);
+      scope(clusterId);
+      const cluster =
+        clusters.find((item) => item.id === clusterId) ??
+        unavailable("cluster");
+      return clone(demoForecastReport(cluster.tenant_id, clusterId));
+    },
+    runSimulation: async (input, signal) => {
+      await wait(signal);
+      scope(input.cluster_id);
+      return clone(
+        demoSimulation(auth?.tenantId ?? DEMO_TENANT_ID, input),
+      );
+    },
+    getUpgradeReadiness: async (
+      clusterId,
+      targetVersion,
+      signal,
+    ) => {
+      await wait(signal);
+      scope(clusterId);
+      return clone(
+        demoUpgradeReadiness(
+          auth?.tenantId ?? DEMO_TENANT_ID,
+          clusterId,
+          targetVersion,
+        ),
+      );
+    },
+    getDrReadiness: async (clusterId, targetRegion, signal) => {
+      await wait(signal);
+      scope(clusterId);
+      return clone(
+        demoDrReadiness(
+          auth?.tenantId ?? DEMO_TENANT_ID,
+          clusterId,
+          targetRegion,
+        ),
+      );
     },
     onboardCluster: async (input, signal) => {
       await wait(signal);
