@@ -17,12 +17,15 @@ use rocketmq_client_rust::MQAdminExt;
 use rocketmq_protocol::protocol::body::kv_table::KVTable;
 
 use crate::client_adapter::lifecycle::AdminSession;
+use crate::core::broker::project_broker_diagnostics;
 use crate::core::broker::BrokerAdmin;
 use crate::core::broker::BrokerSummary;
 use crate::core::broker::ListBrokersRequest;
 use crate::core::broker::ListBrokersResult;
 use crate::core::broker::ProbeBrokerRuntimeRequest;
 use crate::core::broker::ProbeBrokerRuntimeResult;
+use crate::core::broker::QueryBrokerDiagnosticsRequest;
+use crate::core::broker::QueryBrokerDiagnosticsResult;
 use crate::core::AdminError;
 use crate::core::AdminFuture;
 
@@ -100,6 +103,60 @@ impl BrokerAdmin for AdminSession {
                 }
             }
             Ok(result)
+        })
+    }
+
+    fn query_broker_diagnostics<'a>(
+        &'a mut self,
+        request: &'a QueryBrokerDiagnosticsRequest,
+    ) -> AdminFuture<'a, QueryBrokerDiagnosticsResult> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            let cluster_info = self
+                .inner
+                .examine_broker_cluster_info()
+                .await
+                .map_err(|error| AdminError::backend("examine_broker_cluster_info", error.to_string()))?;
+            let broker_names = cluster_info
+                .cluster_addr_table
+                .as_ref()
+                .and_then(|table| table.get(request.cluster.as_str()))
+                .cloned()
+                .unwrap_or_default();
+            let broker_table = cluster_info.broker_addr_table.unwrap_or_default();
+            let observed_at_millis = self.clock.now_millis();
+            let mut brokers = Vec::new();
+            let mut unavailable_brokers = 0usize;
+            for broker_name in broker_names {
+                let Some(broker_data) = broker_table.get(&broker_name) else {
+                    continue;
+                };
+                for (broker_id, broker_addr) in broker_data.broker_addrs() {
+                    match self.inner.fetch_broker_runtime_stats(broker_addr.clone()).await {
+                        Ok(runtime) => brokers.push(project_broker_diagnostics(
+                            broker_name.to_string(),
+                            *broker_id,
+                            &runtime,
+                        )),
+                        Err(_) => unavailable_brokers = unavailable_brokers.saturating_add(1),
+                    }
+                }
+            }
+            brokers.sort_by(|left, right| {
+                left.broker_name
+                    .cmp(&right.broker_name)
+                    .then(left.broker_id.cmp(&right.broker_id))
+            });
+            Ok(QueryBrokerDiagnosticsResult {
+                schema_version: crate::core::broker::BROKER_DIAGNOSTICS_SCHEMA_VERSION.to_owned(),
+                observed_at_millis,
+                partial: unavailable_brokers > 0
+                    || brokers
+                        .iter()
+                        .any(|broker| broker.coverage != crate::core::broker::BrokerDiagnosticsCoverage::Available),
+                brokers,
+                unavailable_brokers,
+            })
         })
     }
 }

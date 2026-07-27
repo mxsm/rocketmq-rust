@@ -1338,6 +1338,82 @@ impl MessageStore for LocalFileMessageStore {
             "backgroundIndexRebuildLastError".to_string(),
             background_index_rebuild.last_error.unwrap_or_default(),
         );
+        if let Some(recovery) = self.last_recovery_report() {
+            let failed_phases = recovery
+                .phases
+                .iter()
+                .filter(|phase| phase.status == crate::message_store::recovery::RecoveryPhaseStatus::Failed)
+                .count();
+            let fallback_phases = recovery
+                .phases
+                .iter()
+                .filter(|phase| phase.status == crate::message_store::recovery::RecoveryPhaseStatus::Fallback)
+                .count();
+            result.insert("recoveryReportAvailable".to_string(), "true".to_string());
+            result.insert(
+                "recoveryTotalDurationMillis".to_string(),
+                recovery.total_duration_ms.to_string(),
+            );
+            result.insert("recoveryPhaseCount".to_string(), recovery.phases.len().to_string());
+            result.insert("recoveryFailedPhaseCount".to_string(), failed_phases.to_string());
+            result.insert("recoveryFallbackPhaseCount".to_string(), fallback_phases.to_string());
+            result.insert(
+                "recoveryFallbackReasonPresent".to_string(),
+                recovery.fallback_reason.is_some().to_string(),
+            );
+            result.insert(
+                "recoveryScannedBytes".to_string(),
+                recovery.stats.scanned_bytes.to_string(),
+            );
+            result.insert(
+                "recoveryRecoveredMessages".to_string(),
+                recovery.stats.recovered_messages.to_string(),
+            );
+            result.insert(
+                "recoveryInvalidMessages".to_string(),
+                recovery.stats.invalid_messages.to_string(),
+            );
+            result.insert(
+                "recoveryTruncatedFiles".to_string(),
+                recovery.stats.truncated_files.to_string(),
+            );
+            result.insert(
+                "recoveryIndexFilesRemoved".to_string(),
+                recovery.stats.index_files_removed.to_string(),
+            );
+            result.insert(
+                "recoveryIndexFilesRebuilt".to_string(),
+                recovery.stats.index_files_rebuilt.to_string(),
+            );
+        } else {
+            result.insert("recoveryReportAvailable".to_string(), "false".to_string());
+        }
+
+        #[cfg(feature = "tieredstore")]
+        if let Some(tiered_store) = self.tiered_store.as_ref() {
+            result.insert("tieredStoreConfigured".to_string(), "true".to_string());
+            result.insert(
+                "tieredDispatchReady".to_string(),
+                tiered_store.is_dispatch_ready().to_string(),
+            );
+            result.insert(
+                "tieredMinimumPinnedWalSegment".to_string(),
+                tiered_store
+                    .minimum_pinned_wal_segment()
+                    .map(|value| value.to_string())
+                    .unwrap_or_default(),
+            );
+        } else {
+            result.insert("tieredStoreConfigured".to_string(), "false".to_string());
+            result.insert("tieredDispatchReady".to_string(), "false".to_string());
+            result.insert("tieredMinimumPinnedWalSegment".to_string(), String::new());
+        }
+        #[cfg(not(feature = "tieredstore"))]
+        {
+            result.insert("tieredStoreConfigured".to_string(), "false".to_string());
+            result.insert("tieredDispatchReady".to_string(), "false".to_string());
+            result.insert("tieredMinimumPinnedWalSegment".to_string(), String::new());
+        }
 
         if let Some(timer_message_store) = self.timer_message_store.as_ref() {
             result.insert(

@@ -55,6 +55,32 @@
         }
       ]
     },
+    "EvidenceExposure": {
+      "description": "Read-only boundary through which an evidence snapshot was observed.\n\nExposure is transport metadata rather than source content, so it does not\nparticipate in the canonical content hash.",
+      "oneOf": [
+        {
+          "enum": [
+            "mcp_tool",
+            "mcp_resource",
+            "admin_rpc",
+            "prometheus_api",
+            "alertmanager_api",
+            "loki_api",
+            "tempo_api",
+            "kubernetes_api",
+            "runtime_diagnostics",
+            "synthetic",
+            "unsupported"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "Compatibility value for evidence captured before exposure metadata was\nintroduced.",
+          "type": "string"
+        }
+      ]
+    },
     "EvidenceId": {
       "description": "Stable identifier for an evidence snapshot.",
       "format": "uuid",
@@ -178,6 +204,10 @@
     },
     "evidence_id": {
       "$ref": "#/$defs/EvidenceId"
+    },
+    "exposure": {
+      "$ref": "#/$defs/EvidenceExposure",
+      "default": "unknown"
     },
     "freshness_seconds": {
       "format": "uint64",

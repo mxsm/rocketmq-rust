@@ -31,6 +31,7 @@ use rocketmq_protocol::protocol::header::export_rocksdb_config_to_json_request_h
 use rocketmq_protocol::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigType;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::DataVersion;
+use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::MessageStore;
 use rocketmq_store::MADV_NORMAL;
 use rocketmq_store::MADV_RANDOM;
@@ -576,14 +577,135 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
     }
 
     fn prepare_runtime_info(&self) -> HashMap<CheetahString, CheetahString> {
-        let mut runtime_info = self.broker_runtime_inner.message_store().unwrap().get_runtime_info();
+        let message_store = self.broker_runtime_inner.message_store().unwrap();
+        let mut runtime_info = message_store.get_runtime_info();
+        let generation = self.broker_runtime_inner.runtime_config_snapshot();
+        let store_health = message_store.health_snapshot();
+        let broker_shutdown = self.broker_runtime_inner.is_shutdown();
+        let broker_active = self.is_special_service_running();
+        runtime_info.insert(
+            "sreDiagnosticsSchemaVersion".to_string(),
+            "rocketmq.broker-diagnostics.v1".to_string(),
+        );
+        runtime_info.insert(
+            "sreDiagnosticsObservedAtMillis".to_string(),
+            current_millis().to_string(),
+        );
+        runtime_info.insert(
+            "brokerConfigGeneration".to_string(),
+            generation.id().value().to_string(),
+        );
+        runtime_info.insert("brokerShutdown".to_string(), broker_shutdown.to_string());
+        runtime_info.insert(
+            "brokerRegistrationAccepting".to_string(),
+            (!broker_shutdown).to_string(),
+        );
+        runtime_info.insert(
+            "brokerRegistrationConfigured".to_string(),
+            generation.broker().namesrv_addr.is_some().to_string(),
+        );
+        runtime_info.insert(
+            "brokerReady".to_string(),
+            (broker_active && !broker_shutdown && store_health.writeable && !store_health.shutdown).to_string(),
+        );
+        runtime_info.insert(
+            "brokerRole".to_string(),
+            generation.store().broker_role.get_broker_role().to_string(),
+        );
+        runtime_info.insert(
+            "storeType".to_string(),
+            generation.store().store_type.get_store_type().to_string(),
+        );
+        runtime_info.insert(
+            "timerWheelEnabled".to_string(),
+            generation.store().timer_wheel_enable.to_string(),
+        );
+        runtime_info.insert(
+            "transientStorePoolEnabled".to_string(),
+            generation.store().transient_store_pool_enable.to_string(),
+        );
+        #[cfg(feature = "tieredstore")]
+        runtime_info.insert(
+            "tieredStoreConfigured".to_string(),
+            generation.store().tiered_store_config.is_some().to_string(),
+        );
+        #[cfg(not(feature = "tieredstore"))]
+        runtime_info.insert("tieredStoreConfigured".to_string(), "false".to_string());
+        runtime_info.insert("storeWriteable".to_string(), store_health.writeable.to_string());
+        runtime_info.insert(
+            "storeLastFlushError".to_string(),
+            store_health.last_flush_error.is_some().to_string(),
+        );
+        runtime_info.insert(
+            "storeOsPageCacheBusy".to_string(),
+            store_health.os_page_cache_busy.to_string(),
+        );
+        runtime_info.insert(
+            "storeTransientPoolDeficient".to_string(),
+            store_health.transient_store_pool_deficient.to_string(),
+        );
+        runtime_info.insert("storeShutdown".to_string(), store_health.shutdown.to_string());
+        runtime_info.insert(
+            "storeDispatchBehindBytes".to_string(),
+            store_health.dispatch_behind_bytes.to_string(),
+        );
+        runtime_info.insert(
+            "storeHaPendingRequestCount".to_string(),
+            store_health.ha_pending_request_count.to_string(),
+        );
+        runtime_info.insert(
+            "storeHaPendingOldestWaitMillis".to_string(),
+            store_health.ha_pending_oldest_wait_millis.to_string(),
+        );
+        runtime_info.insert(
+            "storeSyncFlushQueueDepth".to_string(),
+            store_health.sync_flush.queue_depth.to_string(),
+        );
+        runtime_info.insert(
+            "storeSyncFlushTimeoutTotal".to_string(),
+            store_health.sync_flush.timeout_total.to_string(),
+        );
+        runtime_info.insert(
+            "storeSyncFlushOldestWaitMillis".to_string(),
+            store_health.sync_flush.oldest_wait_millis.to_string(),
+        );
+        if let Some(auth) = self.auth_admin_service.as_ref() {
+            let auth = auth.diagnostics_snapshot();
+            runtime_info.insert("authDiagnosticsSupported".to_string(), "true".to_string());
+            runtime_info.insert(
+                "authAuthenticationEnabled".to_string(),
+                auth.authentication_enabled.to_string(),
+            );
+            runtime_info.insert(
+                "authAuthorizationEnabled".to_string(),
+                auth.authorization_enabled.to_string(),
+            );
+            runtime_info.insert(
+                "authAclFileWatchEnabled".to_string(),
+                auth.acl_file_watch_enabled.to_string(),
+            );
+            runtime_info.insert("authAclGeneration".to_string(), auth.acl_generation.to_string());
+            runtime_info.insert(
+                "authAclReloadAttempts".to_string(),
+                auth.acl_reload_attempts.to_string(),
+            );
+            runtime_info.insert(
+                "authAclReloadSuccesses".to_string(),
+                auth.acl_reload_successes.to_string(),
+            );
+            runtime_info.insert(
+                "authAclReloadFailures".to_string(),
+                auth.acl_reload_failures.to_string(),
+            );
+            runtime_info.insert("authAclReloadSkipped".to_string(), auth.acl_reload_skipped.to_string());
+        } else {
+            runtime_info.insert("authDiagnosticsSupported".to_string(), "false".to_string());
+        }
+        runtime_info.insert("authCredentialRotationSupported".to_string(), "false".to_string());
         self.broker_runtime_inner
             .schedule_message_service()
             .build_running_stats(&mut runtime_info);
-        runtime_info.insert(
-            "brokerActive".to_string(),
-            self.is_special_service_running().to_string(),
-        );
+        runtime_info.insert("brokerActive".to_string(), broker_active.to_string());
         let version = CURRENT_VERSION;
         runtime_info.insert("brokerVersionDesc".to_string(), version.name().to_string());
         runtime_info.insert("brokerVersion".to_string(), version.name().to_string());
@@ -976,6 +1098,43 @@ mod tests {
             .message_store()
             .expect("message store should exist")
             .data_read_ahead_enabled());
+
+        let _ = fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn runtime_diagnostics_generation_comes_from_the_atomic_config_snapshot() {
+        let runtime = new_test_runtime("sre-diagnostics-generation", false).await;
+        let admin = runtime.admin_runtime_for_test();
+        let handler = BrokerConfigRequestHandler::new(admin.clone());
+
+        let initial = handler.prepare_runtime_info();
+        assert_eq!(
+            initial.get("sreDiagnosticsSchemaVersion").map(|value| value.as_str()),
+            Some("rocketmq.broker-diagnostics.v1")
+        );
+        assert_eq!(
+            initial.get("brokerConfigGeneration").map(|value| value.as_str()),
+            Some("1")
+        );
+        assert_eq!(initial.get("storeWriteable").map(|value| value.as_str()), Some("true"));
+
+        let mut next = admin.broker_config().as_ref().clone();
+        next.max_client_event_count = next.max_client_event_count.saturating_add(1);
+        let mut admin = admin;
+        admin
+            .set_broker_config(next)
+            .expect("valid configuration replacement should advance generation");
+
+        let updated = handler.prepare_runtime_info();
+        assert_eq!(
+            updated.get("brokerConfigGeneration").map(|value| value.as_str()),
+            Some("2")
+        );
+        assert_eq!(
+            updated.get("brokerRole").map(|value| value.as_str()),
+            Some(admin.message_store_config().broker_role.get_broker_role())
+        );
 
         let _ = fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }

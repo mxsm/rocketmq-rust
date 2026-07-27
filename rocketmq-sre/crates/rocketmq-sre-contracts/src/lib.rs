@@ -69,6 +69,7 @@ pub use error::SreError;
 pub use evidence::CoverageStatus;
 pub use evidence::DiagnosticEvidence;
 pub use evidence::EvidenceContent;
+pub use evidence::EvidenceExposure;
 pub use evidence::EvidenceQuery;
 pub use evidence::EvidenceReference;
 pub use evidence::EvidenceRelation;

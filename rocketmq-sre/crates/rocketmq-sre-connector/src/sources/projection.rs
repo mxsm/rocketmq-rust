@@ -323,6 +323,28 @@ fn prometheus_collector(raw: &Value) -> Result<Projected, ConnectorError> {
 
 fn prometheus_latest_values(raw: &Value) -> Result<Vec<f64>, ConnectorError> {
     let root = object(raw)?;
+    if root.get("schema_version").and_then(Value::as_str) == Some("rocketmq.prometheus-evidence.v1") {
+        return required_array(root, "series")?
+            .iter()
+            .filter_map(|series| {
+                let series = match object(series) {
+                    Ok(series) => series,
+                    Err(error) => return Some(Err(error)),
+                };
+                let samples = match required_array(series, "samples") {
+                    Ok(samples) => samples,
+                    Err(error) => return Some(Err(error)),
+                };
+                samples.last().map(|sample| {
+                    object(sample)?
+                        .get("value")
+                        .and_then(Value::as_f64)
+                        .filter(|value| value.is_finite())
+                        .ok_or_else(schema_mismatch)
+                })
+            })
+            .collect();
+    }
     if required_string(root, "status")? != "success" {
         return Err(schema_mismatch());
     }
@@ -601,6 +623,7 @@ fn schema_mismatch() -> ConnectorError {
 mod tests {
     use chrono::TimeZone;
     use chrono::Utc;
+    use rocketmq_sre_contracts::EvidenceExposure;
     use rocketmq_sre_contracts::Sensitivity;
 
     use super::*;
@@ -613,6 +636,7 @@ mod tests {
             warnings: Vec::new(),
             sensitivity: Sensitivity::Internal,
             coverage: CoverageStatus::Available,
+            exposure: EvidenceExposure::Unknown,
             content,
         }
     }

@@ -46,6 +46,7 @@ use crate::broker::broker_control_plane::BrokerMembershipState;
 use crate::broker::broker_pre_online_capability::BrokerOnlineRoleState;
 use crate::broker::broker_pre_online_capability::BrokerSpecialServiceCapability;
 use crate::broker::broker_registration_runtime::BrokerRegistrationRuntime;
+use crate::broker::broker_runtime_config_state::BrokerRuntimeConfigGeneration;
 use crate::broker::broker_runtime_config_state::BrokerRuntimeConfigState;
 use crate::broker::log_filter_control::BrokerLogFilterControl;
 use crate::client::manager::consumer_manager::ConsumerManager;
@@ -258,6 +259,14 @@ impl<MS: MessageStore> BrokerAdminRuntime<MS> {
 
     pub(crate) fn message_store_config(&self) -> Arc<MessageStoreConfig> {
         self.config.store_snapshot()
+    }
+
+    pub(crate) fn runtime_config_snapshot(&self) -> Arc<BrokerRuntimeConfigGeneration> {
+        self.config.snapshot()
+    }
+
+    pub(crate) fn is_shutdown(&self) -> bool {
+        self.shutdown.load(std::sync::atomic::Ordering::Acquire)
     }
 
     pub(crate) fn log_filter_control(&self) -> Option<&Arc<BrokerLogFilterControl>> {

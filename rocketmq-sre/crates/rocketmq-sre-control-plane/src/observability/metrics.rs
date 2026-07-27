@@ -97,6 +97,7 @@ bounded_label! {
         Mcp => "mcp",
         AdminQuery => "admin_query",
         Prometheus => "prometheus",
+        Alertmanager => "alertmanager",
         Loki => "loki",
         Tempo => "tempo",
         Kubernetes => "kubernetes",
@@ -111,8 +112,9 @@ impl EvidenceSourceLabel {
     pub fn from_source_id(value: &str) -> Self {
         match value {
             "mcp" | "rocketmq-mcp" => Self::Mcp,
-            "admin_query" | "admin-read" => Self::AdminQuery,
+            "admin-query" | "admin_query" | "admin-read" => Self::AdminQuery,
             "prometheus" => Self::Prometheus,
+            "alertmanager" => Self::Alertmanager,
             "loki" => Self::Loki,
             "tempo" => Self::Tempo,
             "kubernetes" => Self::Kubernetes,
@@ -723,6 +725,18 @@ mod tests {
             ProviderFamilyLabel::Other
         );
         assert_eq!(EvidenceSourceLabel::from_source_id(secret_like).as_str(), "other");
+    }
+
+    #[test]
+    fn phase_two_source_ids_have_finite_canonical_labels() {
+        assert_eq!(
+            EvidenceSourceLabel::from_source_id("admin-query"),
+            EvidenceSourceLabel::AdminQuery
+        );
+        assert_eq!(
+            EvidenceSourceLabel::from_source_id("alertmanager"),
+            EvidenceSourceLabel::Alertmanager
+        );
     }
 
     #[test]

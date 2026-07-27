@@ -419,6 +419,7 @@ export const phase1Evidence = envelope<EvidenceRecord>(
       resource: "consumer-groups/order-worker/topics/orders",
       correlation_id: "91000000-0000-4000-8000-000000000001",
       sensitivity: "internal",
+      exposure: "admin_rpc",
       time_range: {
         start: "2026-07-27T08:11:40Z",
         end: "2026-07-27T08:41:40Z",
@@ -449,6 +450,7 @@ export const phase1Evidence = envelope<EvidenceRecord>(
       resource: "brokers/broker-a",
       correlation_id: "91000000-0000-4000-8000-000000000001",
       sensitivity: "internal",
+      exposure: "admin_rpc",
       time_range: {
         start: "2026-07-27T08:11:38Z",
         end: "2026-07-27T08:41:38Z",
@@ -483,6 +485,7 @@ export const phase1Evidence = envelope<EvidenceRecord>(
       resource: "consumer-groups/order-worker",
       correlation_id: "91000000-0000-4000-8000-000000000001",
       sensitivity: "restricted",
+      exposure: "admin_rpc",
       time_range: {
         start: "2026-07-27T08:11:35Z",
         end: "2026-07-27T08:41:35Z",

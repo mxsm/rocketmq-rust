@@ -36,7 +36,7 @@ const DEFAULT_MAX_CONCURRENCY: usize = 16;
 const DEFAULT_MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 const DEFAULT_INTERNAL_TOKEN_ENV: &str = "ROCKETMQ_SRE_INTERNAL_TOKEN";
 const DEFAULT_SOURCE_MAX_ROWS: usize = 500;
-const DEFAULT_SOURCE_MAX_TIME_RANGE_SECONDS: u64 = 3600;
+const DEFAULT_SOURCE_MAX_TIME_RANGE_SECONDS: u64 = 30 * 24 * 60 * 60;
 const DEFAULT_SOURCE_MAX_REQUESTS_PER_MINUTE: usize = 120;
 const DEFAULT_SOURCE_CACHE_TTL_SECONDS: u64 = 15;
 const DEFAULT_CHANNEL_POLL_SECONDS: u64 = 25;
@@ -312,6 +312,7 @@ pub struct ConnectorConfig {
     pub max_response_bytes: usize,
     pub expected_tool_surface_digest: Option<String>,
     pub prometheus_url: Option<Url>,
+    pub alertmanager_url: Option<Url>,
     pub loki_url: Option<Url>,
     pub tempo_url: Option<Url>,
     pub(crate) admin_source: Option<AdminSourceConfig>,
@@ -341,6 +342,10 @@ impl fmt::Debug for ConnectorConfig {
             .field("max_response_bytes", &self.max_response_bytes)
             .field("expected_tool_surface_digest", &self.expected_tool_surface_digest)
             .field("prometheus_url", &self.prometheus_url.as_ref().map(|_| "[CONFIGURED]"))
+            .field(
+                "alertmanager_url",
+                &self.alertmanager_url.as_ref().map(|_| "[CONFIGURED]"),
+            )
             .field("loki_url", &self.loki_url.as_ref().map(|_| "[CONFIGURED]"))
             .field("tempo_url", &self.tempo_url.as_ref().map(|_| "[CONFIGURED]"))
             .field("admin_source", &self.admin_source)
@@ -435,6 +440,7 @@ impl ConnectorConfig {
             validate_digest(digest)?;
         }
         let prometheus_url = optional_http_url("ROCKETMQ_SRE_PROMETHEUS_URL")?;
+        let alertmanager_url = optional_http_url("ROCKETMQ_SRE_ALERTMANAGER_URL")?;
         let loki_url = optional_http_url("ROCKETMQ_SRE_LOKI_URL")?;
         let tempo_url = optional_http_url("ROCKETMQ_SRE_TEMPO_URL")?;
         let source_limits = load_source_limits(request_timeout, max_concurrency, max_response_bytes)?;
@@ -461,6 +467,7 @@ impl ConnectorConfig {
             max_response_bytes,
             expected_tool_surface_digest,
             prometheus_url,
+            alertmanager_url,
             loki_url,
             tempo_url,
             admin_source,
@@ -611,7 +618,7 @@ fn load_source_limits(
     )?);
     if !(1..=10_000).contains(&max_rows)
         || !(1..=10_000).contains(&max_requests_per_minute)
-        || !(Duration::from_secs(1)..=Duration::from_secs(86_400)).contains(&max_time_range)
+        || !(Duration::from_secs(1)..=Duration::from_secs(30 * 24 * 60 * 60)).contains(&max_time_range)
         || !(Duration::from_secs(1)..=Duration::from_secs(300)).contains(&cache_ttl)
     {
         return Err(ConnectorError::configuration(
@@ -983,6 +990,7 @@ mod tests {
             max_response_bytes: 1024,
             expected_tool_surface_digest: None,
             prometheus_url: None,
+            alertmanager_url: None,
             loki_url: None,
             tempo_url: None,
             admin_source: None,

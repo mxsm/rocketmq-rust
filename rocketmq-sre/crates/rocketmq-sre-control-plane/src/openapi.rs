@@ -162,5 +162,14 @@ mod tests {
         ] {
             assert!(schemas.contains_key(required), "missing Phase 2 schema {required}");
         }
+        assert_eq!(
+            schemas["EvidenceSnapshot"]["properties"]["exposure"]["$ref"],
+            "#/components/schemas/EvidenceSnapshot__EvidenceExposure"
+        );
+        assert!(
+            schemas["EvidenceSnapshot__EvidenceExposure"]
+                .to_string()
+                .contains("runtime_diagnostics")
+        );
     }
 }

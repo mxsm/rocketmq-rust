@@ -17,6 +17,7 @@ use std::sync::Arc;
 use chrono::DateTime;
 use chrono::Utc;
 use parking_lot::RwLock;
+use serde::Deserialize;
 use serde::Serialize;
 
 use crate::config::LogsExporter;
@@ -25,7 +26,7 @@ use crate::config::ObservabilityConfig;
 use crate::config::SubscriberInstallStatus;
 use crate::config::TraceExporter;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ObservabilityStatusValueV1 {
     Initializing,
@@ -38,7 +39,7 @@ pub enum ObservabilityStatusValueV1 {
     Failed,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ObservabilityCompiledFeaturesV1 {
     pub metrics: bool,
     pub traces: bool,
@@ -47,14 +48,14 @@ pub struct ObservabilityCompiledFeaturesV1 {
     pub prometheus: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ObservabilitySignalStatusV1 {
     pub enabled: bool,
     pub exporter: String,
     pub initialization: ObservabilityStatusValueV1,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ObservabilitySubscriberStatusV1 {
     pub attempted: bool,
     pub installed: bool,
@@ -64,7 +65,7 @@ pub struct ObservabilitySubscriberStatusV1 {
 ///
 /// Export, queue, and drop health are deliberately reported as `unknown` or
 /// `not_instrumented` until the exporter SDK exposes authoritative state.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ObservabilityStatusViewV1 {
     pub schema_version: String,
     pub observed_at: DateTime<Utc>,

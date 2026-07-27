@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use chrono::DateTime;
 use chrono::Utc;
+use serde::Deserialize;
 use serde::Serialize;
 
 use crate::blocking::BlockingExecutorSnapshot;
@@ -62,7 +63,7 @@ pub struct RuntimeDiagnosticsSnapshot {
 ///
 /// The enum deliberately avoids caller-provided labels so diagnostics cannot
 /// disclose deployment names or other high-cardinality runtime data.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeComponent {
     Broker,
@@ -75,7 +76,7 @@ pub enum RuntimeComponent {
     Other,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeLifecycleStateV1 {
     Open,
@@ -85,7 +86,7 @@ pub enum RuntimeLifecycleStateV1 {
     Poisoned,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeTaskKindV1 {
     Service,
@@ -97,7 +98,7 @@ pub enum RuntimeTaskKindV1 {
     Other,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeBlockingLaneV1 {
     StorageIo,
@@ -105,7 +106,7 @@ pub enum RuntimeBlockingLaneV1 {
     CpuCrypto,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeBlockingKindV1 {
     ShortIo,
@@ -137,7 +138,7 @@ impl Default for RuntimeDiagnosticsViewOptions {
 /// Unlike [`RuntimeDiagnosticsSnapshot`], this view never exposes runtime IDs,
 /// task IDs, task names, task-group names, executor names, arguments, or
 /// configuration objects.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeDiagnosticsViewV1 {
     pub schema_version: String,
     pub observed_at: DateTime<Utc>,
@@ -154,7 +155,7 @@ impl RuntimeDiagnosticsViewV1 {
     pub const SCHEMA_VERSION: &'static str = "rocketmq.runtime-diagnostics.v1";
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeTaskKindSummaryV1 {
     pub kind: RuntimeTaskKindV1,
     pub active: usize,
@@ -162,9 +163,13 @@ pub struct RuntimeTaskKindSummaryV1 {
     pub max_elapsed_millis: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeBlockingLaneSummaryV1 {
     pub lane: RuntimeBlockingLaneV1,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_concurrency: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_queue_depth: Option<usize>,
     pub queued: usize,
     pub running: usize,
     pub timed_out_still_running: usize,
@@ -172,7 +177,7 @@ pub struct RuntimeBlockingLaneSummaryV1 {
     pub task_kinds: Vec<RuntimeBlockingKindSummaryV1>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeBlockingKindSummaryV1 {
     pub kind: RuntimeBlockingKindV1,
     pub active: usize,
@@ -291,6 +296,8 @@ fn sanitize_blocking_lane(index: usize, snapshot: BlockingExecutorSnapshot) -> R
 
     RuntimeBlockingLaneSummaryV1 {
         lane,
+        max_concurrency: Some(snapshot.max_concurrency),
+        max_queue_depth: Some(snapshot.max_queue_depth),
         queued: snapshot.queued,
         running: snapshot.running,
         timed_out_still_running: snapshot.timed_out_still_running,
@@ -363,8 +370,6 @@ mod tests {
         assert!(!json.contains("sensitive-child-name"));
         assert!(!json.contains("sensitive-task-name"));
         assert!(!json.contains("rocketmq-runtime-"));
-        assert!(!json.contains("max_concurrency"));
-        assert!(!json.contains("max_queue_depth"));
         assert!(json.contains("\"lifecycle_state\":\"open\""));
         assert!(json.contains("\"kind\":\"worker\""));
         assert!(view.task_group_count >= 2);
@@ -393,5 +398,48 @@ mod tests {
         assert!(view.truncated);
         assert!(view.task_kinds.is_empty());
         assert!(view.blocking_lanes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn sanitized_view_exposes_only_bounded_blocking_capacity_and_counts() {
+        let context = RuntimeContext::from_current("runtime-blocking-capacity");
+        let diagnostics = RuntimeDiagnostics::new(context.runtime().clone());
+        let view = diagnostics.view_v1(
+            RuntimeComponent::Broker,
+            context.root_group(),
+            vec![BlockingExecutorSnapshot {
+                name: "sensitive-lane-name".to_owned(),
+                max_concurrency: 8,
+                max_queue_depth: 32,
+                queued: 3,
+                running: 2,
+                timed_out_still_running: 1,
+                blocking_still_running: 0,
+                tasks: Vec::new(),
+            }],
+        );
+
+        assert_eq!(view.blocking_lanes.len(), 1);
+        assert_eq!(view.blocking_lanes[0].max_concurrency, Some(8));
+        assert_eq!(view.blocking_lanes[0].max_queue_depth, Some(32));
+        let encoded = serde_json::to_string(&view).expect("view should serialize");
+        assert!(!encoded.contains("sensitive-lane-name"));
+        let decoded: RuntimeDiagnosticsViewV1 =
+            serde_json::from_str(&encoded).expect("versioned view should deserialize");
+        assert_eq!(decoded, view);
+
+        let mut legacy = serde_json::to_value(&view).expect("view should encode");
+        let lane = legacy
+            .get_mut("blocking_lanes")
+            .and_then(serde_json::Value::as_array_mut)
+            .and_then(|lanes| lanes.first_mut())
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("blocking lane");
+        lane.remove("max_concurrency");
+        lane.remove("max_queue_depth");
+        let legacy: RuntimeDiagnosticsViewV1 =
+            serde_json::from_value(legacy).expect("older v1 view should remain readable");
+        assert_eq!(legacy.blocking_lanes[0].max_concurrency, None);
+        assert_eq!(legacy.blocking_lanes[0].max_queue_depth, None);
     }
 }

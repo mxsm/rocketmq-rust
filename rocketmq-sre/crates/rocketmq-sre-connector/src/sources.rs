@@ -13,15 +13,23 @@
 // limitations under the License.
 
 mod admin_query;
+mod alertmanager;
+mod auth_security_diagnostics;
+mod broker_store_diagnostics;
 mod canonical;
+mod change_timeline;
 mod common;
+mod deployment_state;
 mod inventory;
 mod kubernetes;
+mod kubernetes_events;
 mod loki;
 mod mcp;
 mod projection;
 mod prometheus;
-mod runtime;
+mod proxy_diagnostics;
+mod remoting_diagnostics;
+mod runtime_diagnostics;
 mod tempo;
 mod topology;
 
@@ -40,6 +48,7 @@ use rocketmq_sre_contracts::ConnectorSourceCapability;
 use rocketmq_sre_contracts::ConnectorSourceStatus;
 use rocketmq_sre_contracts::CoverageStatus;
 use rocketmq_sre_contracts::EvidenceContent;
+use rocketmq_sre_contracts::EvidenceExposure;
 use rocketmq_sre_contracts::EvidenceQuery;
 use rocketmq_sre_contracts::EvidenceSnapshot;
 use rocketmq_sre_contracts::current_evidence_schema;
@@ -50,6 +59,7 @@ use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
 
 use self::admin_query::AdminQuerySource;
+use self::alertmanager::AlertmanagerSource;
 use self::canonical::CanonicalQuery;
 use self::canonical::CanonicalResourceRoute;
 pub(crate) use self::common::CancelSignal;
@@ -62,7 +72,7 @@ use self::kubernetes::KubernetesSource;
 use self::loki::LokiSource;
 use self::mcp::McpSource;
 use self::prometheus::PrometheusSource;
-use self::runtime::RuntimeSource;
+use self::runtime_diagnostics::RuntimeDiagnosticsSource;
 use self::tempo::TempoSource;
 use self::topology::TopologySource;
 use crate::ConnectorConfig;
@@ -72,9 +82,10 @@ use crate::EvidenceOperation;
 use crate::mcp::McpGateway;
 
 const CACHE_MAX_ENTRIES: usize = 1024;
-const SOURCE_IDS: [&str; 8] = [
+const SOURCE_IDS: [&str; 9] = [
     "rocketmq-mcp",
     "admin-query",
+    "alertmanager",
     "prometheus",
     "loki",
     "tempo",
@@ -138,6 +149,7 @@ pub(crate) struct SourceManager<G> {
     config: Arc<ConnectorConfig>,
     mcp: McpSource<G>,
     admin: AdminQuerySource,
+    alertmanager: AlertmanagerSource,
     prometheus: PrometheusSource,
     loki: LokiSource,
     tempo: TempoSource,
@@ -160,10 +172,16 @@ where
             .build()
             .map_err(|_| ConnectorError::configuration("evidence source HTTP client cannot be built"))?;
         let admin = AdminQuerySource::new(config.admin_source.clone());
+        let alertmanager = AlertmanagerSource::new(
+            http.clone(),
+            config.alertmanager_url.clone(),
+            config.pseudonymization_key(),
+        );
         let prometheus = PrometheusSource::new(
             http.clone(),
             config.prometheus_url.clone(),
             config.source_limits.label_allowlist.clone(),
+            config.source_limits.max_time_range,
         );
         let loki = LokiSource::new(
             http.clone(),
@@ -179,6 +197,7 @@ where
         let mut state = BTreeMap::new();
         state.insert("rocketmq-mcp", initial_state(true));
         state.insert("admin-query", initial_state(admin.configured()));
+        state.insert("alertmanager", initial_state(alertmanager.configured()));
         state.insert("prometheus", initial_state(prometheus.configured()));
         state.insert("loki", initial_state(loki.configured()));
         state.insert("tempo", initial_state(tempo.configured()));
@@ -192,6 +211,7 @@ where
             ),
             mcp: McpSource::new(gateway),
             admin,
+            alertmanager,
             prometheus,
             loki,
             tempo,
@@ -279,6 +299,9 @@ where
                 return Err(error.with_correlation_id(query.correlation_id));
             }
         };
+        if output.exposure == EvidenceExposure::Unknown {
+            output.exposure = exposure_for_source(source);
+        }
         let (content, bounded) = sanitize_and_bound(
             output.content,
             self.config.source_limits.max_rows,
@@ -395,6 +418,7 @@ where
                         &matchers,
                         query.time_range.start,
                         query.time_range.end,
+                        self.config.source_limits.max_rows,
                         self.config.source_limits.max_bytes,
                         deadline,
                         cancel,
@@ -413,7 +437,9 @@ where
                     )
                     .await
             }
-            CanonicalQuery::Runtime(resource) => RuntimeSource::query(&self.mcp, &resource, deadline, cancel).await,
+            CanonicalQuery::Runtime(resource) => {
+                RuntimeDiagnosticsSource::query(&self.mcp, &resource, deadline, cancel).await
+            }
         }
         .inspect_err(|error| {
             tracing::warn!(
@@ -474,19 +500,60 @@ where
                     .query(external_cluster, &query.resource, deadline, cancel)
                     .await
             }
-            "prometheus" => {
-                self.prometheus
+            "alertmanager" => {
+                self.alertmanager
                     .query(
                         external_cluster,
                         &query.resource,
-                        query.time_range.start,
-                        query.time_range.end,
+                        self.config.source_limits.max_rows,
                         self.config.source_limits.max_bytes,
                         deadline,
                         cancel,
                     )
                     .await
             }
+            "prometheus" => match query.resource.as_str() {
+                "proxy/diagnostics" | "proxy-diagnostics" => {
+                    proxy_diagnostics::query(
+                        &self.prometheus,
+                        external_cluster,
+                        query.time_range.start,
+                        query.time_range.end,
+                        self.config.source_limits.max_rows,
+                        self.config.source_limits.max_bytes,
+                        deadline,
+                        cancel,
+                    )
+                    .await
+                }
+                "remoting/diagnostics" | "remoting-diagnostics" => {
+                    remoting_diagnostics::query(
+                        &self.prometheus,
+                        external_cluster,
+                        query.time_range.start,
+                        query.time_range.end,
+                        self.config.source_limits.max_rows,
+                        self.config.source_limits.max_bytes,
+                        deadline,
+                        cancel,
+                    )
+                    .await
+                }
+                _ => {
+                    self.prometheus
+                        .query(
+                            external_cluster,
+                            &query.resource,
+                            query.time_range.start,
+                            query.time_range.end,
+                            self.config.source_limits.max_rows,
+                            self.config.source_limits.max_bytes,
+                            deadline,
+                            cancel,
+                        )
+                        .await
+                }
+            },
             "loki" => {
                 self.loki
                     .query(
@@ -526,7 +593,7 @@ where
                     )
                     .await
             }
-            "runtime" => RuntimeSource::query(&self.mcp, &query.resource, deadline, cancel).await,
+            "runtime" => RuntimeDiagnosticsSource::query(&self.mcp, &query.resource, deadline, cancel).await,
             "topology" => {
                 TopologySource::query(
                     &self.mcp,
@@ -660,6 +727,7 @@ fn normalize_source(source: &str) -> Result<&'static str, ConnectorError> {
     match source {
         "rocketmq-mcp" | "mcp" | "rocketmq_mcp" => Ok("rocketmq-mcp"),
         "admin-query" | "admin_query" | "rocketmq-admin-read" => Ok("admin-query"),
+        "alertmanager" | "alerts" => Ok("alertmanager"),
         "prometheus" => Ok("prometheus"),
         "loki" => Ok("loki"),
         "tempo" => Ok("tempo"),
@@ -781,7 +849,23 @@ fn capture(query: EvidenceQuery, output: SourceOutput) -> Result<EvidenceSnapsho
     snapshot.warnings = output.warnings;
     snapshot.sensitivity = output.sensitivity;
     snapshot.coverage = output.coverage;
+    snapshot.exposure = output.exposure;
     Ok(snapshot)
+}
+
+fn exposure_for_source(source: &str) -> EvidenceExposure {
+    match source {
+        "rocketmq-mcp" => EvidenceExposure::McpTool,
+        "admin-query" => EvidenceExposure::AdminRpc,
+        "alertmanager" => EvidenceExposure::AlertmanagerApi,
+        "prometheus" => EvidenceExposure::PrometheusApi,
+        "loki" => EvidenceExposure::LokiApi,
+        "tempo" => EvidenceExposure::TempoApi,
+        "kubernetes" => EvidenceExposure::KubernetesApi,
+        "runtime" => EvidenceExposure::RuntimeDiagnostics,
+        "topology" => EvidenceExposure::McpTool,
+        _ => EvidenceExposure::Unknown,
+    }
 }
 
 #[cfg(test)]
@@ -895,6 +979,7 @@ mod tests {
             max_response_bytes: 4096,
             expected_tool_surface_digest: None,
             prometheus_url: None,
+            alertmanager_url: None,
             loki_url: None,
             tempo_url: None,
             admin_source: None,

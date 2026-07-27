@@ -170,6 +170,7 @@ function EvidenceCard({ evidence }: { evidence: EvidenceRecord }) {
   const [error, setError] = useState<string>();
   const status = evidenceStatus(evidence);
   const snapshot = detail ?? evidence;
+  const warnings = snapshot.warnings ?? [];
   const expand = async () => {
     const nextExpanded = !expanded;
     setExpanded(nextExpanded);
@@ -227,6 +228,10 @@ function EvidenceCard({ evidence }: { evidence: EvidenceRecord }) {
           {
             label: "敏感级别",
             value: snapshot.sensitivity,
+          },
+          {
+            label: "Exposure",
+            value: snapshot.exposure,
           },
           {
             label: "Correlation",
@@ -290,10 +295,10 @@ function EvidenceCard({ evidence }: { evidence: EvidenceRecord }) {
           )}
         </div>
       )}
-      {snapshot.warnings.length > 0 && (
+      {warnings.length > 0 && (
         <footer>
           <TriangleAlert size={13} />
-          {snapshot.warnings.join("；")}
+          {warnings.join("；")}
         </footer>
       )}
     </article>

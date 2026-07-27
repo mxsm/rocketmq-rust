@@ -107,6 +107,7 @@ See:
 - [Connector transport ADR](docs/connector-control-plane-transport-adr.md)
 - [Compatibility](docs/compatibility.md)
 - [Phase 02 contracts and persistence](docs/phase02-contracts-and-persistence.md)
+- [Phase 02 diagnostic evidence sources](docs/phase02-evidence-sources.md)
 - [Local stack](deploy/dev/README.md)
 
 ## Kind acceptance

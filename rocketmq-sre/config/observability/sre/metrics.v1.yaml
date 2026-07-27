@@ -71,7 +71,7 @@ metrics:
     unit: s
     labels: [source]
     allowed_values:
-      source: [mcp, admin_query, prometheus, loki, tempo, kubernetes, runtime, topology, other]
+      source: [mcp, admin_query, prometheus, alertmanager, loki, tempo, kubernetes, runtime, topology, other]
 
   - name: rocketmq_sre_diagnostic_evaluations_total
     type: counter

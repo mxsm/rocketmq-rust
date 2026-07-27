@@ -49,6 +49,30 @@ pub enum Sensitivity {
     Restricted,
 }
 
+/// Read-only boundary through which an evidence snapshot was observed.
+///
+/// Exposure is transport metadata rather than source content, so it does not
+/// participate in the canonical content hash.
+#[derive(Clone, Copy, Debug, Default, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceExposure {
+    /// Compatibility value for evidence captured before exposure metadata was
+    /// introduced.
+    #[default]
+    Unknown,
+    McpTool,
+    McpResource,
+    AdminRpc,
+    PrometheusApi,
+    AlertmanagerApi,
+    LokiApi,
+    TempoApi,
+    KubernetesApi,
+    RuntimeDiagnostics,
+    Synthetic,
+    Unsupported,
+}
+
 /// Inclusive time range requested from an evidence source.
 #[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
 pub struct TimeRange {
@@ -119,6 +143,8 @@ pub struct EvidenceSnapshot {
     pub warnings: Vec<String>,
     pub sensitivity: Sensitivity,
     pub coverage: CoverageStatus,
+    #[serde(default)]
+    pub exposure: EvidenceExposure,
     pub content: EvidenceContent,
     pub content_hash: String,
 }
@@ -167,6 +193,7 @@ impl EvidenceSnapshot {
             warnings: Vec::new(),
             sensitivity: Sensitivity::Internal,
             coverage: CoverageStatus::Available,
+            exposure: EvidenceExposure::Unknown,
             content,
             content_hash: String::new(),
         };
@@ -293,6 +320,7 @@ mod tests {
         changed.freshness_seconds = 30;
         changed.partial = true;
         changed.warnings.push("bounded".to_owned());
+        changed.exposure = EvidenceExposure::AdminRpc;
         changed.content = EvidenceContent::Inline(json!({"group": "group-a", "lag": 42}));
 
         assert_eq!(

@@ -1964,8 +1964,70 @@
         ]
       },
       "EvidenceSnapshot": {
-        "type": "object",
-        "additionalProperties": false,
+        "description": "Immutable evidence captured from a queryable source.",
+        "properties": {
+          "cluster_id": {
+            "$ref": "#/components/schemas/EvidenceSnapshot__ClusterId"
+          },
+          "content": {
+            "$ref": "#/components/schemas/EvidenceSnapshot__EvidenceContent"
+          },
+          "content_hash": {
+            "type": "string"
+          },
+          "correlation_id": {
+            "$ref": "#/components/schemas/EvidenceSnapshot__CorrelationId"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/EvidenceSnapshot__CoverageStatus"
+          },
+          "evidence_id": {
+            "$ref": "#/components/schemas/EvidenceSnapshot__EvidenceId"
+          },
+          "exposure": {
+            "$ref": "#/components/schemas/EvidenceSnapshot__EvidenceExposure",
+            "default": "unknown"
+          },
+          "freshness_seconds": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "query_id": {
+            "$ref": "#/components/schemas/EvidenceSnapshot__QueryId"
+          },
+          "resource": {
+            "type": "string"
+          },
+          "schema": {
+            "$ref": "#/components/schemas/EvidenceSnapshot__SchemaVersion"
+          },
+          "sensitivity": {
+            "$ref": "#/components/schemas/EvidenceSnapshot__Sensitivity"
+          },
+          "source": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/EvidenceSnapshot__TenantId"
+          },
+          "time_range": {
+            "$ref": "#/components/schemas/EvidenceSnapshot__TimeRange"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
         "required": [
           "schema",
           "evidence_id",
@@ -1979,103 +2041,13 @@
           "observed_at",
           "freshness_seconds",
           "partial",
-          "warnings",
           "sensitivity",
           "coverage",
           "content",
           "content_hash"
         ],
-        "properties": {
-          "schema": {
-            "$ref": "#/components/schemas/SchemaVersion"
-          },
-          "evidence_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "query_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "correlation_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "tenant_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "cluster_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "source": {
-            "type": "string"
-          },
-          "resource": {
-            "type": "string"
-          },
-          "time_range": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "start",
-              "end"
-            ],
-            "properties": {
-              "start": {
-                "type": "string",
-                "format": "date-time"
-              },
-              "end": {
-                "type": "string",
-                "format": "date-time"
-              }
-            }
-          },
-          "observed_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "freshness_seconds": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "partial": {
-            "type": "boolean"
-          },
-          "warnings": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "sensitivity": {
-            "type": "string",
-            "enum": [
-              "public",
-              "internal",
-              "confidential",
-              "restricted"
-            ]
-          },
-          "coverage": {
-            "type": "string",
-            "enum": [
-              "available",
-              "partial",
-              "missing",
-              "not_production_verified"
-            ]
-          },
-          "content": {
-            "$ref": "#/components/schemas/EvidenceContent"
-          },
-          "content_hash": {
-            "type": "string",
-            "pattern": "^sha256:[0-9a-f]{64}$"
-          }
-        }
+        "title": "EvidenceSnapshot",
+        "type": "object"
       },
       "EvidencePage": {
         "type": "object",
@@ -3990,6 +3962,189 @@
           "manage_action_item_metadata"
         ],
         "type": "string"
+      },
+      "EvidenceSnapshot__ClusterId": {
+        "description": "Internal identifier for an onboarded cluster.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "EvidenceSnapshot__CorrelationId": {
+        "description": "Identifier propagated across one logical SRE operation.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "EvidenceSnapshot__CoverageStatus": {
+        "description": "Availability of a required signal or evidence source.",
+        "enum": [
+          "available",
+          "partial",
+          "missing",
+          "not_production_verified"
+        ],
+        "type": "string"
+      },
+      "EvidenceSnapshot__EvidenceContent": {
+        "description": "Bounded evidence payload or a content-addressed reference.",
+        "oneOf": [
+          {
+            "properties": {
+              "storage": {
+                "const": "inline",
+                "type": "string"
+              },
+              "value": true
+            },
+            "required": [
+              "storage",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "storage": {
+                "const": "reference",
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/components/schemas/EvidenceSnapshot__EvidenceReference"
+              }
+            },
+            "required": [
+              "storage",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "EvidenceSnapshot__EvidenceExposure": {
+        "description": "Read-only boundary through which an evidence snapshot was observed.\n\nExposure is transport metadata rather than source content, so it does not\nparticipate in the canonical content hash.",
+        "oneOf": [
+          {
+            "enum": [
+              "mcp_tool",
+              "mcp_resource",
+              "admin_rpc",
+              "prometheus_api",
+              "alertmanager_api",
+              "loki_api",
+              "tempo_api",
+              "kubernetes_api",
+              "runtime_diagnostics",
+              "synthetic",
+              "unsupported"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "unknown",
+            "description": "Compatibility value for evidence captured before exposure metadata was\nintroduced.",
+            "type": "string"
+          }
+        ]
+      },
+      "EvidenceSnapshot__EvidenceId": {
+        "description": "Stable identifier for an evidence snapshot.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "EvidenceSnapshot__EvidenceReference": {
+        "description": "Content stored outside the inline evidence envelope.",
+        "properties": {
+          "digest": {
+            "type": "string"
+          },
+          "media_type": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "uri": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "uri",
+          "digest",
+          "media_type",
+          "size_bytes"
+        ],
+        "type": "object"
+      },
+      "EvidenceSnapshot__QueryId": {
+        "description": "Stable identifier for an evidence query.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "EvidenceSnapshot__SchemaVersion": {
+        "description": "Version negotiation information for a serialized contract family.",
+        "properties": {
+          "family": {
+            "type": "string"
+          },
+          "major": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "minor": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "required_features": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "family",
+          "major",
+          "minor"
+        ],
+        "type": "object"
+      },
+      "EvidenceSnapshot__Sensitivity": {
+        "description": "Data handling classification applied before evidence leaves its source.",
+        "enum": [
+          "public",
+          "internal",
+          "confidential",
+          "restricted"
+        ],
+        "type": "string"
+      },
+      "EvidenceSnapshot__TenantId": {
+        "description": "Stable tenant boundary identifier.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "EvidenceSnapshot__TimeRange": {
+        "description": "Inclusive time range requested from an evidence source.",
+        "properties": {
+          "end": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "start": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "type": "object"
       }
     }
   },

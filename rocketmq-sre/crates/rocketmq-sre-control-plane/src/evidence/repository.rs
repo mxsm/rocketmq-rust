@@ -16,6 +16,7 @@ use chrono::Utc;
 use rocketmq_sre_contracts::ClusterId;
 use rocketmq_sre_contracts::CoverageStatus;
 use rocketmq_sre_contracts::EvidenceContent;
+use rocketmq_sre_contracts::EvidenceExposure;
 use rocketmq_sre_contracts::EvidenceId;
 use rocketmq_sre_contracts::EvidenceReference;
 use rocketmq_sre_contracts::EvidenceSnapshot;
@@ -111,12 +112,12 @@ impl PostgresRepository {
                     id, query_id, correlation_id, tenant_id, cluster_id,
                     investigation_id, incident_id, schema_family, schema_major, schema_minor,
                     source, resource, time_range_start, time_range_end, observed_at, collected_at,
-                    freshness_seconds, coverage, sensitivity, partial, warnings, inline_content,
+                    freshness_seconds, coverage, sensitivity, exposure, partial, warnings, inline_content,
                     content_uri, content_size_bytes, content_hash, content_digest, query_hash, expires_at
                  ) VALUES (
                     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                     $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
-                    $23, $24, $25, $26, $27, $28
+                    $23, $24, $25, $26, $27, $28, $29
                  )",
             )
             .bind(snapshot.evidence_id.as_uuid())
@@ -140,6 +141,7 @@ impl PostgresRepository {
             })?)
             .bind(coverage_name(snapshot.coverage))
             .bind(sensitivity_name(snapshot.sensitivity))
+            .bind(exposure_name(snapshot.exposure))
             .bind(snapshot.partial)
             .bind(serde_json::to_value(&snapshot.warnings).map_err(|_| {
                 ControlPlaneError::validation("invalid_request", "evidence warnings cannot be serialized")
@@ -335,6 +337,7 @@ fn evidence_from_row(row: &PgRow) -> Result<EvidenceSnapshot, ControlPlaneError>
         warnings,
         sensitivity: parse_sensitivity(row.try_get("sensitivity")?)?,
         coverage: parse_coverage(row.try_get("coverage")?)?,
+        exposure: parse_exposure(row.try_get("exposure")?)?,
         content,
         content_hash: row.try_get("content_hash")?,
     };
@@ -410,6 +413,41 @@ fn parse_sensitivity(value: &str) -> Result<Sensitivity, ControlPlaneError> {
     }
 }
 
+const fn exposure_name(exposure: EvidenceExposure) -> &'static str {
+    match exposure {
+        EvidenceExposure::Unknown => "unknown",
+        EvidenceExposure::McpTool => "mcp_tool",
+        EvidenceExposure::McpResource => "mcp_resource",
+        EvidenceExposure::AdminRpc => "admin_rpc",
+        EvidenceExposure::PrometheusApi => "prometheus_api",
+        EvidenceExposure::AlertmanagerApi => "alertmanager_api",
+        EvidenceExposure::LokiApi => "loki_api",
+        EvidenceExposure::TempoApi => "tempo_api",
+        EvidenceExposure::KubernetesApi => "kubernetes_api",
+        EvidenceExposure::RuntimeDiagnostics => "runtime_diagnostics",
+        EvidenceExposure::Synthetic => "synthetic",
+        EvidenceExposure::Unsupported => "unsupported",
+    }
+}
+
+fn parse_exposure(value: &str) -> Result<EvidenceExposure, ControlPlaneError> {
+    match value {
+        "unknown" => Ok(EvidenceExposure::Unknown),
+        "mcp_tool" => Ok(EvidenceExposure::McpTool),
+        "mcp_resource" => Ok(EvidenceExposure::McpResource),
+        "admin_rpc" => Ok(EvidenceExposure::AdminRpc),
+        "prometheus_api" => Ok(EvidenceExposure::PrometheusApi),
+        "alertmanager_api" => Ok(EvidenceExposure::AlertmanagerApi),
+        "loki_api" => Ok(EvidenceExposure::LokiApi),
+        "tempo_api" => Ok(EvidenceExposure::TempoApi),
+        "kubernetes_api" => Ok(EvidenceExposure::KubernetesApi),
+        "runtime_diagnostics" => Ok(EvidenceExposure::RuntimeDiagnostics),
+        "synthetic" => Ok(EvidenceExposure::Synthetic),
+        "unsupported" => Ok(EvidenceExposure::Unsupported),
+        _ => Err(invalid_stored_evidence("exposure")),
+    }
+}
+
 fn invalid_stored_evidence(field: &str) -> ControlPlaneError {
     ControlPlaneError::validation("source_unavailable", format!("stored evidence {field} is invalid"))
 }
@@ -417,7 +455,7 @@ fn invalid_stored_evidence(field: &str) -> ControlPlaneError {
 const EVIDENCE_COLUMNS: &str = "SELECT e.id, e.query_id, e.correlation_id, e.tenant_id, e.cluster_id,
     e.schema_family, e.schema_major, e.schema_minor, e.source, e.resource,
     e.time_range_start, e.time_range_end, e.observed_at, e.freshness_seconds,
-    e.coverage, e.sensitivity, e.partial, e.warnings, e.inline_content,
+    e.coverage, e.sensitivity, e.exposure, e.partial, e.warnings, e.inline_content,
     e.content_uri, e.content_size_bytes, e.content_hash, e.content_digest
     FROM evidence_snapshots e";
 

@@ -481,6 +481,7 @@ mod tests {
             max_response_bytes: 4096,
             expected_tool_surface_digest: None,
             prometheus_url: None,
+            alertmanager_url: None,
             loki_url: None,
             tempo_url: None,
             admin_source: None,

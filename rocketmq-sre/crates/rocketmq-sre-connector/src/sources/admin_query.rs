@@ -19,7 +19,7 @@ use chrono::DateTime;
 use chrono::Utc;
 use rocketmq_admin_core::core::broker::BrokerQueryAdmin;
 use rocketmq_admin_core::core::broker::ListBrokersRequest;
-use rocketmq_admin_core::core::broker::ProbeBrokerRuntimeRequest;
+use rocketmq_admin_core::core::broker::QueryBrokerDiagnosticsRequest;
 use rocketmq_admin_core::core::client_connection::ClientConnectionQueryAdmin;
 use rocketmq_admin_core::core::client_connection::ListProducerConnectionsRequest;
 use rocketmq_admin_core::core::client_connection::ListProducerConnectionsResult;
@@ -150,18 +150,37 @@ impl AdminQuerySource {
                 )
                 .await?,
             )?
-        } else if resource == "admin/broker-runtime" || resource == "store/health" {
-            let request = ProbeBrokerRuntimeRequest::try_new(cluster)
-                .map_err(|_| ConnectorError::source("read-only broker runtime query is invalid"))?;
-            serialize(
-                bounded_admin(
-                    deadline,
-                    cancel,
-                    session.probe_broker_runtime(&request),
-                    "read-only broker runtime query failed",
-                )
-                .await?,
-            )?
+        } else if resource == "auth/diagnostics" || resource == "auth-security/diagnostics" {
+            let request = QueryBrokerDiagnosticsRequest::try_new(cluster)
+                .map_err(|_| ConnectorError::source("read-only auth diagnostics query is invalid"))?;
+            let result = bounded_admin(
+                deadline,
+                cancel,
+                session.query_broker_diagnostics(&request),
+                "read-only auth diagnostics query failed",
+            )
+            .await?;
+            return super::auth_security_diagnostics::project(result);
+        } else if matches!(
+            resource,
+            "admin/broker-runtime"
+                | "broker/diagnostics"
+                | "store/health"
+                | "store/recovery"
+                | "store/background-index"
+                | "store/rocksdb"
+                | "store/tiered"
+        ) {
+            let request = QueryBrokerDiagnosticsRequest::try_new(cluster)
+                .map_err(|_| ConnectorError::source("read-only broker diagnostics query is invalid"))?;
+            let result = bounded_admin(
+                deadline,
+                cancel,
+                session.query_broker_diagnostics(&request),
+                "read-only broker diagnostics query failed",
+            )
+            .await?;
+            return super::broker_store_diagnostics::project(result);
         } else if resource == "admin/topics" || resource == "topics" {
             let request = ListTopicsRequest::new(Some(cluster.to_owned()));
             serialize(

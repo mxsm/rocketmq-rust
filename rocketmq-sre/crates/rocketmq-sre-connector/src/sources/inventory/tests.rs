@@ -14,6 +14,7 @@
 
 use chrono::TimeZone;
 use rocketmq_sre_contracts::CoverageStatus;
+use rocketmq_sre_contracts::EvidenceExposure;
 use rocketmq_sre_contracts::Sensitivity;
 use serde_json::Value;
 use serde_json::json;
@@ -40,6 +41,7 @@ fn output(content: Value) -> SourceOutput {
         warnings: Vec::new(),
         sensitivity: Sensitivity::Internal,
         coverage: CoverageStatus::Available,
+        exposure: EvidenceExposure::Unknown,
         content,
     }
 }

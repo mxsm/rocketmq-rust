@@ -747,7 +747,18 @@ impl MessageStore for RocksDBMessageStore {
     }
 
     fn get_runtime_info(&self) -> HashMap<String, String> {
-        self.local_file_store.get_runtime_info()
+        let mut runtime = self.local_file_store.get_runtime_info();
+        runtime.insert("storeType".to_string(), "rocksdb".to_string());
+        runtime.insert("rocksdbMaintenanceSupported".to_string(), "true".to_string());
+        runtime.insert(
+            "rocksdbMaintenanceRunning".to_string(),
+            self.is_rocksdb_maintenance_running().to_string(),
+        );
+        runtime.insert(
+            "messageRocksdbMaintenanceRunning".to_string(),
+            self.is_message_rocksdb_maintenance_running().to_string(),
+        );
+        runtime
     }
 
     fn get_max_phy_offset(&self) -> i64 {

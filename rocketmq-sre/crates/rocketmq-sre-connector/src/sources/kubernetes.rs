@@ -18,6 +18,7 @@ use chrono::DateTime;
 use chrono::Utc;
 use reqwest::Client;
 use rocketmq_runtime::BlockingExecutor;
+use rocketmq_sre_contracts::EvidenceExposure;
 use serde_json::Value;
 use serde_json::json;
 
@@ -29,6 +30,10 @@ use super::common::parse_json;
 use super::common::pseudonymize_identifier;
 use super::common::require_label;
 use super::common::validate_identifier;
+use super::deployment_state::project_certificate;
+use super::deployment_state::project_deployment;
+use super::deployment_state::project_stateful_set;
+use super::kubernetes_events::project_event;
 use crate::ConnectorError;
 use crate::config::KubernetesBearerToken;
 use crate::config::KubernetesSourceConfig;
@@ -40,6 +45,10 @@ enum KubernetesResource {
     Nodes,
     PersistentVolumeClaims,
     PodDisruptionBudgets,
+    Deployments,
+    StatefulSets,
+    Certificates,
+    ChangeTimeline,
 }
 
 impl KubernetesResource {
@@ -58,10 +67,15 @@ impl KubernetesResource {
             | "pod-disruption-budgets"
             | "poddisruptionbudgets"
             | "pdbs" => Ok(Self::PodDisruptionBudgets),
+            "kubernetes/deployments" | "deployments" => Ok(Self::Deployments),
+            "kubernetes/statefulsets" | "statefulsets" | "stateful-sets" => Ok(Self::StatefulSets),
+            "kubernetes/certificates" | "certificates" | "certs" => Ok(Self::Certificates),
+            "kubernetes/change-timeline" | "change-timeline" | "release-events" => Ok(Self::ChangeTimeline),
             _ => Err(ConnectorError::new(
                 crate::ConnectorErrorCode::InvalidEvidenceQuery,
                 false,
-                "Kubernetes source supports only bounded Pod, Event, Node, PVC, and PDB metadata",
+                "Kubernetes source supports only bounded workload, Event, Node, PVC, PDB, Certificate, and change \
+                 metadata",
             )),
         }
     }
@@ -73,6 +87,10 @@ impl KubernetesResource {
             Self::Nodes => "nodes",
             Self::PersistentVolumeClaims => "persistent_volume_claims",
             Self::PodDisruptionBudgets => "pod_disruption_budgets",
+            Self::Deployments => "deployments",
+            Self::StatefulSets => "stateful_sets",
+            Self::Certificates => "certificates",
+            Self::ChangeTimeline => "change_timeline",
         }
     }
 
@@ -82,11 +100,24 @@ impl KubernetesResource {
             Self::PodDisruptionBudgets => {
                 format!("apis/policy/v1/namespaces/{namespace}/poddisruptionbudgets")
             }
+            Self::Deployments => format!("apis/apps/v1/namespaces/{namespace}/deployments"),
+            Self::StatefulSets => format!("apis/apps/v1/namespaces/{namespace}/statefulsets"),
+            Self::Certificates => {
+                format!("apis/cert-manager.io/v1/namespaces/{namespace}/certificates")
+            }
+            Self::ChangeTimeline => format!("api/v1/namespaces/{namespace}/events"),
             Self::Pods => format!("api/v1/namespaces/{namespace}/pods"),
             Self::Events => format!("api/v1/namespaces/{namespace}/events"),
             Self::PersistentVolumeClaims => {
                 format!("api/v1/namespaces/{namespace}/persistentvolumeclaims")
             }
+        }
+    }
+
+    fn query_scope(self, cluster: &str, namespace: &str) -> (&'static str, String) {
+        match self {
+            Self::Events | Self::ChangeTimeline => ("fieldSelector", format!("involvedObject.namespace={namespace}")),
+            _ => ("labelSelector", format!("rocketmq.apache.org/cluster={cluster}")),
         }
     }
 }
@@ -145,12 +176,12 @@ impl KubernetesSource {
             .api_url
             .join(&resource.endpoint(&config.namespace))
             .map_err(|_| ConnectorError::configuration("Kubernetes query URL cannot be constructed"))?;
-        let selector = format!("rocketmq.apache.org/cluster={cluster}");
+        let (selector_name, selector_value) = resource.query_scope(cluster, &config.namespace);
         let bearer_token = self.bearer_token(config, deadline, cancel).await?;
         let request = client
             .get(endpoint)
             .bearer_auth(bearer_token.expose())
-            .query(&[("labelSelector", selector), ("limit", max_rows.to_string())]);
+            .query(&[(selector_name, selector_value), ("limit", max_rows.to_string())]);
         let response = bounded_future(deadline, cancel, async {
             request
                 .send()
@@ -172,12 +203,14 @@ impl KubernetesSource {
         );
         let mut output = SourceOutput::available(
             json!({
+                "schema_version": "rocketmq.kubernetes-evidence.v1",
                 "kind": kind,
                 "namespace": config.namespace,
                 "items": items
             }),
             Utc::now(),
-        );
+        )
+        .with_exposure(EvidenceExposure::KubernetesApi);
         if truncated {
             output.partial = true;
             output.coverage = rocketmq_sre_contracts::CoverageStatus::Partial;
@@ -257,7 +290,12 @@ fn project_items(
             KubernetesResource::Nodes => project_node(item, allowed_labels, pseudonymization_key),
             KubernetesResource::PersistentVolumeClaims => project_pvc(item, allowed_labels),
             KubernetesResource::PodDisruptionBudgets => project_pdb(item, allowed_labels),
+            KubernetesResource::Deployments => project_deployment(item, allowed_labels),
+            KubernetesResource::StatefulSets => project_stateful_set(item, allowed_labels),
+            KubernetesResource::Certificates => project_certificate(item, allowed_labels),
+            KubernetesResource::ChangeTimeline => super::change_timeline::project_change(item).unwrap_or(Value::Null),
         })
+        .filter(|item| !item.is_null())
         .collect();
     (items, truncated)
 }
@@ -384,7 +422,7 @@ fn project_pdb(item: &Value, allowed_labels: &std::collections::BTreeSet<String>
     })
 }
 
-fn filtered_labels(
+pub(super) fn filtered_labels(
     labels: Option<&Value>,
     allowed_labels: &std::collections::BTreeSet<String>,
 ) -> serde_json::Map<String, Value> {
@@ -415,19 +453,6 @@ fn container_state_reason(state: &Value) -> Option<Value> {
     None
 }
 
-fn project_event(item: &Value) -> Value {
-    json!({
-        "name": item.pointer("/metadata/name"),
-        "object_kind": item.pointer("/involvedObject/kind"),
-        "object_name": item.pointer("/involvedObject/name"),
-        "reason": item.get("reason"),
-        "type": item.get("type"),
-        "count": item.get("count"),
-        "first_timestamp": item.get("firstTimestamp"),
-        "last_timestamp": item.get("lastTimestamp")
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -446,6 +471,18 @@ mod tests {
     use super::*;
     use crate::config::KubernetesBearerToken;
     use crate::config::ProjectedTokenFile;
+
+    #[test]
+    fn event_queries_use_the_configured_namespace_as_the_read_boundary() {
+        assert_eq!(
+            KubernetesResource::Events.query_scope("cluster-a", "rocketmq"),
+            ("fieldSelector", "involvedObject.namespace=rocketmq".to_owned())
+        );
+        assert_eq!(
+            KubernetesResource::Deployments.query_scope("cluster-a", "rocketmq"),
+            ("labelSelector", "rocketmq.apache.org/cluster=cluster-a".to_owned())
+        );
+    }
 
     #[tokio::test]
     async fn projected_token_rotation_is_used_by_the_next_request_without_restart() {

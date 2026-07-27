@@ -89,6 +89,11 @@ document["x-rocketmq-phase2-contracts"] = [...schemaFiles.keys()];
 for (const [componentName, fileName] of schemaFiles) {
   await embedSchema(document, componentName, fileName);
 }
+await embedSchema(
+  document,
+  "EvidenceSnapshot",
+  "evidence-snapshot.schema.json",
+);
 
 document.paths["/v1/capabilities/phase2-contract"] = {
   get: {

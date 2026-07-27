@@ -986,37 +986,32 @@ export interface components {
             storage: "reference";
             value: components["schemas"]["EvidenceReference"];
         };
+        /**
+         * EvidenceSnapshot
+         * @description Immutable evidence captured from a queryable source.
+         */
         EvidenceSnapshot: {
-            schema: components["schemas"]["SchemaVersion"];
-            /** Format: uuid */
-            evidence_id: string;
-            /** Format: uuid */
-            query_id: string;
-            /** Format: uuid */
-            correlation_id: string;
-            /** Format: uuid */
-            tenant_id: string;
-            /** Format: uuid */
-            cluster_id: string;
-            source: string;
-            resource: string;
-            time_range: {
-                /** Format: date-time */
-                start: string;
-                /** Format: date-time */
-                end: string;
-            };
+            cluster_id: components["schemas"]["EvidenceSnapshot__ClusterId"];
+            content: components["schemas"]["EvidenceSnapshot__EvidenceContent"];
+            content_hash: string;
+            correlation_id: components["schemas"]["EvidenceSnapshot__CorrelationId"];
+            coverage: components["schemas"]["EvidenceSnapshot__CoverageStatus"];
+            evidence_id: components["schemas"]["EvidenceSnapshot__EvidenceId"];
+            /** @default unknown */
+            exposure: components["schemas"]["EvidenceSnapshot__EvidenceExposure"];
+            /** Format: uint64 */
+            freshness_seconds: number;
             /** Format: date-time */
             observed_at: string;
-            freshness_seconds: number;
             partial: boolean;
-            warnings: string[];
-            /** @enum {string} */
-            sensitivity: "public" | "internal" | "confidential" | "restricted";
-            /** @enum {string} */
-            coverage: "available" | "partial" | "missing" | "not_production_verified";
-            content: components["schemas"]["EvidenceContent"];
-            content_hash: string;
+            query_id: components["schemas"]["EvidenceSnapshot__QueryId"];
+            resource: string;
+            schema: components["schemas"]["EvidenceSnapshot__SchemaVersion"];
+            sensitivity: components["schemas"]["EvidenceSnapshot__Sensitivity"];
+            source: string;
+            tenant_id: components["schemas"]["EvidenceSnapshot__TenantId"];
+            time_range: components["schemas"]["EvidenceSnapshot__TimeRange"];
+            warnings?: string[];
         };
         EvidencePage: {
             items: components["schemas"]["EvidenceSnapshot"][];
@@ -1780,6 +1775,82 @@ export interface components {
          * @enum {string}
          */
         Phase2ContractManifest__ReadOnlyOperation: "read_alerts" | "read_topology" | "read_forecasts" | "run_simulation" | "read_readiness" | "manage_postmortem_metadata" | "manage_action_item_metadata";
+        /**
+         * Format: uuid
+         * @description Internal identifier for an onboarded cluster.
+         */
+        EvidenceSnapshot__ClusterId: string;
+        /**
+         * Format: uuid
+         * @description Identifier propagated across one logical SRE operation.
+         */
+        EvidenceSnapshot__CorrelationId: string;
+        /**
+         * @description Availability of a required signal or evidence source.
+         * @enum {string}
+         */
+        EvidenceSnapshot__CoverageStatus: "available" | "partial" | "missing" | "not_production_verified";
+        /** @description Bounded evidence payload or a content-addressed reference. */
+        EvidenceSnapshot__EvidenceContent: {
+            /** @constant */
+            storage: "inline";
+            value: unknown;
+        } | {
+            /** @constant */
+            storage: "reference";
+            value: components["schemas"]["EvidenceSnapshot__EvidenceReference"];
+        };
+        /**
+         * @description Read-only boundary through which an evidence snapshot was observed.
+         *
+         *     Exposure is transport metadata rather than source content, so it does not
+         *     participate in the canonical content hash.
+         */
+        EvidenceSnapshot__EvidenceExposure: ("mcp_tool" | "mcp_resource" | "admin_rpc" | "prometheus_api" | "alertmanager_api" | "loki_api" | "tempo_api" | "kubernetes_api" | "runtime_diagnostics" | "synthetic" | "unsupported") | "unknown";
+        /**
+         * Format: uuid
+         * @description Stable identifier for an evidence snapshot.
+         */
+        EvidenceSnapshot__EvidenceId: string;
+        /** @description Content stored outside the inline evidence envelope. */
+        EvidenceSnapshot__EvidenceReference: {
+            digest: string;
+            media_type: string;
+            /** Format: uint64 */
+            size_bytes: number;
+            uri: string;
+        };
+        /**
+         * Format: uuid
+         * @description Stable identifier for an evidence query.
+         */
+        EvidenceSnapshot__QueryId: string;
+        /** @description Version negotiation information for a serialized contract family. */
+        EvidenceSnapshot__SchemaVersion: {
+            family: string;
+            /** Format: uint16 */
+            major: number;
+            /** Format: uint16 */
+            minor: number;
+            required_features?: string[];
+        };
+        /**
+         * @description Data handling classification applied before evidence leaves its source.
+         * @enum {string}
+         */
+        EvidenceSnapshot__Sensitivity: "public" | "internal" | "confidential" | "restricted";
+        /**
+         * Format: uuid
+         * @description Stable tenant boundary identifier.
+         */
+        EvidenceSnapshot__TenantId: string;
+        /** @description Inclusive time range requested from an evidence source. */
+        EvidenceSnapshot__TimeRange: {
+            /** Format: date-time */
+            end: string;
+            /** Format: date-time */
+            start: string;
+        };
     };
     responses: {
         /** @description Successful scoped response */

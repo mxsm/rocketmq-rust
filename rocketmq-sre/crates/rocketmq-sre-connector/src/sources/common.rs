@@ -22,6 +22,7 @@ use std::time::Duration;
 use chrono::DateTime;
 use chrono::Utc;
 use rocketmq_sre_contracts::CoverageStatus;
+use rocketmq_sre_contracts::EvidenceExposure;
 use rocketmq_sre_contracts::Sensitivity;
 use serde_json::Map;
 use serde_json::Value;
@@ -70,6 +71,7 @@ pub(crate) struct SourceOutput {
     pub warnings: Vec<String>,
     pub sensitivity: Sensitivity,
     pub coverage: CoverageStatus,
+    pub exposure: EvidenceExposure,
     pub content: Value,
 }
 
@@ -82,8 +84,14 @@ impl SourceOutput {
             warnings: Vec::new(),
             sensitivity: Sensitivity::Internal,
             coverage: CoverageStatus::Available,
+            exposure: EvidenceExposure::Unknown,
             content,
         }
+    }
+
+    pub(crate) fn with_exposure(mut self, exposure: EvidenceExposure) -> Self {
+        self.exposure = exposure;
+        self
     }
 
     pub(crate) fn missing(source: &str) -> Self {
@@ -94,6 +102,7 @@ impl SourceOutput {
             warnings: vec!["source_unavailable".to_owned()],
             sensitivity: Sensitivity::Internal,
             coverage: CoverageStatus::Missing,
+            exposure: EvidenceExposure::Unknown,
             content: serde_json::json!({
                 "status": "missing",
                 "source": source,
@@ -110,6 +119,7 @@ impl SourceOutput {
             warnings: vec!["not_production_verified".to_owned()],
             sensitivity: Sensitivity::Internal,
             coverage: CoverageStatus::NotProductionVerified,
+            exposure: EvidenceExposure::Unsupported,
             content: serde_json::json!({
                 "status": "not_production_verified",
                 "source": source,
