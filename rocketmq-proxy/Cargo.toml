@@ -33,9 +33,21 @@ cluster-mode = ["dep:rocketmq-proxy-cluster"]
 local-mode = ["dep:rocketmq-proxy-local"]
 observability = [
   "rocketmq-observability/otel-metrics",
+  "rocketmq-proxy-cluster?/observability",
   "rocketmq-proxy-local?/observability",
   "rocketmq-transport/observability",
 ]
+metrics-prometheus = ["observability", "rocketmq-observability/prometheus"]
+otel-traces = [
+  "rocketmq-observability/otel-traces",
+  "rocketmq-proxy-cluster?/observability-traces",
+  "rocketmq-proxy-local?/observability-traces",
+  "rocketmq-transport/observability-traces",
+]
+otel-logs = ["rocketmq-observability/otel-logs"]
+otlp-traces = ["otel-traces", "rocketmq-observability/otlp-traces"]
+otlp-logs = ["otel-logs", "rocketmq-observability/otlp-logs"]
+production-observability = ["metrics-prometheus", "otlp-traces", "otlp-logs"]
 tieredstore = ["local-mode", "rocketmq-proxy-local/tieredstore"]
 
 [dependencies]

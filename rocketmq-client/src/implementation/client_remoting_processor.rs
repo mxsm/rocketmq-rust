@@ -587,6 +587,7 @@ mod tests {
             client_id,
             None,
             runtime.child("instance"),
+            runtime.telemetry_handle().clone(),
             runtime.pool().request_future_holder(),
         )
     }

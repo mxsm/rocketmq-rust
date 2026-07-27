@@ -32,7 +32,15 @@ default         = ["read-only", "diagnose", "stdio"]
 read-only       = []
 diagnose        = ["read-only"]
 stdio           = ["rmcp/transport-io"]
-observability   = ["rocketmq-observability/observability"]
+observability   = [
+    "rocketmq-admin-core/client-observability",
+    "rocketmq-observability/observability",
+]
+metrics-prometheus = ["observability", "rocketmq-observability/prometheus"]
+otel-logs = ["rocketmq-observability/otel-logs"]
+otlp-traces = ["observability", "rocketmq-observability/otlp-traces"]
+otlp-logs = ["otel-logs", "rocketmq-observability/otlp-logs"]
+production-observability = ["metrics-prometheus", "otlp-traces", "otlp-logs"]
 auth            = []
 streamable-http = [
     "rmcp/transport-streamable-http-server",

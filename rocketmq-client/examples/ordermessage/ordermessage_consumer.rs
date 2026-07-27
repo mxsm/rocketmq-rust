@@ -41,11 +41,8 @@ pub const TAG: &str = "*";
 
 #[tokio::main]
 pub async fn main() -> RocketMQResult<()> {
-    let example_runtime = support::ExampleClientRuntime::new("ordermessage-consumer");
+    let example_runtime = support::ExampleClientRuntime::try_new("ordermessage-consumer")?;
     let client_runtime = example_runtime.client_runtime();
-    let telemetry_guard =
-        rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())
-            .expect("telemetry logging bootstrap should initialize");
     // create a producer builder with default configuration
     let builder = DefaultMQPushConsumer::builder(client_runtime.clone());
 
@@ -59,10 +56,6 @@ pub async fn main() -> RocketMQResult<()> {
     consumer.register_message_listener_orderly(MyMessageListener::new());
     consumer.start().await?;
     let _ = tokio::signal::ctrl_c().await;
-    telemetry_guard
-        .shutdown()
-        .into_result()
-        .expect("telemetry logging shutdown should succeed");
 
     example_runtime.shutdown().await;
 

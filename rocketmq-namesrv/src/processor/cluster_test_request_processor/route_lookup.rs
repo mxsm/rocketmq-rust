@@ -37,6 +37,7 @@ use rocketmq_transport::AdmissionLimits;
 use rocketmq_transport::DefaultTopAddressing;
 use rocketmq_transport::RequestDeadline;
 use rocketmq_transport::TransportClient;
+use rocketmq_transport::TransportTelemetry;
 
 const ROUTE_LOOKUP_TIMEOUT: Duration = Duration::from_secs(3);
 const ROUTE_LOOKUP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
@@ -107,11 +108,16 @@ pub(crate) struct TransportClusterTestRouteLookup {
 }
 
 impl TransportClusterTestRouteLookup {
-    pub(crate) fn new(product_env_name: &str, service_context: ChildServiceContext) -> Self {
+    pub(crate) fn new(
+        product_env_name: &str,
+        service_context: ChildServiceContext,
+        telemetry: TransportTelemetry,
+    ) -> Self {
         Self::with_resolver(
             service_context,
             Arc::new(ProductEnvironmentEndpointResolver::new(product_env_name)),
             ROUTE_LOOKUP_TIMEOUT,
+            telemetry,
         )
     }
 
@@ -119,12 +125,14 @@ impl TransportClusterTestRouteLookup {
         service_context: ChildServiceContext,
         resolver: Arc<dyn ClusterTestEndpointResolver>,
         request_timeout: Duration,
+        telemetry: TransportTelemetry,
     ) -> Self {
         let task_group = service_context.task_group().clone();
         let transport = TransportClient::new(
             service_context.child("transport"),
             Arc::new(AdmissionController::new(AdmissionLimits::default())),
-        );
+        )
+        .with_telemetry(telemetry);
         Self {
             resolver,
             transport,
@@ -415,6 +423,7 @@ mod tests {
             runtime.service_context("route-lookup"),
             resolver.clone(),
             Duration::from_secs(1),
+            TransportTelemetry::noop(),
         );
         lookup.start().await.unwrap();
 
@@ -466,6 +475,7 @@ mod tests {
             runtime.service_context("route-lookup"),
             Arc::new(FixedEndpointResolver::new(vec![address])),
             Duration::from_millis(50),
+            TransportTelemetry::noop(),
         ));
         let active_lookup = {
             let lookup = lookup.clone();
@@ -500,6 +510,7 @@ mod tests {
             runtime.service_context("route-lookup"),
             Arc::new(FixedEndpointResolver::new(vec![unreachable])),
             Duration::from_millis(100),
+            TransportTelemetry::noop(),
         );
         let result = lookup.lookup_topic_route(&CheetahString::from("missing-topic")).await;
         assert!(result.is_err(), "an unreachable endpoint must return a typed error");
@@ -522,6 +533,7 @@ mod tests {
                 entered: entered.clone(),
             }),
             Duration::from_secs(1),
+            TransportTelemetry::noop(),
         ));
         let active_lookup = {
             let lookup = lookup.clone();

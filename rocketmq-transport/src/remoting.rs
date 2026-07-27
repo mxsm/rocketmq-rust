@@ -76,13 +76,14 @@ pub(crate) mod inner {
     use rocketmq_error::RocketMQResult;
     use tracing::error;
     use tracing::warn;
+    use tracing::Instrument;
 
     use crate::base::pending_request_table::PendingRequestTable;
     use crate::net::channel::Channel;
     use crate::runtime::connection_handler_context::ConnectionHandlerContext;
     use crate::runtime::processor::RequestProcessor;
     use crate::runtime::RPCHook;
-    #[cfg(any(feature = "observability", test))]
+    use crate::telemetry::TransportTelemetry;
     use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::code::response_code::ResponseCode;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
@@ -92,55 +93,60 @@ pub(crate) mod inner {
         pub(crate) request_processor: RP,
         rpc_hooks: parking_lot::RwLock<Vec<Arc<dyn RPCHook>>>,
         pub(crate) response_table: PendingRequestTable,
+        telemetry: TransportTelemetry,
     }
 
     impl<RP> RemotingGeneralHandler<RP>
     where
         RP: RequestProcessor + Sync + Clone + 'static,
     {
+        #[cfg(test)]
         pub(crate) fn new(
             request_processor: RP,
             rpc_hooks: Vec<Arc<dyn RPCHook>>,
             response_table: PendingRequestTable,
         ) -> Self {
+            Self::new_with_telemetry(request_processor, rpc_hooks, response_table, TransportTelemetry::noop())
+        }
+
+        pub(crate) fn new_with_telemetry(
+            request_processor: RP,
+            rpc_hooks: Vec<Arc<dyn RPCHook>>,
+            response_table: PendingRequestTable,
+            telemetry: TransportTelemetry,
+        ) -> Self {
             Self {
                 request_processor,
                 rpc_hooks: parking_lot::RwLock::new(rpc_hooks),
                 response_table,
+                telemetry,
             }
         }
 
         pub async fn process_message_received(&self, ctx: &ConnectionHandlerContext, cmd: RemotingCommand) {
             match cmd.get_type() {
-                RemotingCommandType::REQUEST => match self.process_request_command(ctx, cmd).await {
-                    Ok(_) => {}
-                    Err(e) => {
-                        error!("process request command failed: {}", e);
+                RemotingCommandType::REQUEST => {
+                    let span = self.telemetry.request_span(cmd.code(), cmd.opaque());
+                    match self.process_request_command(ctx, cmd).instrument(span).await {
+                        Ok(_) => {}
+                        Err(e) => {
+                            error!("process request command failed: {}", e);
+                        }
                     }
-                },
+                }
                 RemotingCommandType::RESPONSE => {
                     self.process_response_command(ctx, cmd);
                 }
             }
         }
 
-        #[tracing::instrument(
-            level = "debug",
-            name = "RocketMQ REMOTING REQUEST",
-            skip_all,
-            fields(
-                rocketmq.request.code = cmd.code(),
-                rocketmq.request.opaque = cmd.opaque(),
-            )
-        )]
         async fn process_request_command(
             &self,
             ctx: &ConnectionHandlerContext,
             mut cmd: RemotingCommand,
         ) -> RocketMQResult<()> {
             let opaque = cmd.opaque();
-            #[cfg(feature = "observability")]
-            let mut metrics_guard = rocketmq_observability::metrics::remoting::RequestMetricsGuard::start(
+            let mut metrics_guard = self.telemetry.request_guard(
                 cmd.code(),
                 cmd.body().map_or(0, |body| body.len() as u64),
                 is_long_polling_request(cmd.code()),
@@ -161,11 +167,9 @@ pub(crate) mod inner {
                 let result = ctx.channel().send_command(response.set_opaque(opaque)).await;
                 match result {
                     Ok(_) => {
-                        #[cfg(feature = "observability")]
                         metrics_guard.complete_response(response_code);
                     }
                     Err(error) => {
-                        #[cfg(feature = "observability")]
                         metrics_guard.complete_write_channel_failed(response_code);
                         return Err(error);
                     }
@@ -178,7 +182,6 @@ pub(crate) mod inner {
             //handle error if return have
             match handle_error(ctx, oneway_rpc, opaque, exception).await {
                 HandleErrorResult::ReturnMethod => {
-                    #[cfg(feature = "observability")]
                     metrics_guard.complete_process_request_failed(ResponseCode::SystemError.to_i32());
                     return Ok(());
                 }
@@ -191,7 +194,6 @@ pub(crate) mod inner {
                 match request_processor.process_request(channel, ctx, &mut cmd).await {
                     Ok(result) => result,
                     Err(_err) => {
-                        #[cfg(feature = "observability")]
                         metrics_guard.complete_process_request_failed(ResponseCode::SystemError.to_i32());
                         Some(RemotingCommand::create_response_command_with_code(
                             ResponseCode::SystemError,
@@ -204,19 +206,16 @@ pub(crate) mod inner {
 
             match handle_error(ctx, oneway_rpc, opaque, exception).await {
                 HandleErrorResult::ReturnMethod => {
-                    #[cfg(feature = "observability")]
                     metrics_guard.complete_process_request_failed(ResponseCode::SystemError.to_i32());
                     return Ok(());
                 }
                 HandleErrorResult::GoHead => {}
             }
             if oneway_rpc {
-                #[cfg(feature = "observability")]
                 metrics_guard.complete_oneway();
                 return Ok(());
             }
             let Some(response) = response else {
-                #[cfg(feature = "observability")]
                 metrics_guard.complete_cancelled();
                 return Ok(());
             };
@@ -224,18 +223,15 @@ pub(crate) mod inner {
             let result = ctx.channel().send_command(response.set_opaque(opaque)).await;
             match result {
                 Ok(_) => {
-                    #[cfg(feature = "observability")]
                     metrics_guard.complete_response(response_code);
                 }
                 Err(err) => match err {
                     RocketMQError::IO(io_error) => {
-                        #[cfg(feature = "observability")]
                         metrics_guard.complete_write_channel_failed(response_code);
                         error!("connection disconnect: {}", io_error);
                         return Ok(());
                     }
                     _ => {
-                        #[cfg(feature = "observability")]
                         metrics_guard.complete_write_channel_failed(response_code);
                         error!("send response failed: {}", err);
                     }
@@ -321,7 +317,6 @@ pub(crate) mod inner {
         }
     }
 
-    #[cfg(any(feature = "observability", test))]
     #[inline]
     fn is_long_polling_request(request_code: i32) -> bool {
         matches!(

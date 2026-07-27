@@ -20,10 +20,6 @@ use rocketmq_runtime::RuntimeOwner;
 
 fn main() -> anyhow::Result<()> {
     let owner = RuntimeOwner::new(RuntimeConfig::server_default("rocketmq-dashboard-web-backend"))?;
-    let client_runtime = ClientRuntime::new(
-        owner.root_context().child("rocketmq-admin-client"),
-        ClientRuntimeConfig::default(),
-    );
     let config = AppConfig::load()?;
     let environment_filter = rocketmq_observability::read_rust_log()?;
     let resolved_filter =
@@ -38,6 +34,11 @@ fn main() -> anyhow::Result<()> {
     bootstrap.observability.node_id = "web-backend".to_string();
     bootstrap.observability.subscriber_install_policy = rocketmq_observability::SubscriberInstallPolicy::Required;
     let telemetry_guard = rocketmq_observability::install_global_with_filter(&bootstrap, resolved_filter.clone())?;
+    let client_runtime = ClientRuntime::new(
+        owner.root_context().child("rocketmq-admin-client"),
+        ClientRuntimeConfig::default(),
+        telemetry_guard.handle(),
+    );
     tracing::info!(
         service = "rocketmq-dashboard-web-backend",
         effective_filter = resolved_filter.filter(),

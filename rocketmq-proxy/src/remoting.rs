@@ -77,12 +77,13 @@ use rocketmq_proxy_core::remoting::RemotingIngressRoute;
 use rocketmq_proxy_core::remoting::RemotingStatusMapper;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownReport;
-use rocketmq_transport::run_remoting_server_with_report_with_service_context;
+use rocketmq_transport::run_remoting_server_with_report_with_service_context_and_telemetry;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
 use rocketmq_transport::RejectRequestResponse;
 use rocketmq_transport::RemotingDeserializable;
 use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
+use rocketmq_transport::TransportTelemetry;
 use tokio::net::TcpListener;
 use tracing::warn;
 
@@ -182,6 +183,7 @@ where
 #[doc(hidden)]
 pub async fn serve_with_service_context<P, F>(
     service_context: ChildServiceContext,
+    telemetry: TransportTelemetry,
     config: Arc<ProxyConfig>,
     processor: Arc<P>,
     sessions: ClientSessionRegistry,
@@ -195,6 +197,7 @@ where
 {
     serve_with_context(
         service_context,
+        telemetry,
         config,
         processor,
         sessions,
@@ -209,6 +212,7 @@ where
 #[doc(hidden)]
 pub async fn serve_with_service_context_and_ready<P, F, R>(
     service_context: ChildServiceContext,
+    telemetry: TransportTelemetry,
     config: Arc<ProxyConfig>,
     processor: Arc<P>,
     sessions: ClientSessionRegistry,
@@ -224,6 +228,7 @@ where
 {
     serve_with_context(
         service_context,
+        telemetry,
         config,
         processor,
         sessions,
@@ -237,6 +242,7 @@ where
 
 async fn serve_with_context<P, F>(
     service_context: ChildServiceContext,
+    telemetry: TransportTelemetry,
     config: Arc<ProxyConfig>,
     processor: Arc<P>,
     sessions: ClientSessionRegistry,
@@ -258,7 +264,7 @@ where
     }
     let request_processor =
         ProxyRemotingRequestProcessor::new(config, processor, sessions, auth_runtime, remoting_backend);
-    let report = run_remoting_server_with_report_with_service_context(
+    let report = run_remoting_server_with_report_with_service_context_and_telemetry(
         service_context,
         listener,
         shutdown,
@@ -266,6 +272,7 @@ where
         None,
         Vec::new(),
         None,
+        telemetry,
     )
     .await;
     match report.as_ref() {

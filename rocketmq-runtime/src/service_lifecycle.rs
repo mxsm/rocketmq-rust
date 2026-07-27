@@ -41,6 +41,7 @@ use crate::ChildServiceContext;
 use crate::RuntimeError;
 use crate::RuntimeResult;
 use crate::ShutdownDeadline;
+use crate::TaskGroupChildLease;
 
 pub const HEALTH_BIND_ADDR_ENV: &str = "ROCKETMQ_HEALTH_BIND_ADDR";
 pub const SHUTDOWN_TIMEOUT_SECONDS_ENV: &str = "ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS";
@@ -193,7 +194,45 @@ struct ServiceLifecycleInner {
     shutdown_request: Mutex<Option<ShutdownRequest>>,
     shutdown_tx: watch::Sender<Option<ShutdownRequest>>,
     started: AtomicBool,
+    lifecycle_tasks: Mutex<Option<TaskGroupChildLease>>,
     probe_local_addr: Mutex<Option<SocketAddr>>,
+}
+
+struct ServiceLifecycleStartAttempt<'a> {
+    inner: &'a ServiceLifecycleInner,
+    cancellation: Option<tokio_util::sync::CancellationToken>,
+    committed: bool,
+}
+
+impl<'a> ServiceLifecycleStartAttempt<'a> {
+    fn new(inner: &'a ServiceLifecycleInner) -> Self {
+        Self {
+            inner,
+            cancellation: None,
+            committed: false,
+        }
+    }
+
+    fn own(&mut self, cancellation: tokio_util::sync::CancellationToken) {
+        self.cancellation = Some(cancellation);
+    }
+
+    fn commit(mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for ServiceLifecycleStartAttempt<'_> {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        if let Some(cancellation) = self.cancellation.take() {
+            cancellation.cancel();
+        }
+        self.inner.probe_local_addr.lock().take();
+        self.inner.started.store(false, Ordering::Release);
+    }
 }
 
 /// Shared process lifecycle and health-probe owner.
@@ -214,6 +253,7 @@ impl ServiceLifecycle {
                 shutdown_request: Mutex::new(None),
                 shutdown_tx,
                 started: AtomicBool::new(false),
+                lifecycle_tasks: Mutex::new(None),
                 probe_local_addr: Mutex::new(None),
             }),
         }
@@ -227,12 +267,14 @@ impl ServiceLifecycle {
         &self.inner.config
     }
 
-    /// Starts the progress heartbeat and optional HTTP probe server under `service_context`.
+    /// Starts the progress heartbeat and optional HTTP probe server under a dedicated
+    /// child task group of `service_context`.
     ///
     /// # Errors
     ///
     /// Returns an error when called twice, when the listener cannot bind, or when either
-    /// owned service task cannot be registered.
+    /// owned service task cannot be registered. A failed start cancels and awaits every
+    /// task registered by that attempt before making the lifecycle retryable.
     pub async fn start(&self, service_context: &ChildServiceContext) -> RuntimeResult<()> {
         if self.inner.started.swap(true, Ordering::AcqRel) {
             return Err(RuntimeError::LifecycleOperation {
@@ -241,10 +283,22 @@ impl ServiceLifecycle {
             });
         }
 
+        let mut start_attempt = ServiceLifecycleStartAttempt::new(&self.inner);
+        let lifecycle_tasks = match service_context.task_group().try_child_lease("service-lifecycle") {
+            Ok(tasks) => tasks,
+            Err(error) => return Err(error),
+        };
+        start_attempt.own(lifecycle_tasks.cancellation_token());
+
+        let probe = match self.bind_probe_listener().await {
+            Ok(probe) => probe,
+            Err(error) => return self.rollback_failed_start(lifecycle_tasks, error).await,
+        };
+
         self.record_progress();
         let heartbeat = self.clone();
-        let heartbeat_cancellation = service_context.task_group().cancellation_token();
-        service_context.spawn_service("service-lifecycle.progress", async move {
+        let heartbeat_cancellation = lifecycle_tasks.cancellation_token();
+        if let Err(error) = lifecycle_tasks.spawn_service("service-lifecycle.progress", async move {
             let mut interval = tokio::time::interval(PROGRESS_INTERVAL);
             loop {
                 tokio::select! {
@@ -252,10 +306,34 @@ impl ServiceLifecycle {
                     _ = interval.tick() => heartbeat.record_progress(),
                 }
             }
-        })?;
+        }) {
+            return self.rollback_failed_start(lifecycle_tasks, error).await;
+        }
 
+        if let Some((listener, local_addr)) = probe {
+            let lifecycle = self.clone();
+            let cancellation = lifecycle_tasks.cancellation_token();
+            if let Err(error) = lifecycle_tasks.spawn_service("service-lifecycle.probe-server", async move {
+                lifecycle.serve_probe_requests(listener, cancellation).await;
+            }) {
+                return self.rollback_failed_start(lifecycle_tasks, error).await;
+            }
+            *self.inner.probe_local_addr.lock() = Some(local_addr);
+            tracing::info!(
+                service = %self.inner.config.service_name,
+                bind = %local_addr,
+                "service lifecycle probe server listening"
+            );
+        }
+
+        *self.inner.lifecycle_tasks.lock() = Some(lifecycle_tasks);
+        start_attempt.commit();
+        Ok(())
+    }
+
+    async fn bind_probe_listener(&self) -> RuntimeResult<Option<(TcpListener, SocketAddr)>> {
         let Some(bind_addr) = self.inner.config.probe_bind_addr else {
-            return Ok(());
+            return Ok(None);
         };
         let listener = TcpListener::bind(bind_addr)
             .await
@@ -269,19 +347,18 @@ impl ServiceLifecycle {
                 operation: "inspect_service_health_probe",
                 message: error.to_string(),
             })?;
-        *self.inner.probe_local_addr.lock() = Some(local_addr);
+        Ok(Some((listener, local_addr)))
+    }
 
-        let lifecycle = self.clone();
-        let cancellation = service_context.task_group().cancellation_token();
-        service_context.spawn_service("service-lifecycle.probe-server", async move {
-            lifecycle.serve_probe_requests(listener, cancellation).await;
-        })?;
-        tracing::info!(
-            service = %self.inner.config.service_name,
-            bind = %local_addr,
-            "service lifecycle probe server listening"
-        );
-        Ok(())
+    async fn rollback_failed_start(
+        &self,
+        lifecycle_tasks: TaskGroupChildLease,
+        error: RuntimeError,
+    ) -> RuntimeResult<()> {
+        let deadline = ShutdownDeadline::after(self.inner.config.shutdown_timeout);
+        let report = lifecycle_tasks.shutdown_until(deadline).await;
+        report.log_if_unhealthy();
+        Err(error)
     }
 
     pub fn state(&self) -> ServiceLifecycleState {
@@ -559,6 +636,93 @@ mod tests {
 
         let report = context.shutdown_tasks(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
+    }
+
+    #[tokio::test]
+    async fn failed_probe_bind_rolls_back_owned_tasks_and_allows_retry() {
+        let context = RuntimeContext::from_current("service-lifecycle-retry-test");
+        let service = context.service_context("service-lifecycle-retry-test");
+        let occupied_listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+            .await
+            .expect("reserve probe address");
+        let probe_addr = occupied_listener.local_addr().expect("inspect reserved address");
+        let lifecycle = ServiceLifecycle::new(config(Some(probe_addr)));
+
+        let error = lifecycle
+            .start(&service)
+            .await
+            .expect_err("occupied probe address must fail startup");
+        assert!(
+            matches!(
+                error,
+                RuntimeError::LifecycleOperation {
+                    operation: "bind_service_health_probe",
+                    ..
+                }
+            ),
+            "{error}"
+        );
+        assert_eq!(lifecycle.state(), ServiceLifecycleState::Starting);
+        assert_eq!(lifecycle.probe_local_addr(), None);
+        assert!(!lifecycle.inner.started.load(Ordering::Acquire));
+        assert_eq!(service.task_group().task_count(), 0);
+        assert_eq!(
+            service.task_group().child_stats(),
+            crate::TaskGroupChildStats {
+                active: 0,
+                created: 1,
+                pruned: 1,
+            }
+        );
+
+        drop(occupied_listener);
+        lifecycle
+            .start(&service)
+            .await
+            .expect("failed startup must be retryable");
+        assert_eq!(lifecycle.probe_local_addr(), Some(probe_addr));
+        assert!(lifecycle.inner.started.load(Ordering::Acquire));
+        assert_eq!(
+            lifecycle
+                .inner
+                .lifecycle_tasks
+                .lock()
+                .as_ref()
+                .expect("successful startup owns a task group")
+                .task_count(),
+            2
+        );
+        assert_eq!(service.task_group().child_stats().active, 1);
+        assert!(request(probe_addr, "/livez").await.starts_with("HTTP/1.1 200"));
+
+        let report = context.shutdown_tasks(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+        let lifecycle_tasks = lifecycle.inner.lifecycle_tasks.lock();
+        let lifecycle_tasks = lifecycle_tasks
+            .as_ref()
+            .expect("successful startup retains task ownership");
+        assert_eq!(lifecycle_tasks.task_count(), 0);
+        assert_eq!(
+            lifecycle_tasks.lifecycle_state(),
+            crate::TaskGroupLifecycleState::ShutdownCompleted
+        );
+    }
+
+    #[test]
+    fn cancelled_start_attempt_resets_admission_and_cancels_owned_tasks() {
+        let lifecycle = ServiceLifecycle::new(config(None));
+        lifecycle.inner.started.store(true, Ordering::Release);
+        *lifecycle.inner.probe_local_addr.lock() = Some(SocketAddr::from(([127, 0, 0, 1], 8088)));
+        let cancellation = tokio_util::sync::CancellationToken::new();
+
+        {
+            let mut attempt = ServiceLifecycleStartAttempt::new(&lifecycle.inner);
+            attempt.own(cancellation.clone());
+        }
+
+        assert!(cancellation.is_cancelled());
+        assert!(!lifecycle.inner.started.load(Ordering::Acquire));
+        assert_eq!(lifecycle.probe_local_addr(), None);
     }
 
     #[tokio::test]

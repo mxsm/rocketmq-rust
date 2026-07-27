@@ -20,53 +20,97 @@ pub mod remoting;
 pub mod span_names;
 pub mod store;
 
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
-
-use crate::config::TracesConfig;
 use crate::propagation::MessagePropertiesLike;
+use crate::TelemetryHandle;
+use crate::TracePolicy;
+use sha2::Digest;
+use sha2::Sha256;
 
 const PROPERTY_MESSAGE_ID: &str = "UNIQ_KEY";
 const PROPERTY_MESSAGE_KEYS: &str = "KEYS";
 
-static RECORD_MESSAGE_ID: AtomicBool = AtomicBool::new(false);
-static RECORD_MESSAGE_KEYS: AtomicBool = AtomicBool::new(false);
-static RECORD_BODY_SIZE: AtomicBool = AtomicBool::new(true);
-
+/// Effective message fields admitted by one immutable trace policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MessageSpanRecordingConfig {
+    /// Whether an opaque message identifier may be recorded.
     pub record_message_id: bool,
+    /// Whether a one-way hash of message keys may be recorded.
     pub record_message_keys: bool,
+    /// Whether message body size may be recorded.
     pub record_body_size: bool,
 }
 
-pub fn configure_message_span_recording(config: &TracesConfig) {
-    RECORD_MESSAGE_ID.store(config.record_message_id, Ordering::Relaxed);
-    RECORD_MESSAGE_KEYS.store(config.record_message_keys, Ordering::Relaxed);
-    RECORD_BODY_SIZE.store(config.record_body_size, Ordering::Relaxed);
-}
-
-pub fn message_span_recording_config() -> MessageSpanRecordingConfig {
-    MessageSpanRecordingConfig {
-        record_message_id: RECORD_MESSAGE_ID.load(Ordering::Relaxed),
-        record_message_keys: RECORD_MESSAGE_KEYS.load(Ordering::Relaxed),
-        record_body_size: RECORD_BODY_SIZE.load(Ordering::Relaxed),
+impl MessageSpanRecordingConfig {
+    fn from_policy(policy: TracePolicy) -> Self {
+        if !policy.enabled {
+            return Self {
+                record_message_id: false,
+                record_message_keys: false,
+                record_body_size: false,
+            };
+        }
+        Self {
+            record_message_id: policy.record_message_id,
+            record_message_keys: policy.record_message_keys,
+            record_body_size: policy.record_body_size,
+        }
     }
 }
 
-pub fn record_current_message_properties<T>(properties: &T, body_size: Option<usize>)
-where
-    T: MessagePropertiesLike + ?Sized,
-{
-    record_message_properties(&tracing::Span::current(), properties, body_size);
+/// Returns the effective message recording policy for one explicit telemetry handle.
+#[must_use]
+pub fn message_span_recording_config(handle: &TelemetryHandle) -> MessageSpanRecordingConfig {
+    MessageSpanRecordingConfig::from_policy(handle.trace_policy())
 }
 
-pub fn record_message_properties<T>(span: &tracing::Span, properties: &T, body_size: Option<usize>)
-where
+/// Records configured message fields on the current span using an explicit telemetry handle.
+pub fn record_current_message_properties_with_handle<T>(
+    handle: &TelemetryHandle,
+    properties: &T,
+    body_size: Option<usize>,
+) where
     T: MessagePropertiesLike + ?Sized,
 {
-    let config = message_span_recording_config();
+    record_message_properties_with_handle(handle, &tracing::Span::current(), properties, body_size);
+}
 
+/// Records configured message fields on a span using an explicit telemetry handle.
+pub fn record_message_properties_with_handle<T>(
+    handle: &TelemetryHandle,
+    span: &tracing::Span,
+    properties: &T,
+    body_size: Option<usize>,
+) where
+    T: MessagePropertiesLike + ?Sized,
+{
+    record_message_properties_with_policy(handle.trace_policy(), span, properties, body_size);
+}
+
+/// Records configured message fields on a span using an immutable trace policy.
+pub(crate) fn record_message_properties_with_policy<T>(
+    policy: TracePolicy,
+    span: &tracing::Span,
+    properties: &T,
+    body_size: Option<usize>,
+) where
+    T: MessagePropertiesLike + ?Sized,
+{
+    record_message_properties_with_config(
+        MessageSpanRecordingConfig::from_policy(policy),
+        span,
+        properties,
+        body_size,
+    );
+}
+
+fn record_message_properties_with_config<T>(
+    config: MessageSpanRecordingConfig,
+    span: &tracing::Span,
+    properties: &T,
+    body_size: Option<usize>,
+) where
+    T: MessagePropertiesLike + ?Sized,
+{
     if config.record_message_id {
         if let Some(message_id) = properties.get_property(PROPERTY_MESSAGE_ID) {
             span.record(crate::semantic::trace::MESSAGING_MESSAGE_ID, message_id);
@@ -75,7 +119,11 @@ where
 
     if config.record_message_keys {
         if let Some(message_keys) = properties.get_property(PROPERTY_MESSAGE_KEYS) {
-            span.record(crate::semantic::trace::MESSAGING_ROCKETMQ_MESSAGE_KEYS, message_keys);
+            let message_keys_hash = correlation_hash(message_keys);
+            span.record(
+                crate::semantic::trace::MESSAGING_ROCKETMQ_MESSAGE_KEYS,
+                message_keys_hash.as_str(),
+            );
         }
     }
 
@@ -140,33 +188,111 @@ pub fn try_init_tracing_subscriber(
     }
 }
 
+fn correlation_hash(value: &str) -> String {
+    let digest = Sha256::digest(value.as_bytes());
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity("sha256:".len() + digest.len() * 2);
+    encoded.push_str("sha256:");
+    for byte in digest {
+        encoded.push(HEX[usize::from(byte >> 4)] as char);
+        encoded.push(HEX[usize::from(byte & 0x0f)] as char);
+    }
+    encoded
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    static MESSAGE_SPAN_RECORDING_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    #[test]
+    fn message_key_correlation_hash_is_stable_and_non_reversible_in_spans() {
+        let first = correlation_hash("customer-order-42");
+        let second = correlation_hash("customer-order-42");
+        let different = correlation_hash("customer-order-43");
+
+        assert_eq!(first, second);
+        assert_ne!(first, different);
+        assert_eq!(first.len(), "sha256:".len() + 64);
+        assert!(!first.contains("customer-order-42"));
+    }
 
     #[test]
-    fn message_span_recording_flags_follow_trace_config() {
-        let _guard = MESSAGE_SPAN_RECORDING_TEST_LOCK.lock().unwrap();
-        let traces = TracesConfig {
-            record_message_id: true,
-            record_message_keys: true,
-            record_body_size: false,
-            ..TracesConfig::default()
+    fn message_span_recording_policy_is_isolated_between_handles() {
+        let mut first_config = crate::ObservabilityConfig {
+            enabled: true,
+            ..crate::ObservabilityConfig::default()
         };
+        first_config.traces.enabled = true;
+        first_config.traces.record_message_id = true;
+        first_config.traces.record_message_keys = true;
+        first_config.traces.record_body_size = false;
+        let mut second_config = first_config.clone();
+        second_config.traces.record_message_id = false;
+        second_config.traces.record_message_keys = false;
+        second_config.traces.record_body_size = true;
 
-        configure_message_span_recording(&traces);
+        #[cfg(feature = "otel-metrics")]
+        let first = TelemetryHandle::active(&first_config, None);
+        #[cfg(not(feature = "otel-metrics"))]
+        let first = TelemetryHandle::active(&first_config);
+        #[cfg(feature = "otel-metrics")]
+        let second = TelemetryHandle::active(&second_config, None);
+        #[cfg(not(feature = "otel-metrics"))]
+        let second = TelemetryHandle::active(&second_config);
 
         assert_eq!(
-            message_span_recording_config(),
+            message_span_recording_config(&first),
             MessageSpanRecordingConfig {
                 record_message_id: true,
                 record_message_keys: true,
                 record_body_size: false,
             }
         );
+        assert_eq!(
+            message_span_recording_config(&second),
+            MessageSpanRecordingConfig {
+                record_message_id: false,
+                record_message_keys: false,
+                record_body_size: true,
+            }
+        );
 
-        configure_message_span_recording(&TracesConfig::default());
+        first.begin_closing();
+        assert_eq!(
+            message_span_recording_config(&first),
+            MessageSpanRecordingConfig {
+                record_message_id: false,
+                record_message_keys: false,
+                record_body_size: false,
+            }
+        );
+        assert_eq!(
+            message_span_recording_config(&second),
+            MessageSpanRecordingConfig {
+                record_message_id: false,
+                record_message_keys: false,
+                record_body_size: true,
+            }
+        );
+    }
+
+    #[test]
+    fn disabled_trace_policy_records_no_message_fields() {
+        let policy = TracePolicy {
+            enabled: false,
+            propagate_context: true,
+            record_message_id: true,
+            record_message_keys: true,
+            record_body_size: true,
+        };
+
+        assert_eq!(
+            MessageSpanRecordingConfig::from_policy(policy),
+            MessageSpanRecordingConfig {
+                record_message_id: false,
+                record_message_keys: false,
+                record_body_size: false,
+            }
+        );
     }
 }

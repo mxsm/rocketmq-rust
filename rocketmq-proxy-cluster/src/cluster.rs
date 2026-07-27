@@ -49,6 +49,7 @@ use rocketmq_client_rust::ClientRuntimeConfig;
 use rocketmq_client_rust::DefaultMQProducer;
 use rocketmq_client_rust::PopResult;
 use rocketmq_client_rust::PopStatus;
+use rocketmq_client_rust::TelemetryHandle;
 use rocketmq_error::RocketMQError;
 use rocketmq_model::result::PullStatus;
 use rocketmq_model::result::SendResult;
@@ -785,8 +786,9 @@ impl RocketmqClusterClient {
         config: ClusterConfig,
         signer: Option<Arc<dyn OutboundSigner>>,
         service_context: &ChildServiceContext,
+        telemetry_handle: TelemetryHandle,
     ) -> ProxyResult<Self> {
-        let executor = ClusterTaskExecutor::new(config.clone(), signer, service_context)?;
+        let executor = ClusterTaskExecutor::new(config.clone(), signer, service_context, telemetry_handle)?;
         Ok(Self {
             executor,
             producer_group_prefix: config.producer_group_prefix,
@@ -1084,7 +1086,11 @@ fn test_client_runtime() -> Arc<ClientRuntime> {
         })
         .expect("proxy cluster test runtime should start")
     });
-    ClientRuntime::new(OWNER.root_context().child("client"), ClientRuntimeConfig::default())
+    ClientRuntime::new(
+        OWNER.root_context().child("client"),
+        ClientRuntimeConfig::default(),
+        TelemetryHandle::noop(),
+    )
 }
 
 struct ClusterWorkerState {
@@ -1260,20 +1266,26 @@ impl ClusterTaskExecutor {
         config: ClusterConfig,
         signer: Option<Arc<dyn OutboundSigner>>,
         service_context: &ChildServiceContext,
+        telemetry_handle: TelemetryHandle,
     ) -> ProxyResult<Self> {
         let rpc_hook = signer.map(rpc_hook_from_outbound_signer);
-        Self::new_with_rpc_hook(config, rpc_hook, service_context)
+        Self::new_with_rpc_hook(config, rpc_hook, service_context, telemetry_handle)
     }
 
     fn new_with_rpc_hook(
         config: ClusterConfig,
         rpc_hook: Option<Arc<ClientRpcHook>>,
         service_context: &ChildServiceContext,
+        telemetry_handle: TelemetryHandle,
     ) -> ProxyResult<Self> {
         let (sender, receiver) = mpsc::channel(CLUSTER_COMMAND_CAPACITY);
         let worker_context = service_context.child("command-worker");
         let shutdown_context = service_context.clone();
-        let client_runtime = ClientRuntime::new(worker_context.child("client-runtime"), ClientRuntimeConfig::default());
+        let client_runtime = ClientRuntime::new(
+            worker_context.child("client-runtime"),
+            ClientRuntimeConfig::default(),
+            telemetry_handle,
+        );
         let cancellation = worker_context.task_group().cancellation_token();
         let domain_id = worker_context.task_group().id().as_u64();
         worker_context
@@ -3157,6 +3169,7 @@ mod tests {
     use super::ClusterTaskExecutor;
     use super::ClusterWorkerState;
     use super::RocketmqClusterClient;
+    use super::TelemetryHandle;
     use super::CLUSTER_COMMAND_CAPACITY;
     use crate::config::ClusterConfig;
     use rocketmq_client_rust::proxy_adapter_compat::MessageQueue;
@@ -3320,8 +3333,8 @@ mod tests {
         let runtime =
             rocketmq_runtime::RuntimeContext::try_from_current("proxy-cluster-test").expect("test runtime context");
         let service = runtime.service_context("proxy-cluster-test.queue");
-        let executor =
-            ClusterTaskExecutor::new(ClusterConfig::default(), None, &service).expect("managed executor builds");
+        let executor = ClusterTaskExecutor::new(ClusterConfig::default(), None, &service, TelemetryHandle::noop())
+            .expect("managed executor builds");
         assert_eq!(executor.sender.max_capacity(), CLUSTER_COMMAND_CAPACITY);
         let report = service.task_group().shutdown(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
@@ -3332,8 +3345,8 @@ mod tests {
         let runtime =
             rocketmq_runtime::RuntimeContext::try_from_current("proxy-cluster-test").expect("test runtime context");
         let service = runtime.service_context("proxy-cluster-test.service");
-        let client =
-            RocketmqClusterClient::new(ClusterConfig::default(), None, &service).expect("managed client builds");
+        let client = RocketmqClusterClient::new(ClusterConfig::default(), None, &service, TelemetryHandle::noop())
+            .expect("managed client builds");
         assert_eq!(service.task_group().task_count(), 0);
         assert_eq!(service.task_group().child_count(), 1);
 

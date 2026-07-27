@@ -52,7 +52,6 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-use crate::metrics::pop_metrics_manager;
 use crate::processor::pop_message_processor::capability::PopReviveContext;
 use crate::processor::pop_message_processor::PopMessageProcessor;
 use crate::store_read::decode_read_outcome;
@@ -165,11 +164,13 @@ impl<MS: MessageStore> PopReviveService<MS> {
             .inflight
             .decrement_in_flight_message_num_checkpoint(pop_check_point);
 
-        // Record observability metrics
-        pop_metrics_manager::inc_pop_revive_retry_message_count(
-            pop_check_point,
-            put_message_result.put_message_status(),
-        );
+        if let Some(metrics) = self.context.metrics.as_ref() {
+            metrics.inc_pop_revive_retry_message_count(
+                pop_check_point.cid.as_str(),
+                pop_check_point.topic.as_str(),
+                put_message_result.put_message_status().to_string(),
+            );
+        }
 
         self.context.stats.inc_broker_put_nums(&pop_check_point.topic, 1);
         self.context.stats.inc_topic_put_nums(&retry_topic, 1, 1);
@@ -521,7 +522,9 @@ impl<MS: MessageStore> PopReviveService<MS> {
                         .into(),
                         point.clone(),
                     );
-                    pop_metrics_manager::inc_pop_revive_ck_get_count(&point, self.queue_id);
+                    if let Some(metrics) = self.context.metrics.as_ref() {
+                        metrics.inc_pop_revive_ck_get_count(point.cid.as_str(), point.topic.as_str(), self.queue_id);
+                    }
                     if first_rt == 0 {
                         first_rt = point.get_revive_time() as u64;
                     }
@@ -547,7 +550,13 @@ impl<MS: MessageStore> PopReviveService<MS> {
                             continue;
                         }
                     };
-                    pop_metrics_manager::inc_pop_revive_ack_get_count(&ack_msg, self.queue_id);
+                    if let Some(metrics) = self.context.metrics.as_ref() {
+                        metrics.inc_pop_revive_ack_get_count(
+                            ack_msg.consumer_group.as_str(),
+                            ack_msg.topic.as_str(),
+                            self.queue_id,
+                        );
+                    }
                     let merge_key = CheetahString::from_string(format!(
                         "{}{}{}{}{}{}",
                         ack_msg.topic,
@@ -603,7 +612,13 @@ impl<MS: MessageStore> PopReviveService<MS> {
                             continue;
                         }
                     };
-                    pop_metrics_manager::inc_pop_revive_ack_get_count(&b_ack_msg.ack_msg, self.queue_id);
+                    if let Some(metrics) = self.context.metrics.as_ref() {
+                        metrics.inc_pop_revive_ack_get_count(
+                            b_ack_msg.ack_msg.consumer_group.as_str(),
+                            b_ack_msg.ack_msg.topic.as_str(),
+                            self.queue_id,
+                        );
+                    }
                     let merge_key = CheetahString::from_string(format!(
                         "{}{}{}{}{}{}",
                         b_ack_msg.ack_msg.topic,

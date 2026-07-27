@@ -805,6 +805,7 @@ pub async fn run_local_file_offset_store_lifecycle_probe(
         format!("local-offset-store-probe-{}", std::process::id()),
         None,
         client_runtime.child("local-offset-store-probe"),
+        client_runtime.telemetry_handle().clone(),
         client_runtime.pool().request_future_holder(),
     );
     let offset_table = Arc::new(DashMap::<MessageQueue, ControllableOffset>::new());
@@ -925,6 +926,7 @@ mod tests {
             client_id,
             None,
             runtime.child("client-instance"),
+            runtime.telemetry_handle().clone(),
             runtime.pool().request_future_holder(),
         )
     }

@@ -26,6 +26,7 @@ mod topic;
 
 use rocketmq_admin_core::client_adapter::ClientRuntime;
 use rocketmq_admin_core::client_adapter::ClientRuntimeConfig;
+use rocketmq_admin_core::client_adapter::TelemetryHandle;
 use rocketmq_dashboard_common::NameServerConfigStore;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
@@ -68,6 +69,7 @@ pub fn run() {
     let client_runtime = ClientRuntime::new(
         client_runtime_owner.root_context().child("rocketmq-admin-client"),
         ClientRuntimeConfig::default(),
+        TelemetryHandle::noop(),
     );
     let setup_client_runtime = client_runtime.clone();
     let admin_lifecycle = Arc::new(OnceLock::new());

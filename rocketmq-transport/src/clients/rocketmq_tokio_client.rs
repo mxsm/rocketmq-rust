@@ -56,6 +56,7 @@ use crate::runtime::config::client_config::TokioClientConfig;
 use crate::runtime::processor::RequestProcessor;
 use crate::runtime::RPCHook;
 use crate::security::TransportSecurity;
+use crate::telemetry::TransportTelemetry;
 use crate::tls::TlsConfig;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
@@ -206,6 +207,8 @@ pub struct RocketmqDefaultClient<PR = DefaultRemotingRequestProcessor> {
 
     /// Optional signer applied by each canonical transport session before sending.
     transport_security: Option<Arc<TransportSecurity>>,
+
+    telemetry: TransportTelemetry,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -247,6 +250,7 @@ impl<PR> Clone for RocketmqDefaultClient<PR> {
             cmd_handler: self.cmd_handler.clone(),
             tx: self.tx.clone(),
             transport_security: self.transport_security.clone(),
+            telemetry: self.telemetry.clone(),
         }
     }
 }
@@ -283,7 +287,39 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         tx: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
         service_context: ChildServiceContext,
     ) -> Self {
-        let handler = RemotingGeneralHandler::new(processor, vec![], PendingRequestTable::with_capacity(512));
+        Self::new_with_cl_and_telemetry(
+            tokio_client_config,
+            processor,
+            tx,
+            service_context,
+            TransportTelemetry::noop(),
+        )
+    }
+
+    /// Creates a remoting client bound to one explicit transport telemetry instance.
+    pub fn new_with_telemetry(
+        tokio_client_config: Arc<TokioClientConfig>,
+        processor: PR,
+        service_context: ChildServiceContext,
+        telemetry: TransportTelemetry,
+    ) -> Self {
+        Self::new_with_cl_and_telemetry(tokio_client_config, processor, None, service_context, telemetry)
+    }
+
+    /// Creates a remoting client with connection events and explicit transport telemetry.
+    pub fn new_with_cl_and_telemetry(
+        tokio_client_config: Arc<TokioClientConfig>,
+        processor: PR,
+        tx: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
+        service_context: ChildServiceContext,
+        telemetry: TransportTelemetry,
+    ) -> Self {
+        let handler = RemotingGeneralHandler::new_with_telemetry(
+            processor,
+            vec![],
+            PendingRequestTable::with_capacity(512),
+            telemetry.clone(),
+        );
         Self {
             tokio_client_config,
             connection_tables: Arc::new(DashMap::with_capacity(64)),
@@ -300,6 +336,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
             cmd_handler: Arc::new(handler),
             tx,
             transport_security: None,
+            telemetry,
         }
     }
 
@@ -729,13 +766,14 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         tls_config.enable = self.tokio_client_config.use_tls;
 
         let transport_security = self.transport_security.clone();
-        let connect_result = Client::connect_with_service_context_until(
+        let connect_result = Client::connect_with_service_context_until_and_telemetry(
             &self.service_context,
             addr_inner,
             self.cmd_handler.clone(),
             self.tx.as_ref(),
             tls_config,
             deadline,
+            self.telemetry.clone(),
         )
         .await;
         let connect_result = match transport_security {

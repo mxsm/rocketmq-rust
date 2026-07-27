@@ -491,6 +491,7 @@ impl TimerMessageWriteHandle {
 ///Using local files to store message data, which is also the default method.
 pub struct LocalFileMessageStore {
     runtime_scope: StoreRuntimeScope,
+    telemetry: crate::telemetry::StoreTelemetry,
     message_store_config: Arc<MessageStoreConfig>,
     store_runtime_state: Arc<StoreRuntimeState>,
     composition: LocalStoreComposition,

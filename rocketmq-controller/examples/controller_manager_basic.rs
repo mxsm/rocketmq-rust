@@ -50,7 +50,8 @@ async fn main() -> Result<()> {
     // Create the controller manager
     info!("Creating ControllerManager...");
     let runtime = RuntimeContext::from_current("controller-manager-basic-example");
-    let manager = ControllerManager::new(config, runtime.service_context("controller")).await?;
+    let manager =
+        ControllerManager::new(config, runtime.service_context("controller"), telemetry_guard.handle()).await?;
 
     // Share the manager through a read-only ownership handle.
     let manager = Arc::new(manager);

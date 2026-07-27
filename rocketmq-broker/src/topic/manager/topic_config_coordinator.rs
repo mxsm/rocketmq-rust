@@ -511,7 +511,12 @@ mod tests {
             store_path_root_dir: root.into(),
             ..MessageStoreConfig::default()
         };
-        let manager = Arc::new(TopicConfigManager::new(&broker_config, &message_store_config, false));
+        let manager = Arc::new(TopicConfigManager::new(
+            &broker_config,
+            &message_store_config,
+            false,
+            None,
+        ));
         let runtime = RuntimeContext::from_current("topic-config-coordinator-test");
         let coordinator = Arc::new(TopicConfigCoordinator::new(
             manager,

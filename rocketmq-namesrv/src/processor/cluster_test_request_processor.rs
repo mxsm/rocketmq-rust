@@ -196,10 +196,13 @@ mod tests {
         });
 
         let runtime = rocketmq_runtime::RuntimeContext::from_current("namesrv-cluster-test-processor");
-        let bootstrap = Builder::new(runtime.service_context("namesrv"))
-            .set_name_server_config(namesrv_config)
-            .set_cluster_test_route_lookup(mock_lookup)
-            .build();
+        let bootstrap = Builder::new(
+            runtime.service_context("namesrv"),
+            rocketmq_observability::TelemetryHandle::noop(),
+        )
+        .set_name_server_config(namesrv_config)
+        .set_cluster_test_route_lookup(mock_lookup)
+        .build();
 
         let harness = LocalRequestHarness::new(
             runtime

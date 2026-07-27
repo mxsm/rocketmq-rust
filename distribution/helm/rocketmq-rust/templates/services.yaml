@@ -84,3 +84,25 @@ spec:
 {{- end }}
 ---
 {{- end }}
+{{- if and .Values.metrics.enabled .Values.metrics.service.enabled }}
+{{- range $service := list "broker" "namesrv" "controller" "proxy" "mcp" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: rocketmq-{{ $service }}-metrics
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+{{ include "rocketmq.labels" (dict "root" $root "service" $service) | indent 4 }}
+    rocketmq.apache.org/metrics: "true"
+spec:
+  type: ClusterIP
+  selector:
+{{ include "rocketmq.selectorLabels" (dict "root" $root "service" $service) | indent 4 }}
+  ports:
+    - name: metrics
+      port: {{ $root.Values.metrics.port }}
+      targetPort: metrics
+      protocol: TCP
+---
+{{- end }}
+{{- end }}

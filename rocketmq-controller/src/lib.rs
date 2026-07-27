@@ -46,7 +46,9 @@
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
 //!     let config = ControllerConfig::default();
-//!     let controller = Arc::new(ControllerManager::new(config).await?);
+//!     let controller = Arc::new(
+//!         ControllerManager::new(config, service_context, TelemetryHandle::noop()).await?
+//!     );
 //!
 //!     controller.initialize().await?;
 //!     controller.start().await?;
@@ -277,7 +279,7 @@ pub mod bench_support {
             .with_storage_backend(crate::config::StorageBackendType::Memory);
 
         let manager = Arc::new(
-            ControllerManager::new(config, service_context)
+            ControllerManager::new(config, service_context, rocketmq_observability::TelemetryHandle::noop())
                 .await
                 .expect("benchmark controller manager should create"),
         );

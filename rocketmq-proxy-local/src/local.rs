@@ -330,7 +330,11 @@ fn validate_local_queue_config(config: &LocalConfig) -> ProxyResult<()> {
 }
 
 impl LocalBrokerFacadeClient {
-    pub fn new(config: LocalConfig, service_context: &ChildServiceContext) -> ProxyResult<Self> {
+    pub fn new(
+        config: LocalConfig,
+        service_context: &ChildServiceContext,
+        telemetry_handle: rocketmq_observability::TelemetryHandle,
+    ) -> ProxyResult<Self> {
         validate_local_queue_config(&config)?;
         let validated_broker_config =
             ValidatedBrokerConfig::try_from_parts(build_broker_config(&config), build_message_store_config(&config))
@@ -347,7 +351,8 @@ impl LocalBrokerFacadeClient {
         let broker_name = config.broker_name.clone();
         let worker_context = service_context.child("command-worker");
         let broker_context = worker_context.child("embedded-broker-store");
-        let facade = ProxyBrokerFacade::from_validated_config(validated_broker_config, broker_context);
+        let facade =
+            ProxyBrokerFacade::from_validated_config(validated_broker_config, broker_context, telemetry_handle);
         let shutdown_context = service_context.clone();
         let cancellation = worker_context.task_group().cancellation_token();
         worker_context
@@ -756,9 +761,10 @@ pub fn local_components_from_config_with_service_context(
     config: LocalConfig,
     strategy_name: impl Into<String>,
     service_context: &ChildServiceContext,
+    telemetry_handle: rocketmq_observability::TelemetryHandle,
 ) -> ProxyResult<(LocalServiceManager, LocalBrokerFacadeClient)> {
     Ok(local_components(
-        LocalBrokerFacadeClient::new(config, service_context)?,
+        LocalBrokerFacadeClient::new(config, service_context, telemetry_handle)?,
         strategy_name,
     ))
 }
@@ -783,8 +789,9 @@ pub fn local_service_manager_from_config(
     config: LocalConfig,
     strategy_name: impl Into<String>,
     service_context: &ChildServiceContext,
+    telemetry_handle: rocketmq_observability::TelemetryHandle,
 ) -> ProxyResult<LocalServiceManager> {
-    Ok(local_components_from_config_with_service_context(config, strategy_name, service_context)?.0)
+    Ok(local_components_from_config_with_service_context(config, strategy_name, service_context, telemetry_handle)?.0)
 }
 
 async fn run_local_broker_worker(
@@ -2364,7 +2371,8 @@ mod tests {
             store_root_dir: store.path().to_string_lossy().into_owned(),
             ..LocalConfig::default()
         };
-        let client = LocalBrokerFacadeClient::new(config, &service).expect("managed local client builds");
+        let client = LocalBrokerFacadeClient::new(config, &service, rocketmq_observability::TelemetryHandle::noop())
+            .expect("managed local client builds");
         assert_eq!(client.sender.max_capacity(), 7);
 
         let error = client
@@ -2453,7 +2461,7 @@ mod tests {
             ..LocalConfig::default()
         };
 
-        match LocalBrokerFacadeClient::new(config, &service) {
+        match LocalBrokerFacadeClient::new(config, &service, rocketmq_observability::TelemetryHandle::noop()) {
             Err(ProxyError::RocketMQ(RocketMQError::ConfigInvalidValue { key, reason, .. })) => {
                 assert_eq!(key, "proxy.local.embeddedBroker");
                 assert!(reason.contains("broker.brokerIp1"), "{reason}");
@@ -2475,7 +2483,8 @@ mod tests {
             store_root_dir: store.path().to_string_lossy().into_owned(),
             ..LocalConfig::default()
         };
-        let client = LocalBrokerFacadeClient::new(config, &service).expect("managed local client builds");
+        let client = LocalBrokerFacadeClient::new(config, &service, rocketmq_observability::TelemetryHandle::noop())
+            .expect("managed local client builds");
         assert_eq!(service.task_group().task_count(), 0);
         assert_eq!(service.task_group().child_count(), 1);
 

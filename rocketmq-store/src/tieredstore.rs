@@ -19,6 +19,7 @@ use cheetah_string::CheetahString;
 use rocketmq_error::RocketMQError;
 use rocketmq_model::common::boundary_type::BoundaryType;
 use rocketmq_observability::metrics::tiered_store::TieredStoreMetrics;
+use rocketmq_observability::metrics::tiered_store::TieredStoreMetricsRecorder;
 use rocketmq_store_api::DerivedRecordId;
 use rocketmq_tieredstore::dispatcher::DefaultTieredDispatcher;
 use rocketmq_tieredstore::dispatcher::TieredDispatchRequest;
@@ -58,7 +59,15 @@ pub struct TieredStoreDecorator {
 
 impl TieredStoreDecorator {
     pub fn new(config: TieredStoreConfig) -> Result<Self, StoreError> {
-        let store = TieredStore::new(config).map_err(|error| StoreError::tiered_store(StoreOperation::Load, error))?;
+        Self::new_with_metrics(config, TieredStoreMetricsRecorder::noop())
+    }
+
+    pub fn new_with_metrics(
+        config: TieredStoreConfig,
+        metrics: TieredStoreMetricsRecorder,
+    ) -> Result<Self, StoreError> {
+        let store = TieredStore::new_with_metrics(config, metrics)
+            .map_err(|error| StoreError::tiered_store(StoreOperation::Load, error))?;
         Ok(Self { store: Arc::new(store) })
     }
 

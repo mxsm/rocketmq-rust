@@ -28,6 +28,8 @@ use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerI
 use rocketmq_model::common::message::message_single;
 use rocketmq_model::common::message::MessageConst;
 use rocketmq_model::common::message::MessageTrait;
+use rocketmq_observability::metrics::store::StoreMetricsRecorder;
+use rocketmq_observability::metrics::timer::TimerMetricsRecorder;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_runtime::common::system_clock::SystemClock;
 use rocketmq_runtime::common::time_utils::current_millis;
@@ -141,6 +143,8 @@ impl TimerStoreContext {
 
 pub struct TimerMessageStore {
     runtime_scope: crate::runtime::StoreRuntimeScope,
+    otel_timer_metrics: TimerMetricsRecorder,
+    otel_store_metrics: StoreMetricsRecorder,
     pub curr_read_time_ms: AtomicI64,
     pub curr_queue_offset: AtomicI64,
     pub last_enqueue_but_expired_time: u64,
@@ -371,9 +375,25 @@ impl TimerMessageStore {
         message_store_config: Arc<MessageStoreConfig>,
         runtime_scope: crate::runtime::StoreRuntimeScope,
     ) -> Self {
+        Self::new_with_runtime_scope_and_telemetry(
+            message_store_config,
+            runtime_scope,
+            TimerMetricsRecorder::noop(),
+            StoreMetricsRecorder::noop(),
+        )
+    }
+
+    fn new_with_runtime_scope_and_telemetry(
+        message_store_config: Arc<MessageStoreConfig>,
+        runtime_scope: crate::runtime::StoreRuntimeScope,
+        otel_timer_metrics: TimerMetricsRecorder,
+        otel_store_metrics: StoreMetricsRecorder,
+    ) -> Self {
         let timer_metrics_path = get_timer_metrics_path(message_store_config.store_path_root_dir.as_str());
         Self {
             runtime_scope,
+            otel_timer_metrics,
+            otel_store_metrics,
             curr_read_time_ms: AtomicI64::new(0),
             curr_queue_offset: AtomicI64::new(0),
             last_enqueue_but_expired_time: 0,
@@ -398,8 +418,15 @@ impl TimerMessageStore {
         store_context: TimerStoreContext,
         message_store_config: Arc<MessageStoreConfig>,
         runtime_scope: crate::runtime::StoreRuntimeScope,
+        otel_timer_metrics: TimerMetricsRecorder,
+        otel_store_metrics: StoreMetricsRecorder,
     ) -> Self {
-        let mut store = Self::new_with_runtime_scope(message_store_config, runtime_scope);
+        let mut store = Self::new_with_runtime_scope_and_telemetry(
+            message_store_config,
+            runtime_scope,
+            otel_timer_metrics,
+            otel_store_metrics,
+        );
         store.store_context = Some(store_context);
         store
     }
@@ -898,11 +925,9 @@ impl TimerMessageStore {
                 Ok(()) => {
                     let real_topic =
                         message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC));
-                    #[cfg(feature = "observability")]
-                    rocketmq_observability::metrics::timer::record_enqueue_total(
-                        real_topic.as_ref().map(|topic| topic.as_str()),
-                    );
-                    rocketmq_observability::metrics::store::record_delay_message_latency_from_timestamps(
+                    self.otel_timer_metrics
+                        .record_enqueue_total(real_topic.as_ref().map(|topic| topic.as_str()));
+                    self.otel_store_metrics.record_delay_message_latency_from_timestamps(
                         deliver_time_ms,
                         message.born_timestamp(),
                         real_topic.as_ref().map(|topic| topic.as_str()),
@@ -1033,8 +1058,7 @@ impl TimerMessageStore {
                     }
                     if let Some(real_topic) = rolled_topic {
                         self.timer_metrics.add_timing_count(&real_topic, -1);
-                        #[cfg(feature = "observability")]
-                        rocketmq_observability::metrics::timer::record_dequeue_total(real_topic.as_str());
+                        self.otel_timer_metrics.record_dequeue_total(real_topic.as_str());
                     }
                     self.dequeue_tps_counter.record(1, current_millis() as i64);
                     processed += 1;
@@ -1051,8 +1075,7 @@ impl TimerMessageStore {
                         message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
                     {
                         self.timer_metrics.add_timing_count(&real_topic, -1);
-                        #[cfg(feature = "observability")]
-                        rocketmq_observability::metrics::timer::record_dequeue_total(real_topic.as_str());
+                        self.otel_timer_metrics.record_dequeue_total(real_topic.as_str());
                     }
                     processed += 1;
                     continue;
@@ -1073,8 +1096,7 @@ impl TimerMessageStore {
                 break;
             }
             self.timer_metrics.add_timing_count(&delivered_topic, -1);
-            #[cfg(feature = "observability")]
-            rocketmq_observability::metrics::timer::record_dequeue_total(delivered_topic.as_str());
+            self.otel_timer_metrics.record_dequeue_total(delivered_topic.as_str());
             self.dequeue_tps_counter.record(1, current_millis() as i64);
             processed += 1;
         }

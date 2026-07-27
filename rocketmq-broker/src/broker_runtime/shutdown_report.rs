@@ -56,6 +56,7 @@ pub(crate) struct BrokerBasicServiceShutdownReport {
     pub(crate) broker_outer_api: BrokerShutdownComponentReport,
     pub(crate) client_housekeeping: BrokerShutdownComponentReport,
     pub(crate) auth: BrokerShutdownComponentReport,
+    pub(crate) service_tasks: BrokerShutdownComponentReport,
     pub(crate) observability: BrokerShutdownComponentReport,
     pub(crate) scheduled_tasks: BrokerShutdownComponentReport,
     pub(crate) message_store: BrokerShutdownComponentReport,
@@ -81,7 +82,7 @@ impl BrokerShutdownProgress {
     pub(super) fn new() -> Self {
         Self {
             unfinished: Arc::new(StdMutex::new(
-                BrokerBasicServiceShutdownReport::COMPONENT_NAMES[..17].to_vec(),
+                BrokerBasicServiceShutdownReport::COMPONENT_NAMES[..18].to_vec(),
             )),
             message_store_report: Arc::new(StdMutex::new(None)),
         }
@@ -262,13 +263,14 @@ pub(super) fn record_message_store_shutdown_outcome(
 }
 
 impl BrokerBasicServiceShutdownReport {
-    const COMPONENT_NAMES: [&'static str; 18] = [
+    const COMPONENT_NAMES: [&'static str; 19] = [
         "remoting",
         "request_processor",
         "topic_config",
         "broker_outer_api",
         "client_housekeeping",
         "auth",
+        "service_tasks",
         "observability",
         "scheduled_tasks",
         "message_store",
@@ -367,6 +369,7 @@ impl BrokerBasicServiceShutdownReport {
             &self.broker_outer_api,
             &self.client_housekeeping,
             &self.auth,
+            &self.service_tasks,
             &self.observability,
             &self.scheduled_tasks,
             &self.message_store,

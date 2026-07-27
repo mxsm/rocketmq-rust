@@ -953,8 +953,10 @@ pub use crate::implementation::mq_client_api_factory::MQClientAPIFactory;
 #[doc(hidden)]
 pub use crate::implementation::mq_client_api_factory::NamesrvRefreshLifecycleProbe;
 pub use crate::implementation::mq_client_manager::ClientPool;
+pub use crate::runtime::ClientMetrics;
 pub use crate::runtime::ClientRuntime;
 pub use crate::runtime::ClientRuntimeConfig;
+pub use crate::runtime::TelemetryHandle;
 #[doc(hidden)]
 pub use crate::stat::consumer_stats_manager::run_consumer_stats_manager_lifecycle_probe;
 #[doc(hidden)]

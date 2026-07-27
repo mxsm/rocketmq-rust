@@ -237,6 +237,7 @@ impl<MS: MessageStore> BrokerRuntimeState<MS> {
             self.broker_stats_manager_handle(),
             self.pop_inflight_message_counter().clone(),
             Arc::clone(&self.should_start_time),
+            self.pop_metrics_manager.clone(),
             self.broker_service_task_group(),
         ))
     }
@@ -1037,8 +1038,47 @@ impl BrokerRuntime {
         validated_config: Arc<ValidatedBrokerConfig>,
         service_context: ChildServiceContext,
     ) -> Self {
+        Self::new_with_validated_config_and_telemetry(validated_config, service_context, TelemetryHandle::noop())
+    }
+
+    pub(crate) fn new_with_validated_config_and_telemetry(
+        validated_config: Arc<ValidatedBrokerConfig>,
+        service_context: ChildServiceContext,
+        telemetry_handle: TelemetryHandle,
+    ) -> Self {
         let broker_config = validated_config.broker_arc();
         let message_store_config = validated_config.store_arc();
+        #[cfg(feature = "otel-metrics")]
+        let broker_metrics_manager = crate::metrics::broker_metrics_manager::BrokerMetricsManager::from_telemetry(
+            telemetry_handle.child(rocketmq_observability::BROKER_METER_SCOPE),
+            Arc::new(crate::metrics::broker_metrics_manager::BrokerAttributesSupplier::new(
+                broker_config.broker_identity.broker_cluster_name.to_string(),
+                broker_config.broker_identity.get_canonical_name(),
+            )),
+            crate::metrics::broker_metrics_manager::BrokerMetricsSamplingConfig::new(
+                broker_config.metrics_sample_ratio,
+            ),
+        )
+        .map(Arc::new);
+        #[cfg(feature = "otel-metrics")]
+        let pop_metrics_manager = crate::metrics::pop_metrics_manager::PopMetricsManager::from_telemetry(
+            telemetry_handle.child(rocketmq_observability::BROKER_METER_SCOPE),
+            Arc::new(crate::metrics::pop_metrics_manager::BrokerAttributesSupplier::new(
+                broker_config.broker_identity.broker_cluster_name.to_string(),
+                broker_config.broker_identity.broker_name.to_string(),
+                i64::try_from(broker_config.broker_identity.broker_id).unwrap_or(i64::MAX),
+            )),
+        )
+        .map(Arc::new);
+        #[cfg(not(feature = "otel-metrics"))]
+        let broker_metrics_manager = None;
+        #[cfg(not(feature = "otel-metrics"))]
+        let pop_metrics_manager = None;
+        #[cfg(any(feature = "otel-metrics", feature = "otel-traces"))]
+        let transport_telemetry = rocketmq_transport::TransportTelemetry::from_handle(&telemetry_handle);
+        #[cfg(not(any(feature = "otel-metrics", feature = "otel-traces")))]
+        let transport_telemetry = rocketmq_transport::TransportTelemetry::noop();
+        let store_telemetry = rocketmq_store::StoreTelemetry::from_handle(&telemetry_handle);
         let resource_budget = validated_config
             .sections()
             .resources()
@@ -1062,6 +1102,7 @@ impl BrokerRuntime {
         let broker_outer_api = BrokerOuterAPI::new(
             Arc::new(TokioClientConfig::default()),
             service_context.child("broker.outer-api"),
+            transport_telemetry.clone(),
         );
 
         let mut topic_queue_mapping_manager = TopicQueueMappingManager::new_with_service_context(
@@ -1162,6 +1203,11 @@ impl BrokerRuntime {
             controller_state: BrokerControllerState::default(),
             broker_fast_failure,
             log_filter_control: None,
+            telemetry_handle,
+            transport_telemetry,
+            store_telemetry,
+            broker_metrics_manager,
+            pop_metrics_manager,
             observability_guard: None,
             #[cfg(feature = "otel-metrics")]
             observability_metrics_initialized: false,
@@ -1203,11 +1249,13 @@ impl BrokerRuntime {
                     message_store_config_snapshot.as_ref(),
                     true,
                     Arc::clone(&managers.topic),
+                    state.broker_metrics_manager.clone(),
                 ),
                 None => TopicConfigManager::new(
                     broker_config_snapshot.as_ref(),
                     message_store_config_snapshot.as_ref(),
                     true,
+                    state.broker_metrics_manager.clone(),
                 ),
             }));
         }
@@ -1217,6 +1265,7 @@ impl BrokerRuntime {
                 broker_config_snapshot.as_ref(),
                 message_store_config_snapshot.as_ref(),
                 true,
+                state.broker_metrics_manager.clone(),
             )));
         }
         stats_manager.set_producer_state_getter(Arc::new(ProducerStateGetter::new(
@@ -1306,8 +1355,13 @@ impl BrokerRuntime {
                     subscription_group_manager_config,
                     state_machine_version,
                     Arc::clone(&managers.subscription_group),
+                    state.broker_metrics_manager.clone(),
                 ),
-                None => SubscriptionGroupManager::new(subscription_group_manager_config, state_machine_version),
+                None => SubscriptionGroupManager::new(
+                    subscription_group_manager_config,
+                    state_machine_version,
+                    state.broker_metrics_manager.clone(),
+                ),
             });
         }
         #[cfg(not(feature = "rocksdb_store"))]
@@ -1315,6 +1369,7 @@ impl BrokerRuntime {
             state.subscription_group_manager = Some(SubscriptionGroupManager::new(
                 subscription_group_manager_config,
                 state_machine_version,
+                state.broker_metrics_manager.clone(),
             ));
         }
         if let Some(actor) = state
@@ -1407,6 +1462,10 @@ impl BrokerRuntime {
             }
         });
         self.composition.state.observability_guard = Some(guard);
+    }
+
+    pub(crate) fn release_identity_registered(&self) -> bool {
+        self.composition.state.telemetry_handle.release_identity_registered()
     }
 
     pub(crate) fn broker_config(&self) -> Arc<BrokerConfig> {

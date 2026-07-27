@@ -92,8 +92,9 @@ impl LocalServiceManager {
         config: LocalConfig,
         assignment_strategy_name: impl Into<String>,
         service_context: &ChildServiceContext,
+        telemetry_handle: rocketmq_observability::TelemetryHandle,
     ) -> ProxyResult<Self> {
-        local_service_manager_from_config(config, assignment_strategy_name, service_context)
+        local_service_manager_from_config(config, assignment_strategy_name, service_context, telemetry_handle)
     }
 }
 

@@ -29,15 +29,6 @@ pub use crate::semantic::metrics::TIERED_STORE_READ_AHEAD_CACHE_HIT_TOTAL;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
-#[cfg(feature = "otel-metrics")]
-use std::sync::OnceLock;
-
-#[cfg(feature = "otel-metrics")]
-static TIERED_STORE_METRICS: OnceLock<TieredStoreOtelMetrics> = OnceLock::new();
-
-#[cfg(feature = "otel-metrics")]
-static TIERED_STORE_GLOBAL_METRICS: OnceLock<TieredStoreOtelMetrics> = OnceLock::new();
-
 #[derive(Debug, Clone, Default)]
 pub struct TieredStoreObservableValues {
     pub dispatch_behind: Vec<TieredDispatchBehind>,
@@ -53,8 +44,188 @@ pub struct TieredDispatchBehind {
     pub count: i64,
 }
 
-#[derive(Default)]
+/// Cloneable Tiered Store recorder bound to one explicit tiered-store telemetry scope.
+#[derive(Clone)]
+pub struct TieredStoreMetricsRecorder {
+    #[cfg(feature = "otel-metrics")]
+    telemetry: crate::TelemetryRecorder,
+    #[cfg(feature = "otel-metrics")]
+    metrics: Option<TieredStoreOtelMetrics>,
+}
+
+impl std::fmt::Debug for TieredStoreMetricsRecorder {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TieredStoreMetricsRecorder")
+            .field("enabled", &self.is_enabled())
+            .finish()
+    }
+}
+
+impl Default for TieredStoreMetricsRecorder {
+    fn default() -> Self {
+        Self::noop()
+    }
+}
+
+impl TieredStoreMetricsRecorder {
+    /// Creates a recorder that never reads process-global OpenTelemetry state.
+    #[must_use]
+    pub fn noop() -> Self {
+        Self::from_handle(&crate::TelemetryHandle::noop())
+    }
+
+    /// Creates a recorder from the fixed Tiered Store instrumentation scope.
+    #[must_use]
+    pub fn from_handle(handle: &crate::TelemetryHandle) -> Self {
+        #[cfg(feature = "otel-metrics")]
+        {
+            let telemetry = handle.child(crate::TIERED_STORE_METER_SCOPE);
+            let metrics = telemetry
+                .meter()
+                .map(|meter| TieredStoreOtelMetrics::new_with_label_policy(&meter, telemetry.metric_label_policy()));
+            Self { telemetry, metrics }
+        }
+
+        #[cfg(not(feature = "otel-metrics"))]
+        {
+            let _ = handle;
+            Self {}
+        }
+    }
+
+    /// Returns whether this recorder is backed by an active Tiered Store meter.
+    #[must_use]
+    pub fn is_enabled(&self) -> bool {
+        #[cfg(feature = "otel-metrics")]
+        {
+            self.telemetry.is_active() && self.metrics.is_some()
+        }
+
+        #[cfg(not(feature = "otel-metrics"))]
+        {
+            false
+        }
+    }
+
+    /// Registers Tiered Store observable gauges on this recorder's explicit meter.
+    pub fn register_observables<F>(&self, source: F)
+    where
+        F: Fn() -> TieredStoreObservableValues + Send + Sync + 'static,
+    {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(meter) = self.telemetry.meter() {
+            TieredStoreOtelMetrics::register_observables_with_label_policy(
+                &meter,
+                source,
+                self.telemetry.metric_label_policy(),
+            );
+        }
+
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = source;
+    }
+
+    #[cfg(feature = "otel-metrics")]
+    fn active_metrics(&self) -> Option<&TieredStoreOtelMetrics> {
+        self.telemetry.is_active().then_some(())?;
+        self.metrics.as_ref()
+    }
+
+    pub fn record_messages_dispatch(&self, topic: &str, queue_id: i32, file_type: &str, count: u64) {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(metrics) = self.active_metrics() {
+            metrics.record_messages_dispatch(
+                count,
+                &dispatch_attributes(&metrics.label_policy, topic, queue_id, file_type),
+            );
+        }
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = (topic, queue_id, file_type, count);
+    }
+
+    pub fn record_messages_out(&self, topic: &str, group: &str, count: u64) {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(metrics) = self.active_metrics() {
+            metrics.record_messages_out(count, &message_out_attributes(&metrics.label_policy, topic, group));
+        }
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = (topic, group, count);
+    }
+
+    pub fn record_get_message_fallback(&self, topic: &str, group: &str) {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(metrics) = self.active_metrics() {
+            metrics.record_get_message_fallback(1, &message_out_attributes(&metrics.label_policy, topic, group));
+        }
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = (topic, group);
+    }
+
+    pub fn record_provider_read(&self, path: &str, bytes: u64, success: bool, latency_ms: u64) {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(metrics) = self.active_metrics() {
+            let attributes = provider_attributes("read", success, path);
+            metrics.record_provider_download_bytes(bytes, &attributes);
+            metrics.record_provider_rpc_latency(latency_ms, &attributes);
+        }
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = (path, bytes, success, latency_ms);
+    }
+
+    pub fn record_provider_write(&self, path: &str, bytes: u64, success: bool, latency_ms: u64) {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(metrics) = self.active_metrics() {
+            let attributes = provider_attributes("write", success, path);
+            metrics.record_provider_upload_bytes(bytes, &attributes);
+            metrics.record_provider_rpc_latency(latency_ms, &attributes);
+        }
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = (path, bytes, success, latency_ms);
+    }
+
+    pub fn record_api_latency(&self, operation: &str, success: bool, latency_ms: u64) {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(metrics) = self.active_metrics() {
+            metrics.record_api_latency(latency_ms, &api_attributes(operation, success));
+        }
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = (operation, success, latency_ms);
+    }
+
+    pub fn record_dispatch_latency(&self, topic: &str, queue_id: i32, file_type: &str, latency_ms: u64) {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(metrics) = self.active_metrics() {
+            metrics.record_dispatch_latency(
+                latency_ms,
+                &dispatch_attributes(&metrics.label_policy, topic, queue_id, file_type),
+            );
+        }
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = (topic, queue_id, file_type, latency_ms);
+    }
+
+    pub fn record_read_ahead_cache_access(&self, success: bool, count: u64) {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(metrics) = self.active_metrics() {
+            metrics.record_read_ahead_cache_access(count, &cache_attributes(success));
+        }
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = (success, count);
+    }
+
+    pub fn record_read_ahead_cache_hit(&self, success: bool, count: u64) {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(metrics) = self.active_metrics() {
+            metrics.record_read_ahead_cache_hit(count, &cache_attributes(success));
+        }
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = (success, count);
+    }
+}
+
 pub struct TieredStoreMetrics {
+    recorder: TieredStoreMetricsRecorder,
     dispatch_requests: AtomicU64,
     dispatch_behind: AtomicU64,
     commit_failures: AtomicU64,
@@ -70,9 +241,43 @@ pub struct TieredStoreMetrics {
     read_ahead_cache_bytes: AtomicU64,
 }
 
+impl Default for TieredStoreMetrics {
+    fn default() -> Self {
+        Self::new(TieredStoreMetricsRecorder::noop())
+    }
+}
+
 impl TieredStoreMetrics {
+    pub fn new(recorder: TieredStoreMetricsRecorder) -> Self {
+        Self {
+            recorder,
+            dispatch_requests: AtomicU64::new(0),
+            dispatch_behind: AtomicU64::new(0),
+            commit_failures: AtomicU64::new(0),
+            fetch_requests: AtomicU64::new(0),
+            messages_dispatch_total: AtomicU64::new(0),
+            messages_out_total: AtomicU64::new(0),
+            get_message_fallback_total: AtomicU64::new(0),
+            provider_upload_bytes: AtomicU64::new(0),
+            provider_download_bytes: AtomicU64::new(0),
+            read_ahead_cache_access_total: AtomicU64::new(0),
+            read_ahead_cache_hit_total: AtomicU64::new(0),
+            read_ahead_cache_count: AtomicU64::new(0),
+            read_ahead_cache_bytes: AtomicU64::new(0),
+        }
+    }
+
+    pub fn recorder(&self) -> TieredStoreMetricsRecorder {
+        self.recorder.clone()
+    }
+
     pub fn record_dispatch_request(&self) {
         self.dispatch_requests.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_dispatch_queued(&self) {
+        self.record_dispatch_request();
+        self.dispatch_behind.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn record_dispatch_dequeued(&self) {
@@ -91,35 +296,47 @@ impl TieredStoreMetrics {
 
     pub fn record_messages_dispatch(&self, topic: &str, queue_id: i32, file_type: &str, count: u64) {
         self.messages_dispatch_total.fetch_add(count, Ordering::Relaxed);
-        record_messages_dispatch(topic, queue_id, file_type, count);
+        self.recorder
+            .record_messages_dispatch(topic, queue_id, file_type, count);
     }
 
     pub fn record_messages_out(&self, topic: &str, group: &str, count: u64) {
         self.messages_out_total.fetch_add(count, Ordering::Relaxed);
-        record_messages_out(topic, group, count);
+        self.recorder.record_messages_out(topic, group, count);
     }
 
     pub fn record_get_message_fallback(&self, topic: &str, group: &str) {
         self.get_message_fallback_total.fetch_add(1, Ordering::Relaxed);
-        record_get_message_fallback(topic, group);
+        self.recorder.record_get_message_fallback(topic, group);
     }
 
     pub fn record_dispatch_latency(&self, topic: &str, queue_id: i32, file_type: &str, latency_ms: u64) {
-        record_dispatch_latency(topic, queue_id, file_type, latency_ms);
+        self.recorder
+            .record_dispatch_latency(topic, queue_id, file_type, latency_ms);
     }
 
     pub fn record_api_latency(&self, operation: &str, success: bool, latency_ms: u64) {
-        record_api_latency(operation, success, latency_ms);
+        self.recorder.record_api_latency(operation, success, latency_ms);
     }
 
     pub fn record_read_ahead_cache_access(&self, success: bool, count: u64) {
         self.read_ahead_cache_access_total.fetch_add(count, Ordering::Relaxed);
-        record_read_ahead_cache_access(success, count);
+        self.recorder.record_read_ahead_cache_access(success, count);
     }
 
     pub fn record_read_ahead_cache_hit(&self, success: bool, count: u64) {
         self.read_ahead_cache_hit_total.fetch_add(count, Ordering::Relaxed);
-        record_read_ahead_cache_hit(success, count);
+        self.recorder.record_read_ahead_cache_hit(success, count);
+    }
+
+    pub fn record_provider_read(&self, path: &str, bytes: u64, success: bool, latency_ms: u64) {
+        self.provider_download_bytes.fetch_add(bytes, Ordering::Relaxed);
+        self.recorder.record_provider_read(path, bytes, success, latency_ms);
+    }
+
+    pub fn record_provider_write(&self, path: &str, bytes: u64, success: bool, latency_ms: u64) {
+        self.provider_upload_bytes.fetch_add(bytes, Ordering::Relaxed);
+        self.recorder.record_provider_write(path, bytes, success, latency_ms);
     }
 
     pub fn set_read_ahead_cache_gauges(&self, count: u64, bytes: u64) {
@@ -182,132 +399,8 @@ impl TieredStoreMetrics {
     }
 }
 
-pub fn record_dispatch_queued(metrics: &TieredStoreMetrics) {
-    metrics.record_dispatch_request();
-    metrics.dispatch_behind.fetch_add(1, Ordering::Relaxed);
-}
-
-pub fn record_provider_read(path: &str, bytes: u64, success: bool, latency_ms: u64) {
-    record_provider_download_bytes("read", success, path, bytes);
-    record_provider_rpc_latency("read", success, path, latency_ms);
-}
-
-pub fn record_provider_write(path: &str, bytes: u64, success: bool, latency_ms: u64) {
-    record_provider_upload_bytes("write", success, path, bytes);
-    record_provider_rpc_latency("write", success, path, latency_ms);
-}
-
-#[cfg(feature = "otel-metrics")]
-pub fn init_global(meter: &opentelemetry::metrics::Meter) -> bool {
-    init_global_with_observables(meter, TieredStoreObservableValues::default)
-}
-
-#[cfg(feature = "otel-metrics")]
-pub fn init_global_with_observables<F>(meter: &opentelemetry::metrics::Meter, source: F) -> bool
-where
-    F: Fn() -> TieredStoreObservableValues + Send + Sync + 'static,
-{
-    TIERED_STORE_METRICS
-        .set(TieredStoreOtelMetrics::new_with_observables(meter, source))
-        .is_ok()
-}
-
-#[cfg(feature = "otel-metrics")]
-fn global_metrics() -> &'static TieredStoreOtelMetrics {
-    if let Some(metrics) = TIERED_STORE_METRICS.get() {
-        return metrics;
-    }
-
-    TIERED_STORE_GLOBAL_METRICS.get_or_init(|| {
-        TieredStoreOtelMetrics::new_with_observables(
-            &opentelemetry::global::meter("rocketmq-tieredstore"),
-            TieredStoreObservableValues::default,
-        )
-    })
-}
-
-pub fn record_messages_dispatch(topic: &str, queue_id: i32, file_type: &str, count: u64) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record_messages_dispatch(count, &dispatch_attributes(topic, queue_id, file_type));
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = (topic, queue_id, file_type, count);
-}
-
-pub fn record_messages_out(topic: &str, group: &str, count: u64) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record_messages_out(count, &message_out_attributes(topic, group));
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = (topic, group, count);
-}
-
-pub fn record_get_message_fallback(topic: &str, group: &str) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record_get_message_fallback(1, &message_out_attributes(topic, group));
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = (topic, group);
-}
-
-pub fn record_provider_upload_bytes(operation: &str, success: bool, path: &str, bytes: u64) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record_provider_upload_bytes(bytes, &provider_attributes(operation, success, path));
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = (operation, success, path, bytes);
-}
-
-pub fn record_provider_download_bytes(operation: &str, success: bool, path: &str, bytes: u64) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record_provider_download_bytes(bytes, &provider_attributes(operation, success, path));
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = (operation, success, path, bytes);
-}
-
-pub fn record_provider_rpc_latency(operation: &str, success: bool, path: &str, latency_ms: u64) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record_provider_rpc_latency(latency_ms, &provider_attributes(operation, success, path));
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = (operation, success, path, latency_ms);
-}
-
-pub fn record_api_latency(operation: &str, success: bool, latency_ms: u64) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record_api_latency(latency_ms, &api_attributes(operation, success));
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = (operation, success, latency_ms);
-}
-
-pub fn record_dispatch_latency(topic: &str, queue_id: i32, file_type: &str, latency_ms: u64) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record_dispatch_latency(latency_ms, &dispatch_attributes(topic, queue_id, file_type));
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = (topic, queue_id, file_type, latency_ms);
-}
-
-pub fn record_read_ahead_cache_access(success: bool, count: u64) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record_read_ahead_cache_access(count, &cache_attributes(success));
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = (success, count);
-}
-
-pub fn record_read_ahead_cache_hit(success: bool, count: u64) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record_read_ahead_cache_hit(count, &cache_attributes(success));
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = (success, count);
-}
-
 #[cfg(not(feature = "otel-metrics"))]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct TieredStoreOtelMetrics;
 
 #[cfg(not(feature = "otel-metrics"))]
@@ -360,14 +453,20 @@ pub struct TieredStoreOtelMetrics {
     dispatch_latency: opentelemetry::metrics::Histogram<u64>,
     read_ahead_cache_access_total: opentelemetry::metrics::Counter<u64>,
     read_ahead_cache_hit_total: opentelemetry::metrics::Counter<u64>,
+    label_policy: crate::MetricLabelPolicy,
 }
 
 #[cfg(feature = "otel-metrics")]
 impl TieredStoreOtelMetrics {
-    pub fn new_with_observables<F>(meter: &opentelemetry::metrics::Meter, source: F) -> Self
-    where
-        F: Fn() -> TieredStoreObservableValues + Send + Sync + 'static,
-    {
+    #[cfg(test)]
+    pub(crate) fn new(meter: &opentelemetry::metrics::Meter) -> Self {
+        Self::new_with_label_policy(meter, crate::MetricLabelPolicy::default())
+    }
+
+    pub(crate) fn new_with_label_policy(
+        meter: &opentelemetry::metrics::Meter,
+        label_policy: crate::MetricLabelPolicy,
+    ) -> Self {
         let messages_dispatch_total = meter
             .u64_counter(TIERED_STORE_MESSAGES_DISPATCH_TOTAL)
             .with_description("Total number of messages dispatched to tiered store")
@@ -428,6 +527,38 @@ impl TieredStoreOtelMetrics {
             .with_unit("{hit}")
             .build();
 
+        Self {
+            messages_dispatch_total,
+            messages_out_total,
+            get_message_fallback_total,
+            provider_upload_bytes,
+            provider_download_bytes,
+            provider_rpc_latency,
+            api_latency,
+            dispatch_latency,
+            read_ahead_cache_access_total,
+            read_ahead_cache_hit_total,
+            label_policy,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_with_observables<F>(meter: &opentelemetry::metrics::Meter, source: F) -> Self
+    where
+        F: Fn() -> TieredStoreObservableValues + Send + Sync + 'static,
+    {
+        let metrics = Self::new(meter);
+        Self::register_observables_with_label_policy(meter, source, metrics.label_policy.clone());
+        metrics
+    }
+
+    pub(crate) fn register_observables_with_label_policy<F>(
+        meter: &opentelemetry::metrics::Meter,
+        source: F,
+        label_policy: crate::MetricLabelPolicy,
+    ) where
+        F: Fn() -> TieredStoreObservableValues + Send + Sync + 'static,
+    {
         let source = std::sync::Arc::new(source);
 
         let dispatch_behind_source = source.clone();
@@ -440,7 +571,7 @@ impl TieredStoreOtelMetrics {
                 for behind in values.dispatch_behind {
                     observer.observe(
                         behind.count.max(0),
-                        &dispatch_attributes(&behind.topic, behind.queue_id, &behind.file_type),
+                        &dispatch_attributes(&label_policy, &behind.topic, behind.queue_id, &behind.file_type),
                     );
                 }
             })
@@ -466,19 +597,6 @@ impl TieredStoreOtelMetrics {
                 observer.observe(values.read_ahead_cache_bytes.max(0), &[]);
             })
             .build();
-
-        Self {
-            messages_dispatch_total,
-            messages_out_total,
-            get_message_fallback_total,
-            provider_upload_bytes,
-            provider_download_bytes,
-            provider_rpc_latency,
-            api_latency,
-            dispatch_latency,
-            read_ahead_cache_access_total,
-            read_ahead_cache_hit_total,
-        }
     }
 
     #[inline]
@@ -533,45 +651,108 @@ impl TieredStoreOtelMetrics {
 }
 
 #[cfg(feature = "otel-metrics")]
-fn dispatch_attributes(topic: &str, queue_id: i32, file_type: &str) -> [opentelemetry::KeyValue; 3] {
+fn dispatch_attributes(
+    label_policy: &crate::MetricLabelPolicy,
+    topic: &str,
+    queue_id: i32,
+    file_type: &str,
+) -> [opentelemetry::KeyValue; 3] {
     [
-        opentelemetry::KeyValue::new(crate::semantic::labels::TOPIC, topic.to_owned()),
-        opentelemetry::KeyValue::new(crate::semantic::labels::QUEUE_ID, queue_id.to_string()),
-        opentelemetry::KeyValue::new(crate::semantic::labels::FILE_TYPE, file_type.to_owned()),
+        bounded_label(label_policy, crate::semantic::labels::TOPIC, topic),
+        opentelemetry::KeyValue::new(crate::semantic::labels::QUEUE_ID, i64::from(queue_id)),
+        opentelemetry::KeyValue::new(crate::semantic::labels::FILE_TYPE, file_type_class(file_type)),
     ]
 }
 
 #[cfg(feature = "otel-metrics")]
-fn message_out_attributes(topic: &str, group: &str) -> [opentelemetry::KeyValue; 2] {
+fn message_out_attributes(
+    label_policy: &crate::MetricLabelPolicy,
+    topic: &str,
+    group: &str,
+) -> [opentelemetry::KeyValue; 2] {
     [
-        opentelemetry::KeyValue::new(crate::semantic::labels::TOPIC, topic.to_owned()),
-        opentelemetry::KeyValue::new(crate::semantic::labels::GROUP, group.to_owned()),
+        bounded_label(label_policy, crate::semantic::labels::TOPIC, topic),
+        bounded_label(label_policy, crate::semantic::labels::GROUP, group),
     ]
+}
+
+#[cfg(feature = "otel-metrics")]
+#[inline]
+fn bounded_label(policy: &crate::MetricLabelPolicy, key: &'static str, value: &str) -> opentelemetry::KeyValue {
+    let (value, dropped) = policy.normalize_metric_label_with_outcome(key, value);
+    if dropped {
+        opentelemetry::KeyValue::new(key, crate::METRIC_LABEL_SENTINEL)
+    } else {
+        opentelemetry::KeyValue::new(key, value.into_owned())
+    }
 }
 
 #[cfg(feature = "otel-metrics")]
 fn provider_attributes(operation: &str, success: bool, path: &str) -> [opentelemetry::KeyValue; 3] {
     [
-        opentelemetry::KeyValue::new(crate::semantic::labels::OPERATION, operation.to_owned()),
-        opentelemetry::KeyValue::new(crate::semantic::labels::SUCCESS, success.to_string()),
-        opentelemetry::KeyValue::new(crate::semantic::labels::PATH, path.to_owned()),
+        opentelemetry::KeyValue::new(crate::semantic::labels::OPERATION, provider_operation_class(operation)),
+        opentelemetry::KeyValue::new(crate::semantic::labels::SUCCESS, success),
+        opentelemetry::KeyValue::new(crate::semantic::labels::FILE_TYPE, provider_path_class(path)),
     ]
+}
+
+#[cfg(feature = "otel-metrics")]
+fn provider_path_class(path: &str) -> &'static str {
+    if path.split(['/', '\\']).any(|component| component == "commitlog") {
+        "commitlog"
+    } else if path
+        .split(['/', '\\'])
+        .any(|component| matches!(component, "consumequeue" | "consume_queue"))
+    {
+        "consume_queue"
+    } else if path.split(['/', '\\']).any(|component| component == "index") {
+        "index"
+    } else {
+        "other"
+    }
 }
 
 #[cfg(feature = "otel-metrics")]
 fn api_attributes(operation: &str, success: bool) -> [opentelemetry::KeyValue; 2] {
     [
-        opentelemetry::KeyValue::new(crate::semantic::labels::OPERATION, operation.to_owned()),
-        opentelemetry::KeyValue::new(crate::semantic::labels::SUCCESS, success.to_string()),
+        opentelemetry::KeyValue::new(crate::semantic::labels::OPERATION, api_operation_class(operation)),
+        opentelemetry::KeyValue::new(crate::semantic::labels::SUCCESS, success),
     ]
 }
 
 #[cfg(feature = "otel-metrics")]
 fn cache_attributes(success: bool) -> [opentelemetry::KeyValue; 1] {
-    [opentelemetry::KeyValue::new(
-        crate::semantic::labels::SUCCESS,
-        success.to_string(),
-    )]
+    [opentelemetry::KeyValue::new(crate::semantic::labels::SUCCESS, success)]
+}
+
+#[cfg(feature = "otel-metrics")]
+fn provider_operation_class(operation: &str) -> &'static str {
+    match operation {
+        "read" => "read",
+        "write" => "write",
+        _ => "other",
+    }
+}
+
+#[cfg(feature = "otel-metrics")]
+fn api_operation_class(operation: &str) -> &'static str {
+    match operation {
+        "get_message" => "get_message",
+        "get_message_timestamp" => "get_message_timestamp",
+        "get_offset_by_time_with_boundary" => "get_offset_by_time_with_boundary",
+        "query_message" => "query_message",
+        _ => "other",
+    }
+}
+
+#[cfg(feature = "otel-metrics")]
+fn file_type_class(file_type: &str) -> &'static str {
+    match file_type {
+        "commitlog" => "commitlog",
+        "consumequeue" | "consume_queue" => "consume_queue",
+        "index" => "index",
+        _ => "other",
+    }
 }
 
 #[cfg(all(test, feature = "otel-metrics"))]
@@ -596,32 +777,71 @@ mod tests {
             read_ahead_cache_bytes: 1024,
         });
 
-        metrics.record_messages_dispatch(1, &dispatch_attributes("TopicA", 0, "commitlog"));
-        metrics.record_messages_out(2, &message_out_attributes("TopicA", "GroupA"));
-        metrics.record_get_message_fallback(1, &message_out_attributes("TopicA", "GroupA"));
+        metrics.record_messages_dispatch(1, &dispatch_attributes(&metrics.label_policy, "TopicA", 0, "commitlog"));
+        metrics.record_messages_out(2, &message_out_attributes(&metrics.label_policy, "TopicA", "GroupA"));
+        metrics.record_get_message_fallback(1, &message_out_attributes(&metrics.label_policy, "TopicA", "GroupA"));
         metrics.record_provider_upload_bytes(128, &provider_attributes("write", true, "TopicA/0/commitlog/0"));
         metrics.record_provider_download_bytes(64, &provider_attributes("read", true, "TopicA/0/commitlog/0"));
         metrics.record_provider_rpc_latency(5, &provider_attributes("read", true, "TopicA/0/commitlog/0"));
         metrics.record_api_latency(7, &api_attributes("get_message", true));
-        metrics.record_dispatch_latency(9, &dispatch_attributes("TopicA", 0, "commitlog"));
+        metrics.record_dispatch_latency(9, &dispatch_attributes(&metrics.label_policy, "TopicA", 0, "commitlog"));
         metrics.record_read_ahead_cache_access(1, &cache_attributes(true));
         metrics.record_read_ahead_cache_hit(1, &cache_attributes(true));
     }
 
     #[test]
-    fn tiered_store_global_recorders_lazy_initialize() {
-        record_messages_dispatch("TopicA", 0, "commitlog", 1);
-        record_messages_out("TopicA", "GroupA", 1);
-        record_get_message_fallback("TopicA", "GroupA");
-        record_provider_upload_bytes("write", true, "TopicA/0/commitlog/0", 1);
-        record_provider_download_bytes("read", true, "TopicA/0/commitlog/0", 1);
-        record_provider_rpc_latency("read", true, "TopicA/0/commitlog/0", 1);
-        record_api_latency("get_message", true, 1);
-        record_dispatch_latency("TopicA", 0, "commitlog", 1);
-        record_read_ahead_cache_access(true, 1);
-        record_read_ahead_cache_hit(true, 1);
+    fn noop_recorder_is_safe_and_disabled() {
+        let recorder = TieredStoreMetricsRecorder::noop();
 
-        assert!(TIERED_STORE_METRICS.get().is_some() || TIERED_STORE_GLOBAL_METRICS.get().is_some());
+        recorder.record_messages_dispatch("TopicA", 0, "commitlog", 1);
+        recorder.record_messages_out("TopicA", "GroupA", 1);
+        recorder.record_get_message_fallback("TopicA", "GroupA");
+        recorder.record_provider_read("TopicA/0/commitlog/0", 1, true, 1);
+        recorder.record_provider_write("TopicA/0/commitlog/0", 1, true, 1);
+        recorder.record_api_latency("get_message", true, 1);
+        recorder.record_dispatch_latency("TopicA", 0, "commitlog", 1);
+        recorder.record_read_ahead_cache_access(true, 1);
+        recorder.record_read_ahead_cache_hit(true, 1);
+
+        assert!(!recorder.is_enabled());
+    }
+
+    #[test]
+    fn provider_paths_aggregate_by_static_file_class() {
+        let first = provider_path_class("TopicA/0/commitlog/00000000000000000000");
+        let second = provider_path_class("TopicB/19/commitlog/00000000000098765432");
+        let consume_queue = provider_path_class(r"TopicC\7\consume_queue\123");
+
+        assert_eq!(first, "commitlog");
+        assert_eq!(second, first);
+        assert_eq!(consume_queue, "consume_queue");
+        assert_eq!(provider_path_class("TopicD/3/unknown/456"), "other");
+    }
+
+    #[test]
+    fn tiered_store_topic_and_group_attributes_use_the_bounded_policy() {
+        let policy = crate::MetricLabelPolicy::new(1, true, true);
+
+        assert_eq!(
+            dispatch_attributes(&policy, "TopicA", 0, "commitlog")[0]
+                .value
+                .to_string(),
+            "TopicA"
+        );
+        assert_eq!(
+            dispatch_attributes(&policy, "TopicB", 0, "commitlog")[0]
+                .value
+                .to_string(),
+            crate::METRIC_LABEL_SENTINEL
+        );
+        assert_eq!(
+            message_out_attributes(&policy, "TopicA", "GroupA")[1].value.to_string(),
+            "GroupA"
+        );
+        assert_eq!(
+            message_out_attributes(&policy, "TopicA", "GroupB")[1].value.to_string(),
+            crate::METRIC_LABEL_SENTINEL
+        );
     }
 }
 
@@ -633,7 +853,7 @@ mod runtime_tests {
     fn tiered_store_runtime_metrics_count_local_events() {
         let metrics = TieredStoreMetrics::default();
 
-        record_dispatch_queued(&metrics);
+        metrics.record_dispatch_queued();
         metrics.record_dispatch_dequeued();
         metrics.record_commit_failure();
         metrics.record_fetch_request();

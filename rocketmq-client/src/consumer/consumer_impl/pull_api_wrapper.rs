@@ -608,6 +608,7 @@ mod tests {
             "pull-wrapper-test",
             None,
             runtime.child("instance"),
+            runtime.telemetry_handle().clone(),
             runtime.pool().request_future_holder(),
         );
         PullAPIWrapper::new(client_instance, CheetahString::from_static_str("test-group"), false)

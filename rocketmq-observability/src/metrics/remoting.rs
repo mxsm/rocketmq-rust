@@ -17,10 +17,8 @@ pub use crate::semantic::metrics::TRANSPORT_NETWORK_BYTES;
 pub use crate::semantic::metrics::TRANSPORT_REQUESTS_TOTAL;
 pub use crate::semantic::metrics::TRANSPORT_REQUEST_LATENCY;
 
+use std::time::Duration;
 use std::time::Instant;
-
-#[cfg(feature = "otel-metrics")]
-use std::sync::OnceLock;
 
 const NO_RESPONSE_CODE: i32 = -1;
 const RESULT_ONEWAY: &str = "oneway";
@@ -29,49 +27,17 @@ const RESULT_CANCELED: &str = "cancelled";
 const RESULT_PROCESS_REQUEST_FAILED: &str = "process_request_failed";
 const RESULT_WRITE_CHANNEL_FAILED: &str = "write_channel_failed";
 
-#[cfg(feature = "otel-metrics")]
-static REMOTING_METRICS: OnceLock<RemotingMetrics> = OnceLock::new();
-
-#[cfg(feature = "otel-metrics")]
-pub fn init_global(meter: &opentelemetry::metrics::Meter) -> bool {
-    REMOTING_METRICS.set(RemotingMetrics::new(meter)).is_ok()
+#[inline]
+fn duration_millis_u64(duration: Duration) -> u64 {
+    duration.as_millis().min(u128::from(u64::MAX)) as u64
 }
 
-pub fn record_requests_total(count: u64) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = REMOTING_METRICS.get() {
-        metrics.record_requests_total(count, &[]);
-    }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = count;
-}
-
-pub fn record_request_latency(latency_ms: u64) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = REMOTING_METRICS.get() {
-        metrics.record_request_latency(latency_ms, &[]);
-    }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = latency_ms;
-}
-
-pub fn record_network_bytes(bytes: u64) {
-    if bytes == 0 {
-        return;
-    }
-
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = REMOTING_METRICS.get() {
-        metrics.record_network_bytes(bytes, &[]);
-    }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = bytes;
-}
-
+/// Records the metrics for one remoting request against one explicit telemetry runtime.
+///
+/// The guard records request volume and inbound bytes when it starts. Dropping it records request
+/// latency and, unless a terminal outcome was selected explicitly, one cancellation outcome.
 pub struct RequestMetricsGuard {
+    metrics: RemotingMetrics,
     start: Instant,
     request_code: i32,
     is_long_polling: bool,
@@ -80,11 +46,12 @@ pub struct RequestMetricsGuard {
 
 impl RequestMetricsGuard {
     #[inline]
-    pub fn start(request_code: i32, request_bytes: u64, is_long_polling: bool) -> Self {
-        record_requests_total(1);
-        record_network_bytes(request_bytes);
+    pub fn start(metrics: RemotingMetrics, request_code: i32, request_bytes: u64, is_long_polling: bool) -> Self {
+        metrics.record_requests_total(1);
+        metrics.record_network_bytes(request_bytes);
 
         Self {
+            metrics,
             start: Instant::now(),
             request_code,
             is_long_polling,
@@ -118,12 +85,12 @@ impl RequestMetricsGuard {
     }
 
     #[inline]
-    fn record_rpc_latency(&mut self, response_code: i32, result: &str) {
+    fn record_rpc_latency(&mut self, response_code: i32, result: &'static str) {
         if self.rpc_recorded {
             return;
         }
-        record_rpc_latency(
-            self.start.elapsed().as_millis() as u64,
+        self.metrics.record_rpc_latency(
+            duration_millis_u64(self.start.elapsed()),
             self.request_code,
             response_code,
             self.is_long_polling,
@@ -135,38 +102,30 @@ impl RequestMetricsGuard {
 
 impl Drop for RequestMetricsGuard {
     fn drop(&mut self) {
-        record_request_latency(self.start.elapsed().as_millis() as u64);
+        self.metrics
+            .record_request_latency(duration_millis_u64(self.start.elapsed()));
         if !self.rpc_recorded {
             self.complete_cancelled();
         }
     }
 }
 
-pub fn record_rpc_latency(latency_ms: u64, request_code: i32, response_code: i32, is_long_polling: bool, result: &str) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = REMOTING_METRICS.get() {
-        let attrs = [
-            opentelemetry::KeyValue::new(crate::semantic::labels::PROTOCOL_TYPE, "remoting"),
-            opentelemetry::KeyValue::new(crate::semantic::labels::REQUEST_CODE, request_code.to_string()),
-            opentelemetry::KeyValue::new(crate::semantic::labels::RESPONSE_CODE, response_code.to_string()),
-            opentelemetry::KeyValue::new(crate::semantic::labels::IS_LONG_POLLING, is_long_polling.to_string()),
-            opentelemetry::KeyValue::new(crate::semantic::labels::RESULT, result.to_owned()),
-        ];
-        metrics.record_rpc_latency(latency_ms, &attrs);
-    }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = (latency_ms, request_code, response_code, is_long_polling, result);
-}
-
 #[cfg(not(feature = "otel-metrics"))]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct RemotingMetrics;
 
 #[cfg(not(feature = "otel-metrics"))]
 impl RemotingMetrics {
-    pub fn noop() -> Self {
+    /// Creates an instance-scoped no-op recorder.
+    #[must_use]
+    pub const fn noop() -> Self {
         Self
+    }
+
+    /// Creates a no-op recorder without reading process-global OpenTelemetry state.
+    #[must_use]
+    pub fn from_handle(_telemetry: &crate::TelemetryHandle) -> Self {
+        Self::noop()
     }
 
     #[inline]
@@ -179,12 +138,27 @@ impl RemotingMetrics {
     pub fn record_network_bytes(&self, _bytes: u64) {}
 
     #[inline]
-    pub fn record_rpc_latency(&self, _latency_ms: u64, _attributes: &[()]) {}
+    pub fn record_rpc_latency(
+        &self,
+        _latency_ms: u64,
+        _request_code: i32,
+        _response_code: i32,
+        _is_long_polling: bool,
+        _result: &'static str,
+    ) {
+    }
+}
+
+#[cfg(feature = "otel-metrics")]
+#[derive(Clone, Default)]
+pub struct RemotingMetrics {
+    telemetry: Option<crate::TelemetryHandle>,
+    instruments: Option<RemotingMetricInstruments>,
 }
 
 #[cfg(feature = "otel-metrics")]
 #[derive(Clone)]
-pub struct RemotingMetrics {
+struct RemotingMetricInstruments {
     requests_total: opentelemetry::metrics::Counter<u64>,
     request_latency: opentelemetry::metrics::Histogram<u64>,
     network_bytes: opentelemetry::metrics::Counter<u64>,
@@ -193,7 +167,98 @@ pub struct RemotingMetrics {
 
 #[cfg(feature = "otel-metrics")]
 impl RemotingMetrics {
-    pub fn new(meter: &opentelemetry::metrics::Meter) -> Self {
+    /// Creates an instance-scoped recorder that never emits metrics.
+    #[must_use]
+    pub fn noop() -> Self {
+        Self::default()
+    }
+
+    /// Creates a recorder bound to the handle's fixed transport meter.
+    ///
+    /// A no-op, closing, or closed handle produces a no-op recorder. This method never reads the
+    /// process-global OpenTelemetry meter provider.
+    #[must_use]
+    pub fn from_handle(telemetry: &crate::TelemetryHandle) -> Self {
+        let Some(meter) = telemetry.meter(crate::TRANSPORT_METER_SCOPE) else {
+            return Self::noop();
+        };
+        Self {
+            telemetry: Some(telemetry.clone()),
+            instruments: Some(RemotingMetricInstruments::new(&meter)),
+        }
+    }
+
+    /// Creates a recorder from an explicitly supplied meter.
+    #[must_use]
+    #[cfg(test)]
+    pub(crate) fn new(meter: &opentelemetry::metrics::Meter) -> Self {
+        Self {
+            telemetry: None,
+            instruments: Some(RemotingMetricInstruments::new(meter)),
+        }
+    }
+
+    #[inline]
+    fn is_active(&self) -> bool {
+        self.telemetry.as_ref().is_none_or(crate::TelemetryHandle::is_active)
+    }
+
+    #[inline]
+    pub fn record_requests_total(&self, count: u64) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.requests_total.add(count, &[]);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn record_request_latency(&self, latency_ms: u64) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.request_latency.record(latency_ms, &[]);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn record_network_bytes(&self, bytes: u64) {
+        if bytes != 0 && self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.network_bytes.add(bytes, &[]);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn record_rpc_latency(
+        &self,
+        latency_ms: u64,
+        request_code: i32,
+        response_code: i32,
+        is_long_polling: bool,
+        result: &'static str,
+    ) {
+        if !self.is_active() {
+            return;
+        }
+        let Some(instruments) = &self.instruments else {
+            return;
+        };
+        let attributes = [
+            opentelemetry::KeyValue::new(crate::semantic::labels::PROTOCOL_TYPE, "remoting"),
+            opentelemetry::KeyValue::new(crate::semantic::labels::REQUEST_CODE, i64::from(request_code)),
+            opentelemetry::KeyValue::new(crate::semantic::labels::RESPONSE_CODE, i64::from(response_code)),
+            opentelemetry::KeyValue::new(crate::semantic::labels::IS_LONG_POLLING, is_long_polling),
+            opentelemetry::KeyValue::new(crate::semantic::labels::RESULT, result),
+        ];
+        instruments.rpc_latency.record(latency_ms, &attributes);
+    }
+}
+
+#[cfg(feature = "otel-metrics")]
+impl RemotingMetricInstruments {
+    fn new(meter: &opentelemetry::metrics::Meter) -> Self {
         let requests_total = meter
             .u64_counter(TRANSPORT_REQUESTS_TOTAL)
             .with_description("Total number of remoting requests")
@@ -225,53 +290,43 @@ impl RemotingMetrics {
             rpc_latency,
         }
     }
-
-    #[inline]
-    pub fn record_requests_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.requests_total.add(count, attributes);
-    }
-
-    #[inline]
-    pub fn record_request_latency(&self, latency_ms: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.request_latency.record(latency_ms, attributes);
-    }
-
-    #[inline]
-    pub fn record_network_bytes(&self, bytes: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.network_bytes.add(bytes, attributes);
-    }
-
-    #[inline]
-    pub fn record_rpc_latency(&self, latency_ms: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.rpc_latency.record(latency_ms, attributes);
-    }
 }
 
-#[cfg(all(test, feature = "otel-metrics"))]
+#[cfg(test)]
 mod tests {
-    use opentelemetry::metrics::MeterProvider;
-    use opentelemetry_sdk::metrics::SdkMeterProvider;
-
     use super::*;
 
     #[test]
-    fn remoting_metrics_constructs_and_records() {
-        let provider = SdkMeterProvider::builder().build();
-        let meter = provider.meter("remoting-metrics-test");
-        let metrics = RemotingMetrics::new(&meter);
-        let attrs = [opentelemetry::KeyValue::new("request_code", "10")];
+    fn noop_request_metrics_guard_accepts_each_terminal_outcome_once() {
+        let metrics = RemotingMetrics::from_handle(&crate::TelemetryHandle::noop());
 
-        metrics.record_requests_total(1, &attrs);
-        metrics.record_request_latency(3, &attrs);
-        metrics.record_network_bytes(256, &attrs);
-        metrics.record_rpc_latency(5, &attrs);
-        record_rpc_latency(5, 10, 0, false, "success");
+        let mut success = RequestMetricsGuard::start(metrics.clone(), 10, 128, false);
+        success.complete_response(0);
+        success.complete_cancelled();
+
+        let mut process_failure = RequestMetricsGuard::start(metrics.clone(), 11, 64, true);
+        process_failure.complete_process_request_failed(1);
+        process_failure.complete_response(0);
+
+        let mut write_failure = RequestMetricsGuard::start(metrics.clone(), 12, 32, false);
+        write_failure.complete_write_channel_failed(2);
+        write_failure.complete_oneway();
+
+        drop(RequestMetricsGuard::start(metrics, 13, 16, false));
     }
 
+    #[cfg(feature = "otel-metrics")]
     #[test]
-    fn request_metrics_guard_records_completion_once() {
-        let mut guard = RequestMetricsGuard::start(10, 128, false);
-        guard.complete_response(0);
-        guard.complete_cancelled();
+    fn remoting_metrics_constructs_and_records() {
+        use opentelemetry::metrics::MeterProvider;
+
+        let provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder().build();
+        let meter = provider.meter("remoting-metrics-test");
+        let metrics = RemotingMetrics::new(&meter);
+
+        metrics.record_requests_total(1);
+        metrics.record_request_latency(3);
+        metrics.record_network_bytes(256);
+        metrics.record_rpc_latency(5, 10, 0, false, RESULT_SUCCESS);
     }
 }

@@ -45,6 +45,7 @@ use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::mix_all;
 use rocketmq_model::common::mix_all::MASTER_ID;
+use rocketmq_observability::TelemetryHandle;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
@@ -322,7 +323,7 @@ where
     }
 
     if created {
-        TopicConfigManager::record_topic_create_latency(start_time);
+        coordinator.manager().record_topic_create_latency(start_time);
     }
     topic_config
 }
@@ -800,6 +801,11 @@ pub(crate) struct BrokerRuntimeState<MS: MessageStore> {
     controller_state: BrokerControllerState,
     broker_fast_failure: BrokerFastFailure,
     log_filter_control: Option<Arc<crate::broker::log_filter_control::BrokerLogFilterControl>>,
+    telemetry_handle: TelemetryHandle,
+    transport_telemetry: rocketmq_transport::TransportTelemetry,
+    store_telemetry: rocketmq_store::StoreTelemetry,
+    broker_metrics_manager: Option<Arc<crate::metrics::broker_metrics_manager::BrokerMetricsManager>>,
+    pop_metrics_manager: Option<Arc<crate::metrics::pop_metrics_manager::PopMetricsManager>>,
     observability_guard: Option<rocketmq_observability::TelemetryRuntimeGuard>,
     #[cfg(feature = "otel-metrics")]
     observability_metrics_initialized: bool,

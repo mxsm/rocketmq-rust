@@ -17,6 +17,7 @@ mod config;
 mod error;
 mod exporter;
 mod exporter_types;
+mod handle;
 mod init;
 mod log_filter;
 mod logging;
@@ -50,27 +51,26 @@ pub use config::TraceExporter;
 pub use config::TracesConfig;
 pub use error::ObservabilityError;
 pub use exporter::outage::*;
-#[cfg(feature = "prometheus")]
-pub use exporter::prometheus::init_prometheus_meter_provider;
-#[cfg(feature = "prometheus")]
-pub use exporter::prometheus::init_prometheus_metrics;
-#[cfg(feature = "prometheus")]
-pub use exporter::prometheus::render_prometheus_metrics;
-#[cfg(feature = "prometheus")]
-pub use exporter::prometheus::spawn_prometheus_http_endpoint;
-#[cfg(feature = "prometheus")]
-pub use exporter::prometheus::spawn_prometheus_http_endpoint_with_task_group;
-#[cfg(feature = "prometheus")]
-pub use exporter::prometheus::PrometheusHttpHandle;
-#[cfg(feature = "prometheus")]
-pub use exporter::prometheus::PrometheusMetrics;
 pub use exporter_types::LogExporterType;
 pub use exporter_types::MetricsExporterType;
 pub use exporter_types::TraceExporterType;
-pub use init::init_observability;
 #[cfg(feature = "otel-metrics")]
-pub use init::meter;
-pub use init::TelemetryGuard;
+pub use handle::ReleaseIdentityRegistrationError;
+pub use handle::TelemetryHandle;
+pub use handle::TelemetryRecorder;
+pub use handle::TelemetryState;
+pub use handle::TracePolicy;
+pub use handle::BROKER_METER_SCOPE;
+pub use handle::CLIENT_METER_SCOPE;
+pub use handle::CONTROLLER_METER_SCOPE;
+pub use handle::MCP_METER_SCOPE;
+pub use handle::NAMESRV_METER_SCOPE;
+pub use handle::PROXY_METER_SCOPE;
+pub use handle::STORE_METER_SCOPE;
+pub use handle::TIERED_STORE_METER_SCOPE;
+pub use handle::TRANSPORT_METER_SCOPE;
+pub use init::init_observability;
+pub use init::init_observability_with_service_context;
 pub use log_filter::read_rust_log;
 pub use log_filter::LogFilterHandle;
 pub use log_filter::LogFilterInputs;
@@ -83,33 +83,24 @@ pub use log_filter::ResolvedLogFilter;
 pub use log_filter::DEFAULT_LOG_FILTER;
 pub use logging::install_global;
 pub use logging::install_global_with_filter;
+pub use logging::install_global_with_filter_and_service_context;
+pub use logging::install_global_with_service_context;
 pub use logging::FileLogLayer;
 pub use logging::LoggingGuard;
 pub use logging::TelemetryRuntimeGuard;
 pub use logging::TelemetryShutdownReport;
-#[cfg(feature = "otel-traces")]
-pub use propagation::add_current_span_event;
+pub use metrics::labels::MetricLabelPolicy;
+pub use metrics::labels::METRIC_LABEL_SENTINEL;
 #[cfg(feature = "otel-traces")]
 pub use propagation::add_current_span_event_with_status;
 #[cfg(feature = "otel-traces")]
-pub use propagation::extract_context;
+pub use propagation::extract_context_with_handle;
 #[cfg(feature = "otel-traces")]
-pub use propagation::inject_current_context;
+pub use propagation::inject_current_context_with_handle;
 #[cfg(feature = "otel-traces")]
-pub use propagation::install_trace_context_propagators;
+pub use propagation::record_span_parent_assignment_error;
 #[cfg(feature = "otel-traces")]
-pub use propagation::is_context_propagation_enabled;
-#[cfg(feature = "otel-traces")]
-pub use propagation::set_context_propagation_enabled;
-#[cfg(feature = "otel-traces")]
-pub use propagation::set_current_span_parent_from_properties;
-#[cfg(feature = "otel-traces")]
-pub use propagation::set_span_parent_from_properties;
-#[cfg(feature = "otel-traces")]
-pub use propagation::MessagePropertyExtractor;
-#[cfg(feature = "otel-traces")]
-pub use propagation::MessagePropertyInjector;
-pub use propagation::BAGGAGE;
+pub use propagation::set_span_parent_from_properties_with_handle;
 pub use propagation::TRACEPARENT;
 pub use propagation::TRACESTATE;
 pub use sampling::SamplingGate;
@@ -121,6 +112,7 @@ pub mod bench_support {
     use std::time::Instant;
 
     use opentelemetry::metrics::MeterProvider;
+    use rocketmq_runtime::ChildServiceContext;
     use rocketmq_runtime::ShutdownReport;
     use serde::Serialize;
     use tokio::io::AsyncReadExt;
@@ -142,7 +134,7 @@ pub mod bench_support {
         pub healthy: bool,
     }
 
-    pub async fn run_prometheus_lifecycle_probe() -> PrometheusLifecycleProbe {
+    pub async fn run_prometheus_lifecycle_probe(service_context: ChildServiceContext) -> PrometheusLifecycleProbe {
         let mut config = ObservabilityConfig {
             enabled: true,
             ..ObservabilityConfig::default()
@@ -159,9 +151,12 @@ pub mod bench_support {
         let counter = meter.u64_counter("rocketmq_observability_lifecycle_total").build();
         counter.add(1, &[]);
 
-        let handle =
-            crate::exporter::prometheus::spawn_prometheus_http_endpoint(&config, prometheus.registry().clone())
-                .expect("prometheus HTTP endpoint should start");
+        let handle = crate::exporter::prometheus::spawn_prometheus_http_endpoint_with_task_group(
+            &config,
+            prometheus.registry().clone(),
+            service_context.task_group().clone(),
+        )
+        .expect("prometheus HTTP endpoint should start");
         let task_count_before_scrape = handle.task_count();
 
         let response = scrape_metrics(handle.local_addr(), config.prometheus.path.as_str()).await;
@@ -173,10 +168,12 @@ pub mod bench_support {
         let shutdown_started_at = Instant::now();
         let shutdown_report = handle.shutdown_gracefully(Duration::from_secs(5)).await;
         let shutdown_elapsed_us = shutdown_started_at.elapsed().as_micros();
+        let parent_report = service_context.task_group().shutdown(Duration::from_secs(1)).await;
         let finished_accept_tasks = shutdown_report.completed + shutdown_report.cancelled;
         let healthy = response_status_ok
             && response_contains_metric
             && shutdown_report.is_healthy()
+            && parent_report.is_healthy()
             && finished_accept_tasks >= 1
             && shutdown_report.leaked == 0
             && shutdown_report.timed_out == 0
@@ -216,7 +213,9 @@ pub mod bench_support {
 mod bench_support_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn prometheus_lifecycle_probe_reports_clean_shutdown() {
-        let probe = super::bench_support::run_prometheus_lifecycle_probe().await;
+        let runtime = rocketmq_runtime::RuntimeContext::from_current("prometheus-lifecycle-test");
+        let probe =
+            super::bench_support::run_prometheus_lifecycle_probe(runtime.service_context("prometheus-probe")).await;
 
         assert!(probe.healthy, "{probe:?}");
         assert!(probe.response_status_ok, "{probe:?}");

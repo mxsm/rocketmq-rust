@@ -236,6 +236,7 @@ mod tests {
         let app = McpApp::new(
             McpConfig::load(example_config_path()).unwrap(),
             owner.root_context().child("mcp-app"),
+            rocketmq_observability::TelemetryHandle::noop(),
         )
         .unwrap();
         let server = RocketmqMcpServer::new(app);

@@ -1179,6 +1179,7 @@ pub async fn run_pull_message_service_lifecycle_probe(
         "pull-message-service-probe",
         None,
         client_runtime.child("pull-message-service-probe"),
+        client_runtime.telemetry_handle().clone(),
         client_runtime.pool().request_future_holder(),
     );
 
@@ -1341,6 +1342,7 @@ mod tests {
             "pull-message-mismatch-test",
             None,
             runtime.child("instance"),
+            runtime.telemetry_handle().clone(),
             runtime.pool().request_future_holder(),
         );
 

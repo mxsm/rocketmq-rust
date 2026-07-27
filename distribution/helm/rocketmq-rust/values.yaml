@@ -11,6 +11,31 @@ global:
     runAsGroup: 10001
     fsGroup: 10001
 
+releaseIdentity:
+  # Required: exact non-zero 40-character source revision embedded in all five images.
+  commit: ""
+  # Required: stable 1..=63 character lowercase identifier for this rollout.
+  nonce: ""
+
+metrics:
+  enabled: true
+  port: 5557
+  path: /metrics
+  service:
+    enabled: true
+  serviceMonitor:
+    enabled: false
+    # Durations use positive whole seconds or minutes, with at most nine digits.
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+  networkPolicy:
+    enabled: true
+    scraperNamespaceLabels:
+      rocketmq.apache.org/observability: "true"
+    scraperPodLabels:
+      app.kubernetes.io/name: prometheus
+
 namespace:
   create: true
 

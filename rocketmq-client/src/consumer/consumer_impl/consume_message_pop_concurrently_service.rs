@@ -29,6 +29,8 @@ use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::message::MessageConst;
 use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::mix_all;
+use rocketmq_observability::metrics::client::ClientMetrics;
+use rocketmq_observability::TelemetryHandle;
 use rocketmq_protocol::protocol::body::cm_result::CMResult;
 use rocketmq_protocol::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_protocol::protocol::header::extra_info_util::ExtraInfoUtil;
@@ -84,6 +86,8 @@ fn spawn_tracked_pop_concurrent_task<F>(
 
 pub struct ConsumeMessagePopConcurrentlyService {
     service_context: ChildServiceContext,
+    telemetry_handle: TelemetryHandle,
+    client_metrics: ClientMetrics,
     pub(crate) default_mqpush_consumer_impl: Option<Weak<DefaultMQPushConsumerImpl>>,
     pub(crate) client_config: Arc<ClientConfig>,
     pub(crate) consumer_config: Arc<ConsumerConfig>,
@@ -101,6 +105,8 @@ pub struct ConsumeMessagePopConcurrentlyService {
 impl ConsumeMessagePopConcurrentlyService {
     pub fn new(
         service_context: ChildServiceContext,
+        telemetry_handle: TelemetryHandle,
+        client_metrics: ClientMetrics,
         client_config: Arc<ClientConfig>,
         consumer_config: Arc<ConsumerConfig>,
         consumer_group: CheetahString,
@@ -110,6 +116,8 @@ impl ConsumeMessagePopConcurrentlyService {
         let consume_thread = consumer_config.consume_thread_min;
         Self {
             service_context,
+            telemetry_handle,
+            client_metrics,
             default_mqpush_consumer_impl,
             client_config,
             consumer_config,
@@ -235,13 +243,15 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
         let listener = self.message_listener.clone();
         let msgs_cloned: Vec<MessageExt> = msgs.iter().map(|m| m.as_ref().clone()).collect();
         let group_for_span = self.consumer_group.clone();
+        let telemetry_handle = self.telemetry_handle.clone();
         let status_result = spawn_client_blocking_io_with_context(
             &self.service_context,
             "client.pop_concurrent.consume_direct",
             move || {
                 let msgs_refs: Vec<&MessageExt> = msgs_cloned.iter().collect();
                 let process_span = crate::consumer::consumer_impl::observability::consumer_process_span(
-                    msgs_refs.first().copied(),
+                    &telemetry_handle,
+                    msgs_refs.iter().copied(),
                     msgs_refs.len(),
                     group_for_span.as_str(),
                     &context.message_queue,
@@ -280,7 +290,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
         )
         .await;
         let consume_rt = begin_timestamp.elapsed().as_millis() as u64;
-        rocketmq_observability::metrics::client::record_consume(1, consume_rt);
+        self.client_metrics.record_consume(1, consume_rt);
 
         let mut result = ConsumeMessageDirectlyResult::default();
         result.set_order(false);
@@ -746,7 +756,8 @@ impl ConsumeRequest {
         let listener = self.message_listener.clone();
         let msgs_cloned: Vec<MessageExt> = self.msgs.iter().map(|m| m.as_ref().clone()).collect();
         let process_span = crate::consumer::consumer_impl::observability::consumer_process_span(
-            msgs_cloned.first(),
+            &consume_message_concurrently_service.telemetry_handle,
+            msgs_cloned.iter(),
             msgs_cloned.len(),
             self.consumer_group.as_str(),
             &self.message_queue,
@@ -802,7 +813,9 @@ impl ConsumeRequest {
             }
         };
         let consume_rt = begin_timestamp.elapsed().as_millis() as u64;
-        rocketmq_observability::metrics::client::record_consume(self.msgs.len(), consume_rt);
+        consume_message_concurrently_service
+            .client_metrics
+            .record_consume(self.msgs.len(), consume_rt);
         let return_type = classify_pop_consume_return_type(status, has_exception, consume_rt, self.invisible_time);
 
         if default_mqpush_consumer_impl.has_hook() {
@@ -959,6 +972,8 @@ mod tests {
     fn new_service(default_impl: Option<Arc<DefaultMQPushConsumerImpl>>) -> ConsumeMessagePopConcurrentlyService {
         ConsumeMessagePopConcurrentlyService::new(
             test_context(),
+            TelemetryHandle::noop(),
+            ClientMetrics::noop(),
             Arc::new(ClientConfig::default()),
             Arc::new(ConsumerConfig::default()),
             consumer_group(),
@@ -970,6 +985,8 @@ mod tests {
     fn new_service_with_config(consumer_config: ConsumerConfig) -> ConsumeMessagePopConcurrentlyService {
         ConsumeMessagePopConcurrentlyService::new(
             test_context(),
+            TelemetryHandle::noop(),
+            ClientMetrics::noop(),
             Arc::new(ClientConfig::default()),
             Arc::new(consumer_config),
             consumer_group(),

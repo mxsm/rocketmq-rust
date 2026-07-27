@@ -139,6 +139,7 @@ pub mod metrics {
     pub const LOG_FILTER_AUTO_RESTORE_FAILURE_TOTAL: &str =
         "rocketmq_observability_log_filter_auto_restore_failure_total";
     pub const LOG_FILTER_ROLLBACK_FAILURE_TOTAL: &str = "rocketmq_observability_log_filter_rollback_failure_total";
+    pub const RELEASE_INFO: &str = "rocketmq_release_info";
 }
 
 pub mod labels {
@@ -191,6 +192,8 @@ pub mod labels {
     pub const LABEL_KEY: &str = "label_key";
     pub const SERVICE: &str = "service";
     pub const SOURCE: &str = "source";
+    pub const RELEASE_COMMIT: &str = "release_commit";
+    pub const RELEASE_NONCE: &str = "release_nonce";
 }
 
 /// Stable event identifiers consumed by structured-log exporters and guards.
@@ -207,7 +210,6 @@ pub mod events {
 pub mod trace {
     pub const TRACEPARENT: &str = "traceparent";
     pub const TRACESTATE: &str = "tracestate";
-    pub const BAGGAGE: &str = "baggage";
     pub const MESSAGING_MESSAGE_ID: &str = "messaging.message.id";
     pub const MESSAGING_MESSAGE_BODY_SIZE: &str = "messaging.message.body.size";
     pub const MESSAGING_ROCKETMQ_MESSAGE_KEYS: &str = "messaging.rocketmq.message.keys";

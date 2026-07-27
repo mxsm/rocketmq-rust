@@ -100,7 +100,12 @@ async fn main() -> Result<()> {
         
         let runtime = rocketmq_runtime::RuntimeContext::from_current("controller-cli-example");
         let controller = Arc::new(
-            ControllerManager::new(config, runtime.service_context("controller")).await?
+            ControllerManager::new(
+                config,
+                runtime.service_context("controller"),
+                rocketmq_observability::TelemetryHandle::noop(),
+            )
+            .await?
         );
         controller.initialize().await?;
         controller.start().await?;

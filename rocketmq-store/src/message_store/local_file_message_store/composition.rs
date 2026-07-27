@@ -46,6 +46,26 @@ impl LocalFileMessageStore {
         notify_message_arrive_in_batch: bool,
         service_context: ChildServiceContext,
     ) -> Result<Self, StoreError> {
+        Self::try_new_with_telemetry(
+            message_store_config,
+            broker_config,
+            topic_config_table,
+            broker_stats_manager,
+            notify_message_arrive_in_batch,
+            service_context,
+            crate::telemetry::StoreTelemetry::noop(),
+        )
+    }
+
+    pub fn try_new_with_telemetry(
+        message_store_config: Arc<MessageStoreConfig>,
+        broker_config: Arc<StoreRuntimeConfig>,
+        topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
+        broker_stats_manager: Option<Arc<BrokerStatsManager>>,
+        notify_message_arrive_in_batch: bool,
+        service_context: ChildServiceContext,
+        telemetry: crate::telemetry::StoreTelemetry,
+    ) -> Result<Self, StoreError> {
         let runtime_scope = StoreRuntimeScope::new(service_context.clone());
         let local_backend_config = message_store_config.normalized_local_backend_config();
         let cleanup_policy = LocalCleanupPolicy::new(local_backend_config.cleanup);
@@ -100,6 +120,14 @@ impl LocalFileMessageStore {
         let mut dispatcher = CommitLogDispatcherDefault::with_dispatchers(dispatcher_vec);
 
         let memory_lock_budget_bytes = Self::effective_linux_memory_lock_budget_bytes(message_store_config.as_ref());
+        #[cfg(feature = "observability")]
+        let transient_store_pool = TransientStorePool::new_with_memory_lock_budget_and_store_metrics(
+            message_store_config.transient_store_pool_size,
+            message_store_config.mapped_file_size_commit_log,
+            memory_lock_budget_bytes,
+            telemetry.store().clone(),
+        );
+        #[cfg(not(feature = "observability"))]
         let transient_store_pool = TransientStorePool::new_with_memory_lock_budget(
             message_store_config.transient_store_pool_size,
             message_store_config.mapped_file_size_commit_log,
@@ -108,12 +136,15 @@ impl LocalFileMessageStore {
         let transient_store_pool_enable = message_store_config.transient_store_pool_enable
             && (broker_config.enable_controller_mode || message_store_config.broker_role != BrokerRole::Slave);
         let allocate_transient_store_pool = transient_store_pool_enable.then(|| Arc::new(transient_store_pool.clone()));
-        let allocate_mapped_file_service = Arc::new(AllocateMappedFileService::new_with_message_store_config(
+        let allocate_mapped_file_service = AllocateMappedFileService::new_with_message_store_config(
             allocate_transient_store_pool,
             transient_store_pool_enable,
             message_store_config.fast_fail_if_no_buffer_in_store_pool,
             message_store_config.as_ref(),
-        ));
+        );
+        #[cfg(feature = "observability")]
+        let allocate_mapped_file_service = allocate_mapped_file_service.with_store_metrics(telemetry.store().clone());
+        let allocate_mapped_file_service = Arc::new(allocate_mapped_file_service);
 
         let store_context = CommitLogStoreContext::new(
             running_flags.clone(),
@@ -134,6 +165,8 @@ impl LocalFileMessageStore {
             topic_config_table.clone(),
             consume_queue_store.clone(),
             (*allocate_mapped_file_service).clone(),
+            telemetry.handle().clone(),
+            telemetry.store().clone(),
         )?;
         commit_log.set_store_health_recorder(store_health_recorder.clone());
         let commit_log_read = commit_log.read_handle();
@@ -156,7 +189,12 @@ impl LocalFileMessageStore {
                 .and_then(|result| result.get_bytes())
         });
         #[cfg(feature = "tieredstore")]
-        let tiered_store = Self::build_tiered_store(message_store_config.clone(), commit_log_read, &mut dispatcher)?;
+        let tiered_store = Self::build_tiered_store(
+            message_store_config.clone(),
+            commit_log_read,
+            &mut dispatcher,
+            telemetry.tiered_store().clone(),
+        )?;
         #[cfg(feature = "tieredstore")]
         let minimum_pinned_wal_segment = tiered_store.as_ref().map(|tiered_store| {
             let tiered_store = tiered_store.clone();
@@ -178,6 +216,7 @@ impl LocalFileMessageStore {
         });
         Ok(Self {
             runtime_scope: runtime_scope.clone(),
+            telemetry,
             message_store_config: message_store_config.clone(),
             store_runtime_state,
             composition: LocalStoreComposition::new(local_backend_config),
@@ -270,6 +309,7 @@ impl LocalFileMessageStore {
         message_store_config: Arc<MessageStoreConfig>,
         commit_log: CommitLogReadHandle,
         dispatcher: &mut CommitLogDispatcherDefault,
+        metrics: rocketmq_observability::metrics::tiered_store::TieredStoreMetricsRecorder,
     ) -> Result<Option<Arc<TieredStoreDecorator>>, StoreError> {
         let Some(tiered_store_config) = message_store_config.tiered_store_config.clone() else {
             return Ok(None);
@@ -278,7 +318,7 @@ impl LocalFileMessageStore {
             return Ok(None);
         }
 
-        let tiered_store = Arc::new(TieredStoreDecorator::new(tiered_store_config)?);
+        let tiered_store = Arc::new(TieredStoreDecorator::new_with_metrics(tiered_store_config, metrics)?);
         let commit_log_for_dispatch = commit_log;
         let body_resolver = Arc::new(move |request: &DispatchRequest| -> Option<Bytes> {
             resolve_tiered_dispatch_body_with_reader(&commit_log_for_dispatch, request)
@@ -403,6 +443,8 @@ impl LocalFileMessageStore {
                 self.timer_store_context(),
                 Arc::clone(&self.message_store_config),
                 self.runtime_scope.clone(),
+                self.telemetry.timer().clone(),
+                self.telemetry.store().clone(),
             ));
             self.set_timer_message_store(timer_message_store);
         }
@@ -413,14 +455,21 @@ impl LocalFileMessageStore {
             self.pending_ha_service = Some(if self.message_store_config.enable_controller_mode {
                 PendingHAService::AutoSwitch(
                     crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService::new(
-                        crate::ha::default_ha_service::DefaultHAService::new(replica_store, self.runtime_scope.clone()),
+                        crate::ha::default_ha_service::DefaultHAService::new_with_store_metrics(
+                            replica_store,
+                            self.runtime_scope.clone(),
+                            self.telemetry.store().clone(),
+                        ),
                     ),
                 )
             } else {
-                PendingHAService::Default(Box::new(crate::ha::default_ha_service::DefaultHAService::new(
-                    replica_store,
-                    self.runtime_scope.clone(),
-                )))
+                PendingHAService::Default(Box::new(
+                    crate::ha::default_ha_service::DefaultHAService::new_with_store_metrics(
+                        replica_store,
+                        self.runtime_scope.clone(),
+                        self.telemetry.store().clone(),
+                    ),
+                ))
             });
         }
         self.root_dependencies_wired = true;

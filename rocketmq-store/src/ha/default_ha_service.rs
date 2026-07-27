@@ -374,11 +374,28 @@ pub struct DefaultHAService {
 
 impl DefaultHAService {
     pub(crate) fn new(replica_store: HAReplicaStoreHandle, runtime_scope: crate::runtime::StoreRuntimeScope) -> Self {
+        Self::new_with_store_metrics(
+            replica_store,
+            runtime_scope,
+            rocketmq_observability::metrics::store::StoreMetricsRecorder::noop(),
+        )
+    }
+
+    pub(crate) fn new_with_store_metrics(
+        replica_store: HAReplicaStoreHandle,
+        runtime_scope: crate::runtime::StoreRuntimeScope,
+        store_metrics: rocketmq_observability::metrics::store::StoreMetricsRecorder,
+    ) -> Self {
         let connection_count = Arc::new(AtomicU32::new(0));
         let connections = Arc::new(Mutex::new(HashMap::new()));
         let wait_notify_object = Arc::new(Notify::new());
         let replication_progress = Arc::new(ReplicationProgress::default());
+        #[cfg(feature = "observability")]
+        let ha_transfer_metrics = Arc::new(HaTransferMetrics::with_store_metrics(store_metrics));
+        #[cfg(not(feature = "observability"))]
         let ha_transfer_metrics = Arc::new(HaTransferMetrics::default());
+        #[cfg(not(feature = "observability"))]
+        let _ = store_metrics;
         let connection_context = DefaultHAConnectionContext::new(
             connection_count.clone(),
             &connections,

@@ -66,10 +66,6 @@ pub fn main() -> RocketMQResult<()> {
 }
 
 async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> RocketMQResult<()> {
-    // Initialize logger
-    let telemetry_guard =
-        rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())
-            .expect("telemetry logging bootstrap should initialize");
     // Create a push consumer with cluster mode
     let builder = DefaultMQPushConsumer::builder(client_runtime.clone());
 
@@ -134,11 +130,6 @@ async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>
     consumer.shutdown().await;
 
     info!("Cluster consumer shutdown completed.");
-
-    telemetry_guard
-        .shutdown()
-        .into_result()
-        .expect("telemetry logging shutdown should succeed");
 
     Ok(())
 }

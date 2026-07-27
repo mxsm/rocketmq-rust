@@ -23,10 +23,6 @@ use crate::guard::Guard;
 use rocketmq_admin_core::client_adapter::ClientRuntime;
 use rocketmq_admin_core::client_adapter::ClientRuntimeConfig;
 
-static LEGACY_TELEMETRY_GUARD: std::sync::OnceLock<
-    std::sync::Mutex<Option<rocketmq_observability::TelemetryRuntimeGuard>>,
-> = std::sync::OnceLock::new();
-
 #[derive(Debug, Clone)]
 pub struct McpShutdownReport {
     pub audit: AuditDrainReport,
@@ -94,12 +90,14 @@ impl McpApp {
     pub fn new(
         config: McpConfig,
         service_context: rocketmq_runtime::ChildServiceContext,
+        telemetry_handle: rocketmq_observability::TelemetryHandle,
     ) -> Result<Self, crate::error::McpError> {
         let guard = Guard::new(config.security.clone(), config.audit.clone(), &config.clusters)
             .map_err(|error| crate::error::McpError::InvalidConfig(error.to_string()))?;
         let client_runtime = ClientRuntime::new(
             service_context.child("rocketmq-mcp-client"),
             ClientRuntimeConfig::default(),
+            telemetry_handle,
         );
         let query = Arc::new(QueryFacade::new(config.clone(), client_runtime.clone()).with_visibility_class("local"));
         Ok(Self {
@@ -121,23 +119,43 @@ impl McpApp {
     /// services cannot be initialized.
     pub async fn bootstrap_typed(
         config: McpConfig,
+        process_telemetry: rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig,
         _validated_security: rocketmq_security_api::ValidatedSecurityBootstrap,
         service_context: rocketmq_runtime::ChildServiceContext,
     ) -> Result<Self, crate::error::McpError> {
-        let telemetry = init_tracing_typed(&config)?;
-        let app = Self::new(config, service_context)?;
+        let telemetry = init_tracing_typed(&config, &process_telemetry, &service_context).await?;
+        let app = match Self::new(config, service_context.clone(), telemetry.handle()) {
+            Ok(app) => app,
+            Err(error) => {
+                let report = telemetry
+                    .shutdown_with_service_context(&service_context, std::time::Duration::from_secs(10))
+                    .await;
+                if !report.is_healthy() {
+                    tracing::error!(
+                        report = %report.to_json(),
+                        "MCP telemetry rollback after composition failure was unhealthy"
+                    );
+                }
+                return Err(error);
+            }
+        };
         *app.telemetry.lock().unwrap_or_else(|error| error.into_inner()) = Some(telemetry);
-        app.start_background_services()?;
+        if let Err(error) = app.start_background_services() {
+            let deadline = rocketmq_runtime::ShutdownDeadline::after(std::time::Duration::from_secs(10));
+            app.shutdown_with_deadline(deadline).await.log_if_unhealthy();
+            return Err(error);
+        }
         Ok(app)
     }
 
     #[deprecated(since = "1.0.0", note = "use McpApp::bootstrap_typed")]
     pub async fn bootstrap(
         config: McpConfig,
+        process_telemetry: rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig,
         validated_security: rocketmq_security_api::ValidatedSecurityBootstrap,
         service_context: rocketmq_runtime::ChildServiceContext,
     ) -> anyhow::Result<Self> {
-        Self::bootstrap_typed(config, validated_security, service_context)
+        Self::bootstrap_typed(config, process_telemetry, validated_security, service_context)
             .await
             .map_err(anyhow::Error::new)
     }
@@ -231,12 +249,15 @@ impl McpApp {
         let client_report = self.client_runtime.shutdown_until(deadline).await;
         client_report.log_if_unhealthy();
         let runtime = Some(self.service_context.task_group().shutdown_until(deadline).await);
-        let telemetry = self
-            .telemetry
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .take()
-            .map(|guard| guard.shutdown_with_timeout(deadline.remaining()));
+        let telemetry_guard = self.telemetry.lock().unwrap_or_else(|error| error.into_inner()).take();
+        let telemetry = match telemetry_guard {
+            Some(guard) => Some(
+                guard
+                    .shutdown_with_service_context(&self.service_context, deadline.remaining())
+                    .await,
+            ),
+            None => None,
+        };
         McpShutdownReport {
             audit,
             runtime,
@@ -254,8 +275,10 @@ impl McpApp {
     }
 }
 
-pub fn init_tracing_typed(
+pub async fn init_tracing_typed(
     config: &McpConfig,
+    process_telemetry: &rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig,
+    service_context: &rocketmq_runtime::ChildServiceContext,
 ) -> Result<rocketmq_observability::TelemetryRuntimeGuard, crate::error::McpError> {
     let environment_filter = rocketmq_observability::read_rust_log()
         .map_err(|source| crate::error::McpError::infrastructure("read MCP RUST_LOG", source))?;
@@ -266,15 +289,29 @@ pub fn init_tracing_typed(
         ..rocketmq_observability::LogFilterInputs::default()
     })
     .map_err(|source| crate::error::McpError::infrastructure("resolve MCP tracing filter", source))?;
-    let mut bootstrap = rocketmq_observability::TelemetryBootstrapConfig::default();
-    bootstrap.observability.service_name = "rocketmq-mcp".to_string();
-    bootstrap.observability.service_namespace = "rocketmq".to_string();
-    bootstrap.observability.node_type = "mcp".to_string();
-    bootstrap.observability.node_id = config.server.name.clone();
-    bootstrap.observability.subscriber_install_policy = rocketmq_observability::SubscriberInstallPolicy::Required;
-    bootstrap.logging.reload = config.logging.reload;
-    let guard = rocketmq_observability::install_global_with_filter(&bootstrap, resolved_filter.clone())
-        .map_err(|source| crate::error::McpError::infrastructure("install MCP telemetry", source))?;
+    let bootstrap = build_mcp_telemetry_bootstrap_config(config, process_telemetry);
+    let guard = rocketmq_observability::install_global_with_filter_and_service_context(
+        &bootstrap,
+        resolved_filter.clone(),
+        service_context,
+    )
+    .await
+    .map_err(|source| crate::error::McpError::infrastructure("install MCP telemetry", source))?;
+    if let Err(registration_error) = register_mcp_release_identity(&guard, process_telemetry) {
+        let cleanup_error = guard
+            .shutdown_with_service_context(service_context, std::time::Duration::from_secs(10))
+            .await
+            .into_result()
+            .err()
+            .map(|error| error.to_string());
+        return Err(match cleanup_error {
+            Some(cleanup_error) => crate::error::McpError::InvalidConfig(format!(
+                "{registration_error}; MCP telemetry cleanup after release identity failure also failed: \
+                 {cleanup_error}"
+            )),
+            None => registration_error,
+        });
+    }
     tracing::info!(
         service = "rocketmq-mcp",
         effective_filter = resolved_filter.filter(),
@@ -289,12 +326,121 @@ pub fn init_tracing_typed(
     Ok(guard)
 }
 
-#[deprecated(since = "1.0.0", note = "use init_tracing_typed")]
-pub fn init_tracing(config: &McpConfig) -> anyhow::Result<()> {
-    let guard = init_tracing_typed(config).map_err(anyhow::Error::new)?;
-    *LEGACY_TELEMETRY_GUARD
-        .get_or_init(|| std::sync::Mutex::new(None))
-        .lock()
-        .unwrap_or_else(|error| error.into_inner()) = Some(guard);
-    Ok(())
+fn build_mcp_telemetry_bootstrap_config(
+    config: &McpConfig,
+    process_telemetry: &rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig,
+) -> rocketmq_observability::TelemetryBootstrapConfig {
+    let mut bootstrap = rocketmq_observability::TelemetryBootstrapConfig::default();
+    bootstrap.observability.service_name = "rocketmq-mcp".to_string();
+    bootstrap.observability.service_namespace = "rocketmq".to_string();
+    bootstrap.observability.node_type = "mcp".to_string();
+    bootstrap.observability.node_id = config.server.name.clone();
+    bootstrap.observability.subscriber_install_policy = rocketmq_observability::SubscriberInstallPolicy::Required;
+    process_telemetry.apply_to(&mut bootstrap.observability);
+    bootstrap.logging.reload = config.logging.reload;
+    bootstrap
+}
+
+fn register_mcp_release_identity(
+    telemetry_guard: &rocketmq_observability::TelemetryRuntimeGuard,
+    process_telemetry: &rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig,
+) -> Result<(), crate::error::McpError> {
+    if !process_telemetry.metrics_enabled() {
+        return Ok(());
+    }
+
+    #[cfg(feature = "observability")]
+    {
+        let telemetry = telemetry_guard.handle();
+        telemetry
+            .register_release_identity(process_telemetry.release_identity().clone())
+            .map_err(|source| {
+                crate::error::McpError::infrastructure("register MCP release identity before readiness", source)
+            })?;
+        if !telemetry.release_identity_registered() {
+            return Err(crate::error::McpError::InvalidConfig(
+                "MCP release identity was not registered before readiness".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(not(feature = "observability"))]
+    {
+        let _ = telemetry_guard;
+        Err(crate::error::McpError::InvalidConfig(
+            "MCP metrics require the `observability` Cargo feature".to_string(),
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mcp_process_telemetry_defaults_to_disabled_local_bootstrap() {
+        let process_telemetry =
+            rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig::try_from_values(
+                "rocketmq-mcp",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("local MCP process telemetry");
+
+        let bootstrap = build_mcp_telemetry_bootstrap_config(&example_config(), &process_telemetry);
+
+        assert_eq!(bootstrap.observability.service_name, "rocketmq-mcp");
+        assert_eq!(
+            bootstrap.observability.subscriber_install_policy,
+            rocketmq_observability::SubscriberInstallPolicy::Required
+        );
+        assert!(!bootstrap.observability.enabled);
+        assert!(!bootstrap.observability.metrics.enabled);
+        assert_eq!(
+            bootstrap.observability.metrics.exporter,
+            rocketmq_observability::MetricsExporter::Disable
+        );
+    }
+
+    #[test]
+    fn mcp_release_identity_config_enables_prometheus_before_install() {
+        let process_telemetry =
+            rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig::try_from_values(
+                "rocketmq-mcp",
+                Some("0123456789abcdef0123456789abcdef01234567"),
+                Some("mcp-01"),
+                Some("true"),
+                Some("prometheus"),
+                Some("127.0.0.1:9757"),
+                Some("/internal/metrics"),
+            )
+            .expect("MCP Prometheus process telemetry");
+
+        let bootstrap = build_mcp_telemetry_bootstrap_config(&example_config(), &process_telemetry);
+
+        assert!(bootstrap.observability.enabled);
+        assert!(bootstrap.observability.metrics.enabled);
+        assert_eq!(
+            bootstrap.observability.metrics.exporter,
+            rocketmq_observability::MetricsExporter::Prometheus
+        );
+        assert_eq!(bootstrap.observability.prometheus.host, "127.0.0.1");
+        assert_eq!(bootstrap.observability.prometheus.port, 9757);
+        assert_eq!(bootstrap.observability.prometheus.path, "/internal/metrics");
+        assert_eq!(process_telemetry.release_identity().service(), "rocketmq-mcp");
+    }
+
+    fn example_config() -> McpConfig {
+        McpConfig::load(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("conf")
+                .join("mcp.example.toml"),
+        )
+        .expect("load MCP example config")
+    }
 }

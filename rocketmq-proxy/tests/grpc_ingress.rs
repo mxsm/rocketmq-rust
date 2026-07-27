@@ -320,6 +320,7 @@ accounts:
             ..ProxyConfig::default()
         },
         runtime_context.service_context("proxy-grpc-auth"),
+        rocketmq_observability::TelemetryHandle::noop(),
     )
     .with_service_manager(service_manager)
     .with_auth_runtime(auth_runtime)
@@ -698,6 +699,7 @@ accounts:
             ..ProxyConfig::default()
         },
         runtime_context.service_context("proxy-grpc-auth-watcher"),
+        rocketmq_observability::TelemetryHandle::noop(),
     )
     .with_service_manager(service_manager)
     .with_auth_runtime(auth_runtime)
@@ -805,6 +807,7 @@ fn spawn_runtime_on_addr(
             ..ProxyConfig::default()
         },
         runtime_context.service_context("proxy-grpc-listener"),
+        rocketmq_observability::TelemetryHandle::noop(),
     )
     .with_service_manager(service_manager)
     .build()

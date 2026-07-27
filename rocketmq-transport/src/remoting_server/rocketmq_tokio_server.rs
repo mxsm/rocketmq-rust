@@ -52,6 +52,7 @@ use crate::runtime::RPCHook;
 use crate::security::TransportSecurity;
 use crate::server::ConnectionHandler as TransportConnectionHandler;
 use crate::server::TransportListener;
+use crate::telemetry::TransportTelemetry;
 use crate::tls::TlsServerRuntime;
 
 /// Default limit the max number of connections.
@@ -154,6 +155,7 @@ struct ConnectionListener<RP> {
     transport_security: Option<Arc<TransportSecurity>>,
     transport_principal: Option<Principal>,
     command_interceptor: Arc<dyn SessionCommandInterceptor>,
+    telemetry: TransportTelemetry,
 }
 
 impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
@@ -227,7 +229,8 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
             self.tls_runtime.clone(),
             self.admission.clone(),
             DEFAULT_TLS_HANDSHAKE_TIMEOUT,
-        );
+        )
+        .with_telemetry(self.telemetry.clone());
         if let Some(security) = self.transport_security.clone() {
             transport = transport.with_security(security, self.transport_principal.clone());
         }
@@ -428,6 +431,7 @@ pub struct RocketMQServer<RP> {
     transport_security: Option<Arc<TransportSecurity>>,
     transport_principal: Option<Principal>,
     admission: Option<Arc<AdmissionController>>,
+    telemetry: TransportTelemetry,
     #[cfg(all(test, not(doctest)))]
     test_request_hook: Option<TestRequestHook>,
     _phantom_data: std::marker::PhantomData<RP>,
@@ -442,6 +446,7 @@ impl<RP> RocketMQServer<RP> {
             transport_security: None,
             transport_principal: None,
             admission: None,
+            telemetry: TransportTelemetry::noop(),
             #[cfg(all(test, not(doctest)))]
             test_request_hook: None,
             _phantom_data: std::marker::PhantomData,
@@ -450,6 +455,25 @@ impl<RP> RocketMQServer<RP> {
 
     pub fn new_with_service_context(config: Arc<ServerConfig>, service_context: ChildServiceContext) -> Self {
         Self::new(config, service_context)
+    }
+
+    /// Creates a remoting server bound to one explicit transport telemetry instance.
+    pub fn new_with_telemetry(
+        config: Arc<ServerConfig>,
+        service_context: ChildServiceContext,
+        telemetry: TransportTelemetry,
+    ) -> Self {
+        Self {
+            telemetry,
+            ..Self::new(config, service_context)
+        }
+    }
+
+    /// Replaces the no-op transport recorder before the server starts.
+    #[must_use]
+    pub fn with_telemetry(mut self, telemetry: TransportTelemetry) -> Self {
+        self.telemetry = telemetry;
+        self
     }
 
     pub fn register_rpc_hook(&mut self, hook: Arc<dyn RPCHook>) {
@@ -616,6 +640,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> RocketMQServer<RP> {
             self.transport_principal.clone(),
             self.admission.clone(),
             command_interceptor,
+            self.telemetry.clone(),
         )
         .await
     }
@@ -683,6 +708,35 @@ pub async fn run_with_report_with_service_context<RP: RequestProcessor + Sync + 
     rpc_hooks: Vec<Arc<dyn RPCHook>>,
     channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
 ) -> Option<ShutdownReport> {
+    run_with_report_with_service_context_and_telemetry(
+        service_context,
+        listener,
+        shutdown,
+        request_processor,
+        conn_disconnect_notify,
+        rpc_hooks,
+        channel_event_listener,
+        TransportTelemetry::noop(),
+    )
+    .await
+}
+
+/// Runs a remoting server under an explicit service context and transport telemetry instance.
+///
+/// The supplied telemetry capability is propagated to accepted connections, derived channels,
+/// request metrics guards, and request tracing spans.
+// These arguments are independent composition capabilities owned by the remoting server runtime.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_with_report_with_service_context_and_telemetry<RP: RequestProcessor + Sync + 'static + Clone>(
+    service_context: ChildServiceContext,
+    listener: TcpListener,
+    shutdown: impl Future,
+    request_processor: RP,
+    conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
+    rpc_hooks: Vec<Arc<dyn RPCHook>>,
+    channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
+    telemetry: TransportTelemetry,
+) -> Option<ShutdownReport> {
     let remoting_context = new_remoting_server_context(&service_context);
     let tls_runtime =
         match TlsServerRuntime::initialize_with_service_context(Default::default(), &remoting_context).await {
@@ -705,6 +759,7 @@ pub async fn run_with_report_with_service_context<RP: RequestProcessor + Sync + 
         None,
         None,
         Arc::new(()),
+        telemetry,
     )
     .await
 }
@@ -722,11 +777,17 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
     transport_principal: Option<Principal>,
     admission: Option<Arc<AdmissionController>>,
     command_interceptor: Arc<dyn SessionCommandInterceptor>,
+    telemetry: TransportTelemetry,
 ) -> Option<ShutdownReport> {
     let (notify_shutdown, _) = broadcast::channel(1);
     let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::channel(1);
     // Initialize the connection listener state
-    let handler = RemotingGeneralHandler::new(request_processor, rpc_hooks, PendingRequestTable::with_capacity(512));
+    let handler = RemotingGeneralHandler::new_with_telemetry(
+        request_processor,
+        rpc_hooks,
+        PendingRequestTable::with_capacity(512),
+        telemetry.clone(),
+    );
     let mut admission_limits = AdmissionLimits::default();
     admission_limits.connections = ResourceLimit {
         count: DEFAULT_MAX_CONNECTIONS,
@@ -759,6 +820,7 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
         transport_security,
         transport_principal,
         command_interceptor,
+        telemetry,
     };
 
     tokio::select! {
@@ -1643,6 +1705,7 @@ mod tests {
             None,
             None,
             Arc::new(()),
+            TransportTelemetry::noop(),
         );
         let server_task = tokio::spawn(report);
 

@@ -50,8 +50,18 @@ pub struct MessageRocksDbStorage {
 
 impl MessageRocksDbStorage {
     pub fn open(config: RocksDbConfig) -> Result<Self, RocketMQError> {
+        Self::open_with_metrics(
+            config,
+            rocketmq_observability::metrics::rocksdb::RocksDbMetricsRecorder::noop(),
+        )
+    }
+
+    pub fn open_with_metrics(
+        config: RocksDbConfig,
+        metrics: rocketmq_observability::metrics::rocksdb::RocksDbMetricsRecorder,
+    ) -> Result<Self, RocketMQError> {
         Ok(Self {
-            store: Arc::new(RocksDbStore::open(config)?),
+            store: Arc::new(RocksDbStore::open_with_metrics(config, metrics)?),
             timer_delete_cache: Mutex::new(TimerDeleteCache::new(TIMER_DELETE_CACHE_CAPACITY)),
         })
     }

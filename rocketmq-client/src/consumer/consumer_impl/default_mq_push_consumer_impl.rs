@@ -40,6 +40,8 @@ use rocketmq_model::common::mix_all;
 use rocketmq_model::common::mix_all::DEFAULT_CONSUMER_GROUP;
 use rocketmq_model::common::sys_flag::pull_sys_flag::PullSysFlag;
 use rocketmq_model::common::FAQUrl;
+use rocketmq_observability::metrics::client::ClientMetrics;
+use rocketmq_observability::TelemetryHandle;
 use rocketmq_protocol::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_protocol::protocol::body::consumer_running_info::ConsumerRunningInfo;
 use rocketmq_protocol::protocol::body::pop_process_queue_info::PopProcessQueueInfo;
@@ -120,6 +122,8 @@ const _1MB: u64 = 1024 * 1024;
 pub struct DefaultMQPushConsumerImpl {
     service_context: ChildServiceContext,
     client_pool: ClientPool,
+    telemetry_handle: TelemetryHandle,
+    client_metrics: ClientMetrics,
     client_pool_token: Mutex<Option<ClientPoolToken>>,
     pub(crate) global_lock: Arc<Mutex<()>>,
     lifecycle_transition: Mutex<()>,
@@ -165,6 +169,8 @@ impl DefaultMQPushConsumerImpl {
         let this = Self {
             service_context,
             client_pool: client_runtime.pool().clone(),
+            telemetry_handle: client_runtime.telemetry_handle().clone(),
+            client_metrics: client_runtime.client_metrics().clone(),
             client_pool_token: Mutex::new(None),
             global_lock: Arc::new(Default::default()),
             lifecycle_transition: Mutex::new(()),
@@ -222,6 +228,14 @@ impl DefaultMQPushConsumerImpl {
 
     pub fn get_mq_client_factory(&self) -> Option<Arc<MQClientInstance>> {
         self.component_snapshot(&self.client_instance)
+    }
+
+    pub(crate) fn telemetry_handle(&self) -> &TelemetryHandle {
+        &self.telemetry_handle
+    }
+
+    pub(crate) fn client_metrics(&self) -> &ClientMetrics {
+        &self.client_metrics
     }
 
     #[inline]
@@ -448,6 +462,8 @@ impl DefaultMQPushConsumerImpl {
                         self.set_consume_orderly(false);
                         let consume_message_concurrently_service = Arc::new(ConsumeMessageConcurrentlyService::new(
                             self.service_context.child("concurrent-consume"),
+                            self.telemetry_handle.clone(),
+                            self.client_metrics.clone(),
                             client_config_snapshot.clone(),
                             consumer_config_snapshot.clone(),
                             consumer_config_snapshot.consumer_group.clone(),
@@ -464,6 +480,8 @@ impl DefaultMQPushConsumerImpl {
                         let consume_message_pop_concurrently_service =
                             Arc::new(ConsumeMessagePopConcurrentlyService::new(
                                 self.service_context.child("pop-concurrent-consume"),
+                                self.telemetry_handle.clone(),
+                                self.client_metrics.clone(),
                                 client_config_snapshot.clone(),
                                 consumer_config_snapshot.clone(),
                                 consumer_config_snapshot.consumer_group.clone(),
@@ -482,6 +500,8 @@ impl DefaultMQPushConsumerImpl {
                         self.set_consume_orderly(true);
                         let consume_message_orderly_service = Arc::new(ConsumeMessageOrderlyService::new(
                             self.service_context.child("orderly-consume"),
+                            self.telemetry_handle.clone(),
+                            self.client_metrics.clone(),
                             client_config_snapshot.clone(),
                             consumer_config_snapshot.clone(),
                             consumer_config_snapshot.consumer_group.clone(),
@@ -498,6 +518,8 @@ impl DefaultMQPushConsumerImpl {
 
                         let consume_message_pop_orderly_service = Arc::new(ConsumeMessagePopOrderlyService::new(
                             self.service_context.child("pop-orderly-consume"),
+                            self.telemetry_handle.clone(),
+                            self.client_metrics.clone(),
                             client_config_snapshot,
                             consumer_config_snapshot.clone(),
                             consumer_config_snapshot.consumer_group.clone(),
@@ -2411,6 +2433,8 @@ mod tests {
         let consumer_config = Arc::new(ConsumerConfig::default());
         let service = Arc::new(ConsumeMessageConcurrentlyService::new(
             crate::runtime::test_service_context("push-consumer-concurrent-service-test"),
+            consumer.telemetry_handle().clone(),
+            consumer.client_metrics().clone(),
             Arc::new(ClientConfig::default()),
             consumer_config.clone(),
             consumer_config.consumer_group.clone(),
@@ -2543,6 +2567,7 @@ mod tests {
             "push-post-start-fail-client",
             None,
             client_runtime.child("push-post-start-fail-client"),
+            client_runtime.telemetry_handle().clone(),
             client_runtime.pool().request_future_holder(),
         );
         let consumer = new_startable_push_consumer(client_runtime, client_config, group.clone());
@@ -2880,6 +2905,7 @@ mod tests {
             "push-running-info-status-test",
             None,
             runtime.child("push-running-info-status-test"),
+            runtime.telemetry_handle().clone(),
             runtime.pool().request_future_holder(),
         ));
 

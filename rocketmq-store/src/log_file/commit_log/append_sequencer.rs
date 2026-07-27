@@ -403,6 +403,7 @@ pub(super) struct CommitLogAppendDependencies {
     pub(super) put_message_lock: Arc<tokio::sync::Mutex<()>>,
     pub(super) consume_queue_store: ConsumeQueueStore,
     pub(super) flush: CommitLogFlushWakeup,
+    pub(super) store_metrics: rocketmq_observability::metrics::store::StoreMetricsRecorder,
 }
 
 pub(super) struct CommitLogAppendProcessor {
@@ -414,6 +415,7 @@ pub(super) struct CommitLogAppendProcessor {
     put_message_lock: Arc<tokio::sync::Mutex<()>>,
     consume_queue_store: ConsumeQueueStore,
     flush: CommitLogFlushWakeup,
+    store_metrics: rocketmq_observability::metrics::store::StoreMetricsRecorder,
 }
 
 impl CommitLogAppendProcessor {
@@ -427,6 +429,7 @@ impl CommitLogAppendProcessor {
             put_message_lock,
             consume_queue_store,
             flush,
+            store_metrics,
         } = dependencies;
         Self {
             append,
@@ -437,6 +440,7 @@ impl CommitLogAppendProcessor {
             put_message_lock,
             consume_queue_store,
             flush,
+            store_metrics,
         }
     }
 
@@ -474,8 +478,7 @@ impl CommitLogAppendProcessor {
             .record_put_message_lock(lock_wait_millis, lock_hold_millis);
         drop(guard);
         self.runtime_state.clear_begin_time_in_lock();
-        #[cfg(feature = "observability")]
-        rocketmq_observability::metrics::store::record_append_latency(lock_hold_millis);
+        self.store_metrics.record_append_latency(lock_hold_millis);
         if lock_hold_millis > 500 {
             warn!(
                 lock_hold_millis,

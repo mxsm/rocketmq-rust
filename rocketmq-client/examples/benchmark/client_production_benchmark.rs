@@ -117,7 +117,7 @@ struct Stats {
 
 #[tokio::main]
 pub async fn main() -> RocketMQResult<()> {
-    let example_runtime = support::ExampleClientRuntime::new("client-production-benchmark");
+    let example_runtime = support::ExampleClientRuntime::try_new("client-production-benchmark")?;
     let client_runtime = example_runtime.client_runtime();
     let config = Config::parse()?;
     let body = vec![b'a'; config.message_size];

@@ -27,7 +27,7 @@ use rocketmq_model::common::message::message_single::Message;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let example_runtime = support::ExampleClientRuntime::new("random-selector-producer");
+    let example_runtime = support::ExampleClientRuntime::try_new("random-selector-producer")?;
     let client_runtime = example_runtime.client_runtime();
     let mut producer = DefaultMQProducer::builder(client_runtime.clone())
         .producer_group("random_producer_group")

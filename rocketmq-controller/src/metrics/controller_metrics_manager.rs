@@ -23,14 +23,10 @@ use crate::config::ControllerConfig;
 use crate::config::ControllerConfigReader;
 
 #[cfg(feature = "metrics")]
-use rocketmq_observability::MetricsExporter;
+pub use rocketmq_observability::metrics::controller_manager::ControllerMetricsConfig;
 #[cfg(feature = "metrics")]
-#[path = "controller_metrics_manager_impl.rs"]
-mod owner_manager;
-#[cfg(feature = "metrics")]
-pub use owner_manager::ControllerMetricsConfig;
-#[cfg(feature = "metrics")]
-use owner_manager::ControllerMetricsManager as ObservabilityControllerMetricsManager;
+use rocketmq_observability::metrics::controller_manager::ControllerMetricsManager as ObservabilityControllerMetricsManager;
+use rocketmq_observability::TelemetryHandle;
 
 #[cfg(feature = "metrics")]
 pub struct ControllerMetricsManager {
@@ -46,22 +42,10 @@ pub(crate) fn controller_metrics_config(config: &ControllerConfig) -> Controller
         listen_addr: config.listen_addr.to_string(),
         controller_type: config.controller_type.clone(),
         node_id: config.node_id.to_string(),
-        metrics_exporter_type: match config.metrics_exporter_type {
-            rocketmq_observability::MetricsExporterType::Disable => MetricsExporter::Disable,
-            rocketmq_observability::MetricsExporterType::OtlpGrpc => MetricsExporter::OtlpGrpc,
-            rocketmq_observability::MetricsExporterType::Prom => MetricsExporter::Prometheus,
-            rocketmq_observability::MetricsExporterType::Log => MetricsExporter::Log,
-        },
-        metric_logging_exporter_interval_in_mills: config.metric_logging_exporter_interval_in_mills,
-        metric_grpc_exporter_interval_in_mills: config.metric_grpc_exporter_interval_in_mills,
-        metric_grpc_exporter_time_out_in_mills: config.metric_grpc_exporter_time_out_in_mills,
-        metrics_grpc_exporter_target: config.metrics_grpc_exporter_target.clone(),
-        metrics_grpc_exporter_header: config.metrics_grpc_exporter_header.clone(),
-        metrics_prom_exporter_host: config.metrics_prom_exporter_host.clone(),
-        metrics_prom_exporter_port: config.metrics_prom_exporter_port,
         metrics_label: config.metrics_label.clone(),
         storage_path: config.storage_path.clone(),
         controller_store_path: config.controller_store_path.clone(),
+        cardinality_limit: 10_000,
     }
 }
 
@@ -76,27 +60,29 @@ pub(crate) fn active_broker_count_from_snapshot(snapshot: &HashMap<String, HashM
 
 #[cfg(feature = "metrics")]
 impl ControllerMetricsManager {
-    pub fn get_instance(config: ControllerConfigReader) -> Arc<Self> {
-        Self::get_instance_with_active_broker_source(config, || 0)
+    pub fn new(config: ControllerConfigReader, telemetry_handle: &TelemetryHandle) -> Arc<Self> {
+        Self::new_with_active_broker_source(config, telemetry_handle, || 0)
     }
 
-    pub fn get_instance_with_active_broker_source<F>(
+    pub fn new_with_active_broker_source<F>(
         config: ControllerConfigReader,
+        telemetry_handle: &TelemetryHandle,
         active_broker_source: F,
     ) -> Arc<Self>
     where
         F: Fn() -> u64 + Send + Sync + 'static,
     {
         let snapshot = config.snapshot();
-        let inner = ObservabilityControllerMetricsManager::get_instance_with_active_broker_source(
+        let inner = ObservabilityControllerMetricsManager::new(
             controller_metrics_config(&snapshot),
+            telemetry_handle,
             active_broker_source,
         );
         Arc::new(Self { inner })
     }
 
-    pub fn record_role_change(new_role: i64, old_role: i64) {
-        ObservabilityControllerMetricsManager::record_role_change(new_role, old_role);
+    pub fn record_role_change(&self, new_role: i64, old_role: i64) {
+        self.inner.record_role_change(new_role, old_role);
     }
 
     pub fn inc_request_total(&self, request_type: &str, status: super::RequestHandleStatus) {
@@ -119,35 +105,20 @@ impl ControllerMetricsManager {
         self.inner.inc_election_total(result);
     }
 
-    pub fn inc_request_total_static(request_type: &str, status: super::RequestHandleStatus) {
-        ObservabilityControllerMetricsManager::inc_request_total_static(request_type, status);
-    }
-
-    pub fn record_request_latency_static(request_type: &str, latency_us: u64) {
-        ObservabilityControllerMetricsManager::record_request_latency_static(request_type, latency_us);
-    }
-
-    pub fn inc_dledger_op_total_static(operation: super::DLedgerOperation, status: super::DLedgerOperationStatus) {
-        ObservabilityControllerMetricsManager::inc_dledger_op_total_static(operation, status);
-    }
-
-    pub fn record_dledger_op_latency_static(operation: super::DLedgerOperation, latency_us: u64) {
-        ObservabilityControllerMetricsManager::record_dledger_op_latency_static(operation, latency_us);
-    }
-
-    pub fn inc_election_total_static(result: super::ElectionResult) {
-        ObservabilityControllerMetricsManager::inc_election_total_static(result);
+    pub fn record_election_latency(&self, latency_ms: u64) {
+        self.inner.record_election_latency(latency_ms);
     }
 }
 
 #[cfg(not(feature = "metrics"))]
 impl ControllerMetricsManager {
-    pub fn get_instance(_config: ControllerConfigReader) -> Arc<Self> {
+    pub fn new(_config: ControllerConfigReader, _telemetry_handle: &TelemetryHandle) -> Arc<Self> {
         Arc::new(Self)
     }
 
-    pub fn get_instance_with_active_broker_source<F>(
+    pub fn new_with_active_broker_source<F>(
         _config: ControllerConfigReader,
+        _telemetry_handle: &TelemetryHandle,
         _active_broker_source: F,
     ) -> Arc<Self>
     where
@@ -156,7 +127,7 @@ impl ControllerMetricsManager {
         Arc::new(Self)
     }
 
-    pub fn record_role_change(_new_role: i64, _old_role: i64) {}
+    pub fn record_role_change(&self, _new_role: i64, _old_role: i64) {}
 
     pub fn inc_request_total(&self, _request_type: &str, _status: super::RequestHandleStatus) {}
 
@@ -168,13 +139,24 @@ impl ControllerMetricsManager {
 
     pub fn inc_election_total(&self, _result: super::ElectionResult) {}
 
-    pub fn inc_request_total_static(_request_type: &str, _status: super::RequestHandleStatus) {}
+    pub fn record_election_latency(&self, _latency_ms: u64) {}
+}
 
-    pub fn record_request_latency_static(_request_type: &str, _latency_us: u64) {}
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn controller_metrics_api_has_no_static_recording_facade() {
+        let source = include_str!("controller_metrics_manager.rs");
 
-    pub fn inc_dledger_op_total_static(_operation: super::DLedgerOperation, _status: super::DLedgerOperationStatus) {}
-
-    pub fn record_dledger_op_latency_static(_operation: super::DLedgerOperation, _latency_us: u64) {}
-
-    pub fn inc_election_total_static(_result: super::ElectionResult) {}
+        for forbidden in [
+            concat!("get_", "instance"),
+            concat!("_static", "("),
+            concat!("pub fn record_role_change(", "new_role"),
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "Controller metrics API must be instance-scoped: {forbidden}"
+            );
+        }
+    }
 }

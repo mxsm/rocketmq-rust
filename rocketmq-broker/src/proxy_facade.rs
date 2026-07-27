@@ -23,6 +23,7 @@ use cheetah_string::CheetahString;
 use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::mix_all;
+use rocketmq_observability::TelemetryHandle;
 use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
 use rocketmq_protocol::protocol::route::route_data_view::QueueData;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
@@ -112,20 +113,30 @@ impl ProxyBrokerFacade {
         mut broker_config: BrokerConfig,
         message_store_config: MessageStoreConfig,
         service_context: ChildServiceContext,
+        telemetry_handle: TelemetryHandle,
     ) -> Result<Self, BrokerConfigError> {
         broker_config.transfer_msg_by_heap = true;
         broker_config.broker_server_config.listen_port = broker_config.listen_port;
         let validated_config = ValidatedBrokerConfig::try_from_parts(broker_config, message_store_config)?;
-        Ok(Self::from_validated_config(validated_config, service_context))
+        Ok(Self::from_validated_config(
+            validated_config,
+            service_context,
+            telemetry_handle,
+        ))
     }
 
     pub fn from_validated_config(
         validated_config: ValidatedBrokerConfig,
         service_context: ChildServiceContext,
+        telemetry_handle: TelemetryHandle,
     ) -> Self {
         let runtime_context = service_context.child("embedded-broker");
         Self {
-            runtime: BrokerRuntime::new_with_validated_config(Arc::new(validated_config), runtime_context),
+            runtime: BrokerRuntime::new_with_validated_config_and_telemetry(
+                Arc::new(validated_config),
+                runtime_context,
+                telemetry_handle,
+            ),
             service_context,
         }
     }

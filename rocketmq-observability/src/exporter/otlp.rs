@@ -13,7 +13,7 @@
 // limitations under the License.
 
 #[cfg(feature = "otlp-metrics")]
-pub fn init_otlp_meter_provider(
+pub(crate) fn init_otlp_meter_provider(
     config: &crate::config::ObservabilityConfig,
 ) -> Result<opentelemetry_sdk::metrics::SdkMeterProvider, crate::error::ObservabilityError> {
     use std::time::Duration;
@@ -63,7 +63,6 @@ pub fn init_otlp_tracer_provider(
     use opentelemetry_otlp::SpanExporter;
     use opentelemetry_otlp::WithExportConfig;
     use opentelemetry_otlp::WithTonicConfig;
-    use opentelemetry_sdk::trace::BatchSpanProcessor;
     use opentelemetry_sdk::trace::Sampler;
     use opentelemetry_sdk::trace::SdkTracerProvider;
 
@@ -79,9 +78,7 @@ pub fn init_otlp_tracer_provider(
     let exporter = exporter_builder
         .build()
         .map_err(crate::error::ObservabilityError::traces_init)?;
-    let processor = BatchSpanProcessor::builder(exporter)
-        .with_batch_config(crate::exporter::outage::trace_batch_config())
-        .build();
+    let processor = crate::exporter::outage::OutageBoundedBatchSpanProcessor::new(exporter);
 
     Ok(SdkTracerProvider::builder()
         .with_resource(crate::resource::build_resource(config))
@@ -99,7 +96,6 @@ pub fn init_otlp_logger_provider(
     use opentelemetry_otlp::LogExporter;
     use opentelemetry_otlp::WithExportConfig;
     use opentelemetry_otlp::WithTonicConfig;
-    use opentelemetry_sdk::logs::BatchLogProcessor;
     use opentelemetry_sdk::logs::SdkLoggerProvider;
 
     let mut exporter_builder = LogExporter::builder()
@@ -114,9 +110,7 @@ pub fn init_otlp_logger_provider(
     let exporter = exporter_builder
         .build()
         .map_err(crate::error::ObservabilityError::logs_init)?;
-    let processor = BatchLogProcessor::builder(exporter)
-        .with_batch_config(crate::exporter::outage::log_batch_config())
-        .build();
+    let processor = crate::exporter::outage::OutageBoundedBatchLogProcessor::new(exporter);
 
     Ok(SdkLoggerProvider::builder()
         .with_resource(crate::resource::build_resource(config))

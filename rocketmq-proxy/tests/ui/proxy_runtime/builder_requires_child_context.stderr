@@ -1,15 +1,15 @@
-error[E0061]: this function takes 2 arguments but 1 argument was supplied
+error[E0061]: this function takes 3 arguments but 1 argument was supplied
  --> tests/ui/proxy_runtime/builder_requires_child_context.rs:5:13
   |
 5 |     let _ = ProxyRuntime::builder(ProxyConfig::default());
-  |             ^^^^^^^^^^^^^^^^^^^^^------------------------ argument #2 of type `rocketmq_runtime::service_context::ChildServiceContext` is missing
+  |             ^^^^^^^^^^^^^^^^^^^^^------------------------ two arguments of type `rocketmq_runtime::service_context::ChildServiceContext` and `rocketmq_observability::handle::TelemetryHandle` are missing
   |
 note: associated function defined here
  --> src/bootstrap.rs
   |
-  |     pub fn builder(config: ProxyConfig, service_context: ChildServiceContext) -> ProxyRuntimeBuilder {
+  |     pub fn builder(
   |            ^^^^^^^
-help: provide the argument
+help: provide the arguments
   |
-5 |     let _ = ProxyRuntime::builder(ProxyConfig::default(), /* rocketmq_runtime::service_context::ChildServiceContext */);
-  |                                                         ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+5 |     let _ = ProxyRuntime::builder(ProxyConfig::default(), /* rocketmq_runtime::service_context::ChildServiceContext */, /* rocketmq_observability::handle::TelemetryHandle */);
+  |                                                         +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++

@@ -345,11 +345,13 @@ impl ClusterServiceManager {
         config: ClusterConfig,
         signer: Option<Arc<dyn OutboundSigner>>,
         service_context: &ChildServiceContext,
+        telemetry_handle: rocketmq_client_rust::TelemetryHandle,
     ) -> rocketmq_proxy_core::ProxyResult<Self> {
         Ok(Self::from_cluster_client(Arc::new(RocketmqClusterClient::new(
             config,
             signer,
             service_context,
+            telemetry_handle,
         )?)))
     }
 }

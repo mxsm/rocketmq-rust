@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use super::*;
+#[cfg(feature = "observability")]
+use tracing::Instrument;
 #[allow(unused_must_use)]
 #[allow(unused_assignments)]
 impl DefaultMQProducerImpl {
@@ -224,7 +226,7 @@ impl DefaultMQProducerImpl {
                     if let Err(e) = mq_client_api.send_oneway_unbounded(&broker_addr, request).await {
                         tracing::debug!("Oneway batch send failed: {:?}", e);
                     }
-                    rocketmq_observability::metrics::client::record_send(send_start.elapsed());
+                    client_instance.client_metrics().record_send(send_start.elapsed());
                 }
                 Err(e) => tracing::debug!("Oneway batch send skipped: {:?}", e),
             }
@@ -667,19 +669,6 @@ impl DefaultMQProducerImpl {
 #[allow(unused_must_use)]
 #[allow(unused_assignments)]
 impl DefaultMQProducerImpl {
-    #[cfg_attr(
-        feature = "observability",
-        tracing::instrument(
-            name = "RocketMQ PRODUCER SEND",
-            skip_all,
-            fields(
-                messaging.system = "rocketmq",
-                messaging.message.id = tracing::field::Empty,
-                messaging.message.body.size = tracing::field::Empty,
-                messaging.rocketmq.message.keys = tracing::field::Empty,
-            )
-        )
-    )]
     pub(super) async fn send_kernel_impl<T>(
         &self,
         msg: &mut T,
@@ -693,6 +682,25 @@ impl DefaultMQProducerImpl {
         T: MessageTrait + Send + Sync,
     {
         let runtime = self.runtime_snapshot();
+        #[cfg(feature = "observability")]
+        {
+            let client_instance = self.client_instance()?;
+            let span = rocketmq_observability::trace::client::producer_send_span(client_instance.telemetry_handle());
+            return self
+                .send_kernel_impl_with_runtime(
+                    msg,
+                    mq,
+                    communication_mode,
+                    send_callback,
+                    topic_publish_info,
+                    timeout,
+                    &runtime,
+                )
+                .instrument(span)
+                .await;
+        }
+
+        #[cfg(not(feature = "observability"))]
         self.send_kernel_impl_with_runtime(
             msg,
             mq,
@@ -721,6 +729,7 @@ impl DefaultMQProducerImpl {
         let begin_start_time = Instant::now();
 
         let client_instance = self.client_instance()?;
+        let telemetry_handle = client_instance.telemetry_handle();
 
         // Get broker info with a single lookup path
         let mut broker_name = client_instance.get_broker_name_from_message_queue(mq).await;
@@ -743,7 +752,8 @@ impl DefaultMQProducerImpl {
             MessageClientIDSetter::set_uniq_id(msg);
         }
         #[cfg(feature = "observability")]
-        rocketmq_observability::trace::record_current_message_properties(
+        rocketmq_observability::trace::record_current_message_properties_with_handle(
+            telemetry_handle,
             msg.get_properties(),
             msg.get_body().map(|body| body.len()),
         );
@@ -790,7 +800,7 @@ impl DefaultMQProducerImpl {
         #[cfg(feature = "observability")]
         {
             let mut properties = msg.get_properties().clone();
-            rocketmq_observability::inject_current_context(&mut properties);
+            rocketmq_observability::inject_current_context_with_handle(telemetry_handle, &mut properties);
             msg.set_properties(properties);
         }
 
@@ -957,7 +967,7 @@ impl DefaultMQProducerImpl {
             }
         };
 
-        rocketmq_observability::metrics::client::record_send(begin_start_time.elapsed());
+        client_instance.client_metrics().record_send(begin_start_time.elapsed());
 
         match send_result {
             Ok(result) => {

@@ -367,10 +367,10 @@ impl BrokerLogFilterControl {
             Err(error) => {
                 if self.send_schedule(previous.clone()).await.is_err() {
                     if self.handle.restore(&self.baseline).is_err() {
-                        rocketmq_observability::metrics::log_filter::record_rollback_failure("rocketmq-broker");
+                        self.handle.record_rollback_failure();
                     }
                     *self.active.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
-                    rocketmq_observability::metrics::log_filter::set_expiry_timestamp("rocketmq-broker", 0);
+                    self.handle.set_expiry_timestamp(0);
                 }
                 let _ = self
                     .append_audit(
@@ -399,21 +399,18 @@ impl BrokerLogFilterControl {
             let rollback = self.handle.restore(&self.baseline);
             let _ = self.send_schedule(None).await;
             *self.active.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
-            rocketmq_observability::metrics::log_filter::set_expiry_timestamp("rocketmq-broker", 0);
+            self.handle.set_expiry_timestamp(0);
             if let Err(rollback_error) = rollback {
-                rocketmq_observability::metrics::log_filter::record_rollback_failure("rocketmq-broker");
+                self.handle.record_rollback_failure();
                 tracing::error!(error = %rollback_error, "broker log filter rollback after audit failure failed");
             }
             return Err(error);
         }
-        rocketmq_observability::metrics::log_filter::set_expiry_timestamp(
-            "rocketmq-broker",
-            if request.restore {
-                0
-            } else {
-                current_millis() / 1_000 + request.ttl_seconds
-            },
-        );
+        self.handle.set_expiry_timestamp(if request.restore {
+            0
+        } else {
+            current_millis() / 1_000 + request.ttl_seconds
+        });
         Ok(resolved)
     }
 
@@ -478,7 +475,7 @@ impl BrokerLogFilterControl {
     }
 
     async fn append_audit(&self, record: AuditRecord) -> Result<(), BrokerLogFilterControlError> {
-        append_audit(&self.blocking, self.audit_path.clone(), record).await
+        append_audit(&self.blocking, self.audit_path.clone(), record, &self.handle).await
     }
 }
 
@@ -549,14 +546,14 @@ async fn restore_expired_override(context: &TtlControllerContext, expired: &Acti
         new_filter,
         result_text,
     );
-    if let Err(error) = append_audit(&context.blocking, context.audit_path.clone(), record).await {
+    if let Err(error) = append_audit(&context.blocking, context.audit_path.clone(), record, &context.handle).await {
         tracing::error!(error = %error, "broker log filter TTL restore audit failed");
     }
     if let Err(error) = result {
-        rocketmq_observability::metrics::log_filter::record_auto_restore_failure("rocketmq-broker");
+        context.handle.record_auto_restore_failure();
         tracing::error!(error = %error, "broker log filter TTL restore failed");
     } else {
-        rocketmq_observability::metrics::log_filter::set_expiry_timestamp("rocketmq-broker", 0);
+        context.handle.set_expiry_timestamp(0);
         *context.active.lock().unwrap_or_else(|error| error.into_inner()) = None;
     }
 }
@@ -632,6 +629,7 @@ async fn append_audit(
     blocking: &BlockingExecutor,
     path: PathBuf,
     record: AuditRecord,
+    log_filter: &LogFilterHandle,
 ) -> Result<(), BrokerLogFilterControlError> {
     let operation = move || write_audit_record(path.as_path(), &record);
     let result = match blocking.spawn_io("broker.log-filter-audit", operation).await {
@@ -639,7 +637,7 @@ async fn append_audit(
         Err(error) => Err(BrokerLogFilterControlError::Audit(error.to_string())),
     };
     if result.is_err() {
-        rocketmq_observability::metrics::log_filter::record_audit_failure("rocketmq-broker");
+        log_filter.record_audit_failure();
     }
     result
 }

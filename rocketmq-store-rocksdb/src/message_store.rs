@@ -155,6 +155,23 @@ impl RocksDbDerivedStore {
     where
         S: RocksDbConfigSource + ?Sized,
     {
+        Self::open_with_metrics(
+            source,
+            options,
+            service_context,
+            rocketmq_observability::metrics::rocksdb::RocksDbMetricsRecorder::noop(),
+        )
+    }
+
+    pub fn open_with_metrics<S>(
+        source: &S,
+        options: RocksDbMessageStoreOptions,
+        service_context: rocketmq_runtime::ChildServiceContext,
+        metrics: rocketmq_observability::metrics::rocksdb::RocksDbMetricsRecorder,
+    ) -> Result<Self, RocksDbMessageStoreError>
+    where
+        S: RocksDbConfigSource + ?Sized,
+    {
         let runtime_scope = RocksDbRuntimeScope::new(service_context);
         if !source.rocksdb_store_enabled() {
             return Err(RocksDbMessageStoreError::Config(
@@ -172,11 +189,17 @@ impl RocksDbDerivedStore {
 
         let rocksdb_config = RocksDbConfig::consume_queue_from_message_store_config(source);
         rocksdb_config.validate()?;
-        let rocksdb_store = Arc::new(RocksDbStore::open(rocksdb_config.clone())?);
+        let rocksdb_store = Arc::new(RocksDbStore::open_with_metrics(
+            rocksdb_config.clone(),
+            metrics.clone(),
+        )?);
         let consume_queue_store = RocksDbConsumeQueueStore::new(Arc::clone(&rocksdb_store));
         let message_rocksdb_config = RocksDbConfig::message_from_message_store_config(source);
         message_rocksdb_config.validate()?;
-        let message_rocksdb_storage = Arc::new(MessageRocksDbStorage::open(message_rocksdb_config.clone())?);
+        let message_rocksdb_storage = Arc::new(MessageRocksDbStorage::open_with_metrics(
+            message_rocksdb_config.clone(),
+            metrics,
+        )?);
         let rocksdb_maintenance_service = RocksDbMaintenanceService::new(
             Arc::clone(&rocksdb_store),
             rocksdb_config.clone(),

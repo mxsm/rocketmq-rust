@@ -61,6 +61,7 @@ use crate::request_ordering::RequestOrdering;
 use crate::security::TransportSecurity;
 use crate::session_executor::SessionDispatchError;
 use crate::session_executor::SessionExecutor;
+use crate::telemetry::TransportTelemetry;
 use crate::tls::TlsServerRuntime;
 use crate::write_strategy::QueuedWrite;
 use crate::write_strategy::WriterOperation;
@@ -95,6 +96,7 @@ pub struct SessionHandle {
     response_class: Option<AdmissionClass>,
     lifecycle: Arc<SessionLifecycle>,
     writer_task_id: TaskId,
+    telemetry: TransportTelemetry,
 }
 
 impl SessionHandle {
@@ -120,6 +122,7 @@ impl SessionHandle {
             self.connection_id.clone(),
             self.response_class,
             self.lifecycle.clone(),
+            self.telemetry.clone(),
         )
     }
 
@@ -255,6 +258,7 @@ pub struct TransportListener {
     security: Arc<TransportSecurity>,
     principal: Option<Principal>,
     next_session: AtomicU64,
+    telemetry: TransportTelemetry,
 }
 
 impl TransportListener {
@@ -275,6 +279,7 @@ impl TransportListener {
             security: Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
             principal: None,
             next_session: AtomicU64::new(1),
+            telemetry: TransportTelemetry::noop(),
         }
     }
 
@@ -286,6 +291,13 @@ impl TransportListener {
     pub fn with_security(mut self, security: Arc<TransportSecurity>, principal: Option<Principal>) -> Self {
         self.security = security;
         self.principal = principal;
+        self
+    }
+
+    /// Binds accepted connections and their derived channels to one telemetry instance.
+    #[must_use]
+    pub fn with_telemetry(mut self, telemetry: TransportTelemetry) -> Self {
+        self.telemetry = telemetry;
         self
     }
 
@@ -326,6 +338,7 @@ impl TransportListener {
             let security = self.security.clone();
             let principal = self.principal.clone();
             let handler = handler.clone();
+            let telemetry = self.telemetry.clone();
             let spawn_group = session_group.clone();
             if spawn_group
                 .spawn("rocketmq.transport.session", TaskKind::Service, async move {
@@ -351,6 +364,7 @@ impl TransportListener {
                         return;
                     };
                     let (connection, peer_is_tls) = negotiated.into_parts();
+                    let connection = connection.with_telemetry(telemetry);
                     drop(_handshake_permit);
                     run_framed_session(
                         connection,
@@ -394,6 +408,7 @@ async fn run_framed_session<H>(
     H: ConnectionHandler,
 {
     let connection_id = connection.connection_id().clone();
+    let telemetry = connection.telemetry();
     let (mut frame_writer, mut stream) = connection.into_session_io();
     let executor = match SessionExecutor::try_new(&task_group, admission.clone(), scope) {
         Ok(executor) => executor,
@@ -478,6 +493,7 @@ async fn run_framed_session<H>(
         response_class: None,
         lifecycle,
         writer_task_id,
+        telemetry,
     };
 
     handler.connected(session.clone()).await;
@@ -641,6 +657,7 @@ pub struct TransportServer {
     active_sessions: AtomicUsize,
     security: Arc<TransportSecurity>,
     principal: Option<Principal>,
+    telemetry: TransportTelemetry,
 }
 
 struct ActiveSessionGuard {
@@ -723,6 +740,48 @@ impl TransportServer {
         security: Arc<TransportSecurity>,
         principal: Option<Principal>,
     ) -> RocketMQResult<Arc<Self>> {
+        Self::bind_with_security_and_telemetry(
+            service_context,
+            config,
+            processor,
+            admission,
+            security,
+            principal,
+            TransportTelemetry::noop(),
+        )
+        .await
+    }
+
+    /// Binds a server whose accepted connections use one explicit telemetry instance.
+    pub async fn bind_with_telemetry(
+        service_context: ChildServiceContext,
+        config: TransportServerConfig,
+        processor: Arc<dyn RequestProcessor>,
+        admission: Arc<AdmissionController>,
+        telemetry: TransportTelemetry,
+    ) -> RocketMQResult<Arc<Self>> {
+        Self::bind_with_security_and_telemetry(
+            service_context,
+            config,
+            processor,
+            admission,
+            Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
+            None,
+            telemetry,
+        )
+        .await
+    }
+
+    /// Binds a server with explicit security and telemetry capabilities.
+    pub async fn bind_with_security_and_telemetry(
+        service_context: ChildServiceContext,
+        config: TransportServerConfig,
+        processor: Arc<dyn RequestProcessor>,
+        admission: Arc<AdmissionController>,
+        security: Arc<TransportSecurity>,
+        principal: Option<Principal>,
+        telemetry: TransportTelemetry,
+    ) -> RocketMQResult<Arc<Self>> {
         let listener = tokio::net::TcpListener::bind(config.bind_address).await?;
         let local_addr = listener.local_addr()?;
         let tls = TlsServerRuntime::initialize_with_service_context(config.tls.clone(), &service_context).await?;
@@ -739,6 +798,7 @@ impl TransportServer {
             active_sessions: AtomicUsize::new(0),
             security,
             principal,
+            telemetry,
         }))
     }
 
@@ -839,6 +899,7 @@ impl TransportServer {
             return;
         };
         let (connection, peer_is_tls) = negotiated.into_parts();
+        let connection = connection.with_telemetry(self.telemetry.clone());
         drop(_handshake_permit);
         run_framed_session(
             connection,

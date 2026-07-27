@@ -25,7 +25,6 @@ fn typed_and_legacy_error_boundaries_are_both_exported() {
     let _ = McpApp::bootstrap_typed;
     let _ = McpApp::bootstrap;
     let _ = app::init_tracing_typed;
-    let _ = app::init_tracing;
     let _ = transport::stdio::serve_typed;
     let _ = transport::stdio::serve;
 

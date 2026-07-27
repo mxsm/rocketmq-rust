@@ -84,16 +84,8 @@ pub fn main() -> RocketMQResult<()> {
 }
 
 async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> RocketMQResult<()> {
-    let telemetry_guard =
-        rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())
-            .expect("telemetry logging bootstrap should initialize");
     let config = SmokeConfig::from_env()?;
-    let result = run_smoke(client_runtime, config).await;
-    telemetry_guard
-        .shutdown()
-        .into_result()
-        .expect("telemetry logging shutdown should succeed");
-    result
+    run_smoke(client_runtime, config).await
 }
 
 async fn run_smoke(

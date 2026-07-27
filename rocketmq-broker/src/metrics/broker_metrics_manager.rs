@@ -19,10 +19,7 @@ use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 
 #[cfg(feature = "otel-metrics")]
-#[path = "broker_metrics_manager_impl.rs"]
-mod owner_manager;
-#[cfg(feature = "otel-metrics")]
-pub(crate) use owner_manager::*;
+pub(crate) use rocketmq_observability::metrics::broker_manager::*;
 
 /// Get message type from send message request header.
 pub(crate) fn get_message_type(request_header: &SendMessageRequestHeader) -> TopicMessageType {
@@ -59,10 +56,6 @@ pub(crate) struct BrokerMetricsManager;
 
 #[cfg(not(feature = "otel-metrics"))]
 impl BrokerMetricsManager {
-    pub(crate) fn try_global() -> Option<&'static Self> {
-        None
-    }
-
     pub(crate) fn record_messages_in_success(
         &self,
         _topic: &str,
@@ -96,5 +89,40 @@ impl BrokerMetricsManager {
     where
         F: Fn() -> Option<T> + Send + Sync + 'static,
     {
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn broker_metrics_sources_have_no_global_manager_access() {
+        let manager_source = include_str!("../../../rocketmq-observability/src/metrics/broker_manager.rs");
+        for forbidden in [
+            concat!("static ", "BROKER_METRICS_MANAGER"),
+            concat!("static ", "LABEL_MAP"),
+            concat!("static ", "ATTRIBUTES_BUILDER_SUPPLIER"),
+            concat!("BrokerMetricsManager::", "try_global"),
+            concat!("new_attributes", "_builder"),
+        ] {
+            assert!(
+                !manager_source.contains(forbidden),
+                "Broker metrics manager must remain instance-scoped: {forbidden}"
+            );
+        }
+
+        for source in [
+            include_str!("../broker_runtime/control_plane.rs"),
+            include_str!("../processor/default_pull_message_result_handler.rs"),
+            include_str!("../processor/end_transaction_processor.rs"),
+            include_str!("../processor/send_message_processor.rs"),
+            include_str!("../subscription/manager/subscription_group_manager.rs"),
+            include_str!("../topic/manager/topic_config_manager.rs"),
+        ] {
+            let global_access = concat!("BrokerMetricsManager::", "try_global");
+            assert!(
+                !source.contains(global_access),
+                "Broker business metrics must be constructor-injected"
+            );
+        }
     }
 }

@@ -49,6 +49,30 @@ impl TransientStorePool {
         }
     }
 
+    /// Creates a pool whose memory-lock observations use the owning Store recorder.
+    #[cfg(feature = "observability")]
+    #[doc(hidden)]
+    pub fn new_with_memory_lock_budget_and_store_metrics(
+        pool_size: usize,
+        file_size: usize,
+        memory_lock_budget_bytes: u64,
+        store_metrics: rocketmq_observability::metrics::store::StoreMetricsRecorder,
+    ) -> Self {
+        let available_buffers = Arc::new(Mutex::new(VecDeque::with_capacity(pool_size)));
+        let is_real_commit = Arc::new(Mutex::new(true));
+        Self {
+            pool_size,
+            file_size,
+            available_buffers,
+            is_real_commit,
+            memory_lock_manager: Arc::new(MemoryLockManager::new_with_store_metrics(
+                true,
+                memory_lock_budget_bytes,
+                store_metrics,
+            )),
+        }
+    }
+
     pub fn init(&self) -> RocketMQResult<()> {
         self.init_with_locker(mlock)
     }

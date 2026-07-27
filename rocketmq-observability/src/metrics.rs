@@ -15,24 +15,39 @@
 pub mod auth;
 pub mod broker;
 pub mod broker_constants;
+#[cfg(feature = "otel-metrics")]
+pub mod broker_manager;
 pub mod catalog;
 pub mod client;
 pub mod controller;
 pub mod controller_constants;
+#[cfg(feature = "otel-metrics")]
+pub mod controller_manager;
 pub mod instruments;
 pub mod labels;
 pub mod log_filter;
 pub mod namesrv;
 pub mod noop_instruments;
 #[cfg(feature = "otel-metrics")]
-pub mod owner_instruments;
+pub(crate) mod owner_instruments;
 pub mod pop_constants;
 #[cfg(feature = "otel-metrics")]
 pub mod pop_manager;
 pub mod pop_revive_message_type;
 pub mod proxy;
+pub mod release_identity;
 pub mod remoting;
 pub mod rocksdb;
 pub mod store;
 pub mod tiered_store;
 pub mod timer;
+
+#[cfg(all(test, feature = "otel-metrics"))]
+#[path = "metrics/tests/component_metric_isolation.rs"]
+mod component_metric_isolation_tests;
+#[cfg(test)]
+#[path = "metrics/tests/release_identity.rs"]
+mod release_identity_tests;
+#[cfg(all(test, feature = "otel-metrics"))]
+#[path = "metrics/tests/remoting_metric_isolation.rs"]
+mod remoting_metric_isolation_tests;

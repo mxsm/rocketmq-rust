@@ -53,6 +53,7 @@ use tracing::warn;
 use crate::broker_path_config_helper::get_topic_config_path;
 #[cfg(feature = "rocksdb_store")]
 use crate::config::rocksdb_manager::RocksDbBrokerConfigManager;
+use crate::metrics::broker_metrics_manager::BrokerMetricsManager;
 
 pub(crate) struct TopicConfigManager {
     topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
@@ -61,6 +62,7 @@ pub(crate) struct TopicConfigManager {
     persist_lock: Arc<parking_lot::Mutex<()>>,
     config_file_path: String,
     real_time_persist_rocksdb_config: AtomicBool,
+    broker_metrics_manager: Option<Arc<BrokerMetricsManager>>,
     #[cfg(feature = "rocksdb_store")]
     rocksdb_config_manager: Option<Arc<RocksDbBrokerConfigManager>>,
 }
@@ -80,15 +82,20 @@ pub(crate) struct TopicConfigCreation {
 
 impl TopicConfigManager {
     #[inline]
-    pub(crate) fn record_topic_create_latency(start_time: Instant) {
-        if let Some(metrics) = crate::metrics::broker_metrics_manager::BrokerMetricsManager::try_global() {
+    pub(crate) fn record_topic_create_latency(&self, start_time: Instant) {
+        if let Some(metrics) = self.broker_metrics_manager.as_ref() {
             metrics.record_topic_create_time(start_time.elapsed().as_millis().min(u64::MAX as u128) as u64);
         }
     }
 
     const SCHEDULE_TOPIC_QUEUE_NUM: u32 = 18;
 
-    pub fn new(broker_config: &BrokerConfig, message_store_config: &MessageStoreConfig, init: bool) -> Self {
+    pub fn new(
+        broker_config: &BrokerConfig,
+        message_store_config: &MessageStoreConfig,
+        init: bool,
+        broker_metrics_manager: Option<Arc<BrokerMetricsManager>>,
+    ) -> Self {
         let mut manager = Self {
             topic_config_table: Arc::new(DashMap::with_capacity(1024)),
             topic_config_snapshot: ArcSwap::from_pointee(HashMap::new()),
@@ -96,6 +103,7 @@ impl TopicConfigManager {
             persist_lock: Arc::new(parking_lot::Mutex::new(())),
             config_file_path: get_topic_config_path(broker_config.store_path_root_dir.as_str()),
             real_time_persist_rocksdb_config: AtomicBool::new(message_store_config.real_time_persist_rocksdb_config),
+            broker_metrics_manager,
             #[cfg(feature = "rocksdb_store")]
             rocksdb_config_manager: None,
         };
@@ -111,8 +119,9 @@ impl TopicConfigManager {
         message_store_config: &MessageStoreConfig,
         init: bool,
         rocksdb_config_manager: Arc<RocksDbBrokerConfigManager>,
+        broker_metrics_manager: Option<Arc<BrokerMetricsManager>>,
     ) -> Self {
-        let mut manager = Self::new(broker_config, message_store_config, init);
+        let mut manager = Self::new(broker_config, message_store_config, init, broker_metrics_manager);
         manager.rocksdb_config_manager = Some(rocksdb_config_manager);
         manager
     }
@@ -612,7 +621,7 @@ impl TopicConfigManager {
             }
         }
         if old.is_none() {
-            Self::record_topic_create_latency(start_time);
+            self.record_topic_create_latency(start_time);
         }
         update
     }
@@ -1241,7 +1250,7 @@ mod tests {
             store_path_root_dir: root,
             ..MessageStoreConfig::default()
         };
-        let manager = TopicConfigManager::new(&broker_config, &message_store_config, false);
+        let manager = TopicConfigManager::new(&broker_config, &message_store_config, false, None);
         (temp_dir, manager)
     }
 
@@ -1463,6 +1472,7 @@ mod rocksdb_config_tests {
             &message_store_config,
             false,
             rocksdb_manager,
+            None,
         );
         topic_manager.update_topic_config(TopicConfig::with_queues("TopicA", 4, 5), 0);
         topic_manager.persist().unwrap();
@@ -1477,6 +1487,7 @@ mod rocksdb_config_tests {
             &message_store_config,
             false,
             restarted_rocksdb_manager,
+            None,
         );
 
         assert!(restarted_manager.load());
@@ -1502,6 +1513,7 @@ mod rocksdb_config_tests {
             &message_store_config,
             false,
             rocksdb_manager,
+            None,
         );
         let topic_name = CheetahString::from_static_str("TopicDelete");
         topic_manager.update_topic_config(TopicConfig::with_queues(topic_name.clone(), 1, 1), 0);
@@ -1519,6 +1531,7 @@ mod rocksdb_config_tests {
             &message_store_config,
             false,
             restarted_rocksdb_manager,
+            None,
         );
 
         assert!(restarted_manager.load());

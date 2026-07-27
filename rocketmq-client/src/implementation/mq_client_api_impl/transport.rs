@@ -27,6 +27,7 @@ impl MQClientAPIImpl {
         client_config: Arc<ClientConfig>,
         tx: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
         service_context: ChildServiceContext,
+        telemetry_handle: rocketmq_observability::TelemetryHandle,
     ) -> Self {
         Self::init_remoting_version();
 
@@ -34,11 +35,19 @@ impl MQClientAPIImpl {
         remoting_config.use_tls = client_config.use_tls;
         remoting_config.tls_config = client_config.tls_config.clone();
         remoting_config.tls_config.enable = client_config.use_tls;
-        let default_client = RocketmqDefaultClient::new_with_cl(
+        #[cfg(any(feature = "observability", feature = "observability-metrics"))]
+        let transport_telemetry = TransportTelemetry::from_handle(&telemetry_handle);
+        #[cfg(not(any(feature = "observability", feature = "observability-metrics")))]
+        let transport_telemetry = {
+            let _ = telemetry_handle;
+            TransportTelemetry::noop()
+        };
+        let default_client = RocketmqDefaultClient::new_with_cl_and_telemetry(
             Arc::new(remoting_config),
             client_remoting_processor,
             tx,
             service_context.child("transport"),
+            transport_telemetry,
         );
         if let Some(hook) = rpc_hook {
             default_client.register_rpc_hook(hook);

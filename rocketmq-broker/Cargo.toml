@@ -43,12 +43,15 @@ otel-metrics     = [
 otel-traces      = [
   "rocketmq-observability/otel-traces",
   "rocketmq-store/observability-traces",
+  "rocketmq-transport/observability-traces",
 ]
 otel-logs        = ["rocketmq-observability/otel-logs"]
 otlp-metrics     = ["otel-metrics", "rocketmq-observability/otlp-metrics"]
 otlp-traces      = ["otel-traces", "rocketmq-observability/otlp-traces"]
 otlp-logs        = ["otel-logs", "rocketmq-observability/otlp-logs"]
 prometheus       = ["otel-metrics", "rocketmq-observability/prometheus"]
+metrics-prometheus = ["prometheus"]
+production-observability = ["metrics-prometheus", "otlp-traces", "otlp-logs"]
 
 [dependencies]
 rocketmq-store       = { workspace = true }

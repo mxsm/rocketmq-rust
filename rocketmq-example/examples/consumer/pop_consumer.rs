@@ -41,9 +41,6 @@ pub fn main() -> RocketMQResult<()> {
 }
 
 async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> RocketMQResult<()> {
-    let telemetry_guard =
-        rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())
-            .expect("telemetry logging bootstrap should initialize");
     switch_pop_consumer(client_runtime.clone()).await?;
 
     // create a producer builder with default configuration
@@ -59,10 +56,6 @@ async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>
     consumer.register_message_listener_concurrently(MyMessageListener);
     consumer.start().await?;
     let _ = wait_for_signal().await;
-    telemetry_guard
-        .shutdown()
-        .into_result()
-        .expect("telemetry logging shutdown should succeed");
 
     Ok(())
 }

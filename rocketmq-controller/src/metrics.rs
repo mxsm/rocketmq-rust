@@ -16,4 +16,3 @@ pub mod controller_metrics_constant;
 pub mod controller_metrics_manager;
 
 pub use controller_metrics_constant::*;
-pub use controller_metrics_manager::ControllerMetricsManager;

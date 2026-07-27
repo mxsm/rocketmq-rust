@@ -14,9 +14,10 @@
 
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
-use std::sync::OnceLock;
+use std::sync::Arc;
 
 use crate::LogFilterSource;
+use crate::TelemetryHandle;
 
 #[cfg(feature = "otel-metrics")]
 use crate::semantic::labels;
@@ -41,104 +42,172 @@ struct MetricState {
     rollback_failures: AtomicU64,
 }
 
-static STATE: OnceLock<MetricState> = OnceLock::new();
-
-fn state() -> &'static MetricState {
-    STATE.get_or_init(MetricState::default)
+/// Instance-scoped log-filter telemetry bound to one explicit telemetry runtime.
+///
+/// The operational counters remain available for local diagnostics even when metrics export is
+/// disabled. OpenTelemetry instruments are created from the injected [`TelemetryHandle`] and are
+/// gated by that handle's lifecycle; this type never reads process-global OpenTelemetry state.
+#[derive(Clone)]
+pub(crate) struct LogFilterMetrics {
+    inner: Arc<LogFilterMetricsInner>,
 }
 
-pub fn snapshot() -> LogFilterMetricsSnapshot {
-    let state = state();
-    LogFilterMetricsSnapshot {
-        reload_successes: state.reload_successes.load(Ordering::Relaxed),
-        reload_failures: state.reload_failures.load(Ordering::Relaxed),
-        audit_failures: state.audit_failures.load(Ordering::Relaxed),
-        auto_restore_failures: state.auto_restore_failures.load(Ordering::Relaxed),
-        rollback_failures: state.rollback_failures.load(Ordering::Relaxed),
-    }
-}
-
-pub fn record_reload(service: &str, success: bool, source: LogFilterSource) {
-    if success {
-        state().reload_successes.fetch_add(1, Ordering::Relaxed);
-    } else {
-        state().reload_failures.fetch_add(1, Ordering::Relaxed);
-    }
+struct LogFilterMetricsInner {
+    state: MetricState,
     #[cfg(feature = "otel-metrics")]
-    instruments().reload_total.add(
-        1,
-        &[
-            opentelemetry::KeyValue::new(labels::SERVICE, service.to_owned()),
-            opentelemetry::KeyValue::new("result", if success { "success" } else { "failure" }),
-            opentelemetry::KeyValue::new(labels::SOURCE, source.as_str()),
-        ],
-    );
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = (service, source);
+    telemetry: TelemetryHandle,
+    #[cfg(feature = "otel-metrics")]
+    service: Arc<str>,
+    #[cfg(feature = "otel-metrics")]
+    instruments: Option<Instruments>,
 }
 
-pub fn set_active(service: &str, previous: Option<LogFilterSource>, source: LogFilterSource) {
-    #[cfg(feature = "otel-metrics")]
-    {
-        if let Some(previous) = previous {
-            instruments().active.record(
-                0,
+impl LogFilterMetrics {
+    pub(crate) fn new(telemetry: TelemetryHandle, service: impl Into<Arc<str>>) -> Self {
+        #[cfg(feature = "otel-metrics")]
+        let service = service.into();
+        #[cfg(feature = "otel-metrics")]
+        let instruments = telemetry.meter(service.as_ref()).map(Instruments::new);
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = (telemetry, service);
+        Self {
+            inner: Arc::new(LogFilterMetricsInner {
+                state: MetricState::default(),
+                #[cfg(feature = "otel-metrics")]
+                telemetry,
+                #[cfg(feature = "otel-metrics")]
+                service,
+                #[cfg(feature = "otel-metrics")]
+                instruments,
+            }),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn snapshot(&self) -> LogFilterMetricsSnapshot {
+        LogFilterMetricsSnapshot {
+            reload_successes: self.inner.state.reload_successes.load(Ordering::Relaxed),
+            reload_failures: self.inner.state.reload_failures.load(Ordering::Relaxed),
+            audit_failures: self.inner.state.audit_failures.load(Ordering::Relaxed),
+            auto_restore_failures: self.inner.state.auto_restore_failures.load(Ordering::Relaxed),
+            rollback_failures: self.inner.state.rollback_failures.load(Ordering::Relaxed),
+        }
+    }
+
+    pub(crate) fn record_reload(&self, success: bool, source: LogFilterSource) {
+        if success {
+            self.inner.state.reload_successes.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.inner.state.reload_failures.fetch_add(1, Ordering::Relaxed);
+        }
+        #[cfg(feature = "otel-metrics")]
+        if self.inner.telemetry.is_active() {
+            if let Some(instruments) = self.inner.instruments.as_ref() {
+                instruments.reload_total.add(
+                    1,
+                    &[
+                        opentelemetry::KeyValue::new(labels::SERVICE, self.inner.service.to_string()),
+                        opentelemetry::KeyValue::new("result", if success { "success" } else { "failure" }),
+                        opentelemetry::KeyValue::new(labels::SOURCE, source.as_str()),
+                    ],
+                );
+            }
+        }
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = source;
+    }
+
+    pub(crate) fn set_active(&self, previous: Option<LogFilterSource>, source: LogFilterSource) {
+        #[cfg(feature = "otel-metrics")]
+        if self.inner.telemetry.is_active() {
+            let Some(instruments) = self.inner.instruments.as_ref() else {
+                return;
+            };
+            if let Some(previous) = previous {
+                instruments.active.record(
+                    0,
+                    &[
+                        opentelemetry::KeyValue::new(labels::SERVICE, self.inner.service.to_string()),
+                        opentelemetry::KeyValue::new(labels::SOURCE, previous.as_str()),
+                    ],
+                );
+            }
+            instruments.active.record(
+                1,
                 &[
-                    opentelemetry::KeyValue::new(labels::SERVICE, service.to_owned()),
-                    opentelemetry::KeyValue::new(labels::SOURCE, previous.as_str()),
+                    opentelemetry::KeyValue::new(labels::SERVICE, self.inner.service.to_string()),
+                    opentelemetry::KeyValue::new(labels::SOURCE, source.as_str()),
                 ],
             );
         }
-        instruments().active.record(
-            1,
-            &[
-                opentelemetry::KeyValue::new(labels::SERVICE, service.to_owned()),
-                opentelemetry::KeyValue::new(labels::SOURCE, source.as_str()),
-            ],
-        );
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = (previous, source);
     }
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = (service, previous, source);
-}
 
-pub fn set_expiry_timestamp(service: &str, timestamp_seconds: u64) {
-    #[cfg(feature = "otel-metrics")]
-    instruments().expiry.record(
-        timestamp_seconds,
-        &[opentelemetry::KeyValue::new(labels::SERVICE, service.to_owned())],
-    );
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = (service, timestamp_seconds);
-}
+    pub(crate) fn set_expiry_timestamp(&self, timestamp_seconds: u64) {
+        #[cfg(feature = "otel-metrics")]
+        if self.inner.telemetry.is_active() {
+            if let Some(instruments) = self.inner.instruments.as_ref() {
+                instruments.expiry.record(
+                    timestamp_seconds,
+                    &[opentelemetry::KeyValue::new(
+                        labels::SERVICE,
+                        self.inner.service.to_string(),
+                    )],
+                );
+            }
+        }
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = timestamp_seconds;
+    }
 
-pub fn record_audit_failure(service: &str) {
-    state().audit_failures.fetch_add(1, Ordering::Relaxed);
-    #[cfg(feature = "otel-metrics")]
-    instruments()
-        .audit_failure_total
-        .add(1, &[opentelemetry::KeyValue::new(labels::SERVICE, service.to_owned())]);
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = service;
-}
+    pub(crate) fn record_audit_failure(&self) {
+        self.inner.state.audit_failures.fetch_add(1, Ordering::Relaxed);
+        #[cfg(feature = "otel-metrics")]
+        if self.inner.telemetry.is_active() {
+            if let Some(instruments) = self.inner.instruments.as_ref() {
+                instruments.audit_failure_total.add(
+                    1,
+                    &[opentelemetry::KeyValue::new(
+                        labels::SERVICE,
+                        self.inner.service.to_string(),
+                    )],
+                );
+            }
+        }
+    }
 
-pub fn record_auto_restore_failure(service: &str) {
-    state().auto_restore_failures.fetch_add(1, Ordering::Relaxed);
-    #[cfg(feature = "otel-metrics")]
-    instruments()
-        .auto_restore_failure_total
-        .add(1, &[opentelemetry::KeyValue::new(labels::SERVICE, service.to_owned())]);
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = service;
-}
+    pub(crate) fn record_auto_restore_failure(&self) {
+        self.inner.state.auto_restore_failures.fetch_add(1, Ordering::Relaxed);
+        #[cfg(feature = "otel-metrics")]
+        if self.inner.telemetry.is_active() {
+            if let Some(instruments) = self.inner.instruments.as_ref() {
+                instruments.auto_restore_failure_total.add(
+                    1,
+                    &[opentelemetry::KeyValue::new(
+                        labels::SERVICE,
+                        self.inner.service.to_string(),
+                    )],
+                );
+            }
+        }
+    }
 
-pub fn record_rollback_failure(service: &str) {
-    state().rollback_failures.fetch_add(1, Ordering::Relaxed);
-    #[cfg(feature = "otel-metrics")]
-    instruments()
-        .rollback_failure_total
-        .add(1, &[opentelemetry::KeyValue::new(labels::SERVICE, service.to_owned())]);
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = service;
+    pub(crate) fn record_rollback_failure(&self) {
+        self.inner.state.rollback_failures.fetch_add(1, Ordering::Relaxed);
+        #[cfg(feature = "otel-metrics")]
+        if self.inner.telemetry.is_active() {
+            if let Some(instruments) = self.inner.instruments.as_ref() {
+                instruments.rollback_failure_total.add(
+                    1,
+                    &[opentelemetry::KeyValue::new(
+                        labels::SERVICE,
+                        self.inner.service.to_string(),
+                    )],
+                );
+            }
+        }
+    }
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -152,11 +221,9 @@ struct Instruments {
 }
 
 #[cfg(feature = "otel-metrics")]
-fn instruments() -> &'static Instruments {
-    static INSTRUMENTS: OnceLock<Instruments> = OnceLock::new();
-    INSTRUMENTS.get_or_init(|| {
-        let meter = opentelemetry::global::meter("rocketmq-observability-log-filter");
-        Instruments {
+impl Instruments {
+    fn new(meter: opentelemetry::metrics::Meter) -> Self {
+        Self {
             reload_total: meter.u64_counter(metrics::LOG_FILTER_RELOAD_TOTAL).build(),
             active: meter.u64_gauge(metrics::LOG_FILTER_ACTIVE).build(),
             expiry: meter.u64_gauge(metrics::LOG_FILTER_EXPIRY_TIMESTAMP_SECONDS).build(),
@@ -166,7 +233,7 @@ fn instruments() -> &'static Instruments {
                 .build(),
             rollback_failure_total: meter.u64_counter(metrics::LOG_FILTER_ROLLBACK_FAILURE_TOTAL).build(),
         }
-    })
+    }
 }
 
 #[cfg(test)]
@@ -174,19 +241,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn snapshot_tracks_reload_and_failure_counters() {
-        let before = snapshot();
-        record_reload("test", true, LogFilterSource::Runtime);
-        record_reload("test", false, LogFilterSource::Runtime);
-        record_audit_failure("test");
-        record_auto_restore_failure("test");
-        record_rollback_failure("test");
-        let after = snapshot();
+    fn snapshots_are_isolated_between_log_filter_handles() {
+        let first = LogFilterMetrics::new(TelemetryHandle::noop(), "rocketmq-broker");
+        let second = LogFilterMetrics::new(TelemetryHandle::noop(), "rocketmq-broker");
 
-        assert_eq!(after.reload_successes, before.reload_successes + 1);
-        assert_eq!(after.reload_failures, before.reload_failures + 1);
-        assert_eq!(after.audit_failures, before.audit_failures + 1);
-        assert_eq!(after.auto_restore_failures, before.auto_restore_failures + 1);
-        assert_eq!(after.rollback_failures, before.rollback_failures + 1);
+        first.record_reload(true, LogFilterSource::Runtime);
+        first.record_reload(false, LogFilterSource::Runtime);
+        first.record_audit_failure();
+        first.record_auto_restore_failure();
+        first.record_rollback_failure();
+
+        assert_eq!(
+            first.snapshot(),
+            LogFilterMetricsSnapshot {
+                reload_successes: 1,
+                reload_failures: 1,
+                audit_failures: 1,
+                auto_restore_failures: 1,
+                rollback_failures: 1,
+            }
+        );
+        assert_eq!(second.snapshot(), LogFilterMetricsSnapshot::default());
     }
 }

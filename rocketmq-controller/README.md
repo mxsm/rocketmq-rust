@@ -186,6 +186,8 @@ Create and manage a controller directly from Rust:
 use rocketmq_controller::config::{ControllerConfig, RaftPeer};
 use rocketmq_controller::manager::ControllerManager;
 use rocketmq_error::Result;
+use rocketmq_observability::TelemetryHandle;
+use rocketmq_runtime::RuntimeContext;
 use rocketmq_rust::ArcMut;
 
 #[tokio::main]
@@ -198,7 +200,15 @@ async fn main() -> Result<()> {
         }])
         .with_storage_path("/tmp/rocketmq-controller/node-1");
 
-    let manager = ArcMut::new(ControllerManager::new(config).await?);
+    let runtime = RuntimeContext::from_current("controller");
+    let manager = ArcMut::new(
+        ControllerManager::new(
+            config,
+            runtime.service_context("controller"),
+            TelemetryHandle::noop(),
+        )
+        .await?,
+    );
     if !manager.clone().initialize().await? {
         return Err(rocketmq_controller::error::ControllerError::InitializationFailed.into());
     }

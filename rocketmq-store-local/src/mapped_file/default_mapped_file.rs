@@ -82,11 +82,13 @@ fn current_millis() -> u64 {
 }
 
 const LINUX_STORAGE_DEGRADATION_UNKNOWN_ERRNO: i32 = -1;
+#[cfg(test)]
 const LINUX_STORAGE_OP_FALLOCATE: &str = "fallocate";
 const LINUX_STORAGE_OP_MADVISE: &str = "madvise";
 const LINUX_STORAGE_OP_PAGE_TOUCH: &str = "page_touch";
 const LINUX_STORAGE_REASON_FAILED: &str = "failed";
 const LINUX_STORAGE_REASON_FLUSH_FAILED: &str = "flush_failed";
+#[cfg(test)]
 const LINUX_STORAGE_REASON_UNSUPPORTED: &str = "unsupported";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,6 +114,7 @@ fn errno_from_io_error(error: &io::Error) -> i32 {
     error.raw_os_error().unwrap_or(LINUX_STORAGE_DEGRADATION_UNKNOWN_ERRNO)
 }
 
+#[cfg(test)]
 fn file_preallocate_degradation_event(outcome: FilePreallocateOutcome) -> Option<LinuxStorageDegradationEvent> {
     match outcome {
         FilePreallocateOutcome::Allocated => None,
@@ -128,19 +131,6 @@ fn file_preallocate_degradation_event(outcome: FilePreallocateOutcome) -> Option
     }
 }
 
-fn emit_linux_storage_degradation_observability(event: LinuxStorageDegradationEvent) {
-    #[cfg(feature = "observability")]
-    rocketmq_observability::metrics::store::record_linux_storage_degradation(
-        event.operation,
-        event.reason,
-        event.errno,
-        event.count,
-    );
-
-    #[cfg(not(feature = "observability"))]
-    let _ = event;
-}
-
 pub struct DefaultMappedFile<M: MappedMemory = NativeMappedMemory> {
     reference_resource: ReferenceResourceCounter,
     storage: MappedFileStorage,
@@ -154,6 +144,8 @@ pub struct DefaultMappedFile<M: MappedMemory = NativeMappedMemory> {
     mapped_byte_buffer_access_count_since_last_swap: AtomicI64,
     metrics: Option<MappedFileMetrics>,
     flush_strategy: FlushStrategy,
+    #[cfg(feature = "observability")]
+    store_metrics: rocketmq_observability::metrics::store::StoreMetricsRecorder,
 }
 
 #[derive(Default)]
@@ -282,9 +274,6 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
 
         let (storage, preallocate_outcome) = MappedFileStorage::open(path_buf, file_size)?;
         if let Some(preallocate_outcome) = preallocate_outcome {
-            if let Some(event) = file_preallocate_degradation_event(preallocate_outcome) {
-                emit_linux_storage_degradation_observability(event);
-            }
             match preallocate_outcome {
                 FilePreallocateOutcome::Allocated => {}
                 FilePreallocateOutcome::Unsupported { errno } => debug!(
@@ -317,7 +306,29 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
             transient_store_pool,
             metrics: Some(MappedFileMetrics::new()),
             flush_strategy: FlushStrategy::Async,
+            #[cfg(feature = "observability")]
+            store_metrics: rocketmq_observability::metrics::store::StoreMetricsRecorder::noop(),
         })
+    }
+
+    /// Binds mapped-file observations to the owning Store telemetry instance.
+    #[cfg(feature = "observability")]
+    #[doc(hidden)]
+    pub fn with_store_metrics(
+        mut self,
+        store_metrics: rocketmq_observability::metrics::store::StoreMetricsRecorder,
+    ) -> Self {
+        self.store_metrics = store_metrics;
+        self
+    }
+
+    fn record_linux_storage_degradation(&self, event: LinuxStorageDegradationEvent) {
+        #[cfg(feature = "observability")]
+        self.store_metrics
+            .record_linux_storage_degradation(event.operation, event.reason, event.errno, event.count);
+
+        #[cfg(not(feature = "observability"))]
+        let _ = event;
     }
 
     fn copy_to_mapping(&self, start: usize, data: &[u8]) -> MappedFileResult<()> {
@@ -855,7 +866,7 @@ impl<M: MappedMemory> MappedFile for DefaultMappedFile<M> {
             Self::touch_mapped_page,
             Self::flush_mapped_file_range,
             Self::advise_mapped_file,
-            emit_linux_storage_degradation_observability,
+            |event| self.record_linux_storage_degradation(event),
         );
     }
 
@@ -1213,7 +1224,7 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         let warmup_duration = warmup_started.elapsed();
         let warmup_millis = u64::try_from(warmup_duration.as_millis()).unwrap_or(u64::MAX);
         #[cfg(feature = "observability")]
-        rocketmq_observability::metrics::store::record_linux_page_cache_warmup_millis(warmup_millis);
+        self.store_metrics.record_linux_page_cache_warmup_millis(warmup_millis);
         #[cfg(not(feature = "observability"))]
         let _ = warmup_millis;
         if let Some(metrics) = &self.metrics {

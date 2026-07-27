@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use dashmap::DashMap;
 use rocketmq_error::RocketMQError;
+use rocketmq_observability::metrics::tiered_store::TieredStoreMetrics;
 
 use crate::config::TieredStoreConfig;
 use crate::dispatcher::TieredDispatchRequest;
@@ -42,6 +43,7 @@ where
     config: Arc<TieredStoreConfig>,
     metadata_store: Arc<JsonMetadataStore>,
     provider: P,
+    metrics: Arc<TieredStoreMetrics>,
     read_ahead_cache: Arc<ReadAheadCache>,
     files: DashMap<FlatFileKey, Arc<TieredFlatFile<P>>>,
     index_file: IndexFileSegment<P>,
@@ -52,21 +54,37 @@ where
     P: TieredStoreProvider,
 {
     pub fn new(config: Arc<TieredStoreConfig>, metadata_store: Arc<JsonMetadataStore>, provider: P) -> Self {
+        Self::new_with_metrics(
+            config,
+            metadata_store,
+            provider,
+            Arc::new(TieredStoreMetrics::default()),
+        )
+    }
+
+    pub fn new_with_metrics(
+        config: Arc<TieredStoreConfig>,
+        metadata_store: Arc<JsonMetadataStore>,
+        provider: P,
+        metrics: Arc<TieredStoreMetrics>,
+    ) -> Self {
         let read_ahead_cache = Arc::new(ReadAheadCache::new(
             config.read_ahead_cache_enable,
             config.read_ahead_cache_max_bytes,
             config.read_ahead_cache_expire,
         ));
-        let index_file = IndexFileSegment::with_limits(
+        let index_file = IndexFileSegment::with_limits_and_metrics(
             IndexFileSegment::<P>::default_path().to_owned(),
             provider.clone(),
             config.index_file_max_hash_slot_num as usize,
             config.index_file_max_index_num as usize,
+            metrics.clone(),
         );
         Self {
             config,
             metadata_store,
             provider,
+            metrics,
             read_ahead_cache,
             files: DashMap::new(),
             index_file,
@@ -112,6 +130,7 @@ where
                 self.metadata_store.clone(),
                 self.provider.clone(),
                 self.read_ahead_cache.clone(),
+                self.metrics.clone(),
             ))
         });
         Ok(entry.value().clone())

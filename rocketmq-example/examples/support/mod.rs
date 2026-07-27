@@ -29,7 +29,14 @@ where
 {
     let owner = RuntimeOwner::new(RuntimeConfig::server_default("rocketmq-example"))
         .map_err(|source| RocketMQError::internal("create example runtime", source))?;
-    let client_runtime = ClientRuntime::new(owner.root_context().child("client"), ClientRuntimeConfig::default());
+    let telemetry_guard =
+        rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())
+            .map_err(|source| RocketMQError::internal("initialize example telemetry", source))?;
+    let client_runtime = ClientRuntime::new(
+        owner.root_context().child("client"),
+        ClientRuntimeConfig::default(),
+        telemetry_guard.handle(),
+    );
 
     let operation_result = owner.block_on(async {
         let result = operation(Arc::clone(&client_runtime)).await;
@@ -40,6 +47,12 @@ where
     let shutdown_result = owner
         .shutdown_runtime_blocking()
         .map_err(|source| RocketMQError::internal("shut down example runtime", source));
+    let telemetry_result = telemetry_guard
+        .shutdown()
+        .into_result()
+        .map_err(|source| RocketMQError::internal("shut down example telemetry", source));
 
-    operation_result.and(shutdown_result.map(|_| ()))
+    operation_result
+        .and(shutdown_result.map(|_| ()))
+        .and(telemetry_result.map(|_| ()))
 }

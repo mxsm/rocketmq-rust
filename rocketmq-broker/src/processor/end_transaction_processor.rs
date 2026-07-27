@@ -111,6 +111,7 @@ pub(crate) struct EndTransactionProcessorContext<MS: MessageStore> {
     policy: EndTransactionPolicy,
     message_store: EndTransactionStoreCapability<MS>,
     broker_stats_manager: Arc<BrokerStatsManager>,
+    broker_metrics_manager: Option<Arc<BrokerMetricsManager>>,
 }
 
 impl<MS: MessageStore> EndTransactionProcessorContext<MS> {
@@ -118,11 +119,13 @@ impl<MS: MessageStore> EndTransactionProcessorContext<MS> {
         policy: EndTransactionPolicy,
         message_store: EndTransactionStoreCapability<MS>,
         broker_stats_manager: Arc<BrokerStatsManager>,
+        broker_metrics_manager: Option<Arc<BrokerMetricsManager>>,
     ) -> Self {
         Self {
             policy,
             message_store,
             broker_stats_manager,
+            broker_metrics_manager,
         }
     }
 }
@@ -133,6 +136,7 @@ impl<MS: MessageStore> Clone for EndTransactionProcessorContext<MS> {
             policy: self.policy,
             message_store: self.message_store.clone(),
             broker_stats_manager: Arc::clone(&self.broker_stats_manager),
+            broker_metrics_manager: self.broker_metrics_manager.clone(),
         }
     }
 }
@@ -344,7 +348,7 @@ where
                             .await;
 
                         // Record metrics for successful commit
-                        if let Some(metrics) = BrokerMetricsManager::try_global() {
+                        if let Some(metrics) = self.context.broker_metrics_manager.as_ref() {
                             // Increment commit messages counter
                             metrics.inc_commit_messages(&topic, 1);
 
@@ -398,7 +402,7 @@ where
                             .property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
                             .unwrap_or_default();
 
-                        if let Some(metrics) = BrokerMetricsManager::try_global() {
+                        if let Some(metrics) = self.context.broker_metrics_manager.as_ref() {
                             // Increment rollback messages counter
                             metrics.inc_rollback_messages(&real_topic, 1);
                         }

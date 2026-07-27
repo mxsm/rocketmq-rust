@@ -61,7 +61,6 @@ use std::time::Instant;
 use crate::controller::broker_heartbeat_manager::BrokerHeartbeatManager;
 use crate::heartbeat::default_broker_heartbeat_manager::DefaultBrokerHeartbeatManager;
 use crate::manager::ControllerManager;
-use crate::metrics::ControllerMetricsManager;
 use crate::metrics::RequestHandleStatus;
 use crate::metrics::RequestType as MetricsRequestType;
 use crate::Controller;
@@ -857,6 +856,21 @@ impl ControllerRequestProcessor {
 }
 
 impl ControllerRequestProcessor {
+    fn record_request_metrics(&self, request_name: &str, status: RequestHandleStatus, latency_us: u64) {
+        #[cfg(feature = "metrics")]
+        if let Some(controller_manager) = self.controller_manager.upgrade() {
+            controller_manager
+                .metrics_manager()
+                .inc_request_total(request_name, status);
+            controller_manager
+                .metrics_manager()
+                .record_request_latency(request_name, latency_us);
+        }
+
+        #[cfg(not(feature = "metrics"))]
+        let _ = (request_name, status, latency_us);
+    }
+
     pub(super) async fn complete_request<F>(
         &self,
         request_name: Option<&'static str>,
@@ -881,22 +895,19 @@ impl ControllerRequestProcessor {
                     } else {
                         RequestHandleStatus::Failed
                     };
-                    ControllerMetricsManager::inc_request_total_static(name, status);
-                    ControllerMetricsManager::record_request_latency_static(name, latency_us);
+                    self.record_request_metrics(name, status, latency_us);
                 }
                 Ok(response)
             }
             Ok(Err(error)) => {
                 if let Some(name) = request_name {
-                    ControllerMetricsManager::inc_request_total_static(name, RequestHandleStatus::Failed);
-                    ControllerMetricsManager::record_request_latency_static(name, latency_us);
+                    self.record_request_metrics(name, RequestHandleStatus::Failed, latency_us);
                 }
                 Err(error)
             }
             Err(_) => {
                 if let Some(name) = request_name {
-                    ControllerMetricsManager::inc_request_total_static(name, RequestHandleStatus::Timeout);
-                    ControllerMetricsManager::record_request_latency_static(name, latency_us);
+                    self.record_request_metrics(name, RequestHandleStatus::Timeout, latency_us);
                 }
                 Ok(Some(RemotingCommand::create_response_command_with_code_remark(
                     ResponseCode::SystemError,

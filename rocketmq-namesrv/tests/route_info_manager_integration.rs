@@ -85,10 +85,13 @@ impl NamesrvHarness {
                 ..ServerConfig::default()
             };
             let runtime_context = rocketmq_runtime::RuntimeContext::from_current(format!("namesrv-integration-{port}"));
-            let bootstrap = Builder::new(runtime_context.service_context("namesrv"))
-                .set_name_server_config(namesrv_config.clone())
-                .set_server_config(server_config)
-                .build();
+            let bootstrap = Builder::new(
+                runtime_context.service_context("namesrv"),
+                rocketmq_observability::TelemetryHandle::noop(),
+            )
+            .set_name_server_config(namesrv_config.clone())
+            .set_server_config(server_config)
+            .build();
 
             let (shutdown_tx, shutdown_rx) = oneshot::channel();
             let mut server_task = tokio::spawn(async move {

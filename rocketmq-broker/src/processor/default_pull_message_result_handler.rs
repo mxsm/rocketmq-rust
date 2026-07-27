@@ -50,6 +50,7 @@ use tracing::info;
 use tracing::warn;
 
 use crate::long_polling::pull_request::PullRequest;
+use crate::metrics::broker_metrics_manager::BrokerMetricsManager;
 use crate::mqtrace::consume_message_context::ConsumeMessageContext;
 use crate::mqtrace::consume_message_hook::ConsumeMessageHook;
 use crate::processor::pull_message_processor::capability::PullMessageProcessorContext;
@@ -60,16 +61,19 @@ use crate::processor::pull_message_result_handler::PullMessageResultHandler;
 pub struct DefaultPullMessageResultHandler<MS: MessageStore> {
     context: Arc<PullMessageProcessorContext<MS>>,
     consume_message_hook_list: Arc<Vec<Box<dyn ConsumeMessageHook>>>,
+    broker_metrics_manager: Option<Arc<BrokerMetricsManager>>,
 }
 
 impl<MS: MessageStore> DefaultPullMessageResultHandler<MS> {
     pub fn new(
         consume_message_hook_list: Arc<Vec<Box<dyn ConsumeMessageHook>>>,
         context: Arc<PullMessageProcessorContext<MS>>,
+        broker_metrics_manager: Option<Arc<BrokerMetricsManager>>,
     ) -> Self {
         Self {
             context,
             consume_message_hook_list,
+            broker_metrics_manager,
         }
     }
 }
@@ -151,7 +155,7 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
                 broker_stats.inc_broker_get_nums(request_header.topic.as_str(), get_message_result.message_count());
 
                 // Record BrokerMetrics for non-retry/dlq topics
-                if let Some(metrics) = crate::metrics::broker_metrics_manager::BrokerMetricsManager::try_global() {
+                if let Some(metrics) = self.broker_metrics_manager.as_ref() {
                     let topic = request_header.topic.as_str();
                     let consumer_group = request_header.consumer_group.as_str();
                     let is_retry = topic.starts_with("%RETRY%") || topic.starts_with("%DLQ%");

@@ -48,10 +48,13 @@ fn run_namesrv_shutdown_drain(shutdown_after: Duration) -> NameSrvShutdownOutput
     runtime.block_on(async move {
         let artifact_dir = benchmark_artifact_dir();
         let context = RuntimeContext::from_current("namesrv-shutdown-bench");
-        let bootstrap = Builder::new(context.service_context("namesrv"))
-            .set_name_server_config(namesrv_config(&artifact_dir))
-            .set_server_config(server_config())
-            .build();
+        let bootstrap = Builder::new(
+            context.service_context("namesrv"),
+            rocketmq_observability::TelemetryHandle::noop(),
+        )
+        .set_name_server_config(namesrv_config(&artifact_dir))
+        .set_server_config(server_config())
+        .build();
 
         let started_at = Instant::now();
         let report = bootstrap

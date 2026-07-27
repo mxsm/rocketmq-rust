@@ -655,17 +655,25 @@ impl BrokerRuntime {
         progress.complete("client_housekeeping");
 
         let started = Instant::now();
+        shutdown_report.service_tasks = if let Some(service_context) = self.composition.state.service_context.as_ref() {
+            let report = service_context.task_group().shutdown_until(deadline).await;
+            BrokerShutdownComponentReport::from_shutdown_report("service_tasks", Some(&report), started.elapsed())
+        } else {
+            BrokerShutdownComponentReport::unhealthy(
+                "service_tasks",
+                started.elapsed(),
+                BrokerBlockingShutdownError::MissingServiceContext.detail(),
+            )
+        };
+        progress.complete("service_tasks");
+
+        let started = Instant::now();
         if let Some(guard) = self.composition.state.observability_guard.take() {
-            let telemetry_result = if let Some(service_context) = self.composition.state.service_context.as_ref() {
-                run_shutdown_blocking_operation(service_context, deadline, "broker.telemetry-shutdown", move || {
-                    guard.shutdown_with_timeout(deadline.remaining())
-                })
-                .await
-            } else {
-                Err(BrokerBlockingShutdownError::MissingServiceContext)
-            };
-            shutdown_report.observability = match telemetry_result {
-                Ok(telemetry_report) => {
+            shutdown_report.observability =
+                if let Some(service_context) = self.composition.state.service_context.as_ref() {
+                    let telemetry_report = guard
+                        .shutdown_with_service_context(service_context, deadline.remaining())
+                        .await;
                     if !telemetry_report.is_healthy() {
                         warn!(
                             report = %telemetry_report.to_json(),
@@ -673,14 +681,13 @@ impl BrokerRuntime {
                         );
                     }
                     BrokerShutdownComponentReport::from_telemetry_shutdown_report(&telemetry_report, started.elapsed())
-                }
-                Err(error) if error.is_timed_out() => {
-                    BrokerShutdownComponentReport::timed_out("observability", started.elapsed())
-                }
-                Err(error) => {
-                    BrokerShutdownComponentReport::unhealthy("observability", started.elapsed(), error.detail())
-                }
-            };
+                } else {
+                    BrokerShutdownComponentReport::unhealthy(
+                        "observability",
+                        started.elapsed(),
+                        BrokerBlockingShutdownError::MissingServiceContext.detail(),
+                    )
+                };
         } else {
             shutdown_report.observability = BrokerShutdownComponentReport::skipped("observability");
         }

@@ -20,6 +20,7 @@ use bytes::BytesMut;
 use parking_lot::Mutex;
 use rocketmq_error::RocketMQError;
 use rocketmq_model::boundary_type::BoundaryType;
+use rocketmq_observability::metrics::tiered_store::TieredStoreMetrics;
 
 use crate::config::TieredStoreConfig;
 use crate::error;
@@ -88,6 +89,7 @@ where
     config: Arc<TieredStoreConfig>,
     metadata_store: Arc<JsonMetadataStore>,
     provider: P,
+    metrics: Arc<TieredStoreMetrics>,
     read_ahead_cache: Arc<ReadAheadCache>,
     commit_log_segments: Mutex<Vec<Arc<TieredFileSegment<P>>>>,
     consume_queue_segments: Mutex<Vec<Arc<TieredFileSegment<P>>>>,
@@ -109,7 +111,15 @@ where
             config.read_ahead_cache_max_bytes,
             config.read_ahead_cache_expire,
         ));
-        Self::new_with_read_ahead_cache(topic, queue_id, config, metadata_store, provider, read_ahead_cache)
+        Self::new_with_read_ahead_cache(
+            topic,
+            queue_id,
+            config,
+            metadata_store,
+            provider,
+            read_ahead_cache,
+            Arc::new(TieredStoreMetrics::default()),
+        )
     }
 
     pub(crate) fn new_with_read_ahead_cache(
@@ -119,6 +129,7 @@ where
         metadata_store: Arc<JsonMetadataStore>,
         provider: P,
         read_ahead_cache: Arc<ReadAheadCache>,
+        metrics: Arc<TieredStoreMetrics>,
     ) -> Self {
         Self {
             topic,
@@ -126,6 +137,7 @@ where
             config,
             metadata_store,
             provider,
+            metrics,
             read_ahead_cache,
             commit_log_segments: Mutex::new(Vec::new()),
             consume_queue_segments: Mutex::new(Vec::new()),
@@ -230,13 +242,14 @@ where
                 metadata.size = real_size.min(max_size);
                 self.metadata_store.upsert_file_segment(metadata.clone()).await?;
             }
-            let segment = Arc::new(TieredFileSegment::new(
+            let segment = Arc::new(TieredFileSegment::new_with_metrics(
                 metadata.path.clone(),
                 metadata.segment_type,
                 metadata.base_offset,
                 max_size,
                 metadata,
                 self.provider.clone(),
+                self.metrics.clone(),
             ));
             match segment.segment_type() {
                 FileSegmentType::CommitLog => commit_log_segments.push(segment),
@@ -471,7 +484,8 @@ where
         let segment = Arc::new(
             self.provider
                 .create_segment(path, segment_type, absolute_offset, max_size)
-                .await?,
+                .await?
+                .with_metrics(self.metrics.clone()),
         );
         self.metadata_store.upsert_file_segment(segment.metadata()).await?;
         match segment_type {

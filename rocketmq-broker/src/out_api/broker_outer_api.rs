@@ -106,6 +106,7 @@ use rocketmq_transport::RpcRequest;
 use rocketmq_transport::RpcRequestHeader;
 use rocketmq_transport::TokioClientConfig;
 use rocketmq_transport::TopicRequestHeader as RpcTopicRequestHeader;
+use rocketmq_transport::TransportTelemetry;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -120,11 +121,16 @@ pub struct BrokerOuterAPI {
 }
 
 impl BrokerOuterAPI {
-    pub fn new(tokio_client_config: Arc<TokioClientConfig>, service_context: ChildServiceContext) -> Self {
-        let client = Arc::new(RocketmqDefaultClient::new(
+    pub fn new(
+        tokio_client_config: Arc<TokioClientConfig>,
+        service_context: ChildServiceContext,
+        telemetry: TransportTelemetry,
+    ) -> Self {
+        let client = Arc::new(RocketmqDefaultClient::new_with_telemetry(
             tokio_client_config,
             DefaultRemotingRequestProcessor,
             service_context,
+            telemetry,
         ));
         let client_metadata = Arc::new(ClientMetadata::new());
         Self {
@@ -139,11 +145,13 @@ impl BrokerOuterAPI {
         tokio_client_config: Arc<TokioClientConfig>,
         rpc_hook: Option<Arc<dyn RPCHook>>,
         service_context: ChildServiceContext,
+        telemetry: TransportTelemetry,
     ) -> Self {
-        let client = Arc::new(RocketmqDefaultClient::new(
+        let client = Arc::new(RocketmqDefaultClient::new_with_telemetry(
             tokio_client_config,
             DefaultRemotingRequestProcessor,
             service_context,
+            telemetry,
         ));
         let client_metadata = Arc::new(ClientMetadata::new());
         if let Some(rpc_hook) = rpc_hook {
@@ -1677,6 +1685,7 @@ mod tests {
         let api = BrokerOuterAPI::new(
             Arc::new(TokioClientConfig::default()),
             runtime.root_context().child("broker-outer-api-test"),
+            TransportTelemetry::noop(),
         );
         let cloned = api.clone();
 

@@ -20,6 +20,7 @@ use bytes::Bytes;
 use bytes::BytesMut;
 use rocketmq_error::ErrorKind;
 use rocketmq_error::RocketMQError;
+use rocketmq_observability::metrics::tiered_store::TieredStoreMetrics;
 
 use crate::error;
 use crate::file::index_generation::crc32;
@@ -57,7 +58,7 @@ impl TieredIndexEntry {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct IndexFileSegment<P>
 where
     P: TieredStoreProvider,
@@ -69,6 +70,7 @@ where
     generation_manager: Arc<IndexGenerationManager<P>>,
     generation_lock: Arc<tokio::sync::RwLock<()>>,
     validated_generation: Arc<parking_lot::RwLock<Option<u64>>>,
+    metrics: Arc<TieredStoreMetrics>,
     raw: bool,
 }
 
@@ -117,6 +119,22 @@ where
     }
 
     pub fn with_limits(directory: String, provider: P, hash_slot_count: usize, max_index_items: usize) -> Self {
+        Self::with_limits_and_metrics(
+            directory,
+            provider,
+            hash_slot_count,
+            max_index_items,
+            Arc::new(TieredStoreMetrics::default()),
+        )
+    }
+
+    pub fn with_limits_and_metrics(
+        directory: String,
+        provider: P,
+        hash_slot_count: usize,
+        max_index_items: usize,
+        metrics: Arc<TieredStoreMetrics>,
+    ) -> Self {
         let generation_manager = Arc::new(IndexGenerationManager::new(directory.clone(), provider.clone()));
         Self {
             directory,
@@ -126,6 +144,7 @@ where
             generation_manager,
             generation_lock: Arc::new(tokio::sync::RwLock::new(())),
             validated_generation: Arc::new(parking_lot::RwLock::new(None)),
+            metrics,
             raw: false,
         }
     }
@@ -141,7 +160,7 @@ where
     async fn provider_read(&self, path: String, position: u64, length: usize) -> Result<Bytes, RocketMQError> {
         let started = std::time::Instant::now();
         let result = self.provider.read(path.clone(), position, length).await;
-        rocketmq_observability::metrics::tiered_store::record_provider_read(
+        self.metrics.record_provider_read(
             &path,
             result.as_ref().map(|bytes| bytes.len() as u64).unwrap_or(0),
             result.is_ok(),
@@ -153,7 +172,7 @@ where
     async fn provider_write(&self, path: String, position: u64, data: Bytes) -> Result<usize, RocketMQError> {
         let started = std::time::Instant::now();
         let result = self.provider.write(path.clone(), position, data).await;
-        rocketmq_observability::metrics::tiered_store::record_provider_write(
+        self.metrics.record_provider_write(
             &path,
             result.as_ref().map(|written| *written as u64).unwrap_or(0),
             result.is_ok(),
@@ -669,6 +688,7 @@ where
             max_index_items: self.max_index_items,
             generation_lock: Arc::new(tokio::sync::RwLock::new(())),
             validated_generation: Arc::new(parking_lot::RwLock::new(None)),
+            metrics: self.metrics.clone(),
             raw: true,
         }
     }

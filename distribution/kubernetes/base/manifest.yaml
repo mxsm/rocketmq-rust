@@ -262,6 +262,32 @@ spec:
             cidr: 0.0.0.0/0
       ports:
         - {protocol: TCP, port: 443}
+---
+# Source: rocketmq-rust/templates/networkpolicies.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rocketmq-metrics-scrape
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: rocketmq
+      app.kubernetes.io/part-of: rocketmq-rust
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              rocketmq.apache.org/observability: "true"
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - {protocol: TCP, port: 5557}
 
 ---
 # Source: rocketmq-rust/templates/pdbs.yaml
@@ -1162,6 +1188,141 @@ spec:
       targetPort: 8081
       protocol: TCP
 ---
+# Source: rocketmq-rust/templates/services.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: rocketmq-broker-metrics
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-broker
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: broker
+    rocketmq.apache.org/architecture-milestone: P0-05
+    rocketmq.apache.org/metrics: "true"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: rocketmq-broker
+    app.kubernetes.io/instance: rocketmq
+    rocketmq.apache.org/service: broker
+  ports:
+    - name: metrics
+      port: 5557
+      targetPort: metrics
+      protocol: TCP
+---
+# Source: rocketmq-rust/templates/services.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: rocketmq-namesrv-metrics
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-namesrv
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: namesrv
+    rocketmq.apache.org/architecture-milestone: P0-05
+    rocketmq.apache.org/metrics: "true"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: rocketmq-namesrv
+    app.kubernetes.io/instance: rocketmq
+    rocketmq.apache.org/service: namesrv
+  ports:
+    - name: metrics
+      port: 5557
+      targetPort: metrics
+      protocol: TCP
+---
+# Source: rocketmq-rust/templates/services.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: rocketmq-controller-metrics
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-controller
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: controller
+    rocketmq.apache.org/architecture-milestone: P0-05
+    rocketmq.apache.org/metrics: "true"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: rocketmq-controller
+    app.kubernetes.io/instance: rocketmq
+    rocketmq.apache.org/service: controller
+  ports:
+    - name: metrics
+      port: 5557
+      targetPort: metrics
+      protocol: TCP
+---
+# Source: rocketmq-rust/templates/services.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: rocketmq-proxy-metrics
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-proxy
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: proxy
+    rocketmq.apache.org/architecture-milestone: P0-05
+    rocketmq.apache.org/metrics: "true"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: rocketmq-proxy
+    app.kubernetes.io/instance: rocketmq
+    rocketmq.apache.org/service: proxy
+  ports:
+    - name: metrics
+      port: 5557
+      targetPort: metrics
+      protocol: TCP
+---
+# Source: rocketmq-rust/templates/services.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: rocketmq-mcp-metrics
+  namespace: rocketmq
+  labels:
+    app.kubernetes.io/name: rocketmq-mcp
+    app.kubernetes.io/instance: rocketmq
+    app.kubernetes.io/part-of: rocketmq-rust
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "0.1.0"
+    rocketmq.apache.org/service: mcp
+    rocketmq.apache.org/architecture-milestone: P0-05
+    rocketmq.apache.org/metrics: "true"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: rocketmq-mcp
+    app.kubernetes.io/instance: rocketmq
+    rocketmq.apache.org/service: mcp
+  ports:
+    - name: metrics
+      port: 5557
+      targetPort: metrics
+      protocol: TCP
+---
 # Source: rocketmq-rust/templates/workloads.yaml
 apiVersion: apps/v1
 kind: Deployment
@@ -1188,6 +1349,9 @@ spec:
       rocketmq.apache.org/service: proxy
   template:
     metadata:
+      annotations:
+        rocketmq.apache.org/release-commit: "698f053f149784be1be1ddda403270b579607089"
+        rocketmq.apache.org/release-nonce: "render-fixture"
       labels:
         app.kubernetes.io/name: rocketmq-proxy
         app.kubernetes.io/instance: rocketmq
@@ -1243,12 +1407,19 @@ spec:
             - {name: ROCKETMQ_SECURITY_SECRET_PROVIDER, value: "mounted-files"}
             - {name: ROCKETMQ_SECURITY_ADMIN_IDENTITY, value: "/var/run/secrets/rocketmq/admin.identity"}
             - {name: ROCKETMQ_SECURITY_REQUEST_POLICY, value: "/var/run/secrets/rocketmq/request-policy.json"}
+            - {name: ROCKETMQ_RELEASE_COMMIT, value: "698f053f149784be1be1ddda403270b579607089"}
+            - {name: ROCKETMQ_RELEASE_NONCE, value: "render-fixture"}
+            - {name: ROCKETMQ_METRICS_ENABLED, value: "true"}
+            - {name: ROCKETMQ_METRICS_EXPORTER, value: "prometheus"}
+            - {name: ROCKETMQ_METRICS_BIND_ADDR, value: "0.0.0.0:5557"}
+            - {name: ROCKETMQ_METRICS_PATH, value: "/metrics"}
             - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/proxy}
             - {name: OTEL_SERVICE_NAME, value: rocketmq-proxy}
             - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.observability.svc.cluster.local:4317"}
             - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
           ports:
             - {name: health, containerPort: 8088, protocol: TCP}
+            - {name: metrics, containerPort: 5557, protocol: TCP}
             - {name: remoting, containerPort: 8080, protocol: TCP}
             - {name: grpc, containerPort: 8081, protocol: TCP}
           lifecycle:
@@ -1339,6 +1510,9 @@ spec:
       rocketmq.apache.org/service: mcp
   template:
     metadata:
+      annotations:
+        rocketmq.apache.org/release-commit: "698f053f149784be1be1ddda403270b579607089"
+        rocketmq.apache.org/release-nonce: "render-fixture"
       labels:
         app.kubernetes.io/name: rocketmq-mcp
         app.kubernetes.io/instance: rocketmq
@@ -1375,12 +1549,19 @@ spec:
             - {name: ROCKETMQ_SECURITY_SECRET_PROVIDER, value: "mounted-files"}
             - {name: ROCKETMQ_SECURITY_ADMIN_IDENTITY, value: "/var/run/secrets/rocketmq/admin.identity"}
             - {name: ROCKETMQ_SECURITY_REQUEST_POLICY, value: "/var/run/secrets/rocketmq/request-policy.json"}
+            - {name: ROCKETMQ_RELEASE_COMMIT, value: "698f053f149784be1be1ddda403270b579607089"}
+            - {name: ROCKETMQ_RELEASE_NONCE, value: "render-fixture"}
+            - {name: ROCKETMQ_METRICS_ENABLED, value: "true"}
+            - {name: ROCKETMQ_METRICS_EXPORTER, value: "prometheus"}
+            - {name: ROCKETMQ_METRICS_BIND_ADDR, value: "0.0.0.0:5557"}
+            - {name: ROCKETMQ_METRICS_PATH, value: "/metrics"}
             - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/mcp}
             - {name: OTEL_SERVICE_NAME, value: rocketmq-mcp}
             - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.observability.svc.cluster.local:4317"}
             - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
           ports:
             - {name: health, containerPort: 8088, protocol: TCP}
+            - {name: metrics, containerPort: 5557, protocol: TCP}
             - {name: https-mcp, containerPort: 8089, protocol: TCP}
           lifecycle:
             preStop:
@@ -1477,6 +1658,9 @@ spec:
       rocketmq.apache.org/service: broker
   template:
     metadata:
+      annotations:
+        rocketmq.apache.org/release-commit: "698f053f149784be1be1ddda403270b579607089"
+        rocketmq.apache.org/release-nonce: "render-fixture"
       labels:
         app.kubernetes.io/name: rocketmq-broker
         app.kubernetes.io/instance: rocketmq
@@ -1532,6 +1716,12 @@ spec:
             - {name: ROCKETMQ_SECURITY_SECRET_PROVIDER, value: "mounted-files"}
             - {name: ROCKETMQ_SECURITY_ADMIN_IDENTITY, value: "/var/run/secrets/rocketmq/admin.identity"}
             - {name: ROCKETMQ_SECURITY_REQUEST_POLICY, value: "/var/run/secrets/rocketmq/request-policy.json"}
+            - {name: ROCKETMQ_RELEASE_COMMIT, value: "698f053f149784be1be1ddda403270b579607089"}
+            - {name: ROCKETMQ_RELEASE_NONCE, value: "render-fixture"}
+            - {name: ROCKETMQ_METRICS_ENABLED, value: "true"}
+            - {name: ROCKETMQ_METRICS_EXPORTER, value: "prometheus"}
+            - {name: ROCKETMQ_METRICS_BIND_ADDR, value: "0.0.0.0:5557"}
+            - {name: ROCKETMQ_METRICS_PATH, value: "/metrics"}
             - name: POD_NAME
               valueFrom:
                 fieldRef:
@@ -1542,6 +1732,7 @@ spec:
             - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
           ports:
             - {name: health, containerPort: 8088, protocol: TCP}
+            - {name: metrics, containerPort: 5557, protocol: TCP}
             - {name: remoting, containerPort: 10911, protocol: TCP}
             - {name: ha, containerPort: 10912, protocol: TCP}
           lifecycle:
@@ -1654,6 +1845,9 @@ spec:
       rocketmq.apache.org/service: namesrv
   template:
     metadata:
+      annotations:
+        rocketmq.apache.org/release-commit: "698f053f149784be1be1ddda403270b579607089"
+        rocketmq.apache.org/release-nonce: "render-fixture"
       labels:
         app.kubernetes.io/name: rocketmq-namesrv
         app.kubernetes.io/instance: rocketmq
@@ -1709,12 +1903,19 @@ spec:
             - {name: ROCKETMQ_SECURITY_SECRET_PROVIDER, value: "mounted-files"}
             - {name: ROCKETMQ_SECURITY_ADMIN_IDENTITY, value: "/var/run/secrets/rocketmq/admin.identity"}
             - {name: ROCKETMQ_SECURITY_REQUEST_POLICY, value: "/var/run/secrets/rocketmq/request-policy.json"}
+            - {name: ROCKETMQ_RELEASE_COMMIT, value: "698f053f149784be1be1ddda403270b579607089"}
+            - {name: ROCKETMQ_RELEASE_NONCE, value: "render-fixture"}
+            - {name: ROCKETMQ_METRICS_ENABLED, value: "true"}
+            - {name: ROCKETMQ_METRICS_EXPORTER, value: "prometheus"}
+            - {name: ROCKETMQ_METRICS_BIND_ADDR, value: "0.0.0.0:5557"}
+            - {name: ROCKETMQ_METRICS_PATH, value: "/metrics"}
             - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/namesrv}
             - {name: OTEL_SERVICE_NAME, value: rocketmq-namesrv}
             - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.observability.svc.cluster.local:4317"}
             - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
           ports:
             - {name: health, containerPort: 8088, protocol: TCP}
+            - {name: metrics, containerPort: 5557, protocol: TCP}
             - {name: remoting, containerPort: 9876, protocol: TCP}
           lifecycle:
             preStop:
@@ -1823,6 +2024,9 @@ spec:
       rocketmq.apache.org/service: controller
   template:
     metadata:
+      annotations:
+        rocketmq.apache.org/release-commit: "698f053f149784be1be1ddda403270b579607089"
+        rocketmq.apache.org/release-nonce: "render-fixture"
       labels:
         app.kubernetes.io/name: rocketmq-controller
         app.kubernetes.io/instance: rocketmq
@@ -1886,6 +2090,12 @@ spec:
             - {name: ROCKETMQ_SECURITY_SECRET_PROVIDER, value: "mounted-files"}
             - {name: ROCKETMQ_SECURITY_ADMIN_IDENTITY, value: "/var/run/secrets/rocketmq/admin.identity"}
             - {name: ROCKETMQ_SECURITY_REQUEST_POLICY, value: "/var/run/secrets/rocketmq/request-policy.json"}
+            - {name: ROCKETMQ_RELEASE_COMMIT, value: "698f053f149784be1be1ddda403270b579607089"}
+            - {name: ROCKETMQ_RELEASE_NONCE, value: "render-fixture"}
+            - {name: ROCKETMQ_METRICS_ENABLED, value: "true"}
+            - {name: ROCKETMQ_METRICS_EXPORTER, value: "prometheus"}
+            - {name: ROCKETMQ_METRICS_BIND_ADDR, value: "0.0.0.0:5557"}
+            - {name: ROCKETMQ_METRICS_PATH, value: "/metrics"}
             - name: POD_NAME
               valueFrom:
                 fieldRef:
@@ -1898,6 +2108,7 @@ spec:
             - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
           ports:
             - {name: health, containerPort: 8088, protocol: TCP}
+            - {name: metrics, containerPort: 5557, protocol: TCP}
             - {name: remoting, containerPort: 60109, protocol: TCP}
             - {name: raft, containerPort: 60110, protocol: TCP}
           lifecycle:

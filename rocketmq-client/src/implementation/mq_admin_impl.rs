@@ -514,6 +514,7 @@ mod tests {
             "admin-client-binding",
             None,
             runtime.child("instance"),
+            runtime.telemetry_handle().clone(),
             runtime.pool().request_future_holder(),
         );
         let admin = MQAdminImpl::new();

@@ -46,7 +46,7 @@ async fn main() -> Result<()> {
     info!("Starting 3-node ControllerManager cluster example");
 
     // Start 3-node cluster
-    let managers = start_cluster().await?;
+    let managers = start_cluster(telemetry_guard.handle()).await?;
 
     // Wait for leader election
     info!("Waiting for leader election...");
@@ -73,7 +73,7 @@ async fn main() -> Result<()> {
 }
 
 /// Start a 3-node controller cluster
-async fn start_cluster() -> Result<Vec<Arc<ControllerManager>>> {
+async fn start_cluster(telemetry: rocketmq_observability::TelemetryHandle) -> Result<Vec<Arc<ControllerManager>>> {
     let mut managers = Vec::new();
 
     // Define node configurations
@@ -97,7 +97,7 @@ async fn start_cluster() -> Result<Vec<Arc<ControllerManager>>> {
 
         // Create manager
         let runtime = rocketmq_runtime::RuntimeContext::from_current(format!("controller-manager-cluster-{node_id}"));
-        let manager = ControllerManager::new(config, runtime.service_context("controller")).await?;
+        let manager = ControllerManager::new(config, runtime.service_context("controller"), telemetry.clone()).await?;
 
         // Share the manager through a read-only ownership handle.
         let manager = Arc::new(manager);

@@ -163,18 +163,20 @@ impl<P> Clone for ProxyGrpcService<P> {
 }
 
 impl<P> ProxyGrpcService<P> {
-    /// Builds a gRPC service after validating all runtime resource budgets.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed Proxy error when the configured resource limits are
-    /// invalid or the process memory limit cannot be detected.
-    pub fn try_new(config: Arc<ProxyConfig>, processor: Arc<P>, sessions: ClientSessionRegistry) -> ProxyResult<Self> {
-        let guards = ExecutionGuards::try_from_config(&config.runtime)?;
+    pub(crate) fn try_execution_guards(config: &ProxyConfig) -> ProxyResult<ExecutionGuards> {
+        ExecutionGuards::try_from_config(&config.runtime)
+    }
+
+    pub(crate) fn from_execution_guards(
+        config: Arc<ProxyConfig>,
+        processor: Arc<P>,
+        sessions: ClientSessionRegistry,
+        guards: ExecutionGuards,
+    ) -> Self {
         let interval_ms = Self::housekeeping_interval_from_config(config.as_ref())
             .as_millis()
             .clamp(1, u128::from(u64::MAX)) as u64;
-        Ok(Self {
+        Self {
             guards,
             config,
             processor,
@@ -183,7 +185,18 @@ impl<P> ProxyGrpcService<P> {
             auth_runtime: None,
             hooks: ProxyHookChain::default(),
             metrics: ProxyMetrics::default(),
-        })
+        }
+    }
+
+    /// Builds a gRPC service after validating all runtime resource budgets.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed Proxy error when the configured resource limits are
+    /// invalid or the process memory limit cannot be detected.
+    pub fn try_new(config: Arc<ProxyConfig>, processor: Arc<P>, sessions: ClientSessionRegistry) -> ProxyResult<Self> {
+        let guards = Self::try_execution_guards(config.as_ref())?;
+        Ok(Self::from_execution_guards(config, processor, sessions, guards))
     }
 
     /// Builds a gRPC service for compatibility with existing embedders.

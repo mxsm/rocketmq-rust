@@ -26,6 +26,7 @@ use crate::rocketmq_tui_app::RocketmqTuiApp;
 use anyhow::Context;
 use rocketmq_admin_core::client_adapter::ClientRuntime;
 use rocketmq_admin_core::client_adapter::ClientRuntimeConfig;
+use rocketmq_admin_core::client_adapter::TelemetryHandle;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 
@@ -36,6 +37,7 @@ fn main() -> anyhow::Result<()> {
     let client_runtime = ClientRuntime::new(
         owner.root_context().child("rocketmq-admin-client"),
         ClientRuntimeConfig::default(),
+        TelemetryHandle::noop(),
     );
     let run_result = owner.block_on(async {
         let run_result = run(client_runtime.clone()).await;

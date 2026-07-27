@@ -83,6 +83,7 @@ use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
+use tracing::Instrument;
 
 use crate::client::net::broker_to_client::Broker2Client;
 use crate::mqtrace::consume_message_context::ConsumeMessageContext;
@@ -123,25 +124,16 @@ where
     MS: MessageStore,
     TS: TransactionalMessageService,
 {
-    #[tracing::instrument(
-        level = "debug",
-        name = "RocketMQ BROKER RECEIVE_SEND",
-        skip_all,
-        fields(
-            rocketmq.request.code = request.code(),
-            rocketmq.request.opaque = request.opaque(),
-            messaging.message.id = tracing::field::Empty,
-            messaging.message.body.size = tracing::field::Empty,
-            messaging.rocketmq.message.keys = tracing::field::Empty,
-        )
-    )]
     async fn process_request(
         &mut self,
         channel: Channel,
         ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        self.process_request_mut(channel, ctx, request).await
+        let receive_span = self.receive_span_with_remote_parent(request);
+        self.process_request_mut(channel, ctx, request)
+            .instrument(receive_span)
+            .await
     }
 
     fn reject_request(&self, _code: i32) -> RejectRequestResponse {
@@ -188,18 +180,6 @@ where
     MS: MessageStore,
     TS: TransactionalMessageService,
 {
-    #[tracing::instrument(
-        level = "debug",
-        name = "RocketMQ BROKER RECEIVE_SEND",
-        skip_all,
-        fields(
-            rocketmq.request.code = request.code(),
-            rocketmq.request.opaque = request.opaque(),
-            messaging.message.id = tracing::field::Empty,
-            messaging.message.body.size = tracing::field::Empty,
-            messaging.rocketmq.message.keys = tracing::field::Empty,
-        )
-    )]
     pub async fn process_request_shared(
         &self,
         channel: Channel,
@@ -207,7 +187,49 @@ where
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut processor = self.clone();
-        processor.process_request_mut(channel, ctx, request).await
+        let receive_span = self.receive_span_with_remote_parent(request);
+        processor
+            .process_request_mut(channel, ctx, request)
+            .instrument(receive_span)
+            .await
+    }
+
+    fn receive_span_with_remote_parent(&self, request: &RemotingCommand) -> tracing::Span {
+        let span = rocketmq_observability::trace::broker::receive_send_span(
+            &self.inner.context.telemetry,
+            request.code(),
+            request.opaque(),
+        );
+        #[cfg(feature = "otel-traces")]
+        {
+            let request_code = RequestCode::from(request.code());
+            if matches!(
+                request_code,
+                RequestCode::SendMessage | RequestCode::SendMessageV2 | RequestCode::SendBatchMessage
+            ) {
+                if let Ok(header) = parse_request_header(request, request_code) {
+                    let properties = string_to_message_properties(header.properties.as_ref());
+                    if let Err(error) = rocketmq_observability::set_span_parent_from_properties_with_handle(
+                        &self.inner.context.telemetry,
+                        &span,
+                        &properties,
+                    ) {
+                        rocketmq_observability::record_span_parent_assignment_error(
+                            &self.inner.context.telemetry,
+                            "broker.receive_send",
+                            error,
+                        );
+                    }
+                    rocketmq_observability::trace::record_message_properties_with_handle(
+                        &self.inner.context.telemetry,
+                        &span,
+                        &properties,
+                        request.body().map(|body| body.len()),
+                    );
+                }
+            }
+        }
+        span
     }
 
     async fn process_request_mut(
@@ -257,15 +279,6 @@ where
             RequestCode::ConsumerSendMsgBack => self.inner.consumer_send_msg_back(&channel, &ctx, request).await,
             _ => {
                 let mut request_header = parse_request_header(request, request_code)?;
-                #[cfg(feature = "otel-traces")]
-                {
-                    let properties = string_to_message_properties(request_header.properties.as_ref());
-                    rocketmq_observability::set_current_span_parent_from_properties(&properties);
-                    rocketmq_observability::trace::record_current_message_properties(
-                        &properties,
-                        request.body().map(|body| body.len()),
-                    );
-                }
                 let mapping_context = self
                     .inner
                     .context
@@ -786,7 +799,7 @@ where
         let latency_ms_for_stats = latency_millis.min(i32::MAX as u128) as i32;
         stats.inc_topic_put_latency(topic, queue_id, latency_ms_for_stats);
 
-        if let Some(metrics) = crate::metrics::broker_metrics_manager::BrokerMetricsManager::try_global() {
+        if let Some(metrics) = self.inner.context.broker_metrics_manager.as_ref() {
             let msg_num = u64::try_from(append_result.msg_num.max(0)).unwrap_or_default();
             let bytes = u64::try_from(append_result.wrote_bytes.max(0)).unwrap_or_default();
             let message_size = bytes / msg_num.max(1);
@@ -1487,8 +1500,8 @@ where
         };
         #[cfg(feature = "otel-traces")]
         {
-            rocketmq_observability::set_current_span_parent_from_properties(msg_ext.get_properties());
-            rocketmq_observability::trace::record_current_message_properties(
+            rocketmq_observability::trace::record_current_message_properties_with_handle(
+                &self.context.telemetry,
                 msg_ext.get_properties(),
                 msg_ext.get_body().map(|body| body.len()),
             );
@@ -1580,7 +1593,7 @@ where
         let (response, succeeded) = match put_message_result.put_message_status() {
             PutMessageStatus::PutOk => {
                 if is_dlq {
-                    if let Some(metrics) = crate::metrics::broker_metrics_manager::BrokerMetricsManager::try_global() {
+                    if let Some(metrics) = self.context.broker_metrics_manager.as_ref() {
                         metrics.inc_send_to_dlq_messages(inner_topic.as_str(), request_header.group.as_str(), 1);
                     }
                 }
@@ -1603,7 +1616,7 @@ where
                 "RocketMQ CONSUMER RETRY"
             };
             let status = if succeeded { "success" } else { "failure" };
-            rocketmq_observability::add_current_span_event_with_status(event, status);
+            rocketmq_observability::add_current_span_event_with_status(&self.context.telemetry, event, status);
         }
 
         if self.has_consume_message_hook() && request_header.origin_msg_id.is_some_and(|ref id| !id.is_empty()) {
@@ -1874,6 +1887,25 @@ mod tests {
     use super::store_health_reject_remark;
     use super::store_health_reject_remark_from;
     use super::sync_flush_backlog_reject_remark;
+
+    #[test]
+    fn broker_receive_spans_bind_remote_parent_before_instrumentation() {
+        let source = include_str!("send_message_processor.rs");
+        let parent_with_handle = concat!("set_span_parent_from_properties", "_with_handle");
+        let late_parent_with_handle = concat!("set_current_span_parent_from_properties", "_with_handle");
+        let record_with_handle = concat!("record_message_properties", "_with_handle");
+        let late_record_with_handle = concat!("record_current_message_properties", "_with_handle");
+
+        assert_eq!(source.matches("receive_span_with_remote_parent(request)").count(), 2);
+        assert_eq!(source.matches(parent_with_handle).count(), 1);
+        assert_eq!(source.matches(late_parent_with_handle).count(), 0);
+        assert_eq!(source.matches(record_with_handle).count(), 1);
+        assert_eq!(source.matches(late_record_with_handle).count(), 1);
+        assert!(!source.contains(concat!("set_current_span_parent_from_", "properties(")));
+        assert!(!source.contains(concat!("record_current_message_", "properties(")));
+        assert_eq!(source.matches("trace::broker::receive_send_span").count(), 1);
+        assert!(!source.contains("name = \"RocketMQ BROKER RECEIVE_SEND\""));
+    }
 
     struct CapabilityStore {
         health: StoreHealthSnapshot,

@@ -257,10 +257,12 @@ mod tests {
             broker_config.as_ref(),
             &message_store_config,
             true,
+            None,
         ));
         let subscription_group_manager = SubscriptionGroupManager::new(
             SubscriptionGroupManagerConfig::from_configs(broker_config.as_ref(), &message_store_config),
             StateMachineVersionView::default(),
+            None,
         );
         PollingInfoProcessor::new(
             broker_config,

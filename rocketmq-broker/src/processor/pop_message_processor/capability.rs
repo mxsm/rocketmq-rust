@@ -38,6 +38,7 @@ use crate::client::manager::consumer_manager::ConsumerManager;
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::failover::escape_bridge::MessageStoreUnavailable;
 use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
+use crate::metrics::pop_metrics_manager::PopMetricsManager;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetRequestCapability;
 use crate::offset::manager::consumer_order_info_manager::ConsumerOrderInfoManager;
 use crate::processor::pop_inflight_message_counter::PopInflightMessageCounter;
@@ -482,6 +483,7 @@ pub(crate) struct PopReviveContext<MS: MessageStore> {
     pub(crate) stats: Arc<BrokerStatsManager>,
     pub(crate) inflight: PopInflightMessageCounter,
     pub(crate) should_start_time: Arc<AtomicU64>,
+    pub(crate) metrics: Option<Arc<PopMetricsManager>>,
     parent_task_group: Option<TaskGroup>,
 }
 
@@ -500,6 +502,7 @@ impl<MS: MessageStore> PopReviveContext<MS> {
         stats: Arc<BrokerStatsManager>,
         inflight: PopInflightMessageCounter,
         should_start_time: Arc<AtomicU64>,
+        metrics: Option<Arc<PopMetricsManager>>,
         parent_task_group: Option<TaskGroup>,
     ) -> Self {
         Self {
@@ -512,6 +515,7 @@ impl<MS: MessageStore> PopReviveContext<MS> {
             stats,
             inflight,
             should_start_time,
+            metrics,
             parent_task_group,
         }
     }

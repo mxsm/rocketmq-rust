@@ -48,6 +48,7 @@ use crate::runtime::processor::RequestProcessor;
 use crate::security::TransportSecurity;
 use crate::server::ConnectionHandler as TransportConnectionHandler;
 use crate::server::SessionHandle;
+use crate::telemetry::TransportTelemetry;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 #[derive(Clone)]
@@ -165,6 +166,8 @@ impl<PR> Drop for Client<PR> {
     }
 }
 
+// The explicit parameters are independently owned connection capabilities moved into one task.
+#[allow(clippy::too_many_arguments)]
 fn connect<PR>(
     addr: String,
     cmd_handler: Arc<RemotingGeneralHandler<PR>>,
@@ -174,16 +177,18 @@ fn connect<PR>(
     tls_config: TlsConfig,
     task_group: TaskGroup,
     deadline: RequestDeadline,
+    telemetry: TransportTelemetry,
 ) -> ClientConnectFuture
 where
     PR: RequestProcessor + Sync + Clone + 'static,
 {
     Box::pin(async move {
-        let connected = crate::client::connect_with_config(
+        let connected = crate::client::connect_with_config_and_telemetry(
             addr.as_str(),
             &tls_config,
             FrameLimits::legacy_compatibility(),
             deadline,
+            telemetry,
         )
         .await?;
         let (connection, local_addr, remote_address, negotiated_tls) = connected.into_parts_with_tls();
@@ -225,6 +230,7 @@ impl<PR> Client<PR>
 where
     PR: RequestProcessor + Sync + Clone + 'static,
 {
+    #[cfg(test)]
     pub(crate) async fn connect_with_service_context_until(
         context: &ChildServiceContext,
         addr: String,
@@ -233,10 +239,43 @@ where
         tls_config: TlsConfig,
         deadline: RequestDeadline,
     ) -> RocketMQResult<Client<PR>> {
-        let (task_group, child_lease) = new_client_connection_task_group_with_service_context(context, &addr)?;
-        Self::connect_with_task_group(addr, cmd_handler, tx, tls_config, task_group, child_lease, deadline).await
+        Self::connect_with_service_context_until_and_telemetry(
+            context,
+            addr,
+            cmd_handler,
+            tx,
+            tls_config,
+            deadline,
+            TransportTelemetry::noop(),
+        )
+        .await
     }
 
+    pub(crate) async fn connect_with_service_context_until_and_telemetry(
+        context: &ChildServiceContext,
+        addr: String,
+        cmd_handler: Arc<RemotingGeneralHandler<PR>>,
+        tx: Option<&tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
+        tls_config: TlsConfig,
+        deadline: RequestDeadline,
+        telemetry: TransportTelemetry,
+    ) -> RocketMQResult<Client<PR>> {
+        let (task_group, child_lease) = new_client_connection_task_group_with_service_context(context, &addr)?;
+        Self::connect_with_task_group(
+            addr,
+            cmd_handler,
+            tx,
+            tls_config,
+            task_group,
+            child_lease,
+            deadline,
+            telemetry,
+        )
+        .await
+    }
+
+    // The explicit parameters preserve the task-group, TLS, event, and telemetry ownership boundary.
+    #[allow(clippy::too_many_arguments)]
     async fn connect_with_task_group(
         addr: String,
         cmd_handler: Arc<RemotingGeneralHandler<PR>>,
@@ -245,6 +284,7 @@ where
         task_group: TaskGroup,
         child_lease: Option<TaskGroupChildLease>,
         deadline: RequestDeadline,
+        telemetry: TransportTelemetry,
     ) -> RocketMQResult<Client<PR>> {
         let (notify_shutdown, _) = broadcast::channel(1);
         let receiver = notify_shutdown.subscribe();
@@ -263,6 +303,7 @@ where
             tls_config,
             task_group,
             deadline,
+            telemetry,
         )
         .await?;
         Ok(Client {

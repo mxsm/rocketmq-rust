@@ -127,6 +127,9 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         );
     }
 
+    let process_telemetry =
+        rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig::from_process_env("rocketmq-namesrv")
+            .context("invalid NameServer process telemetry configuration")?;
     let security_config =
         SecurityBootstrapConfig::from_env().context("failed to load NameServer security bootstrap configuration")?;
     let controller_raft_bind_addr = controller_config
@@ -139,6 +142,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         &server_config,
         controller_config.as_ref(),
         controller_raft_bind_addr,
+        process_telemetry.prometheus_listener_addr(),
         lifecycle.config().probe_bind_addr,
     )
     .context("NameServer security bootstrap failed before listener bind")?;
@@ -146,11 +150,29 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     let environment_filter = rocketmq_observability::read_rust_log().context("failed to read RUST_LOG")?;
     let resolved_filter = resolve_startup_log_filter(&args, &logging_overrides, environment_filter.as_deref())
         .context("failed to resolve namesrv log filter")?;
-    let mut bootstrap_config = build_namesrv_telemetry_bootstrap_config(&namesrv_config);
+    let mut bootstrap_config = build_namesrv_telemetry_bootstrap_config(&namesrv_config, &process_telemetry);
     bootstrap_config.logging.reload = logging_overrides.logging.reload;
-    let telemetry_guard =
-        rocketmq_observability::install_global_with_filter(&bootstrap_config, resolved_filter.clone())
-            .context("failed to initialize namesrv telemetry bootstrap")?;
+    let telemetry_guard = rocketmq_observability::install_global_with_filter_and_service_context(
+        &bootstrap_config,
+        resolved_filter.clone(),
+        &service_context,
+    )
+    .await
+    .context("failed to initialize namesrv telemetry bootstrap")?;
+    if let Err(registration_error) = register_namesrv_release_identity(&telemetry_guard, &process_telemetry) {
+        let cleanup_error = telemetry_guard
+            .shutdown_with_service_context(&service_context, lifecycle.config().shutdown_timeout)
+            .await
+            .into_result()
+            .err()
+            .map(|error| error.to_string());
+        return Err(match cleanup_error {
+            Some(cleanup_error) => registration_error.context(format!(
+                "namesrv telemetry cleanup after release identity failure also failed: {cleanup_error}"
+            )),
+            None => registration_error,
+        });
+    }
     log_telemetry_bootstrap(
         &bootstrap_config,
         &resolved_filter,
@@ -162,7 +184,8 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         lifecycle.mark_failed();
         let request = lifecycle.request_shutdown(ShutdownReason::Internal);
         if let Err(shutdown_error) = telemetry_guard
-            .shutdown_with_timeout(request.deadline.remaining())
+            .shutdown_with_service_context(&service_context, request.deadline.remaining())
+            .await
             .into_result()
         {
             tracing::warn!(error = %shutdown_error, "namesrv telemetry cleanup after lifecycle startup failure was unhealthy");
@@ -182,7 +205,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     info!("Config Store Path: {}", namesrv_config.config_store_path);
     info!("===============================================");
     // Start the name server
-    let boot_result = Builder::new(service_context)
+    let boot_result = Builder::new(service_context.clone(), telemetry_guard.handle())
         .set_name_server_config(namesrv_config)
         .set_server_config(server_config)
         .set_controller_config_opt(controller_config)
@@ -197,21 +220,30 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     let shutdown_request = lifecycle
         .shutdown_request()
         .unwrap_or_else(|| lifecycle.request_shutdown(ShutdownReason::Internal));
-    let telemetry_report = telemetry_guard.shutdown_with_timeout(shutdown_request.deadline.remaining());
+    let telemetry_report = telemetry_guard
+        .shutdown_with_service_context(&service_context, shutdown_request.deadline.remaining())
+        .await;
     let shutdown_result = telemetry_report
         .into_result()
         .context("failed to shutdown namesrv telemetry bootstrap");
 
     match (boot_result, shutdown_result) {
         (Err(error), _) => Err(error),
-        (Ok(_report), Err(error)) => Err(error),
+        (Ok(_report), Err(error)) => {
+            lifecycle.mark_failed();
+            Err(error)
+        }
         (Ok(report), Ok(_telemetry_report)) if !report.is_healthy() => {
+            lifecycle.mark_failed();
             bail!("NameServer shutdown did not complete within the shared lifecycle deadline")
         }
         (Ok(_report), Ok(_telemetry_report)) if lifecycle.state() == ServiceLifecycleState::Failed => {
             bail!("NameServer lifecycle failed while observing or completing shutdown")
         }
-        (Ok(_report), Ok(_telemetry_report)) => Ok(()),
+        (Ok(_report), Ok(_telemetry_report)) => {
+            lifecycle.mark_stopped();
+            Ok(())
+        }
     }
 }
 
@@ -220,6 +252,7 @@ fn validate_namesrv_security(
     server_config: &ServerConfig,
     controller_config: Option<&ControllerConfig>,
     controller_raft_bind_addr: Option<SocketAddr>,
+    prometheus_bind_addr: Option<SocketAddr>,
     probe_bind_addr: Option<SocketAddr>,
 ) -> Result<ValidatedSecurityBootstrap> {
     let bind_ip = server_config
@@ -232,6 +265,9 @@ fn validate_namesrv_security(
         listeners.push(controller_config.listen_addr);
         listeners
             .push(controller_raft_bind_addr.context("embedded Controller Raft listener address must be resolved")?);
+    }
+    if let Some(prometheus_bind_addr) = prometheus_bind_addr {
+        listeners.push(prometheus_bind_addr);
     }
     if let Some(probe_bind_addr) = probe_bind_addr {
         listeners.push(probe_bind_addr);
@@ -256,6 +292,7 @@ fn log_security_bootstrap(validated: ValidatedSecurityBootstrap) {
 
 fn build_namesrv_telemetry_bootstrap_config(
     namesrv_config: &NamesrvConfig,
+    process_telemetry: &rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig,
 ) -> rocketmq_observability::TelemetryBootstrapConfig {
     let mut observability = rocketmq_observability::ObservabilityConfig {
         service_name: "rocketmq-namesrv".to_string(),
@@ -265,12 +302,40 @@ fn build_namesrv_telemetry_bootstrap_config(
         ..rocketmq_observability::ObservabilityConfig::default()
     };
     observability.subscriber_install_policy = rocketmq_observability::SubscriberInstallPolicy::Required;
+    process_telemetry.apply_to(&mut observability);
 
     let mut logging = rocketmq_observability::LoggingConfig::default();
     logging.file.directory = service_log_directory(namesrv_config.rocketmq_home.as_str());
     logging.file.file_name_prefix = "rocketmq-namesrv".to_string();
 
     rocketmq_observability::TelemetryBootstrapConfig { observability, logging }
+}
+
+fn register_namesrv_release_identity(
+    telemetry_guard: &rocketmq_observability::TelemetryRuntimeGuard,
+    process_telemetry: &rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig,
+) -> Result<()> {
+    if !process_telemetry.metrics_enabled() {
+        return Ok(());
+    }
+
+    #[cfg(feature = "observability")]
+    {
+        let telemetry = telemetry_guard.handle();
+        telemetry
+            .register_release_identity(process_telemetry.release_identity().clone())
+            .context("failed to register NameServer release identity before readiness")?;
+        if !telemetry.release_identity_registered() {
+            bail!("NameServer release identity was not registered before readiness");
+        }
+        Ok(())
+    }
+
+    #[cfg(not(feature = "observability"))]
+    {
+        let _ = telemetry_guard;
+        bail!("NameServer metrics require the `observability` Cargo feature");
+    }
 }
 
 fn service_log_directory(rocketmq_home: &str) -> String {
@@ -708,12 +773,33 @@ mod tests {
             &server,
             None,
             None,
+            None,
             Some(SocketAddr::from(([127, 0, 0, 1], 8088))),
         )
         .expect("loopback-only NameServer bootstrap should pass");
 
         server.bind_address = "0.0.0.0".to_string();
-        assert!(validate_namesrv_security(&security, &server, None, None, None).is_err());
+        assert!(validate_namesrv_security(&security, &server, None, None, None, None).is_err());
+    }
+
+    #[test]
+    fn development_security_rejects_public_prometheus_listener() {
+        let security = SecurityBootstrapConfig::new(SecurityBootstrapProfile::DevelopmentInsecureLoopback);
+        let server = ServerConfig {
+            bind_address: "127.0.0.1".to_string(),
+            listen_port: 9876,
+            ..ServerConfig::default()
+        };
+
+        assert!(validate_namesrv_security(
+            &security,
+            &server,
+            None,
+            None,
+            Some(SocketAddr::from(([0, 0, 0, 0], 5557))),
+            None,
+        )
+        .is_err());
     }
 
     #[test]
@@ -730,8 +816,19 @@ mod tests {
             rocketmq_home: "target/namesrv-telemetry-bootstrap".to_string(),
             ..NamesrvConfig::default()
         };
+        let process_telemetry =
+            rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig::try_from_values(
+                "rocketmq-namesrv",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("local NameServer process telemetry");
 
-        let config = build_namesrv_telemetry_bootstrap_config(&namesrv_config);
+        let config = build_namesrv_telemetry_bootstrap_config(&namesrv_config, &process_telemetry);
 
         assert_eq!(config.observability.service_name, "rocketmq-namesrv");
         assert_eq!(
@@ -746,5 +843,37 @@ mod tests {
 
         let expected_log_dir = PathBuf::from("target/namesrv-telemetry-bootstrap").join("logs");
         assert_eq!(PathBuf::from(config.logging.file.directory.as_str()), expected_log_dir);
+    }
+
+    #[test]
+    fn namesrv_release_identity_config_enables_prometheus_before_install() {
+        let namesrv_config = NamesrvConfig {
+            rocketmq_home: "target/namesrv-release-identity".to_string(),
+            ..NamesrvConfig::default()
+        };
+        let process_telemetry =
+            rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig::try_from_values(
+                "rocketmq-namesrv",
+                Some("0123456789abcdef0123456789abcdef01234567"),
+                Some("namesrv-01"),
+                Some("true"),
+                Some("prometheus"),
+                Some("127.0.0.1:9557"),
+                Some("/internal/metrics"),
+            )
+            .expect("NameServer Prometheus process telemetry");
+
+        let config = build_namesrv_telemetry_bootstrap_config(&namesrv_config, &process_telemetry);
+
+        assert!(config.observability.enabled);
+        assert!(config.observability.metrics.enabled);
+        assert_eq!(
+            config.observability.metrics.exporter,
+            rocketmq_observability::MetricsExporter::Prometheus
+        );
+        assert_eq!(config.observability.prometheus.host, "127.0.0.1");
+        assert_eq!(config.observability.prometheus.port, 9557);
+        assert_eq!(config.observability.prometheus.path, "/internal/metrics");
+        assert_eq!(process_telemetry.release_identity().service(), "rocketmq-namesrv");
     }
 }

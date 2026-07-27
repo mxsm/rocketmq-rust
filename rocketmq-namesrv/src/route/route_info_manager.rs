@@ -119,11 +119,16 @@ pub struct RouteInfoManager {
     // Runtime and lifecycle components
     name_server_runtime_inner: NameServerRuntimeHandle,
     un_register_service: Arc<BatchUnregistrationService>,
+    metrics: rocketmq_observability::metrics::namesrv::NameServerMetrics,
 }
 
 impl RouteInfoManager {
     /// Create a new RouteInfoManager with DashMap-based tables and segmented locks
-    pub(crate) fn new(name_server_runtime_inner: NameServerRuntimeHandle, queue_capacity: usize) -> Self {
+    pub(crate) fn new(
+        name_server_runtime_inner: NameServerRuntimeHandle,
+        queue_capacity: usize,
+        metrics: rocketmq_observability::metrics::namesrv::NameServerMetrics,
+    ) -> Self {
         let un_register_service = Arc::new(BatchUnregistrationService::new(
             name_server_runtime_inner.clone(),
             queue_capacity,
@@ -144,6 +149,7 @@ impl RouteInfoManager {
 
             name_server_runtime_inner,
             un_register_service,
+            metrics,
         }
     }
 
@@ -325,7 +331,7 @@ impl RouteInfoManager {
                 "Broker registration rejected due to version conflict: cluster={}, broker={}, id={}, addr={}",
                 cluster_name, broker_name, broker_id, broker_addr
             );
-            rocketmq_observability::metrics::namesrv::record_broker_registration(self.active_broker_count());
+            self.metrics.record_broker_registration(self.active_broker_count());
             return Ok(result);
         }
         let (register_first, is_min_broker_id_changed) = update_result.unwrap();
@@ -420,7 +426,7 @@ impl RouteInfoManager {
             cluster_name, broker_name, broker_id, broker_addr, register_first
         );
 
-        rocketmq_observability::metrics::namesrv::record_broker_registration(self.active_broker_count());
+        self.metrics.record_broker_registration(self.active_broker_count());
         Ok(result)
     }
 
@@ -1099,7 +1105,7 @@ impl RouteInfoManager {
             );
         }
 
-        rocketmq_observability::metrics::namesrv::record_active_broker_count(self.active_broker_count());
+        self.metrics.record_active_broker_count(self.active_broker_count());
         Ok(())
     }
 
@@ -1298,7 +1304,7 @@ impl RouteInfoManager {
                     .update_queue_data_perm(topic.as_str(), broker_name.as_str(), perm as i32);
             }
         }
-        rocketmq_observability::metrics::namesrv::record_active_broker_count(self.active_broker_count());
+        self.metrics.record_active_broker_count(self.active_broker_count());
     }
 }
 
@@ -1567,7 +1573,7 @@ impl RouteInfoManager {
             }
         }
 
-        rocketmq_observability::metrics::namesrv::record_active_broker_count(self.active_broker_count());
+        self.metrics.record_active_broker_count(self.active_broker_count());
         count
     }
 

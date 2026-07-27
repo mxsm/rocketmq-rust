@@ -27,14 +27,12 @@
 //!
 //! ## Design Philosophy
 //! - Uses OpenTelemetry Rust SDK for standard metrics instrumentation
-//! - Provides both static global interface and instance-based API
+//! - Keeps instruments and labels scoped to one broker instance
 //! - Thread-safe by design
 //! - Supports multiple exporter types (OTLP gRPC, Prometheus, Log)
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::OnceLock;
-use std::sync::RwLock;
 use std::time::Duration;
 
 use rocketmq_model::topic::is_system_topic;
@@ -44,20 +42,20 @@ use rocketmq_model::topic::RETRY_GROUP_TOPIC_PREFIX;
 use rocketmq_model::version::RocketMqVersion;
 use tracing::warn;
 
-use rocketmq_observability::metrics::auth::AuthMetricsSnapshot;
-use rocketmq_observability::metrics::broker::BrokerMetrics;
-use rocketmq_observability::metrics::broker_constants::BrokerMetricsConstant;
-use rocketmq_observability::metrics::labels::LabelGuard;
-use rocketmq_observability::metrics::noop_instruments::NopLongCounter;
-use rocketmq_observability::metrics::noop_instruments::NopLongHistogram;
-use rocketmq_observability::metrics::owner_instruments::Counter;
-use rocketmq_observability::metrics::owner_instruments::Histogram;
-use rocketmq_observability::metrics::owner_instruments::KeyValue;
-use rocketmq_observability::metrics::owner_instruments::Meter;
-use rocketmq_observability::metrics::owner_instruments::MeterProvider;
-use rocketmq_observability::metrics::owner_instruments::SdkMeterProvider;
-use rocketmq_observability::MetricsExporter;
-use rocketmq_observability::SamplingGate;
+use crate::metrics::auth::AuthMetricsSnapshot;
+use crate::metrics::broker::BrokerMetrics;
+use crate::metrics::broker_constants::BrokerMetricsConstant;
+use crate::metrics::noop_instruments::NopLongCounter;
+use crate::metrics::noop_instruments::NopLongHistogram;
+use crate::metrics::owner_instruments::Counter;
+use crate::metrics::owner_instruments::Histogram;
+use crate::metrics::owner_instruments::KeyValue;
+use crate::metrics::owner_instruments::Meter;
+use crate::MetricLabelPolicy;
+use crate::MetricsExporter;
+use crate::SamplingGate;
+use crate::TelemetryRecorder;
+use crate::METRIC_LABEL_SENTINEL;
 
 // ============================================================================
 // Constants
@@ -151,7 +149,7 @@ impl AttributesBuilderSupplier for BrokerAttributesSupplier {
 }
 
 // ============================================================================
-// Static Metrics Wrappers
+// Metrics Wrappers
 // ============================================================================
 
 /// Wrapper for Counter that can be either real or no-op
@@ -229,15 +227,6 @@ pub fn get_create_time_buckets() -> Vec<f64> {
 // BrokerMetricsManager
 // ============================================================================
 
-/// Global singleton for BrokerMetricsManager
-static BROKER_METRICS_MANAGER: OnceLock<BrokerMetricsManager> = OnceLock::new();
-
-/// Global label map for common labels
-static LABEL_MAP: OnceLock<RwLock<HashMap<String, String>>> = OnceLock::new();
-
-/// Global attributes builder supplier
-static ATTRIBUTES_BUILDER_SUPPLIER: OnceLock<Arc<dyn AttributesBuilderSupplier>> = OnceLock::new();
-
 #[cfg(feature = "otel-metrics")]
 struct GuardedLabel {
     key_value: KeyValue,
@@ -245,16 +234,14 @@ struct GuardedLabel {
 }
 
 #[cfg(feature = "otel-metrics")]
-fn guarded_bounded_label(label_guard: &RwLock<LabelGuard>, key: &'static str, value: &str) -> GuardedLabel {
-    let (value, dropped) = label_guard
-        .write()
-        .map(|mut guard| {
-            let (value, dropped) = guard.normalize_metric_label_with_outcome(key, value);
-            (value.into_owned(), dropped)
-        })
-        .unwrap_or_else(|_| ("other".to_string(), true));
+fn guarded_bounded_label(label_policy: &MetricLabelPolicy, key: &'static str, value: &str) -> GuardedLabel {
+    let (value, dropped) = label_policy.normalize_metric_label_with_outcome(key, value);
     GuardedLabel {
-        key_value: KeyValue::new(key, value),
+        key_value: if dropped {
+            KeyValue::new(key, METRIC_LABEL_SENTINEL)
+        } else {
+            KeyValue::new(key, value.into_owned())
+        },
         dropped,
     }
 }
@@ -348,16 +335,38 @@ pub struct BrokerMetricsManager {
     sampled_metric_gate: SamplingGate,
 
     #[cfg(feature = "otel-metrics")]
-    label_guard: RwLock<LabelGuard>,
+    label_policy: MetricLabelPolicy,
+
+    telemetry: Option<TelemetryRecorder>,
 }
 
 impl BrokerMetricsManager {
+    /// Creates a production manager bound to one telemetry runtime.
+    #[must_use]
+    pub fn from_telemetry(
+        telemetry: TelemetryRecorder,
+        attributes_supplier: Arc<dyn AttributesBuilderSupplier>,
+        sampling_config: BrokerMetricsSamplingConfig,
+    ) -> Option<Self> {
+        let meter = telemetry.meter()?;
+        let label_policy = telemetry.metric_label_policy();
+        Some(Self::build(
+            meter,
+            attributes_supplier,
+            label_policy,
+            sampling_config,
+            Some(telemetry),
+        ))
+    }
+
     /// Create a new BrokerMetricsManager with OpenTelemetry Meter
-    pub fn new(meter: Meter, attributes_supplier: Arc<dyn AttributesBuilderSupplier>) -> Self {
+    #[cfg(test)]
+    pub(crate) fn new(meter: Meter, attributes_supplier: Arc<dyn AttributesBuilderSupplier>) -> Self {
         Self::new_with_label_config(meter, attributes_supplier, BrokerMetricsLabelConfig::default())
     }
 
-    pub fn new_with_label_config(
+    #[cfg(test)]
+    pub(crate) fn new_with_label_config(
         meter: Meter,
         attributes_supplier: Arc<dyn AttributesBuilderSupplier>,
         label_config: BrokerMetricsLabelConfig,
@@ -370,14 +379,44 @@ impl BrokerMetricsManager {
         )
     }
 
-    pub fn new_with_label_and_sampling_config(
+    #[cfg(test)]
+    pub(crate) fn new_with_label_and_sampling_config(
         meter: Meter,
         attributes_supplier: Arc<dyn AttributesBuilderSupplier>,
         label_config: BrokerMetricsLabelConfig,
         sampling_config: BrokerMetricsSamplingConfig,
     ) -> Self {
+        Self::new_with_label_policy_and_sampling_config(
+            meter,
+            attributes_supplier,
+            MetricLabelPolicy::new(
+                label_config.cardinality_limit,
+                label_config.topic_label_enabled,
+                label_config.consumer_group_label_enabled,
+            ),
+            sampling_config,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_with_label_policy_and_sampling_config(
+        meter: Meter,
+        attributes_supplier: Arc<dyn AttributesBuilderSupplier>,
+        label_policy: MetricLabelPolicy,
+        sampling_config: BrokerMetricsSamplingConfig,
+    ) -> Self {
+        Self::build(meter, attributes_supplier, label_policy, sampling_config, None)
+    }
+
+    fn build(
+        meter: Meter,
+        attributes_supplier: Arc<dyn AttributesBuilderSupplier>,
+        label_policy: MetricLabelPolicy,
+        sampling_config: BrokerMetricsSamplingConfig,
+        telemetry: Option<TelemetryRecorder>,
+    ) -> Self {
         #[cfg(not(feature = "otel-metrics"))]
-        let _ = label_config;
+        let _ = label_policy;
 
         // Request metrics - Counters
         #[cfg(not(feature = "otel-metrics"))]
@@ -470,54 +509,14 @@ impl BrokerMetricsManager {
             attributes_supplier,
             sampled_metric_gate: SamplingGate::new(sampling_config.sample_ratio),
             #[cfg(feature = "otel-metrics")]
-            label_guard: RwLock::new(LabelGuard::new(
-                label_config.cardinality_limit,
-                label_config.topic_label_enabled,
-                label_config.consumer_group_label_enabled,
-            )),
+            label_policy,
+            telemetry,
         }
     }
 
-    /// Initialize with observable gauges for stats metrics
-    /// This registers all observable gauges that require callbacks
-    pub fn init_with_observables<F1, F2, F3, F4, F5, F6>(
-        meter_provider: &SdkMeterProvider,
-        attributes_supplier: Arc<dyn AttributesBuilderSupplier>,
-        // Stats callbacks
-        processor_watermark_fn: F1,
-        broker_permission_fn: F2,
-        topic_num_fn: F3,
-        consumer_group_num_fn: F4,
-        // Connection callbacks
-        producer_connections_fn: F5,
-        consumer_connections_fn: F6,
-    ) -> Self
-    where
-        F1: Fn() -> Vec<(String, i64)> + Send + Sync + 'static, // (processor_name, count)
-        F2: Fn() -> i64 + Send + Sync + 'static,
-        F3: Fn() -> i64 + Send + Sync + 'static,
-        F4: Fn() -> i64 + Send + Sync + 'static,
-        F5: Fn() -> Vec<(ProducerConnectionAttributes, i64)> + Send + Sync + 'static,
-        F6: Fn() -> Vec<(ConsumerConnectionAttributes, i64)> + Send + Sync + 'static,
-    {
-        Self::init_with_observables_and_label_config(
-            meter_provider,
-            attributes_supplier,
-            BrokerMetricsLabelConfig::default(),
-            Some(processor_watermark_fn),
-            broker_permission_fn,
-            topic_num_fn,
-            consumer_group_num_fn,
-            producer_connections_fn,
-            consumer_connections_fn,
-        )
-    }
-
-    /// Initialize with observable gauges and an explicit label guard configuration.
-    pub fn init_with_observables_and_label_config<F1, F2, F3, F4, F5, F6>(
-        meter_provider: &SdkMeterProvider,
-        attributes_supplier: Arc<dyn AttributesBuilderSupplier>,
-        label_config: BrokerMetricsLabelConfig,
+    /// Register observable callbacks on the meter owned by this broker instance.
+    pub fn register_observables<F1, F2, F3, F4, F5, F6>(
+        &self,
         // Stats callbacks
         processor_watermark_fn: Option<F1>,
         broker_permission_fn: F2,
@@ -526,8 +525,7 @@ impl BrokerMetricsManager {
         // Connection callbacks
         producer_connections_fn: F5,
         consumer_connections_fn: F6,
-    ) -> Self
-    where
+    ) where
         F1: Fn() -> Vec<(String, i64)> + Send + Sync + 'static, // (processor_name, count)
         F2: Fn() -> i64 + Send + Sync + 'static,
         F3: Fn() -> i64 + Send + Sync + 'static,
@@ -535,58 +533,22 @@ impl BrokerMetricsManager {
         F5: Fn() -> Vec<(ProducerConnectionAttributes, i64)> + Send + Sync + 'static,
         F6: Fn() -> Vec<(ConsumerConnectionAttributes, i64)> + Send + Sync + 'static,
     {
-        Self::init_with_observables_and_configs(
-            meter_provider,
-            attributes_supplier,
-            label_config,
-            BrokerMetricsSamplingConfig::default(),
-            processor_watermark_fn,
-            broker_permission_fn,
-            topic_num_fn,
-            consumer_group_num_fn,
-            producer_connections_fn,
-            consumer_connections_fn,
-        )
-    }
-
-    /// Initialize with observable gauges, label guard configuration, and sampling configuration.
-    pub fn init_with_observables_and_configs<F1, F2, F3, F4, F5, F6>(
-        meter_provider: &SdkMeterProvider,
-        attributes_supplier: Arc<dyn AttributesBuilderSupplier>,
-        label_config: BrokerMetricsLabelConfig,
-        sampling_config: BrokerMetricsSamplingConfig,
-        // Stats callbacks
-        processor_watermark_fn: Option<F1>,
-        broker_permission_fn: F2,
-        topic_num_fn: F3,
-        consumer_group_num_fn: F4,
-        // Connection callbacks
-        producer_connections_fn: F5,
-        consumer_connections_fn: F6,
-    ) -> Self
-    where
-        F1: Fn() -> Vec<(String, i64)> + Send + Sync + 'static, // (processor_name, count)
-        F2: Fn() -> i64 + Send + Sync + 'static,
-        F3: Fn() -> i64 + Send + Sync + 'static,
-        F4: Fn() -> i64 + Send + Sync + 'static,
-        F5: Fn() -> Vec<(ProducerConnectionAttributes, i64)> + Send + Sync + 'static,
-        F6: Fn() -> Vec<(ConsumerConnectionAttributes, i64)> + Send + Sync + 'static,
-    {
-        let meter = meter_provider.meter(BrokerMetricsConstant::OPEN_TELEMETRY_METER_NAME);
-        let manager = Self::new_with_label_and_sampling_config(
-            meter.clone(),
-            attributes_supplier.clone(),
-            label_config,
-            sampling_config,
-        );
+        if !self.is_recording_active() {
+            return;
+        }
+        let meter = &self.meter;
 
         // Register stats observable gauges
         if let Some(processor_watermark_fn) = processor_watermark_fn {
-            let attrs1 = attributes_supplier.clone();
+            let telemetry1 = self.telemetry.clone();
+            let attrs1 = Arc::clone(&self.attributes_supplier);
             let _processor_watermark = meter
                 .i64_observable_gauge(BrokerMetricsConstant::GAUGE_PROCESSOR_WATERMARK)
                 .with_description("Request processor watermark")
                 .with_callback(move |observer| {
+                    if !telemetry_allows_recording(telemetry1.as_ref()) {
+                        return;
+                    }
                     for (processor_name, count) in processor_watermark_fn() {
                         let mut attrs = attrs1.get();
                         attrs.push(KeyValue::new(BrokerMetricsConstant::LABEL_PROCESSOR, processor_name));
@@ -596,42 +558,58 @@ impl BrokerMetricsManager {
                 .build();
         }
 
-        let attrs2 = attributes_supplier.clone();
+        let telemetry2 = self.telemetry.clone();
+        let attrs2 = Arc::clone(&self.attributes_supplier);
         let _broker_permission = meter
             .i64_observable_gauge(BrokerMetricsConstant::GAUGE_BROKER_PERMISSION)
             .with_description("Broker permission")
             .with_callback(move |observer| {
+                if !telemetry_allows_recording(telemetry2.as_ref()) {
+                    return;
+                }
                 let attrs = attrs2.get();
                 observer.observe(broker_permission_fn(), &attrs);
             })
             .build();
 
-        let attrs3 = attributes_supplier.clone();
+        let telemetry3 = self.telemetry.clone();
+        let attrs3 = Arc::clone(&self.attributes_supplier);
         let _topic_num = meter
             .i64_observable_gauge(BrokerMetricsConstant::GAUGE_TOPIC_NUM)
             .with_description("Active topic number")
             .with_callback(move |observer| {
+                if !telemetry_allows_recording(telemetry3.as_ref()) {
+                    return;
+                }
                 let attrs = attrs3.get();
                 observer.observe(topic_num_fn(), &attrs);
             })
             .build();
 
-        let attrs4 = attributes_supplier.clone();
+        let telemetry4 = self.telemetry.clone();
+        let attrs4 = Arc::clone(&self.attributes_supplier);
         let _consumer_group_num = meter
             .i64_observable_gauge(BrokerMetricsConstant::GAUGE_CONSUMER_GROUP_NUM)
             .with_description("Active subscription group number")
             .with_callback(move |observer| {
+                if !telemetry_allows_recording(telemetry4.as_ref()) {
+                    return;
+                }
                 let attrs = attrs4.get();
                 observer.observe(consumer_group_num_fn(), &attrs);
             })
             .build();
 
         // Register connection observable gauges
-        let attrs5 = attributes_supplier.clone();
+        let telemetry5 = self.telemetry.clone();
+        let attrs5 = Arc::clone(&self.attributes_supplier);
         let _producer_connection = meter
             .i64_observable_gauge(BrokerMetricsConstant::GAUGE_PRODUCER_CONNECTIONS)
             .with_description("Producer connections")
             .with_callback(move |observer| {
+                if !telemetry_allows_recording(telemetry5.as_ref()) {
+                    return;
+                }
                 for (attr, count) in producer_connections_fn() {
                     let mut attrs = attrs5.get();
                     attrs.extend([
@@ -648,17 +626,21 @@ impl BrokerMetricsManager {
             .build();
 
         #[cfg(feature = "otel-metrics")]
-        let consumer_connection_label_guard = Arc::new(RwLock::new(LabelGuard::default()));
-        let attrs6 = attributes_supplier;
+        let consumer_connection_label_policy = self.label_policy.clone();
+        let telemetry6 = self.telemetry.clone();
+        let attrs6 = Arc::clone(&self.attributes_supplier);
         let _consumer_connection = meter
             .i64_observable_gauge(BrokerMetricsConstant::GAUGE_CONSUMER_CONNECTIONS)
             .with_description("Consumer connections")
             .with_callback(move |observer| {
+                if !telemetry_allows_recording(telemetry6.as_ref()) {
+                    return;
+                }
                 for (attr, count) in consumer_connections_fn() {
                     let mut attrs = attrs6.get();
                     #[cfg(feature = "otel-metrics")]
                     let consumer_group_label = guarded_bounded_label(
-                        &consumer_connection_label_guard,
+                        &consumer_connection_label_policy,
                         BrokerMetricsConstant::LABEL_CONSUMER_GROUP,
                         &attr.group,
                     )
@@ -687,110 +669,17 @@ impl BrokerMetricsManager {
                 }
             })
             .build();
-
-        manager
-    }
-
-    /// Initialize the global BrokerMetricsManager
-    pub fn init_global(meter: Meter, attributes_supplier: Arc<dyn AttributesBuilderSupplier>) {
-        Self::init_global_with_label_config(meter, attributes_supplier, BrokerMetricsLabelConfig::default());
-    }
-
-    pub fn init_global_with_label_config(
-        meter: Meter,
-        attributes_supplier: Arc<dyn AttributesBuilderSupplier>,
-        label_config: BrokerMetricsLabelConfig,
-    ) {
-        let _ = ATTRIBUTES_BUILDER_SUPPLIER.set(attributes_supplier.clone());
-        let _ = LABEL_MAP.set(RwLock::new(HashMap::new()));
-        let _ = BROKER_METRICS_MANAGER.set(Self::new_with_label_config(meter, attributes_supplier, label_config));
-    }
-
-    pub fn init_global_with_observables_and_label_config<F1, F2, F3, F4, F5, F6>(
-        meter_provider: &SdkMeterProvider,
-        attributes_supplier: Arc<dyn AttributesBuilderSupplier>,
-        label_config: BrokerMetricsLabelConfig,
-        processor_watermark_fn: Option<F1>,
-        broker_permission_fn: F2,
-        topic_num_fn: F3,
-        consumer_group_num_fn: F4,
-        producer_connections_fn: F5,
-        consumer_connections_fn: F6,
-    ) where
-        F1: Fn() -> Vec<(String, i64)> + Send + Sync + 'static,
-        F2: Fn() -> i64 + Send + Sync + 'static,
-        F3: Fn() -> i64 + Send + Sync + 'static,
-        F4: Fn() -> i64 + Send + Sync + 'static,
-        F5: Fn() -> Vec<(ProducerConnectionAttributes, i64)> + Send + Sync + 'static,
-        F6: Fn() -> Vec<(ConsumerConnectionAttributes, i64)> + Send + Sync + 'static,
-    {
-        Self::init_global_with_observables_and_configs(
-            meter_provider,
-            attributes_supplier,
-            label_config,
-            BrokerMetricsSamplingConfig::default(),
-            processor_watermark_fn,
-            broker_permission_fn,
-            topic_num_fn,
-            consumer_group_num_fn,
-            producer_connections_fn,
-            consumer_connections_fn,
-        );
-    }
-
-    pub fn init_global_with_observables_and_configs<F1, F2, F3, F4, F5, F6>(
-        meter_provider: &SdkMeterProvider,
-        attributes_supplier: Arc<dyn AttributesBuilderSupplier>,
-        label_config: BrokerMetricsLabelConfig,
-        sampling_config: BrokerMetricsSamplingConfig,
-        processor_watermark_fn: Option<F1>,
-        broker_permission_fn: F2,
-        topic_num_fn: F3,
-        consumer_group_num_fn: F4,
-        producer_connections_fn: F5,
-        consumer_connections_fn: F6,
-    ) where
-        F1: Fn() -> Vec<(String, i64)> + Send + Sync + 'static,
-        F2: Fn() -> i64 + Send + Sync + 'static,
-        F3: Fn() -> i64 + Send + Sync + 'static,
-        F4: Fn() -> i64 + Send + Sync + 'static,
-        F5: Fn() -> Vec<(ProducerConnectionAttributes, i64)> + Send + Sync + 'static,
-        F6: Fn() -> Vec<(ConsumerConnectionAttributes, i64)> + Send + Sync + 'static,
-    {
-        let _ = ATTRIBUTES_BUILDER_SUPPLIER.set(attributes_supplier.clone());
-        let _ = LABEL_MAP.set(RwLock::new(HashMap::new()));
-        let _ = BROKER_METRICS_MANAGER.set(Self::init_with_observables_and_configs(
-            meter_provider,
-            attributes_supplier,
-            label_config,
-            sampling_config,
-            processor_watermark_fn,
-            broker_permission_fn,
-            topic_num_fn,
-            consumer_group_num_fn,
-            producer_connections_fn,
-            consumer_connections_fn,
-        ));
-    }
-
-    /// Get the global BrokerMetricsManager instance
-    pub fn try_global() -> Option<&'static BrokerMetricsManager> {
-        BROKER_METRICS_MANAGER.get()
     }
 
     /// Get base attributes from the supplier
     #[inline]
     fn base_attributes(&self) -> Vec<KeyValue> {
-        let mut attrs = self.attributes_supplier.get();
-        // Add labels from global LABEL_MAP
-        if let Some(label_map) = LABEL_MAP.get() {
-            if let Ok(map) = label_map.read() {
-                for (k, v) in map.iter() {
-                    attrs.push(KeyValue::new(k.clone(), v.clone()));
-                }
-            }
-        }
-        attrs
+        self.attributes_supplier.get()
+    }
+
+    #[inline]
+    fn is_recording_active(&self) -> bool {
+        telemetry_allows_recording(self.telemetry.as_ref())
     }
 
     #[inline]
@@ -806,7 +695,7 @@ impl BrokerMetricsManager {
     #[cfg(feature = "otel-metrics")]
     #[inline]
     fn bounded_label(&self, key: &'static str, value: &str) -> KeyValue {
-        let label = guarded_bounded_label(&self.label_guard, key, value);
+        let label = guarded_bounded_label(&self.label_policy, key, value);
         if label.dropped {
             self.record_metric_label_dropped(key);
         }
@@ -819,11 +708,6 @@ impl BrokerMetricsManager {
         KeyValue::new(key, value.to_owned())
     }
 
-    /// Get the meter reference
-    pub fn meter(&self) -> &Meter {
-        &self.meter
-    }
-
     #[cfg(feature = "otel-metrics")]
     fn record_metric_label_dropped(&self, label_key: &'static str) {
         let mut attrs = self.base_attributes();
@@ -833,22 +717,27 @@ impl BrokerMetricsManager {
 
     #[cfg(feature = "otel-metrics")]
     pub fn dropped_metric_labels(&self) -> u64 {
-        self.label_guard
-            .read()
-            .map(|guard| guard.dropped_labels())
-            .unwrap_or_default()
+        self.label_policy.dropped_labels()
     }
 
     pub fn register_auth_observable_gauge<F>(&self, auth_snapshot_fn: F)
     where
         F: Fn() -> Option<AuthMetricsSnapshot> + Send + Sync + 'static,
     {
+        if !self.is_recording_active() {
+            return;
+        }
+
+        let telemetry = self.telemetry.clone();
         let attributes_supplier = self.attributes_supplier.clone();
         let _auth_metrics = self
             .meter
             .u64_observable_gauge(BrokerMetricsConstant::GAUGE_AUTH_METRIC_VALUE)
             .with_description("Current RocketMQ auth metric counter values")
             .with_callback(move |observer| {
+                if !telemetry_allows_recording(telemetry.as_ref()) {
+                    return;
+                }
                 let Some(snapshot) = auth_snapshot_fn() else {
                     return;
                 };
@@ -868,6 +757,9 @@ impl BrokerMetricsManager {
 
     /// Record incoming message count
     pub fn inc_messages_in_total(&self, topic: &str, message_type: TopicMessageType, num: u64, is_system: bool) {
+        if !self.is_recording_active() {
+            return;
+        }
         let mut attrs = self.base_attributes();
         attrs.extend([
             self.topic_label(topic),
@@ -893,6 +785,9 @@ impl BrokerMetricsManager {
         message_size: u64,
         is_system: bool,
     ) {
+        if !self.is_recording_active() {
+            return;
+        }
         let mut message_attrs = self.base_attributes();
         message_attrs.extend([
             self.topic_label(topic),
@@ -931,6 +826,9 @@ impl BrokerMetricsManager {
 
     /// Record outgoing message count
     pub fn inc_messages_out_total(&self, topic: &str, consumer_group: &str, num: u64, is_retry: bool) {
+        if !self.is_recording_active() {
+            return;
+        }
         let is_system = is_system(topic, consumer_group);
         let mut attrs = self.base_attributes();
         attrs.extend([
@@ -951,6 +849,9 @@ impl BrokerMetricsManager {
 
     /// Record incoming throughput (bytes)
     pub fn inc_throughput_in_total(&self, topic: &str, bytes: u64) {
+        if !self.is_recording_active() {
+            return;
+        }
         let mut attrs = self.base_attributes();
         attrs.push(self.topic_label(topic));
         #[cfg(feature = "otel-metrics")]
@@ -961,6 +862,9 @@ impl BrokerMetricsManager {
 
     /// Record outgoing throughput (bytes)
     pub fn inc_throughput_out_total(&self, topic: &str, consumer_group: &str, bytes: u64, is_retry: bool) {
+        if !self.is_recording_active() {
+            return;
+        }
         let is_system = is_system(topic, consumer_group);
         let mut attrs = self.base_attributes();
         attrs.extend([
@@ -981,6 +885,9 @@ impl BrokerMetricsManager {
 
     /// Record message size
     pub fn record_message_size(&self, topic: &str, message_type: TopicMessageType, size: u64) {
+        if !self.is_recording_active() {
+            return;
+        }
         let mut attrs = self.base_attributes();
         attrs.extend([
             self.topic_label(topic),
@@ -997,6 +904,9 @@ impl BrokerMetricsManager {
 
     /// Record broker send message processing latency.
     pub fn record_send_message_latency(&self, topic: &str, latency_ms: u64) {
+        if !self.is_recording_active() {
+            return;
+        }
         if !self.sampled_metric_gate.should_sample() {
             return;
         }
@@ -1020,12 +930,18 @@ impl BrokerMetricsManager {
 
     /// Record topic create execution time
     pub fn record_topic_create_time(&self, time_ms: u64) {
+        if !self.is_recording_active() {
+            return;
+        }
         let attrs = self.base_attributes();
         self.topic_create_execute_time.record(time_ms, &attrs);
     }
 
     /// Record consumer group create execution time
     pub fn record_consumer_group_create_time(&self, time_ms: u64) {
+        if !self.is_recording_active() {
+            return;
+        }
         let attrs = self.base_attributes();
         self.consumer_group_create_execute_time.record(time_ms, &attrs);
     }
@@ -1036,6 +952,9 @@ impl BrokerMetricsManager {
 
     /// Record send to DLQ message count
     pub fn inc_send_to_dlq_messages(&self, topic: &str, consumer_group: &str, num: u64) {
+        if !self.is_recording_active() {
+            return;
+        }
         let is_system = is_system(topic, consumer_group);
         let mut attrs = self.base_attributes();
         attrs.extend([
@@ -1052,6 +971,9 @@ impl BrokerMetricsManager {
 
     /// Record commit message count
     pub fn inc_commit_messages(&self, topic: &str, num: u64) {
+        if !self.is_recording_active() {
+            return;
+        }
         let mut attrs = self.base_attributes();
         attrs.push(self.topic_label(topic));
         self.commit_messages_total.add(num, &attrs);
@@ -1059,6 +981,9 @@ impl BrokerMetricsManager {
 
     /// Record rollback message count
     pub fn inc_rollback_messages(&self, topic: &str, num: u64) {
+        if !self.is_recording_active() {
+            return;
+        }
         let mut attrs = self.base_attributes();
         attrs.push(self.topic_label(topic));
         self.rollback_messages_total.add(num, &attrs);
@@ -1066,30 +991,18 @@ impl BrokerMetricsManager {
 
     /// Record transaction finish latency
     pub fn record_transaction_finish_latency(&self, topic: &str, latency_ms: u64) {
+        if !self.is_recording_active() {
+            return;
+        }
         let mut attrs = self.base_attributes();
         attrs.push(self.topic_label(topic));
         self.transaction_finish_latency.record(latency_ms, &attrs);
     }
 }
 
-// ============================================================================
-// Static Helper Functions
-// ============================================================================
-
-/// Create a new attributes builder with common labels
-pub fn new_attributes_builder() -> Vec<KeyValue> {
-    let mut attrs = Vec::new();
-    if let Some(supplier) = ATTRIBUTES_BUILDER_SUPPLIER.get() {
-        attrs = supplier.get();
-    }
-    if let Some(label_map) = LABEL_MAP.get() {
-        if let Ok(map) = label_map.read() {
-            for (k, v) in map.iter() {
-                attrs.push(KeyValue::new(k.clone(), v.clone()));
-            }
-        }
-    }
-    attrs
+#[inline]
+fn telemetry_allows_recording(telemetry: Option<&TelemetryRecorder>) -> bool {
+    telemetry.is_none_or(TelemetryRecorder::is_active)
 }
 
 /// Check if topic is retry or DLQ topic
@@ -1195,6 +1108,9 @@ impl MetricsConfig {
 
 #[cfg(test)]
 mod tests {
+    use opentelemetry::metrics::MeterProvider;
+    use opentelemetry_sdk::metrics::SdkMeterProvider;
+
     use super::*;
 
     #[test]
@@ -1339,6 +1255,56 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "otel-metrics")]
+    fn broker_metrics_manager_uses_the_injected_policy_state() {
+        let meter_provider = SdkMeterProvider::builder().build();
+        let policy = MetricLabelPolicy::new(1, true, true);
+        let manager = BrokerMetricsManager::new_with_label_policy_and_sampling_config(
+            meter_provider.meter("broker-shared-label-policy"),
+            Arc::new(NoopAttributesSupplier),
+            policy.clone(),
+            BrokerMetricsSamplingConfig::default(),
+        );
+
+        assert_eq!(manager.topic_label("topic-a").value.to_string(), "topic-a");
+        assert_eq!(manager.topic_label("topic-b").value.to_string(), METRIC_LABEL_SENTINEL);
+        assert_eq!(policy.dropped_labels(), 1);
+    }
+
+    #[test]
+    #[cfg(feature = "otel-metrics")]
+    fn broker_metrics_manager_fails_closed_before_expanding_labels() {
+        let mut config = crate::ObservabilityConfig {
+            enabled: true,
+            ..crate::ObservabilityConfig::default()
+        };
+        config.metrics.enabled = true;
+        config.metrics.exporter = MetricsExporter::Disable;
+        config.metrics.cardinality_limit = 1;
+        let guard = crate::init_observability(&config).expect("test telemetry runtime should initialize");
+        let handle = guard.handle();
+        let policy = handle.metric_label_policy();
+        let manager = BrokerMetricsManager::from_telemetry(
+            handle.child(crate::BROKER_METER_SCOPE),
+            Arc::new(NoopAttributesSupplier),
+            BrokerMetricsSamplingConfig::default(),
+        )
+        .expect("active telemetry should provide a broker meter");
+
+        manager.inc_messages_in_total("topic-a", TopicMessageType::Normal, 1, false);
+        assert_eq!(policy.normalize_topic("topic-a"), "topic-a");
+        assert_eq!(policy.dropped_labels(), 0);
+
+        guard
+            .shutdown()
+            .into_result()
+            .expect("test telemetry runtime should shut down");
+        manager.inc_messages_in_total("topic-b", TopicMessageType::Normal, 1, false);
+
+        assert_eq!(policy.dropped_labels(), 0);
+    }
+
+    #[test]
     fn broker_metrics_sampling_config_defaults_to_full_recording() {
         let config = BrokerMetricsSamplingConfig::default();
 
@@ -1383,10 +1349,40 @@ mod tests {
     }
 
     #[test]
-    fn test_new_attributes_builder_empty() {
-        // Without global initialization, should return empty
-        let attrs = new_attributes_builder();
-        // May be empty or have some values depending on test order
-        let _ = attrs;
+    fn broker_metrics_manager_instances_do_not_share_labels_or_cardinality_state() {
+        let meter_provider = SdkMeterProvider::builder().build();
+        let first = BrokerMetricsManager::new_with_label_config(
+            meter_provider.meter("broker-instance-one"),
+            Arc::new(BrokerAttributesSupplier::new(
+                "cluster-one".to_string(),
+                "node-one".to_string(),
+            )),
+            BrokerMetricsLabelConfig::new(1, true, true),
+        );
+        let second = BrokerMetricsManager::new_with_label_config(
+            meter_provider.meter("broker-instance-two"),
+            Arc::new(BrokerAttributesSupplier::new(
+                "cluster-two".to_string(),
+                "node-two".to_string(),
+            )),
+            BrokerMetricsLabelConfig::new(1, true, true),
+        );
+
+        assert_eq!(first.topic_label("topic-one").value.to_string(), "topic-one");
+        assert_eq!(first.topic_label("topic-two").value.to_string(), "other");
+        assert_eq!(first.dropped_metric_labels(), 1);
+        assert_eq!(second.dropped_metric_labels(), 0);
+
+        let first_attributes = first.base_attributes();
+        let second_attributes = second.base_attributes();
+        assert!(first_attributes
+            .iter()
+            .any(|attribute| attribute.value.to_string() == "cluster-one"));
+        assert!(second_attributes
+            .iter()
+            .any(|attribute| attribute.value.to_string() == "cluster-two"));
+        assert!(!second_attributes
+            .iter()
+            .any(|attribute| attribute.value.to_string() == "cluster-one"));
     }
 }

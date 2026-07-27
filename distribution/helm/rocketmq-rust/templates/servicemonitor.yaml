@@ -1,0 +1,29 @@
+{{- if .Values.metrics.serviceMonitor.enabled }}
+{{- include "rocketmq.validateValues" . -}}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: rocketmq-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/part-of: rocketmq-rust
+{{- with .Values.metrics.serviceMonitor.labels }}
+{{ toYaml . | indent 4 }}
+{{- end }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/part-of: rocketmq-rust
+      rocketmq.apache.org/metrics: "true"
+  endpoints:
+    - port: metrics
+      path: {{ .Values.metrics.path | quote }}
+      interval: {{ .Values.metrics.serviceMonitor.interval | quote }}
+      scrapeTimeout: {{ .Values.metrics.serviceMonitor.scrapeTimeout | quote }}
+      scheme: http
+{{- end }}

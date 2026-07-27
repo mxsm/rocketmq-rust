@@ -347,6 +347,67 @@ fn build_time_log_filter_detector_catches_known_patterns() {
 }
 
 #[test]
+fn explicit_telemetry_capability_does_not_export_raw_sdk_or_unguarded_trace_paths() {
+    let workspace_root = workspace_root();
+    let handle_source = fs::read_to_string(workspace_root.join("rocketmq-observability/src/handle.rs"))
+        .expect("telemetry handle source should be readable");
+    assert!(
+        !handle_source.contains("pub fn meter("),
+        "TelemetryHandle and TelemetryRecorder must not export raw SDK meters"
+    );
+
+    let observability_src = workspace_root.join("rocketmq-observability/src");
+    let mut observability_files = Vec::new();
+    collect_rs_files(&observability_src, &mut observability_files);
+    let mut raw_meter_api_files = BTreeSet::new();
+    for file in observability_files {
+        let source =
+            fs::read_to_string(&file).unwrap_or_else(|error| panic!("failed to read {}: {error}", file.display()));
+        if source.match_indices("pub fn ").any(|(start, _)| {
+            let signature = &source[start..];
+            let signature = signature.split_once('{').map_or(signature, |(signature, _)| signature);
+            signature.contains("Meter")
+        }) {
+            raw_meter_api_files.insert(relative_slash_path(&workspace_root, &file));
+        }
+    }
+    assert!(
+        raw_meter_api_files.is_empty(),
+        "public observability APIs must not expose raw SDK Meter values:\n{}",
+        format_paths(&raw_meter_api_files)
+    );
+
+    let lib_source = fs::read_to_string(workspace_root.join("rocketmq-observability/src/lib.rs"))
+        .expect("observability root source should be readable");
+    for forbidden in [
+        "pub use propagation::add_current_span_event;",
+        "pub use propagation::extract_context;",
+        "pub use propagation::inject_current_context;",
+        "pub use propagation::install_trace_context_propagators;",
+        "pub use propagation::MessagePropertyExtractor;",
+        "pub use propagation::MessagePropertyInjector;",
+    ] {
+        assert!(
+            !lib_source.contains(forbidden),
+            "unguarded propagation API must stay private: {forbidden}"
+        );
+    }
+
+    let trace_source = fs::read_to_string(workspace_root.join("rocketmq-observability/src/trace.rs"))
+        .expect("trace source should be readable");
+    for forbidden in [
+        "pub fn record_current_message_properties(",
+        "pub fn record_message_properties(",
+        "pub fn record_message_properties_with_policy(",
+    ] {
+        assert!(
+            !trace_source.contains(forbidden),
+            "message trace recording must require an explicit handle: {forbidden}"
+        );
+    }
+}
+
+#[test]
 fn metric_name_constants_are_declared_only_in_canonical_or_legacy_files() {
     let workspace_root = workspace_root();
     let mut allowed_files = path_set(METRIC_CONSTANT_CANONICAL_FILES);

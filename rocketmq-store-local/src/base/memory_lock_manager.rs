@@ -94,10 +94,51 @@ pub struct MemoryLockManager {
     locked_bytes: AtomicU64,
     lock_failed_bytes: AtomicU64,
     lock_skipped_bytes: AtomicU64,
+    #[cfg(feature = "observability")]
+    store_metrics: rocketmq_observability::metrics::store::StoreMetricsRecorder,
 }
 
 impl MemoryLockManager {
     pub fn new(warn_only: bool, budget_bytes: u64) -> Self {
+        #[cfg(feature = "observability")]
+        {
+            Self::new_with_store_metrics(
+                warn_only,
+                budget_bytes,
+                rocketmq_observability::metrics::store::StoreMetricsRecorder::noop(),
+            )
+        }
+
+        #[cfg(not(feature = "observability"))]
+        {
+            Self::new_without_store_metrics(warn_only, budget_bytes)
+        }
+    }
+
+    /// Binds memory-lock observations to the owning Store telemetry instance.
+    #[cfg(feature = "observability")]
+    #[doc(hidden)]
+    pub fn new_with_store_metrics(
+        warn_only: bool,
+        budget_bytes: u64,
+        store_metrics: rocketmq_observability::metrics::store::StoreMetricsRecorder,
+    ) -> Self {
+        Self {
+            warn_only,
+            budget_bytes: AtomicU64::new(budget_bytes),
+            lock_attempts: AtomicUsize::new(0),
+            locked_buffers: AtomicUsize::new(0),
+            lock_failed_buffers: AtomicUsize::new(0),
+            lock_skipped_buffers: AtomicUsize::new(0),
+            locked_bytes: AtomicU64::new(0),
+            lock_failed_bytes: AtomicU64::new(0),
+            lock_skipped_bytes: AtomicU64::new(0),
+            store_metrics,
+        }
+    }
+
+    #[cfg(not(feature = "observability"))]
+    fn new_without_store_metrics(warn_only: bool, budget_bytes: u64) -> Self {
         Self {
             warn_only,
             budget_bytes: AtomicU64::new(budget_bytes),
@@ -169,13 +210,13 @@ impl MemoryLockManager {
         F: FnMut(*const u8, usize) -> RocketMQResult<()>,
     {
         self.lock_attempts.fetch_add(1, Ordering::Relaxed);
-        emit_memory_lock_attempt_observability(category);
+        emit_memory_lock_attempt_observability(self, category);
 
         let len_bytes = len as u64;
         if !self.reserve_lock_budget(len_bytes) {
             self.lock_skipped_buffers.fetch_add(1, Ordering::Relaxed);
             self.lock_skipped_bytes.fetch_add(len_bytes, Ordering::Relaxed);
-            emit_memory_lock_skip_observability(category, self.locked_bytes.load(Ordering::Relaxed));
+            emit_memory_lock_skip_observability(self, category, self.locked_bytes.load(Ordering::Relaxed));
             if self.warn_only {
                 warn!(
                     "Skipped {} memory lock of {} bytes because lock budget {} bytes is exhausted",
@@ -200,14 +241,14 @@ impl MemoryLockManager {
                 if self.budget_bytes.load(Ordering::Relaxed) == 0 {
                     self.locked_bytes.fetch_add(len_bytes, Ordering::Relaxed);
                 }
-                emit_memory_lock_success_observability(category, self.locked_bytes.load(Ordering::Relaxed));
+                emit_memory_lock_success_observability(self, category, self.locked_bytes.load(Ordering::Relaxed));
                 Ok(Some(MemoryLockHandle::new(addr, len, category)))
             }
             Err(error) => {
                 self.release_reserved_budget(len_bytes);
                 self.lock_failed_buffers.fetch_add(1, Ordering::Relaxed);
                 self.lock_failed_bytes.fetch_add(len_bytes, Ordering::Relaxed);
-                emit_memory_lock_failure_observability(category, self.locked_bytes.load(Ordering::Relaxed));
+                emit_memory_lock_failure_observability(self, category, self.locked_bytes.load(Ordering::Relaxed));
                 if self.warn_only {
                     warn!(
                         "Failed to lock {} memory region of {} bytes, continuing without mlock: {}",
@@ -245,13 +286,18 @@ impl MemoryLockManager {
             Ok(()) => {
                 self.release_locked_bytes(handle.len() as u64);
                 emit_memory_lock_locked_bytes_observability(
+                    self,
                     handle.category(),
                     self.locked_bytes.load(Ordering::Relaxed),
                 );
                 Ok(())
             }
             Err(error) => {
-                emit_memory_unlock_failure_observability(handle.category(), self.locked_bytes.load(Ordering::Relaxed));
+                emit_memory_unlock_failure_observability(
+                    self,
+                    handle.category(),
+                    self.locked_bytes.load(Ordering::Relaxed),
+                );
                 if self.warn_only {
                     warn!(
                         "Failed to unlock {} memory region of {} bytes, continuing: {}",
@@ -412,74 +458,106 @@ fn memory_lock_failure_observability_event(
     }
 }
 
-fn emit_memory_lock_attempt_observability(category: MemoryLockCategory) {
+fn emit_memory_lock_attempt_observability(manager: &MemoryLockManager, category: MemoryLockCategory) {
     #[cfg(feature = "observability")]
     {
         let event = memory_lock_attempt_observability_event(category);
-        rocketmq_observability::metrics::store::record_linux_mlock_attempt(event.category, event.count);
+        manager
+            .store_metrics
+            .record_linux_mlock_attempt(event.category, event.count);
     }
 
     #[cfg(not(feature = "observability"))]
-    let _ = category;
+    let _ = (manager, category);
 }
 
-fn emit_memory_lock_success_observability(category: MemoryLockCategory, locked_bytes: u64) {
+fn emit_memory_lock_success_observability(
+    manager: &MemoryLockManager,
+    category: MemoryLockCategory,
+    locked_bytes: u64,
+) {
     #[cfg(feature = "observability")]
     {
         let event = memory_lock_success_observability_event(category, locked_bytes);
-        rocketmq_observability::metrics::store::record_linux_mlock_success(event.category, event.count);
-        rocketmq_observability::metrics::store::record_linux_locked_bytes(event.category, event.locked_bytes);
+        manager
+            .store_metrics
+            .record_linux_mlock_success(event.category, event.count);
+        manager
+            .store_metrics
+            .record_linux_locked_bytes(event.category, event.locked_bytes);
     }
 
     #[cfg(not(feature = "observability"))]
-    let _ = (category, locked_bytes);
+    let _ = (manager, category, locked_bytes);
 }
 
-fn emit_memory_lock_skip_observability(category: MemoryLockCategory, locked_bytes: u64) {
+fn emit_memory_lock_skip_observability(manager: &MemoryLockManager, category: MemoryLockCategory, locked_bytes: u64) {
     #[cfg(feature = "observability")]
     {
         let event = memory_lock_skip_observability_event(category, locked_bytes);
-        rocketmq_observability::metrics::store::record_linux_mlock_skipped(event.category, event.reason, event.count);
-        rocketmq_observability::metrics::store::record_linux_locked_bytes(event.category, event.locked_bytes);
+        manager
+            .store_metrics
+            .record_linux_mlock_skipped(event.category, event.reason, event.count);
+        manager
+            .store_metrics
+            .record_linux_locked_bytes(event.category, event.locked_bytes);
     }
 
     #[cfg(not(feature = "observability"))]
-    let _ = (category, locked_bytes);
+    let _ = (manager, category, locked_bytes);
 }
 
-fn emit_memory_lock_failure_observability(category: MemoryLockCategory, locked_bytes: u64) {
+fn emit_memory_lock_failure_observability(
+    manager: &MemoryLockManager,
+    category: MemoryLockCategory,
+    locked_bytes: u64,
+) {
     #[cfg(feature = "observability")]
     {
         let event = memory_lock_failure_observability_event(category, locked_bytes);
-        rocketmq_observability::metrics::store::record_linux_mlock_failure(event.category, event.errno, event.count);
-        rocketmq_observability::metrics::store::record_linux_locked_bytes(event.category, event.locked_bytes);
+        manager
+            .store_metrics
+            .record_linux_mlock_failure(event.category, event.errno, event.count);
+        manager
+            .store_metrics
+            .record_linux_locked_bytes(event.category, event.locked_bytes);
     }
 
     #[cfg(not(feature = "observability"))]
-    let _ = (category, locked_bytes);
+    let _ = (manager, category, locked_bytes);
 }
 
-fn emit_memory_lock_locked_bytes_observability(category: MemoryLockCategory, locked_bytes: u64) {
+fn emit_memory_lock_locked_bytes_observability(
+    manager: &MemoryLockManager,
+    category: MemoryLockCategory,
+    locked_bytes: u64,
+) {
     #[cfg(feature = "observability")]
-    rocketmq_observability::metrics::store::record_linux_locked_bytes(category.as_str(), locked_bytes);
+    manager
+        .store_metrics
+        .record_linux_locked_bytes(category.as_str(), locked_bytes);
 
     #[cfg(not(feature = "observability"))]
-    let _ = (category, locked_bytes);
+    let _ = (manager, category, locked_bytes);
 }
 
-fn emit_memory_unlock_failure_observability(category: MemoryLockCategory, locked_bytes: u64) {
+fn emit_memory_unlock_failure_observability(
+    manager: &MemoryLockManager,
+    category: MemoryLockCategory,
+    locked_bytes: u64,
+) {
     #[cfg(feature = "observability")]
     {
-        rocketmq_observability::metrics::store::record_linux_munlock_failure(
-            category.as_str(),
-            MEMORY_LOCK_UNKNOWN_ERRNO,
-            1,
-        );
-        rocketmq_observability::metrics::store::record_linux_locked_bytes(category.as_str(), locked_bytes);
+        manager
+            .store_metrics
+            .record_linux_munlock_failure(category.as_str(), MEMORY_LOCK_UNKNOWN_ERRNO, 1);
+        manager
+            .store_metrics
+            .record_linux_locked_bytes(category.as_str(), locked_bytes);
     }
 
     #[cfg(not(feature = "observability"))]
-    let _ = (category, locked_bytes);
+    let _ = (manager, category, locked_bytes);
 }
 
 impl Default for MemoryLockManager {

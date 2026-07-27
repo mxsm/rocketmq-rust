@@ -665,6 +665,7 @@ fn broker_basic_shutdown_report_exposes_required_component_names() {
             "broker_outer_api",
             "client_housekeeping",
             "auth",
+            "service_tasks",
             "observability",
             "scheduled_tasks",
             "message_store",
@@ -1713,7 +1714,7 @@ async fn start_namesrv(port: u16, root: &Path) -> TestNameServer {
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let namesrv_context = RuntimeContext::from_current("broker-namesrv-test").service_context("namesrv");
     let handle = tokio::spawn(async move {
-        NameServerBuilder::new(namesrv_context)
+        NameServerBuilder::new(namesrv_context, rocketmq_observability::TelemetryHandle::noop())
             .set_name_server_config(namesrv_config)
             .set_server_config(server_config)
             .build()
@@ -1863,9 +1864,13 @@ async fn new_test_controller_manager(
         .with_enable_elect_unclean_master_local(true);
 
     let manager = Arc::new(
-        TestControllerManager::new(config, crate::test_service_context("controller-manager"))
-            .await
-            .expect("create controller manager"),
+        TestControllerManager::new(
+            config,
+            crate::test_service_context("controller-manager"),
+            rocketmq_observability::TelemetryHandle::noop(),
+        )
+        .await
+        .expect("create controller manager"),
     );
     assert!(
         manager.initialize().await.expect("initialize controller manager"),

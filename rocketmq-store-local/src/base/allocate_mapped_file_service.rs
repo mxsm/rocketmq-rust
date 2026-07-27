@@ -107,6 +107,9 @@ pub struct AllocateMappedFileService {
 
     /// CommitLog warm-up behavior copied from MessageStoreConfig.
     warm_mapped_file_config: MappedFileWarmupConfig,
+
+    #[cfg(feature = "observability")]
+    store_metrics: rocketmq_observability::metrics::store::StoreMetricsRecorder,
 }
 
 impl Clone for AllocateMappedFileService {
@@ -125,6 +128,8 @@ impl Clone for AllocateMappedFileService {
             transient_store_pool_enable: self.transient_store_pool_enable,
             fast_fail_if_no_buffer: self.fast_fail_if_no_buffer,
             warm_mapped_file_config: self.warm_mapped_file_config,
+            #[cfg(feature = "observability")]
+            store_metrics: self.store_metrics.clone(),
         }
     }
 }
@@ -168,7 +173,20 @@ impl AllocateMappedFileService {
             transient_store_pool_enable,
             fast_fail_if_no_buffer,
             warm_mapped_file_config: MappedFileWarmupConfig::disabled(),
+            #[cfg(feature = "observability")]
+            store_metrics: rocketmq_observability::metrics::store::StoreMetricsRecorder::noop(),
         }
+    }
+
+    /// Binds mapped-file allocation observations to the owning Store recorder.
+    #[cfg(feature = "observability")]
+    #[doc(hidden)]
+    pub fn with_store_metrics(
+        mut self,
+        store_metrics: rocketmq_observability::metrics::store::StoreMetricsRecorder,
+    ) -> Self {
+        self.store_metrics = store_metrics;
+        self
     }
 
     pub fn new_with_message_store_config<C>(
@@ -224,6 +242,8 @@ impl AllocateMappedFileService {
         let transient_store_pool = self.transient_store_pool.clone();
         let worker_wakeup = self.worker_wakeup.clone();
         let warm_mapped_file_config = self.warm_mapped_file_config;
+        #[cfg(feature = "observability")]
+        let store_metrics = self.store_metrics.clone();
         let worker_completed = self.worker_completed.clone();
         let worker_completion = self.worker_completion.clone();
 
@@ -242,6 +262,8 @@ impl AllocateMappedFileService {
                     transient_store_pool,
                     worker_wakeup,
                     warm_mapped_file_config,
+                    #[cfg(feature = "observability")]
+                    store_metrics,
                 );
             }) {
             Ok(handle) => {
@@ -265,6 +287,7 @@ impl AllocateMappedFileService {
         transient_store_pool: Option<Arc<TransientStorePool>>,
         worker_wakeup: Arc<(StdMutex<()>, Condvar)>,
         warm_mapped_file_config: MappedFileWarmupConfig,
+        #[cfg(feature = "observability")] store_metrics: rocketmq_observability::metrics::store::StoreMetricsRecorder,
     ) {
         info!("AllocateMappedFileService: service started");
 
@@ -276,6 +299,8 @@ impl AllocateMappedFileService {
                     &has_exception,
                     &transient_store_pool,
                     warm_mapped_file_config,
+                    #[cfg(feature = "observability")]
+                    &store_metrics,
                 )
             {}
 
@@ -307,6 +332,7 @@ impl AllocateMappedFileService {
         has_exception: &Arc<AtomicBool>,
         transient_store_pool: &Option<Arc<TransientStorePool>>,
         warm_mapped_file_config: MappedFileWarmupConfig,
+        #[cfg(feature = "observability")] store_metrics: &rocketmq_observability::metrics::store::StoreMetricsRecorder,
     ) -> bool {
         // Pop request from priority queue
         let req = {
@@ -353,7 +379,13 @@ impl AllocateMappedFileService {
         }
 
         // Perform actual file allocation
-        let result = Self::create_mapped_file(&req, transient_store_pool, warm_mapped_file_config);
+        let result = Self::create_mapped_file(
+            &req,
+            transient_store_pool,
+            warm_mapped_file_config,
+            #[cfg(feature = "observability")]
+            store_metrics,
+        );
 
         match result {
             Ok(mapped_file) => {
@@ -391,6 +423,7 @@ impl AllocateMappedFileService {
         req: &AllocateRequest,
         transient_store_pool: &Option<Arc<TransientStorePool>>,
         warm_mapped_file_config: MappedFileWarmupConfig,
+        #[cfg(feature = "observability")] store_metrics: &rocketmq_observability::metrics::store::StoreMetricsRecorder,
     ) -> Result<Arc<DefaultMappedFile>, RocketMQError> {
         let start = std::time::Instant::now();
         let file_path = req.file_path().to_owned();
@@ -412,6 +445,8 @@ impl AllocateMappedFileService {
             path: req.file_path().to_owned(),
             reason: error.to_string(),
         })?;
+        #[cfg(feature = "observability")]
+        let mapped_file = mapped_file.with_store_metrics(store_metrics.clone());
 
         if warm_mapped_file_config.should_warm(file_size) {
             mapped_file.warm_mapped_file(
