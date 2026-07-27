@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "registry_version": "1.0.0",
+  "registry_version": "1.1.0",
   "milestone": "M11-01",
   "description": "Canonical telemetry semantics and collector-outage behavior for RocketMQ Rust.",
   "required_families": [
@@ -8,6 +8,7 @@
     "connection-bytes",
     "exporter",
     "recovery-cache",
+    "release-identity",
     "request",
     "task",
     "watermark-lag"
@@ -424,6 +425,24 @@
       "privacy": "operational",
       "max_distinct": 10000,
       "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "release_commit",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 64,
+      "max_value_bytes": 40,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "release_nonce",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 64,
+      "max_value_bytes": 63,
       "default_enabled": true,
       "redaction": "none"
     },
@@ -3297,8 +3316,8 @@
       }
     },
     {
-      "id": "rocketmq_remoting_requests_total",
-      "source_symbol": "REMOTING_REQUESTS_TOTAL",
+      "id": "rocketmq_transport_requests_total",
+      "source_symbol": "TRANSPORT_REQUESTS_TOTAL",
       "signal_type": "metric",
       "kind": "counter",
       "unit": "{request}",
@@ -3320,8 +3339,8 @@
       }
     },
     {
-      "id": "rocketmq_remoting_request_latency",
-      "source_symbol": "REMOTING_REQUEST_LATENCY",
+      "id": "rocketmq_transport_request_latency",
+      "source_symbol": "TRANSPORT_REQUEST_LATENCY",
       "signal_type": "metric",
       "kind": "histogram",
       "unit": "ms",
@@ -3343,8 +3362,8 @@
       }
     },
     {
-      "id": "rocketmq_remoting_network_bytes",
-      "source_symbol": "REMOTING_NETWORK_BYTES",
+      "id": "rocketmq_transport_network_bytes",
+      "source_symbol": "TRANSPORT_NETWORK_BYTES",
       "signal_type": "metric",
       "kind": "counter",
       "unit": "By",
@@ -3895,6 +3914,33 @@
       }
     },
     {
+      "id": "rocketmq_release_info",
+      "source_symbol": "RELEASE_INFO",
+      "signal_type": "metric",
+      "kind": "gauge",
+      "unit": "1",
+      "owner": "observability",
+      "catalog": "rust",
+      "family": "release-identity",
+      "stability": "stable",
+      "attributes": [
+        "service",
+        "release_commit",
+        "release_nonce"
+      ],
+      "cardinality_budget": 64,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
       "id": "RocketMQ BROKER RECEIVE_SEND",
       "source_symbol": "BROKER_RECEIVE_SEND",
       "signal_type": "span",
@@ -3934,6 +3980,56 @@
         "messaging.operation.name",
         "messaging.destination.name",
         "messaging.message.body.size"
+      ],
+      "cardinality_budget": 1000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "ratio",
+        "default_ratio": 0.01,
+        "max_events_per_operation": 0
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "RocketMQ STORE FLUSH",
+      "source_symbol": "STORE_FLUSH",
+      "signal_type": "span",
+      "owner": "store",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [
+        "component",
+        "result"
+      ],
+      "cardinality_budget": 1000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "ratio",
+        "default_ratio": 0.01,
+        "max_events_per_operation": 0
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "RocketMQ STORE DISPATCH",
+      "source_symbol": "STORE_DISPATCH",
+      "signal_type": "span",
+      "owner": "store",
+      "family": "recovery-cache",
+      "stability": "stable",
+      "attributes": [
+        "component",
+        "result"
       ],
       "cardinality_budget": 1000,
       "privacy": "operational",

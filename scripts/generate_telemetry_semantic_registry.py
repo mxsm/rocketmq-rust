@@ -53,6 +53,14 @@ SPAN_ATTRIBUTES = {
         "messaging.destination.name",
         "messaging.message.body.size",
     ],
+    "STORE_FLUSH": [
+        "component",
+        "result",
+    ],
+    "STORE_DISPATCH": [
+        "component",
+        "result",
+    ],
     "PRODUCER_SEND": [
         "messaging.system",
         "messaging.operation.name",
@@ -93,6 +101,8 @@ EVENT_CONTRACTS = {
 def metric_family(metric_id: str) -> str:
     if "metrics_label_dropped" in metric_id:
         return "exporter"
+    if metric_id == "rocketmq_release_info":
+        return "release-identity"
     if any(token in metric_id for token in ("watermark", "lag", "behind", "inflight", "ready", "queueing")):
         return "watermark-lag"
     if any(token in metric_id for token in ("connection", "bytes", "throughput", "size", "disk_usage")):
@@ -105,12 +115,20 @@ def metric_family(metric_id: str) -> str:
 def attribute_contract(attribute_id: str) -> dict[str, Any]:
     high = attribute_id in HIGH_CARDINALITY_ATTRIBUTES
     privacy = "sensitive" if high else "public" if attribute_id in PUBLIC_ATTRIBUTES else "operational"
+    release_limits = {
+        "release_commit": (64, 40),
+        "release_nonce": (64, 63),
+    }
+    max_distinct, max_value_bytes = release_limits.get(
+        attribute_id,
+        (1_000 if high else 10_000, 512 if high else 256),
+    )
     return {
         "id": attribute_id,
         "cardinality": "high" if high else "bounded",
         "privacy": privacy,
-        "max_distinct": 1_000 if high else 10_000,
-        "max_value_bytes": 512 if high else 256,
+        "max_distinct": max_distinct,
+        "max_value_bytes": max_value_bytes,
         "default_enabled": not high,
         "redaction": "hash" if high else "none",
     }
@@ -158,7 +176,11 @@ def build_registry() -> dict[str, Any]:
                 "family": metric_family(metric["id"]),
                 "stability": "stable",
                 "attributes": metric["attributes"],
-                "cardinality_budget": 10_000 if metric["attributes"] else 1,
+                "cardinality_budget": (
+                    64
+                    if metric["id"] == "rocketmq_release_info"
+                    else 10_000 if metric["attributes"] else 1
+                ),
                 "privacy": signal_privacy(metric["attributes"]),
                 "sampling": {"strategy": "aggregate"},
                 "deprecation": deprecation(),
@@ -168,6 +190,8 @@ def build_registry() -> dict[str, Any]:
     span_owners = {
         "BROKER_RECEIVE_SEND": "broker",
         "STORE_APPEND": "store",
+        "STORE_FLUSH": "store",
+        "STORE_DISPATCH": "store",
         "PRODUCER_SEND": "client",
         "CONSUMER_PROCESS": "client",
     }
@@ -179,7 +203,7 @@ def build_registry() -> dict[str, Any]:
                 "source_symbol": symbol,
                 "signal_type": "span",
                 "owner": span_owners[symbol],
-                "family": "recovery-cache" if symbol == "STORE_APPEND" else "request",
+                "family": "recovery-cache" if symbol.startswith("STORE_") else "request",
                 "stability": "stable",
                 "attributes": attributes,
                 "cardinality_budget": 1_000,
@@ -238,7 +262,7 @@ def build_registry() -> dict[str, Any]:
     )
     return {
         "schema_version": 1,
-        "registry_version": "1.0.0",
+        "registry_version": "1.1.0",
         "milestone": "M11-01",
         "description": "Canonical telemetry semantics and collector-outage behavior for RocketMQ Rust.",
         "required_families": sorted(guard.REQUIRED_FAMILIES),
