@@ -17,6 +17,9 @@ use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
+use rocketmq_store_local::commit_log::append::finalized_append::FinalizedAppend;
+use rocketmq_store_local::commit_log::append::prepared_payload::PreparedPayload;
+use rocketmq_store_local::commit_log::append::prepared_payload::PreparedPayloadKind;
 use rocketmq_store_local::commit_log::append_frame::AppendBatchFrameCursor;
 use rocketmq_store_local::commit_log::append_frame::AppendFrameCrcPlan;
 use rocketmq_store_local::commit_log::append_frame::AppendFrameKernel;
@@ -102,6 +105,240 @@ impl DefaultAppendMessageCallback {
             crc32_reserved_length,
             message_store_config,
             topic_config_table,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn message_num(&self, message: &MessageExtBrokerInner) -> i16 {
+        get_message_num(&self.topic_config_table, message)
+    }
+
+    /// Appends one structurally validated immutable payload.
+    ///
+    /// All fallible offset calculations complete before mapped-file reservation. The reservation
+    /// path then performs only rollover publication or stable-byte copy, runtime-field patching,
+    /// checksum finalization, and lease commit.
+    pub(crate) fn append_prepared_message<MF: MappedFile>(
+        &self,
+        file_from_offset: i64,
+        mapped_file: &MF,
+        msg_inner: &MessageExtBrokerInner,
+        prepared: &PreparedPayload,
+        queue_offset: i64,
+        message_num: i32,
+    ) -> AppendMessageResult {
+        if prepared.kind() != PreparedPayloadKind::Single {
+            error!("Single-message append received a batch PreparedPayload");
+            return AppendMessageResult {
+                status: AppendMessageStatus::UnknownError,
+                ..Default::default()
+            };
+        }
+        self.append_prepared(
+            file_from_offset,
+            mapped_file,
+            prepared,
+            queue_offset,
+            msg_inner.store_timestamp(),
+            message_num,
+            |wrote_offset, _| {
+                let address = msg_inner.message_ext_inner.store_host;
+                Arc::new(move || message_utils::build_message_id(address, wrote_offset))
+            },
+            |_| {},
+        )
+    }
+
+    /// Appends a structurally validated immutable payload containing one or more batch frames.
+    pub(crate) fn append_prepared_batch<MF: MappedFile>(
+        &self,
+        file_from_offset: i64,
+        mapped_file: &MF,
+        msg_batch: &MessageExtBatch,
+        prepared: &PreparedPayload,
+        put_message_context: &mut PutMessageContext,
+    ) -> AppendMessageResult {
+        if prepared.kind() != PreparedPayloadKind::Batch {
+            error!("Batch append received a single-frame PreparedPayload");
+            return AppendMessageResult {
+                status: AppendMessageStatus::UnknownError,
+                ..Default::default()
+            };
+        }
+        let queue_offset = msg_batch.message_ext_broker_inner.queue_offset();
+        let address = msg_batch.message_ext_broker_inner.store_host();
+        let store_host_length =
+            if msg_batch.message_ext_broker_inner.sys_flag() & MessageSysFlag::STOREHOSTADDRESS_V6_FLAG == 0 {
+                4 + 4
+            } else {
+                16 + 4
+            };
+        self.append_prepared(
+            file_from_offset,
+            mapped_file,
+            prepared,
+            queue_offset,
+            msg_batch.message_ext_broker_inner.store_timestamp(),
+            i32::from(prepared.message_count()),
+            move |_, physical_offsets| {
+                let physical_offsets = physical_offsets.to_vec();
+                Arc::new(move || {
+                    build_batch_message_id(address, store_host_length, physical_offsets.len(), &physical_offsets)
+                })
+            },
+            |physical_offsets| {
+                put_message_context.set_batch_size(physical_offsets.len() as i32);
+                put_message_context.set_phy_pos(physical_offsets.to_vec());
+            },
+        )
+    }
+
+    fn append_prepared<MF, I, C>(
+        &self,
+        file_from_offset: i64,
+        mapped_file: &MF,
+        prepared: &PreparedPayload,
+        queue_offset: i64,
+        store_timestamp: i64,
+        message_num: i32,
+        message_id_supplier: I,
+        mut publish_physical_offsets: C,
+    ) -> AppendMessageResult
+    where
+        MF: MappedFile,
+        I: FnOnce(i64, &[i64]) -> Arc<dyn Fn() -> String + Send + Sync>,
+        C: FnMut(&[i64]),
+    {
+        let encoded_len = prepared.retained_bytes();
+        let Ok(encoded_len_i32) = i32::try_from(encoded_len) else {
+            return AppendMessageResult {
+                status: AppendMessageStatus::UnknownError,
+                ..Default::default()
+            };
+        };
+        let current_position = mapped_file.get_wrote_position().max(0) as usize;
+        let remaining = mapped_file.get_file_size().saturating_sub(current_position as u64) as usize;
+        let max_blank = i32::try_from(remaining).unwrap_or(i32::MAX);
+        let Some(wrote_offset) = file_from_offset.checked_add(current_position as i64) else {
+            error!("CommitLog physical offset overflow before mapped-file reservation");
+            return AppendMessageResult {
+                status: AppendMessageStatus::UnknownError,
+                ..Default::default()
+            };
+        };
+        let Some(reservation_size) = encoded_len.checked_add(BLANK_MARKER_LENGTH) else {
+            return AppendMessageResult {
+                status: AppendMessageStatus::UnknownError,
+                ..Default::default()
+            };
+        };
+
+        if AppendFrameKernel::segment_append_decision(encoded_len_i32, max_blank) == SegmentAppendDecision::Roll {
+            let mut lease = match mapped_file.reserve_write(reservation_size) {
+                Ok(lease) => lease,
+                Err(error) => {
+                    error!(%error, "Failed to reserve mapped-file rollover marker");
+                    return AppendMessageResult {
+                        status: AppendMessageStatus::UnknownError,
+                        ..Default::default()
+                    };
+                }
+            };
+            let marker = AppendFrameKernel::blank_marker(max_blank);
+            let started = Instant::now();
+            if lease.capacity() >= BLANK_MARKER_LENGTH {
+                lease.buffer_mut()[..BLANK_MARKER_LENGTH].copy_from_slice(marker.bytes());
+            }
+            let committed_bytes = lease.capacity();
+            if let Err(error) = lease.commit(committed_bytes, Some(store_timestamp as u64)) {
+                error!(%error, "Failed to publish mapped-file rollover marker");
+                return AppendMessageResult {
+                    status: AppendMessageStatus::UnknownError,
+                    ..Default::default()
+                };
+            }
+            return AppendMessageResult {
+                status: AppendMessageStatus::EndOfFile,
+                wrote_offset,
+                wrote_bytes: marker.declared_wrote_bytes(),
+                store_timestamp,
+                logics_offset: queue_offset,
+                msg_num: message_num,
+                msg_id_supplier: Some(message_id_supplier(wrote_offset, &[])),
+                page_cache_rt: started.elapsed().as_millis() as i64,
+                ..Default::default()
+            };
+        }
+
+        let finalized = match FinalizedAppend::try_new(prepared, queue_offset, wrote_offset, store_timestamp) {
+            Ok(finalized) => finalized,
+            Err(error) => {
+                error!(%error, "Failed to finalize PreparedPayload before mapped-file reservation");
+                return AppendMessageResult {
+                    status: AppendMessageStatus::UnknownError,
+                    ..Default::default()
+                };
+            }
+        };
+        let physical_offsets = finalized.physical_offsets().collect::<Vec<_>>();
+        let mut lease = match mapped_file.reserve_write(reservation_size) {
+            Ok(lease) => lease,
+            Err(error) => {
+                error!(%error, "Failed to reserve mapped-file prepared append");
+                return AppendMessageResult {
+                    status: AppendMessageStatus::UnknownError,
+                    ..Default::default()
+                };
+            }
+        };
+        if lease.start_position() != current_position {
+            error!(
+                expected = current_position,
+                actual = lease.start_position(),
+                "Mapped-file position changed between append finalization and reservation"
+            );
+            return AppendMessageResult {
+                status: AppendMessageStatus::UnknownError,
+                ..Default::default()
+            };
+        }
+        let started = Instant::now();
+        let write_result = finalized.write_into(&mut lease.buffer_mut()[..encoded_len], |frame, crc_plan| {
+            if let AppendFrameCrcPlan::Trailer {
+                covered_end,
+                trailer_start,
+                trailer_end,
+            } = crc_plan
+            {
+                let checksum = crc32(&frame[..covered_end]);
+                create_crc32(&mut frame[trailer_start..trailer_end], checksum);
+            }
+        });
+        if let Err(error) = write_result {
+            error!(%error, "Prepared append staging buffer rejected a preflighted payload");
+            return AppendMessageResult {
+                status: AppendMessageStatus::UnknownError,
+                ..Default::default()
+            };
+        }
+        if let Err(error) = lease.commit(encoded_len, Some(store_timestamp as u64)) {
+            error!(%error, "Failed to commit mapped-file prepared append");
+            return AppendMessageResult {
+                status: AppendMessageStatus::UnknownError,
+                ..Default::default()
+            };
+        }
+        publish_physical_offsets(&physical_offsets);
+        AppendMessageResult {
+            status: AppendMessageStatus::PutOk,
+            wrote_offset,
+            wrote_bytes: encoded_len_i32,
+            store_timestamp,
+            logics_offset: queue_offset,
+            msg_num: message_num,
+            msg_id_supplier: Some(message_id_supplier(wrote_offset, &physical_offsets)),
+            page_cache_rt: started.elapsed().as_millis() as i64,
+            ..Default::default()
         }
     }
 }
