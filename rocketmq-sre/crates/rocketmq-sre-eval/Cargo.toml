@@ -49,6 +49,10 @@ name = "schema-export"
 path = "src/bin/schema_export.rs"
 
 [[bin]]
+name = "phase3-schema-export"
+path = "src/bin/phase3_schema_export.rs"
+
+[[bin]]
 name = "phase00-dev-issuer"
 path = "src/bin/phase00_dev_issuer.rs"
 

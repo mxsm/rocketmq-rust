@@ -125,6 +125,18 @@ uuid_id!(
     HealthSnapshotId,
     "Stable identifier for an immutable cluster health evaluation."
 );
+uuid_id!(ActionPlanId, "Stable identifier for an immutable action plan.");
+uuid_id!(PlanStepId, "Stable identifier for an immutable action plan step.");
+uuid_id!(CriticReviewId, "Stable identifier for an immutable critic review.");
+uuid_id!(ApprovalId, "Stable identifier for an approval decision.");
+uuid_id!(ExecutionId, "Stable identifier for a supervised execution.");
+uuid_id!(ExecutionStepId, "Stable identifier for an execution step.");
+uuid_id!(AuditEventId, "Stable identifier for an append-only audit event.");
+uuid_id!(LeaseId, "Stable identifier for an executor lease generation.");
+uuid_id!(
+    ResourceQuarantineId,
+    "Stable identifier for a persistent resource quarantine."
+);
 
 #[cfg(test)]
 mod tests {

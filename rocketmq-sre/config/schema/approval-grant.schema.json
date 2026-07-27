@@ -1,0 +1,87 @@
+{
+  "$defs": {
+    "ActionPlanId": {
+      "description": "Stable identifier for an immutable action plan.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ApprovalId": {
+      "description": "Stable identifier for an approval decision.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Short-lived Control Plane grant accepted only by the Executor audience.",
+  "properties": {
+    "approval_id": {
+      "$ref": "#/$defs/ApprovalId"
+    },
+    "approver_subject": {
+      "type": "string"
+    },
+    "audience": {
+      "type": "string"
+    },
+    "cluster_id": {
+      "$ref": "#/$defs/ClusterId"
+    },
+    "expires_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "issued_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "issuer": {
+      "type": "string"
+    },
+    "nonce": {
+      "type": "string"
+    },
+    "plan_hash": {
+      "type": "string"
+    },
+    "plan_id": {
+      "$ref": "#/$defs/ActionPlanId"
+    },
+    "precondition_hash": {
+      "type": "string"
+    },
+    "signature": {
+      "type": "string"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    }
+  },
+  "required": [
+    "issuer",
+    "audience",
+    "approval_id",
+    "plan_id",
+    "plan_hash",
+    "precondition_hash",
+    "tenant_id",
+    "cluster_id",
+    "approver_subject",
+    "issued_at",
+    "expires_at",
+    "nonce",
+    "signature"
+  ],
+  "title": "ApprovalGrant",
+  "type": "object"
+}

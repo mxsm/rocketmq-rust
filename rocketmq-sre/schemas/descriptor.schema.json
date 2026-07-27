@@ -1,8 +1,17 @@
 {
   "$defs": {
     "ActionDescriptor": {
-      "description": "Extension contract for a future action.",
+      "additionalProperties": false,
+      "description": "Versioned action contract shared by planning, policy, and typed handlers.",
       "properties": {
+        "compensation": {
+          "$ref": "#/$defs/CompensationSpec",
+          "default": {
+            "mode": "automatic",
+            "required_before_fields": [],
+            "timeout_seconds": 0
+          }
+        },
         "config_schema": true,
         "deprecation": {
           "anyOf": [
@@ -17,11 +26,36 @@
         "execution_supported": {
           "type": "boolean"
         },
+        "forbidden_fields": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
         "id": {
           "type": "string"
         },
+        "max_impact": {
+          "$ref": "#/$defs/ImpactScope",
+          "default": "single_resource"
+        },
         "owner": {
           "type": "string"
+        },
+        "parameter_schema": {
+          "default": null
+        },
+        "plan_only": {
+          "default": false,
+          "type": "boolean"
+        },
+        "preconditions": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "required_capabilities": {
           "items": {
@@ -41,6 +75,21 @@
             "$ref": "#/$defs/SchemaVersion"
           },
           "type": "array"
+        },
+        "timeout_seconds": {
+          "default": 0,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "verification": {
+          "$ref": "#/$defs/VerificationSpec",
+          "default": {
+            "max_wait_seconds": 0,
+            "resource_conditions": [],
+            "stable_window_seconds": 0,
+            "technical_slis": []
+          }
         },
         "version": {
           "type": "string"
@@ -68,6 +117,41 @@
         "r3"
       ],
       "type": "string"
+    },
+    "CompensationMode": {
+      "description": "Deterministic compensation mode.",
+      "enum": [
+        "automatic",
+        "manual_takeover",
+        "not_available"
+      ],
+      "type": "string"
+    },
+    "CompensationSpec": {
+      "additionalProperties": false,
+      "description": "Compensation behavior frozen by an action descriptor.",
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/CompensationMode"
+        },
+        "required_before_fields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "timeout_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "mode",
+        "timeout_seconds"
+      ],
+      "type": "object"
     },
     "Deprecation": {
       "description": "Explicit migration information for a deprecated extension.",
@@ -223,6 +307,16 @@
         "result_schema"
       ],
       "type": "object"
+    },
+    "ImpactScope": {
+      "description": "Maximum descriptor-authorized blast radius.",
+      "enum": [
+        "single_resource",
+        "single_instance",
+        "one_replica",
+        "allowlisted_fields"
+      ],
+      "type": "string"
     },
     "IntegrationDescriptor": {
       "description": "Extension contract for an external system integration.",
@@ -390,6 +484,41 @@
         "family",
         "major",
         "minor"
+      ],
+      "type": "object"
+    },
+    "VerificationSpec": {
+      "additionalProperties": false,
+      "description": "Verification policy frozen by an action descriptor.",
+      "properties": {
+        "max_wait_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "resource_conditions": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "stable_window_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "technical_slis": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "stable_window_seconds",
+        "max_wait_seconds"
       ],
       "type": "object"
     }

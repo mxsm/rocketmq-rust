@@ -1,0 +1,67 @@
+{
+  "$defs": {
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "LeaseEpoch": {
+      "description": "Monotonically increasing cluster fencing epoch.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "LeaseId": {
+      "description": "Stable identifier for an executor lease generation.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Short-lived grant authorizing one active epoch to dispatch.",
+  "properties": {
+    "audience": {
+      "type": "string"
+    },
+    "cluster_id": {
+      "$ref": "#/$defs/ClusterId"
+    },
+    "epoch": {
+      "$ref": "#/$defs/LeaseEpoch"
+    },
+    "expires_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "issued_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "lease_id": {
+      "$ref": "#/$defs/LeaseId"
+    },
+    "nonce": {
+      "type": "string"
+    },
+    "owner": {
+      "type": "string"
+    },
+    "signature": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "lease_id",
+    "owner",
+    "cluster_id",
+    "epoch",
+    "audience",
+    "issued_at",
+    "expires_at",
+    "nonce",
+    "signature"
+  ],
+  "title": "LeaseFenceGrant",
+  "type": "object"
+}

@@ -1,0 +1,49 @@
+{
+  "$defs": {
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "LeaseEpoch": {
+      "description": "Monotonically increasing cluster fencing epoch.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Agent acknowledgement that the durable highest epoch has advanced.",
+  "properties": {
+    "acknowledged_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "agent_subject": {
+      "type": "string"
+    },
+    "cluster_id": {
+      "$ref": "#/$defs/ClusterId"
+    },
+    "epoch": {
+      "$ref": "#/$defs/LeaseEpoch"
+    },
+    "pending_nonce": {
+      "type": "string"
+    },
+    "signature": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "cluster_id",
+    "epoch",
+    "pending_nonce",
+    "agent_subject",
+    "acknowledged_at",
+    "signature"
+  ],
+  "title": "FenceAck",
+  "type": "object"
+}

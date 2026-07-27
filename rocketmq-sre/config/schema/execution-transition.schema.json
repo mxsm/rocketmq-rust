@@ -1,0 +1,47 @@
+{
+  "$defs": {
+    "ExecutionState": {
+      "description": "Recoverable supervised execution state.",
+      "enum": [
+        "pending",
+        "prechecking",
+        "intent_persisted",
+        "applying",
+        "unknown",
+        "reconciling",
+        "verifying",
+        "compensating",
+        "succeeded",
+        "rolled_back",
+        "escalated"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Explicit state transition appended to the execution timeline.",
+  "properties": {
+    "from": {
+      "$ref": "#/$defs/ExecutionState"
+    },
+    "occurred_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "reason_code": {
+      "type": "string"
+    },
+    "to": {
+      "$ref": "#/$defs/ExecutionState"
+    }
+  },
+  "required": [
+    "from",
+    "to",
+    "reason_code",
+    "occurred_at"
+  ],
+  "title": "ExecutionTransition",
+  "type": "object"
+}

@@ -1,0 +1,99 @@
+{
+  "$defs": {
+    "AuditEventId": {
+      "description": "Stable identifier for an append-only audit event.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "AuditEventKind": {
+      "description": "Append-only audit event kind for the supervised change timeline.",
+      "enum": [
+        "plan_created",
+        "plan_submitted",
+        "policy_evaluated",
+        "critic_reviewed",
+        "approved",
+        "rejected",
+        "execution_submitted",
+        "state_changed",
+        "step_intent_persisted",
+        "step_result_persisted",
+        "quarantine_created",
+        "quarantine_cleared",
+        "cancelled"
+      ],
+      "type": "string"
+    },
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "CorrelationId": {
+      "description": "Identifier propagated across one logical SRE operation.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Sanitized append-only audit event.",
+  "properties": {
+    "actor_role": {
+      "type": "string"
+    },
+    "actor_subject": {
+      "type": "string"
+    },
+    "cluster_id": {
+      "$ref": "#/$defs/ClusterId"
+    },
+    "correlation_id": {
+      "$ref": "#/$defs/CorrelationId"
+    },
+    "details": true,
+    "event_kind": {
+      "$ref": "#/$defs/AuditEventKind"
+    },
+    "id": {
+      "$ref": "#/$defs/AuditEventId"
+    },
+    "occurred_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "reason_code": {
+      "type": "string"
+    },
+    "resource_id": {
+      "type": "string"
+    },
+    "resource_kind": {
+      "type": "string"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    }
+  },
+  "required": [
+    "id",
+    "tenant_id",
+    "cluster_id",
+    "correlation_id",
+    "event_kind",
+    "actor_subject",
+    "actor_role",
+    "resource_kind",
+    "resource_id",
+    "reason_code",
+    "details",
+    "occurred_at"
+  ],
+  "title": "AuditEvent",
+  "type": "object"
+}

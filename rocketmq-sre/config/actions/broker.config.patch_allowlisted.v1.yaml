@@ -1,0 +1,45 @@
+id: broker.config.patch_allowlisted.v1
+version: 1.0.0
+owner: messaging-platform
+supported_versions:
+  - family: rocketmq-sre.action-plan
+    major: 1
+    minor: 0
+required_capabilities:
+  - broker.config-generation-cas
+config_schema:
+  type: object
+  additionalProperties: false
+parameter_schema:
+  type: object
+  additionalProperties: false
+  required: [broker, expected_generation, patch]
+  properties:
+    broker: { type: string, maxLength: 128 }
+    expected_generation: { type: integer, minimum: 0 }
+    patch:
+      type: object
+      minProperties: 1
+      maxProperties: 8
+      additionalProperties: false
+status: active
+deprecation: null
+risk: r2
+execution_supported: false
+preconditions:
+  - valid_heterogeneous_critic
+  - generation_matches
+  - every_field_allowlisted_and_restart_free
+max_impact: allowlisted_fields
+verification:
+  resource_conditions: [generation_incremented, patch_visible]
+  technical_slis: [broker_error_ratio, store_dispatch_latency]
+  stable_window_seconds: 180
+  max_wait_seconds: 900
+timeout_seconds: 900
+compensation:
+  mode: automatic
+  required_before_fields: [before_config, latest_generation]
+  timeout_seconds: 600
+forbidden_fields: [auth, tls, ha, quorum, store_delete, retention_delete, raw_request_code]
+plan_only: false

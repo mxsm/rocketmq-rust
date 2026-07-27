@@ -1,0 +1,45 @@
+id: topic.config.patch_allowlisted.v1
+version: 1.0.0
+owner: messaging-platform
+supported_versions:
+  - family: rocketmq-sre.action-plan
+    major: 1
+    minor: 0
+required_capabilities:
+  - admin.topic-config-cas
+config_schema:
+  type: object
+  additionalProperties: false
+parameter_schema:
+  type: object
+  additionalProperties: false
+  required: [topic, expected_version, patch]
+  properties:
+    topic: { type: string, maxLength: 255 }
+    expected_version: { type: integer, minimum: 0 }
+    patch:
+      type: object
+      minProperties: 1
+      maxProperties: 6
+      additionalProperties: false
+status: active
+deprecation: null
+risk: r2
+execution_supported: false
+preconditions:
+  - valid_heterogeneous_critic
+  - topic_version_matches
+  - every_field_allowlisted
+max_impact: allowlisted_fields
+verification:
+  resource_conditions: [topic_version_incremented, patch_visible]
+  technical_slis: [send_success_ratio, consume_success_ratio]
+  stable_window_seconds: 180
+  max_wait_seconds: 900
+timeout_seconds: 900
+compensation:
+  mode: automatic
+  required_before_fields: [before_config, latest_version]
+  timeout_seconds: 600
+forbidden_fields: [delete_topic, clean_messages, widen_permissions, raw_request_code]
+plan_only: false

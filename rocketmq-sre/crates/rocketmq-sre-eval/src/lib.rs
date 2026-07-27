@@ -25,28 +25,49 @@ use std::path::Path;
 
 use rocketmq_sre_contracts::ActionDescriptor;
 use rocketmq_sre_contracts::ActionItem;
+use rocketmq_sre_contracts::ActionPlan;
+use rocketmq_sre_contracts::ActionPlanDraft;
+use rocketmq_sre_contracts::AgentStepRequest;
+use rocketmq_sre_contracts::AgentStepResult;
 use rocketmq_sre_contracts::AlertEvent;
+use rocketmq_sre_contracts::ApprovalGrant;
+use rocketmq_sre_contracts::ApprovalRecord;
+use rocketmq_sre_contracts::AuditEvent;
 use rocketmq_sre_contracts::BacklogEta;
 use rocketmq_sre_contracts::CapacityForecast;
 use rocketmq_sre_contracts::ClusterForecastReport;
 use rocketmq_sre_contracts::ClusterHealthReport;
+use rocketmq_sre_contracts::CriticFinding;
+use rocketmq_sre_contracts::CriticReview;
 use rocketmq_sre_contracts::Descriptor;
 use rocketmq_sre_contracts::DrReadinessReport;
 use rocketmq_sre_contracts::EvidenceQuery;
 use rocketmq_sre_contracts::EvidenceSnapshot;
+use rocketmq_sre_contracts::ExecutionAction;
+use rocketmq_sre_contracts::ExecutionRequest;
+use rocketmq_sre_contracts::ExecutionResult;
+use rocketmq_sre_contracts::ExecutionTransition;
+use rocketmq_sre_contracts::FenceAck;
 use rocketmq_sre_contracts::FleetHealthReport;
 use rocketmq_sre_contracts::Incident;
 use rocketmq_sre_contracts::IncidentOperationRequest;
 use rocketmq_sre_contracts::IncidentOperationResult;
 use rocketmq_sre_contracts::IncidentOperationsState;
+use rocketmq_sre_contracts::LeaseFenceGrant;
+use rocketmq_sre_contracts::ManualRunbookDraft;
 use rocketmq_sre_contracts::NotificationDelivery;
 use rocketmq_sre_contracts::OperationsReport;
 use rocketmq_sre_contracts::Phase2ContractManifest;
+use rocketmq_sre_contracts::PlanStep;
 use rocketmq_sre_contracts::PostmortemDraft;
 use rocketmq_sre_contracts::PostmortemRevision;
+use rocketmq_sre_contracts::ReconcileGrant;
 use rocketmq_sre_contracts::ShiftHandoffSummary;
+use rocketmq_sre_contracts::StepIntent;
+use rocketmq_sre_contracts::StepResult;
 use rocketmq_sre_contracts::TopologySnapshot;
 use rocketmq_sre_contracts::UpgradeReadinessReport;
+use rocketmq_sre_contracts::VerificationResult;
 use rocketmq_sre_contracts::WhatIfSimulation;
 use rocketmq_sre_contracts::WhatIfSimulationRequest;
 use rocketmq_sre_model_gateway::CanonicalModelRequest;
@@ -198,6 +219,120 @@ pub fn export_schemas(output_dir: &Path) -> Result<(), EvalError> {
         })?;
     }
     Ok(())
+}
+
+/// Writes only the Phase 3 supervised-execution schemas.
+///
+/// # Errors
+///
+/// Returns an I/O or JSON encoding error.
+pub fn export_phase3_schemas(output_dir: &Path) -> Result<(), EvalError> {
+    fs::create_dir_all(output_dir).map_err(|source| EvalError::Io {
+        path: output_dir.display().to_string(),
+        source,
+    })?;
+    for (name, schema) in phase3_generated_schemas()? {
+        let path = output_dir.join(name);
+        let mut bytes = serde_json::to_vec_pretty(&schema)?;
+        bytes.push(b'\n');
+        fs::write(&path, bytes).map_err(|source| EvalError::Io {
+            path: path.display().to_string(),
+            source,
+        })?;
+    }
+    Ok(())
+}
+
+/// Returns every generated Phase 3 schema and its stable artifact name.
+///
+/// # Errors
+///
+/// Returns a JSON encoding error if a public schema cannot be represented.
+pub fn phase3_generated_schemas() -> Result<Vec<(&'static str, serde_json::Value)>, EvalError> {
+    Ok(vec![
+        (
+            "execution-action.schema.json",
+            serde_json::to_value(schema_for!(ExecutionAction))?,
+        ),
+        (
+            "action-descriptor.schema.json",
+            serde_json::to_value(schema_for!(ActionDescriptor))?,
+        ),
+        ("plan-step.schema.json", serde_json::to_value(schema_for!(PlanStep))?),
+        (
+            "action-plan-draft.schema.json",
+            serde_json::to_value(schema_for!(ActionPlanDraft))?,
+        ),
+        (
+            "action-plan.schema.json",
+            serde_json::to_value(schema_for!(ActionPlan))?,
+        ),
+        (
+            "manual-runbook-draft.schema.json",
+            serde_json::to_value(schema_for!(ManualRunbookDraft))?,
+        ),
+        (
+            "approval-record.schema.json",
+            serde_json::to_value(schema_for!(ApprovalRecord))?,
+        ),
+        (
+            "approval-grant.schema.json",
+            serde_json::to_value(schema_for!(ApprovalGrant))?,
+        ),
+        (
+            "critic-finding.schema.json",
+            serde_json::to_value(schema_for!(CriticFinding))?,
+        ),
+        (
+            "critic-review.schema.json",
+            serde_json::to_value(schema_for!(CriticReview))?,
+        ),
+        (
+            "execution-transition.schema.json",
+            serde_json::to_value(schema_for!(ExecutionTransition))?,
+        ),
+        (
+            "execution-request.schema.json",
+            serde_json::to_value(schema_for!(ExecutionRequest))?,
+        ),
+        (
+            "step-intent.schema.json",
+            serde_json::to_value(schema_for!(StepIntent))?,
+        ),
+        (
+            "agent-step-request.schema.json",
+            serde_json::to_value(schema_for!(AgentStepRequest))?,
+        ),
+        (
+            "agent-step-result.schema.json",
+            serde_json::to_value(schema_for!(AgentStepResult))?,
+        ),
+        (
+            "step-result.schema.json",
+            serde_json::to_value(schema_for!(StepResult))?,
+        ),
+        (
+            "execution-result.schema.json",
+            serde_json::to_value(schema_for!(ExecutionResult))?,
+        ),
+        (
+            "verification-result.schema.json",
+            serde_json::to_value(schema_for!(VerificationResult))?,
+        ),
+        (
+            "lease-fence-grant.schema.json",
+            serde_json::to_value(schema_for!(LeaseFenceGrant))?,
+        ),
+        (
+            "reconcile-grant.schema.json",
+            serde_json::to_value(schema_for!(ReconcileGrant))?,
+        ),
+        ("fence-ack.schema.json", serde_json::to_value(schema_for!(FenceAck))?),
+        (
+            "audit-event.schema.json",
+            serde_json::to_value(schema_for!(AuditEvent))?,
+        ),
+    ])
 }
 
 fn generated_schemas() -> Result<Vec<(&'static str, serde_json::Value)>, EvalError> {

@@ -14,16 +14,26 @@
 
 //! Provider-neutral coordination primitives for RocketMQ AI SRE.
 
+mod action_catalog;
+mod canonical_hash;
 pub mod correlation;
 pub mod diagnostics;
+mod execution_state;
 pub mod health;
 mod incident_manager;
+mod plan;
 pub mod postmortem;
 pub mod prediction;
 mod registry;
 pub mod slo;
 
+pub use action_catalog::ActionCatalog;
+pub use action_catalog::ActionCatalogError;
+pub use canonical_hash::canonical_plan_hash;
+pub use execution_state::ExecutionStateMachine;
 pub use incident_manager::IncidentManager;
 pub use incident_manager::IncidentManagerError;
+pub use plan::PlanError;
+pub use plan::PlanService;
 pub use registry::DescriptorRegistry;
 pub use registry::RegistryError;

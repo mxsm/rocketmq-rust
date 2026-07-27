@@ -1,0 +1,62 @@
+{
+  "$defs": {
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "LeaseEpoch": {
+      "description": "Monotonically increasing cluster fencing epoch.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "LeaseId": {
+      "description": "Stable identifier for an executor lease generation.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Read-only grant used while a pending owner reconciles old effects.",
+  "properties": {
+    "audience": {
+      "type": "string"
+    },
+    "cluster_id": {
+      "$ref": "#/$defs/ClusterId"
+    },
+    "expires_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "lease_id": {
+      "$ref": "#/$defs/LeaseId"
+    },
+    "nonce": {
+      "type": "string"
+    },
+    "owner": {
+      "type": "string"
+    },
+    "pending_epoch": {
+      "$ref": "#/$defs/LeaseEpoch"
+    },
+    "signature": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "lease_id",
+    "owner",
+    "cluster_id",
+    "pending_epoch",
+    "audience",
+    "expires_at",
+    "nonce",
+    "signature"
+  ],
+  "title": "ReconcileGrant",
+  "type": "object"
+}

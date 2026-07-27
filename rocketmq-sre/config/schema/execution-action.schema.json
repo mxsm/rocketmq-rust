@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Closed set of Phase 3 actions that may enter supervised execution.\n\nR3 and unknown actions are intentionally not representable.",
+  "enum": [
+    "observability.logger_level_ttl.v1",
+    "proxy.scale_out_one.v1",
+    "proxy.restart_one.v1",
+    "broker.config.patch_allowlisted.v1",
+    "topic.config.patch_allowlisted.v1"
+  ],
+  "title": "ExecutionAction",
+  "type": "string"
+}

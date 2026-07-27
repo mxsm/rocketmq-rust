@@ -1,0 +1,160 @@
+{
+  "$defs": {
+    "ActionPlanId": {
+      "description": "Stable identifier for an immutable action plan.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "CriticConclusion": {
+      "description": "Bounded deterministic Critic conclusion.",
+      "enum": [
+        "accept",
+        "needs_revision",
+        "reject"
+      ],
+      "type": "string"
+    },
+    "CriticFinding": {
+      "additionalProperties": false,
+      "description": "One structured finding returned by the Critic.",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "evidence_ids": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          },
+          "type": "array"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
+    "CriticReviewId": {
+      "description": "Stable identifier for an immutable critic review.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "CriticReviewStatus": {
+      "description": "Critic review availability and validation state.",
+      "enum": [
+        "pending",
+        "valid",
+        "invalid",
+        "unavailable",
+        "conflict"
+      ],
+      "type": "string"
+    },
+    "EvidenceId": {
+      "description": "Stable identifier for an evidence snapshot.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ModelInvocationId": {
+      "description": "Stable identifier for a model invocation.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Immutable heterogeneous model review bound to actual invocation identity.",
+  "properties": {
+    "conclusion": {
+      "$ref": "#/$defs/CriticConclusion"
+    },
+    "created_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "critic_invocation_id": {
+      "$ref": "#/$defs/ModelInvocationId"
+    },
+    "critic_model_family": {
+      "type": "string"
+    },
+    "critic_model_revision": {
+      "type": "string"
+    },
+    "critic_profile": {
+      "type": "string"
+    },
+    "critic_provider": {
+      "type": "string"
+    },
+    "endpoint_instance": {
+      "type": "string"
+    },
+    "fallback_chain": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "findings": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/CriticFinding"
+      },
+      "type": "array"
+    },
+    "id": {
+      "$ref": "#/$defs/CriticReviewId"
+    },
+    "payload_hash": {
+      "type": "string"
+    },
+    "plan_hash": {
+      "type": "string"
+    },
+    "plan_id": {
+      "$ref": "#/$defs/ActionPlanId"
+    },
+    "primary_invocation_id": {
+      "$ref": "#/$defs/ModelInvocationId"
+    },
+    "primary_model_family": {
+      "type": "string"
+    },
+    "prompt_version": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/CriticReviewStatus"
+    }
+  },
+  "required": [
+    "id",
+    "plan_id",
+    "plan_hash",
+    "primary_invocation_id",
+    "critic_invocation_id",
+    "primary_model_family",
+    "critic_model_family",
+    "critic_provider",
+    "critic_profile",
+    "critic_model_revision",
+    "endpoint_instance",
+    "prompt_version",
+    "schema_version",
+    "payload_hash",
+    "status",
+    "conclusion",
+    "created_at"
+  ],
+  "title": "CriticReview",
+  "type": "object"
+}

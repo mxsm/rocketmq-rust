@@ -19,7 +19,10 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::CompensationSpec;
+use crate::ImpactScope;
 use crate::SchemaVersion;
+use crate::VerificationSpec;
 
 /// Kind-safe namespace for extension identifiers.
 #[derive(Clone, Copy, Debug, Eq, Hash, JsonSchema, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -93,8 +96,9 @@ pub struct DiagnosticPackDescriptor {
     pub produced_hypotheses: BTreeSet<String>,
 }
 
-/// Extension contract for a future action.
+/// Versioned action contract shared by planning, policy, and typed handlers.
 #[derive(Clone, Debug, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ActionDescriptor {
     pub id: String,
     pub version: String,
@@ -107,6 +111,22 @@ pub struct ActionDescriptor {
     pub deprecation: Option<Deprecation>,
     pub risk: ActionRisk,
     pub execution_supported: bool,
+    #[serde(default)]
+    pub parameter_schema: Value,
+    #[serde(default)]
+    pub preconditions: Vec<String>,
+    #[serde(default)]
+    pub max_impact: ImpactScope,
+    #[serde(default)]
+    pub verification: VerificationSpec,
+    #[serde(default)]
+    pub timeout_seconds: u64,
+    #[serde(default)]
+    pub compensation: CompensationSpec,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub forbidden_fields: BTreeSet<String>,
+    #[serde(default)]
+    pub plan_only: bool,
 }
 
 /// Model provider capabilities without provider SDK coupling.
