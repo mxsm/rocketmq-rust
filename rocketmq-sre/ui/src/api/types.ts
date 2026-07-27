@@ -47,6 +47,22 @@ export type HealthOperationalState =
   ApiSchemas["ClusterHealthReport__HealthOperationalState"];
 export type SloDimension =
   ApiSchemas["ClusterHealthReport__SloDimension"];
+export type CreatePlanRequest = ApiSchemas["CreatePlanRequest"];
+export type CreatePlanResponse = ApiSchemas["CreatePlanResponse"];
+export type ActionPlanView = ApiSchemas["ActionPlanView"];
+export type ApprovalDecisionRequest =
+  ApiSchemas["ApprovalDecisionRequest"];
+export type ApprovalDecisionResponse =
+  ApiSchemas["ApprovalDecisionResponse"];
+export type SubmitExecutionRequest =
+  ApiSchemas["SubmitExecutionRequest"];
+export type ExecutionSubmissionView =
+  ApiSchemas["ExecutionSubmissionView"];
+export type AuditPage = ApiSchemas["AuditPage"];
+export type QuarantinePage = ApiSchemas["QuarantinePage"];
+export type ClearQuarantineRequest =
+  ApiSchemas["ClearQuarantineRequest"];
+export type ResourceQuarantine = ApiSchemas["ResourceQuarantine"];
 
 export type OnboardingState =
   | "pending"
@@ -166,9 +182,12 @@ export interface CoverageMatrix {
 export interface CapabilityCatalogResponse {
   schema_version: string;
   phase: string;
-  effective_access_profile: "read_only";
-  execution_supported: false;
-  approval_supported: false;
+  effective_access_profile: "read_only" | "human_approved_supervised";
+  execution_supported: boolean;
+  execution_submission_supported?: boolean;
+  approval_supported: boolean;
+  unattended_execution_supported?: false;
+  arbitrary_mutation_supported?: false;
   provider_network_calls_supported: true;
   providers: Array<{
     id: string;

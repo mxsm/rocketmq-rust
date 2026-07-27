@@ -16,12 +16,12 @@ use std::sync::LazyLock;
 
 use serde_json::Value;
 
-const PHASE_TWO_OPENAPI: &str = include_str!("../../../openapi/rocketmq-sre-phase02.openapi.json");
+const PHASE_THREE_OPENAPI: &str = include_str!("../../../openapi/rocketmq-sre-phase03.openapi.json");
 
 static DOCUMENT: LazyLock<Value> = LazyLock::new(|| {
     // Invariant: the checked-in document is parsed by this module's tests and
     // by the UI type-generation contract before it can be accepted.
-    serde_json::from_str(PHASE_TWO_OPENAPI).expect("the checked-in Phase 02 OpenAPI document must be valid JSON")
+    serde_json::from_str(PHASE_THREE_OPENAPI).expect("the checked-in Phase 03 OpenAPI document must be valid JSON")
 });
 
 pub(crate) fn document() -> Value {
@@ -39,6 +39,7 @@ mod tests {
         "/readyz",
         "/v1/action-items",
         "/v1/action-items/{id}",
+        "/v1/audit/{correlation_id}",
         "/v1/assets",
         "/v1/assets/dashboard-link",
         "/v1/capabilities",
@@ -63,6 +64,8 @@ mod tests {
         "/v1/evidence",
         "/v1/evidence/{id}",
         "/v1/evidence/{id}/content",
+        "/v1/executions",
+        "/v1/executions/{id}",
         "/v1/fleet/health",
         "/v1/incidents",
         "/v1/incidents/{id}",
@@ -98,8 +101,14 @@ mod tests {
         "/v1/operations/shift-handoff",
         "/v1/postmortems/{id}",
         "/v1/postmortems/{id}/publish",
+        "/v1/plans",
+        "/v1/plans/{id}",
+        "/v1/plans/{id}/approve",
+        "/v1/plans/{id}/reject",
         "/v1/recommendations",
         "/v1/recommendations/{id}/disposition",
+        "/v1/resource-quarantines",
+        "/v1/resource-quarantines/{id}/clear",
         "/v1/simulations",
         "/v1/topology",
         "/v1/topology/diff",
@@ -148,17 +157,51 @@ mod tests {
     }
 
     #[test]
-    fn document_freezes_the_read_only_rocketmq_boundary() {
+    fn document_freezes_the_human_approved_typed_mutation_boundary() {
         let document = document();
         assert_eq!(document["openapi"], "3.1.0");
-        assert_eq!(document["x-rocketmq-effective-access"], "read_only");
-        assert_eq!(document["x-rocketmq-cluster-mutation-supported"], false);
-        assert_eq!(document["x-rocketmq-sre-phase"], 2);
+        assert_eq!(document["x-rocketmq-effective-access"], "human_approved_supervised");
+        assert_eq!(document["x-rocketmq-cluster-mutation-supported"], true);
+        assert_eq!(document["x-rocketmq-unattended-mutation-supported"], false);
+        assert_eq!(document["x-rocketmq-arbitrary-mutation-supported"], false);
+        assert_eq!(document["x-rocketmq-sre-phase"], 3);
 
         let encoded = serde_json::to_string(&document).expect("OpenAPI JSON");
-        for forbidden in ["\"delete\":", "/apply", "/reset", "/restart", "/scale", "/truncate"] {
+        for forbidden in ["\"delete\":", "/apply", "/reset", "/truncate", "arbitrary_patch"] {
             assert!(!encoded.contains(forbidden), "forbidden OpenAPI surface: {forbidden}");
         }
+    }
+
+    #[test]
+    fn document_contains_the_phase_three_supervised_contracts() {
+        let document = document();
+        let schemas = document["components"]["schemas"]
+            .as_object()
+            .expect("OpenAPI schemas must be an object");
+        for required in [
+            "ActionPlan",
+            "ApprovalGrant",
+            "ApprovalRecord",
+            "PolicyDecision",
+            "ExecutionRequest",
+            "AuditEvent",
+            "ResourceQuarantine",
+            "CreatePlanRequest",
+            "ApprovalDecisionRequest",
+            "SubmitExecutionRequest",
+        ] {
+            assert!(schemas.contains_key(required), "missing Phase 3 schema {required}");
+        }
+        assert_eq!(
+            document["paths"]["/v1/plans/{id}/approve"]["post"]["requestBody"]["content"]["application/json"]["schema"]
+                ["$ref"],
+            "#/components/schemas/ApprovalDecisionRequest"
+        );
+        assert_eq!(
+            document["paths"]["/v1/resource-quarantines/{id}/clear"]["post"]["requestBody"]["content"]
+                ["application/json"]["schema"]["$ref"],
+            "#/components/schemas/ClearQuarantineRequest"
+        );
     }
 
     #[test]

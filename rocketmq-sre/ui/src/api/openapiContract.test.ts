@@ -1,20 +1,24 @@
-import specification from "../../../openapi/rocketmq-sre-phase02.openapi.json";
+import specification from "../../../openapi/rocketmq-sre-phase03.openapi.json";
 
-describe("checked-in Phase 2 OpenAPI", () => {
-  it("keeps the generated UI contract read-only at the RocketMQ boundary", () => {
+describe("checked-in Phase 3 OpenAPI", () => {
+  it("keeps every mutation human-approved, typed, and bounded", () => {
     expect(
       specification["x-rocketmq-cluster-mutation-supported"],
-    ).toBe(false);
+    ).toBe(true);
     expect(specification["x-rocketmq-effective-access"]).toBe(
-      "read_only",
+      "human_approved_supervised",
+    );
+    expect(specification["x-rocketmq-unattended-mutation-supported"]).toBe(
+      false,
+    );
+    expect(specification["x-rocketmq-arbitrary-mutation-supported"]).toBe(
+      false,
     );
 
     const paths = Object.entries(specification.paths);
     expect(
       paths.some(([path]) =>
-        /\/(apply|delete|reset|restart|scale|truncate|update)(\/|$)/i.test(
-          path,
-        ),
+        /\/(delete|reset|truncate)(\/|$)/i.test(path),
       ),
     ).toBe(false);
     expect(
@@ -22,8 +26,8 @@ describe("checked-in Phase 2 OpenAPI", () => {
     ).toBe(false);
   });
 
-  it("publishes typed Phase 2 contracts without adding a cluster mutation", () => {
-    expect(specification["x-rocketmq-sre-phase"]).toBe(2);
+  it("publishes typed Phase 2 and supervised Phase 3 contracts", () => {
+    expect(specification["x-rocketmq-sre-phase"]).toBe(3);
     expect(specification["x-rocketmq-phase2-contracts"]).toContain(
       "PostmortemRevision",
     );
@@ -72,5 +76,16 @@ describe("checked-in Phase 2 OpenAPI", () => {
       specification.paths["/v1/operations/reports"],
     ).toBeDefined();
     expect(specification.paths["/v1/action-items/{id}"]?.patch).toBeDefined();
+    expect(specification.components.schemas.ActionPlan).toBeDefined();
+    expect(specification.components.schemas.ApprovalGrant).toBeDefined();
+    expect(specification.components.schemas.PolicyDecision).toBeDefined();
+    expect(specification.components.schemas.ExecutionRequest).toBeDefined();
+    expect(specification.components.schemas.ResourceQuarantine).toBeDefined();
+    expect(specification.paths["/v1/plans"]?.post).toBeDefined();
+    expect(specification.paths["/v1/plans/{id}/approve"]?.post).toBeDefined();
+    expect(specification.paths["/v1/executions"]?.post).toBeDefined();
+    expect(
+      specification.paths["/v1/resource-quarantines/{id}/clear"]?.post,
+    ).toBeDefined();
   });
 });

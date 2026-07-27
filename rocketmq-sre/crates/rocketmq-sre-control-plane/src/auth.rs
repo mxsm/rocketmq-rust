@@ -167,6 +167,8 @@ fn authorize_development(
         clusters,
         roles: BTreeSet::from([
             "diagnose".to_owned(),
+            "operator".to_owned(),
+            "approver".to_owned(),
             "rocketmq:diagnose".to_owned(),
             "rocketmq:onboard".to_owned(),
         ]),
@@ -202,11 +204,17 @@ async fn authorize_oidc(
     let claims = decode::<OidcClaims>(token, &decoding_key, &validation)
         .map_err(|_| ControlPlaneError::Unauthorized)?
         .claims;
-    if !claims
-        .scope
-        .split_ascii_whitespace()
-        .any(|scope| matches!(scope, "rocketmq:read" | "rocketmq:diagnose" | "rocketmq:sre"))
-    {
+    if !claims.scope.split_ascii_whitespace().any(|scope| {
+        matches!(
+            scope,
+            "rocketmq:read"
+                | "rocketmq:diagnose"
+                | "rocketmq:sre"
+                | "rocketmq:operate"
+                | "rocketmq:approve"
+                | "rocketmq:executor"
+        )
+    }) {
         return Err(ControlPlaneError::forbidden(
             "unauthorized_scope",
             "token does not grant RocketMQ SRE read or diagnose scope",
@@ -228,8 +236,20 @@ async fn authorize_oidc(
     enforce_cluster_scope(&clusters, cluster)?;
     let mut roles = claims.roles.into_iter().collect::<BTreeSet<_>>();
     for scope in claims.scope.split_ascii_whitespace() {
-        if matches!(scope, "rocketmq:diagnose" | "rocketmq:sre") {
-            roles.insert(scope.to_owned());
+        match scope {
+            "rocketmq:diagnose" | "rocketmq:sre" => {
+                roles.insert(scope.to_owned());
+            }
+            "rocketmq:operate" => {
+                roles.insert("operator".to_owned());
+            }
+            "rocketmq:approve" => {
+                roles.insert("approver".to_owned());
+            }
+            "rocketmq:executor" => {
+                roles.insert("executor_service".to_owned());
+            }
+            _ => {}
         }
     }
     Ok(AuthContext {

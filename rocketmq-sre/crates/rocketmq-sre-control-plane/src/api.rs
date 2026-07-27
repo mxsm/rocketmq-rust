@@ -527,6 +527,7 @@ pub(crate) struct AppState {
     pub(crate) postmortems: crate::postmortem::PostmortemService,
     pub(crate) sre_metrics: Arc<SreMetrics>,
     pub(crate) slo: SloService,
+    pub(crate) supervised_execution: crate::supervised_execution::SupervisedExecutionService,
     pub(crate) workflow: WorkflowService,
 }
 
@@ -544,6 +545,7 @@ pub fn build_router(
     Ok(build_routers_with_auth(
         repository,
         documents,
+        internal_token.clone(),
         internal_token,
         auth,
         evidence_blobs,
@@ -565,6 +567,7 @@ fn build_routers_with_auth(
     repository: PostgresRepository,
     documents: CapabilityDocuments,
     internal_token: Arc<str>,
+    grant_signing_key: Arc<str>,
     auth: AuthService,
     evidence_blobs: EvidenceBlobStore,
     dashboard_links: DashboardDeepLinkPolicy,
@@ -596,6 +599,11 @@ fn build_routers_with_auth(
         assets.clone(),
         slo.clone(),
     )?;
+    let supervised_execution = crate::supervised_execution::SupervisedExecutionService::new(
+        repository.clone(),
+        workflow.clone(),
+        grant_signing_key.as_bytes(),
+    )?;
     let connector_routes = connector_channel::router::<AppState>(connector_channel.clone());
     let connector_control_routes = Router::new()
         .route(
@@ -622,6 +630,7 @@ fn build_routers_with_auth(
         postmortems,
         sre_metrics,
         slo: slo.clone(),
+        supervised_execution,
         workflow,
     };
     let public = Router::new()
@@ -640,6 +649,7 @@ fn build_routers_with_auth(
         .merge(crate::phase1_api::public_routes())
         .merge(crate::operator_workbench::routes())
         .merge(crate::postmortem::routes())
+        .merge(crate::supervised_execution::routes())
         .with_state(state.clone())
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -743,7 +753,7 @@ pub async fn run(config: ControlPlaneConfig, service_context: ChildServiceContex
     tracing::info!(
         bind_addr = %public_addr,
         scope = service_context.name(),
-        effective_access = "read_only",
+        effective_access = "human_approved_supervised",
         "RocketMQ AI SRE control plane is ready"
     );
     tracing::info!(
@@ -756,6 +766,7 @@ pub async fn run(config: ControlPlaneConfig, service_context: ChildServiceContex
         repository,
         documents,
         Arc::<str>::from(config.internal_token()),
+        Arc::<str>::from(config.grant_signing_key()),
         auth,
         evidence_blobs,
         dashboard_links,
@@ -1103,10 +1114,13 @@ async fn capabilities(State(state): State<AppState>, headers: HeaderMap) -> Resu
     let providers = rocketmq_sre_model_gateway::phase00_provider_descriptors();
     Ok(Json(json!({
         "schema_version": "rocketmq-sre.capabilities.v1",
-        "phase": "02",
-        "effective_access_profile": "read_only",
+        "phase": "03",
+        "effective_access_profile": "human_approved_supervised",
         "execution_supported": false,
-        "approval_supported": false,
+        "execution_submission_supported": true,
+        "approval_supported": true,
+        "unattended_execution_supported": false,
+        "arbitrary_mutation_supported": false,
         "provider_network_calls_supported": true,
         "providers": providers,
         "catalog": state.documents.catalog.as_ref(),
@@ -1317,6 +1331,7 @@ mod tests {
         let routers = build_routers_with_auth(
             repository,
             documents,
+            internal_token.clone(),
             internal_token,
             auth,
             EvidenceBlobStore::in_memory(64 * 1024),

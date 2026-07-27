@@ -18,7 +18,13 @@ health scoring. P2-06 adds explainable 7-day/30-day capacity and backlog
 forecasting, seasonal anomaly and change-point hints, deterministic What-if
 simulation, Upgrade/DR readiness, persisted forecast outcomes, and a full-width
 desktop prediction workspace. Forecasts and simulations remain advisory-only
-and cannot create execution requests.
+and cannot create execution requests. Phase 03 now includes immutable
+execution contracts, a durable PostgreSQL execution journal, server-validated
+ActionPlan creation, deterministic policy evaluation, non-self human approval,
+service-signed ApprovalGrant issuance, execution submission, resource
+quarantine management, correlation-scoped Audit APIs, and a generated Phase 03
+OpenAPI/TypeScript contract. Target-side execution remains fail closed until
+the dedicated Executor and Execution Agent are enabled in P3-05.
 
 ## Workspace boundaries
 
@@ -46,7 +52,9 @@ python scripts/check_source_layout.py
 cargo check --locked --workspace
 cargo test --locked --workspace --all-features
 cargo run --locked -p rocketmq-sre-eval --bin schema-export -- schemas
-node scripts/export_phase2_openapi.mjs
+cargo run --locked -p rocketmq-sre-eval --bin phase3-schema-export
+node scripts/generate_phase3_openapi.mjs
+npm --prefix ui run generate:api
 npm --prefix ui run check:api
 ```
 
@@ -119,6 +127,9 @@ See:
 - [Phase 02 diagnostic evidence sources](docs/phase02-evidence-sources.md)
 - [Phase 02 DiagnosticPack catalog](docs/phase02-diagnostic-packs.md)
 - [Phase 02 alert correlation and notification](docs/phase02-alert-correlation.md)
+- [Phase 03 execution contracts](docs/phase03-execution-contracts.md)
+- [Phase 03 PostgreSQL recovery](docs/phase03-postgres-recovery.md)
+- [Phase 03 Plan, Policy, Approval, and Audit](docs/phase03-plan-policy-approval.md)
 - [Local stack](deploy/dev/README.md)
 
 ## Kind acceptance

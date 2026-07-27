@@ -14,8 +14,11 @@
 
 //! PostgreSQL-backed, read-only control plane for RocketMQ AI SRE.
 //!
-//! Phase 00 owns cluster onboarding and compatibility history. It deliberately
-//! exposes no RocketMQ mutation, approval, or execution endpoint.
+//! The control plane owns cluster onboarding, diagnosis workflows, immutable
+//! plans, deterministic policy decisions, human approval, and durable
+//! execution submission. Target-side mutation remains isolated behind the
+//! Executor and Execution Agent boundary; this crate exposes no arbitrary
+//! RocketMQ Admin, Kubernetes, or configuration mutation surface.
 
 mod alerting;
 mod api;
@@ -41,6 +44,7 @@ mod postmortem;
 mod read_audit;
 mod repository;
 mod slo;
+mod supervised_execution;
 mod supervised_repository;
 mod workflow;
 

@@ -25,8 +25,10 @@ description = "RocketMQ Rust AI SRE control-plane composition root"
 
 [dependencies]
 axum.workspace = true
+base64.workspace = true
 bytes.workspace = true
 chrono.workspace = true
+hmac.workspace = true
 jsonwebtoken.workspace = true
 object_store.workspace = true
 reqwest.workspace = true
@@ -37,6 +39,7 @@ rocketmq-observability.workspace = true
 rocketmq-runtime.workspace = true
 semver.workspace = true
 serde.workspace = true
+serde_jcs.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
 sha2.workspace = true

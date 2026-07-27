@@ -1,0 +1,24 @@
+schema_version: rocketmq-sre.supervised-policy.v1
+policy_version: "1.0.0"
+evaluator: rocketmq-sre-control-plane
+executor_audience: rocketmq-sre-executor
+plan_ttl_seconds: 86400
+approval_ttl_seconds: 1800
+max_evidence_age_seconds: 900
+maintenance_window_utc:
+  start_minute: 0
+  end_minute: 1440
+approval_required:
+  - r1
+  - r2
+required_operator_role: operator
+required_approver_role: approver
+deny_on:
+  - rules_only_diagnosis
+  - diagnosis_not_confirmed
+  - missing_or_stale_evidence
+  - descriptor_or_parameter_mismatch
+  - resource_quarantine
+  - active_resource_change
+  - maintenance_window_closed
+  - rollback_unavailable

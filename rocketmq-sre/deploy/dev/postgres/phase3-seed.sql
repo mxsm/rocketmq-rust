@@ -2,7 +2,7 @@
 -- Licensed under the Apache License, Version 2.0.
 
 -- Development-only identity graph for supervised planning. Run this after the
--- Control Plane has applied migrations through 0027. It creates no approval,
+-- Control Plane has applied migrations through 0028. It creates no approval,
 -- lease, execution, credential, or cluster mutation.
 
 INSERT INTO clusters (
@@ -213,7 +213,67 @@ INSERT INTO model_invocations (
     NOW()
 ) ON CONFLICT (id) DO NOTHING;
 
+INSERT INTO evidence_snapshots (
+    id,
+    query_id,
+    correlation_id,
+    tenant_id,
+    cluster_id,
+    incident_id,
+    schema_family,
+    schema_major,
+    schema_minor,
+    source,
+    resource,
+    time_range_start,
+    time_range_end,
+    observed_at,
+    collected_at,
+    freshness_seconds,
+    coverage,
+    sensitivity,
+    exposure,
+    partial,
+    warnings,
+    inline_content,
+    content_hash,
+    content_digest,
+    query_hash,
+    expires_at
+) VALUES (
+    '03000000-0000-4000-8000-000000000008',
+    '03000000-0000-4000-8000-000000000009',
+    '03000000-0000-4000-8000-000000000010',
+    '03000000-0000-4000-8000-000000000002',
+    '03000000-0000-4000-8000-000000000001',
+    '03000000-0000-4000-8000-000000000003',
+    'rocketmq-sre.evidence',
+    1,
+    0,
+    'synthetic',
+    'deployment/default/proxy',
+    '2026-01-01T00:00:00Z',
+    '2026-01-01T00:01:00Z',
+    NOW(),
+    NOW(),
+    600,
+    'available',
+    'internal',
+    'synthetic',
+    FALSE,
+    '[]'::JSONB,
+    '{"desired_replicas":2,"ready_replicas":2,"proxy_error_ratio":0}'::JSONB,
+    'sha256:20a573f66412353bb299170f6a3218a213d83651a41d9a0cd95092acb7bfe732',
+    'sha256:20a573f66412353bb299170f6a3218a213d83651a41d9a0cd95092acb7bfe732',
+    'sha256:3030303030303030303030303030303030303030303030303030303030303030',
+    NOW() + INTERVAL '1 day'
+) ON CONFLICT (id) DO UPDATE
+SET observed_at = EXCLUDED.observed_at,
+    collected_at = EXCLUDED.collected_at,
+    expires_at = EXCLUDED.expires_at;
+
 UPDATE diagnosis_revisions
 SET primary_model_invocation_id = '03000000-0000-4000-8000-000000000006',
-    execution_eligible = TRUE
+    execution_eligible = TRUE,
+    evidence_ids = ARRAY['03000000-0000-4000-8000-000000000008'::UUID]
 WHERE id = '03000000-0000-4000-8000-000000000004';

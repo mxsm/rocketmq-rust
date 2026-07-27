@@ -39,6 +39,7 @@ pub enum AuditEventKind {
     StepIntentPersisted,
     StepResultPersisted,
     QuarantineCreated,
+    QuarantineClearRequested,
     QuarantineCleared,
     Cancelled,
 }

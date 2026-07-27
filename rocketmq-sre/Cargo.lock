@@ -3425,8 +3425,10 @@ name = "rocketmq-sre-control-plane"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64",
  "bytes",
  "chrono",
+ "hmac 0.12.1",
  "jsonwebtoken",
  "object_store",
  "reqwest 0.13.4",
@@ -3437,6 +3439,7 @@ dependencies = [
  "rocketmq-sre-model-gateway",
  "semver",
  "serde",
+ "serde_jcs",
  "serde_json",
  "serde_yaml",
  "sha2 0.10.9",

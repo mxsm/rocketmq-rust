@@ -14,7 +14,7 @@ cargo +1.95.0 run --locked -p rocketmq-sre-control-plane
 ```
 
 The Control Plane applies forward-only migrations through
-`0027_supervised_execution.sql` before readiness becomes true. PostgreSQL data
+`0028_supervised_workflow.sql` before readiness becomes true. PostgreSQL data
 is held in the Compose `postgres-data` volume.
 
 The optional development identity graph can be loaded after migration:
@@ -26,8 +26,10 @@ Get-Content -Raw deploy/dev/postgres/phase3-seed.sql |
 ```
 
 The seed is idempotent. It creates one read-only cluster, one incident, one
-model-backed eligible diagnosis, and one model profile/invocation. It does not
-create approvals, executions, leases, credentials, or RocketMQ changes.
+model-backed eligible diagnosis, one model profile, and bounded primary/Critic
+invocation fixtures. It does not create approvals, executions, leases,
+credentials, or RocketMQ changes. The Control Plane integration test reloads
+the seed and verifies its canonical Evidence content hash.
 
 ## Durable tables and invariants
 

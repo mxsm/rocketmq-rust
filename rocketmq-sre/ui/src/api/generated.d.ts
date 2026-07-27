@@ -1092,6 +1092,159 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/plans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create an immutable supervised plan or manual-only runbook */
+        post: operations["createSupervisedPlanV1"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/plans/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read a supervised plan projection */
+        get: operations["getSupervisedPlanV1"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/plans/{id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve an exact plan hash */
+        post: operations["approveSupervisedPlanV1"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/plans/{id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reject an exact plan hash */
+        post: operations["rejectSupervisedPlanV1"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/executions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Submit a current human-approved plan to Change Executor */
+        post: operations["submitSupervisedExecutionV1"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/executions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read a supervised execution projection */
+        get: operations["getSupervisedExecutionV1"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/audit/{correlation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read a bounded append-only supervised audit timeline */
+        get: operations["getSupervisedAuditTimelineV1"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/resource-quarantines": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List scoped active or historical resource quarantines */
+        get: operations["listResourceQuarantinesV1"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/resource-quarantines/{id}/clear": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Clear quarantine with approver scope and current Evidence */
+        post: operations["clearResourceQuarantineV1"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3317,6 +3470,401 @@ export interface components {
             /** Format: date-time */
             observed_at: string;
         };
+        /**
+         * Format: uuid
+         * @description Stable identifier for an immutable action plan.
+         */
+        ActionPlanId: string;
+        /**
+         * Format: uuid
+         * @description Internal identifier for an onboarded cluster.
+         */
+        ClusterId: string;
+        /**
+         * @description Deterministic compensation mode.
+         * @enum {string}
+         */
+        CompensationMode: "automatic" | "manual_takeover" | "not_available";
+        /** @description Compensation behavior frozen by an action descriptor. */
+        CompensationSpec: {
+            mode: components["schemas"]["CompensationMode"];
+            /** @default [] */
+            required_before_fields: string[];
+            /** Format: uint64 */
+            timeout_seconds: number;
+        };
+        /**
+         * Format: uuid
+         * @description Stable identifier for an immutable diagnosis revision.
+         */
+        DiagnosisRevisionId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an evidence snapshot.
+         */
+        EvidenceId: string;
+        /**
+         * @description Closed set of Phase 3 actions that may enter supervised execution.
+         *
+         *     R3 and unknown actions are intentionally not representable.
+         * @enum {string}
+         */
+        ExecutionAction: "observability.logger_level_ttl.v1" | "proxy.scale_out_one.v1" | "proxy.restart_one.v1" | "broker.config.patch_allowlisted.v1" | "topic.config.patch_allowlisted.v1";
+        /**
+         * @description Maximum descriptor-authorized blast radius.
+         * @enum {string}
+         */
+        ImpactScope: "single_resource" | "single_instance" | "one_replica" | "allowlisted_fields";
+        /**
+         * Format: uuid
+         * @description Stable identifier for an SRE incident.
+         */
+        IncidentId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for a model invocation.
+         */
+        ModelInvocationId: string;
+        /**
+         * @description Immutable action-plan lifecycle.
+         * @enum {string}
+         */
+        PlanStatus: "draft" | "needs_critic" | "ready_for_approval" | "in_review" | "approved" | "rejected" | "expired" | "superseded";
+        /** @description One typed and bounded step in an immutable plan. */
+        PlanStep: {
+            action: components["schemas"]["ExecutionAction"];
+            compensation: components["schemas"]["CompensationSpec"];
+            descriptor_version: string;
+            /** @default [] */
+            evidence_ids: components["schemas"]["EvidenceId"][];
+            id: components["schemas"]["PlanStepId"];
+            max_impact: components["schemas"]["ImpactScope"];
+            parameters: unknown;
+            precondition_hash: string;
+            resource: string;
+            /** Format: uint16 */
+            sequence: number;
+            verification: components["schemas"]["VerificationSpec"];
+        };
+        /**
+         * Format: uuid
+         * @description Stable identifier for an immutable action plan step.
+         */
+        PlanStepId: string;
+        /**
+         * Format: uuid
+         * @description Stable tenant boundary identifier.
+         */
+        TenantId: string;
+        /** @description Verification policy frozen by an action descriptor. */
+        VerificationSpec: {
+            /** Format: uint64 */
+            max_wait_seconds: number;
+            /** @default [] */
+            resource_conditions: string[];
+            /** Format: uint64 */
+            stable_window_seconds: number;
+            /** @default [] */
+            technical_slis: string[];
+        };
+        /** @description Immutable supervised action plan bound to one model-backed diagnosis. */
+        ActionPlan: {
+            cluster_id: components["schemas"]["ClusterId"];
+            /** Format: date-time */
+            created_at: string;
+            created_by: string;
+            diagnosis_execution_eligible: boolean;
+            diagnosis_revision: components["schemas"]["DiagnosisRevisionId"];
+            evidence_hash: string;
+            /** Format: date-time */
+            expires_at: string;
+            id: components["schemas"]["ActionPlanId"];
+            incident_id: components["schemas"]["IncidentId"];
+            plan_hash: string;
+            primary_model_invocation_id: components["schemas"]["ModelInvocationId"];
+            schema_version: string;
+            status: components["schemas"]["PlanStatus"];
+            steps: components["schemas"]["PlanStep"][];
+            /** Format: date-time */
+            submitted_at?: string | null;
+            tenant_id: components["schemas"]["TenantId"];
+            /** Format: uint32 */
+            version: number;
+        };
+        /**
+         * Format: uuid
+         * @description Stable identifier for an approval decision.
+         */
+        ApprovalId: string;
+        /** @description Short-lived Control Plane grant accepted only by the Executor audience. */
+        ApprovalGrant: {
+            approval_id: components["schemas"]["ApprovalId"];
+            approver_subject: string;
+            audience: string;
+            cluster_id: components["schemas"]["ClusterId"];
+            /** Format: date-time */
+            expires_at: string;
+            /** Format: date-time */
+            issued_at: string;
+            issuer: string;
+            nonce: string;
+            plan_hash: string;
+            plan_id: components["schemas"]["ActionPlanId"];
+            precondition_hash: string;
+            signature: string;
+            tenant_id: components["schemas"]["TenantId"];
+        };
+        /**
+         * @description Human approval outcome.
+         * @enum {string}
+         */
+        ApprovalDecision: "approved" | "rejected";
+        /**
+         * ApprovalRecord
+         * @description Append-only human decision bound to one exact plan hash.
+         */
+        ApprovalRecord: {
+            approver_role: string;
+            approver_subject: string;
+            cluster_id: components["schemas"]["ClusterId"];
+            /** Format: date-time */
+            decided_at: string;
+            decision: components["schemas"]["ApprovalDecision"];
+            /** Format: date-time */
+            expires_at: string;
+            id: components["schemas"]["ApprovalId"];
+            plan_hash: string;
+            plan_id: components["schemas"]["ActionPlanId"];
+            reason: string;
+            requester_subject: string;
+            tenant_id: components["schemas"]["TenantId"];
+        };
+        /**
+         * Format: uuid
+         * @description Stable identifier for an append-only audit event.
+         */
+        AuditEventId: string;
+        /**
+         * @description Append-only audit event kind for the supervised change timeline.
+         * @enum {string}
+         */
+        AuditEventKind: "plan_created" | "plan_submitted" | "policy_evaluated" | "critic_reviewed" | "approved" | "rejected" | "execution_submitted" | "state_changed" | "step_intent_persisted" | "step_result_persisted" | "quarantine_created" | "quarantine_clear_requested" | "quarantine_cleared" | "cancelled";
+        /**
+         * Format: uuid
+         * @description Identifier propagated across one logical SRE operation.
+         */
+        CorrelationId: string;
+        /**
+         * AuditEvent
+         * @description Sanitized append-only audit event.
+         */
+        AuditEvent: {
+            actor_role: string;
+            actor_subject: string;
+            cluster_id: components["schemas"]["ClusterId"];
+            correlation_id: components["schemas"]["CorrelationId"];
+            details: unknown;
+            event_kind: components["schemas"]["AuditEventKind"];
+            id: components["schemas"]["AuditEventId"];
+            /** Format: date-time */
+            occurred_at: string;
+            reason_code: string;
+            resource_id: string;
+            resource_kind: string;
+            tenant_id: components["schemas"]["TenantId"];
+        };
+        /**
+         * Format: uuid
+         * @description Stable identifier for a supervised execution.
+         */
+        ExecutionId: string;
+        /**
+         * ExecutionRequest
+         * @description Short-lived immutable request submitted to Change Executor.
+         */
+        ExecutionRequest: {
+            approvals: components["schemas"]["ApprovalGrant"][];
+            audience: string;
+            cluster_id: components["schemas"]["ClusterId"];
+            correlation_id: components["schemas"]["CorrelationId"];
+            /** Format: date-time */
+            expires_at: string;
+            id: components["schemas"]["ExecutionId"];
+            idempotency_key: string;
+            /** Format: date-time */
+            issued_at: string;
+            issuer: string;
+            nonce: string;
+            plan: components["schemas"]["ActionPlan"];
+            requested_by: string;
+            schema_version: string;
+            signature: string;
+            tenant_id: components["schemas"]["TenantId"];
+        };
+        /**
+         * ManualRunbookDraft
+         * @description Non-executable fallback produced for rules-only or R3 recommendations.
+         */
+        ManualRunbookDraft: {
+            action_id: string;
+            cluster_id: components["schemas"]["ClusterId"];
+            diagnosis_revision: components["schemas"]["DiagnosisRevisionId"];
+            execution_supported: boolean;
+            incident_id: components["schemas"]["IncidentId"];
+            instructions: string[];
+            reason_code: string;
+            schema_version: string;
+            tenant_id: components["schemas"]["TenantId"];
+            title: string;
+        };
+        /**
+         * Format: uuid
+         * @description Stable identifier for an immutable policy decision.
+         */
+        PolicyDecisionId: string;
+        /**
+         * @description Deterministic effect produced by the versioned Rust policy evaluator.
+         * @enum {string}
+         */
+        PolicyEffect: "allow" | "deny" | "require_approval";
+        /**
+         * PolicyDecision
+         * @description Immutable policy evaluation bound to one exact plan and input digest.
+         */
+        PolicyDecision: {
+            cluster_id: components["schemas"]["ClusterId"];
+            effect: components["schemas"]["PolicyEffect"];
+            /** Format: date-time */
+            evaluated_at: string;
+            evaluated_by: string;
+            id: components["schemas"]["PolicyDecisionId"];
+            input_hash: string;
+            plan_hash: string;
+            plan_id: components["schemas"]["ActionPlanId"];
+            policy_version: string;
+            /** @default [] */
+            reason_codes: string[];
+            tenant_id: components["schemas"]["TenantId"];
+        };
+        /**
+         * Format: uuid
+         * @description Stable identifier for a persistent resource quarantine.
+         */
+        ResourceQuarantineId: string;
+        /**
+         * ResourceQuarantine
+         * @description Persistent fail-closed resource block independent of a temporary lock.
+         */
+        ResourceQuarantine: {
+            action_id?: string | null;
+            /** @default [] */
+            clear_evidence_ids: components["schemas"]["EvidenceId"][];
+            clear_reason?: string | null;
+            /** Format: date-time */
+            cleared_at?: string | null;
+            cleared_by?: string | null;
+            cluster_id: components["schemas"]["ClusterId"];
+            /** Format: date-time */
+            created_at: string;
+            created_by: string;
+            /** @default [] */
+            evidence_ids: components["schemas"]["EvidenceId"][];
+            id: components["schemas"]["ResourceQuarantineId"];
+            reason_code: string;
+            resource_key: string;
+            source_execution_id?: components["schemas"]["ExecutionId"] | null;
+            tenant_id: components["schemas"]["TenantId"];
+        };
+        /** @enum {string} */
+        ActionRisk: "read" | "plan" | "r1" | "r2" | "r3";
+        /** @enum {string} */
+        ExecutionState: "pending" | "prechecking" | "intent_persisted" | "applying" | "unknown" | "reconciling" | "verifying" | "compensating" | "succeeded" | "rolled_back" | "escalated";
+        ErrorEnvelope: {
+            /** @constant */
+            schema_version: "rocketmq-sre.error.v1";
+            code: string;
+            message: string;
+            retryable: boolean;
+            /** Format: uuid */
+            correlation_id: string;
+        };
+        CandidatePlanStep: {
+            action_id: string;
+            descriptor_version: string;
+            resource: string;
+            parameters: Record<string, never>;
+            evidence_ids: string[];
+        };
+        CreatePlanRequest: {
+            /** Format: uuid */
+            cluster_id: string;
+            /** Format: uuid */
+            incident_id: string;
+            /** Format: uuid */
+            diagnosis_revision_id: string;
+            /** Format: date-time */
+            expires_at?: string | null;
+            steps: components["schemas"]["CandidatePlanStep"][];
+        };
+        CreatePlanResponse: {
+            /** @constant */
+            kind: "action_plan";
+            plan: components["schemas"]["ActionPlan"];
+            risk: components["schemas"]["ActionRisk"];
+            policy_decision: components["schemas"]["PolicyDecision"];
+        } | {
+            /** @constant */
+            kind: "manual_runbook";
+            runbook: components["schemas"]["ManualRunbookDraft"];
+        };
+        ActionPlanView: {
+            plan: components["schemas"]["ActionPlan"];
+            risk: components["schemas"]["ActionRisk"];
+            latest_policy_decision: components["schemas"]["PolicyDecision"] | null;
+            latest_approval: components["schemas"]["ApprovalRecord"] | null;
+        };
+        ApprovalDecisionRequest: {
+            plan_hash: string;
+            precondition_hash: string;
+            reason: string;
+            validity_seconds?: number | null;
+        };
+        ApprovalDecisionResponse: {
+            plan: components["schemas"]["ActionPlan"];
+            approval: components["schemas"]["ApprovalRecord"];
+            grant?: components["schemas"]["ApprovalGrant"] | null;
+        };
+        SubmitExecutionRequest: {
+            /** Format: uuid */
+            plan_id: string;
+            plan_hash: string;
+            precondition_hash: string;
+            idempotency_key: string;
+        };
+        ExecutionSubmissionView: {
+            execution: components["schemas"]["ExecutionRequest"];
+            state: components["schemas"]["ExecutionState"];
+            /** Format: date-time */
+            submitted_at: string;
+        };
+        AuditPage: {
+            /** @constant */
+            schema_version: "rocketmq-sre.audit-page.v1";
+            /** Format: uuid */
+            correlation_id: string;
+            items: components["schemas"]["AuditEvent"][];
+            partial: boolean;
+        };
+        QuarantinePage: {
+            /** @constant */
+            schema_version: "rocketmq-sre.resource-quarantine-page.v1";
+            items: components["schemas"]["ResourceQuarantine"][];
+            partial: boolean;
+        };
+        ClearQuarantineRequest: {
+            reason: string;
+            evidence_ids: string[];
+        };
     };
     responses: {
         /** @description Successful scoped response */
@@ -4766,6 +5314,708 @@ export interface operations {
                     "application/json": components["schemas"]["OperationsReport"];
                     "text/markdown": string;
                     "text/html": string;
+                };
+            };
+        };
+    };
+    createSupervisedPlanV1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreatePlanRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatePlanResponse"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getSupervisedPlanV1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActionPlanView"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    approveSupervisedPlanV1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApprovalDecisionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalDecisionResponse"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    rejectSupervisedPlanV1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApprovalDecisionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalDecisionResponse"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    submitSupervisedExecutionV1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubmitExecutionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecutionSubmissionView"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getSupervisedExecutionV1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecutionSubmissionView"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getSupervisedAuditTimelineV1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                correlation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditPage"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listResourceQuarantinesV1: {
+        parameters: {
+            query: {
+                cluster_id: string;
+                include_cleared?: boolean;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuarantinePage"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    clearResourceQuarantineV1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClearQuarantineRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceQuarantine"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
         };

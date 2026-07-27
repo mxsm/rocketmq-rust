@@ -33,8 +33,8 @@ pub enum ControlPlaneError {
     Forbidden { code: &'static str, detail: String },
     #[error("resource was not found")]
     NotFound,
-    #[error("operation conflicts with cluster state")]
-    Conflict { detail: String },
+    #[error("operation conflicts with current state")]
+    Conflict { code: &'static str, detail: String },
     #[error("persistent state is unavailable")]
     Database(#[source] sqlx::Error),
     #[error("identity provider is unavailable")]
@@ -60,7 +60,17 @@ impl ControlPlaneError {
     }
 
     pub(crate) fn conflict(detail: impl Into<String>) -> Self {
-        Self::Conflict { detail: detail.into() }
+        Self::Conflict {
+            code: "capability_mismatch",
+            detail: detail.into(),
+        }
+    }
+
+    pub(crate) fn conflict_code(code: &'static str, detail: impl Into<String>) -> Self {
+        Self::Conflict {
+            code,
+            detail: detail.into(),
+        }
     }
 
     pub(crate) fn forbidden(code: &'static str, detail: impl Into<String>) -> Self {
@@ -79,7 +89,7 @@ impl ControlPlaneError {
             Self::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized_scope", false),
             Self::Forbidden { code, .. } => (StatusCode::FORBIDDEN, code, false),
             Self::NotFound => (StatusCode::NOT_FOUND, "source_unavailable", false),
-            Self::Conflict { .. } => (StatusCode::CONFLICT, "capability_mismatch", false),
+            Self::Conflict { code, .. } => (StatusCode::CONFLICT, code, false),
             Self::Database(_) | Self::IdentityProvider(_) | Self::ObjectStore | Self::Io(_) => {
                 (StatusCode::SERVICE_UNAVAILABLE, "source_unavailable", true)
             }
@@ -91,7 +101,7 @@ impl ControlPlaneError {
             Self::Configuration { detail }
             | Self::Validation { detail, .. }
             | Self::Forbidden { detail, .. }
-            | Self::Conflict { detail }
+            | Self::Conflict { detail, .. }
             | Self::CapabilityDocument { detail } => detail.clone(),
             Self::NotFound => "resource was not found".to_owned(),
             Self::Unauthorized => "an authenticated internal identity is required".to_owned(),

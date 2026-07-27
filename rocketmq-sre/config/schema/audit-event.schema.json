@@ -19,6 +19,7 @@
         "step_intent_persisted",
         "step_result_persisted",
         "quarantine_created",
+        "quarantine_clear_requested",
         "quarantine_cleared",
         "cancelled"
       ],

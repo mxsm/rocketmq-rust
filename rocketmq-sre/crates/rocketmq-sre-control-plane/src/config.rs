@@ -36,6 +36,7 @@ pub struct ControlPlaneConfig {
     database_max_connections: u32,
     shutdown_timeout: Duration,
     internal_token: String,
+    grant_signing_key: String,
     dev_auth_enabled: bool,
     oidc_issuer: Option<String>,
     oidc_audience: Option<String>,
@@ -92,6 +93,20 @@ impl ControlPlaneConfig {
             ));
         }
         let dev_auth_enabled = parse_env("ROCKETMQ_SRE_DEV_AUTH", false)?;
+        let grant_signing_key = match optional_env("ROCKETMQ_SRE_GRANT_SIGNING_KEY") {
+            Some(value) if value.len() >= 32 => value,
+            Some(_) => {
+                return Err(ControlPlaneError::configuration(
+                    "ROCKETMQ_SRE_GRANT_SIGNING_KEY must contain at least 32 bytes",
+                ));
+            }
+            None if dev_auth_enabled => internal_token.clone(),
+            None => {
+                return Err(ControlPlaneError::configuration(
+                    "production mode requires ROCKETMQ_SRE_GRANT_SIGNING_KEY",
+                ));
+            }
+        };
         let oidc_issuer = optional_env("ROCKETMQ_SRE_OIDC_ISSUER");
         let oidc_audience = optional_env("ROCKETMQ_SRE_OIDC_AUDIENCE");
         let oidc_jwks_url = optional_env("ROCKETMQ_SRE_OIDC_JWKS_URL")
@@ -125,6 +140,7 @@ impl ControlPlaneConfig {
             database_max_connections,
             shutdown_timeout: Duration::from_secs(shutdown_seconds),
             internal_token,
+            grant_signing_key,
             dev_auth_enabled,
             oidc_issuer,
             oidc_audience,
@@ -163,6 +179,14 @@ impl ControlPlaneConfig {
     #[must_use]
     pub fn internal_token(&self) -> &str {
         &self.internal_token
+    }
+
+    /// Returns the process-local key used to sign short-lived Executor grants.
+    ///
+    /// The value must never be logged or returned by a public API.
+    #[must_use]
+    pub fn grant_signing_key(&self) -> &str {
+        &self.grant_signing_key
     }
 
     #[must_use]
@@ -204,6 +228,7 @@ impl ControlPlaneConfig {
             database_max_connections: 1,
             shutdown_timeout: Duration::from_secs(1),
             internal_token: "test-internal-token".to_owned(),
+            grant_signing_key: "test-grant-signing-key-at-least-32-bytes".to_owned(),
             dev_auth_enabled: true,
             oidc_issuer: None,
             oidc_audience: None,
@@ -224,6 +249,7 @@ impl Debug for ControlPlaneConfig {
             .field("database_max_connections", &self.database_max_connections)
             .field("shutdown_timeout", &self.shutdown_timeout)
             .field("internal_token", &"[REDACTED]")
+            .field("grant_signing_key", &"[REDACTED]")
             .field("dev_auth_enabled", &self.dev_auth_enabled)
             .field("oidc_issuer", &self.oidc_issuer)
             .field("oidc_audience", &self.oidc_audience)
@@ -270,6 +296,7 @@ mod tests {
         assert!(debug.contains("[REDACTED]"));
         assert!(!debug.contains("postgres://redacted"));
         assert!(!debug.contains("test-internal-token"));
+        assert!(!debug.contains("test-grant-signing-key-at-least-32-bytes"));
         assert!(!debug.contains("internal-dashboard"));
         assert!(debug.contains("dashboard_deep_link_origin_count"));
     }

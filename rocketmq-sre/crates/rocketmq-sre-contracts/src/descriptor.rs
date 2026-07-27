@@ -53,7 +53,7 @@ pub struct Deprecation {
 }
 
 /// Risk taxonomy reserved for future action planning and approval.
-#[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ActionRisk {
     Read,

@@ -17,8 +17,9 @@ repository instructions also apply unless this file is more specific.
   it must not import the MCP server crate or its Rust DTOs.
 - The probe may use producer and consumer APIs only. It must never enable an
   admin or mutation feature.
-- The executor and execution agent remain disabled until a later phase adds an
-  explicit approval and policy design.
+- Plan, policy, approval, and audit code must not import target mutation
+  drivers. The Executor and Execution Agent remain mutation-disabled until
+  P3-05 enables the isolated Agent boundary with leases and fencing.
 - Do not expose credentials, message bodies, access tokens, TLS material, or
   full configuration values through logs, evidence, diagnostics, or errors.
 
