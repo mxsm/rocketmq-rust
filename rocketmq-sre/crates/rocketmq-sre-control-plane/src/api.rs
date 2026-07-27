@@ -523,6 +523,7 @@ pub(crate) struct AppState {
     pub(crate) model_gateway: ModelGatewayService,
     pub(crate) observability: SreObservability,
     pub(crate) observability_status: ObservabilityStatusHandle,
+    pub(crate) operations: crate::operator_workbench::OperatorWorkbenchService,
     pub(crate) postmortems: crate::postmortem::PostmortemService,
     pub(crate) sre_metrics: Arc<SreMetrics>,
     pub(crate) slo: SloService,
@@ -580,6 +581,7 @@ fn build_routers_with_auth(
         model_gateway.clone(),
         workflow.clone(),
     );
+    let operations = crate::operator_workbench::OperatorWorkbenchService::new(repository.clone());
     let connector_channel = PostgresConnectorChannelService::postgres(repository.clone(), internal_token.clone())?;
     let slo = SloService::new(
         repository.clone(),
@@ -616,6 +618,7 @@ fn build_routers_with_auth(
         model_gateway,
         observability,
         observability_status: ObservabilityStatusHandle::default(),
+        operations,
         postmortems,
         sre_metrics,
         slo: slo.clone(),
@@ -635,6 +638,7 @@ fn build_routers_with_auth(
         .route("/v1/capabilities/coverage", get(coverage))
         .route("/v1/capabilities/phase2-contract", get(phase2_contract_manifest))
         .merge(crate::phase1_api::public_routes())
+        .merge(crate::operator_workbench::routes())
         .merge(crate::postmortem::routes())
         .with_state(state.clone())
         .layer(middleware::from_fn_with_state(

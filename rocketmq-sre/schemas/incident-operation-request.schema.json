@@ -1,0 +1,139 @@
+{
+  "$defs": {
+    "IncidentId": {
+      "description": "Stable identifier for an SRE incident.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Bounded operator action applied to incident metadata.\n\nThese actions never call RocketMQ mutation APIs. Reopening or splitting\ncreates a linked incident instead of mutating a terminal incident.",
+  "oneOf": [
+    {
+      "properties": {
+        "action": {
+          "const": "acknowledge",
+          "type": "string"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "action": {
+          "const": "assign",
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "owner",
+        "reason"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "action": {
+          "const": "merge",
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "target_incident_id": {
+          "$ref": "#/$defs/IncidentId"
+        }
+      },
+      "required": [
+        "action",
+        "target_incident_id",
+        "reason"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "action": {
+          "const": "split",
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "resource": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "symptom_family": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "title",
+        "symptom_family",
+        "reason"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "action": {
+          "const": "suppress",
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "until": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "until",
+        "reason"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "action": {
+          "const": "reopen",
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "reason"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "IncidentOperationRequest"
+}

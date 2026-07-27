@@ -830,15 +830,34 @@ async fn insert_correlated_incident(
     correlation_id: CorrelationId,
 ) -> Result<(), ControlPlaneError> {
     let resource = canonical_resource(&event.affected_resource);
+    let (sla_ack_due_at, sla_resolve_due_at) = match event.severity {
+        rocketmq_sre_contracts::AlertSeverity::Critical => (
+            event.occurred_at + Duration::minutes(15),
+            event.occurred_at + Duration::hours(4),
+        ),
+        rocketmq_sre_contracts::AlertSeverity::Error => (
+            event.occurred_at + Duration::minutes(30),
+            event.occurred_at + Duration::hours(8),
+        ),
+        rocketmq_sre_contracts::AlertSeverity::Warning => (
+            event.occurred_at + Duration::hours(2),
+            event.occurred_at + Duration::hours(24),
+        ),
+        rocketmq_sre_contracts::AlertSeverity::Info => (
+            event.occurred_at + Duration::hours(8),
+            event.occurred_at + Duration::hours(72),
+        ),
+    };
     sqlx::query(
         "INSERT INTO sre_incidents (
             id, tenant_id, cluster_id, title, resource, symptom_family,
             fingerprint, status, workflow_checkpoint, created_by_subject,
             created_at, updated_at, alert_correlation_key, severity, owner_name,
-            occurrence_count, last_alert_at, reopened_from_incident_id
+            occurrence_count, last_alert_at, reopened_from_incident_id,
+            sla_ack_due_at, sla_resolve_due_at
          ) VALUES (
             $1, $2, $3, $4, $5, $6, $7, 'new', $8, $9,
-            $10, $10, $11, $12, $13, 0, $10, $14
+            $10, $10, $11, $12, $13, 0, $10, $14, $15, $16
          )",
     )
     .bind(incident_id.as_uuid())
@@ -859,6 +878,8 @@ async fn insert_correlated_incident(
     .bind(severity_name(event.severity))
     .bind(owner)
     .bind(recurrence_from.map(IncidentId::as_uuid))
+    .bind(sla_ack_due_at)
+    .bind(sla_resolve_due_at)
     .execute(&mut **transaction)
     .await?;
     let timeline_id = deterministic_uuid(&format!("incident-created:{incident_id}"));

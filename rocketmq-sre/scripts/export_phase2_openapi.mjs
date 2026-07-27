@@ -39,6 +39,11 @@ const schemaFiles = new Map([
   ["PostmortemRevision", "postmortem-revision.schema.json"],
   ["ActionItem", "action-item.schema.json"],
   ["Phase2ContractManifest", "phase2-contract-manifest.schema.json"],
+  ["IncidentOperationRequest", "incident-operation-request.schema.json"],
+  ["IncidentOperationResult", "incident-operation-result.schema.json"],
+  ["IncidentOperationsState", "incident-operations-state.schema.json"],
+  ["ShiftHandoffSummary", "shift-handoff-summary.schema.json"],
+  ["OperationsReport", "operations-report.schema.json"],
 ]);
 
 function rewriteReferences(value, componentName) {
@@ -115,6 +120,24 @@ const dateTime = {
   type: "string",
   format: "date-time",
 };
+const inspectionTemplates = [
+  "cluster_health",
+  "consumer",
+  "broker",
+  "telemetry",
+  "full_cluster",
+  "producer_consumer",
+  "store_ha",
+  "routing_proxy",
+  "security",
+  "upgrade",
+  "disaster_recovery",
+];
+
+document.components.schemas.CreateInspectionRequest.properties.template.enum =
+  inspectionTemplates;
+document.components.schemas.InspectionRun.properties.template.enum =
+  inspectionTemplates;
 
 Object.assign(document.components.schemas, {
   AlertmanagerAlertRequest: {
@@ -1280,6 +1303,119 @@ document.paths["/v1/action-items/{id}"] = {
           "application/json": {
             schema: { $ref: "#/components/schemas/ActionItem" },
           },
+        },
+      },
+    },
+  },
+};
+
+document.paths["/v1/incidents/{id}/operations"] = {
+  get: {
+    operationId: "getIncidentOperations",
+    parameters: [{ $ref: "#/components/parameters/Id" }],
+    responses: {
+      200: {
+        description: "Read-only cluster boundary and mutable SRE incident metadata state",
+        content: {
+          "application/json": {
+            schema: { $ref: "#/components/schemas/IncidentOperationsState" },
+          },
+        },
+      },
+    },
+  },
+  post: {
+    operationId: "applyIncidentOperation",
+    "x-max-body-bytes": 16384,
+    parameters: [{ $ref: "#/components/parameters/Id" }],
+    requestBody: {
+      required: true,
+      content: {
+        "application/json": {
+          schema: { $ref: "#/components/schemas/IncidentOperationRequest" },
+        },
+      },
+    },
+    responses: {
+      200: {
+        description:
+          "Audited incident metadata operation; terminal reopen creates a linked incident",
+        content: {
+          "application/json": {
+            schema: { $ref: "#/components/schemas/IncidentOperationResult" },
+          },
+        },
+      },
+    },
+  },
+};
+
+document.paths["/v1/operations/shift-handoff"] = {
+  get: {
+    operationId: "getShiftHandoff",
+    parameters: [
+      {
+        name: "cluster_id",
+        in: "query",
+        required: false,
+        schema: uuid,
+      },
+    ],
+    responses: {
+      200: {
+        description:
+          "Bounded shift handoff across incidents, changes, expiry, capacity, action items and source gaps",
+        content: {
+          "application/json": {
+            schema: { $ref: "#/components/schemas/ShiftHandoffSummary" },
+          },
+        },
+      },
+    },
+  },
+};
+
+document.paths["/v1/operations/reports"] = {
+  get: {
+    operationId: "getOperationsReport",
+    parameters: [
+      {
+        name: "cluster_id",
+        in: "query",
+        required: false,
+        schema: uuid,
+      },
+      {
+        name: "window",
+        in: "query",
+        required: false,
+        schema: {
+          type: "string",
+          enum: ["daily", "weekly"],
+          default: "daily",
+        },
+      },
+      {
+        name: "format",
+        in: "query",
+        required: false,
+        schema: {
+          type: "string",
+          enum: ["json", "markdown", "html"],
+          default: "json",
+        },
+      },
+    ],
+    responses: {
+      200: {
+        description:
+          "Daily or weekly operations report as JSON or a downloadable Markdown/HTML artifact",
+        content: {
+          "application/json": {
+            schema: { $ref: "#/components/schemas/OperationsReport" },
+          },
+          "text/markdown": { schema: { type: "string" } },
+          "text/html": { schema: { type: "string" } },
         },
       },
     },

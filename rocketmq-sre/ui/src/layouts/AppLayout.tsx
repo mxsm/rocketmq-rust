@@ -3,6 +3,7 @@ import {
   BookOpenCheck,
   Bot,
   Boxes,
+  CalendarCheck2,
   CircleHelp,
   ClipboardList,
   Clock3,
@@ -60,6 +61,7 @@ const groups = [
       { to: "/incidents", label: "事件诊断", icon: Siren },
       { to: "/inspections", label: "巡检建议", icon: ListChecks },
       { to: "/forecasts", label: "容量预测", icon: TrendingUp },
+      { to: "/operations", label: "值班运营", icon: CalendarCheck2 },
       {
         to: "/action-items",
         label: "复盘改进",
@@ -178,7 +180,7 @@ export function AppLayout() {
             </div>
           </div>
           <div className="sidebar-meta">
-            <span>v0.2.0 · Phase 01</span>
+            <span>v0.2.0 · Phase 02</span>
             <span>execution_supported=false</span>
           </div>
         </aside>

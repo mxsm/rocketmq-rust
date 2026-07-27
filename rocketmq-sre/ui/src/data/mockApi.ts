@@ -5,6 +5,8 @@ import type {
   CollectionEnvelope,
   ConversationView,
   IncidentTopologyView,
+  IncidentOperationRequest,
+  IncidentOperationResult,
   IncidentView,
   InspectionView,
   InvestigationView,
@@ -47,6 +49,11 @@ import {
   demoSimulation,
   demoUpgradeReadiness,
 } from "./phase2ForecastDemo";
+import {
+  demoIncidentOperations,
+  demoOperationsReport,
+  demoShiftHandoff,
+} from "./phase2OperationsDemo";
 
 const WAIT_MS = 90;
 const mockPostmortems: PostmortemView[] = [];
@@ -88,6 +95,7 @@ export function createMockSreApi(auth?: ApiRequestContext): SreApi {
   const evidence = clone(phase1Evidence.items);
   const postmortems = mockPostmortems;
   const actionItems = mockActionItems;
+  const incidentOperations = clone(demoIncidentOperations);
 
   const scope = (clusterId: string) => {
     if (auth && !auth.clusterIds.includes(clusterId)) {
@@ -452,6 +460,150 @@ export function createMockSreApi(auth?: ApiRequestContext): SreApi {
           (revision) => revision.partial,
         ),
         warnings: [],
+      });
+    },
+    getIncidentOperations: async (id, signal) => {
+      await wait(signal);
+      const state =
+        incidentOperations[id] ?? unavailable("incident operations");
+      scope(state.cluster_id);
+      return clone(state);
+    },
+    applyIncidentOperation: async (
+      id,
+      input: IncidentOperationRequest,
+      signal,
+    ) => {
+      await wait(signal);
+      const state =
+        incidentOperations[id] ?? unavailable("incident operations");
+      const incident =
+        incidents.find((item) => item.incident.id === id) ??
+        unavailable("incident");
+      scope(state.cluster_id);
+      const now = new Date().toISOString();
+      let relatedIncidentId: string | undefined;
+      switch (input.action) {
+        case "acknowledge":
+          state.acknowledged_by ??= auth?.subject ?? "demo-operator";
+          state.sla.acknowledged_at ??= now;
+          state.sla.acknowledgement_breached = false;
+          break;
+        case "assign":
+          state.owner = input.owner;
+          incident.incident.owner = input.owner;
+          break;
+        case "suppress":
+          state.suppressed_until = input.until;
+          state.suppression_reason = input.reason;
+          break;
+        case "merge":
+          state.merged_into_incident_id = input.target_incident_id;
+          relatedIncidentId = input.target_incident_id;
+          break;
+        case "split":
+          relatedIncidentId = crypto.randomUUID();
+          state.split_incident_ids.push(relatedIncidentId);
+          break;
+        case "reopen":
+          relatedIncidentId = crypto.randomUUID();
+          break;
+      }
+      state.updated_at = now;
+      const timeline = {
+        id: crypto.randomUUID(),
+        tenant_id: state.tenant_id,
+        cluster_id: state.cluster_id,
+        incident_id: id,
+        event_type: `incident_${input.action}`,
+        summary: `Incident ${input.action}`,
+        details: {
+          related_incident_id: relatedIncidentId,
+          cluster_mutation_performed: false,
+        },
+        correlation_id: crypto.randomUUID(),
+        actor: {
+          subject: auth?.subject ?? "demo-operator",
+        },
+        occurred_at: now,
+      };
+      incident.timeline.push(timeline);
+      return clone<IncidentOperationResult>({
+        schema_version: "rocketmq-sre.incident-operation-result.v1",
+        state,
+        related_incident_id: relatedIncidentId,
+        timeline_event: timeline,
+        cluster_mutation_performed: false,
+      });
+    },
+    getShiftHandoff: async (clusterId, signal) => {
+      await wait(signal);
+      if (clusterId) {
+        scope(clusterId);
+      }
+      const summary = clone(demoShiftHandoff);
+      if (clusterId && clusterId !== summary.unresolved_incidents[0]?.cluster_id) {
+        for (const key of [
+          "new_incidents",
+          "unresolved_incidents",
+          "risk_trends",
+          "recent_changes",
+          "expiring_certificates",
+          "capacity_risks",
+          "overdue_action_items",
+          "source_gaps",
+        ] as const) {
+          summary[key] = [];
+        }
+      }
+      return summary;
+    },
+    getOperationsReport: async (window, clusterId, signal) => {
+      await wait(signal);
+      if (clusterId) {
+        scope(clusterId);
+      }
+      const report = clone(demoOperationsReport);
+      report.window = window;
+      const end = new Date(report.window_end);
+      report.window_start = new Date(
+        end.getTime() -
+          (window === "weekly" ? 7 : 1) * 24 * 60 * 60 * 1_000,
+      ).toISOString();
+      if (clusterId && clusterId !== report.worst_clusters[0]?.cluster_id) {
+        report.worst_clusters = [];
+        report.slo_burns = [];
+        report.diagnostic_pack_findings = [];
+        report.repeat_incidents = [];
+        report.forecast_errors = [];
+        report.source_gaps = [];
+        report.forecast_mean_absolute_error = null;
+      }
+      return report;
+    },
+    downloadOperationsReport: async (
+      window,
+      format,
+      clusterId,
+      signal,
+    ) => {
+      await wait(signal);
+      if (clusterId) {
+        scope(clusterId);
+      }
+      const report = {
+        ...clone(demoOperationsReport),
+        window,
+      };
+      const content =
+        format === "html"
+          ? `<h1>RocketMQ AI SRE ${window} report</h1><p>RocketMQ mutations: 0</p>`
+          : `# RocketMQ AI SRE ${window} report\n\n- RocketMQ mutations: 0\n`;
+      return new Blob([content, JSON.stringify(report)], {
+        type:
+          format === "html"
+            ? "text/html; charset=utf-8"
+            : "text/markdown; charset=utf-8",
       });
     },
     createPostmortem: async (incidentId, _input, signal) => {

@@ -68,6 +68,7 @@ mod tests {
         "/v1/incidents/{id}",
         "/v1/incidents/{id}/diagnose",
         "/v1/incidents/{id}/notes",
+        "/v1/incidents/{id}/operations",
         "/v1/incidents/{id}/postmortems",
         "/v1/incidents/{id}/timeline",
         "/v1/incidents/{id}/topology",
@@ -93,6 +94,8 @@ mod tests {
         "/v1/models/invocations",
         "/v1/models/status",
         "/v1/openapi.json",
+        "/v1/operations/reports",
+        "/v1/operations/shift-handoff",
         "/v1/postmortems/{id}",
         "/v1/postmortems/{id}/publish",
         "/v1/recommendations",
@@ -181,6 +184,11 @@ mod tests {
             "PostmortemRevision",
             "ActionItem",
             "Phase2ContractManifest",
+            "IncidentOperationRequest",
+            "IncidentOperationResult",
+            "IncidentOperationsState",
+            "ShiftHandoffSummary",
+            "OperationsReport",
         ] {
             assert!(schemas.contains_key(required), "missing Phase 2 schema {required}");
         }

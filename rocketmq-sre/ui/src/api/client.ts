@@ -20,6 +20,9 @@ import type {
   EvidenceRecord,
   FleetHealthReport,
   IncidentTopologyView,
+  IncidentOperationRequest,
+  IncidentOperationResult,
+  IncidentOperationsState,
   IncidentView,
   InspectionReport,
   InspectionView,
@@ -29,6 +32,8 @@ import type {
   ModelCapabilitiesResponse,
   OnboardClusterRequest,
   OnboardOutcome,
+  OperationsReport,
+  OperationsReportWindow,
   Phase2ContractManifest,
   PostmortemPatchRequest,
   PostmortemPublishRequest,
@@ -38,6 +43,7 @@ import type {
   Recommendation,
   RecommendationDispositionRequest,
   ServiceStatus,
+  ShiftHandoffSummary,
   TopologySnapshot,
   UpgradeReadinessReport,
   WhatIfSimulation,
@@ -110,6 +116,26 @@ async function request<T>(
     return undefined as T;
   }
   return (await response.json()) as T;
+}
+
+async function download(
+  path: string,
+  auth?: ApiRequestContext,
+  signal?: AbortSignal,
+): Promise<Blob> {
+  const response = await fetch(path, {
+    headers: requestHeaders({ auth }),
+    credentials: "same-origin",
+    signal,
+  });
+  if (!response.ok) {
+    throw new ApiError(
+      response.status,
+      response.status === 403 ? "cluster_not_allowed" : "source_unavailable",
+      "operations report download is unavailable",
+    );
+  }
+  return response.blob();
 }
 
 function query(
@@ -237,6 +263,30 @@ export interface SreApi {
     id: string,
     signal?: AbortSignal,
   ) => Promise<IncidentTopologyView>;
+  getIncidentOperations: (
+    id: string,
+    signal?: AbortSignal,
+  ) => Promise<IncidentOperationsState>;
+  applyIncidentOperation: (
+    id: string,
+    input: IncidentOperationRequest,
+    signal?: AbortSignal,
+  ) => Promise<IncidentOperationResult>;
+  getShiftHandoff: (
+    clusterId?: string,
+    signal?: AbortSignal,
+  ) => Promise<ShiftHandoffSummary>;
+  getOperationsReport: (
+    window: OperationsReportWindow,
+    clusterId?: string,
+    signal?: AbortSignal,
+  ) => Promise<OperationsReport>;
+  downloadOperationsReport: (
+    window: OperationsReportWindow,
+    format: "markdown" | "html",
+    clusterId?: string,
+    signal?: AbortSignal,
+  ) => Promise<Blob>;
   createPostmortem: (
     incidentId: string,
     input?: CreatePostmortemRequest,
@@ -456,6 +506,43 @@ export function createHttpSreApi(auth?: ApiRequestContext): SreApi {
     getIncidentTopology: (id, signal) =>
       get<IncidentTopologyView>(
         `/v1/incidents/${encodeURIComponent(id)}/topology`,
+        signal,
+      ),
+    getIncidentOperations: (id, signal) =>
+      get<IncidentOperationsState>(
+        `/v1/incidents/${encodeURIComponent(id)}/operations`,
+        signal,
+      ),
+    applyIncidentOperation: (id, input, signal) =>
+      post<IncidentOperationResult>(
+        `/v1/incidents/${encodeURIComponent(id)}/operations`,
+        input,
+        signal,
+      ),
+    getShiftHandoff: (clusterId, signal) =>
+      get<ShiftHandoffSummary>(
+        query("/v1/operations/shift-handoff", {
+          cluster_id: clusterId,
+        }),
+        signal,
+      ),
+    getOperationsReport: (window, clusterId, signal) =>
+      get<OperationsReport>(
+        query("/v1/operations/reports", {
+          cluster_id: clusterId,
+          window,
+          format: "json",
+        }),
+        signal,
+      ),
+    downloadOperationsReport: (window, format, clusterId, signal) =>
+      download(
+        query("/v1/operations/reports", {
+          cluster_id: clusterId,
+          window,
+          format,
+        }),
+        auth,
         signal,
       ),
     createPostmortem: (incidentId, input = {}, signal) =>

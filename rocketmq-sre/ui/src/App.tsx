@@ -98,6 +98,11 @@ const ActionItemsPage = lazy(() =>
     default: module.ActionItemsPage,
   })),
 );
+const OperationsPage = lazy(() =>
+  import("./pages/OperationsPage").then((module) => ({
+    default: module.OperationsPage,
+  })),
+);
 
 function RouteLoading() {
   return (
@@ -143,6 +148,7 @@ const router = createBrowserRouter([
         element: <PostmortemDetailPage />,
       },
       { path: "action-items", element: <ActionItemsPage /> },
+      { path: "operations", element: <OperationsPage /> },
       { path: "inspections", element: <InspectionsPage /> },
       { path: "forecasts", element: <ForecastPage /> },
       {

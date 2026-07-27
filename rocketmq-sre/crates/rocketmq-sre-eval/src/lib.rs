@@ -36,10 +36,15 @@ use rocketmq_sre_contracts::EvidenceQuery;
 use rocketmq_sre_contracts::EvidenceSnapshot;
 use rocketmq_sre_contracts::FleetHealthReport;
 use rocketmq_sre_contracts::Incident;
+use rocketmq_sre_contracts::IncidentOperationRequest;
+use rocketmq_sre_contracts::IncidentOperationResult;
+use rocketmq_sre_contracts::IncidentOperationsState;
 use rocketmq_sre_contracts::NotificationDelivery;
+use rocketmq_sre_contracts::OperationsReport;
 use rocketmq_sre_contracts::Phase2ContractManifest;
 use rocketmq_sre_contracts::PostmortemDraft;
 use rocketmq_sre_contracts::PostmortemRevision;
+use rocketmq_sre_contracts::ShiftHandoffSummary;
 use rocketmq_sre_contracts::TopologySnapshot;
 use rocketmq_sre_contracts::UpgradeReadinessReport;
 use rocketmq_sre_contracts::WhatIfSimulation;
@@ -286,6 +291,26 @@ fn generated_schemas() -> Result<Vec<(&'static str, serde_json::Value)>, EvalErr
         (
             "phase2-contract-manifest.schema.json",
             serde_json::to_value(schema_for!(Phase2ContractManifest))?,
+        ),
+        (
+            "incident-operation-request.schema.json",
+            serde_json::to_value(schema_for!(IncidentOperationRequest))?,
+        ),
+        (
+            "incident-operation-result.schema.json",
+            serde_json::to_value(schema_for!(IncidentOperationResult))?,
+        ),
+        (
+            "incident-operations-state.schema.json",
+            serde_json::to_value(schema_for!(IncidentOperationsState))?,
+        ),
+        (
+            "shift-handoff-summary.schema.json",
+            serde_json::to_value(schema_for!(ShiftHandoffSummary))?,
+        ),
+        (
+            "operations-report.schema.json",
+            serde_json::to_value(schema_for!(OperationsReport))?,
         ),
     ])
 }

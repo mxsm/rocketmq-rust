@@ -297,6 +297,77 @@ fn template_packs(template: InspectionTemplate) -> &'static [&'static str] {
             "proxy-connectivity.v1",
             "auth-failure.v1",
         ],
+        InspectionTemplate::FullCluster => &[
+            "cluster-topology.v1",
+            "broker-health.v1",
+            "consumer-lag.v2",
+            "consumer-runtime.v1",
+            "store-pressure.v1",
+            "store-integrity.v1",
+            "broker-ha.v1",
+            "controller-ha.v1",
+            "namesrv-route.v1",
+            "proxy-connectivity.v1",
+            "security-posture.v1",
+            "upgrade-readiness.v1",
+            "capacity-runway.v1",
+            "dr-readiness.v1",
+            "telemetry-pipeline.v1",
+            "change-regression.v1",
+        ],
+        InspectionTemplate::ProducerConsumer => &[
+            "send-latency.v1",
+            "consumer-lag.v2",
+            "consumer-runtime.v1",
+            "retry-dlq.v1",
+            "transaction-message.v1",
+            "pop-revive.v1",
+            "timer-backlog.v1",
+            "queue-hotspot.v1",
+            "topic-subscription-config.v1",
+        ],
+        InspectionTemplate::StoreHa => &[
+            "broker-health.v1",
+            "store-pressure.v1",
+            "store-integrity.v1",
+            "rocksdb-health.v1",
+            "tiered-store.v1",
+            "broker-ha.v1",
+            "controller-ha.v1",
+            "cold-data-flow.v1",
+        ],
+        InspectionTemplate::RoutingProxy => &[
+            "cluster-topology.v1",
+            "namesrv-route.v1",
+            "static-topic-route.v1",
+            "proxy-connectivity.v1",
+            "send-latency.v1",
+            "deployment-drift.v1",
+        ],
+        InspectionTemplate::Security => &[
+            "security-posture.v1",
+            "auth-failure.v1",
+            "proxy-connectivity.v1",
+            "runtime-saturation.v1",
+        ],
+        InspectionTemplate::Upgrade => &[
+            "upgrade-readiness.v1",
+            "deployment-drift.v1",
+            "change-regression.v1",
+            "capacity-runway.v1",
+            "broker-ha.v1",
+            "controller-ha.v1",
+            "store-integrity.v1",
+        ],
+        InspectionTemplate::DisasterRecovery => &[
+            "dr-readiness.v1",
+            "broker-ha.v1",
+            "controller-ha.v1",
+            "store-integrity.v1",
+            "capacity-runway.v1",
+            "cold-data-flow.v1",
+            "security-posture.v1",
+        ],
     }
 }
 
@@ -465,12 +536,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_phase_one_templates_have_read_only_packs() {
+    fn all_supported_templates_have_read_only_packs() {
         for template in [
             InspectionTemplate::ClusterHealth,
             InspectionTemplate::Consumer,
             InspectionTemplate::Broker,
             InspectionTemplate::Telemetry,
+            InspectionTemplate::FullCluster,
+            InspectionTemplate::ProducerConsumer,
+            InspectionTemplate::StoreHa,
+            InspectionTemplate::RoutingProxy,
+            InspectionTemplate::Security,
+            InspectionTemplate::Upgrade,
+            InspectionTemplate::DisasterRecovery,
         ] {
             assert!(!template_packs(template).is_empty());
         }

@@ -1044,6 +1044,54 @@ export interface paths {
         patch: operations["patchActionItem"];
         trace?: never;
     };
+    "/v1/incidents/{id}/operations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getIncidentOperations"];
+        put?: never;
+        post: operations["applyIncidentOperation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/operations/shift-handoff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getShiftHandoff"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/operations/reports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getOperationsReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1139,7 +1187,7 @@ export interface components {
             /** Format: uuid */
             cluster_id: string;
             /** @enum {string} */
-            template: "cluster_health" | "consumer" | "broker" | "telemetry";
+            template: "cluster_health" | "consumer" | "broker" | "telemetry" | "full_cluster" | "producer_consumer" | "store_ha" | "routing_proxy" | "security" | "upgrade" | "disaster_recovery";
             schedule?: string;
         };
         RecommendationDispositionRequest: {
@@ -1223,7 +1271,7 @@ export interface components {
             /** Format: uuid */
             cluster_id: string;
             /** @enum {string} */
-            template: "cluster_health" | "consumer" | "broker" | "telemetry";
+            template: "cluster_health" | "consumer" | "broker" | "telemetry" | "full_cluster" | "producer_consumer" | "store_ha" | "routing_proxy" | "security" | "upgrade" | "disaster_recovery";
             /** @enum {string} */
             status: "scheduled" | "running" | "needs_evidence" | "completed" | "failed" | "cancelled";
             schedule?: string | null;
@@ -2643,6 +2691,297 @@ export interface components {
          * @enum {string}
          */
         Phase2ContractManifest__ReadOnlyOperation: "read_alerts" | "read_topology" | "read_slo_health" | "read_forecasts" | "run_simulation" | "read_readiness" | "manage_postmortem_metadata" | "manage_action_item_metadata";
+        /**
+         * IncidentOperationRequest
+         * @description Bounded operator action applied to incident metadata.
+         *
+         *     These actions never call RocketMQ mutation APIs. Reopening or splitting
+         *     creates a linked incident instead of mutating a terminal incident.
+         */
+        IncidentOperationRequest: {
+            /** @constant */
+            action: "acknowledge";
+            note?: string | null;
+        } | {
+            /** @constant */
+            action: "assign";
+            owner: string;
+            reason: string;
+        } | {
+            /** @constant */
+            action: "merge";
+            reason: string;
+            target_incident_id: components["schemas"]["IncidentOperationRequest__IncidentId"];
+        } | {
+            /** @constant */
+            action: "split";
+            reason: string;
+            resource?: string | null;
+            symptom_family: string;
+            title: string;
+        } | {
+            /** @constant */
+            action: "suppress";
+            reason: string;
+            /** Format: date-time */
+            until: string;
+        } | {
+            /** @constant */
+            action: "reopen";
+            reason: string;
+        };
+        /**
+         * Format: uuid
+         * @description Stable identifier for an SRE incident.
+         */
+        IncidentOperationRequest__IncidentId: string;
+        /**
+         * IncidentOperationResult
+         * @description Result returned after an incident operator action.
+         */
+        IncidentOperationResult: {
+            cluster_mutation_performed: boolean;
+            related_incident_id?: components["schemas"]["IncidentOperationResult__IncidentId"] | null;
+            schema_version: string;
+            state: components["schemas"]["IncidentOperationResult__IncidentOperationsState"];
+            timeline_event: components["schemas"]["IncidentOperationResult__TimelineEvent"];
+        };
+        /**
+         * Format: uuid
+         * @description Internal identifier for an onboarded cluster.
+         */
+        IncidentOperationResult__ClusterId: string;
+        /**
+         * Format: uuid
+         * @description Identifier propagated across one logical SRE operation.
+         */
+        IncidentOperationResult__CorrelationId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an SRE incident.
+         */
+        IncidentOperationResult__IncidentId: string;
+        /** @description Read model for incident ownership and operator state. */
+        IncidentOperationResult__IncidentOperationsState: {
+            acknowledged_by?: string | null;
+            cluster_id: components["schemas"]["IncidentOperationResult__ClusterId"];
+            incident_id: components["schemas"]["IncidentOperationResult__IncidentId"];
+            merged_into_incident_id?: components["schemas"]["IncidentOperationResult__IncidentId"] | null;
+            owner: string;
+            schema_version: string;
+            sla: components["schemas"]["IncidentOperationResult__IncidentSlaState"];
+            split_incident_ids: components["schemas"]["IncidentOperationResult__IncidentId"][];
+            /** Format: date-time */
+            suppressed_until?: string | null;
+            suppression_reason?: string | null;
+            tenant_id: components["schemas"]["IncidentOperationResult__TenantId"];
+            /** Format: date-time */
+            updated_at: string;
+        };
+        /** @description Current SLA clocks associated with one incident. */
+        IncidentOperationResult__IncidentSlaState: {
+            /** Format: date-time */
+            acknowledged_at?: string | null;
+            acknowledgement_breached: boolean;
+            /** Format: date-time */
+            acknowledgement_due_at: string;
+            resolution_breached: boolean;
+            /** Format: date-time */
+            resolution_due_at: string;
+        };
+        /**
+         * Format: uuid
+         * @description Stable identifier for a multi-step investigation.
+         */
+        IncidentOperationResult__InvestigationId: string;
+        /**
+         * Format: uuid
+         * @description Stable tenant boundary identifier.
+         */
+        IncidentOperationResult__TenantId: string;
+        /** @description Immutable timeline entry shared by investigations and incidents. */
+        IncidentOperationResult__TimelineEvent: {
+            actor: components["schemas"]["IncidentOperationResult__WorkflowActor"];
+            cluster_id: components["schemas"]["IncidentOperationResult__ClusterId"];
+            correlation_id: components["schemas"]["IncidentOperationResult__CorrelationId"];
+            details: unknown;
+            event_type: string;
+            id: components["schemas"]["IncidentOperationResult__TimelineEventId"];
+            incident_id?: components["schemas"]["IncidentOperationResult__IncidentId"] | null;
+            investigation_id?: components["schemas"]["IncidentOperationResult__InvestigationId"] | null;
+            /** Format: date-time */
+            occurred_at: string;
+            summary: string;
+            tenant_id: components["schemas"]["IncidentOperationResult__TenantId"];
+        };
+        /**
+         * Format: uuid
+         * @description Stable identifier for a workflow timeline event.
+         */
+        IncidentOperationResult__TimelineEventId: string;
+        /** @description Identity that caused a workflow event. */
+        IncidentOperationResult__WorkflowActor: {
+            display_name?: string | null;
+            subject: string;
+        };
+        /**
+         * IncidentOperationsState
+         * @description Read model for incident ownership and operator state.
+         */
+        IncidentOperationsState: {
+            acknowledged_by?: string | null;
+            cluster_id: components["schemas"]["IncidentOperationsState__ClusterId"];
+            incident_id: components["schemas"]["IncidentOperationsState__IncidentId"];
+            merged_into_incident_id?: components["schemas"]["IncidentOperationsState__IncidentId"] | null;
+            owner: string;
+            schema_version: string;
+            sla: components["schemas"]["IncidentOperationsState__IncidentSlaState"];
+            split_incident_ids: components["schemas"]["IncidentOperationsState__IncidentId"][];
+            /** Format: date-time */
+            suppressed_until?: string | null;
+            suppression_reason?: string | null;
+            tenant_id: components["schemas"]["IncidentOperationsState__TenantId"];
+            /** Format: date-time */
+            updated_at: string;
+        };
+        /**
+         * Format: uuid
+         * @description Internal identifier for an onboarded cluster.
+         */
+        IncidentOperationsState__ClusterId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an SRE incident.
+         */
+        IncidentOperationsState__IncidentId: string;
+        /** @description Current SLA clocks associated with one incident. */
+        IncidentOperationsState__IncidentSlaState: {
+            /** Format: date-time */
+            acknowledged_at?: string | null;
+            acknowledgement_breached: boolean;
+            /** Format: date-time */
+            acknowledgement_due_at: string;
+            resolution_breached: boolean;
+            /** Format: date-time */
+            resolution_due_at: string;
+        };
+        /**
+         * Format: uuid
+         * @description Stable tenant boundary identifier.
+         */
+        IncidentOperationsState__TenantId: string;
+        /**
+         * ShiftHandoffSummary
+         * @description Shift-change read model assembled from current operational state.
+         */
+        ShiftHandoffSummary: {
+            capacity_risks: components["schemas"]["ShiftHandoffSummary__OperationsFinding"][];
+            expiring_certificates: components["schemas"]["ShiftHandoffSummary__OperationsFinding"][];
+            /** Format: date-time */
+            generated_at: string;
+            new_incidents: components["schemas"]["ShiftHandoffSummary__OperationsFinding"][];
+            overdue_action_items: components["schemas"]["ShiftHandoffSummary__OperationsFinding"][];
+            partial: boolean;
+            recent_changes: components["schemas"]["ShiftHandoffSummary__OperationsFinding"][];
+            risk_trends: components["schemas"]["ShiftHandoffSummary__OperationsFinding"][];
+            schema_version: string;
+            source_gaps: components["schemas"]["ShiftHandoffSummary__OperationsFinding"][];
+            tenant_id: components["schemas"]["ShiftHandoffSummary__TenantId"];
+            unresolved_incidents: components["schemas"]["ShiftHandoffSummary__OperationsFinding"][];
+            warnings: string[];
+            /** Format: date-time */
+            window_start: string;
+        };
+        /**
+         * Format: uuid
+         * @description Internal identifier for an onboarded cluster.
+         */
+        ShiftHandoffSummary__ClusterId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an SRE incident.
+         */
+        ShiftHandoffSummary__IncidentId: string;
+        /** @description One bounded, sanitized item in a handoff or operations report. */
+        ShiftHandoffSummary__OperationsFinding: {
+            category: string;
+            cluster_id: components["schemas"]["ShiftHandoffSummary__ClusterId"];
+            deep_link: string;
+            detail: string;
+            incident_id?: components["schemas"]["ShiftHandoffSummary__IncidentId"] | null;
+            /** Format: date-time */
+            observed_at: string;
+            resource?: string | null;
+            severity: string;
+            suggested_owner: string;
+            title: string;
+        };
+        /**
+         * Format: uuid
+         * @description Stable tenant boundary identifier.
+         */
+        ShiftHandoffSummary__TenantId: string;
+        /**
+         * OperationsReport
+         * @description Daily or weekly operational report.
+         */
+        OperationsReport: {
+            /** Format: uint32 */
+            cluster_mutation_count: number;
+            diagnostic_pack_findings: components["schemas"]["OperationsReport__OperationsFinding"][];
+            forecast_errors: components["schemas"]["OperationsReport__OperationsFinding"][];
+            /** Format: double */
+            forecast_mean_absolute_error?: number | null;
+            /** Format: date-time */
+            generated_at: string;
+            partial: boolean;
+            repeat_incidents: components["schemas"]["OperationsReport__OperationsFinding"][];
+            schema_version: string;
+            slo_burns: components["schemas"]["OperationsReport__OperationsFinding"][];
+            source_gaps: components["schemas"]["OperationsReport__OperationsFinding"][];
+            tenant_id: components["schemas"]["OperationsReport__TenantId"];
+            warnings: string[];
+            window: components["schemas"]["OperationsReport__OperationsReportWindow"];
+            /** Format: date-time */
+            window_end: string;
+            /** Format: date-time */
+            window_start: string;
+            worst_clusters: components["schemas"]["OperationsReport__OperationsFinding"][];
+        };
+        /**
+         * Format: uuid
+         * @description Internal identifier for an onboarded cluster.
+         */
+        OperationsReport__ClusterId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for an SRE incident.
+         */
+        OperationsReport__IncidentId: string;
+        /** @description One bounded, sanitized item in a handoff or operations report. */
+        OperationsReport__OperationsFinding: {
+            category: string;
+            cluster_id: components["schemas"]["OperationsReport__ClusterId"];
+            deep_link: string;
+            detail: string;
+            incident_id?: components["schemas"]["OperationsReport__IncidentId"] | null;
+            /** Format: date-time */
+            observed_at: string;
+            resource?: string | null;
+            severity: string;
+            suggested_owner: string;
+            title: string;
+        };
+        /**
+         * @description Supported operations-report time windows.
+         * @enum {string}
+         */
+        OperationsReport__OperationsReportWindow: "daily" | "weekly";
+        /**
+         * Format: uuid
+         * @description Stable tenant boundary identifier.
+         */
+        OperationsReport__TenantId: string;
         /**
          * Format: uuid
          * @description Internal identifier for an onboarded cluster.
@@ -4331,6 +4670,102 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ActionItem"];
+                };
+            };
+        };
+    };
+    getIncidentOperations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Read-only cluster boundary and mutable SRE incident metadata state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IncidentOperationsState"];
+                };
+            };
+        };
+    };
+    applyIncidentOperation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IncidentOperationRequest"];
+            };
+        };
+        responses: {
+            /** @description Audited incident metadata operation; terminal reopen creates a linked incident */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IncidentOperationResult"];
+                };
+            };
+        };
+    };
+    getShiftHandoff: {
+        parameters: {
+            query?: {
+                cluster_id?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded shift handoff across incidents, changes, expiry, capacity, action items and source gaps */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShiftHandoffSummary"];
+                };
+            };
+        };
+    };
+    getOperationsReport: {
+        parameters: {
+            query?: {
+                cluster_id?: string;
+                window?: "daily" | "weekly";
+                format?: "json" | "markdown" | "html";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Daily or weekly operations report as JSON or a downloadable Markdown/HTML artifact */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationsReport"];
+                    "text/markdown": string;
+                    "text/html": string;
                 };
             };
         };

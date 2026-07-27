@@ -28,6 +28,17 @@ export type ActionItemStatus =
 export type ActionItemPatchRequest =
   ApiSchemas["ActionItemPatchRequest"];
 export type ActionItemPage = ApiSchemas["ActionItemPage"];
+export type IncidentOperationRequest =
+  ApiSchemas["IncidentOperationRequest"];
+export type IncidentOperationResult =
+  ApiSchemas["IncidentOperationResult"];
+export type IncidentOperationsState =
+  ApiSchemas["IncidentOperationsState"];
+export type ShiftHandoffSummary =
+  ApiSchemas["ShiftHandoffSummary"];
+export type OperationsReport = ApiSchemas["OperationsReport"];
+export type OperationsReportWindow =
+  ApiSchemas["OperationsReport__OperationsReportWindow"];
 export type HealthStatus =
   ApiSchemas["ClusterHealthReport__HealthStatus"];
 export type HealthDataQuality =
@@ -303,7 +314,14 @@ export type InspectionTemplate =
   | "cluster_health"
   | "consumer"
   | "broker"
-  | "telemetry";
+  | "telemetry"
+  | "full_cluster"
+  | "producer_consumer"
+  | "store_ha"
+  | "routing_proxy"
+  | "security"
+  | "upgrade"
+  | "disaster_recovery";
 
 export type InspectionStatus =
   | "scheduled"

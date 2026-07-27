@@ -154,4 +154,30 @@ describe("mock SRE API", () => {
     expect(published.knowledge_item?.review_status).toBe("validated");
     expect(published.execution_journal_empty).toBe(true);
   });
+
+  it("supports bounded shift handoff, reports and audited incident metadata operations", async () => {
+    const api = createMockSreApi(auth);
+    const handoff = await api.getShiftHandoff(DEMO_CLUSTER_ID);
+    const report = await api.getOperationsReport(
+      "weekly",
+      DEMO_CLUSTER_ID,
+    );
+    const incidentId = handoff.unresolved_incidents[0]?.incident_id;
+    expect(incidentId).toBeTruthy();
+
+    const operation = await api.applyIncidentOperation(incidentId!, {
+      action: "assign",
+      owner: "next-shift",
+      reason: "shift handoff",
+    });
+    const state = await api.getIncidentOperations(incidentId!);
+
+    expect(handoff.schema_version).toBe(
+      "rocketmq-sre.shift-handoff.v1",
+    );
+    expect(report.window).toBe("weekly");
+    expect(report.cluster_mutation_count).toBe(0);
+    expect(operation.cluster_mutation_performed).toBe(false);
+    expect(state.owner).toBe("next-shift");
+  });
 });

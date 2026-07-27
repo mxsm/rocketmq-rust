@@ -1,0 +1,44 @@
+// Copyright 2026 The RocketMQ Rust Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use rocketmq_sre_contracts::ClusterId;
+use rocketmq_sre_contracts::OperationsReportWindow;
+use serde::Deserialize;
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum OperationsReportFormat {
+    #[default]
+    Json,
+    Markdown,
+    Html,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub(super) struct ShiftHandoffQuery {
+    pub cluster_id: Option<ClusterId>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub(super) struct OperationsReportQuery {
+    pub cluster_id: Option<ClusterId>,
+    #[serde(default = "default_window")]
+    pub window: OperationsReportWindow,
+    #[serde(default)]
+    pub format: OperationsReportFormat,
+}
+
+const fn default_window() -> OperationsReportWindow {
+    OperationsReportWindow::Daily
+}

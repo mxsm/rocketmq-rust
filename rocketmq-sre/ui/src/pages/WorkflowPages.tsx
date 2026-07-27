@@ -76,6 +76,13 @@ const templateLabels: Record<InspectionTemplate, string> = {
   consumer: "Consumer",
   broker: "Broker",
   telemetry: "Telemetry",
+  full_cluster: "全量集群",
+  producer_consumer: "Producer / Consumer",
+  store_ha: "Store / HA",
+  routing_proxy: "Routing / Proxy",
+  security: "Security",
+  upgrade: "Upgrade",
+  disaster_recovery: "DR",
 };
 
 export function AskSrePage() {

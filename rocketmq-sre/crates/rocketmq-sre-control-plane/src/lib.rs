@@ -33,6 +33,7 @@ mod model;
 mod models;
 pub mod observability;
 mod openapi;
+mod operator_workbench;
 mod orchestrator;
 mod phase1_api;
 mod phase2_repository;

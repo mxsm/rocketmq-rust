@@ -131,7 +131,10 @@ pub struct DiagnosisRevision {
     pub created_at: DateTime<Utc>,
 }
 
-/// Supported Phase 1 inspection templates.
+/// Supported read-only inspection templates.
+///
+/// The original Phase 1 variants remain wire-compatible. Phase 2 adds
+/// domain-complete templates used by preventive operations.
 #[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InspectionTemplate {
@@ -139,6 +142,13 @@ pub enum InspectionTemplate {
     Consumer,
     Broker,
     Telemetry,
+    FullCluster,
+    ProducerConsumer,
+    StoreHa,
+    RoutingProxy,
+    Security,
+    Upgrade,
+    DisasterRecovery,
 }
 
 /// Inspection lifecycle.

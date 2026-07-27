@@ -2037,6 +2037,13 @@ fn inspection_template_name(value: InspectionTemplate) -> &'static str {
         InspectionTemplate::Consumer => "consumer",
         InspectionTemplate::Broker => "broker",
         InspectionTemplate::Telemetry => "telemetry",
+        InspectionTemplate::FullCluster => "full_cluster",
+        InspectionTemplate::ProducerConsumer => "producer_consumer",
+        InspectionTemplate::StoreHa => "store_ha",
+        InspectionTemplate::RoutingProxy => "routing_proxy",
+        InspectionTemplate::Security => "security",
+        InspectionTemplate::Upgrade => "upgrade",
+        InspectionTemplate::DisasterRecovery => "disaster_recovery",
     }
 }
 
@@ -2046,6 +2053,13 @@ fn parse_inspection_template(value: &str) -> Result<InspectionTemplate, ControlP
         "consumer" => Ok(InspectionTemplate::Consumer),
         "broker" => Ok(InspectionTemplate::Broker),
         "telemetry" => Ok(InspectionTemplate::Telemetry),
+        "full_cluster" => Ok(InspectionTemplate::FullCluster),
+        "producer_consumer" => Ok(InspectionTemplate::ProducerConsumer),
+        "store_ha" => Ok(InspectionTemplate::StoreHa),
+        "routing_proxy" => Ok(InspectionTemplate::RoutingProxy),
+        "security" => Ok(InspectionTemplate::Security),
+        "upgrade" => Ok(InspectionTemplate::Upgrade),
+        "disaster_recovery" => Ok(InspectionTemplate::DisasterRecovery),
         _ => Err(invalid_database_enum("inspection template")),
     }
 }
