@@ -486,12 +486,40 @@ impl<MS: MessageStore> BrokerAdminRuntime<MS> {
         &mut self,
         properties: &HashMap<CheetahString, CheetahString>,
     ) -> Result<ConfigGeneration, BrokerConfigError> {
+        self.commit_broker_config_patch_inner(None, properties)
+    }
+
+    /// Commits a broker configuration patch only when the caller's generation
+    /// still matches the current configuration.
+    ///
+    /// The generation comparison, candidate validation, atomic publication,
+    /// and legacy capability projection are serialized by one lock. A stale
+    /// supervised operation therefore cannot overwrite a newer configuration.
+    pub(crate) fn commit_broker_config_patch_if_generation(
+        &mut self,
+        expected_generation: u64,
+        properties: &HashMap<CheetahString, CheetahString>,
+    ) -> Result<ConfigGeneration, BrokerConfigError> {
+        self.commit_broker_config_patch_inner(Some(expected_generation), properties)
+    }
+
+    fn commit_broker_config_patch_inner(
+        &mut self,
+        expected_generation: Option<u64>,
+        properties: &HashMap<CheetahString, CheetahString>,
+    ) -> Result<ConfigGeneration, BrokerConfigError> {
         // Request handlers own cloned capability carriers. Serialize the
         // publish-and-project sequence so a slower request cannot overwrite
         // policy views with an older, though valid, generation.
         let update_lock = Arc::clone(&self.config_update_lock);
         let _update_guard = update_lock.lock();
         let current = self.config.snapshot();
+        if let Some(expected) = expected_generation {
+            let actual = current.id().value();
+            if expected != actual {
+                return Err(BrokerConfigError::GenerationConflict { expected, actual });
+            }
+        }
         let transaction = ConfigUpdateTransaction::from_broker_patch(current.id(), current.validated(), properties)?;
         let generation = self.config.commit(transaction)?;
         self.apply_broker_config_generation(&generation);

@@ -14,6 +14,8 @@
 
 //! Broker capability contracts.
 
+use std::collections::BTreeMap;
+
 use cheetah_string::CheetahString;
 use rocketmq_protocol::protocol::body::kv_table::KVTable;
 use serde::Deserialize;
@@ -291,8 +293,48 @@ impl<T: BrokerAdmin + ?Sized> BrokerQueryAdmin for T {
     }
 }
 
-/// Marker for future broker mutation operations.
-pub trait BrokerMutationAdmin: Send {}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueryBrokerConfigGenerationRequest {
+    pub broker_addr: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueryBrokerConfigGenerationResult {
+    pub generation: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PatchBrokerConfigRequest {
+    pub broker_addr: String,
+    pub expected_generation: u64,
+    pub properties: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PatchBrokerConfigOutcome {
+    Applied {
+        previous_generation: u64,
+        generation: u64,
+    },
+    GenerationConflict {
+        expected_generation: u64,
+        actual_generation: u64,
+    },
+}
+
+/// Narrow broker mutation operations used by supervised execution.
+pub trait BrokerMutationAdmin: Send {
+    fn query_config_generation<'a>(
+        &'a mut self,
+        request: &'a QueryBrokerConfigGenerationRequest,
+    ) -> AdminFuture<'a, QueryBrokerConfigGenerationResult>;
+
+    fn patch_config_if_generation<'a>(
+        &'a mut self,
+        request: &'a PatchBrokerConfigRequest,
+    ) -> AdminFuture<'a, PatchBrokerConfigOutcome>;
+}
 
 pub(crate) fn project_broker_diagnostics(broker_name: String, broker_id: u64, runtime: &KVTable) -> BrokerDiagnostics {
     let schema = runtime_value(runtime, "sreDiagnosticsSchemaVersion");

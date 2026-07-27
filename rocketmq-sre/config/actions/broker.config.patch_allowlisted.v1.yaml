@@ -16,7 +16,7 @@ parameter_schema:
   required: [broker, expected_generation, patch]
   properties:
     broker: { type: string, maxLength: 128 }
-    expected_generation: { type: integer, minimum: 0 }
+    expected_generation: { type: integer, minimum: 1 }
     patch:
       type: object
       minProperties: 1

@@ -248,7 +248,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .get_timer_metrics(channel, ctx, request_code, request)
                     .await
             }
-            RequestCode::UpdateBrokerConfig => {
+            RequestCode::UpdateBrokerConfig | RequestCode::UpdateBrokerConfigCas => {
                 self.broker_config_request_handler
                     .update_broker_config(channel, ctx, request_code, request)
                     .await

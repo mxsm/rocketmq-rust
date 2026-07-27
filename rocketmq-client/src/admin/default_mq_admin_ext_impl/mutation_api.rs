@@ -52,6 +52,7 @@ use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::route_facade::BrokerDataExt;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 
+use crate::admin::mq_admin_mutation_ext::BrokerConfigPatchOutcome;
 use crate::admin::mq_admin_mutation_ext::MQAdminMutationExt;
 
 use super::DefaultMQAdminExtImpl;
@@ -263,6 +264,43 @@ impl DefaultMQAdminExtImpl {
 }
 
 impl MQAdminMutationExt for DefaultMQAdminExtImpl {
+    async fn broker_config_generation(&self, broker_addr: CheetahString) -> rocketmq_error::RocketMQResult<u64> {
+        let runtime = self
+            .mq_client_api()?
+            .get_broker_runtime_info(&broker_addr, self.remoting_timeout_millis()?)
+            .await?;
+        let generation = runtime.table.get("brokerConfigGeneration").ok_or_else(|| {
+            rocketmq_error::RocketMQError::ResponseProcessFailed {
+                operation: "broker_config_generation",
+                reason: "broker runtime info does not contain brokerConfigGeneration".to_string(),
+            }
+        })?;
+        generation
+            .parse::<u64>()
+            .ok()
+            .filter(|generation| *generation > 0)
+            .ok_or_else(|| rocketmq_error::RocketMQError::ResponseProcessFailed {
+                operation: "broker_config_generation",
+                reason: "brokerConfigGeneration is not a positive unsigned integer".to_string(),
+            })
+    }
+
+    async fn patch_broker_config_if_generation(
+        &self,
+        broker_addr: CheetahString,
+        expected_generation: u64,
+        properties: HashMap<CheetahString, CheetahString>,
+    ) -> rocketmq_error::RocketMQResult<BrokerConfigPatchOutcome> {
+        self.mq_client_api()?
+            .update_broker_config_if_generation(
+                &broker_addr,
+                expected_generation,
+                properties,
+                self.remoting_timeout_millis()?,
+            )
+            .await
+    }
+
     async fn upsert_topic_config(
         &self,
         broker_addr: CheetahString,

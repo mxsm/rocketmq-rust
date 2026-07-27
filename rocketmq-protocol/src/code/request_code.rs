@@ -197,6 +197,8 @@ define_request_code! {
         SendReplyMessageV2 = 325,
         PushReplyMessageToClient = 326,
         AddWritePermOfBroker = 327,
+        /// Generation-checked broker configuration update used by supervised SRE execution.
+        UpdateBrokerConfigCas = 330,
         GetTopicConfig = 351,
         GetSubscriptionGroupConfig = 352,
         UpdateAndGetGroupForbidden = 353,
@@ -283,6 +285,7 @@ mod tests {
         assert_eq!(RequestCode::HeartBeat.to_i32(), 34);
         assert_eq!(RequestCode::PopMessage.to_i32(), 200050);
         assert_eq!(RequestCode::ControllerAlterSyncStateSet.to_i32(), 1001);
+        assert_eq!(RequestCode::UpdateBrokerConfigCas.to_i32(), 330);
         assert_eq!(RequestCode::AuthCreateUser.to_i32(), 3001);
         assert_eq!(RequestCode::MaintenanceCreateControllerSnapshot.to_i32(), 6002);
         assert_eq!(RequestCode::Unknown.to_i32(), -9999999);
@@ -295,6 +298,7 @@ mod tests {
         assert_eq!(RequestCode::from(34), RequestCode::HeartBeat);
         assert_eq!(RequestCode::from(200050), RequestCode::PopMessage);
         assert_eq!(RequestCode::from(1001), RequestCode::ControllerAlterSyncStateSet);
+        assert_eq!(RequestCode::from(330), RequestCode::UpdateBrokerConfigCas);
         assert_eq!(RequestCode::from(3001), RequestCode::AuthCreateUser);
         assert_eq!(RequestCode::from(6003), RequestCode::MaintenanceCreateStoreCheckpoint);
         assert_eq!(RequestCode::from(-9999999), RequestCode::Unknown);

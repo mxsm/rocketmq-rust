@@ -34,6 +34,18 @@ use rocketmq_protocol::protocol::subscription::subscription_group_config::Subscr
 
 use super::default_mq_admin_ext::DefaultMQAdminExt;
 
+/// Result of one generation-checked broker configuration patch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BrokerConfigPatchOutcome {
+    /// The patch was committed as the generation immediately after precheck.
+    Applied { previous_generation: u64, generation: u64 },
+    /// The broker changed after precheck; callers must stop and re-plan.
+    GenerationConflict {
+        expected_generation: u64,
+        actual_generation: u64,
+    },
+}
+
 /// Explicit RocketMQ mutation capability.
 ///
 /// The legacy mixed administration API remains available only through
@@ -41,6 +53,18 @@ use super::default_mq_admin_ext::DefaultMQAdminExt;
 /// keep it out of read-only process dependency graphs.
 #[allow(async_fn_in_trait)]
 pub trait MQAdminMutationExt: Send {
+    /// Reads the broker configuration generation used by supervised prechecks.
+    async fn broker_config_generation(&self, broker_addr: CheetahString) -> rocketmq_error::RocketMQResult<u64>;
+
+    /// Applies a broker configuration patch only when `expected_generation`
+    /// still matches the broker's current generation.
+    async fn patch_broker_config_if_generation(
+        &self,
+        broker_addr: CheetahString,
+        expected_generation: u64,
+        properties: HashMap<CheetahString, CheetahString>,
+    ) -> rocketmq_error::RocketMQResult<BrokerConfigPatchOutcome>;
+
     async fn upsert_topic_config(
         &self,
         broker_addr: CheetahString,
@@ -162,6 +186,25 @@ pub trait MQAdminMutationExt: Send {
 }
 
 impl MQAdminMutationExt for DefaultMQAdminExt {
+    async fn broker_config_generation(&self, broker_addr: CheetahString) -> rocketmq_error::RocketMQResult<u64> {
+        MQAdminMutationExt::broker_config_generation(self.inner(), broker_addr).await
+    }
+
+    async fn patch_broker_config_if_generation(
+        &self,
+        broker_addr: CheetahString,
+        expected_generation: u64,
+        properties: HashMap<CheetahString, CheetahString>,
+    ) -> rocketmq_error::RocketMQResult<BrokerConfigPatchOutcome> {
+        MQAdminMutationExt::patch_broker_config_if_generation(
+            self.inner(),
+            broker_addr,
+            expected_generation,
+            properties,
+        )
+        .await
+    }
+
     async fn upsert_topic_config(
         &self,
         broker_addr: CheetahString,

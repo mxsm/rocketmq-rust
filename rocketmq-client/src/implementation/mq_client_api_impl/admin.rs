@@ -15,6 +15,12 @@
 use super::request_builder::*;
 use super::response_decoder::*;
 use super::*;
+#[cfg(feature = "admin-mutation")]
+use crate::admin::BrokerConfigPatchOutcome;
+#[cfg(feature = "admin-mutation")]
+use rocketmq_protocol::protocol::header::update_broker_config_request_header::UpdateBrokerConfigRequestHeader;
+#[cfg(feature = "admin-mutation")]
+use rocketmq_protocol::protocol::header::update_broker_config_response_header::UpdateBrokerConfigResponseHeader;
 
 pub struct AdminClient<'a> {
     api: &'a MQClientAPIImpl,
@@ -1841,6 +1847,90 @@ impl MQClientAPIImpl {
 
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => Ok(()),
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or_else(String::new, |remark| remark.to_string())
+            )),
+        }
+    }
+
+    #[cfg(feature = "admin-mutation")]
+    pub(crate) async fn update_broker_config_if_generation(
+        &self,
+        addr: &CheetahString,
+        expected_generation: u64,
+        properties: HashMap<CheetahString, CheetahString>,
+        timeout_millis: u64,
+    ) -> RocketMQResult<BrokerConfigPatchOutcome> {
+        if expected_generation == 0 {
+            return Err(RocketMQError::illegal_argument(
+                "expected broker config generation must be greater than zero",
+            ));
+        }
+        let validator_input = properties
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect::<HashMap<String, String>>();
+        crate::base::validators::Validators::check_broker_config(&validator_input)?;
+
+        let body = mix_all::properties_to_string(&properties);
+        if body.is_empty() {
+            return Err(RocketMQError::illegal_argument(
+                "generation-checked broker config patch must not be empty",
+            ));
+        }
+
+        let request = RemotingCommand::create_request_command(
+            RequestCode::UpdateBrokerConfigCas,
+            UpdateBrokerConfigRequestHeader { expected_generation },
+        )
+        .set_body(body.to_string());
+        let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&broker_addr), request, timeout_millis)
+            .await?;
+
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {
+                let header = response
+                    .decode_command_custom_header::<UpdateBrokerConfigResponseHeader>()
+                    .map_err(|error| RocketMQError::ResponseProcessFailed {
+                        operation: "update_broker_config_if_generation",
+                        reason: format!("missing committed config generation: {error}"),
+                    })?;
+                let expected_next = expected_generation
+                    .checked_add(1)
+                    .ok_or(RocketMQError::ResponseProcessFailed {
+                        operation: "update_broker_config_if_generation",
+                        reason: "broker accepted a patch after the generation counter was exhausted".to_string(),
+                    })?;
+                if header.config_generation != expected_next {
+                    return Err(RocketMQError::ResponseProcessFailed {
+                        operation: "update_broker_config_if_generation",
+                        reason: format!(
+                            "broker returned generation {}, expected {}",
+                            header.config_generation, expected_next
+                        ),
+                    });
+                }
+                Ok(BrokerConfigPatchOutcome::Applied {
+                    previous_generation: expected_generation,
+                    generation: header.config_generation,
+                })
+            }
+            ResponseCode::InvalidParameter => {
+                if let Ok(header) = response.decode_command_custom_header::<UpdateBrokerConfigResponseHeader>() {
+                    return Ok(BrokerConfigPatchOutcome::GenerationConflict {
+                        expected_generation,
+                        actual_generation: header.config_generation,
+                    });
+                }
+                Err(mq_client_err!(
+                    response.code(),
+                    response.remark().map_or_else(String::new, |remark| remark.to_string())
+                ))
+            }
             _ => Err(mq_client_err!(
                 response.code(),
                 response.remark().map_or_else(String::new, |remark| remark.to_string())

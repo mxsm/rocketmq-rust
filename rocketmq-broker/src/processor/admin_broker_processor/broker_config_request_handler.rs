@@ -29,6 +29,8 @@ use rocketmq_protocol::protocol::body::kv_table::KVTable;
 use rocketmq_protocol::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigToJsonRequestHeader;
 #[cfg(feature = "rocksdb_store")]
 use rocketmq_protocol::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigType;
+use rocketmq_protocol::protocol::header::update_broker_config_request_header::UpdateBrokerConfigRequestHeader;
+use rocketmq_protocol::protocol::header::update_broker_config_response_header::UpdateBrokerConfigResponseHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::DataVersion;
 use rocketmq_runtime::common::time_utils::current_millis;
@@ -132,7 +134,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
         &mut self,
         channel: Channel,
         _ctx: ConnectionHandlerContext,
-        _request_code: RequestCode,
+        request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_response_command().set_opaque(request.opaque());
@@ -160,19 +162,61 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
             ));
         }
 
+        let expected_generation = if request_code == RequestCode::UpdateBrokerConfigCas {
+            match request.decode_command_custom_header::<UpdateBrokerConfigRequestHeader>() {
+                Ok(header) if header.expected_generation > 0 => Some(header.expected_generation),
+                Ok(_) => {
+                    return Ok(Some(
+                        response
+                            .set_code(ResponseCode::InvalidParameter)
+                            .set_remark("expectedGeneration must be greater than zero"),
+                    ));
+                }
+                Err(_) => {
+                    return Ok(Some(
+                        response
+                            .set_code(ResponseCode::InvalidParameter)
+                            .set_remark("expectedGeneration is required and must be an unsigned integer"),
+                    ));
+                }
+            }
+        } else {
+            None
+        };
+
         if properties.keys().any(|key| LOG_FILTER_KEYS.contains(&key.as_str())) {
+            if expected_generation.is_some() {
+                return Ok(Some(response.set_code(ResponseCode::InvalidParameter).set_remark(
+                    "generation-checked broker config updates do not accept log filter properties",
+                )));
+            }
             return self.update_log_filter(channel, request, response, &properties).await;
         }
 
-        let generation = match self.broker_runtime_inner.commit_broker_config_patch(&properties) {
+        let commit_result = match expected_generation {
+            Some(expected_generation) => self
+                .broker_runtime_inner
+                .commit_broker_config_patch_if_generation(expected_generation, &properties),
+            None => self.broker_runtime_inner.commit_broker_config_patch(&properties),
+        };
+        let generation = match commit_result {
             Ok(generation) => generation,
             Err(error @ BrokerConfigError::RestartRequired { .. })
             | Err(error @ BrokerConfigError::UnsupportedKeys { .. })
             | Err(error @ BrokerConfigError::InvalidProperty { .. })
-            | Err(error @ BrokerConfigError::Invalid { .. })
-            | Err(error @ BrokerConfigError::GenerationConflict { .. }) => {
+            | Err(error @ BrokerConfigError::Invalid { .. }) => {
                 return Ok(Some(
                     response
+                        .set_code(ResponseCode::InvalidParameter)
+                        .set_remark(error.to_string()),
+                ));
+            }
+            Err(error @ BrokerConfigError::GenerationConflict { actual, .. }) => {
+                return Ok(Some(
+                    response
+                        .set_command_custom_header(UpdateBrokerConfigResponseHeader {
+                            config_generation: actual,
+                        })
                         .set_code(ResponseCode::InvalidParameter)
                         .set_remark(error.to_string()),
                 ));
@@ -186,10 +230,17 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
             }
         };
 
-        Ok(Some(response.set_code(ResponseCode::Success).set_remark(format!(
-            "update broker config success, generation={}",
-            generation.value()
-        ))))
+        Ok(Some(
+            response
+                .set_command_custom_header(UpdateBrokerConfigResponseHeader {
+                    config_generation: generation.value(),
+                })
+                .set_code(ResponseCode::Success)
+                .set_remark(format!(
+                    "update broker config success, generation={}",
+                    generation.value()
+                )),
+        ))
     }
 
     async fn update_log_filter(
@@ -922,6 +973,8 @@ mod tests {
     use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::code::response_code::ResponseCode;
     use rocketmq_protocol::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigToJsonRequestHeader;
+    use rocketmq_protocol::protocol::header::update_broker_config_request_header::UpdateBrokerConfigRequestHeader;
+    use rocketmq_protocol::protocol::header::update_broker_config_response_header::UpdateBrokerConfigResponseHeader;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     #[cfg(feature = "rocksdb_store")]
     use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
@@ -1165,6 +1218,69 @@ mod tests {
         assert_eq!(admin.broker_config().max_lite_subscription_count, 5);
         assert_eq!(admin.broker_config().max_client_event_count, 7);
         assert_eq!(admin.broker_config().lite_event_full_dispatch_delay_time, 1234);
+
+        let _ = fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn update_broker_config_cas_commits_once_and_rejects_stale_generation() {
+        let runtime = new_test_runtime("update-broker-config-cas", false).await;
+        let admin = runtime.admin_runtime_for_test();
+        let mut handler = BrokerConfigRequestHandler::new(admin.clone());
+
+        let channel = create_test_channel().await;
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::UpdateBrokerConfigCas,
+            UpdateBrokerConfigRequestHeader { expected_generation: 1 },
+        )
+        .set_body("maxClientEventCount=7");
+        request.make_custom_header_to_net();
+
+        let response = handler
+            .update_broker_config(channel, ctx, RequestCode::UpdateBrokerConfigCas, &mut request)
+            .await
+            .expect("CAS update should return broker response")
+            .expect("CAS update should return a response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        assert_eq!(
+            response
+                .read_custom_header_ref::<UpdateBrokerConfigResponseHeader>()
+                .map(|header| header.config_generation),
+            Some(2)
+        );
+        assert_eq!(admin.broker_config().max_client_event_count, 7);
+
+        let channel = create_test_channel().await;
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let mut stale_request = RemotingCommand::create_request_command(
+            RequestCode::UpdateBrokerConfigCas,
+            UpdateBrokerConfigRequestHeader { expected_generation: 1 },
+        )
+        .set_body("maxClientEventCount=9");
+        stale_request.make_custom_header_to_net();
+
+        let stale_response = handler
+            .update_broker_config(channel, ctx, RequestCode::UpdateBrokerConfigCas, &mut stale_request)
+            .await
+            .expect("stale CAS update should return broker response")
+            .expect("stale CAS update should return a response");
+
+        assert_eq!(
+            ResponseCode::from(stale_response.code()),
+            ResponseCode::InvalidParameter
+        );
+        assert_eq!(
+            stale_response
+                .read_custom_header_ref::<UpdateBrokerConfigResponseHeader>()
+                .map(|header| header.config_generation),
+            Some(2)
+        );
+        assert!(stale_response
+            .remark()
+            .is_some_and(|remark| remark.contains("expected 1, actual 2")));
+        assert_eq!(admin.broker_config().max_client_event_count, 7);
 
         let _ = fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }

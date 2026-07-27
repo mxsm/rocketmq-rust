@@ -20,6 +20,7 @@ use std::ops::DerefMut;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
+use rocketmq_client_rust::BrokerConfigPatchOutcome as ClientBrokerConfigPatchOutcome;
 use rocketmq_client_rust::MQAdminMutationExt;
 use rocketmq_error::RocketMQError;
 use rocketmq_model::common::message::message_ext::MessageExt;
@@ -34,6 +35,10 @@ use rocketmq_protocol::protocol::subscription::subscription_group_config::Subscr
 
 use crate::client_adapter::producer::*;
 use crate::core::broker::BrokerMutationAdmin;
+use crate::core::broker::PatchBrokerConfigOutcome;
+use crate::core::broker::PatchBrokerConfigRequest;
+use crate::core::broker::QueryBrokerConfigGenerationRequest;
+use crate::core::broker::QueryBrokerConfigGenerationResult;
 use crate::core::clock::Clock;
 use crate::core::consumer;
 use crate::core::consumer::ConsumerMutationAdmin;
@@ -595,7 +600,76 @@ impl MessageMutationAdmin for MutationAdminSession {
     }
 }
 
-impl BrokerMutationAdmin for MutationAdminSession {}
+impl BrokerMutationAdmin for MutationAdminSession {
+    fn query_config_generation<'a>(
+        &'a mut self,
+        request: &'a QueryBrokerConfigGenerationRequest,
+    ) -> AdminFuture<'a, QueryBrokerConfigGenerationResult> {
+        Box::pin(async move {
+            self.inner.ensure_open()?;
+            let broker_addr = require_non_empty("brokerAddr", &request.broker_addr)?;
+            let generation = self
+                .inner
+                .inner
+                .broker_config_generation(CheetahString::from(broker_addr))
+                .await
+                .map_err(|error| backend_error("broker_config_generation", error))?;
+            Ok(QueryBrokerConfigGenerationResult { generation })
+        })
+    }
+
+    fn patch_config_if_generation<'a>(
+        &'a mut self,
+        request: &'a PatchBrokerConfigRequest,
+    ) -> AdminFuture<'a, PatchBrokerConfigOutcome> {
+        Box::pin(async move {
+            self.inner.ensure_open()?;
+            let broker_addr = require_non_empty("brokerAddr", &request.broker_addr)?;
+            if request.expected_generation == 0 {
+                return Err(AdminError::invalid_argument(
+                    "expectedGeneration",
+                    "must be greater than zero",
+                ));
+            }
+            if request.properties.is_empty() {
+                return Err(AdminError::invalid_argument("properties", "must not be empty"));
+            }
+            let mut properties = HashMap::with_capacity(request.properties.len());
+            for (key, value) in &request.properties {
+                let key = require_non_empty("propertyKey", key)?;
+                let value = require_non_empty("propertyValue", value)?;
+                properties.insert(CheetahString::from(key), CheetahString::from(value));
+            }
+
+            let outcome = self
+                .inner
+                .inner
+                .patch_broker_config_if_generation(
+                    CheetahString::from(broker_addr),
+                    request.expected_generation,
+                    properties,
+                )
+                .await
+                .map_err(|error| backend_error("patch_broker_config_if_generation", error))?;
+            Ok(match outcome {
+                ClientBrokerConfigPatchOutcome::Applied {
+                    previous_generation,
+                    generation,
+                } => PatchBrokerConfigOutcome::Applied {
+                    previous_generation,
+                    generation,
+                },
+                ClientBrokerConfigPatchOutcome::GenerationConflict {
+                    expected_generation,
+                    actual_generation,
+                } => PatchBrokerConfigOutcome::GenerationConflict {
+                    expected_generation,
+                    actual_generation,
+                },
+            })
+        })
+    }
+}
 impl DashboardMutationAdmin for MutationAdminSession {}
 
 async fn require_topic_route(
