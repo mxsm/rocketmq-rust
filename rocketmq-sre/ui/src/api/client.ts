@@ -15,6 +15,7 @@ import type {
   DrReadinessReport,
   EvidenceRecord,
   FleetHealthReport,
+  IncidentTopologyView,
   IncidentView,
   InspectionReport,
   InspectionView,
@@ -225,6 +226,10 @@ export interface SreApi {
     id: string,
     signal?: AbortSignal,
   ) => Promise<IncidentView>;
+  getIncidentTopology: (
+    id: string,
+    signal?: AbortSignal,
+  ) => Promise<IncidentTopologyView>;
   diagnoseIncident: (
     id: string,
     signal?: AbortSignal,
@@ -411,6 +416,11 @@ export function createHttpSreApi(auth?: ApiRequestContext): SreApi {
       ),
     getIncident: (id, signal) =>
       get<IncidentView>(`/v1/incidents/${encodeURIComponent(id)}`, signal),
+    getIncidentTopology: (id, signal) =>
+      get<IncidentTopologyView>(
+        `/v1/incidents/${encodeURIComponent(id)}/topology`,
+        signal,
+      ),
     diagnoseIncident: (id, signal) =>
       post<DiagnosisDispatch>(
         `/v1/incidents/${encodeURIComponent(id)}/diagnose`,

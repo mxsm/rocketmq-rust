@@ -2,6 +2,7 @@ import { ApiError, type SreApi } from "@/api/client";
 import type {
   CollectionEnvelope,
   ConversationView,
+  IncidentTopologyView,
   IncidentView,
   InspectionView,
   InvestigationView,
@@ -405,6 +406,44 @@ export function createMockSreApi(auth?: ApiRequestContext): SreApi {
         unavailable("incident");
       scope(result.incident.cluster_id);
       return clone(result);
+    },
+    getIncidentTopology: async (id, signal) => {
+      await wait(signal);
+      const result =
+        incidents.find((item) => item.incident.id === id) ??
+        unavailable("incident");
+      scope(result.incident.cluster_id);
+      const resource =
+        result.incident.resource ?? `cluster:${result.incident.cluster_id}`;
+      return clone<IncidentTopologyView>({
+        schema_version: "rocketmq-sre.incident-topology.v1",
+        incident_id: id,
+        nodes: [
+          {
+            key: resource,
+            kind: resource.split(":")[0] || "resource",
+            display_name: resource,
+            alert_count: Math.max(result.incident.occurrence_count, 1),
+          },
+          {
+            key: `cluster:${result.incident.cluster_id}`,
+            kind: "cluster",
+            display_name: "RocketMQ cluster",
+            alert_count: 0,
+          },
+        ],
+        edges: [
+          {
+            from: resource,
+            to: `cluster:${result.incident.cluster_id}`,
+            relation: "member_of",
+          },
+        ],
+        partial: result.diagnosis_revisions.some(
+          (revision) => revision.partial,
+        ),
+        warnings: [],
+      });
     },
     diagnoseIncident: async (id, signal) => {
       await wait(signal);

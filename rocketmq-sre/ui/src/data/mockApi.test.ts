@@ -93,4 +93,24 @@ describe("mock SRE API", () => {
     );
     expect(fleet.clusters).toHaveLength(1);
   });
+
+  it("returns bounded incident topology without a mutation surface", async () => {
+    const api = createMockSreApi(auth);
+    const incident = (await api.listIncidents(DEMO_CLUSTER_ID)).items[0];
+    expect(incident).toBeDefined();
+
+    const topology = await api.getIncidentTopology(
+      incident!.incident.id,
+    );
+    expect(topology.schema_version).toBe(
+      "rocketmq-sre.incident-topology.v1",
+    );
+    expect(topology.nodes.length).toBeGreaterThan(0);
+    expect(topology.edges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ relation: "member_of" }),
+      ]),
+    );
+    expect(JSON.stringify(topology)).not.toContain("execution");
+  });
 });

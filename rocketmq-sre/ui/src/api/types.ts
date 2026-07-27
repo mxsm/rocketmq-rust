@@ -14,6 +14,7 @@ export type WhatIfSimulation = ApiSchemas["WhatIfSimulation"];
 export type UpgradeReadinessReport =
   ApiSchemas["UpgradeReadinessReport"];
 export type DrReadinessReport = ApiSchemas["DrReadinessReport"];
+export type IncidentTopologyView = ApiSchemas["IncidentTopologyView"];
 export type HealthStatus =
   ApiSchemas["ClusterHealthReport__HealthStatus"];
 export type HealthDataQuality =

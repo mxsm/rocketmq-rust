@@ -24,7 +24,6 @@ import {
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import type {
-  IncidentStatus,
   InspectionReport,
   InspectionTemplate,
   InvestigationStatus,
@@ -47,6 +46,17 @@ import { ReadOnlyBoundary } from "@/components/ReadOnlyBoundary";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useSreData } from "@/data/SreDataContext";
+import { DiagnosisRevisionList } from "@/features/incidents/DiagnosisRevisionList";
+import {
+  IncidentInboxCards,
+  IncidentInboxFilters,
+} from "@/features/incidents/IncidentInbox";
+import { IncidentTopology } from "@/features/incidents/IncidentTopology";
+import {
+  filterAndSortIncidents,
+  incidentOwnerOptions,
+  incidentStatusLabels,
+} from "@/features/incidents/incidentPresentation";
 import { useAsyncResource } from "@/hooks/useAsyncResource";
 import { useClusterScope } from "@/hooks/useClusterScope";
 import { useWorkflowProgress } from "@/hooks/useWorkflowProgress";
@@ -59,16 +69,6 @@ const investigationLabels: Record<InvestigationStatus, string> = {
   monitoring: "监测中",
   promoted: "已升级",
   closed: "已关闭",
-};
-
-const incidentLabels: Record<IncidentStatus, string> = {
-  new: "新建",
-  collecting: "采集中",
-  diagnosing: "诊断中",
-  needs_evidence: "需要证据",
-  monitoring: "监测中",
-  resolved: "已解决",
-  escalated: "已升级人工",
 };
 
 const templateLabels: Record<InspectionTemplate, string> = {
@@ -581,6 +581,10 @@ export function InvestigationDetailPage() {
 export function IncidentsPage() {
   const { api } = useSreData();
   const scope = useClusterScope();
+  const [severity, setSeverity] = useState("all");
+  const [status, setStatus] = useState("all");
+  const [owner, setOwner] = useState("all");
+  const [query, setQuery] = useState("");
   const load = useCallback(
     (signal: AbortSignal) =>
       scope.clusterId
@@ -595,6 +599,24 @@ export function IncidentsPage() {
   );
   const resource = useAsyncResource(load);
   const progress = useWorkflowProgress(scope.clusterId, resource.reload);
+  const incidents = useMemo(
+    () =>
+      filterAndSortIncidents(resource.data?.items ?? [], {
+        severity,
+        status,
+        owner,
+        query,
+      }),
+    [owner, query, resource.data?.items, severity, status],
+  );
+  const owners = useMemo(
+    () => incidentOwnerOptions(resource.data?.items ?? []),
+    [resource.data?.items],
+  );
+  const now = useMemo(
+    () => new Date(resource.data?.observed_at ?? Date.now()),
+    [resource.data?.observed_at],
+  );
 
   return (
     <div className="page">
@@ -617,9 +639,24 @@ export function IncidentsPage() {
       <PartialNotice envelope={resource.data} />
       <DataSurface
         title="事件列表"
-        description="终态事件不可重新进入运行态。"
-        meta={<span>{resource.data?.items.length ?? 0} 个</span>}
+        description="严重度优先、最近更新次之；终态事件不可重新进入运行态。"
+        meta={
+          <span>
+            {incidents.length} / {resource.data?.items.length ?? 0} 个
+          </span>
+        }
       >
+        <IncidentInboxFilters
+          severity={severity}
+          status={status}
+          owner={owner}
+          query={query}
+          owners={owners}
+          onSeverityChange={setSeverity}
+          onStatusChange={setStatus}
+          onOwnerChange={setOwner}
+          onQueryChange={setQuery}
+        />
         <DataState
           loading={resource.loading}
           error={resource.error}
@@ -628,39 +665,16 @@ export function IncidentsPage() {
           emptyTitle="当前没有 Incident"
           emptyDescription="可从 Ask SRE 调查或 Inspection recommendation 升级为 Incident。"
         />
-        {resource.data && resource.data.items.length > 0 && (
-          <div className="record-grid">
-            {resource.data.items.map((view) => (
-              <Link
-                className="record-card"
-                key={view.incident.id}
-                to={`/incidents/${view.incident.id}`}
-              >
-                <div>
-                  <Badge
-                    variant={
-                      view.incident.severity === "critical"
-                        ? "destructive"
-                        : "warning"
-                    }
-                  >
-                    {view.incident.severity ?? "warning"}
-                  </Badge>
-                  <Badge variant="outline">
-                    {incidentLabels[view.incident.status]}
-                  </Badge>
-                </div>
-                <h3>{view.incident.title}</h3>
-                <p>{view.incident.summary ?? "等待诊断摘要。"}</p>
-                <footer>
-                  <span>
-                    {view.diagnosis_revisions.length} diagnosis revisions
-                  </span>
-                  <ChevronRight size={15} />
-                </footer>
-              </Link>
-            ))}
-          </div>
+        {resource.data &&
+          resource.data.items.length > 0 &&
+          incidents.length === 0 && (
+            <div className="empty-state compact">
+              <h3>没有匹配当前筛选的 Incident</h3>
+              <p>调整严重度、状态、Owner 或关键词后重试。</p>
+            </div>
+          )}
+        {incidents.length > 0 && (
+          <IncidentInboxCards incidents={incidents} now={now} />
         )}
       </DataSurface>
     </div>
@@ -677,9 +691,21 @@ export function IncidentDetailPage() {
     [api, incidentId],
   );
   const resource = useAsyncResource(load);
+  const topologyLoad = useCallback(
+    (signal: AbortSignal) =>
+      api.getIncidentTopology(incidentId, signal),
+    [api, incidentId],
+  );
+  const topology = useAsyncResource(topologyLoad);
+  const reloadIncident = resource.reload;
+  const reloadTopology = topology.reload;
+  const reload = useCallback(() => {
+    reloadIncident();
+    reloadTopology();
+  }, [reloadIncident, reloadTopology]);
   const progress = useWorkflowProgress(
     resource.data?.incident.cluster_id ?? "",
-    resource.reload,
+    reload,
   );
 
   const diagnose = async () => {
@@ -733,10 +759,12 @@ export function IncidentDetailPage() {
       />
       {resource.data && (
         <>
-          <section className="summary-strip phase1-summary">
+          <section className="summary-strip phase1-summary incident-summary">
             <Summary
               label="状态"
-              value={incidentLabels[resource.data.incident.status]}
+              value={
+                incidentStatusLabels[resource.data.incident.status]
+              }
             />
             <Summary
               label="严重度"
@@ -745,6 +773,14 @@ export function IncidentDetailPage() {
             <Summary
               label="Revision"
               value={String(resource.data.diagnosis_revisions.length)}
+            />
+            <Summary
+              label="Owner"
+              value={resource.data.incident.owner ?? "未分派"}
+            />
+            <Summary
+              label="合并告警"
+              value={String(resource.data.incident.occurrence_count)}
             />
             <Summary
               label="执行资格"
@@ -757,49 +793,9 @@ export function IncidentDetailPage() {
               title="诊断 Revision"
               description="Rules-only revision 永远不可执行。"
             >
-              {resource.data.diagnosis_revisions.length === 0 ? (
-                <div className="state-message">尚无诊断 revision。</div>
-              ) : (
-                <div className="diagnosis-list">
-                  {resource.data.diagnosis_revisions.map((revision) => (
-                    <article key={revision.id}>
-                      <header>
-                        <strong>Revision {revision.revision}</strong>
-                        <Badge
-                          variant={revision.partial ? "warning" : "success"}
-                        >
-                          {revision.partial ? "partial" : "complete"}
-                        </Badge>
-                      </header>
-                      <div className="hypothesis-list">
-                        {revision.hypotheses.map((hypothesis) => (
-                          <div key={hypothesis.title}>
-                            <span>{hypothesis.title}</span>
-                            <strong>
-                              {Math.round(hypothesis.confidence * 100)}%
-                            </strong>
-                            <Badge
-                              variant={
-                                hypothesis.status === "supported"
-                                  ? "success"
-                                  : "secondary"
-                              }
-                            >
-                              {hypothesis.status}
-                            </Badge>
-                          </div>
-                        ))}
-                      </div>
-                      <footer>
-                        <span>
-                          {revision.evidence_ids.length} Evidence 引用
-                        </span>
-                        <code>execution_eligible=false</code>
-                      </footer>
-                    </article>
-                  ))}
-                </div>
-              )}
+              <DiagnosisRevisionList
+                revisions={resource.data.diagnosis_revisions}
+              />
             </DataSurface>
             <DataSurface
               title="Incident 时间线"
@@ -808,6 +804,20 @@ export function IncidentDetailPage() {
               <Timeline events={resource.data.timeline} />
             </DataSurface>
           </div>
+          <DataSurface
+            title="Incident 拓扑"
+            description="显示受影响资源、组件和集群关系；节点与边均有界且保留 partial 状态。"
+            meta={
+              topology.data ? (
+                <span>
+                  {topology.data.nodes.length} 节点 ·{" "}
+                  {topology.data.edges.length} 关系
+                </span>
+              ) : undefined
+            }
+          >
+            <IncidentTopology topology={topology} />
+          </DataSurface>
         </>
       )}
     </div>

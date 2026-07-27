@@ -1332,7 +1332,7 @@ td small {
 }
 
 .cluster-table {
-  min-width: 1080px;
+  min-width: 1480px;
 }
 
 .cluster-name-button {
@@ -2090,6 +2090,18 @@ td small {
   border-right: 0;
 }
 
+.incident-summary {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.incident-summary .summary-item:nth-child(4) {
+  border-right: 1px solid var(--border);
+}
+
+.incident-summary .summary-item:nth-child(6) {
+  border-right: 0;
+}
+
 .phase1-definition-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2140,6 +2152,95 @@ td small {
   gap: 10px;
   padding: 13px 16px;
   border-bottom: 1px solid var(--border);
+}
+
+.operator-filter-bar {
+  display: grid;
+  align-items: end;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  background: #101010;
+}
+
+.overview-filter-bar {
+  grid-template-columns: repeat(4, minmax(150px, 0.75fr)) minmax(220px, 1fr);
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+
+.incident-filter-bar {
+  grid-template-columns:
+    minmax(140px, 0.55fr)
+    minmax(160px, 0.65fr)
+    minmax(160px, 0.65fr)
+    minmax(280px, 1.5fr);
+}
+
+.operator-filter {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+  color: var(--muted-foreground);
+  font-size: 9px;
+}
+
+.operator-filter .select-trigger,
+.operator-filter .native-select {
+  width: 100%;
+  min-width: 0;
+}
+
+.operator-filter-result {
+  display: grid;
+  align-content: center;
+  min-height: 36px;
+  gap: 4px;
+  padding-left: 15px;
+  border-left: 1px solid var(--border);
+}
+
+.operator-filter-result span {
+  color: var(--muted-foreground);
+  font-size: 9px;
+}
+
+.operator-filter-result strong {
+  font-size: 11px;
+  font-weight: 550;
+}
+
+.operator-search {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  min-height: 36px;
+  gap: 8px;
+  padding: 0 11px;
+  color: var(--muted-foreground);
+  border: 1px solid var(--input);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--background);
+}
+
+.operator-search:focus-within {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 1px var(--ring);
+}
+
+.operator-search input {
+  width: 100%;
+  min-width: 0;
+  color: var(--foreground);
+  border: 0;
+  outline: 0;
+  background: transparent;
+}
+
+.operator-search input::placeholder {
+  color: #666666;
 }
 
 .inspection-toolbar {
@@ -2623,6 +2724,60 @@ td small {
   font-size: 8px;
 }
 
+.incident-inbox-card {
+  min-height: 300px;
+}
+
+.incident-badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.incident-inbox-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--background);
+}
+
+.incident-inbox-meta > div {
+  min-width: 0;
+  padding: 9px 10px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.incident-inbox-meta > div:nth-child(2n) {
+  border-right: 0;
+}
+
+.incident-inbox-meta > div:nth-last-child(-n + 2) {
+  border-bottom: 0;
+}
+
+.incident-inbox-meta dt,
+.incident-inbox-meta dd {
+  margin: 0;
+}
+
+.incident-inbox-meta dt {
+  margin-bottom: 4px;
+  color: var(--muted-foreground);
+  font-size: 8px;
+}
+
+.incident-inbox-meta dd {
+  overflow: hidden;
+  font-size: 9px;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .diagnosis-list,
 .hypothesis-list,
 .inspection-list,
@@ -2662,13 +2817,69 @@ td small {
   font-size: 11px;
 }
 
+.diagnosis-list article > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 13px;
+  padding-top: 11px;
+  color: var(--muted-foreground);
+  border-top: 1px solid var(--border);
+  font-size: 9px;
+}
+
+.diagnosis-list article > footer code {
+  color: var(--success);
+  font-size: 8px;
+}
+
+.diagnosis-attribution-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0 0 12px;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--background);
+}
+
+.diagnosis-attribution-grid > div {
+  min-width: 0;
+  padding: 9px 10px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.diagnosis-attribution-grid > div:nth-child(3n) {
+  border-right: 0;
+}
+
+.diagnosis-attribution-grid dt,
+.diagnosis-attribution-grid dd {
+  margin: 0;
+}
+
+.diagnosis-attribution-grid dt {
+  margin-bottom: 4px;
+  color: var(--muted-foreground);
+  font-size: 8px;
+}
+
+.diagnosis-attribution-grid dd {
+  overflow: hidden;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .hypothesis-list {
   gap: 7px;
 }
 
 .hypothesis-list > div {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 8px;
   padding: 10px;
   border: 1px solid var(--border);
@@ -2683,6 +2894,109 @@ td small {
 .hypothesis-list strong {
   color: var(--info);
   font-size: 10px;
+}
+
+.diagnosis-evidence-summary {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.diagnosis-evidence-summary > div {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 10px;
+}
+
+.diagnosis-evidence-summary span {
+  color: var(--muted-foreground);
+  font-size: 8px;
+}
+
+.diagnosis-evidence-summary p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 8px;
+  line-height: 1.55;
+}
+
+.incident-topology {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.7fr) minmax(0, 1.3fr);
+  min-height: 250px;
+}
+
+.topology-node-list {
+  border-right: 1px solid var(--border);
+}
+
+.topology-panel-title {
+  display: flex;
+  align-items: center;
+  min-height: 40px;
+  gap: 8px;
+  padding: 9px 14px;
+  color: var(--muted-foreground);
+  border-bottom: 1px solid var(--border);
+  background: #101010;
+  font-size: 10px;
+}
+
+.topology-node-list article {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 54px;
+  gap: 14px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.topology-node-list article > div {
+  min-width: 0;
+}
+
+.topology-node-list strong,
+.topology-node-list small {
+  display: block;
+}
+
+.topology-node-list strong {
+  overflow: hidden;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topology-node-list small {
+  margin-top: 4px;
+  color: var(--muted-foreground);
+  font-size: 8px;
+}
+
+.topology-edge-list article {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  min-height: 54px;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.topology-edge-list code {
+  overflow: hidden;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topology-edge-list span {
+  color: var(--info);
+  font-size: 8px;
+  white-space: nowrap;
 }
 
 .inspection-list > a {

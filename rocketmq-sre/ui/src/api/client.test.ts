@@ -54,6 +54,7 @@ describe("stateLabel", () => {
     await api.getClusterSlo("cluster/id");
     await api.getClusterHealth("cluster/id");
     await api.getFleetHealth("cn/shanghai");
+    await api.getIncidentTopology("incident/id");
 
     expect(
       fetchMock.mock.calls.map(([input]) => String(input)),
@@ -69,6 +70,7 @@ describe("stateLabel", () => {
       "/v1/clusters/cluster%2Fid/slo",
       "/v1/clusters/cluster%2Fid/health",
       "/v1/fleet/health?region=cn%2Fshanghai",
+      "/v1/incidents/incident%2Fid/topology",
     ]);
     const healthHeaders = new Headers(
       fetchMock.mock.calls[9]?.[1]?.headers,

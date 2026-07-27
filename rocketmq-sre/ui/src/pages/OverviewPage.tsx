@@ -36,10 +36,19 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import { useSreData } from "@/data/SreDataContext";
+import {
+  dataQualityLabel,
+  filterAndSortClusters,
+  projectFleetHealth,
+  uniqueClusterValues,
+} from "@/features/fleet/clusterFilters";
 
 export function OverviewPage() {
   const { clusters, loading, error, refresh, capability, api } = useSreData();
   const [environment, setEnvironment] = useState("all");
+  const [region, setRegion] = useState("all");
+  const [tenant, setTenant] = useState("all");
+  const [version, setVersion] = useState("all");
   const [selectedId, setSelectedId] = useState<string>();
   const [capabilityMap, setCapabilityMap] = useState<
     Record<string, CapabilitySnapshot>
@@ -50,14 +59,46 @@ export function OverviewPage() {
 
   const filteredClusters = useMemo(
     () =>
-      environment === "all"
-        ? clusters
-        : clusters.filter((cluster) => cluster.environment === environment),
-    [clusters, environment],
+      filterAndSortClusters(
+        clusters,
+        { environment, region, tenant, version },
+        fleetHealth,
+      ),
+    [clusters, environment, fleetHealth, region, tenant, version],
   );
   const environments = useMemo(
-    () => [...new Set(clusters.map((cluster) => cluster.environment))],
+    () => uniqueClusterValues(clusters, (cluster) => cluster.environment),
     [clusters],
+  );
+  const regions = useMemo(
+    () => uniqueClusterValues(clusters, (cluster) => cluster.region),
+    [clusters],
+  );
+  const tenants = useMemo(
+    () => uniqueClusterValues(clusters, (cluster) => cluster.tenant_id),
+    [clusters],
+  );
+  const versions = useMemo(
+    () =>
+      uniqueClusterValues(
+        clusters,
+        (cluster) => cluster.rocketmq_version,
+      ),
+    [clusters],
+  );
+  const visibleFleetHealth = useMemo(
+    () => projectFleetHealth(fleetHealth, filteredClusters),
+    [fleetHealth, filteredClusters],
+  );
+  const healthByCluster = useMemo(
+    () =>
+      new Map(
+        fleetHealth?.clusters.map((cluster) => [
+          cluster.cluster_id,
+          cluster,
+        ]),
+      ),
+    [fleetHealth],
   );
 
   useEffect(() => {
@@ -110,7 +151,10 @@ export function OverviewPage() {
     const controller = new AbortController();
     setFleetHealthError(undefined);
     void api
-      .getFleetHealth(undefined, controller.signal)
+      .getFleetHealth(
+        region === "all" ? undefined : region,
+        controller.signal,
+      )
       .then(setFleetHealth)
       .catch((cause: unknown) => {
         if (
@@ -122,9 +166,9 @@ export function OverviewPage() {
               : "Fleet 健康评分暂不可用",
           );
         }
-      });
+    });
     return () => controller.abort();
-  }, [api]);
+  }, [api, region]);
 
   const selected = filteredClusters.find(
     (cluster) => cluster.id === selectedId,
@@ -141,33 +185,52 @@ export function OverviewPage() {
         title="集群战情台"
         description="汇总只读接入、安全握手和证据覆盖状态，缺失数据始终显式标记。"
         actions={
-          <>
-            <Select value={environment} onValueChange={setEnvironment}>
-              <SelectTrigger aria-label="环境筛选">
-                <SelectValue placeholder="全部环境" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">全部环境</SelectItem>
-                {environments.map((item) => (
-                  <SelectItem key={item} value={item}>
-                    {item}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Button disabled={loading} onClick={() => void refresh()}>
-              <RefreshCw
-                aria-hidden="true"
-                className={loading ? "spin" : undefined}
-                size={15}
-              />
-              刷新证据
-            </Button>
-          </>
+          <Button disabled={loading} onClick={() => void refresh()}>
+            <RefreshCw
+              aria-hidden="true"
+              className={loading ? "spin" : undefined}
+              size={15}
+            />
+            刷新证据
+          </Button>
         }
       />
 
       <ReadOnlyBoundary />
+
+      <section
+        aria-label="Fleet 筛选"
+        className="operator-filter-bar overview-filter-bar"
+      >
+        <FilterSelect
+          label="环境"
+          value={environment}
+          values={environments}
+          onChange={setEnvironment}
+        />
+        <FilterSelect
+          label="区域"
+          value={region}
+          values={regions}
+          onChange={setRegion}
+        />
+        <FilterSelect
+          label="租户"
+          value={tenant}
+          values={tenants}
+          onChange={setTenant}
+        />
+        <FilterSelect
+          label="RocketMQ 版本"
+          value={version}
+          values={versions}
+          onChange={setVersion}
+        />
+        <div className="operator-filter-result">
+          <span>排序</span>
+          <strong>最严重优先 · {filteredClusters.length} 个结果</strong>
+        </div>
+      </section>
 
       {error && (
         <div className="inline-alert warning" role="status">
@@ -203,8 +266,8 @@ export function OverviewPage() {
         />
       </section>
 
-      {fleetHealth ? (
-        <FleetHealthOverview report={fleetHealth} />
+      {visibleFleetHealth ? (
+        <FleetHealthOverview report={visibleFleetHealth} />
       ) : (
         <section className="data-surface health-loading-surface">
           <div className="state-message">
@@ -235,6 +298,10 @@ export function OverviewPage() {
                 <tr>
                   <th>集群</th>
                   <th>环境</th>
+                  <th>健康评分</th>
+                  <th>活跃风险</th>
+                  <th>容量风险</th>
+                  <th>数据质量</th>
                   <th>安全状态</th>
                   <th>MCP 协议</th>
                   <th>业务 Schema</th>
@@ -250,6 +317,13 @@ export function OverviewPage() {
                   const isSelected = cluster.id === selectedId;
                   const current = capabilityMap[cluster.id];
                   const rowSummary = summarizeCapability(current);
+                  const health = healthByCluster.get(cluster.id);
+                  const capacitySignals =
+                    health?.triggered_sli_ids?.filter((id) =>
+                      /(capacity|disk|store|connection|tps|runway)/i.test(
+                        id,
+                      ),
+                    ) ?? [];
                   return (
                     <tr
                       aria-selected={isSelected}
@@ -284,6 +358,35 @@ export function OverviewPage() {
                       <td>
                         {cluster.environment}
                         <small>{cluster.region}</small>
+                      </td>
+                      <td>
+                        {health?.score ?? "—"}
+                        <small>{health?.status ?? "未采集"}</small>
+                      </td>
+                      <td>
+                        {health?.critical_incidents ?? "—"}
+                        <small>
+                          {health?.triggered_sli_ids?.length
+                            ? `${health.triggered_sli_ids.length} 个 SLI`
+                            : "未触发"}
+                        </small>
+                      </td>
+                      <td>
+                        {capacitySignals.length > 0 ? "有风险" : "未触发"}
+                        <small>
+                          {capacitySignals.join(" · ") || "健康证据内无容量告警"}
+                        </small>
+                      </td>
+                      <td>
+                        {dataQualityLabel(health?.data_quality)}
+                        <small>
+                          {health?.observed_at
+                            ? new Date(health.observed_at).toLocaleString(
+                                "zh-CN",
+                                { hour12: false },
+                              )
+                            : "未观测"}
+                        </small>
                       </td>
                       <td>
                         <StatusBadge state={cluster.state} />
@@ -421,6 +524,37 @@ export function OverviewPage() {
         )}
       </section>
     </div>
+  );
+}
+
+function FilterSelect({
+  label,
+  value,
+  values,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  values: string[];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="operator-filter">
+      <span>{label}</span>
+      <Select value={value} onValueChange={onChange}>
+        <SelectTrigger aria-label={`${label}筛选`}>
+          <SelectValue placeholder={`全部${label}`} />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">全部{label}</SelectItem>
+          {values.map((item) => (
+            <SelectItem key={item} value={item}>
+              {item}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </label>
   );
 }
 
