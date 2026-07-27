@@ -45,7 +45,22 @@ rocketmq-{{ .service }}
 {{- if lt (int .Values.releaseIdentity.storageGeneration) 1 -}}
   {{- fail "releaseIdentity.storageGeneration must be at least 1" -}}
 {{- end -}}
+{{- $maintenancePolicy := .Files.Get "files/maintenance-policy.json" -}}
+{{- if .Values.maintenance.enabled -}}
+  {{- if not $maintenancePolicy -}}
+    {{- fail "maintenance.enabled=true requires files/maintenance-policy.json" -}}
+  {{- end -}}
+  {{- if ne (sha256sum $maintenancePolicy) .Values.maintenance.sha256 -}}
+    {{- fail "maintenance policy bytes do not match maintenance.sha256" -}}
+  {{- end -}}
+  {{- if ne (int .Values.maintenance.version) 1 -}}
+    {{- fail "maintenance policy version must match the chart policy version" -}}
+  {{- end -}}
+{{- end -}}
 {{- if eq $profile "production-controller-ha" -}}
+  {{- if not .Values.maintenance.enabled -}}
+    {{- fail "production-controller-ha requires maintenance.enabled=true" -}}
+  {{- end -}}
   {{- $controllerReplicas := int .Values.services.controller.replicas -}}
   {{- $controllerQuorum := add (div $controllerReplicas 2) 1 -}}
   {{- if or (lt $controllerReplicas 3) (eq (mod $controllerReplicas 2) 0) -}}

@@ -15,12 +15,15 @@
 pub mod local_file_message_store;
 mod owned_message_store;
 pub mod recovery;
+mod release_checkpoint;
 pub(crate) mod runtime_state;
 
 #[cfg(feature = "rocksdb_store")]
 pub mod rocksdb_message_store;
 
 pub use owned_message_store::OwnedMessageStore;
+pub use release_checkpoint::StoreReleaseCheckpointError;
+pub use release_checkpoint::StoreReleaseCheckpointService;
 
 use std::any::Any;
 use std::collections::HashMap;

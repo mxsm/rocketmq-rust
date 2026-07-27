@@ -26,6 +26,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::env;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -34,6 +35,9 @@ use std::time::Duration;
 
 use crate::config::ControllerConfigReader;
 use crate::controller::broker_heartbeat_manager::DEFAULT_BROKER_CHANNEL_EXPIRED_TIME;
+use crate::controller::release_snapshot::controller_snapshot_error;
+use crate::controller::release_snapshot::ControllerReleaseSnapshot;
+use crate::controller::release_snapshot::ControllerReleaseSnapshotRepository;
 use crate::controller::Controller;
 use crate::error::ControllerError;
 use crate::error::Result;
@@ -54,11 +58,18 @@ use crate::ReplicasInfoManager;
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
+use rocketmq_auth::MaintenanceAuthorizationGrant;
+use rocketmq_auth::MaintenanceCapability;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_error::SerializationError;
 use rocketmq_error::UnifiedServiceError;
 use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::body::release_checkpoint::ControllerReleaseSnapshotManifest;
+use rocketmq_protocol::protocol::body::release_checkpoint::ControllerReleaseSnapshotRequest;
+use rocketmq_protocol::protocol::body::release_checkpoint::ReleaseCheckpointArtifact;
+use rocketmq_protocol::protocol::body::release_checkpoint::ReleaseCheckpointRestoreVerification;
+use rocketmq_protocol::protocol::body::release_checkpoint::RELEASE_CHECKPOINT_SCHEMA_VERSION;
 use rocketmq_protocol::protocol::body::sync_state_set_body::SyncStateSet;
 use rocketmq_protocol::protocol::header::controller::alter_sync_state_set_request_header::AlterSyncStateSetRequestHeader;
 use rocketmq_protocol::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
@@ -74,11 +85,15 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::CommandCustomHeader;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_runtime::BlockingKind;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
+use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::TaskGroup;
+use sha2::Digest;
+use sha2::Sha256;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::sync::Mutex as AsyncMutex;
@@ -491,6 +506,179 @@ impl OpenRaftController {
             .node()
             .ok_or_else(|| ControllerError::NotInitialized("OpenRaft node is not started".to_string()))?;
         node.initialize_cluster(nodes).await
+    }
+
+    /// Creates a release snapshot after a leader ReadIndex barrier.
+    ///
+    /// The authorization grant is minted only by the auth-owned maintenance
+    /// policy and carries the absolute deadline, fencing token, and resource
+    /// budget into this storage boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when authorization is unsuitable, the request is
+    /// invalid, this node is unavailable/not leader, the absolute deadline is
+    /// exceeded, snapshot creation fails, or the resulting artifact violates
+    /// its integrity/resource contract.
+    pub async fn create_release_snapshot(
+        &self,
+        authorization: &MaintenanceAuthorizationGrant,
+        request: ControllerReleaseSnapshotRequest,
+    ) -> RocketMQResult<ControllerReleaseSnapshot> {
+        if authorization.capability() != MaintenanceCapability::ReleaseCheckpoint {
+            return Err(RocketMQError::authentication_failed(
+                "maintenance grant does not authorize release checkpoints",
+            ));
+        }
+        request.validate().map_err(controller_snapshot_error)?;
+
+        let now_unix_millis = current_millis();
+        let timeout_millis = authorization
+            .deadline_unix_millis()
+            .checked_sub(now_unix_millis)
+            .filter(|remaining| *remaining > 0)
+            .ok_or(RocketMQError::ControllerConsensusTimeout {
+                operation: "create release snapshot",
+                timeout_ms: 0,
+            })?;
+        let deadline = ShutdownDeadline::after(Duration::from_millis(timeout_millis));
+        let node = self
+            .node()
+            .ok_or_else(|| RocketMQError::not_initialized("OpenRaft node is not started"))?;
+
+        let read_barrier = tokio::time::timeout(deadline.remaining(), node.ensure_linearizable_read())
+            .await
+            .map_err(|_| RocketMQError::ControllerConsensusTimeout {
+                operation: "release snapshot ReadIndex",
+                timeout_ms: timeout_millis,
+            })?
+            .map_err(RocketMQError::Controller)?
+            .ok_or_else(|| controller_snapshot_error("Controller has no committed Raft state to snapshot"))?;
+
+        tokio::time::timeout(deadline.remaining(), node.raft().trigger().snapshot())
+            .await
+            .map_err(|_| RocketMQError::ControllerConsensusTimeout {
+                operation: "trigger release snapshot",
+                timeout_ms: timeout_millis,
+            })?
+            .map_err(|error| {
+                RocketMQError::Controller(ControllerError::raft_source("trigger release snapshot", error))
+            })?;
+
+        let snapshot = loop {
+            let current = tokio::time::timeout(deadline.remaining(), node.raft().get_snapshot())
+                .await
+                .map_err(|_| RocketMQError::ControllerConsensusTimeout {
+                    operation: "await release snapshot",
+                    timeout_ms: timeout_millis,
+                })?
+                .map_err(|error| {
+                    RocketMQError::Controller(ControllerError::raft_source("read current release snapshot", error))
+                })?;
+            if let Some(snapshot) = current {
+                if snapshot
+                    .meta
+                    .last_log_id
+                    .is_some_and(|last_log_id| last_log_id >= read_barrier)
+                {
+                    break snapshot;
+                }
+            }
+            if deadline.is_expired() {
+                return Err(RocketMQError::ControllerConsensusTimeout {
+                    operation: "await release snapshot",
+                    timeout_ms: timeout_millis,
+                });
+            }
+            tokio::task::yield_now().await;
+        };
+
+        let snapshot_id = snapshot.meta.snapshot_id.clone();
+        let last_applied = snapshot
+            .meta
+            .last_log_id
+            .ok_or_else(|| controller_snapshot_error("release snapshot has no last-applied Raft position"))?;
+        let voter_ids = snapshot.meta.last_membership.voter_ids().collect::<Vec<_>>();
+        let payload = snapshot.snapshot.into_inner();
+        crate::openraft::validate_snapshot_payload(&payload).map_err(controller_snapshot_error)?;
+        let max_snapshot_bytes =
+            (crate::openraft::SNAPSHOT_MAX_BYTES as u64).min(authorization.resource_budget().max_checkpoint_bytes);
+        if payload.len() as u64 > max_snapshot_bytes {
+            return Err(RocketMQError::MessageTooLarge {
+                actual: payload.len(),
+                limit: usize::try_from(max_snapshot_bytes).unwrap_or(usize::MAX),
+            });
+        }
+
+        let (payload, sha256) = self
+            .service_context
+            .cpu_crypto()
+            .spawn_until(
+                "controller.release-snapshot.sha256",
+                BlockingKind::CpuBound,
+                deadline,
+                move || {
+                    let sha256 = hex::encode(Sha256::digest(&payload));
+                    (payload, sha256)
+                },
+            )
+            .await
+            .map_err(|error| RocketMQError::internal("hash controller release snapshot", error))?;
+        let node_id = self.config.snapshot().node_id;
+        let manifest = ControllerReleaseSnapshotManifest {
+            artifact: ReleaseCheckpointArtifact {
+                schema_version: RELEASE_CHECKPOINT_SCHEMA_VERSION,
+                checkpoint_id: request.checkpoint_id,
+                checkpoint_set_id: request.checkpoint_set_id,
+                generation: request.generation,
+                barrier_id: request.barrier_id,
+                created_at_unix_millis: current_millis(),
+                length_bytes: payload.len() as u64,
+                sha256: sha256.clone(),
+                uri: format!("controller://node-{node_id}/objects/{sha256}/{snapshot_id}"),
+            },
+            snapshot_id,
+            last_applied_index: last_applied.index,
+            last_applied_term: last_applied.leader_id.term,
+            voter_ids,
+        };
+        manifest.validate().map_err(controller_snapshot_error)?;
+
+        let snapshot = ControllerReleaseSnapshot { manifest, payload };
+        self.release_snapshot_repository()?
+            .publish(authorization, &snapshot)
+            .await?;
+        Ok(snapshot)
+    }
+
+    /// Verifies a durably published Controller release snapshot without installing it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when authorization, deadline, manifest binding,
+    /// resource budget, immutable artifact I/O, or snapshot integrity fails.
+    pub async fn verify_release_snapshot(
+        &self,
+        authorization: &MaintenanceAuthorizationGrant,
+        manifest: &ControllerReleaseSnapshotManifest,
+    ) -> RocketMQResult<ReleaseCheckpointRestoreVerification> {
+        self.release_snapshot_repository()?
+            .verify(authorization, manifest)
+            .await
+    }
+
+    fn release_snapshot_repository(&self) -> RocketMQResult<ControllerReleaseSnapshotRepository> {
+        let config = self.config.snapshot();
+        if config.maintenance_checkpoint_root.trim().is_empty() {
+            return Err(RocketMQError::not_initialized(
+                "Controller maintenance checkpoint root is not configured",
+            ));
+        }
+        Ok(ControllerReleaseSnapshotRepository::new(
+            PathBuf::from(&config.maintenance_checkpoint_root),
+            config.node_id,
+            &self.service_context,
+        ))
     }
 
     pub async fn add_learner(&self, node_id: NodeId, node_info: Node, blocking: bool) -> Result<()> {

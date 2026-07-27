@@ -158,6 +158,7 @@ impl StorageConfig {
 pub struct SecurityConfig {
     authentication_enabled: bool,
     authorization_enabled: bool,
+    maintenance_enabled: bool,
     tls_enabled: bool,
 }
 
@@ -170,6 +171,11 @@ impl SecurityConfig {
     #[must_use]
     pub const fn authorization_enabled(&self) -> bool {
         self.authorization_enabled
+    }
+
+    #[must_use]
+    pub const fn maintenance_enabled(&self) -> bool {
+        self.maintenance_enabled
     }
 
     #[must_use]
@@ -594,6 +600,51 @@ fn validate_security(broker: &BrokerConfig) -> Result<SecurityConfig, BrokerConf
             "must not be blank when broker authentication or authorization is enabled",
         ));
     }
+    if broker.maintenance_enabled {
+        if !broker.authentication_enabled || !broker.authorization_enabled {
+            return Err(BrokerConfigError::invalid(
+                ConfigSection::Security,
+                "broker.maintenanceEnabled",
+                "requires authenticationEnabled=true and authorizationEnabled=true",
+            ));
+        }
+        if broker.acl_file.trim().is_empty()
+            || broker.maintenance_policy_path.trim().is_empty()
+            || broker.maintenance_policy_version == 0
+            || broker.maintenance_checkpoint_root.trim().is_empty()
+        {
+            return Err(BrokerConfigError::invalid(
+                ConfigSection::Security,
+                "broker.maintenancePolicy",
+                "requires aclFile, maintenancePolicyPath, maintenanceCheckpointRoot, and a non-zero \
+                 maintenancePolicyVersion",
+            ));
+        }
+        let checkpoint_root = PathBuf::from(broker.maintenance_checkpoint_root.as_str());
+        let store_root = PathBuf::from(broker.store_path_root_dir.as_str());
+        if checkpoint_root == store_root
+            || checkpoint_root.starts_with(&store_root)
+            || store_root.starts_with(&checkpoint_root)
+        {
+            return Err(BrokerConfigError::invalid(
+                ConfigSection::Security,
+                "broker.maintenanceCheckpointRoot",
+                "must not overlap the live Store root",
+            ));
+        }
+        if broker.maintenance_policy_sha256.len() != 64
+            || !broker
+                .maintenance_policy_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(BrokerConfigError::invalid(
+                ConfigSection::Security,
+                "broker.maintenancePolicySha256",
+                "must be 64 lowercase hexadecimal characters",
+            ));
+        }
+    }
     let tls = &broker.broker_server_config.tls_config;
     if tls.enable && !tls.test_mode_enable {
         if tls.server.cert_path.as_deref().is_none_or(str::is_empty) {
@@ -615,6 +666,7 @@ fn validate_security(broker: &BrokerConfig) -> Result<SecurityConfig, BrokerConf
     Ok(SecurityConfig {
         authentication_enabled: broker.authentication_enabled,
         authorization_enabled: broker.authorization_enabled,
+        maintenance_enabled: broker.maintenance_enabled,
         tls_enabled: tls.enable,
     })
 }

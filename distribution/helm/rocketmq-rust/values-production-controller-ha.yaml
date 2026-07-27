@@ -9,6 +9,14 @@ releaseIdentity:
   secretVersion: local-reference-1
   storageGeneration: 1
 
+maintenance:
+  enabled: true
+  configMapName: rocketmq-maintenance-policy-v1
+  policyKey: maintenance-policy.json
+  mountPath: /etc/rocketmq/auth/maintenance-policy.json
+  version: 1
+  sha256: 328683f40a3aadcca0592c889196294eab10037271b0671de7d1c77287fa51c8
+
 # These tags are loaded into the local cluster and are never pulled. Build them
 # with `docker buildx build --load`, then use the cluster-specific image-load command.
 services:

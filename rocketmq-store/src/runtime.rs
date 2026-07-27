@@ -16,6 +16,7 @@ use rocketmq_error::RocketMQError;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::BlockingExecutorSnapshot;
 use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskId;
@@ -42,6 +43,22 @@ impl StoreRuntimeScope {
     {
         self.blocking_executor
             .spawn_io(name, operation)
+            .await
+            .map_err(|error| RocketMQError::storage_write_failed("store", format!("{name}: {error}")))
+    }
+
+    pub(crate) async fn spawn_io_until<F, R>(
+        &self,
+        name: &'static str,
+        deadline: ShutdownDeadline,
+        operation: F,
+    ) -> Result<R, RocketMQError>
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        self.blocking_executor
+            .spawn_io_until(name, deadline, operation)
             .await
             .map_err(|error| RocketMQError::storage_write_failed("store", format!("{name}: {error}")))
     }

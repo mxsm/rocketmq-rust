@@ -40,6 +40,7 @@ use rocketmq_auth::AuthConfig;
 use rocketmq_auth::AuthMetricsSnapshot;
 use rocketmq_auth::AuthRuntime;
 use rocketmq_auth::AuthRuntimeBuilder;
+use rocketmq_auth::MaintenanceAuthorizer;
 use rocketmq_auth::SignatureAlgorithm;
 use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_model::common::config::TopicConfig;
@@ -180,6 +181,7 @@ use crate::processor::lite_manager_processor::LiteManagerStoreCapability;
 use crate::processor::lite_subscription_ctl_processor::LiteSubscriptionCtlContext;
 use crate::processor::lite_subscription_ctl_processor::LiteSubscriptionCtlPolicy;
 use crate::processor::lite_subscription_ctl_processor::LiteSubscriptionCtlProcessor;
+use crate::processor::maintenance_request_processor::MaintenanceRequestProcessor;
 use crate::processor::notification_processor::NotificationPolicy;
 use crate::processor::notification_processor::NotificationPopOffsetCapability;
 use crate::processor::notification_processor::NotificationProcessor;
@@ -470,6 +472,10 @@ fn build_auth_config(broker_config: &BrokerConfig) -> AuthConfig {
         authorization_metadata_provider: broker_config.authorization_metadata_provider.clone(),
         authorization_strategy: broker_config.authorization_strategy.clone(),
         authorization_whitelist: broker_config.authorization_whitelist.clone(),
+        maintenance_enabled: broker_config.maintenance_enabled,
+        maintenance_policy_path: broker_config.maintenance_policy_path.clone(),
+        maintenance_policy_version: broker_config.maintenance_policy_version,
+        maintenance_policy_sha256: broker_config.maintenance_policy_sha256.clone(),
         migrate_auth_from_v1_enabled: broker_config.migrate_auth_from_v1_enabled,
         user_cache_max_num: broker_config.user_cache_max_num,
         user_cache_expired_second: broker_config.user_cache_expired_second,
@@ -820,6 +826,7 @@ pub(crate) struct BrokerRuntimeState<MS: MessageStore> {
     notification_processor: Option<Arc<NotificationProcessor<MS>>>,
     query_assignment_processor: Option<Arc<QueryAssignmentProcessor>>,
     auth_runtime: Option<Arc<AuthRuntime>>,
+    maintenance_authorizer: Option<Arc<MaintenanceAuthorizer>>,
     auth_admin_service: Option<Arc<AuthAdminService>>,
     metadata_io: Option<Result<MetadataIoActor, MetadataIoError>>,
     broker_attached_plugins: Vec<Arc<dyn BrokerAttachedPlugin>>,

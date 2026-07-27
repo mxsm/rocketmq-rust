@@ -19,6 +19,8 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::authentication::acl_signer::SignatureAlgorithm;
+use crate::maintenance::MaintenancePolicyError;
+use crate::maintenance::MaintenancePolicyReference;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -48,6 +50,15 @@ pub struct AuthConfig {
     pub authorization_metadata_provider: CheetahString,
     pub authorization_strategy: CheetahString,
     pub authorization_whitelist: CheetahString,
+
+    /// Whether privileged production maintenance APIs are exposed.
+    pub maintenance_enabled: bool,
+    /// Pinned maintenance policy path, resolved by the service composition root.
+    pub maintenance_policy_path: CheetahString,
+    /// Expected maintenance policy version.
+    pub maintenance_policy_version: u64,
+    /// Expected SHA-256 of the exact maintenance policy bytes.
+    pub maintenance_policy_sha256: CheetahString,
 
     pub migrate_auth_from_v1_enabled: bool,
 
@@ -101,6 +112,10 @@ impl fmt::Debug for AuthConfig {
             .field("authorization_metadata_provider", &self.authorization_metadata_provider)
             .field("authorization_strategy", &self.authorization_strategy)
             .field("authorization_whitelist", &self.authorization_whitelist)
+            .field("maintenance_enabled", &self.maintenance_enabled)
+            .field("maintenance_policy_path", &self.maintenance_policy_path)
+            .field("maintenance_policy_version", &self.maintenance_policy_version)
+            .field("maintenance_policy_sha256", &self.maintenance_policy_sha256)
             .field("migrate_auth_from_v1_enabled", &self.migrate_auth_from_v1_enabled)
             .field("user_cache_max_num", &self.user_cache_max_num)
             .field("user_cache_expired_second", &self.user_cache_expired_second)
@@ -166,6 +181,11 @@ impl Default for AuthConfig {
             authorization_strategy: CheetahString::new(),
             authorization_whitelist: CheetahString::new(),
 
+            maintenance_enabled: false,
+            maintenance_policy_path: CheetahString::new(),
+            maintenance_policy_version: 0,
+            maintenance_policy_sha256: CheetahString::new(),
+
             migrate_auth_from_v1_enabled: false,
 
             user_cache_max_num: 1000,
@@ -182,6 +202,39 @@ impl Default for AuthConfig {
             stateful_authorization_cache_expired_second: 60,
             stateful_authorization_cache_negative_enable: false,
         }
+    }
+}
+
+impl AuthConfig {
+    /// Builds the immutable maintenance policy reference after validating the
+    /// service-level fail-closed prerequisites.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed reference error when maintenance is enabled without
+    /// authentication, authorization, or a complete path/version/SHA pin.
+    pub fn maintenance_policy_reference(&self) -> Result<Option<MaintenancePolicyReference>, MaintenancePolicyError> {
+        if !self.maintenance_enabled {
+            return Ok(None);
+        }
+        if !self.authentication_enabled || !self.authorization_enabled {
+            return Err(MaintenancePolicyError::InvalidReference(
+                "maintenance requires both authentication and authorization".to_string(),
+            ));
+        }
+        if self.maintenance_policy_path.trim().is_empty()
+            || self.maintenance_policy_version == 0
+            || self.maintenance_policy_sha256.trim().is_empty()
+        {
+            return Err(MaintenancePolicyError::InvalidReference(
+                "maintenance policy path, version, and SHA-256 are required".to_string(),
+            ));
+        }
+        Ok(Some(MaintenancePolicyReference {
+            path: self.maintenance_policy_path.as_str().into(),
+            version: self.maintenance_policy_version,
+            sha256: self.maintenance_policy_sha256.to_string(),
+        }))
     }
 }
 
@@ -216,6 +269,10 @@ mod tests {
         // Boolean fields
         assert!(!config.authentication_enabled);
         assert!(!config.authorization_enabled);
+        assert!(!config.maintenance_enabled);
+        assert!(config.maintenance_policy_path.is_empty());
+        assert_eq!(config.maintenance_policy_version, 0);
+        assert!(config.maintenance_policy_sha256.is_empty());
         assert!(!config.acl_file_watch_enabled);
         assert!(!config.migrate_auth_from_v1_enabled);
         assert_eq!(config.acl_file_watch_interval_millis, 5_000);
@@ -273,5 +330,38 @@ statefulAuthorizationCacheNegativeEnable: true
         assert!(debug.contains("<redacted>"));
         assert!(!debug.contains("init-secret"));
         assert!(!debug.contains("inner-secret"));
+    }
+
+    #[test]
+    fn maintenance_reference_requires_auth_and_complete_pin() {
+        let disabled = AuthConfig::default();
+        assert!(disabled
+            .maintenance_policy_reference()
+            .expect("disabled maintenance has no reference")
+            .is_none());
+
+        let incomplete = AuthConfig {
+            maintenance_enabled: true,
+            ..AuthConfig::default()
+        };
+        assert!(incomplete.maintenance_policy_reference().is_err());
+
+        let complete = AuthConfig {
+            authentication_enabled: true,
+            authorization_enabled: true,
+            maintenance_enabled: true,
+            maintenance_policy_path: "maintenance-policy.json".into(),
+            maintenance_policy_version: 7,
+            maintenance_policy_sha256: "a".repeat(64).into(),
+            ..AuthConfig::default()
+        };
+        assert_eq!(
+            complete
+                .maintenance_policy_reference()
+                .expect("complete reference")
+                .expect("enabled maintenance reference")
+                .version,
+            7
+        );
     }
 }

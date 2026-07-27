@@ -266,6 +266,65 @@ impl BrokerRuntime {
             broker_request_processor.set_auth_runtime(auth_runtime.clone());
         }
         broker_request_processor.set_broker_fast_failure(self.composition.state.broker_fast_failure.clone());
+        let broker_config = self.composition.state.broker_config();
+        if broker_config.maintenance_enabled {
+            let auth_runtime = self.composition.state.auth_runtime.as_ref().cloned().ok_or_else(|| {
+                BrokerStartupError::Initialization {
+                    component: "maintenance_request_processor",
+                    detail: "maintenance API requires an initialized auth runtime".to_string(),
+                }
+            })?;
+            let authorizer = self
+                .composition
+                .state
+                .maintenance_authorizer
+                .as_ref()
+                .cloned()
+                .ok_or_else(|| BrokerStartupError::Initialization {
+                    component: "maintenance_request_processor",
+                    detail: "maintenance API requires a validated maintenance policy".to_string(),
+                })?;
+            let store =
+                self.composition
+                    .state
+                    .message_store_weak()
+                    .ok_or_else(|| BrokerStartupError::Initialization {
+                        component: "maintenance_request_processor",
+                        detail: "maintenance API requires the Broker-owned Store".to_string(),
+                    })?;
+            let service_context = self
+                .composition
+                .state
+                .service_context
+                .as_ref()
+                .cloned()
+                .ok_or_else(|| BrokerStartupError::Initialization {
+                    component: "maintenance_request_processor",
+                    detail: "maintenance API requires a lifecycle-owned service context".to_string(),
+                })?;
+            let checkpoint_service = Arc::new(rocketmq_store::StoreReleaseCheckpointService::new(
+                store,
+                std::path::PathBuf::from(broker_config.maintenance_checkpoint_root.as_str()),
+                service_context.child("broker.release-checkpoint"),
+            ));
+            let maintenance_processor = Arc::new(MaintenanceRequestProcessor::new(
+                Arc::clone(&broker_config),
+                auth_runtime,
+                authorizer,
+                checkpoint_service,
+            ));
+            for request_code in [
+                RequestCode::MaintenanceGetCapabilities,
+                RequestCode::MaintenanceCreateStoreCheckpoint,
+                RequestCode::MaintenanceVerifyCheckpoint,
+                RequestCode::MaintenanceRestoreVerify,
+            ] {
+                broker_request_processor.register_processor(
+                    request_code as i32,
+                    BrokerProcessorType::Maintenance(Arc::clone(&maintenance_processor)),
+                );
+            }
+        }
         let send_message_processor = Arc::new(send_message_processor);
 
         broker_request_processor.register_processor(

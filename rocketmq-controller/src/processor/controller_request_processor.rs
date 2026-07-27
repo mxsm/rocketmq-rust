@@ -65,15 +65,23 @@ use crate::metrics::RequestHandleStatus;
 use crate::metrics::RequestType as MetricsRequestType;
 use crate::Controller;
 use cheetah_string::CheetahString;
+use rocketmq_auth::MaintenanceAuthorizationContext;
+use rocketmq_auth::MaintenanceAuthorizationGrant;
+use rocketmq_auth::MaintenanceCapability;
+use rocketmq_auth::MaintenanceRequestClass;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::body::release_checkpoint::ControllerReleaseSnapshotManifest;
+use rocketmq_protocol::protocol::body::release_checkpoint::ControllerReleaseSnapshotRequest;
+use rocketmq_protocol::protocol::body::release_checkpoint::MaintenanceCapabilitiesResponse;
 use rocketmq_protocol::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
 use rocketmq_protocol::protocol::header::controller::clean_broker_data_request_header::CleanBrokerDataRequestHeader;
 use rocketmq_protocol::protocol::header::controller::elect_master_request_header::ElectMasterRequestHeader;
 use rocketmq_protocol::protocol::header::controller::get_next_broker_id_request_header::GetNextBrokerIdRequestHeader;
 use rocketmq_protocol::protocol::header::controller::register_broker_to_controller_request_header::RegisterBrokerToControllerRequestHeader;
+use rocketmq_protocol::protocol::header::maintenance_request_header::MaintenanceRequestHeader;
 use rocketmq_protocol::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingDeserializable;
@@ -198,6 +206,16 @@ impl ControllerRequestProcessor {
             RequestCode::ControllerGetNextBrokerId => self.handle_get_next_broker_id(channel, ctx, request).await,
             RequestCode::ControllerApplyBrokerId => self.handle_apply_broker_id(channel, ctx, request).await,
             RequestCode::ControllerRegisterBroker => self.handle_register_broker(channel, ctx, request).await,
+            RequestCode::MaintenanceGetCapabilities => {
+                self.handle_maintenance_capabilities(channel, ctx, request).await
+            }
+            RequestCode::MaintenanceCreateControllerSnapshot => {
+                self.handle_create_release_snapshot(channel, ctx, request).await
+            }
+            RequestCode::MaintenanceVerifyCheckpoint => {
+                self.handle_verify_release_snapshot(channel, ctx, request).await
+            }
+            RequestCode::MaintenanceRestoreVerify => self.handle_restore_verify(channel, ctx, request).await,
             _ => {
                 let error_msg = format!("request type {} not supported", request.code());
                 Ok(Some(RemotingCommand::create_response_command_with_code_remark(
@@ -209,6 +227,166 @@ impl ControllerRequestProcessor {
     }
 
     // ==================== Request Handlers ====================
+
+    async fn authorize_maintenance_request(
+        &self,
+        channel: &Channel,
+        request: &RemotingCommand,
+    ) -> RocketMQResult<(MaintenanceRequestHeader, MaintenanceAuthorizationGrant)> {
+        let controller_manager = self.controller_manager()?;
+        let config = controller_manager.controller_config();
+        if !config.maintenance_enabled {
+            return Err(RocketMQError::authentication_failed(
+                "Controller maintenance API is disabled",
+            ));
+        }
+        let auth_runtime = controller_manager
+            .auth_runtime()
+            .ok_or_else(|| RocketMQError::authentication_failed("Controller auth runtime is unavailable"))?;
+        let principal = auth_runtime
+            .authenticate_maintenance_principal(request, Some(channel.channel_id()))
+            .await?;
+        let header = request
+            .decode_command_custom_header::<MaintenanceRequestHeader>()
+            .map_err(|error| {
+                RocketMQError::request_header_error(format!("failed to decode privileged maintenance header: {error}"))
+            })?;
+        header
+            .validate()
+            .map_err(|reason| RocketMQError::request_header_error(reason.to_string()))?;
+        let authorizer = controller_manager
+            .maintenance_authorizer()
+            .ok_or_else(|| RocketMQError::authentication_failed("Controller maintenance policy is unavailable"))?;
+        if header.policy_version != authorizer.policy().policy_version {
+            return Err(RocketMQError::authentication_failed(format!(
+                "maintenance policy version {} does not match loaded version {}",
+                header.policy_version,
+                authorizer.policy().policy_version
+            )));
+        }
+        let grant = authorizer
+            .authorize(
+                Some(&MaintenanceAuthorizationContext {
+                    authentication_enabled: config.authentication_enabled,
+                    authorization_enabled: config.authorization_enabled,
+                    principal: Some(principal.to_string()),
+                    request_class: MaintenanceRequestClass::PrivilegedMaintenance,
+                    capability: MaintenanceCapability::ReleaseCheckpoint,
+                    deadline_unix_millis: header.deadline_unix_millis,
+                    fencing_token: Some(header.fencing_token),
+                }),
+                rocketmq_runtime::common::time_utils::current_millis(),
+            )
+            .map_err(|error| RocketMQError::authentication_failed(error.to_string()))?;
+        Ok((header, grant))
+    }
+
+    async fn handle_maintenance_capabilities(
+        &self,
+        channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
+    ) -> RocketMQResult<Option<RemotingCommand>> {
+        let (_header, grant) = self.authorize_maintenance_request(&channel, request).await?;
+        let controller_manager = self.controller_manager()?;
+        let policy = controller_manager
+            .maintenance_authorizer()
+            .ok_or_else(|| RocketMQError::authentication_failed("Controller maintenance policy is unavailable"))?
+            .policy();
+        let response = MaintenanceCapabilitiesResponse {
+            schema_version: 1,
+            policy_id: policy.policy_id.clone(),
+            policy_version: grant.policy_version(),
+            operations: vec![
+                "capabilities".to_string(),
+                "create_controller_snapshot".to_string(),
+                "verify_checkpoint".to_string(),
+                "restore_verify".to_string(),
+            ],
+            max_checkpoint_bytes: grant.resource_budget().max_checkpoint_bytes,
+            max_store_members: grant.resource_budget().max_store_members,
+            max_concurrent_operations: grant.resource_budget().max_concurrent_operations,
+            store: None,
+        };
+        let body = serde_json::to_vec(&response)
+            .map_err(|error| RocketMQError::internal("encode maintenance capabilities", error))?;
+        Ok(Some(
+            RemotingCommand::create_response_command()
+                .set_code(ResponseCode::Success)
+                .set_body(body),
+        ))
+    }
+
+    async fn handle_create_release_snapshot(
+        &self,
+        channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
+    ) -> RocketMQResult<Option<RemotingCommand>> {
+        let (_header, grant) = self.authorize_maintenance_request(&channel, request).await?;
+        let request_body = request.body().ok_or_else(|| {
+            RocketMQError::request_body_invalid("MAINTENANCE_CREATE_CONTROLLER_SNAPSHOT", "request body is empty")
+        })?;
+        let snapshot_request: ControllerReleaseSnapshotRequest =
+            serde_json::from_slice(request_body).map_err(|error| {
+                RocketMQError::request_body_invalid("MAINTENANCE_CREATE_CONTROLLER_SNAPSHOT", error.to_string())
+            })?;
+        let controller_manager = self.controller_manager()?;
+        let snapshot = controller_manager
+            .controller()
+            .create_release_snapshot(&grant, snapshot_request)
+            .await?;
+        let body = serde_json::to_vec(&snapshot.manifest)
+            .map_err(|error| RocketMQError::internal("encode Controller release snapshot manifest", error))?;
+        Ok(Some(
+            RemotingCommand::create_response_command()
+                .set_code(ResponseCode::Success)
+                .set_body(body),
+        ))
+    }
+
+    async fn handle_verify_release_snapshot(
+        &self,
+        channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
+    ) -> RocketMQResult<Option<RemotingCommand>> {
+        let (_header, grant) = self.authorize_maintenance_request(&channel, request).await?;
+        let manifest = decode_controller_release_snapshot_manifest(request, "MAINTENANCE_VERIFY_CHECKPOINT")?;
+        self.controller_manager()?
+            .controller()
+            .verify_release_snapshot(&grant, &manifest)
+            .await?;
+        let body = serde_json::to_vec(&manifest)
+            .map_err(|error| RocketMQError::internal("encode verified Controller snapshot manifest", error))?;
+        Ok(Some(
+            RemotingCommand::create_response_command()
+                .set_code(ResponseCode::Success)
+                .set_body(body),
+        ))
+    }
+
+    async fn handle_restore_verify(
+        &self,
+        channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
+    ) -> RocketMQResult<Option<RemotingCommand>> {
+        let (_header, grant) = self.authorize_maintenance_request(&channel, request).await?;
+        let manifest = decode_controller_release_snapshot_manifest(request, "MAINTENANCE_RESTORE_VERIFY")?;
+        let verification = self
+            .controller_manager()?
+            .controller()
+            .verify_release_snapshot(&grant, &manifest)
+            .await?;
+        let body = serde_json::to_vec(&verification)
+            .map_err(|error| RocketMQError::internal("encode Controller restore-verification proof", error))?;
+        Ok(Some(
+            RemotingCommand::create_response_command()
+                .set_code(ResponseCode::Success)
+                .set_body(body),
+        ))
+    }
 
     /// Handle ALTER_SYNC_STATE_SET request
     ///
@@ -853,6 +1031,16 @@ impl ControllerRequestProcessor {
         }
         false
     }
+}
+
+fn decode_controller_release_snapshot_manifest(
+    request: &RemotingCommand,
+    operation: &'static str,
+) -> RocketMQResult<ControllerReleaseSnapshotManifest> {
+    let body = request
+        .body()
+        .ok_or_else(|| RocketMQError::request_body_invalid(operation, "request body is empty"))?;
+    serde_json::from_slice(body).map_err(|error| RocketMQError::request_body_invalid(operation, error.to_string()))
 }
 
 impl ControllerRequestProcessor {

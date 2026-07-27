@@ -30,14 +30,19 @@ default = []
 [dependencies]
 bytes.workspace = true
 rocksdb.workspace = true
+rocketmq-auth.workspace = true
 rocketmq-error.workspace = true
 rocketmq-observability.workspace = true
+rocketmq-protocol.workspace = true
 rocketmq-runtime.workspace = true
 rocketmq-store-api.workspace = true
 rocketmq-store-local.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+hex = "0.4"
+sha2 = "0.11"
 tempfile = "3.27.0"

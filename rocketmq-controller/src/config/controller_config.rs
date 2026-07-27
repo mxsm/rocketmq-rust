@@ -16,8 +16,10 @@ use std::collections::HashMap;
 use std::env;
 use std::fmt;
 use std::net::SocketAddr;
+use std::path::Path;
 use std::path::PathBuf;
 
+use rocketmq_auth::AuthConfig;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use serde::de::DeserializeOwned;
@@ -194,6 +196,33 @@ pub struct ControllerConfig {
     /// Default: "configBlackList;configStorePath"
     pub config_black_list: String,
 
+    /// Enable signed identity verification for Controller requests.
+    pub authentication_enabled: bool,
+
+    /// Enable ordinary authorization checks.
+    pub authorization_enabled: bool,
+
+    /// Root directory for Controller auth metadata.
+    pub auth_config_path: String,
+
+    /// Credential/ACL file loaded before the Controller listener is bound.
+    pub acl_file: String,
+
+    /// Expose privileged maintenance APIs after pinned-policy validation.
+    pub maintenance_enabled: bool,
+
+    /// Maintenance policy path, resolved relative to `auth_config_path`.
+    pub maintenance_policy_path: String,
+
+    /// Expected maintenance policy version.
+    pub maintenance_policy_version: u64,
+
+    /// Expected SHA-256 of the exact maintenance policy bytes.
+    pub maintenance_policy_sha256: String,
+
+    /// Persistent root for immutable Controller release-snapshot artifacts.
+    pub maintenance_checkpoint_root: String,
+
     // --- node-specific fields (added for controller usage) ---
     /// Node id for this controller process (optional in shared config)
     pub node_id: u64,
@@ -252,6 +281,15 @@ impl Clone for ControllerConfig {
             metrics_label: self.metrics_label.clone(),
             metrics_in_delta: self.metrics_in_delta,
             config_black_list: self.config_black_list.clone(),
+            authentication_enabled: self.authentication_enabled,
+            authorization_enabled: self.authorization_enabled,
+            auth_config_path: self.auth_config_path.clone(),
+            acl_file: self.acl_file.clone(),
+            maintenance_enabled: self.maintenance_enabled,
+            maintenance_policy_path: self.maintenance_policy_path.clone(),
+            maintenance_policy_version: self.maintenance_policy_version,
+            maintenance_policy_sha256: self.maintenance_policy_sha256.clone(),
+            maintenance_checkpoint_root: self.maintenance_checkpoint_root.clone(),
             node_id: self.node_id,
             listen_addr: self.listen_addr,
             raft_peers: self.raft_peers.clone(),
@@ -326,7 +364,16 @@ impl Default for ControllerConfig {
             metrics_prom_exporter_host: String::new(),
             metrics_label: String::new(),
             metrics_in_delta: false,
-            config_black_list: "configBlackList;configStorePath".to_string(),
+            config_black_list: "configBlackList;configStorePath;maintenanceCheckpointRoot".to_string(),
+            authentication_enabled: false,
+            authorization_enabled: false,
+            auth_config_path: String::new(),
+            acl_file: String::new(),
+            maintenance_enabled: false,
+            maintenance_policy_path: String::new(),
+            maintenance_policy_version: 0,
+            maintenance_policy_sha256: String::new(),
+            maintenance_checkpoint_root: String::new(),
             node_id: 1,
             listen_addr: SocketAddr::from(([127, 0, 0, 1], 60109)),
             raft_peers: Vec::new(),
@@ -512,6 +559,48 @@ impl ControllerConfig {
         self
     }
 
+    /// Configures the fail-closed maintenance security boundary.
+    pub fn with_maintenance_security(
+        mut self,
+        auth_config_path: impl Into<String>,
+        acl_file: impl Into<String>,
+        policy_path: impl Into<String>,
+        policy_version: u64,
+        policy_sha256: impl Into<String>,
+    ) -> Self {
+        self.authentication_enabled = true;
+        self.authorization_enabled = true;
+        self.auth_config_path = auth_config_path.into();
+        self.acl_file = acl_file.into();
+        self.maintenance_enabled = true;
+        self.maintenance_policy_path = policy_path.into();
+        self.maintenance_policy_version = policy_version;
+        self.maintenance_policy_sha256 = policy_sha256.into();
+        self
+    }
+
+    /// Sets the persistent root for immutable Controller release snapshots.
+    pub fn with_maintenance_checkpoint_root(mut self, checkpoint_root: impl Into<String>) -> Self {
+        self.maintenance_checkpoint_root = checkpoint_root.into();
+        self
+    }
+
+    /// Builds the auth-owned configuration used by the composition root.
+    pub fn auth_config(&self) -> AuthConfig {
+        AuthConfig {
+            config_name: "controller".into(),
+            auth_config_path: self.auth_config_path.as_str().into(),
+            acl_file: self.acl_file.as_str().into(),
+            authentication_enabled: self.authentication_enabled,
+            authorization_enabled: self.authorization_enabled,
+            maintenance_enabled: self.maintenance_enabled,
+            maintenance_policy_path: self.maintenance_policy_path.as_str().into(),
+            maintenance_policy_version: self.maintenance_policy_version,
+            maintenance_policy_sha256: self.maintenance_policy_sha256.as_str().into(),
+            ..AuthConfig::default()
+        }
+    }
+
     /// Convenience constructor for a node-specific config (node id + listen addr)
     pub fn new_node(node_id: u64, listen_addr: SocketAddr) -> Self {
         Self::default().with_node_info(node_id, listen_addr)
@@ -595,6 +684,49 @@ impl ControllerConfig {
             return Err("elect_master_max_retry_count must be greater than 0".to_string());
         }
 
+        if self.authorization_enabled && !self.authentication_enabled {
+            return Err("authorization_enabled requires authentication_enabled".to_string());
+        }
+        if self.maintenance_enabled {
+            if !self.authentication_enabled || !self.authorization_enabled {
+                return Err(
+                    "maintenance_enabled requires authentication_enabled and authorization_enabled".to_string(),
+                );
+            }
+            if self.auth_config_path.trim().is_empty() || self.acl_file.trim().is_empty() {
+                return Err("maintenance_enabled requires auth_config_path and acl_file".to_string());
+            }
+            if self.maintenance_policy_path.trim().is_empty() || self.maintenance_policy_version == 0 {
+                return Err("maintenance policy path and version are required".to_string());
+            }
+            if self.maintenance_policy_sha256.len() != 64
+                || !self
+                    .maintenance_policy_sha256
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return Err("maintenance policy SHA-256 must be 64 lowercase hexadecimal characters".to_string());
+            }
+            let checkpoint_root = Path::new(self.maintenance_checkpoint_root.trim());
+            if self.maintenance_checkpoint_root.trim().is_empty() || !checkpoint_root.is_absolute() {
+                return Err("maintenance_checkpoint_root must be an absolute path".to_string());
+            }
+            let live_storage = if self.storage_path.trim().is_empty() {
+                self.controller_store_path.trim()
+            } else {
+                self.storage_path.trim()
+            };
+            if !live_storage.is_empty() {
+                let live_storage = Path::new(live_storage);
+                if checkpoint_root == live_storage
+                    || checkpoint_root.starts_with(live_storage)
+                    || live_storage.starts_with(checkpoint_root)
+                {
+                    return Err("maintenance_checkpoint_root must not overlap Controller live storage".to_string());
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -648,6 +780,15 @@ impl ControllerConfig {
         write_property!("metricsLabel={}", self.metrics_label);
         write_property!("metricsInDelta={}", self.metrics_in_delta);
         write_property!("configBlackList={}", self.config_black_list);
+        write_property!("authenticationEnabled={}", self.authentication_enabled);
+        write_property!("authorizationEnabled={}", self.authorization_enabled);
+        write_property!("authConfigPath={}", self.auth_config_path);
+        write_property!("aclFile={}", self.acl_file);
+        write_property!("maintenanceEnabled={}", self.maintenance_enabled);
+        write_property!("maintenancePolicyPath={}", self.maintenance_policy_path);
+        write_property!("maintenancePolicyVersion={}", self.maintenance_policy_version);
+        write_property!("maintenancePolicySha256={}", self.maintenance_policy_sha256);
+        write_property!("maintenanceCheckpointRoot={}", self.maintenance_checkpoint_root);
         write_property!("nodeId={}", self.node_id);
         write_property!("listenAddr={}", self.listen_addr);
 
@@ -787,6 +928,42 @@ impl ControllerConfig {
                     self.config_black_list = value.clone();
                 }
 
+                "authenticationEnabled" => {
+                    self.authentication_enabled = parse_update_value::<bool>("authenticationEnabled", value)?;
+                }
+
+                "authorizationEnabled" => {
+                    self.authorization_enabled = parse_update_value::<bool>("authorizationEnabled", value)?;
+                }
+
+                "authConfigPath" => {
+                    self.auth_config_path = value.clone();
+                }
+
+                "aclFile" => {
+                    self.acl_file = value.clone();
+                }
+
+                "maintenanceEnabled" => {
+                    self.maintenance_enabled = parse_update_value::<bool>("maintenanceEnabled", value)?;
+                }
+
+                "maintenancePolicyPath" => {
+                    self.maintenance_policy_path = value.clone();
+                }
+
+                "maintenancePolicyVersion" => {
+                    self.maintenance_policy_version = parse_update_value::<u64>("maintenancePolicyVersion", value)?;
+                }
+
+                "maintenancePolicySha256" => {
+                    self.maintenance_policy_sha256 = value.clone();
+                }
+
+                "maintenanceCheckpointRoot" => {
+                    self.maintenance_checkpoint_root = value.clone();
+                }
+
                 "nodeId" => {
                     self.node_id = parse_update_value::<u64>("nodeId", value)?;
                 }
@@ -884,11 +1061,38 @@ mod tests {
     }
 
     #[test]
+    fn maintenance_checkpoint_root_must_be_absolute_and_isolated_from_live_storage() {
+        let live_storage = tempfile::tempdir().expect("live storage directory");
+        let checkpoint_storage = tempfile::tempdir().expect("checkpoint storage directory");
+        let secured = ControllerConfig::new()
+            .with_storage_path(live_storage.path().to_string_lossy())
+            .with_maintenance_security(
+                "auth",
+                "controller-acl.yml",
+                "maintenance-policy.json",
+                1,
+                "a".repeat(64),
+            );
+
+        assert!(secured.clone().validate().is_err());
+        assert!(secured
+            .clone()
+            .with_maintenance_checkpoint_root(live_storage.path().join("checkpoints").to_string_lossy())
+            .validate()
+            .is_err());
+        assert!(secured
+            .with_maintenance_checkpoint_root(checkpoint_storage.path().to_string_lossy())
+            .validate()
+            .is_ok());
+    }
+
+    #[test]
     fn test_config_blacklist() {
         let config = ControllerConfig::default();
 
         assert!(config.is_config_in_blacklist("configBlackList"));
         assert!(config.is_config_in_blacklist("configStorePath"));
+        assert!(config.is_config_in_blacklist("maintenanceCheckpointRoot"));
         assert!(!config.is_config_in_blacklist("controllerType"));
     }
 

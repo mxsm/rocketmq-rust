@@ -45,6 +45,10 @@ impl RequestType for RequestCode {
             RequestCode::CleanBrokerData => Some("controller_clean_broker_data"),
             RequestCode::ControllerGetNextBrokerId => Some("controller_get_next_broker_id"),
             RequestCode::ControllerApplyBrokerId => Some("controller_apply_broker_id"),
+            RequestCode::MaintenanceGetCapabilities => Some("controller_maintenance_capabilities"),
+            RequestCode::MaintenanceCreateControllerSnapshot => Some("controller_maintenance_create_release_snapshot"),
+            RequestCode::MaintenanceVerifyCheckpoint => Some("controller_maintenance_verify_release_snapshot"),
+            RequestCode::MaintenanceRestoreVerify => Some("controller_maintenance_restore_verify"),
             _ => None,
         }
     }

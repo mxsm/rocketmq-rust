@@ -2690,9 +2690,9 @@ async fn initialize_message_store_opens_rocksdb_owner_for_rocksdb_store_type() {
                 .message_store()
                 .expect("message store should be initialized")
                 .get_max_offset_in_queue(&topic, 0)
-                == 2
+                == 3
         },
-        "RocksDB ConsumeQueue to publish both dispatched units",
+        "RocksDB ConsumeQueue to publish all three dispatched messages",
     )
     .await;
     assert_eq!(
@@ -2702,8 +2702,8 @@ async fn initialize_message_store_opens_rocksdb_owner_for_rocksdb_store_type() {
             .message_store()
             .expect("message store should be initialized")
             .get_max_offset_in_queue(&topic, 0),
-        2,
-        "one single message and one ordinary batch must create two ConsumeQueue units"
+        3,
+        "one single message and a two-message batch must create three ConsumeQueue units"
     );
 
     runtime.shutdown_message_store_for_test().await;

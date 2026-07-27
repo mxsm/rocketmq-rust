@@ -99,6 +99,8 @@ pub use controller::broker_heartbeat_manager::BrokerHeartbeatManager;
 pub use controller::open_raft_controller::resolve_controller_raft_bind_addr;
 pub use controller::open_raft_controller::OpenRaftController;
 pub use controller::raft_controller::RaftController;
+pub use controller::release_snapshot::verify_controller_release_snapshot;
+pub use controller::release_snapshot::ControllerReleaseSnapshot;
 pub use controller::Controller;
 pub use controller::MockController;
 pub use elect::policy::DefaultElectPolicy;

@@ -458,6 +458,7 @@ pub(super) struct ReputMessageService {
     pub(super) new_message_notify: Arc<Notify>,
     pub(super) dispatch_progress_notify: Arc<Notify>,
     pub(super) pending_messages: Arc<AtomicI64>,
+    pub(super) inflight_dispatch_batches: Arc<AtomicU64>,
     pub(super) reput_from_offset: Option<Arc<AtomicI64>>,
     pub(super) dispatch_tx: Option<tokio::sync::mpsc::Sender<Vec<DispatchRequest>>>,
     pub(super) inner: Option<ReputMessageServiceInner>,
@@ -527,6 +528,7 @@ impl ReputMessageService {
         let new_message_notify = self.new_message_notify.clone();
         let dispatch_progress_notify = self.dispatch_progress_notify.clone();
         let pending_messages = self.pending_messages.clone();
+        let inflight_dispatch_batches = self.inflight_dispatch_batches.clone();
 
         // Task 1: Read messages from CommitLog and send to channel
         let shutdown_reader = shutdown.clone();
@@ -550,10 +552,12 @@ impl ReputMessageService {
                             }
 
                             // Read and parse messages, send to dispatch channel
+                            inflight_dispatch_batches.fetch_add(1, Ordering::AcqRel);
                             match inner.read_and_parse_batch().await {
                                 Some(batch) => {
                                     // Successfully read a batch, try to send
                                     if dispatch_tx.send(batch).await.is_err() {
+                                        inflight_dispatch_batches.fetch_sub(1, Ordering::AcqRel);
                                         error!("Failed to send dispatch batch to channel, channel closed");
                                         break;
                                     }
@@ -568,6 +572,7 @@ impl ReputMessageService {
                                     dispatch_progress_notify.notify_waiters();
                                 }
                                 None => {
+                                    inflight_dispatch_batches.fetch_sub(1, Ordering::AcqRel);
                                     // No more messages available at this offset
                                     dispatch_progress_notify.notify_waiters();
                                     if inner.has_unconfirmed_commit_log() {
@@ -604,6 +609,8 @@ impl ReputMessageService {
 
         // Task 2: Receive from channel and dispatch
         let shutdown_dispatcher = shutdown;
+        let dispatcher_progress_notify = self.dispatch_progress_notify.clone();
+        let dispatcher_inflight_batches = self.inflight_dispatch_batches.clone();
         if let Err(error) = task_group.spawn_service("reput-dispatcher", async move {
             loop {
                 tokio::select! {
@@ -615,6 +622,8 @@ impl ReputMessageService {
                             &mut batch,
                         )
                         .await;
+                        dispatcher_inflight_batches.fetch_sub(1, Ordering::AcqRel);
+                        dispatcher_progress_notify.notify_waiters();
                     }
                     _ = shutdown_dispatcher.cancelled() => {
                         // Process remaining messages in channel before shutdown
@@ -626,6 +635,8 @@ impl ReputMessageService {
                                 &mut batch,
                             )
                             .await;
+                            dispatcher_inflight_batches.fetch_sub(1, Ordering::AcqRel);
+                            dispatcher_progress_notify.notify_waiters();
                         }
                         break;
                     }
@@ -661,6 +672,24 @@ impl ReputMessageService {
         }
     }
 
+    pub(super) async fn wait_until_release_checkpoint_drained(&self, deadline: ShutdownDeadline) -> bool {
+        let Some(inner) = self.inner.as_ref() else {
+            return self.inflight_dispatch_batches.load(Ordering::Acquire) == 0;
+        };
+        let deadline = tokio::time::Instant::from_std(deadline.instant());
+        loop {
+            let progress = self.dispatch_progress_notify.notified();
+            tokio::pin!(progress);
+            progress.as_mut().enable();
+            if !inner.is_commit_log_available() && self.inflight_dispatch_batches.load(Ordering::Acquire) == 0 {
+                return true;
+            }
+            if tokio::time::timeout_at(deadline, progress).await.is_err() {
+                return !inner.is_commit_log_available() && self.inflight_dispatch_batches.load(Ordering::Acquire) == 0;
+            }
+        }
+    }
+
     pub async fn run_once(
         &mut self,
         commit_log: CommitLogReadHandle,
@@ -669,6 +698,14 @@ impl ReputMessageService {
         notify_message_arrive_in_batch: bool,
         runtime_context: ReputRuntimeContext,
     ) {
+        if self.task_group.is_some() {
+            self.new_message_notify.notify_one();
+            let deadline = ShutdownDeadline::after(Duration::from_secs(5));
+            if !self.wait_until_release_checkpoint_drained(deadline).await {
+                warn!("manual reput did not drain every background dispatch within five seconds");
+            }
+            return;
+        }
         if self.reput_from_offset.is_none() {
             self.reput_from_offset = Some(Arc::new(AtomicI64::new(0)));
         }
@@ -688,6 +725,10 @@ impl ReputMessageService {
         }
         if let Some(inner) = self.inner.as_mut() {
             inner.do_reput().await;
+        }
+        let deadline = ShutdownDeadline::after(Duration::from_secs(5));
+        if !self.wait_until_release_checkpoint_drained(deadline).await {
+            warn!("manual reput did not drain every derived-state dispatch within five seconds");
         }
     }
 

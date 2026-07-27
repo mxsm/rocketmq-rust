@@ -569,18 +569,29 @@ impl BrokerRuntime {
 
     pub(super) async fn initial_acl(&mut self) -> bool {
         let broker_config = self.composition.state.broker_config();
+        let auth_config = build_auth_config(&broker_config);
+        let maintenance_authorizer = match auth_config.maintenance_policy_reference() {
+            Ok(Some(reference)) => match reference.load_from(auth_config.auth_config_path.as_str()) {
+                Ok(policy) => Some(Arc::new(MaintenanceAuthorizer::new(policy))),
+                Err(error) => {
+                    error!(%error, "Initialize maintenance authorization failed");
+                    return false;
+                }
+            },
+            Ok(None) => None,
+            Err(error) => {
+                error!(%error, "Validate maintenance authorization reference failed");
+                return false;
+            }
+        };
+        self.composition.state.maintenance_authorizer = maintenance_authorizer;
         if !broker_config.authentication_enabled && !broker_config.authorization_enabled {
             self.composition.state.auth_runtime = None;
             let Some(service_context) = self.composition.state.service_context.as_ref() else {
                 error!("Initialize auth admin service failed because ChildServiceContext is unavailable");
                 return false;
             };
-            return match AuthAdminService::new(
-                build_auth_config(&broker_config),
-                service_context.child("broker.auth-admin"),
-            )
-            .await
-            {
+            return match AuthAdminService::new(auth_config, service_context.child("broker.auth-admin")).await {
                 Ok(service) => {
                     self.composition.state.auth_admin_service = Some(Arc::new(service));
                     true
@@ -592,7 +603,6 @@ impl BrokerRuntime {
             };
         }
 
-        let auth_config = build_auth_config(&self.composition.state.broker_config());
         let auth_context = match self.composition.state.service_context.as_ref() {
             Some(service_context) => service_context.child("broker.auth"),
             None => {

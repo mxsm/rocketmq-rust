@@ -864,6 +864,16 @@ impl CommitLog {
         }
     }
 
+    pub(crate) fn release_checkpoint_write_lock(&self) -> Arc<tokio::sync::Mutex<()>> {
+        Arc::clone(&self.put_message_lock)
+    }
+
+    pub(crate) fn release_checkpoint_flush_handle(
+        &self,
+    ) -> crate::consume_queue::mapped_file_queue::MappedFileQueueFlushHandle {
+        self.mapped_file_queue.flush_handle()
+    }
+
     pub(crate) fn internal_message_write_handle(&self) -> CommitLogInternalMessageWriteHandle {
         CommitLogInternalMessageWriteHandle {
             message_store_config: Arc::clone(&self.message_store_config),

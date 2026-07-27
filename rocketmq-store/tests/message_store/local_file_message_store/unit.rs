@@ -19,6 +19,7 @@ use std::fs;
 use std::net::TcpListener;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI64;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -51,6 +52,7 @@ use rocketmq_model::common::mix_all;
 use rocketmq_model::common::running::running_stats::RunningStats;
 use rocketmq_model::common::topic::TopicValidator;
 use rocketmq_model::utils::crc32_utils::crc32;
+use rocketmq_runtime::ShutdownDeadline;
 #[cfg(feature = "tieredstore")]
 use rocketmq_tieredstore::fetcher::TieredGetMessageStatus;
 #[cfg(feature = "tieredstore")]
@@ -810,6 +812,7 @@ async fn reput_shutdown_wait_uses_dispatch_progress_notification() {
         new_message_notify: Arc::new(tokio::sync::Notify::new()),
         dispatch_progress_notify: Arc::new(tokio::sync::Notify::new()),
         pending_messages: Arc::new(AtomicI64::new(0)),
+        inflight_dispatch_batches: Arc::new(AtomicU64::new(0)),
         reput_from_offset: None,
         dispatch_tx: None,
         inner: None,
@@ -835,6 +838,36 @@ async fn reput_shutdown_wait_uses_dispatch_progress_notification() {
 }
 
 #[tokio::test]
+async fn release_checkpoint_waits_for_inflight_dispatch_batch_completion() {
+    let temp_dir = tempdir().unwrap();
+    let store = new_configured_test_store(&temp_dir, MessageStoreConfig::default());
+    let inflight = Arc::new(AtomicU64::new(1));
+    let progress = Arc::new(tokio::sync::Notify::new());
+    let service = ReputMessageService {
+        shutdown_token: CancellationToken::new(),
+        new_message_notify: Arc::new(tokio::sync::Notify::new()),
+        dispatch_progress_notify: Arc::clone(&progress),
+        pending_messages: Arc::new(AtomicI64::new(0)),
+        inflight_dispatch_batches: Arc::clone(&inflight),
+        reput_from_offset: None,
+        dispatch_tx: None,
+        inner: Some(reput_inner_for_store(&store)),
+        task_group: None,
+    };
+
+    let (drained, ()) = tokio::join!(
+        service.wait_until_release_checkpoint_drained(ShutdownDeadline::after(Duration::from_secs(1))),
+        async move {
+            tokio::task::yield_now().await;
+            inflight.store(0, Ordering::Release);
+            progress.notify_waiters();
+        }
+    );
+
+    assert!(drained);
+}
+
+#[tokio::test]
 async fn reput_shutdown_releases_the_runtime_context() {
     let temp_dir = tempdir().unwrap();
     let store = new_configured_test_store(&temp_dir, MessageStoreConfig::default());
@@ -844,6 +877,7 @@ async fn reput_shutdown_releases_the_runtime_context() {
         new_message_notify: Arc::new(tokio::sync::Notify::new()),
         dispatch_progress_notify: Arc::new(tokio::sync::Notify::new()),
         pending_messages: Arc::new(AtomicI64::new(0)),
+        inflight_dispatch_batches: Arc::new(AtomicU64::new(0)),
         reput_from_offset: Some(reput_from_offset.clone()),
         dispatch_tx: None,
         inner: Some(ReputMessageServiceInner {

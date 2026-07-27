@@ -1,4 +1,21 @@
 {{- include "rocketmq.validateValues" . -}}
+{{- if .Values.maintenance.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.maintenance.configMapName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+{{ include "rocketmq.labels" (dict "root" . "service" "maintenance") | indent 4 }}
+  annotations:
+    rocketmq.apache.org/maintenance-policy-version: {{ .Values.maintenance.version | quote }}
+    rocketmq.apache.org/maintenance-policy-sha256: {{ .Values.maintenance.sha256 | quote }}
+immutable: true
+data:
+  {{ .Values.maintenance.policyKey }}: |-
+{{ .Files.Get "files/maintenance-policy.json" | indent 4 }}
+---
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -13,17 +30,24 @@ data:
     listenPort = 10911
     brokerIp1 = "rocketmq-broker-{{ $ordinal }}.rocketmq-broker-headless.{{ $.Release.Namespace }}.svc.cluster.local"
     brokerIp2 = "rocketmq-broker-{{ $ordinal }}.rocketmq-broker-headless.{{ $.Release.Namespace }}.svc.cluster.local"
-    storePathRootDir = "/var/lib/rocketmq/broker"
+    storePathRootDir = "/var/lib/rocketmq/store"
     namesrvAddr = "{{ include "rocketmq.namesrvAddresses" $ }}"
     autoCreateTopicEnable = {{ $.Values.services.broker.autoCreateTopicEnable }}
     enableControllerMode = {{ eq $.Values.deploymentProfile "production-controller-ha" }}
     controllerAddr = "{{ include "rocketmq.controllerAddresses" $ }}"
-    authConfigPath = "/var/lib/rocketmq/broker/auth"
+    authConfigPath = "/etc/rocketmq/auth"
     aclFile = "/var/run/secrets/rocketmq/broker-acl.yml"
     aclFileWatchEnabled = true
     authenticationEnabled = true
     authorizationEnabled = true
     signatureAlgorithm = "HmacSHA256"
+{{- if $.Values.maintenance.enabled }}
+    maintenanceEnabled = true
+    maintenancePolicyPath = "maintenance-policy.json"
+    maintenancePolicyVersion = {{ $.Values.maintenance.version }}
+    maintenancePolicySha256 = {{ $.Values.maintenance.sha256 | quote }}
+    maintenanceCheckpointRoot = "/var/lib/rocketmq/checkpoints"
+{{- end }}
 
     [broker.brokerIdentity]
     brokerName = {{ $.Values.services.broker.replicaGroupName | quote }}
@@ -33,8 +57,8 @@ data:
     [store]
     haListenAddress = "0.0.0.0"
     haListenPort = 10912
-    storePathRootDir = "/var/lib/rocketmq/broker"
-    storePathBrokerIdentity = "/var/lib/rocketmq/broker/brokerIdentity.json"
+    storePathRootDir = "/var/lib/rocketmq/store"
+    storePathBrokerIdentity = "/var/lib/rocketmq/store/brokerIdentity.json"
 {{- end }}
 ---
 apiVersion: v1
@@ -86,7 +110,7 @@ data:
     metricsPromExporterHost = ""
     metricsLabel = ""
     metricsInDelta = false
-    configBlackList = "configBlackList;configStorePath"
+    configBlackList = "configBlackList;configStorePath;maintenanceCheckpointRoot"
     nodeId = {{ add $ordinal 1 }}
     listenAddr = "0.0.0.0:60109"
     electionTimeoutMs = 1000
@@ -94,6 +118,17 @@ data:
     storagePath = "/var/lib/rocketmq/controller/node-{{ add $ordinal 1 }}"
     storageBackend = {{ $.Values.services.controller.storageBackend | quote }}
     enableElectUncleanMasterLocal = false
+{{- if $.Values.maintenance.enabled }}
+    authenticationEnabled = true
+    authorizationEnabled = true
+    authConfigPath = "/etc/rocketmq/auth"
+    aclFile = "/var/run/secrets/rocketmq/controller-acl.yml"
+    maintenanceEnabled = true
+    maintenancePolicyPath = "maintenance-policy.json"
+    maintenancePolicyVersion = {{ $.Values.maintenance.version }}
+    maintenancePolicySha256 = {{ $.Values.maintenance.sha256 | quote }}
+    maintenanceCheckpointRoot = "/var/lib/rocketmq/controller/checkpoints/node-{{ add $ordinal 1 }}"
+{{- end }}
 {{- if eq $.Values.deploymentProfile "dev-single" }}
 
     [[raftPeers]]

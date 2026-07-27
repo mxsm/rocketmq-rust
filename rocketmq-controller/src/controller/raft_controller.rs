@@ -19,7 +19,11 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
+use rocketmq_auth::MaintenanceAuthorizationGrant;
 use rocketmq_error::RocketMQResult;
+use rocketmq_protocol::protocol::body::release_checkpoint::ControllerReleaseSnapshotManifest;
+use rocketmq_protocol::protocol::body::release_checkpoint::ControllerReleaseSnapshotRequest;
+use rocketmq_protocol::protocol::body::release_checkpoint::ReleaseCheckpointRestoreVerification;
 use rocketmq_protocol::protocol::body::sync_state_set_body::SyncStateSet;
 use rocketmq_protocol::protocol::header::controller::alter_sync_state_set_request_header::AlterSyncStateSetRequestHeader;
 use rocketmq_protocol::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
@@ -33,6 +37,7 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 use crate::config::ControllerConfigReader;
 use crate::controller::open_raft_controller::OpenRaftController;
+use crate::controller::release_snapshot::ControllerReleaseSnapshot;
 use crate::controller::Controller;
 use crate::error::Result;
 use crate::heartbeat::default_broker_heartbeat_manager::DefaultBrokerHeartbeatManager;
@@ -90,6 +95,24 @@ impl RaftController {
 
     pub async fn change_membership(&self, members: BTreeSet<NodeId>, retain: bool) -> Result<()> {
         self.inner.change_membership(members, retain).await
+    }
+
+    /// Creates an authorized, fenced, deadline-bounded Controller snapshot.
+    pub async fn create_release_snapshot(
+        &self,
+        authorization: &MaintenanceAuthorizationGrant,
+        request: ControllerReleaseSnapshotRequest,
+    ) -> RocketMQResult<ControllerReleaseSnapshot> {
+        self.inner.create_release_snapshot(authorization, request).await
+    }
+
+    /// Verifies an authorized immutable Controller release snapshot.
+    pub async fn verify_release_snapshot(
+        &self,
+        authorization: &MaintenanceAuthorizationGrant,
+        manifest: &ControllerReleaseSnapshotManifest,
+    ) -> RocketMQResult<ReleaseCheckpointRestoreVerification> {
+        self.inner.verify_release_snapshot(authorization, manifest).await
     }
 
     pub async fn allow_next_revert(&self, node_id: NodeId, allow: bool) -> Result<()> {

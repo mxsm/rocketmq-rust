@@ -15,6 +15,7 @@
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io;
+use std::io::Read;
 use std::path::Path;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -34,6 +35,13 @@ pub struct StoreCheckpoint {
     master_flushed_offset: AtomicU64,
     confirm_phy_offset: AtomicU64,
     index_safe_phy_offset: AtomicU64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct StoreCheckpointSnapshot {
+    pub(crate) master_flushed_offset: u64,
+    pub(crate) confirm_phy_offset: u64,
+    pub(crate) index_safe_phy_offset: u64,
 }
 
 impl StoreCheckpoint {
@@ -95,6 +103,18 @@ impl StoreCheckpoint {
                 index_safe_phy_offset: AtomicU64::new(0),
             })
         }
+    }
+
+    pub(crate) fn read_snapshot(path: impl AsRef<Path>) -> std::io::Result<StoreCheckpointSnapshot> {
+        let path = path.as_ref();
+        let mut file = File::open(path)?;
+        let mut bytes = [0_u8; 48];
+        file.read_exact(&mut bytes)?;
+        Ok(StoreCheckpointSnapshot {
+            master_flushed_offset: read_checkpoint_u64(&bytes, 24, "masterFlushedOffset")?,
+            confirm_phy_offset: read_checkpoint_u64(&bytes, 32, "confirmPhyOffset")?,
+            index_safe_phy_offset: read_checkpoint_u64(&bytes, 40, "indexSafePhyOffset")?,
+        })
     }
 
     #[inline]

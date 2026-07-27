@@ -23,6 +23,7 @@ pub use capability::DerivedRecordSink;
 pub use capability::MessageAppender;
 pub use capability::MessageReader;
 pub use capability::OffsetIndex;
+pub use capability::ReleaseCheckpointStore;
 pub use capability::ReplicationControl;
 pub use capability::StoreHealth;
 pub use capability::StoreLifecycle;
