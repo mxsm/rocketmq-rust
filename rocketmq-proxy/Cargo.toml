@@ -48,6 +48,7 @@ otel-logs = ["rocketmq-observability/otel-logs"]
 otlp-traces = ["otel-traces", "rocketmq-observability/otlp-traces"]
 otlp-logs = ["otel-logs", "rocketmq-observability/otlp-logs"]
 production-observability = ["metrics-prometheus", "otlp-traces", "otlp-logs"]
+production = ["cluster-mode", "production-observability"]
 tieredstore = ["local-mode", "rocketmq-proxy-local/tieredstore"]
 
 [dependencies]

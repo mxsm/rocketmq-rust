@@ -34,6 +34,17 @@ rocketmq-{{ .service }}
 {{- if not (regexMatch "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" $releaseNonce) -}}
   {{- fail "releaseIdentity.nonce must be 1..=63 lowercase ASCII letters, digits, or interior hyphens" -}}
 {{- end -}}
+{{- $configDigest := required "releaseIdentity.configDigest is required" .Values.releaseIdentity.configDigest -}}
+{{- if not (regexMatch "^sha256:[0-9a-f]{64}$" $configDigest) -}}
+  {{- fail "releaseIdentity.configDigest must be a lowercase SHA-256 digest" -}}
+{{- end -}}
+{{- $secretVersion := required "releaseIdentity.secretVersion is required" .Values.releaseIdentity.secretVersion -}}
+{{- if not (regexMatch "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" $secretVersion) -}}
+  {{- fail "releaseIdentity.secretVersion must be an opaque 1..=128 character version identifier" -}}
+{{- end -}}
+{{- if lt (int .Values.releaseIdentity.storageGeneration) 1 -}}
+  {{- fail "releaseIdentity.storageGeneration must be at least 1" -}}
+{{- end -}}
 {{- if eq $profile "production-controller-ha" -}}
   {{- $controllerReplicas := int .Values.services.controller.replicas -}}
   {{- $controllerQuorum := add (div $controllerReplicas 2) 1 -}}
@@ -136,6 +147,9 @@ rocketmq.apache.org/architecture-milestone: P0-05
 {{- define "rocketmq.telemetryEnv" -}}
 - {name: ROCKETMQ_RELEASE_COMMIT, value: {{ required "releaseIdentity.commit is required" .Values.releaseIdentity.commit | quote }}}
 - {name: ROCKETMQ_RELEASE_NONCE, value: {{ required "releaseIdentity.nonce is required" .Values.releaseIdentity.nonce | quote }}}
+- {name: ROCKETMQ_RELEASE_CONFIG_DIGEST, value: {{ required "releaseIdentity.configDigest is required" .Values.releaseIdentity.configDigest | quote }}}
+- {name: ROCKETMQ_RELEASE_SECRET_VERSION, value: {{ required "releaseIdentity.secretVersion is required" .Values.releaseIdentity.secretVersion | quote }}}
+- {name: ROCKETMQ_STORAGE_GENERATION, value: {{ .Values.releaseIdentity.storageGeneration | quote }}}
 - {name: ROCKETMQ_METRICS_ENABLED, value: {{ .Values.metrics.enabled | quote }}}
 - {name: ROCKETMQ_METRICS_EXPORTER, value: {{ ternary "prometheus" "disable" .Values.metrics.enabled | quote }}}
 - {name: ROCKETMQ_METRICS_BIND_ADDR, value: {{ printf "0.0.0.0:%d" (int .Values.metrics.port) | quote }}}
@@ -145,6 +159,9 @@ rocketmq.apache.org/architecture-milestone: P0-05
 {{- define "rocketmq.releaseAnnotations" -}}
 rocketmq.apache.org/release-commit: {{ .Values.releaseIdentity.commit | quote }}
 rocketmq.apache.org/release-nonce: {{ .Values.releaseIdentity.nonce | quote }}
+rocketmq.apache.org/release-config-digest: {{ .Values.releaseIdentity.configDigest | quote }}
+rocketmq.apache.org/release-secret-version: {{ .Values.releaseIdentity.secretVersion | quote }}
+rocketmq.apache.org/storage-generation: {{ .Values.releaseIdentity.storageGeneration | quote }}
 {{- end -}}
 
 {{- define "rocketmq.lifecycleProbes" -}}

@@ -1,5 +1,14 @@
 deploymentProfile: production-controller-ha
 
+# Local rendering fixture. The release-state reconciler replaces every value from
+# a validated candidate and never treats this fixture as deployable state.
+releaseIdentity:
+  commit: "1111111111111111111111111111111111111111"
+  nonce: local-validation
+  configDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+  secretVersion: local-reference-1
+  storageGeneration: 1
+
 # These tags are loaded into the local cluster and are never pulled. Build them
 # with `docker buildx build --load`, then use the cluster-specific image-load command.
 services:

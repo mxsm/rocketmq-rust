@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "release_state_schema": "distribution/config/release-state.schema.json",
+  "local_images_only": true,
+  "remote_push_enabled": false,
+  "allowed_cluster_kinds": [
+    "kind",
+    "k3d"
+  ],
+  "forbid_image_only_transition": true,
+  "apply_order": [
+    {
+      "step": "validate_complete_state",
+      "compensation": "none"
+    },
+    {
+      "step": "snapshot_before",
+      "compensation": "retain_snapshot"
+    },
+    {
+      "step": "import_local_images",
+      "compensation": "retain_local_images"
+    },
+    {
+      "step": "apply_complete_state",
+      "compensation": "restore_previous_helm_revision"
+    },
+    {
+      "step": "wait_readiness",
+      "compensation": "restore_previous_helm_revision"
+    },
+    {
+      "step": "snapshot_after",
+      "compensation": "retain_snapshot"
+    },
+    {
+      "step": "publish_active_state",
+      "compensation": "restore_previous_active_state"
+    }
+  ],
+  "compensation_order": [
+    "publish_active_state",
+    "snapshot_after",
+    "wait_readiness",
+    "apply_complete_state",
+    "import_local_images",
+    "snapshot_before",
+    "validate_complete_state"
+  ],
+  "readiness": {
+    "timeout": "10m",
+    "workloads": [
+      "statefulset/rocketmq-controller",
+      "statefulset/rocketmq-namesrv",
+      "statefulset/rocketmq-broker",
+      "deployment/rocketmq-proxy",
+      "deployment/rocketmq-mcp"
+    ]
+  },
+  "snapshots": {
+    "include_helm_status": true,
+    "include_workload_status": true,
+    "include_release_state": true,
+    "secret_values_forbidden": true
+  }
+}

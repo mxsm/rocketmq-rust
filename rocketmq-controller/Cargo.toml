@@ -124,6 +124,7 @@ otel-logs = ["rocketmq-observability/otel-logs"]
 otlp-traces = ["otel-traces", "rocketmq-observability/otlp-traces"]
 otlp-logs = ["otel-logs", "rocketmq-observability/otlp-logs"]
 production-observability = ["metrics-prometheus", "otlp-traces", "otlp-logs"]
+production      = ["storage-rocksdb", "production-observability"]
 debug           = []
 
 [[bin]]

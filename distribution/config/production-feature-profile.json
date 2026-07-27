@@ -1,0 +1,134 @@
+{
+  "schema_version": 1,
+  "profile": "production",
+  "build_mode": {
+    "locked": true,
+    "release": true,
+    "default_features": false,
+    "local_images_only": true,
+    "remote_push_enabled": false,
+    "tag_pattern": "^rocketmq-rust/(broker|namesrv|controller|proxy|mcp):[0-9a-f]{7,12}$"
+  },
+  "config_bundle_files": [
+    "distribution/config/image-provenance.schema.json",
+    "distribution/config/image-sbom.schema.json",
+    "distribution/config/production-feature-profile.json",
+    "distribution/config/release-state.schema.json",
+    "distribution/helm/rocketmq-rust/templates/_helpers.tpl",
+    "distribution/helm/rocketmq-rust/templates/configmaps.yaml",
+    "distribution/helm/rocketmq-rust/templates/networkpolicies.yaml",
+    "distribution/helm/rocketmq-rust/templates/services.yaml",
+    "distribution/helm/rocketmq-rust/templates/servicemonitor.yaml",
+    "distribution/helm/rocketmq-rust/templates/workloads.yaml",
+    "distribution/helm/rocketmq-rust/values-production-controller-ha.yaml",
+    "distribution/helm/rocketmq-rust/values.schema.json",
+    "distribution/helm/rocketmq-rust/values.yaml",
+    "distribution/kubernetes/base/manifest.yaml",
+    "distribution/kubernetes/release-state-transition-policy.json"
+  ],
+  "services": {
+    "broker": {
+      "package": "rocketmq-broker",
+      "manifest": "rocketmq-broker/Cargo.toml",
+      "binary": "rocketmq-broker-rust",
+      "docker_target": "broker",
+      "features": [
+        "production"
+      ],
+      "resolved_features": [
+        "local_file_store",
+        "metrics-prometheus",
+        "otel-logs",
+        "otel-metrics",
+        "otel-traces",
+        "otlp-logs",
+        "otlp-traces",
+        "production",
+        "production-observability",
+        "prometheus"
+      ]
+    },
+    "namesrv": {
+      "package": "rocketmq-namesrv",
+      "manifest": "rocketmq-namesrv/Cargo.toml",
+      "binary": "rocketmq-namesrv-rust",
+      "docker_target": "namesrv",
+      "features": [
+        "production"
+      ],
+      "resolved_features": [
+        "metrics-prometheus",
+        "observability",
+        "otel-logs",
+        "otel-traces",
+        "otlp-logs",
+        "otlp-traces",
+        "production",
+        "production-observability"
+      ]
+    },
+    "controller": {
+      "package": "rocketmq-controller",
+      "manifest": "rocketmq-controller/Cargo.toml",
+      "binary": "rocketmq-controller-rust",
+      "docker_target": "controller",
+      "features": [
+        "production"
+      ],
+      "resolved_features": [
+        "metrics",
+        "metrics-prometheus",
+        "otel-logs",
+        "otel-traces",
+        "otlp-logs",
+        "otlp-traces",
+        "production",
+        "production-observability",
+        "storage-rocksdb"
+      ]
+    },
+    "proxy": {
+      "package": "rocketmq-proxy",
+      "manifest": "rocketmq-proxy/Cargo.toml",
+      "binary": "rocketmq-proxy-rust",
+      "docker_target": "proxy",
+      "features": [
+        "production"
+      ],
+      "resolved_features": [
+        "cluster-mode",
+        "metrics-prometheus",
+        "observability",
+        "otel-logs",
+        "otel-traces",
+        "otlp-logs",
+        "otlp-traces",
+        "production",
+        "production-observability"
+      ]
+    },
+    "mcp": {
+      "package": "rocketmq-mcp",
+      "manifest": "rocketmq-tools/rocketmq-mcp/Cargo.toml",
+      "binary": "rocketmq-mcp",
+      "docker_target": "mcp",
+      "features": [
+        "production"
+      ],
+      "resolved_features": [
+        "auth",
+        "diagnose",
+        "metrics-prometheus",
+        "observability",
+        "otel-logs",
+        "otlp-logs",
+        "otlp-traces",
+        "production",
+        "production-observability",
+        "read-only",
+        "stdio",
+        "streamable-http"
+      ]
+    }
+  }
+}

@@ -111,7 +111,10 @@
       "additionalProperties": false,
       "required": [
         "commit",
-        "nonce"
+        "nonce",
+        "configDigest",
+        "secretVersion",
+        "storageGeneration"
       ],
       "properties": {
         "commit": {
@@ -128,6 +131,23 @@
           "minLength": 1,
           "maxLength": 63,
           "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+        },
+        "configDigest": {
+          "type": "string",
+          "description": "SHA-256 digest of the complete non-sensitive configuration bundle.",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "secretVersion": {
+          "type": "string",
+          "description": "Opaque version of the referenced Secret; this field must never contain Secret material.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "storageGeneration": {
+          "type": "integer",
+          "description": "Monotonically increasing generation shared by the persisted release state.",
+          "minimum": 1
         }
       }
     },
