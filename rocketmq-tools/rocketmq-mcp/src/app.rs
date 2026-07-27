@@ -111,7 +111,7 @@ impl McpApp {
     }
 
     /// Initializes telemetry and background work only after the composition root has
-    /// completed the process-wide pre-bind security validation.
+    /// resolved process-wide security bootstrap before listener bind.
     ///
     /// # Errors
     ///
@@ -120,7 +120,7 @@ impl McpApp {
     pub async fn bootstrap_typed(
         config: McpConfig,
         process_telemetry: rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig,
-        _validated_security: rocketmq_security_api::ValidatedSecurityBootstrap,
+        _security_bootstrap: rocketmq_security_api::SecurityBootstrapOutcome,
         service_context: rocketmq_runtime::ChildServiceContext,
     ) -> Result<Self, crate::error::McpError> {
         let telemetry = init_tracing_typed(&config, &process_telemetry, &service_context).await?;
@@ -155,9 +155,14 @@ impl McpApp {
         validated_security: rocketmq_security_api::ValidatedSecurityBootstrap,
         service_context: rocketmq_runtime::ChildServiceContext,
     ) -> anyhow::Result<Self> {
-        Self::bootstrap_typed(config, process_telemetry, validated_security, service_context)
-            .await
-            .map_err(anyhow::Error::new)
+        Self::bootstrap_typed(
+            config,
+            process_telemetry,
+            rocketmq_security_api::SecurityBootstrapOutcome::Validated(validated_security),
+            service_context,
+        )
+        .await
+        .map_err(anyhow::Error::new)
     }
 
     pub fn config(&self) -> &McpConfig {

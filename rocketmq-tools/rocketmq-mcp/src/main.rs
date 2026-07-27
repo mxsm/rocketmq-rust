@@ -27,9 +27,10 @@ use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ServiceLifecycle;
 use rocketmq_runtime::ServiceLifecycleState;
 use rocketmq_runtime::ShutdownReason;
+use rocketmq_security_api::SecurityBootstrap;
 use rocketmq_security_api::SecurityBootstrapConfig;
+use rocketmq_security_api::SecurityBootstrapOutcome;
 use rocketmq_security_api::SecurityBootstrapProfile;
-use rocketmq_security_api::ValidatedSecurityBootstrap;
 
 const RUNTIME_TEARDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 const ENTRYPOINT_MAX_BLOCKING_THREADS: usize = 32;
@@ -86,10 +87,10 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
             .map_err(|error| {
                 McpError::InvalidConfig(format!("invalid MCP process telemetry configuration: {error}"))
             })?;
-    let security_config = SecurityBootstrapConfig::from_env()
+    let security_bootstrap = SecurityBootstrapConfig::from_env()
         .map_err(|error| McpError::InvalidConfig(format!("MCP security bootstrap configuration failed: {error}")))?;
     let validated_security = validate_mcp_security(
-        &security_config,
+        &security_bootstrap,
         config.server.transport,
         &config.server.http.bind,
         process_telemetry.prometheus_listener_addr(),
@@ -150,12 +151,17 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
 }
 
 fn validate_mcp_security(
-    security_config: &SecurityBootstrapConfig,
+    security_bootstrap: &SecurityBootstrap,
     transport: TransportKind,
     http_bind: &str,
     prometheus_bind_addr: Option<std::net::SocketAddr>,
     probe_bind_addr: Option<std::net::SocketAddr>,
-) -> Result<ValidatedSecurityBootstrap, McpError> {
+) -> Result<SecurityBootstrapOutcome, McpError> {
+    if !security_bootstrap.is_enabled() {
+        return security_bootstrap.validate(&[]).map_err(|error| {
+            McpError::InvalidConfig(format!("MCP security bootstrap failed before listener bind: {error}"))
+        });
+    }
     let mut listeners = Vec::with_capacity(3);
     if transport == TransportKind::StreamableHttp {
         listeners.push(
@@ -170,23 +176,28 @@ fn validate_mcp_security(
     if let Some(probe_bind_addr) = probe_bind_addr {
         listeners.push(probe_bind_addr);
     }
-    security_config.validate(&listeners).map_err(|error| {
+    security_bootstrap.validate(&listeners).map_err(|error| {
         McpError::InvalidConfig(format!("MCP security bootstrap failed before listener bind: {error}"))
     })
 }
 
-fn log_security_bootstrap(validated: ValidatedSecurityBootstrap) {
-    match validated.profile() {
-        SecurityBootstrapProfile::DevelopmentInsecureLoopback => tracing::warn!(
-            profile = validated.profile().as_str(),
-            listener_count = validated.listener_count(),
-            "MCP development-insecure security profile is active; every listener is restricted to loopback"
-        ),
-        SecurityBootstrapProfile::SecureEnforced => tracing::info!(
-            profile = validated.profile().as_str(),
-            listener_count = validated.listener_count(),
-            "MCP secure bootstrap completed before listener bind"
-        ),
+fn log_security_bootstrap(outcome: SecurityBootstrapOutcome) {
+    match outcome {
+        SecurityBootstrapOutcome::Disabled => {
+            tracing::warn!("MCP security bootstrap is disabled because no security profile is configured")
+        }
+        SecurityBootstrapOutcome::Validated(validated) => match validated.profile() {
+            SecurityBootstrapProfile::DevelopmentInsecureLoopback => tracing::warn!(
+                profile = validated.profile().as_str(),
+                listener_count = validated.listener_count(),
+                "MCP development-insecure security profile is active; every listener is restricted to loopback"
+            ),
+            SecurityBootstrapProfile::SecureEnforced => tracing::info!(
+                profile = validated.profile().as_str(),
+                listener_count = validated.listener_count(),
+                "MCP secure bootstrap completed before listener bind"
+            ),
+        },
     }
 }
 
@@ -218,12 +229,30 @@ mod tests {
     use super::mcp_runtime_config;
     use super::validate_mcp_security;
     use super::TransportKind;
+    use rocketmq_security_api::SecurityBootstrap;
     use rocketmq_security_api::SecurityBootstrapConfig;
+    use rocketmq_security_api::SecurityBootstrapOutcome;
     use rocketmq_security_api::SecurityBootstrapProfile;
 
     #[test]
+    fn disabled_security_bootstrap_skips_mcp_listener_validation() {
+        let outcome = validate_mcp_security(
+            &SecurityBootstrap::Disabled,
+            TransportKind::StreamableHttp,
+            "not-a-socket-address",
+            None,
+            None,
+        )
+        .expect("disabled security bootstrap should not inspect MCP listeners");
+
+        assert_eq!(outcome, SecurityBootstrapOutcome::Disabled);
+    }
+
+    #[test]
     fn security_bootstrap_precedes_mcp_listener_bind() {
-        let security = SecurityBootstrapConfig::new(SecurityBootstrapProfile::DevelopmentInsecureLoopback);
+        let security = SecurityBootstrap::Enabled(SecurityBootstrapConfig::new(
+            SecurityBootstrapProfile::DevelopmentInsecureLoopback,
+        ));
 
         validate_mcp_security(
             &security,
@@ -239,7 +268,9 @@ mod tests {
 
     #[test]
     fn development_security_rejects_public_prometheus_listener() {
-        let security = SecurityBootstrapConfig::new(SecurityBootstrapProfile::DevelopmentInsecureLoopback);
+        let security = SecurityBootstrap::Enabled(SecurityBootstrapConfig::new(
+            SecurityBootstrapProfile::DevelopmentInsecureLoopback,
+        ));
 
         assert!(validate_mcp_security(
             &security,

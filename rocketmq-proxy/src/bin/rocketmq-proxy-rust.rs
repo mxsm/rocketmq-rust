@@ -35,9 +35,10 @@ use rocketmq_runtime::ServiceLifecycleState;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReason;
 use rocketmq_runtime::TaskGroup;
+use rocketmq_security_api::SecurityBootstrap;
 use rocketmq_security_api::SecurityBootstrapConfig;
+use rocketmq_security_api::SecurityBootstrapOutcome;
 use rocketmq_security_api::SecurityBootstrapProfile;
-use rocketmq_security_api::ValidatedSecurityBootstrap;
 use tracing::info;
 
 const ENTRYPOINT_MAX_BLOCKING_THREADS: usize = 64;
@@ -110,9 +111,9 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
             .map_err(|error| ProxyError::Transport {
             message: format!("invalid Proxy process telemetry configuration: {error}"),
         })?;
-    let security_config = SecurityBootstrapConfig::from_env().map_err(proxy_security_error)?;
+    let security_bootstrap = SecurityBootstrapConfig::from_env().map_err(proxy_security_error)?;
     let validated_security = validate_proxy_security(
-        &security_config,
+        &security_bootstrap,
         &config,
         process_telemetry.prometheus_listener_addr(),
         lifecycle.config().probe_bind_addr,
@@ -261,11 +262,14 @@ fn proxy_security_error(error: rocketmq_security_api::SecurityBootstrapError) ->
 }
 
 fn validate_proxy_security(
-    security_config: &SecurityBootstrapConfig,
+    security_bootstrap: &SecurityBootstrap,
     config: &ProxyConfig,
     prometheus_bind_addr: Option<std::net::SocketAddr>,
     probe_bind_addr: Option<std::net::SocketAddr>,
-) -> ProxyResult<ValidatedSecurityBootstrap> {
+) -> ProxyResult<SecurityBootstrapOutcome> {
+    if !security_bootstrap.is_enabled() {
+        return security_bootstrap.validate(&[]).map_err(proxy_security_error);
+    }
     let mut listeners = vec![config.grpc.socket_addr()?];
     if config.remoting.enabled {
         listeners.push(config.remoting.socket_addr()?);
@@ -276,21 +280,26 @@ fn validate_proxy_security(
     if let Some(probe_bind_addr) = probe_bind_addr {
         listeners.push(probe_bind_addr);
     }
-    security_config.validate(&listeners).map_err(proxy_security_error)
+    security_bootstrap.validate(&listeners).map_err(proxy_security_error)
 }
 
-fn log_security_bootstrap(validated: ValidatedSecurityBootstrap) {
-    match validated.profile() {
-        SecurityBootstrapProfile::DevelopmentInsecureLoopback => tracing::warn!(
-            profile = validated.profile().as_str(),
-            listener_count = validated.listener_count(),
-            "Proxy development-insecure security profile is active; every listener is restricted to loopback"
-        ),
-        SecurityBootstrapProfile::SecureEnforced => info!(
-            profile = validated.profile().as_str(),
-            listener_count = validated.listener_count(),
-            "Proxy secure bootstrap completed before listener bind"
-        ),
+fn log_security_bootstrap(outcome: SecurityBootstrapOutcome) {
+    match outcome {
+        SecurityBootstrapOutcome::Disabled => {
+            tracing::warn!("Proxy security bootstrap is disabled because no security profile is configured")
+        }
+        SecurityBootstrapOutcome::Validated(validated) => match validated.profile() {
+            SecurityBootstrapProfile::DevelopmentInsecureLoopback => tracing::warn!(
+                profile = validated.profile().as_str(),
+                listener_count = validated.listener_count(),
+                "Proxy development-insecure security profile is active; every listener is restricted to loopback"
+            ),
+            SecurityBootstrapProfile::SecureEnforced => info!(
+                profile = validated.profile().as_str(),
+                listener_count = validated.listener_count(),
+                "Proxy secure bootstrap completed before listener bind"
+            ),
+        },
     }
 }
 
@@ -545,8 +554,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn disabled_security_bootstrap_allows_default_proxy_listeners() {
+        let outcome = validate_proxy_security(
+            &rocketmq_security_api::SecurityBootstrap::Disabled,
+            &ProxyConfig::default(),
+            None,
+            None,
+        )
+        .expect("disabled security bootstrap should not restrict Proxy listeners");
+
+        assert_eq!(outcome, rocketmq_security_api::SecurityBootstrapOutcome::Disabled);
+    }
+
+    #[test]
     fn security_bootstrap_precedes_proxy_listener_bind() {
-        let security = SecurityBootstrapConfig::new(SecurityBootstrapProfile::DevelopmentInsecureLoopback);
+        let security = rocketmq_security_api::SecurityBootstrap::Enabled(SecurityBootstrapConfig::new(
+            SecurityBootstrapProfile::DevelopmentInsecureLoopback,
+        ));
         let mut config = ProxyConfig {
             grpc: GrpcConfig {
                 listen_addr: "127.0.0.1:8081".to_string(),
@@ -573,7 +597,9 @@ mod tests {
 
     #[test]
     fn development_security_rejects_public_prometheus_listener() {
-        let security = SecurityBootstrapConfig::new(SecurityBootstrapProfile::DevelopmentInsecureLoopback);
+        let security = rocketmq_security_api::SecurityBootstrap::Enabled(SecurityBootstrapConfig::new(
+            SecurityBootstrapProfile::DevelopmentInsecureLoopback,
+        ));
         let config = ProxyConfig {
             grpc: GrpcConfig {
                 listen_addr: "127.0.0.1:8081".to_string(),

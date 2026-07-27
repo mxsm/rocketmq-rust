@@ -41,9 +41,10 @@ use rocketmq_runtime::ServiceLifecycleState;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReason;
 use rocketmq_runtime::TaskGroup;
+use rocketmq_security_api::SecurityBootstrap;
 use rocketmq_security_api::SecurityBootstrapConfig;
+use rocketmq_security_api::SecurityBootstrapOutcome;
 use rocketmq_security_api::SecurityBootstrapProfile;
-use rocketmq_security_api::ValidatedSecurityBootstrap;
 use tracing::info;
 
 /// RocketMQ Controller Bootstrap
@@ -145,14 +146,11 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
             "rocketmq-controller",
         )
         .context("failed to validate Controller release identity and metrics configuration")?;
-    let security_config =
+    let security_bootstrap =
         SecurityBootstrapConfig::from_env().context("failed to load Controller security bootstrap configuration")?;
-    let raft_bind_addr = resolve_controller_raft_bind_addr(config.local_raft_addr())
-        .context("failed to resolve Controller Raft listener address")?;
     let validated_security = validate_controller_security(
-        &security_config,
+        &security_bootstrap,
         &config,
-        raft_bind_addr,
         process_telemetry.prometheus_listener_addr(),
         lifecycle.config().probe_bind_addr,
     )
@@ -259,12 +257,16 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
 }
 
 fn validate_controller_security(
-    security_config: &SecurityBootstrapConfig,
+    security_bootstrap: &SecurityBootstrap,
     controller_config: &ControllerConfig,
-    raft_bind_addr: SocketAddr,
     prometheus_bind_addr: Option<SocketAddr>,
     probe_bind_addr: Option<SocketAddr>,
-) -> Result<ValidatedSecurityBootstrap> {
+) -> Result<SecurityBootstrapOutcome> {
+    if !security_bootstrap.is_enabled() {
+        return security_bootstrap.validate(&[]).map_err(anyhow::Error::from);
+    }
+    let raft_bind_addr = resolve_controller_raft_bind_addr(controller_config.local_raft_addr())
+        .context("failed to resolve Controller Raft listener address")?;
     let mut listeners = vec![controller_config.listen_addr, raft_bind_addr];
     if let Some(prometheus_bind_addr) = prometheus_bind_addr {
         listeners.push(prometheus_bind_addr);
@@ -272,21 +274,26 @@ fn validate_controller_security(
     if let Some(probe_bind_addr) = probe_bind_addr {
         listeners.push(probe_bind_addr);
     }
-    security_config.validate(&listeners).map_err(anyhow::Error::from)
+    security_bootstrap.validate(&listeners).map_err(anyhow::Error::from)
 }
 
-fn log_security_bootstrap(validated: ValidatedSecurityBootstrap) {
-    match validated.profile() {
-        SecurityBootstrapProfile::DevelopmentInsecureLoopback => tracing::warn!(
-            profile = validated.profile().as_str(),
-            listener_count = validated.listener_count(),
-            "Controller development-insecure security profile is active; every listener is restricted to loopback"
-        ),
-        SecurityBootstrapProfile::SecureEnforced => info!(
-            profile = validated.profile().as_str(),
-            listener_count = validated.listener_count(),
-            "Controller secure bootstrap completed before listener bind"
-        ),
+fn log_security_bootstrap(outcome: SecurityBootstrapOutcome) {
+    match outcome {
+        SecurityBootstrapOutcome::Disabled => {
+            tracing::warn!("Controller security bootstrap is disabled because no security profile is configured")
+        }
+        SecurityBootstrapOutcome::Validated(validated) => match validated.profile() {
+            SecurityBootstrapProfile::DevelopmentInsecureLoopback => tracing::warn!(
+                profile = validated.profile().as_str(),
+                listener_count = validated.listener_count(),
+                "Controller development-insecure security profile is active; every listener is restricted to loopback"
+            ),
+            SecurityBootstrapProfile::SecureEnforced => info!(
+                profile = validated.profile().as_str(),
+                listener_count = validated.listener_count(),
+                "Controller secure bootstrap completed before listener bind"
+            ),
+        },
     }
 }
 
@@ -594,8 +601,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn disabled_security_bootstrap_allows_default_controller_listeners() {
+        let outcome = validate_controller_security(
+            &rocketmq_security_api::SecurityBootstrap::Disabled,
+            &ControllerConfig::default(),
+            None,
+            None,
+        )
+        .expect("disabled security bootstrap should not restrict Controller listeners");
+
+        assert_eq!(outcome, rocketmq_security_api::SecurityBootstrapOutcome::Disabled);
+    }
+
+    #[test]
     fn security_bootstrap_precedes_controller_listener_bind() {
-        let security = SecurityBootstrapConfig::new(SecurityBootstrapProfile::DevelopmentInsecureLoopback);
+        let security = rocketmq_security_api::SecurityBootstrap::Enabled(SecurityBootstrapConfig::new(
+            SecurityBootstrapProfile::DevelopmentInsecureLoopback,
+        ));
         let mut controller = ControllerConfig::default()
             .with_node_info(1, SocketAddr::from(([127, 0, 0, 1], 60109)))
             .with_raft_peers(Vec::new());
@@ -603,21 +625,20 @@ mod tests {
         validate_controller_security(
             &security,
             &controller,
-            controller.local_raft_addr(),
             None,
             Some(SocketAddr::from(([127, 0, 0, 1], 8088))),
         )
         .expect("loopback-only Controller bootstrap should pass");
 
         controller.listen_addr = SocketAddr::from(([0, 0, 0, 0], 60109));
-        assert!(
-            validate_controller_security(&security, &controller, controller.local_raft_addr(), None, None).is_err()
-        );
+        assert!(validate_controller_security(&security, &controller, None, None).is_err());
     }
 
     #[test]
     fn development_security_rejects_public_prometheus_listener() {
-        let security = SecurityBootstrapConfig::new(SecurityBootstrapProfile::DevelopmentInsecureLoopback);
+        let security = rocketmq_security_api::SecurityBootstrap::Enabled(SecurityBootstrapConfig::new(
+            SecurityBootstrapProfile::DevelopmentInsecureLoopback,
+        ));
         let controller = ControllerConfig::default()
             .with_node_info(1, SocketAddr::from(([127, 0, 0, 1], 60109)))
             .with_raft_peers(Vec::new());
@@ -625,7 +646,6 @@ mod tests {
         assert!(validate_controller_security(
             &security,
             &controller,
-            controller.local_raft_addr(),
             Some(SocketAddr::from(([0, 0, 0, 0], 5557))),
             None,
         )

@@ -76,6 +76,97 @@ pub struct SecurityBootstrapConfig {
     request_policy: Option<PathBuf>,
 }
 
+/// Resolved process-wide security bootstrap state.
+#[derive(Debug, Clone)]
+pub enum SecurityBootstrap {
+    Disabled,
+    Enabled(SecurityBootstrapConfig),
+}
+
+impl SecurityBootstrap {
+    pub const fn is_enabled(&self) -> bool {
+        matches!(self, Self::Enabled(_))
+    }
+
+    /// Validates enabled security bootstrap or records that it was intentionally disabled.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecurityBootstrapError`] when an enabled profile is incomplete or unsafe.
+    pub fn validate(
+        &self,
+        listener_addresses: &[SocketAddr],
+    ) -> Result<SecurityBootstrapOutcome, SecurityBootstrapError> {
+        match self {
+            Self::Disabled => Ok(SecurityBootstrapOutcome::Disabled),
+            Self::Enabled(config) => config
+                .validate(listener_addresses)
+                .map(SecurityBootstrapOutcome::Validated),
+        }
+    }
+}
+
+#[derive(Default)]
+struct SecurityBootstrapEnvironment {
+    profile: Option<String>,
+    trust_anchor: Option<PathBuf>,
+    tls_certificate: Option<PathBuf>,
+    tls_private_key: Option<PathBuf>,
+    secret_provider: Option<String>,
+    admin_identity: Option<PathBuf>,
+    request_policy: Option<PathBuf>,
+}
+
+impl SecurityBootstrapEnvironment {
+    fn from_env() -> Result<Self, SecurityBootstrapError> {
+        Ok(Self {
+            profile: optional_env(SECURITY_PROFILE_ENV)?,
+            trust_anchor: optional_path_env(SECURITY_TRUST_ANCHOR_ENV)?,
+            tls_certificate: optional_path_env(SECURITY_TLS_CERT_ENV)?,
+            tls_private_key: optional_path_env(SECURITY_TLS_KEY_ENV)?,
+            secret_provider: optional_env(SECURITY_SECRET_PROVIDER_ENV)?,
+            admin_identity: optional_path_env(SECURITY_ADMIN_IDENTITY_ENV)?,
+            request_policy: optional_path_env(SECURITY_REQUEST_POLICY_ENV)?,
+        })
+    }
+
+    fn resolve(self) -> Result<SecurityBootstrap, SecurityBootstrapError> {
+        let Self {
+            profile,
+            trust_anchor,
+            tls_certificate,
+            tls_private_key,
+            secret_provider,
+            admin_identity,
+            request_policy,
+        } = self;
+        let Some(profile) = profile else {
+            if trust_anchor.is_some()
+                || tls_certificate.is_some()
+                || tls_private_key.is_some()
+                || secret_provider.is_some()
+                || admin_identity.is_some()
+                || request_policy.is_some()
+            {
+                return Err(SecurityBootstrapError::MissingProfile);
+            }
+            return Ok(SecurityBootstrap::Disabled);
+        };
+        let profile = profile
+            .parse::<SecurityBootstrapProfile>()
+            .map_err(|_| SecurityBootstrapError::UnknownProfile)?;
+        Ok(SecurityBootstrap::Enabled(SecurityBootstrapConfig {
+            profile,
+            trust_anchor,
+            tls_certificate,
+            tls_private_key,
+            secret_provider,
+            admin_identity,
+            request_policy,
+        }))
+    }
+}
+
 impl fmt::Debug for SecurityBootstrapConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SecurityBootstrapConfig")
@@ -105,23 +196,15 @@ impl SecurityBootstrapConfig {
 
     /// Loads the canonical bootstrap environment without exposing configured values in errors.
     ///
+    /// Security bootstrap is disabled only when neither the profile nor any bootstrap field is
+    /// configured.
+    ///
     /// # Errors
     ///
-    /// Returns a typed error when the profile is absent, unknown, non-UTF-8, or when any
-    /// configured bootstrap field is non-UTF-8.
-    pub fn from_env() -> Result<Self, SecurityBootstrapError> {
-        let profile = required_env(SECURITY_PROFILE_ENV)?
-            .parse::<SecurityBootstrapProfile>()
-            .map_err(|_| SecurityBootstrapError::UnknownProfile)?;
-        Ok(Self {
-            profile,
-            trust_anchor: optional_path_env(SECURITY_TRUST_ANCHOR_ENV)?,
-            tls_certificate: optional_path_env(SECURITY_TLS_CERT_ENV)?,
-            tls_private_key: optional_path_env(SECURITY_TLS_KEY_ENV)?,
-            secret_provider: optional_env(SECURITY_SECRET_PROVIDER_ENV)?,
-            admin_identity: optional_path_env(SECURITY_ADMIN_IDENTITY_ENV)?,
-            request_policy: optional_path_env(SECURITY_REQUEST_POLICY_ENV)?,
-        })
+    /// Returns a typed error when fields are configured without a profile, the profile is
+    /// unknown, or any configured environment field is non-UTF-8.
+    pub fn from_env() -> Result<SecurityBootstrap, SecurityBootstrapError> {
+        SecurityBootstrapEnvironment::from_env()?.resolve()
     }
 
     pub fn with_trust_anchor(mut self, path: impl Into<PathBuf>) -> Self {
@@ -204,8 +287,15 @@ impl SecurityBootstrapConfig {
 /// Returns [`SecurityBootstrapError`] for every incomplete, unsupported, or unsafe profile.
 pub fn validate_security_bootstrap_from_env(
     listener_addresses: &[SocketAddr],
-) -> Result<ValidatedSecurityBootstrap, SecurityBootstrapError> {
+) -> Result<SecurityBootstrapOutcome, SecurityBootstrapError> {
     SecurityBootstrapConfig::from_env()?.validate(listener_addresses)
+}
+
+/// Result of resolving and, when enabled, validating process security bootstrap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecurityBootstrapOutcome {
+    Disabled,
+    Validated(ValidatedSecurityBootstrap),
 }
 
 /// Non-sensitive proof that canonical bootstrap completed before listener ownership begins.
@@ -249,7 +339,7 @@ impl fmt::Display for SecurityBootstrapMaterial {
 /// Typed, value-free startup failures returned before listener bind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum SecurityBootstrapError {
-    #[error("security bootstrap profile is required")]
+    #[error("security bootstrap profile is required when bootstrap fields are configured")]
     MissingProfile,
     #[error("security bootstrap profile is unknown")]
     UnknownProfile,
@@ -269,10 +359,6 @@ pub enum SecurityBootstrapError {
     UnsupportedSecretProvider,
     #[error("development-insecure profile requires every listener to use a loopback address")]
     DevelopmentListenerNotLoopback,
-}
-
-fn required_env(name: &'static str) -> Result<String, SecurityBootstrapError> {
-    optional_env(name)?.ok_or(SecurityBootstrapError::MissingProfile)
 }
 
 fn optional_path_env(name: &'static str) -> Result<Option<PathBuf>, SecurityBootstrapError> {
@@ -591,6 +677,100 @@ mod tests {
     use tempfile::NamedTempFile;
 
     use super::*;
+
+    #[test]
+    fn security_bootstrap_environment_without_profile_or_fields_is_disabled() {
+        let security_bootstrap = SecurityBootstrapEnvironment::default()
+            .resolve()
+            .expect("empty security bootstrap environment should resolve");
+
+        assert!(matches!(security_bootstrap, SecurityBootstrap::Disabled));
+    }
+
+    #[test]
+    fn security_bootstrap_environment_rejects_every_field_without_profile() {
+        let configured_environments = [
+            SecurityBootstrapEnvironment {
+                trust_anchor: Some(PathBuf::from("ca.crt")),
+                ..SecurityBootstrapEnvironment::default()
+            },
+            SecurityBootstrapEnvironment {
+                tls_certificate: Some(PathBuf::from("tls.crt")),
+                ..SecurityBootstrapEnvironment::default()
+            },
+            SecurityBootstrapEnvironment {
+                tls_private_key: Some(PathBuf::from("tls.key")),
+                ..SecurityBootstrapEnvironment::default()
+            },
+            SecurityBootstrapEnvironment {
+                secret_provider: Some(MOUNTED_FILES_SECRET_PROVIDER.to_string()),
+                ..SecurityBootstrapEnvironment::default()
+            },
+            SecurityBootstrapEnvironment {
+                admin_identity: Some(PathBuf::from("admin.identity")),
+                ..SecurityBootstrapEnvironment::default()
+            },
+            SecurityBootstrapEnvironment {
+                request_policy: Some(PathBuf::from("request-policy.json")),
+                ..SecurityBootstrapEnvironment::default()
+            },
+        ];
+
+        for environment in configured_environments {
+            assert_eq!(
+                environment
+                    .resolve()
+                    .expect_err("security fields without a profile must fail"),
+                SecurityBootstrapError::MissingProfile
+            );
+        }
+    }
+
+    #[test]
+    fn security_bootstrap_environment_enables_known_profiles_and_rejects_unknown_profile() {
+        let development = SecurityBootstrapEnvironment {
+            profile: Some("development-insecure-loopback".to_string()),
+            ..SecurityBootstrapEnvironment::default()
+        }
+        .resolve()
+        .expect("development profile should resolve");
+        let SecurityBootstrap::Enabled(development) = development else {
+            panic!("development profile must enable security bootstrap");
+        };
+        assert_eq!(
+            development
+                .validate(&[])
+                .expect("development profile without listeners should validate")
+                .profile(),
+            SecurityBootstrapProfile::DevelopmentInsecureLoopback
+        );
+
+        let secure = SecurityBootstrapEnvironment {
+            profile: Some("secure-enforced".to_string()),
+            ..SecurityBootstrapEnvironment::default()
+        }
+        .resolve()
+        .expect("secure profile should resolve");
+        let SecurityBootstrap::Enabled(secure) = secure else {
+            panic!("secure profile must enable security bootstrap");
+        };
+        assert_eq!(
+            secure
+                .validate(&[])
+                .expect_err("secure profile without material must fail closed"),
+            SecurityBootstrapError::MissingMaterial(SecurityBootstrapMaterial::TrustAnchor)
+        );
+
+        assert_eq!(
+            SecurityBootstrapEnvironment {
+                profile: Some("unknown".to_string()),
+                ..SecurityBootstrapEnvironment::default()
+            }
+            .resolve()
+            .expect_err("unknown profile must fail closed"),
+            SecurityBootstrapError::UnknownProfile
+        );
+    }
 
     #[test]
     fn new_defaults_secure_while_existing_defaults_compatibility_with_report() {

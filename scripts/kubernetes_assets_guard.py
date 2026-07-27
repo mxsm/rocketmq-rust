@@ -105,6 +105,15 @@ EXPECTED_TOOLS = {
     ),
 }
 FORBIDDEN_PROBE_FIELDS = ("tcpSocket:", "startupProbe:")
+SECURITY_BOOTSTRAP_ENVIRONMENT = (
+    ("ROCKETMQ_SECURITY_PROFILE", "secure-enforced"),
+    ("ROCKETMQ_SECURITY_TRUST_ANCHOR", "/var/run/secrets/rocketmq/ca.crt"),
+    ("ROCKETMQ_SECURITY_TLS_CERT", "/var/run/secrets/rocketmq/tls.crt"),
+    ("ROCKETMQ_SECURITY_TLS_KEY", "/var/run/secrets/rocketmq/tls.key"),
+    ("ROCKETMQ_SECURITY_SECRET_PROVIDER", "mounted-files"),
+    ("ROCKETMQ_SECURITY_ADMIN_IDENTITY", "/var/run/secrets/rocketmq/admin.identity"),
+    ("ROCKETMQ_SECURITY_REQUEST_POLICY", "/var/run/secrets/rocketmq/request-policy.json"),
+)
 
 
 @dataclass(frozen=True)
@@ -187,6 +196,15 @@ def require_valid_toml(guard: Guard, label: str, document: Document, key: str) -
         tomllib.loads(source)
     except tomllib.TOMLDecodeError as error:
         guard.errors.append(f"{label}: invalid TOML in {document.name}/{key}: {error}")
+
+
+def require_security_bootstrap_environment(guard: Guard, label: str, text: str) -> None:
+    for name, value in SECURITY_BOOTSTRAP_ENVIRONMENT:
+        pattern = rf"name:\s*{re.escape(name)}\s*,\s*value:\s*[\"']?{re.escape(value)}[\"']?"
+        guard.require(
+            re.search(pattern, text) is not None,
+            f"{label}: missing explicit security bootstrap environment {name}={value}",
+        )
 
 
 def validate_exact_policy(guard: Guard, policy: dict[str, Any], container_policy: dict[str, Any]) -> None:
@@ -368,6 +386,7 @@ def validate_source_assets(guard: Guard) -> None:
             "networkpolicies.yaml",
         )
     )
+    require_security_bootstrap_environment(guard, "Helm chart", chart_sources)
     all_yaml_sources = chart_sources + "\n" + guard.read("distribution/kubernetes/base/manifest.yaml")
     for field in FORBIDDEN_PROBE_FIELDS:
         guard.require(field not in all_yaml_sources, f"forbidden lifecycle probe field found: {field}")
@@ -423,6 +442,7 @@ def validate_source_assets(guard: Guard) -> None:
 
 def validate_workload(guard: Guard, label: str, document: Document, service: str, expected: dict[str, Any], digest: str) -> None:
     text = document.text
+    require_security_bootstrap_environment(guard, f"{label}: {service}", text)
     guard.require(re.search(rf"(?m)^  replicas:\s*{expected['replicas']}\s*$", text) is not None, f"{label}: {service} replicas drifted")
     expected_image = f"ghcr.io/mxsm/rocketmq-rust/{service}@{digest}"
     guard.require(expected_image in text, f"{label}: {service} immutable image missing")

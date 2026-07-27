@@ -24,6 +24,18 @@ use serde_json::Value;
 static NEXT_TEMP_CONFIG_ID: AtomicU64 = AtomicU64::new(1);
 
 #[test]
+fn stdio_starts_without_security_bootstrap_environment() {
+    let output = run_stdio_server_without_security_bootstrap(
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"default-disabled-integration","version":"1.0.0"}}}
+"#,
+    );
+
+    assert!(output.status.success(), "server failed: {}", output.stderr);
+    let responses = parse_stdout_json(&output.stdout);
+    assert_eq!(responses[&1]["result"]["protocolVersion"], "2025-11-25");
+}
+
+#[test]
 fn mcp_inspector_stdio_surface_integration() {
     let output = run_stdio_server(
         r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"integration-inspector","version":"1.0.0"}}}
@@ -136,14 +148,37 @@ fn run_stdio_server(input: &str) -> StdioOutput {
     run_stdio_server_with_namesrv(input, "127.0.0.1:9876")
 }
 
+fn run_stdio_server_without_security_bootstrap(input: &str) -> StdioOutput {
+    run_stdio_server_with_namesrv_and_security_profile(input, "127.0.0.1:9876", None)
+}
+
 fn run_stdio_server_with_namesrv(input: &str, namesrv_addr: &str) -> StdioOutput {
+    run_stdio_server_with_namesrv_and_security_profile(input, namesrv_addr, Some("development-insecure-loopback"))
+}
+
+fn run_stdio_server_with_namesrv_and_security_profile(
+    input: &str,
+    namesrv_addr: &str,
+    security_profile: Option<&str>,
+) -> StdioOutput {
     let binary = env!("CARGO_BIN_EXE_rocketmq-mcp");
     let config = temporary_memory_audit_config(namesrv_addr);
-    let mut child = Command::new(binary)
-        .env(
-            rocketmq_security_api::SECURITY_PROFILE_ENV,
-            "development-insecure-loopback",
-        )
+    let mut command = Command::new(binary);
+    for name in [
+        rocketmq_security_api::SECURITY_PROFILE_ENV,
+        rocketmq_security_api::SECURITY_TRUST_ANCHOR_ENV,
+        rocketmq_security_api::SECURITY_TLS_CERT_ENV,
+        rocketmq_security_api::SECURITY_TLS_KEY_ENV,
+        rocketmq_security_api::SECURITY_SECRET_PROVIDER_ENV,
+        rocketmq_security_api::SECURITY_ADMIN_IDENTITY_ENV,
+        rocketmq_security_api::SECURITY_REQUEST_POLICY_ENV,
+    ] {
+        command.env_remove(name);
+    }
+    if let Some(security_profile) = security_profile {
+        command.env(rocketmq_security_api::SECURITY_PROFILE_ENV, security_profile);
+    }
+    let mut child = command
         .arg("--config")
         .arg(&config)
         .arg("--transport")
