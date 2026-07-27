@@ -62,6 +62,7 @@ use crate::security::TransportSecurity;
 use crate::session_executor::SessionDispatchError;
 use crate::session_executor::SessionExecutor;
 use crate::telemetry::TransportTelemetry;
+use crate::tls::NegotiatedConnection;
 use crate::tls::TlsServerRuntime;
 use crate::write_strategy::QueuedWrite;
 use crate::write_strategy::WriterOperation;
@@ -247,6 +248,49 @@ pub trait ConnectionHandler: Send + Sync + 'static {
     }
 }
 
+#[derive(Clone, Copy)]
+struct NegotiationTimeouts {
+    protocol_detection: Duration,
+    tls_handshake: Duration,
+}
+
+async fn negotiate_transport_connection(
+    tls: &TlsServerRuntime,
+    admission: &AdmissionController,
+    scope: AdmissionScope,
+    stream: tokio::net::TcpStream,
+    remote_addr: SocketAddr,
+    timeouts: NegotiationTimeouts,
+) -> Option<NegotiatedConnection> {
+    // Protocol detection waits under the connection idle budget. Once TLS is identified, the
+    // narrower handshake budget bounds only the cryptographic negotiation.
+    let is_tls_handshake = tokio::time::timeout(
+        timeouts.protocol_detection,
+        tls.detect_tls_handshake(&stream, remote_addr),
+    )
+    .await
+    .ok()
+    .flatten()?;
+    let _handshake_permit = admission
+        .try_acquire(
+            AdmissionResource::Handshake,
+            scope,
+            crate::admission::estimated_handshake_retained_bytes(),
+            AdmissionClass::Data,
+        )
+        .ok()?;
+    let negotiation = tls.negotiate_detected_connection(stream, remote_addr, is_tls_handshake);
+
+    if is_tls_handshake {
+        tokio::time::timeout(timeouts.tls_handshake, negotiation)
+            .await
+            .ok()
+            .flatten()
+    } else {
+        negotiation.await
+    }
+}
+
 /// Canonical socket accept, admission, TLS handshake, and session ownership runtime.
 pub struct TransportListener {
     listener: tokio::net::TcpListener,
@@ -344,28 +388,26 @@ impl TransportListener {
                 .spawn("rocketmq.transport.session", TaskKind::Service, async move {
                     let _session_lease = session_lease;
                     let _connection_permit = connection_permit;
-                    let Ok(_handshake_permit) = admission.try_acquire(
-                        AdmissionResource::Handshake,
-                        scope,
-                        crate::admission::estimated_handshake_retained_bytes(),
-                        AdmissionClass::Data,
-                    ) else {
-                        return;
-                    };
                     let handshake_cancellation = session_group.cancellation_token();
                     let negotiated = tokio::select! {
                         () = handshake_cancellation.cancelled() => return,
-                        negotiated = tokio::time::timeout(
-                            handshake_timeout,
-                            tls.negotiate_connection(stream, remote_addr),
+                        negotiated = negotiate_transport_connection(
+                            &tls,
+                            &admission,
+                            scope,
+                            stream,
+                            remote_addr,
+                            NegotiationTimeouts {
+                                protocol_detection: idle_timeout,
+                                tls_handshake: handshake_timeout,
+                            },
                         ) => negotiated,
                     };
-                    let Ok(Some(negotiated)) = negotiated else {
+                    let Some(negotiated) = negotiated else {
                         return;
                     };
                     let (connection, peer_is_tls) = negotiated.into_parts();
                     let connection = connection.with_telemetry(telemetry);
-                    drop(_handshake_permit);
                     run_framed_session(
                         connection,
                         local_addr,
@@ -879,28 +921,26 @@ impl TransportServer {
         session_group: TaskGroup,
     ) {
         let scope = AdmissionScope::new(remote_addr.ip()).with_session(session_id);
-        let Ok(_handshake_permit) = self.admission.try_acquire(
-            AdmissionResource::Handshake,
-            scope,
-            crate::admission::estimated_handshake_retained_bytes(),
-            AdmissionClass::Data,
-        ) else {
-            return;
-        };
-        let handshake_deadline = tokio::time::Instant::now() + self.config.handshake_timeout;
         let handshake_cancellation = session_group.cancellation_token();
         let negotiated = tokio::select! {
             () = handshake_cancellation.cancelled() => return,
-            negotiated =
-                tokio::time::timeout_at(handshake_deadline, self.tls.negotiate_connection(stream, remote_addr)) =>
-                negotiated,
+            negotiated = negotiate_transport_connection(
+                &self.tls,
+                &self.admission,
+                scope,
+                stream,
+                remote_addr,
+                NegotiationTimeouts {
+                    protocol_detection: self.config.request_timeout,
+                    tls_handshake: self.config.handshake_timeout,
+                },
+            ) => negotiated,
         };
-        let Ok(Some(negotiated)) = negotiated else {
+        let Some(negotiated) = negotiated else {
             return;
         };
         let (connection, peer_is_tls) = negotiated.into_parts();
         let connection = connection.with_telemetry(self.telemetry.clone());
-        drop(_handshake_permit);
         run_framed_session(
             connection,
             self.local_addr,
@@ -956,16 +996,24 @@ mod retirement_tests {
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_runtime::RuntimeContext;
     use tokio::io::AsyncReadExt;
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::TcpListener;
+    use tokio::net::TcpStream;
     use tokio::sync::oneshot;
     use tokio::sync::Notify;
 
     use super::ConnectionHandler;
     use super::SessionHandle;
+    use super::TransportListener;
     use crate::admission::AdmissionController;
     use crate::admission::AdmissionLimits;
+    use crate::config::TlsConfig;
+    #[cfg(feature = "tls")]
+    use crate::config::TlsMode;
     use crate::connection::Connection;
     use crate::deadline::RequestDeadline;
     use crate::security::TransportSecurity;
+    use crate::tls::TlsServerRuntime;
 
     struct CaptureSession {
         sender: std::sync::Mutex<Option<oneshot::Sender<SessionHandle>>>,
@@ -987,6 +1035,143 @@ mod retirement_tests {
         ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
             Box::pin(async {})
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn delayed_plaintext_first_byte_uses_idle_timeout_not_tls_handshake_timeout() {
+        let runtime = RuntimeContext::from_current("transport-delayed-plaintext-test");
+        let service = runtime.service_context("transport-delayed-plaintext");
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
+        let addr = listener.local_addr().expect("listener address");
+        let tls = TlsServerRuntime::initialize_with_service_context(TlsConfig::default(), &service)
+            .await
+            .expect("initialize TLS runtime");
+        let (session_tx, session_rx) = oneshot::channel();
+        let handler = Arc::new(CaptureSession {
+            sender: std::sync::Mutex::new(Some(session_tx)),
+        });
+        let transport = TransportListener::new(
+            listener,
+            service.task_group().clone(),
+            tls,
+            Arc::new(AdmissionController::new(AdmissionLimits::default())),
+            Duration::from_millis(20),
+        )
+        .with_idle_timeout(Duration::from_millis(500));
+        let server = tokio::spawn(transport.run(handler));
+
+        let mut client = TcpStream::connect(addr).await.expect("connect client");
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        client.write_all(&[0]).await.expect("write delayed plaintext byte");
+
+        tokio::time::timeout(Duration::from_millis(500), session_rx)
+            .await
+            .expect("plaintext session should outlive TLS handshake timeout")
+            .expect("capture session");
+
+        service.task_group().cancel();
+        tokio::time::timeout(Duration::from_secs(1), server)
+            .await
+            .expect("server should stop")
+            .expect("server task")
+            .expect("server result");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn silent_connection_uses_idle_timeout_before_closing() {
+        let runtime = RuntimeContext::from_current("transport-silent-connection-test");
+        let service = runtime.service_context("transport-silent-connection");
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
+        let addr = listener.local_addr().expect("listener address");
+        let tls = TlsServerRuntime::initialize_with_service_context(TlsConfig::default(), &service)
+            .await
+            .expect("initialize TLS runtime");
+        let (session_tx, _session_rx) = oneshot::channel();
+        let handler = Arc::new(CaptureSession {
+            sender: std::sync::Mutex::new(Some(session_tx)),
+        });
+        let transport = TransportListener::new(
+            listener,
+            service.task_group().clone(),
+            tls,
+            Arc::new(AdmissionController::new(AdmissionLimits::default())),
+            Duration::from_millis(20),
+        )
+        .with_idle_timeout(Duration::from_millis(150));
+        let server = tokio::spawn(transport.run(handler));
+
+        let mut client = TcpStream::connect(addr).await.expect("connect client");
+        let mut byte = [0u8; 1];
+        assert!(
+            tokio::time::timeout(Duration::from_millis(60), client.read(&mut byte))
+                .await
+                .is_err(),
+            "silent connection must remain open past the TLS handshake timeout"
+        );
+        let read = tokio::time::timeout(Duration::from_millis(300), client.read(&mut byte))
+            .await
+            .expect("silent connection should reach idle timeout")
+            .expect("read idle close");
+        assert_eq!(read, 0, "idle timeout should close the silent connection");
+
+        service.task_group().cancel();
+        tokio::time::timeout(Duration::from_secs(1), server)
+            .await
+            .expect("server should stop")
+            .expect("server task")
+            .expect("server result");
+    }
+
+    #[cfg(feature = "tls")]
+    #[tokio::test(start_paused = true)]
+    async fn detected_tls_handshake_remains_bounded_by_handshake_timeout() {
+        let runtime = RuntimeContext::from_current("transport-stalled-tls-test");
+        let service = runtime.service_context("transport-stalled-tls");
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
+        let addr = listener.local_addr().expect("listener address");
+        let tls = TlsServerRuntime::initialize_with_service_context(
+            TlsConfig {
+                test_mode_enable: true,
+                server: crate::config::TlsServerConfig {
+                    mode: TlsMode::Permissive,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            &service,
+        )
+        .await
+        .expect("initialize TLS runtime");
+        assert_eq!(tls.active_generation(), 1, "test TLS acceptor must be active");
+        let (session_tx, _session_rx) = oneshot::channel();
+        let handler = Arc::new(CaptureSession {
+            sender: std::sync::Mutex::new(Some(session_tx)),
+        });
+        let transport = TransportListener::new(
+            listener,
+            service.task_group().clone(),
+            tls,
+            Arc::new(AdmissionController::new(AdmissionLimits::default())),
+            Duration::from_millis(30),
+        )
+        .with_idle_timeout(Duration::from_millis(500));
+        let server = tokio::spawn(transport.run(handler));
+
+        let mut client = TcpStream::connect(addr).await.expect("connect client");
+        client.write_all(&[0x16]).await.expect("write TLS handshake magic");
+        let mut byte = [0u8; 1];
+        let read = tokio::time::timeout(Duration::from_millis(250), client.read(&mut byte))
+            .await
+            .expect("stalled TLS handshake should not reach idle timeout")
+            .expect("read handshake close");
+        assert_eq!(read, 0, "TLS handshake timeout should close the connection");
+
+        service.task_group().cancel();
+        tokio::time::timeout(Duration::from_secs(1), server)
+            .await
+            .expect("server should stop")
+            .expect("server task")
+            .expect("server result");
     }
 
     #[tokio::test]

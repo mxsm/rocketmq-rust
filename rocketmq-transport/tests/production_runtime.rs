@@ -30,6 +30,7 @@ use rocketmq_transport::SessionHandle;
 use rocketmq_transport::TlsConfig;
 use rocketmq_transport::TlsServerRuntime;
 use rocketmq_transport::TransportListener;
+use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 
 struct CountConnections(AtomicUsize);
@@ -70,8 +71,8 @@ async fn canonical_client_connect_builds_the_framed_transport() {
     accept.await.unwrap();
 }
 
-#[tokio::test]
-async fn canonical_listener_times_out_a_silent_tls_peek() {
+#[tokio::test(start_paused = true)]
+async fn canonical_listener_uses_idle_timeout_for_a_silent_tls_peek() {
     let runtime = RuntimeContext::from_current("transport-listener-test");
     let service = runtime.service_context("listener");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -87,7 +88,8 @@ async fn canonical_listener_times_out_a_silent_tls_peek() {
         tls,
         admission.clone(),
         Duration::from_millis(25),
-    );
+    )
+    .with_idle_timeout(Duration::from_millis(100));
     let handler = handled.clone();
     service
         .spawn_service("listener.run", async move {
@@ -95,10 +97,18 @@ async fn canonical_listener_times_out_a_silent_tls_peek() {
         })
         .unwrap();
 
-    let _silent = tokio::net::TcpStream::connect(address).await.unwrap();
+    let mut silent = tokio::net::TcpStream::connect(address).await.unwrap();
     tokio::time::sleep(Duration::from_millis(75)).await;
 
     assert_eq!(handled.0.load(Ordering::SeqCst), 0);
+    assert_eq!(admission.snapshot().connections.current_count, 1);
+
+    let mut byte = [0u8; 1];
+    let read = tokio::time::timeout(Duration::from_millis(100), silent.read(&mut byte))
+        .await
+        .expect("silent connection should reach the idle timeout")
+        .expect("read idle close");
+    assert_eq!(read, 0);
     assert_eq!(admission.snapshot().connections.current_count, 0);
 
     let mut active = tokio::net::TcpStream::connect(address).await.unwrap();
