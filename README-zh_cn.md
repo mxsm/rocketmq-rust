@@ -11,7 +11,7 @@
 [![CodeCov][codecov-image]][codecov-url] [![GitHub contributors](https://img.shields.io/github/contributors/mxsm/rocketmq-rust)](https://github.com/mxsm/rocketmq-rust/graphs/contributors) [![Crates.io License](https://img.shields.io/crates/l/rocketmq-rust)](#license)
 <br/>
 ![GitHub repo size](https://img.shields.io/github/repo-size/mxsm/rocketmq-rust)
-![Static Badge](https://img.shields.io/badge/MSRV-1.85.0%2B-25b373)
+![Static Badge](https://img.shields.io/badge/MSRV-1.95.0%2B-25b373)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/mxsm/rocketmq-rust)
 
 </div>
@@ -78,9 +78,12 @@ RocketMQ-Rust 实现了分布式架构，包含以下核心组件：
 
 ### 前置要求
 
-- Rust 工具链 1.85.0 或更高版本
+- Rust 工具链 1.95.0
 - 可用的 shell 和 `cargo`
 - 为 NameServer、Broker 和客户端示例准备独立终端
+
+固定工具链、依赖准入规则和本地验证约定请参阅
+[工具链与依赖信任策略](rocketmq-doc/en/toolchain-and-dependency-policy.md)。
 
 ### 1. 构建工作区
 
@@ -275,7 +278,8 @@ RocketMQ-Rust 聚焦 RocketMQ 兼容的消息服务和 Rust 原生集成能力�
 <details>
 <summary><b>最低支持的 Rust 版本（MSRV）是什么？</b></summary>
 
-最低支持的 Rust 版本是 1.85.0（stable 或 nightly）。
+最低支持的 Rust 版本是 stable Rust 1.95.0。仓库对本地和生产构建固定使用该精确版本；
+只有 Miri、rustdoc JSON 等明确记录的专项检查才使用固定日期的 nightly 工具链。
 </details>
 
 <details>

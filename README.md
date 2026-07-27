@@ -14,7 +14,7 @@
 [![CodeCov][codecov-image]][codecov-url] [![GitHub contributors](https://img.shields.io/github/contributors/mxsm/rocketmq-rust)](https://github.com/mxsm/rocketmq-rust/graphs/contributors) [![Crates.io License](https://img.shields.io/crates/l/rocketmq-rust)](#license)
 <br/>
 ![GitHub repo size](https://img.shields.io/github/repo-size/mxsm/rocketmq-rust)
-![Static Badge](https://img.shields.io/badge/MSRV-1.85.0%2B-25b373)
+![Static Badge](https://img.shields.io/badge/MSRV-1.95.0%2B-25b373)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/mxsm/rocketmq-rust)
 
 </div>
@@ -85,9 +85,12 @@ RocketMQ-Rust implements a distributed architecture with the following core comp
 
 ### Prerequisites
 
-- Rust toolchain 1.85.0 or later
+- Rust toolchain 1.95.0
 - A shell with `cargo` available
 - Separate terminals for the NameServer, Broker, and client examples
+
+See the [toolchain and dependency trust policy](rocketmq-doc/en/toolchain-and-dependency-policy.md)
+for the pinned toolchain, dependency admission rules, and local validation contract.
 
 ### 1. Build the Workspace
 
@@ -282,7 +285,9 @@ Yes, RocketMQ-Rust implements the RocketMQ protocol and can interoperate with Ap
 <details>
 <summary><b>What's the minimum supported Rust version (MSRV)?</b></summary>
 
-The minimum supported Rust version is 1.85.0 (stable or nightly).
+The minimum supported Rust version is stable Rust 1.95.0. The repository pins that exact
+toolchain for local and production builds; dated nightly toolchains are reserved for explicitly
+documented specialized checks such as Miri and rustdoc JSON generation.
 </details>
 
 <details>

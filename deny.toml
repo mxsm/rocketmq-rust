@@ -1,0 +1,109 @@
+# Copyright 2026 The RocketMQ Rust Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+[graph]
+all-features = true
+targets = [
+  { triple = "x86_64-pc-windows-msvc" },
+  { triple = "x86_64-unknown-linux-gnu" },
+]
+
+[advisories]
+unmaintained = "all"
+unsound = "all"
+yanked = "warn"
+# This repository shares one policy across several standalone Cargo graphs, so an exception
+# can legitimately be absent from the graph currently being checked.
+unused-ignored-advisory = "allow"
+ignore = [
+  { id = "RUSTSEC-2026-0173", reason = "Owner: RocketMQ Rust maintainers. Build-time-only transitive dependency of tabled and validator derive macros; no maintained compatible release exists. Re-evaluate on every upstream update and by 2026-10-27." },
+  { id = "RUSTSEC-2025-0052", reason = "Owner: Dashboard maintainers. GPUI 0.2.2 pulls async-std 1.13.2 only through zed-async-tar; the latest GPUI release has no maintained replacement. Re-evaluate on every GPUI update and by 2026-10-27." },
+  { id = "RUSTSEC-2026-0105", reason = "Owner: Dashboard maintainers. GPUI 0.2.2 pulls core2 0.4.0 through image/rav1e/bitstream-io; the latest compatible graph has no maintained replacement. Re-evaluate on every GPUI or image update and by 2026-10-27." },
+  { id = "RUSTSEC-2024-0384", reason = "Owner: Dashboard maintainers. GPUI 0.2.2 and gpui-component 0.5.1 pull instant 0.1.13 through their event and file-watching stacks; no compatible maintained replacement is published. Re-evaluate on every framework update and by 2026-10-27." },
+  { id = "RUSTSEC-2024-0436", reason = "Owner: Dashboard maintainers. The latest GPUI component and graphics stack still use paste 1.0.15; this is an unmaintained notice with no known vulnerability. Re-evaluate on every framework update and by 2026-10-27." },
+  { id = "RUSTSEC-2025-0134", reason = "Owner: Dashboard maintainers. GPUI 0.2.2 pulls rustls-pemfile 2.2.0 through its pinned zed-reqwest HTTP client; application TLS code does not depend on it directly. Re-evaluate on every GPUI update and by 2026-10-27." },
+  { id = "RUSTSEC-2026-0206", reason = "Owner: Dashboard maintainers. The latest GPUI font stack still resolves rustybuzz 0.14.1 and 0.20.1 with no maintained compatible alternative. Re-evaluate on every GPUI/font-stack update and by 2026-10-27." },
+  { id = "RUSTSEC-2026-0192", reason = "Owner: Dashboard maintainers. The latest GPUI font stack still resolves ttf-parser 0.20.0, 0.21.1, and 0.25.1 with no maintained compatible alternative. Re-evaluate on every GPUI/font-stack update and by 2026-10-27." },
+  { id = "RUSTSEC-2024-0411", reason = "Owner: Dashboard maintainers. Tauri 2.11.5/Wry 0.55.1 still require the Linux-only GTK3 gdkwayland-sys stack; Linux Tauri packaging is not production-certified while this exception remains. Re-evaluate on every Tauri update and by 2026-10-27." },
+  { id = "RUSTSEC-2024-0412", reason = "Owner: Dashboard maintainers. Tauri 2.11.5/Wry 0.55.1 still require the Linux-only GTK3 gdk stack; Linux Tauri packaging is not production-certified while this exception remains. Re-evaluate on every Tauri update and by 2026-10-27." },
+  { id = "RUSTSEC-2024-0413", reason = "Owner: Dashboard maintainers. Tauri 2.11.5/Wry 0.55.1 still require the Linux-only GTK3 atk stack; Linux Tauri packaging is not production-certified while this exception remains. Re-evaluate on every Tauri update and by 2026-10-27." },
+  { id = "RUSTSEC-2024-0414", reason = "Owner: Dashboard maintainers. Tauri 2.11.5/Wry 0.55.1 still require the Linux-only GTK3 gdkx11-sys stack; Linux Tauri packaging is not production-certified while this exception remains. Re-evaluate on every Tauri update and by 2026-10-27." },
+  { id = "RUSTSEC-2024-0415", reason = "Owner: Dashboard maintainers. Tauri 2.11.5/Wry 0.55.1 still require the Linux-only GTK3 gtk stack; Linux Tauri packaging is not production-certified while this exception remains. Re-evaluate on every Tauri update and by 2026-10-27." },
+  { id = "RUSTSEC-2024-0416", reason = "Owner: Dashboard maintainers. Tauri 2.11.5/Wry 0.55.1 still require the Linux-only GTK3 atk-sys stack; Linux Tauri packaging is not production-certified while this exception remains. Re-evaluate on every Tauri update and by 2026-10-27." },
+  { id = "RUSTSEC-2024-0417", reason = "Owner: Dashboard maintainers. Tauri 2.11.5/Wry 0.55.1 still require the Linux-only GTK3 gdkx11 stack; Linux Tauri packaging is not production-certified while this exception remains. Re-evaluate on every Tauri update and by 2026-10-27." },
+  { id = "RUSTSEC-2024-0418", reason = "Owner: Dashboard maintainers. Tauri 2.11.5/Wry 0.55.1 still require the Linux-only GTK3 gdk-sys stack; Linux Tauri packaging is not production-certified while this exception remains. Re-evaluate on every Tauri update and by 2026-10-27." },
+  { id = "RUSTSEC-2024-0419", reason = "Owner: Dashboard maintainers. Tauri 2.11.5/Wry 0.55.1 still require the Linux-only GTK3 macro stack; Linux Tauri packaging is not production-certified while this exception remains. Re-evaluate on every Tauri update and by 2026-10-27." },
+  { id = "RUSTSEC-2024-0420", reason = "Owner: Dashboard maintainers. Tauri 2.11.5/Wry 0.55.1 still require the Linux-only GTK3 gtk-sys stack; Linux Tauri packaging is not production-certified while this exception remains. Re-evaluate on every Tauri update and by 2026-10-27." },
+  { id = "RUSTSEC-2024-0429", reason = "Owner: Dashboard maintainers. Tauri 2.11.5/Wry 0.55.1 pins Linux glib 0.18.5 and cannot accept the fixed 0.20 API; Linux Tauri packaging is not production-certified while this unsound dependency remains. Re-evaluate on every Tauri update and by 2026-10-27." },
+  { id = "RUSTSEC-2025-0057", reason = "Owner: Dashboard maintainers. Tauri 2.11.5 uses fxhash 0.2.1 only through tauri-utils build-time HTML processing; no maintained compatible upstream release exists. Re-evaluate on every Tauri update and by 2026-10-27." },
+  { id = "RUSTSEC-2024-0370", reason = "Owner: Dashboard maintainers. Tauri's Linux-only GTK3 glib-macros dependency still requires proc-macro-error 1.0.4; it is build-time-only and no compatible replacement is available. Re-evaluate on every Tauri update and by 2026-10-27." },
+  { id = "RUSTSEC-2026-0097", reason = "Owner: Dashboard maintainers. All runtime rand dependencies are patched; Tauri 2.11.5 still resolves rand 0.7.3 only through build-time phf generation in tauri-utils, without the affected custom-logger runtime path. Re-evaluate on every Tauri update and by 2026-10-27." },
+  { id = "RUSTSEC-2025-0075", reason = "Owner: Dashboard maintainers. Tauri 2.11.5 pulls unic-char-range 0.9.0 only through build-time urlpattern processing in tauri-utils; no compatible maintained replacement is published. Re-evaluate on every Tauri update and by 2026-10-27." },
+  { id = "RUSTSEC-2025-0080", reason = "Owner: Dashboard maintainers. Tauri 2.11.5 pulls unic-common 0.9.0 only through build-time urlpattern processing in tauri-utils; no compatible maintained replacement is published. Re-evaluate on every Tauri update and by 2026-10-27." },
+  { id = "RUSTSEC-2025-0081", reason = "Owner: Dashboard maintainers. Tauri 2.11.5 pulls unic-char-property 0.9.0 only through build-time urlpattern processing in tauri-utils; no compatible maintained replacement is published. Re-evaluate on every Tauri update and by 2026-10-27." },
+  { id = "RUSTSEC-2025-0098", reason = "Owner: Dashboard maintainers. Tauri 2.11.5 pulls unic-ucd-version 0.9.0 only through build-time urlpattern processing in tauri-utils; no compatible maintained replacement is published. Re-evaluate on every Tauri update and by 2026-10-27." },
+  { id = "RUSTSEC-2025-0100", reason = "Owner: Dashboard maintainers. Tauri 2.11.5 pulls unic-ucd-ident 0.9.0 only through build-time urlpattern processing in tauri-utils; no compatible maintained replacement is published. Re-evaluate on every Tauri update and by 2026-10-27." },
+]
+
+[licenses]
+allow = [
+  "0BSD",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "BSL-1.0",
+  "CC0-1.0",
+  "ISC",
+  "MIT",
+  "MPL-2.0",
+  "Unicode-3.0",
+  "Zlib",
+]
+confidence-threshold = 0.8
+exceptions = [
+  # Owner: RocketMQ Rust maintainers. MIT-0 is permissive; scope it to the URI parser dependency only.
+  { allow = ["MIT-0"], crate = "borrow-or-share@0.2.4" },
+  # Owner: RocketMQ Rust maintainers. Preserve the existing Unlicense dependency without allowing it globally.
+  { allow = ["Unlicense"], crate = "serde_json_any_key@2.1.0" },
+  # Owner: Dashboard maintainers. The standalone GPUI application still resolves 2.0.0; keep the exception exact-version scoped.
+  { allow = ["Unlicense"], crate = "serde_json_any_key@2.0.0" },
+]
+
+[licenses.private]
+ignore = false
+registries = []
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "simplest-path"
+workspace-default-features = "allow"
+external-default-features = "allow"
+allow = []
+allow-workspace = true
+deny = []
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+
+[sources.allow-org]
+github = []
+gitlab = []
+bitbucket = []

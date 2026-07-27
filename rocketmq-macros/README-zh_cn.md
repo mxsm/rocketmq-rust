@@ -116,7 +116,7 @@ pub struct QueryMessageRequestHeader {
 
 ## 环境要求
 
-- Rust `1.85.0` 或更新版本。
+- Stable Rust `1.95.0`，使用仓库固定的工具链。
 - 使用仓库中的 [`../rust-toolchain.toml`](../rust-toolchain.toml) 工具链。
 - 消费方 crate 需要为生成的 protocol trait 实现暴露兼容的 `crate::protocol` 模块路径。
 

@@ -65,7 +65,7 @@ coerces numeric and boolean literals where the SQL expression requires them.
 
 ## Requirements
 
-- Rust `1.85.0` or newer.
+- Stable Rust `1.95.0`, using the pinned repository toolchain.
 - The repository toolchain from [`../rust-toolchain.toml`](../rust-toolchain.toml).
 - No running RocketMQ broker or NameServer is required for local tests, expression evaluation, or Bloom filter usage.
 

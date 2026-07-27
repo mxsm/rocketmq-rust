@@ -11,7 +11,7 @@ Detailed guide for developing RocketMQ-Rust.
 
 ### Prerequisites
 
-- **Rust**: nightly toolchain
+- **Rust**: stable 1.95.0 toolchain
 - **Git**: For version control
 - **IDE**: VS Code, RustRover, or similar
 
@@ -30,20 +30,17 @@ Install extensions:
 
 RustRover comes with built-in Rust support. No additional plugins required.
 
-### Installing Rust Nightly
+### Installing the Pinned Stable Toolchain
 
 ```bash
 # Install rustup if you haven't already
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-# Install nightly toolchain
-rustup toolchain install nightly
+# Install the exact repository toolchain and required components
+rustup toolchain install 1.95.0 --profile minimal --component rustfmt,clippy
 
-# Set nightly as default (optional)
-rustup default nightly
-
-# Or use nightly for this project only
-rustup override set nightly
+# rust-toolchain.toml selects it automatically inside the repository
+rustc --version
 ```
 
 ### Building from Source

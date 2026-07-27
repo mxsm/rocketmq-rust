@@ -28,7 +28,7 @@ rust-version.workspace = true
 [features]
 default = ["tls"]
 simd = ["rocketmq-protocol/simd"]
-tls = ["arc-swap", "rcgen", "rustls-native-certs", "rustls-pemfile", "tokio-rustls"]
+tls = ["arc-swap", "rcgen", "rustls-native-certs", "tokio-rustls"]
 observability = ["dep:rocketmq-observability", "rocketmq-observability/otel-metrics"]
 observability-traces = ["dep:rocketmq-observability"]
 
@@ -67,7 +67,6 @@ uuid.workspace = true
 arc-swap = { version = "1.9", optional = true }
 rcgen = { version = "0.14", optional = true }
 rustls-native-certs = { version = "0.8", optional = true }
-rustls-pemfile = { version = "2.2", optional = true }
 tokio-rustls = { version = "0.26", optional = true }
 
 [dev-dependencies]

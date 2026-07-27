@@ -21,7 +21,7 @@ cargo build -p rocketmq-dashboard-tauri
 
 ## 环境要求
 
-- Rust 1.85.0 或更高版本
+- Stable Rust 1.95.0
 - `rocketmq-dashboard-tauri` 需要 Node.js 和 npm
 - 需要满足 Tauri 在当前操作系统上的依赖要求
 

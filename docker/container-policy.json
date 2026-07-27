@@ -15,7 +15,7 @@
     }
   },
   "build": {
-    "rust_toolchain": "nightly-2026-07-05",
+    "rust_toolchain": "1.95.0",
     "debian_snapshot": "20260717T000000Z",
     "snapshot_bootstrap_transport": "http-with-signed-release-then-https",
     "builder_packages": [

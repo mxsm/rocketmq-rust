@@ -61,7 +61,7 @@ SQL runtime，返回 object-safe 的表达式实例，调用方可以缓存编�
 
 ## 环境要求
 
-- Rust `1.85.0` 或更新版本。
+- Stable Rust `1.95.0`，使用仓库固定的工具链。
 - 使用仓库中的 [`../rust-toolchain.toml`](../rust-toolchain.toml) 工具链。
 - 本地测试、表达式求值和 Bloom filter 使用不需要运行 RocketMQ broker 或 NameServer。
 

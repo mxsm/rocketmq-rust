@@ -7,7 +7,7 @@ This project is not part of the root Cargo workspace. Run all commands from
 
 ## Prerequisites
 
-- Rust 1.85.0 or later.
+- Stable Rust 1.95.0, using the pinned repository toolchain.
 - A running RocketMQ name server and broker.
 - Default name server address used by examples: `127.0.0.1:9876`.
 - Create topics and subscription groups before running examples. The examples do

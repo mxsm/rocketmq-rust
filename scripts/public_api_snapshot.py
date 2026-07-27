@@ -28,6 +28,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_VERSION = 1
 LIB_KINDS = {"lib", "rlib", "proc-macro"}
+RUSTDOC_TOOLCHAIN = "nightly-2026-07-05"
 
 
 class SnapshotError(RuntimeError):
@@ -72,9 +73,9 @@ def workspace_library_targets() -> list[tuple[str, str]]:
 
 def toolchain() -> dict[str, str]:
     return {
-        "rustc": run(["rustc", "--version"]),
-        "rustdoc": run(["rustdoc", "--version"]),
-        "cargo": run(["cargo", "--version"]),
+        "rustc": run(["rustc", f"+{RUSTDOC_TOOLCHAIN}", "--version"]),
+        "rustdoc": run(["rustdoc", f"+{RUSTDOC_TOOLCHAIN}", "--version"]),
+        "cargo": run(["cargo", f"+{RUSTDOC_TOOLCHAIN}", "--version"]),
     }
 
 
@@ -97,6 +98,7 @@ def snapshot_package(package: str, target: str, *, refresh: bool = True) -> dict
         run(
             [
                 "cargo",
+                f"+{RUSTDOC_TOOLCHAIN}",
                 "rustdoc",
                 "-p",
                 package,

@@ -56,7 +56,7 @@ The public library surface exports:
 
 ## Requirements
 
-- Rust `1.85.0` or newer.
+- Stable Rust `1.95.0`, using the pinned repository toolchain.
 - `ROCKETMQ_HOME` must be set before starting the broker. If `$ROCKETMQ_HOME/conf/broker.toml` exists, it is used as
   the default config file.
 - A reachable NameServer is recommended for normal broker registration. If no address is provided, the broker defaults

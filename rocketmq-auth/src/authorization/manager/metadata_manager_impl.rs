@@ -796,7 +796,8 @@ mod tests {
         assert!(!AuthorizationMetadataManagerImpl::is_valid_ip_or_cidr(
             "256.256.256.256"
         ));
-        assert!(!AuthorizationMetadataManagerImpl::is_valid_ip_or_cidr("192.168.0.0/33")); // Invalid prefix
+        assert!(!AuthorizationMetadataManagerImpl::is_valid_ip_or_cidr("192.168.0.0/33"));
+        // Invalid prefix
     }
 
     #[tokio::test]

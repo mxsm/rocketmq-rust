@@ -31,6 +31,9 @@ class ProbeFailure(RuntimeError):
     """Raised when a soundness probe produces an unexpected result."""
 
 
+MIRI_TOOLCHAIN = "nightly-2026-07-05"
+
+
 def combined_output(result: subprocess.CompletedProcess[str]) -> str:
     return f"{result.stdout}\n{result.stderr}".strip()
 
@@ -129,7 +132,7 @@ fn main() {
 def miri_command(manifest: Path, mode: str, locked: bool) -> list[str]:
     command = [
         "cargo",
-        "+nightly",
+        f"+{MIRI_TOOLCHAIN}",
         "miri",
         "run",
         "--manifest-path",

@@ -94,7 +94,7 @@ remoting ingress and should be sent to broker administration endpoints.
 
 ## Requirements
 
-- Rust `1.85.0` or newer, matching the workspace toolchain.
+- Stable Rust `1.95.0`, matching the pinned workspace toolchain.
 - A reachable RocketMQ NameServer for cluster mode.
 - Writable local storage for local mode and file-based auth metadata.
 - Optional: an OpenTelemetry metrics pipeline when the `observability` feature

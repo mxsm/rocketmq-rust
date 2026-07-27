@@ -46,12 +46,8 @@ git remote add upstream https://github.com/mxsm/rocketmq-rust.git
 ### 2. Set Up Development Environment
 
 ```bash
-# Install Rust nightly toolchain
-rustup toolchain install nightly
-rustup default nightly
-
-# Install development tools
-rustup component add rustfmt clippy
+# Install the repository's pinned stable toolchain and development components
+rustup toolchain install 1.95.0 --profile minimal --component rustfmt,clippy
 
 # Build the project
 cargo build

@@ -17,7 +17,7 @@
 ARG BUILDER_IMAGE=docker.io/library/rust:slim-bookworm@sha256:99e09cb2284e2ddbb73a995deee3e91783fd04d177602ccf6eab326d778ee777
 ARG RUNTIME_IMAGE=docker.io/library/ubuntu:noble@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90
 ARG DEBIAN_SNAPSHOT=20260717T000000Z
-ARG ROCKETMQ_RUST_TOOLCHAIN=nightly-2026-07-05
+ARG ROCKETMQ_RUST_TOOLCHAIN=1.95.0
 ARG SOURCE_REVISION
 
 FROM ${BUILDER_IMAGE} AS ca-bundle
@@ -85,7 +85,8 @@ rustup toolchain install "${ROCKETMQ_RUST_TOOLCHAIN}" \
     --component clippy,rustfmt
 EOF
 
-ENV CC=clang \
+ENV RUST_VERSION=${ROCKETMQ_RUST_TOOLCHAIN} \
+    CC=clang \
     CXX=clang++ \
     RUSTUP_TOOLCHAIN=${ROCKETMQ_RUST_TOOLCHAIN}
 

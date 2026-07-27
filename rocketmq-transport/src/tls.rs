@@ -41,6 +41,8 @@ use tokio::net::TcpStream;
 #[cfg(feature = "tls")]
 use tokio::time;
 #[cfg(feature = "tls")]
+use tokio_rustls::rustls::pki_types::pem::PemObject;
+#[cfg(feature = "tls")]
 use tracing::debug;
 use tracing::warn;
 
@@ -768,8 +770,7 @@ pub fn load_certificates(
 ) -> RocketMQResult<Vec<tokio_rustls::rustls::pki_types::CertificateDer<'static>>> {
     let file = fs::File::open(path)
         .map_err(|error| config_error(key, path, format!("failed to open certificate file: {error}")))?;
-    let mut reader = std::io::BufReader::new(file);
-    let certs = rustls_pemfile::certs(&mut reader)
+    let certs = tokio_rustls::rustls::pki_types::CertificateDer::pem_reader_iter(file)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| config_error(key, path, format!("failed to read PEM certificates: {error}")))?;
 
@@ -787,10 +788,15 @@ fn load_private_key(
 ) -> RocketMQResult<tokio_rustls::rustls::pki_types::PrivateKeyDer<'static>> {
     let file = fs::File::open(path)
         .map_err(|error| config_error(key, path, format!("failed to open private key file: {error}")))?;
-    let mut reader = std::io::BufReader::new(file);
-    rustls_pemfile::private_key(&mut reader)
-        .map_err(|error| config_error(key, path, format!("failed to read PEM private key: {error}")))?
-        .ok_or_else(|| config_error(key, path, "no supported PEM private key was found"))
+    match tokio_rustls::rustls::pki_types::PrivateKeyDer::pem_reader_iter(file).next() {
+        Some(Ok(private_key)) => Ok(private_key),
+        Some(Err(error)) => Err(config_error(
+            key,
+            path,
+            format!("failed to read PEM private key: {error}"),
+        )),
+        None => Err(config_error(key, path, "no supported PEM private key was found")),
+    }
 }
 
 #[cfg(feature = "tls")]
@@ -1115,6 +1121,28 @@ mod tests {
     fn pem_loader_rejects_missing_certificate_file() {
         let error = load_certificates("missing.pem", "tls.server.certPath").expect_err("missing cert path should fail");
         assert!(error.to_string().contains("missing.pem"));
+    }
+
+    #[cfg(feature = "tls")]
+    #[test]
+    fn pem_loaders_select_supported_sections_from_a_mixed_bundle() {
+        let certificates = TestCertificates::new();
+        let temp_dir = tempfile::tempdir().expect("create mixed PEM temp dir");
+        let certificate_pem = fs::read_to_string(&certificates.server_cert_path).expect("read server certificate");
+        let private_key_pem = fs::read_to_string(&certificates.server_key_path).expect("read server private key");
+        let mixed_bundle_path = write_pem(
+            temp_dir.path(),
+            "server-bundle.pem",
+            format!("{certificate_pem}{private_key_pem}"),
+        );
+
+        let loaded_certificates =
+            load_certificates(&mixed_bundle_path, "tls.server.certPath").expect("load certificate section");
+        let loaded_private_key =
+            load_private_key(&mixed_bundle_path, "tls.server.keyPath").expect("load private key section");
+
+        assert_eq!(loaded_certificates.len(), 1);
+        assert!(!loaded_private_key.secret_der().is_empty());
     }
 
     #[cfg(feature = "tls")]

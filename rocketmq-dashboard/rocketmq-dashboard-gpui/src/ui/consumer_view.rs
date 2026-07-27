@@ -653,17 +653,17 @@ impl ConsumerView {
 
     /// Render just the modal content without backdrop (for use in render_page)
     fn render_modal_content_only(&self, cx: &mut Context<Self>) -> Div {
-        if let Some(index) = self.modal_consumer_index {
-            if let Some(group) = self.consumer_groups.get(index) {
-                return div()
-                    .absolute()
-                    .inset_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .bg(rgba(0x000000AA))
-                    .child(self.render_modal_content(group, cx));
-            }
+        if let Some(index) = self.modal_consumer_index
+            && let Some(group) = self.consumer_groups.get(index)
+        {
+            return div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(rgba(0x000000AA))
+                .child(self.render_modal_content(group, cx));
         }
         div()
     }
