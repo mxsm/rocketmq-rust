@@ -58,7 +58,7 @@ impl ExecutionState {
         matches!(
             (self, next),
             (Self::Pending, Self::Prechecking)
-                | (Self::Prechecking, Self::IntentPersisted)
+                | (Self::Prechecking, Self::IntentPersisted | Self::Escalated)
                 | (Self::IntentPersisted, Self::Applying)
                 | (Self::Applying, Self::Verifying | Self::Unknown | Self::Compensating)
                 | (Self::Unknown, Self::Reconciling)

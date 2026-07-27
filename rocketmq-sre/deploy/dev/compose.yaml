@@ -178,6 +178,10 @@ services:
       ROCKETMQ_SRE_CONFIG_DIR: /opt/rocketmq-sre/config
       ROCKETMQ_SRE_MIGRATIONS_DIR: /opt/rocketmq-sre/migrations
       ROCKETMQ_SRE_INTERNAL_TOKEN: phase00-internal-token
+      ROCKETMQ_SRE_AGENT_ACK_KEY: phase03-development-agent-ack-key-00000001
+      ROCKETMQ_SRE_EXECUTOR_URL: http://sre-executor:8094
+      ROCKETMQ_SRE_CONTROL_PLANE_EXECUTOR_TOKEN: phase00-internal-token
+      ROCKETMQ_SRE_EXECUTOR_ALLOW_INSECURE_HTTP: "true"
       ROCKETMQ_SRE_DEV_AUTH: "true"
       ROCKETMQ_SRE_OBJECT_STORE_LOCAL_PATH: /var/lib/rocketmq-sre/evidence
       ROCKETMQ_SRE_MODEL_ENABLED: "true"
@@ -196,7 +200,80 @@ services:
     ports:
       - "8090:8090"
       - "127.0.0.1:8444:8444"
-    networks: [rocketmq-sre, control-plane-backend, model-backend]
+    networks: [rocketmq-sre, control-plane-backend, model-backend, execution-control]
+
+  sre-execution-agent:
+    build:
+      context: ../../..
+      dockerfile: rocketmq-sre/deploy/docker/Dockerfile
+      target: execution-agent
+    depends_on:
+      postgres:
+        condition: service_healthy
+      sre-control-plane:
+        condition: service_healthy
+    environment:
+      RUST_LOG: info
+      DATABASE_URL: postgres://rocketmq_sre:rocketmq_sre@postgres:5432/rocketmq_sre
+      ROCKETMQ_SRE_AGENT_BIND_ADDR: 0.0.0.0:8095
+      ROCKETMQ_SRE_LEASE_AUTHORITY_URL: http://sre-control-plane:8090
+      ROCKETMQ_SRE_AGENT_AUTHORITY_TOKEN: phase00-internal-token
+      ROCKETMQ_SRE_EXECUTOR_AGENT_TOKEN: phase00-internal-token
+      ROCKETMQ_SRE_AGENT_SUBJECT: rocketmq-sre-execution-agent
+      ROCKETMQ_SRE_AGENT_ACK_KEY: phase03-development-agent-ack-key-00000001
+      ROCKETMQ_SRE_AGENT_DEV_INSECURE_HTTP: "true"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8095/readyz"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    ports:
+      - "127.0.0.1:8095:8095"
+    networks: [rocketmq-sre, control-plane-backend, executor-agent]
+
+  sre-executor:
+    build:
+      context: ../../..
+      dockerfile: rocketmq-sre/deploy/docker/Dockerfile
+      target: executor
+    depends_on:
+      postgres:
+        condition: service_healthy
+      sre-control-plane:
+        condition: service_healthy
+      sre-execution-agent:
+        condition: service_healthy
+    environment:
+      RUST_LOG: info
+      DATABASE_URL: postgres://rocketmq_sre:rocketmq_sre@postgres:5432/rocketmq_sre
+      ROCKETMQ_SRE_EXECUTOR_BIND_ADDR: 0.0.0.0:8094
+      ROCKETMQ_SRE_LEASE_AUTHORITY_URL: http://sre-control-plane:8090
+      ROCKETMQ_SRE_EXECUTOR_AUTHORITY_TOKEN: phase00-internal-token
+      ROCKETMQ_SRE_EXECUTION_AGENT_URL: http://sre-execution-agent:8095
+      ROCKETMQ_SRE_EXECUTOR_AGENT_TOKEN: phase00-internal-token
+      ROCKETMQ_SRE_CONTROL_PLANE_EXECUTOR_TOKEN: phase00-internal-token
+      ROCKETMQ_SRE_EXECUTOR_SUBJECT: rocketmq-sre-executor
+      ROCKETMQ_SRE_EXECUTOR_DEV_INSECURE_HTTP: "true"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8094/readyz"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    ports:
+      - "127.0.0.1:8094:8094"
+    networks: [control-plane-backend, execution-control, executor-agent]
 
   sre-control-plane-mtls:
     image: nginx:1.29-alpine
@@ -514,6 +591,12 @@ networks:
     internal: true
   model-backend:
     name: rocketmq-sre-phase01-model
+    internal: true
+  execution-control:
+    name: rocketmq-sre-phase03-control-executor
+    internal: true
+  executor-agent:
+    name: rocketmq-sre-phase03-executor-agent
     internal: true
 
 volumes:

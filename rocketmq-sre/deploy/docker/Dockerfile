@@ -14,12 +14,16 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --release \
     --package rocketmq-sre-control-plane \
     --package rocketmq-sre-connector \
+    --package rocketmq-sre-executor \
+    --package rocketmq-sre-execution-agent \
     --package rocketmq-sre-probe \
     --package rocketmq-sre-eval \
     --bins \
     && install -d /opt/rocketmq-sre-binaries \
     && install -m 0555 rocketmq-sre/target/release/rocketmq-sre-control-plane /opt/rocketmq-sre-binaries/ \
     && install -m 0555 rocketmq-sre/target/release/rocketmq-sre-connector /opt/rocketmq-sre-binaries/ \
+    && install -m 0555 rocketmq-sre/target/release/rocketmq-sre-executor /opt/rocketmq-sre-binaries/ \
+    && install -m 0555 rocketmq-sre/target/release/rocketmq-sre-execution-agent /opt/rocketmq-sre-binaries/ \
     && install -m 0555 rocketmq-sre/target/release/rocketmq-sre-probe /opt/rocketmq-sre-binaries/ \
     && install -m 0555 rocketmq-sre/target/release/phase00-dev-issuer /opt/rocketmq-sre-binaries/ \
     && install -m 0555 rocketmq-sre/target/release/phase01-model-mock /opt/rocketmq-sre-binaries/
@@ -49,6 +53,16 @@ COPY --from=builder /opt/rocketmq-sre-binaries/rocketmq-sre-connector /usr/local
 COPY rocketmq-sre/config /opt/rocketmq-sre/config
 EXPOSE 8091
 ENTRYPOINT ["/usr/local/bin/rocketmq-sre-connector"]
+
+FROM runtime-base AS executor
+COPY --from=builder /opt/rocketmq-sre-binaries/rocketmq-sre-executor /usr/local/bin/rocketmq-sre-executor
+EXPOSE 8094
+ENTRYPOINT ["/usr/local/bin/rocketmq-sre-executor"]
+
+FROM runtime-base AS execution-agent
+COPY --from=builder /opt/rocketmq-sre-binaries/rocketmq-sre-execution-agent /usr/local/bin/rocketmq-sre-execution-agent
+EXPOSE 8095
+ENTRYPOINT ["/usr/local/bin/rocketmq-sre-execution-agent"]
 
 FROM runtime-base AS probe
 COPY --from=builder /opt/rocketmq-sre-binaries/rocketmq-sre-probe /usr/local/bin/rocketmq-sre-probe

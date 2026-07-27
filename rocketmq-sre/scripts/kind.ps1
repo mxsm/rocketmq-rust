@@ -42,6 +42,8 @@ $localImages = [ordered]@{
     mcp = 'rocketmq-rust/mcp:local'
     'sre-control-plane' = 'rocketmq-rust/sre-control-plane:phase00-local'
     'sre-connector' = 'rocketmq-rust/sre-connector:phase00-local'
+    'sre-executor' = 'rocketmq-rust/sre-executor:phase03-local'
+    'sre-execution-agent' = 'rocketmq-rust/sre-execution-agent:phase03-local'
     'sre-probe' = 'rocketmq-rust/sre-probe:phase00-local'
     'sre-model-mock' = 'rocketmq-rust/sre-model-mock:phase00-local'
     'sre-ui' = 'rocketmq-rust/sre-ui:phase00-local'
@@ -200,10 +202,19 @@ function Ensure-Kubeconfig {
 
 function Build-Images {
     foreach ($entry in $localImages.GetEnumerator()) {
-        if ($entry.Key -in @('sre-control-plane', 'sre-connector', 'sre-probe', 'sre-model-mock')) {
+        if ($entry.Key -in @(
+                'sre-control-plane',
+                'sre-connector',
+                'sre-executor',
+                'sre-execution-agent',
+                'sre-probe',
+                'sre-model-mock'
+            )) {
             $target = switch ($entry.Key) {
                 'sre-control-plane' { 'control-plane' }
                 'sre-connector' { 'connector' }
+                'sre-executor' { 'executor' }
+                'sre-execution-agent' { 'execution-agent' }
                 'sre-probe' { 'probe' }
                 'sre-model-mock' { 'model-mock' }
             }
@@ -622,6 +633,8 @@ switch ($Action) {
         Wait-Rollout $sreNamespace 'statefulset/postgres'
         Wait-Rollout $sreNamespace 'deployment/sre-model-mock'
         Wait-Rollout $sreNamespace 'deployment/sre-control-plane'
+        Wait-Rollout $sreNamespace 'deployment/sre-execution-agent'
+        Wait-Rollout $sreNamespace 'deployment/sre-executor'
         Invoke-Kubectl @(
             '--namespace', $sreNamespace,
             'wait', '--for=condition=complete',

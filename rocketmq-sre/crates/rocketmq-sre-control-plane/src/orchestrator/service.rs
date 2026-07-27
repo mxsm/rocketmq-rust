@@ -575,6 +575,7 @@ fn control_plane_error_code(error: &ControlPlaneError) -> &'static str {
         | ControlPlaneError::NotFound
         | ControlPlaneError::Database(_)
         | ControlPlaneError::IdentityProvider(_)
+        | ControlPlaneError::Executor(_)
         | ControlPlaneError::ObjectStore
         | ControlPlaneError::CapabilityDocument { .. }
         | ControlPlaneError::Io(_) => "source_unavailable",

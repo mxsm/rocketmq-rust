@@ -27,6 +27,13 @@ use rocketmq_sre_contracts::ActionDescriptor;
 use rocketmq_sre_contracts::ActionItem;
 use rocketmq_sre_contracts::ActionPlan;
 use rocketmq_sre_contracts::ActionPlanDraft;
+use rocketmq_sre_contracts::ActivateLeaseRequest;
+use rocketmq_sre_contracts::AdvanceFenceRequest;
+use rocketmq_sre_contracts::AdvanceFenceResponse;
+use rocketmq_sre_contracts::AgentDispatchRequest;
+use rocketmq_sre_contracts::AgentDispatchResponse;
+use rocketmq_sre_contracts::AgentReadRequest;
+use rocketmq_sre_contracts::AgentReadResult;
 use rocketmq_sre_contracts::AgentStepRequest;
 use rocketmq_sre_contracts::AgentStepResult;
 use rocketmq_sre_contracts::AlertEvent;
@@ -34,6 +41,8 @@ use rocketmq_sre_contracts::ApprovalGrant;
 use rocketmq_sre_contracts::ApprovalRecord;
 use rocketmq_sre_contracts::AuditEvent;
 use rocketmq_sre_contracts::BacklogEta;
+use rocketmq_sre_contracts::BeginLeaseTakeoverRequest;
+use rocketmq_sre_contracts::BeginLeaseTakeoverResponse;
 use rocketmq_sre_contracts::CapacityForecast;
 use rocketmq_sre_contracts::ClusterForecastReport;
 use rocketmq_sre_contracts::ClusterHealthReport;
@@ -46,15 +55,19 @@ use rocketmq_sre_contracts::DrReadinessReport;
 use rocketmq_sre_contracts::EvidenceQuery;
 use rocketmq_sre_contracts::EvidenceSnapshot;
 use rocketmq_sre_contracts::ExecutionAction;
+use rocketmq_sre_contracts::ExecutionAgentCapabilities;
 use rocketmq_sre_contracts::ExecutionRequest;
 use rocketmq_sre_contracts::ExecutionResult;
 use rocketmq_sre_contracts::ExecutionTransition;
+use rocketmq_sre_contracts::ExecutorLease;
 use rocketmq_sre_contracts::FenceAck;
 use rocketmq_sre_contracts::FleetHealthReport;
+use rocketmq_sre_contracts::GrantVerification;
 use rocketmq_sre_contracts::Incident;
 use rocketmq_sre_contracts::IncidentOperationRequest;
 use rocketmq_sre_contracts::IncidentOperationResult;
 use rocketmq_sre_contracts::IncidentOperationsState;
+use rocketmq_sre_contracts::IssueFenceGrantRequest;
 use rocketmq_sre_contracts::LeaseFenceGrant;
 use rocketmq_sre_contracts::ManualRunbookDraft;
 use rocketmq_sre_contracts::NotificationDelivery;
@@ -64,6 +77,8 @@ use rocketmq_sre_contracts::PlanStep;
 use rocketmq_sre_contracts::PolicyDecision;
 use rocketmq_sre_contracts::PostmortemDraft;
 use rocketmq_sre_contracts::PostmortemRevision;
+use rocketmq_sre_contracts::ReconcileEffectRequest;
+use rocketmq_sre_contracts::ReconcileEffectResponse;
 use rocketmq_sre_contracts::ReconcileGrant;
 use rocketmq_sre_contracts::ResourceQuarantine;
 use rocketmq_sre_contracts::ShiftHandoffSummary;
@@ -72,6 +87,9 @@ use rocketmq_sre_contracts::StepResult;
 use rocketmq_sre_contracts::TopologySnapshot;
 use rocketmq_sre_contracts::UpgradeReadinessReport;
 use rocketmq_sre_contracts::VerificationResult;
+use rocketmq_sre_contracts::VerifyExecutionRequest;
+use rocketmq_sre_contracts::VerifyFenceGrantRequest;
+use rocketmq_sre_contracts::VerifyReconcileGrantRequest;
 use rocketmq_sre_contracts::WhatIfSimulation;
 use rocketmq_sre_contracts::WhatIfSimulationRequest;
 use rocketmq_sre_model_gateway::CanonicalModelRequest;
@@ -324,6 +342,42 @@ pub fn phase3_generated_schemas() -> Result<Vec<(&'static str, serde_json::Value
             serde_json::to_value(schema_for!(AgentStepResult))?,
         ),
         (
+            "agent-read-request.schema.json",
+            serde_json::to_value(schema_for!(AgentReadRequest))?,
+        ),
+        (
+            "agent-read-result.schema.json",
+            serde_json::to_value(schema_for!(AgentReadResult))?,
+        ),
+        (
+            "agent-dispatch-request.schema.json",
+            serde_json::to_value(schema_for!(AgentDispatchRequest))?,
+        ),
+        (
+            "agent-dispatch-response.schema.json",
+            serde_json::to_value(schema_for!(AgentDispatchResponse))?,
+        ),
+        (
+            "execution-agent-capabilities.schema.json",
+            serde_json::to_value(schema_for!(ExecutionAgentCapabilities))?,
+        ),
+        (
+            "reconcile-effect-request.schema.json",
+            serde_json::to_value(schema_for!(ReconcileEffectRequest))?,
+        ),
+        (
+            "reconcile-effect-response.schema.json",
+            serde_json::to_value(schema_for!(ReconcileEffectResponse))?,
+        ),
+        (
+            "advance-fence-request.schema.json",
+            serde_json::to_value(schema_for!(AdvanceFenceRequest))?,
+        ),
+        (
+            "advance-fence-response.schema.json",
+            serde_json::to_value(schema_for!(AdvanceFenceResponse))?,
+        ),
+        (
             "step-result.schema.json",
             serde_json::to_value(schema_for!(StepResult))?,
         ),
@@ -344,6 +398,42 @@ pub fn phase3_generated_schemas() -> Result<Vec<(&'static str, serde_json::Value
             serde_json::to_value(schema_for!(ReconcileGrant))?,
         ),
         ("fence-ack.schema.json", serde_json::to_value(schema_for!(FenceAck))?),
+        (
+            "executor-lease.schema.json",
+            serde_json::to_value(schema_for!(ExecutorLease))?,
+        ),
+        (
+            "begin-lease-takeover-request.schema.json",
+            serde_json::to_value(schema_for!(BeginLeaseTakeoverRequest))?,
+        ),
+        (
+            "begin-lease-takeover-response.schema.json",
+            serde_json::to_value(schema_for!(BeginLeaseTakeoverResponse))?,
+        ),
+        (
+            "issue-fence-grant-request.schema.json",
+            serde_json::to_value(schema_for!(IssueFenceGrantRequest))?,
+        ),
+        (
+            "activate-lease-request.schema.json",
+            serde_json::to_value(schema_for!(ActivateLeaseRequest))?,
+        ),
+        (
+            "verify-execution-request.schema.json",
+            serde_json::to_value(schema_for!(VerifyExecutionRequest))?,
+        ),
+        (
+            "verify-fence-grant-request.schema.json",
+            serde_json::to_value(schema_for!(VerifyFenceGrantRequest))?,
+        ),
+        (
+            "verify-reconcile-grant-request.schema.json",
+            serde_json::to_value(schema_for!(VerifyReconcileGrantRequest))?,
+        ),
+        (
+            "grant-verification.schema.json",
+            serde_json::to_value(schema_for!(GrantVerification))?,
+        ),
         (
             "audit-event.schema.json",
             serde_json::to_value(schema_for!(AuditEvent))?,

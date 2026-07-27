@@ -34,6 +34,7 @@ cargo test --locked --workspace --all-features
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo doc --locked --workspace --no-deps
 python scripts/check_source_layout.py
+python scripts/check_execution_dependency_boundary.py
 ```
 
 Schema artifacts are generated deliberately, not as part of a normal build:

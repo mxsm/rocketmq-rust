@@ -518,6 +518,7 @@ pub(crate) struct AppState {
     pub(crate) assets: AssetTopologyService,
     pub(crate) connector_channel: PostgresConnectorChannelService,
     pub(crate) evidence: EvidenceService,
+    pub(crate) lease_authority: crate::execution_authority::LeaseAuthorityService,
     pub(crate) forecast: ForecastService,
     pub(crate) knowledge: KnowledgeService,
     pub(crate) model_gateway: ModelGatewayService,
@@ -546,7 +547,9 @@ pub fn build_router(
         repository,
         documents,
         internal_token.clone(),
+        internal_token.clone(),
         internal_token,
+        crate::supervised_execution::ExecutorSubmissionClient::disabled(),
         auth,
         evidence_blobs,
         DashboardDeepLinkPolicy::disabled(),
@@ -568,6 +571,8 @@ fn build_routers_with_auth(
     documents: CapabilityDocuments,
     internal_token: Arc<str>,
     grant_signing_key: Arc<str>,
+    agent_ack_verification_key: Arc<str>,
+    executor_client: crate::supervised_execution::ExecutorSubmissionClient,
     auth: AuthService,
     evidence_blobs: EvidenceBlobStore,
     dashboard_links: DashboardDeepLinkPolicy,
@@ -599,11 +604,17 @@ fn build_routers_with_auth(
         assets.clone(),
         slo.clone(),
     )?;
-    let supervised_execution = crate::supervised_execution::SupervisedExecutionService::new(
+    let supervised_execution = crate::supervised_execution::SupervisedExecutionService::new_with_executor(
         repository.clone(),
         workflow.clone(),
         grant_signing_key.as_bytes(),
         model_gateway.clone(),
+        executor_client,
+    )?;
+    let lease_authority = crate::execution_authority::LeaseAuthorityService::new(
+        repository.pool.clone(),
+        grant_signing_key.as_bytes(),
+        agent_ack_verification_key.as_bytes(),
     )?;
     let connector_routes = connector_channel::router::<AppState>(connector_channel.clone());
     let connector_control_routes = Router::new()
@@ -622,6 +633,7 @@ fn build_routers_with_auth(
         assets,
         connector_channel,
         evidence,
+        lease_authority,
         forecast: forecast.clone(),
         knowledge,
         model_gateway,
@@ -651,6 +663,7 @@ fn build_routers_with_auth(
         .merge(crate::operator_workbench::routes())
         .merge(crate::postmortem::routes())
         .merge(crate::supervised_execution::routes())
+        .merge(crate::execution_authority::routes())
         .with_state(state.clone())
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -763,11 +776,27 @@ pub async fn run(config: ControlPlaneConfig, service_context: ChildServiceContex
         transport_boundary = "mtls_proxy_only",
         "RocketMQ AI SRE Connector-only listener is ready"
     );
+    let executor_client = match (config.executor_url(), config.executor_token()) {
+        (Some(url), Some(token)) => crate::supervised_execution::ExecutorSubmissionClient::http(
+            url.clone(),
+            Arc::<str>::from(token),
+            config.executor_timeout(),
+            config.executor_allow_insecure_http(),
+        )?,
+        (None, None) => crate::supervised_execution::ExecutorSubmissionClient::disabled(),
+        _ => {
+            return Err(ControlPlaneError::configuration(
+                "Executor URL and token configuration is incomplete",
+            ));
+        }
+    };
     let routers = build_routers_with_auth(
         repository,
         documents,
         Arc::<str>::from(config.internal_token()),
         Arc::<str>::from(config.grant_signing_key()),
+        Arc::<str>::from(config.agent_ack_verification_key()),
+        executor_client,
         auth,
         evidence_blobs,
         dashboard_links,
@@ -1333,7 +1362,9 @@ mod tests {
             repository,
             documents,
             internal_token.clone(),
+            internal_token.clone(),
             internal_token,
+            crate::supervised_execution::ExecutorSubmissionClient::disabled(),
             auth,
             EvidenceBlobStore::in_memory(64 * 1024),
             DashboardDeepLinkPolicy::disabled(),

@@ -109,6 +109,9 @@ jobs:
       - name: Check Rust 2024 source layout
         run: python rocketmq-sre/scripts/check_source_layout.py
 
+      - name: Check Executor and Agent dependency boundary
+        run: python rocketmq-sre/scripts/check_execution_dependency_boundary.py
+
       - name: Check formatting
         run: |
           cargo fmt --manifest-path rocketmq-sre/Cargo.toml \
@@ -128,6 +131,19 @@ jobs:
 
       - name: Test PostgreSQL repositories
         run: cargo test --manifest-path rocketmq-sre/Cargo.toml --locked -p rocketmq-sre-control-plane -- --include-ignored
+
+      - name: Test fenced execution recovery
+        run: |
+          cargo test --manifest-path rocketmq-sre/Cargo.toml --locked \
+            -p rocketmq-sre-executor --test postgres_recovery \
+            -- --ignored --test-threads=1
+          cargo test --manifest-path rocketmq-sre/Cargo.toml --locked \
+            -p rocketmq-sre-executor --test fencing_interleavings \
+            -- --ignored --test-threads=1
+
+      - name: Validate Compose and Kind deployment contracts
+        shell: pwsh
+        run: ./rocketmq-sre/scripts/verify-mtls-deployment.ps1
 
       - name: Clippy
         run: cargo clippy --manifest-path rocketmq-sre/Cargo.toml --locked --workspace --all-targets --all-features -- -D warnings

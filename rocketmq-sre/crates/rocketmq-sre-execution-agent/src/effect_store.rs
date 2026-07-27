@@ -99,10 +99,6 @@ impl AgentEffectStore {
             ));
         }
         let mut transaction = self.pool.begin().await?;
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-            .bind(ack.cluster_id.to_string())
-            .execute(&mut *transaction)
-            .await?;
         let lease_exists: bool = sqlx::query_scalar(
             "SELECT EXISTS (
                 SELECT 1
@@ -197,6 +193,11 @@ impl AgentEffectStore {
             || request.intent.fence_grant.nonce.trim().is_empty()
             || request.intent.fence_grant.signature.trim().is_empty()
             || request.intent.fence_grant.expires_at <= prepared_at
+            || request.intent.fence_grant.execution_id != request.intent.execution_id
+            || request.intent.fence_grant.step_id != request.intent.step_id
+            || request.intent.fence_grant.plan_step_id != request.intent.step.id
+            || request.intent.fence_grant.action != request.intent.step.action
+            || request.intent.fence_grant.resource != request.intent.step.resource
             || !is_sha256_digest(&request.intent.plan_hash)
             || request.action != request.intent.step.action
             || request.descriptor_version != request.intent.step.descriptor_version
@@ -399,6 +400,52 @@ impl AgentEffectStore {
         effect_from_row(&row)
     }
 
+    /// Loads the immutable typed request snapshot for read-only reconciliation.
+    ///
+    /// # Errors
+    ///
+    /// Returns not-found, database, or snapshot decoding failures.
+    pub async fn request(&self, idempotency_key: &str) -> Result<AgentStepRequest, AgentStoreError> {
+        let snapshot: Value = sqlx::query_scalar(
+            "SELECT request_snapshot
+             FROM execution_agent_effects
+             WHERE idempotency_key = $1",
+        )
+        .bind(idempotency_key)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or(AgentStoreError::NotFound)?;
+        serde_json::from_value(snapshot).map_err(AgentStoreError::SnapshotDecoding)
+    }
+
+    /// Loads the exact persisted FenceAck for idempotent fence retries.
+    ///
+    /// # Errors
+    ///
+    /// Returns not-found, database, or snapshot decoding failures.
+    pub async fn fence_ack(&self, cluster_id: ClusterId) -> Result<FenceAck, AgentStoreError> {
+        let snapshot: Value = sqlx::query_scalar(
+            "SELECT fence_ack_snapshot
+             FROM execution_agent_fences
+             WHERE cluster_id = $1",
+        )
+        .bind(cluster_id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or(AgentStoreError::NotFound)?;
+        serde_json::from_value(snapshot).map_err(AgentStoreError::SnapshotDecoding)
+    }
+
+    /// Performs the minimal PostgreSQL readiness probe.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error when durable fencing cannot be reached.
+    pub async fn ready(&self) -> Result<(), AgentStoreError> {
+        sqlx::query("SELECT 1").execute(&self.pool).await?;
+        Ok(())
+    }
+
     /// Lists non-terminal effects in deterministic recovery order.
     ///
     /// # Errors
@@ -415,6 +462,37 @@ impl AgentEffectStore {
              ORDER BY updated_at, id
              LIMIT $1",
         )
+        .bind(i64::from(limit.min(10_000)))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(effect_from_row).collect()
+    }
+
+    /// Lists old-epoch effects that must become terminal before fence advance.
+    ///
+    /// # Errors
+    ///
+    /// Returns database or invalid stored-state failures.
+    pub async fn unfinished_before_epoch(
+        &self,
+        cluster_id: ClusterId,
+        pending_epoch: LeaseEpoch,
+        limit: u32,
+    ) -> Result<Vec<AgentEffectRecord>, AgentStoreError> {
+        let rows = sqlx::query(
+            "SELECT id, tenant_id, cluster_id, execution_id, step_id, lease_id,
+                    epoch, idempotency_key, action_id, target, state,
+                    operation_id, outcome_code, sanitized_summary,
+                    prepared_at, dispatched_at, confirmed_at
+             FROM execution_agent_effects
+             WHERE cluster_id = $1
+               AND epoch < $2
+               AND state IN ('prepared', 'dispatched', 'unknown')
+             ORDER BY updated_at, id
+             LIMIT $3",
+        )
+        .bind(cluster_id.as_uuid())
+        .bind(epoch_i64(pending_epoch)?)
         .bind(i64::from(limit.min(10_000)))
         .fetch_all(&self.pool)
         .await?;

@@ -47,6 +47,9 @@ pub struct ExecutionCreation {
 pub struct PendingIntent {
     pub intent: StepIntent,
     pub execution_state: ExecutionState,
+    pub tenant_id: rocketmq_sre_contracts::TenantId,
+    pub cluster_id: rocketmq_sre_contracts::ClusterId,
+    pub correlation_id: rocketmq_sre_contracts::CorrelationId,
 }
 
 /// PostgreSQL journal used before and after every external side effect.
@@ -63,6 +66,16 @@ impl ExecutionJournal {
             pool,
             expected_audience: expected_audience.into(),
         }
+    }
+
+    /// Checks the PostgreSQL dependency used for readiness.
+    ///
+    /// # Errors
+    ///
+    /// Returns the database failure without exposing connection details.
+    pub async fn ready(&self) -> Result<(), JournalError> {
+        sqlx::query_scalar::<_, i32>("SELECT 1").fetch_one(&self.pool).await?;
+        Ok(())
     }
 
     /// Creates one immutable execution request or returns an identical retry.
@@ -173,6 +186,58 @@ impl ExecutionJournal {
         .bind(transition.occurred_at)
         .execute(&self.pool)
         .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    /// Applies a state transition and its append-only audit in one database
+    /// transaction.
+    ///
+    /// # Errors
+    ///
+    /// Rejects illegal graph edges, stale current state, audit scope drift,
+    /// and non-state-change audit kinds.
+    pub async fn transition_with_audit(
+        &self,
+        id: ExecutionId,
+        transition: &ExecutionTransition,
+        audit: &AuditEvent,
+    ) -> Result<bool, JournalError> {
+        if audit.event_kind != AuditEventKind::StateChanged {
+            return Err(JournalError::InvalidInput(
+                "execution transition requires a state_changed audit event".to_owned(),
+            ));
+        }
+        transition
+            .validate()
+            .map_err(|error| JournalError::InvalidInput(error.to_string()))?;
+        let completed_at = if matches!(
+            transition.to,
+            ExecutionState::Succeeded | ExecutionState::RolledBack | ExecutionState::Escalated
+        ) {
+            Some(transition.occurred_at)
+        } else {
+            None
+        };
+        let mut transaction = self.pool.begin().await?;
+        ensure_execution_scope(&mut transaction, id, audit).await?;
+        let result = sqlx::query(
+            "UPDATE executions
+             SET state = $3,
+                 completed_at = COALESCE(completed_at, $4),
+                 updated_at = $5
+             WHERE id = $1 AND state = $2",
+        )
+        .bind(id.as_uuid())
+        .bind(execution_state_name(transition.from))
+        .bind(execution_state_name(transition.to))
+        .bind(completed_at)
+        .bind(transition.occurred_at)
+        .execute(&mut *transaction)
+        .await?;
+        if result.rows_affected() == 1 {
+            append_audit(&mut transaction, audit).await?;
+        }
+        transaction.commit().await?;
         Ok(result.rows_affected() == 1)
     }
 
@@ -319,7 +384,9 @@ impl ExecutionJournal {
     /// Returns a database or snapshot decoding failure.
     pub async fn pending_intents(&self, limit: u32) -> Result<Vec<PendingIntent>, JournalError> {
         let rows = sqlx::query(
-            "SELECT intent.intent_snapshot, execution.state
+            "SELECT intent.intent_snapshot, execution.state,
+                    execution.tenant_id, execution.cluster_id,
+                    execution.correlation_id
              FROM execution_steps intent
              JOIN executions execution ON execution.id = intent.execution_id
              LEFT JOIN execution_steps result
@@ -341,6 +408,55 @@ impl ExecutionJournal {
                 Ok(PendingIntent {
                     intent: from_json(row.try_get("intent_snapshot")?)?,
                     execution_state: parse_execution_state(row.try_get::<String, _>("state")?.as_str())?,
+                    tenant_id: rocketmq_sre_contracts::TenantId::from_uuid(row.try_get("tenant_id")?),
+                    cluster_id: rocketmq_sre_contracts::ClusterId::from_uuid(row.try_get("cluster_id")?),
+                    correlation_id: rocketmq_sre_contracts::CorrelationId::from_uuid(row.try_get("correlation_id")?),
+                })
+            })
+            .collect()
+    }
+
+    /// Returns unresolved intents for one cluster during a pending-epoch
+    /// takeover.
+    ///
+    /// # Errors
+    ///
+    /// Returns persistence or snapshot-decoding failures.
+    pub async fn pending_intents_for_cluster(
+        &self,
+        cluster_id: rocketmq_sre_contracts::ClusterId,
+        limit: u32,
+    ) -> Result<Vec<PendingIntent>, JournalError> {
+        let rows = sqlx::query(
+            "SELECT intent.intent_snapshot, execution.state,
+                    execution.tenant_id, execution.cluster_id,
+                    execution.correlation_id
+             FROM execution_steps intent
+             JOIN executions execution ON execution.id = intent.execution_id
+             LEFT JOIN execution_steps result
+               ON result.execution_id = intent.execution_id
+              AND result.step_id = intent.step_id
+              AND result.attempt = intent.attempt
+              AND result.record_kind = 'result'
+             WHERE intent.record_kind = 'intent'
+               AND execution.cluster_id = $1
+               AND result.sequence_id IS NULL
+               AND execution.state NOT IN ('succeeded', 'rolled_back', 'escalated')
+             ORDER BY intent.sequence_id
+             LIMIT $2",
+        )
+        .bind(cluster_id.as_uuid())
+        .bind(i64::from(limit.min(10_000)))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(PendingIntent {
+                    intent: from_json(row.try_get("intent_snapshot")?)?,
+                    execution_state: parse_execution_state(row.try_get::<String, _>("state")?.as_str())?,
+                    tenant_id: rocketmq_sre_contracts::TenantId::from_uuid(row.try_get("tenant_id")?),
+                    cluster_id: rocketmq_sre_contracts::ClusterId::from_uuid(row.try_get("cluster_id")?),
+                    correlation_id: rocketmq_sre_contracts::CorrelationId::from_uuid(row.try_get("correlation_id")?),
                 })
             })
             .collect()
@@ -357,6 +473,25 @@ impl ExecutionJournal {
             .fetch_optional(&self.pool)
             .await?;
         parse_execution_state(state.ok_or(JournalError::NotFound)?.as_str())
+    }
+
+    /// Returns whether any immutable intent was persisted for an execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database failure.
+    pub async fn has_intent(&self, id: ExecutionId) -> Result<bool, JournalError> {
+        sqlx::query_scalar(
+            "SELECT EXISTS (
+                SELECT 1
+                FROM execution_steps
+                WHERE execution_id = $1 AND record_kind = 'intent'
+            )",
+        )
+        .bind(id.as_uuid())
+        .fetch_one(&self.pool)
+        .await
+        .map_err(Into::into)
     }
 }
 

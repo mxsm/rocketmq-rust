@@ -1,0 +1,29 @@
+# Copyright 2026 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0.
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sre-execution-agent-typed-workloads
+  namespace: rocketmq-system
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "deployments/scale", "statefulsets"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sre-execution-agent-typed-workloads
+  namespace: rocketmq-system
+subjects:
+  - kind: ServiceAccount
+    name: sre-execution-agent
+    namespace: rocketmq-sre
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: sre-execution-agent-typed-workloads

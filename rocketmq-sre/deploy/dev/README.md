@@ -11,6 +11,8 @@ Control Plane 或整栈重启不会让数据库中的 Evidence URI 失效。
 | --- | ---: |
 | AI SRE UI | 3004 |
 | Control Plane | 8090 |
+| Change Executor | 8094 |
+| Execution Agent | 8095 |
 | Control Plane Connector mTLS | 8444（仅 127.0.0.1） |
 | Control Plane Connector upstream | 8093（仅共享网络命名空间内的 loopback，不发布） |
 | Connector（经 MCP 网络命名空间） | 8091 |
@@ -23,6 +25,12 @@ Control Plane 或整栈重启不会让数据库中的 Evidence URI 失效。
 | Loki | 3100 |
 | Tempo | 3200 |
 | OTLP gRPC/HTTP | 4317/4318 |
+
+Control Plane、Change Executor 与 Execution Agent 使用三个独立容器和内部网络。
+Control Plane 只能调用 Executor；Executor 只能调用 Lease Authority 与 Agent，且
+没有 RocketMQ/Kubernetes 目标网络；只有 Agent 位于目标网络并持有类型化 mutation
+适配器。Compose 中的 HTTP、Bearer token 与投影 identity 仅用于显式开发模式，
+生产配置会拒绝这些明文传输设置。
 
 ## 启动
 

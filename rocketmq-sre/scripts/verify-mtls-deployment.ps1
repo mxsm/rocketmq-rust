@@ -54,6 +54,9 @@ $kindConnectorPatch = Join-Path $kindDirectory 'mcp-connector-patch.yaml'
 $kindConnectorRbac = Join-Path $kindDirectory 'connector-rbac.yaml'
 $kindStack = Join-Path $kindDirectory 'sre-stack.yaml'
 $kindNetworkPolicy = Join-Path $kindDirectory 'control-plane-network-policy.yaml'
+$kindExecutionStack = Join-Path $kindDirectory 'execution-stack.yaml'
+$kindExecutionRbac = Join-Path $kindDirectory 'execution-rbac.yaml'
+$kindExecutionNetworkPolicy = Join-Path $kindDirectory 'execution-network-policy.yaml'
 
 foreach ($proxyConfig in @($composeProxy, $kindProxy)) {
     Assert-Contains $proxyConfig 'ssl_verify_client\s+on;' 'mandatory client-certificate verification'
@@ -75,6 +78,11 @@ Assert-Contains $composeFile 'env_file:\s*\r?\n\s+- .*admin-read\.env' 'Compose 
 Assert-Contains $composeFile 'ROCKETMQ_SRE_CONNECTOR_BIND_ADDR:\s+127\.0\.0\.1:8093' 'Compose loopback Connector listener'
 Assert-Contains $composeFile 'network_mode:\s+"service:sre-control-plane"' 'Compose shared network namespace'
 Assert-Contains $composeFile 'control-plane-backend:\s*\r?\n\s+name:.*\r?\n\s+internal:\s+true' 'Compose backend network isolation'
+Assert-Contains $composeFile 'execution-control:\s*\r?\n\s+name:.*\r?\n\s+internal:\s+true' 'Compose Control Plane to Executor isolation'
+Assert-Contains $composeFile 'executor-agent:\s*\r?\n\s+name:.*\r?\n\s+internal:\s+true' 'Compose Executor to Agent isolation'
+Assert-Contains $composeFile 'ROCKETMQ_SRE_EXECUTOR_URL:\s+http://sre-executor:8094' 'Compose isolated Executor URL'
+Assert-Contains $composeFile 'ROCKETMQ_SRE_EXECUTION_AGENT_URL:\s+http://sre-execution-agent:8095' 'Compose isolated Agent URL'
+Assert-Contains $composeFile 'ROCKETMQ_SRE_AGENT_ACK_KEY:' 'Compose Agent fence acknowledgement key'
 Assert-NotContains $composeFile 'ROCKETMQ_SRE_CONTROL_PLANE_URL:\s+http://' 'plain HTTP connector channel'
 Assert-Contains $composeProxy 'proxy_pass\s+http://127\.0\.0\.1:8093;' 'Compose proxy loopback listener upstream'
 
@@ -103,6 +111,14 @@ Assert-Contains $kindConnectorRbac 'resources:\s+\["pods",\s+"events",\s+"persis
 Assert-Contains $kindConnectorRbac 'resources:\s+\["poddisruptionbudgets"\]' 'Kind PDB allowlist'
 Assert-Contains $kindConnectorRbac 'resources:\s+\["nodes"\]' 'Kind Node allowlist'
 Assert-NotContains $kindConnectorRbac 'verbs:\s*\[[^\]]*(create|update|patch|delete|watch)' 'Kind RBAC mutation or watch verb'
+Assert-Contains $kindExecutionStack 'name:\s+sre-executor\s*\r?\n\s+namespace:\s+rocketmq-sre\s*\r?\nautomountServiceAccountToken:\s+false' 'Kind tokenless Executor identity'
+Assert-Contains $kindExecutionStack 'name:\s+sre-execution-agent\s*\r?\n\s+namespace:\s+rocketmq-sre\s*\r?\nautomountServiceAccountToken:\s+true' 'Kind Agent target identity'
+Assert-Contains $kindExecutionStack 'serviceAccountName:\s+sre-executor' 'Kind dedicated Executor ServiceAccount'
+Assert-Contains $kindExecutionStack 'serviceAccountName:\s+sre-execution-agent' 'Kind dedicated Agent ServiceAccount'
+Assert-Contains $kindExecutionRbac 'name:\s+sre-execution-agent\s*\r?\n\s+namespace:\s+rocketmq-sre' 'Kind Agent-only mutation role binding'
+Assert-NotContains $kindExecutionRbac 'name:\s+sre-executor' 'Kind Executor target role binding'
+Assert-Contains $kindExecutionNetworkPolicy 'name:\s+sre-executor-isolation' 'Kind Executor network boundary'
+Assert-Contains $kindExecutionNetworkPolicy 'name:\s+sre-execution-agent-isolation' 'Kind Agent network boundary'
 
 $kindPatchContent = Get-Content -Raw -LiteralPath $kindConnectorPatch
 $connectorContainer = [regex]::Match(
@@ -138,6 +154,10 @@ foreach ($requiredRender in @(
     'name: rocketmq-sre-connector',
     'name: rocketmq-sre-connector-read',
     'name: rocketmq-sre-connector-node-read',
+    'name: sre-executor',
+    'name: sre-execution-agent',
+    'name: sre-executor-isolation',
+    'name: sre-execution-agent-isolation',
     'port: 8444',
     'kind: NetworkPolicy'
 )) {

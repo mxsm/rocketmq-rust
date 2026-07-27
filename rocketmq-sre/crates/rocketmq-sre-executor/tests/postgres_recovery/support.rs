@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::TimeDelta;
@@ -61,9 +62,17 @@ pub(crate) struct Fixture {
 }
 
 pub(crate) async fn isolated_pool(database_url: &str, schema: &str) -> PgPool {
+    let search_path: Arc<str> = Arc::from(format!("SET search_path TO \"{schema}\""));
     let pool = PgPoolOptions::new()
-        .max_connections(1)
+        .max_connections(8)
         .acquire_timeout(Duration::from_secs(10))
+        .after_connect(move |connection, _metadata| {
+            let search_path = Arc::clone(&search_path);
+            Box::pin(async move {
+                sqlx::query(search_path.as_ref()).execute(connection).await?;
+                Ok(())
+            })
+        })
         .connect(database_url)
         .await
         .expect("Docker PostgreSQL");
@@ -71,22 +80,15 @@ pub(crate) async fn isolated_pool(database_url: &str, schema: &str) -> PgPool {
         .execute(&pool)
         .await
         .expect("isolated schema");
-    sqlx::query(&format!("SET search_path TO \"{schema}\""))
-        .execute(&pool)
-        .await
-        .expect("isolated search path");
     pool
 }
 
 pub(crate) async fn cleanup_schema(pool: &PgPool, schema: &str) {
-    sqlx::query("SET search_path TO public")
-        .execute(pool)
-        .await
-        .expect("restore search path");
-    sqlx::query(&format!("DROP SCHEMA \"{schema}\" CASCADE"))
+    sqlx::raw_sql(&format!("SET search_path TO public; DROP SCHEMA \"{schema}\" CASCADE"))
         .execute(pool)
         .await
         .expect("drop isolated schema");
+    pool.close().await;
 }
 
 pub(crate) async fn assert_phase_three_tables(pool: &PgPool) {
@@ -272,9 +274,10 @@ pub(crate) fn step_intent(
     idempotency_key: &str,
     intended_at: chrono::DateTime<Utc>,
 ) -> StepIntent {
+    let step_id = ExecutionStepId::new();
     StepIntent {
         execution_id: fixture.request.id,
-        step_id: ExecutionStepId::new(),
+        step_id,
         plan_hash: fixture.plan.plan_hash.clone(),
         step: fixture.plan.steps[0].clone(),
         attempt: 1,
@@ -284,6 +287,11 @@ pub(crate) fn step_intent(
             owner: owner.to_owned(),
             cluster_id: fixture.cluster_id,
             epoch,
+            execution_id: fixture.request.id,
+            step_id,
+            plan_step_id: fixture.plan.steps[0].id,
+            action: fixture.plan.steps[0].action,
+            resource: fixture.plan.steps[0].resource.clone(),
             audience: "execution-agent".to_owned(),
             issued_at: intended_at - TimeDelta::seconds(1),
             expires_at,
@@ -295,6 +303,10 @@ pub(crate) fn step_intent(
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "shared support is compiled by integration tests that do not all append executor audit events"
+)]
 pub(crate) fn audit(
     fixture: &Fixture,
     event_kind: AuditEventKind,
@@ -321,24 +333,28 @@ pub(crate) async fn assert_critic_review_is_immutable(pool: &PgPool, fixture: &F
     let review_id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO critic_reviews (
-            id, plan_id, plan_hash, primary_invocation_id,
+            id, plan_id, plan_hash, diagnosis_revision_id, primary_invocation_id,
             critic_invocation_id, primary_model_family, critic_model_family,
             critic_provider, critic_profile, critic_model_revision,
-            endpoint_instance, conclusion, status, review_hash,
-            review_snapshot, created_at
+            endpoint_instance, fallback_chain, prompt_version, schema_version,
+            payload_hash, conclusion, status, review_hash, review_snapshot,
+            created_at
          ) VALUES (
-            $1, $2, $3, $4,
-            $5, 'fixture-primary', 'fixture-critic',
+            $1, $2, $3, $4, $5,
+            $6, 'fixture-primary', 'fixture-critic',
             'fixture-provider', 'fixture-profile', 'fixture-r1',
-            'fixture-endpoint', 'accept', 'valid', $6,
-            '{}'::JSONB, $7
+            'fixture-endpoint', '{}'::TEXT[], 'critic.prompt.v1',
+            'rocketmq-sre.critic-review.v1', $7, 'accept', 'valid',
+            $8, '{}'::JSONB, $9
          )",
     )
     .bind(review_id)
     .bind(fixture.plan.id.as_uuid())
     .bind(&fixture.plan.plan_hash)
+    .bind(fixture.plan.diagnosis_revision.as_uuid())
     .bind(fixture.primary_invocation_id.as_uuid())
     .bind(fixture.critic_invocation_id.as_uuid())
+    .bind(format!("sha256:{}", "d".repeat(64)))
     .bind(format!("sha256:{}", "c".repeat(64)))
     .bind(Utc::now())
     .execute(pool)

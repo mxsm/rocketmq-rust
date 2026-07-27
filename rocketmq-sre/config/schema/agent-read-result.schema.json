@@ -1,0 +1,56 @@
+{
+  "$defs": {
+    "ExecutionAction": {
+      "description": "Closed set of Phase 3 actions that may enter supervised execution.\n\nR3 and unknown actions are intentionally not representable.",
+      "enum": [
+        "observability.logger_level_ttl.v1",
+        "proxy.scale_out_one.v1",
+        "proxy.restart_one.v1",
+        "broker.config.patch_allowlisted.v1",
+        "topic.config.patch_allowlisted.v1"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Sanitized live-state result. It never contains target configuration dumps.",
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/ExecutionAction"
+    },
+    "observed_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "precondition_hash": {
+      "type": "string"
+    },
+    "ready": {
+      "type": "boolean"
+    },
+    "reason_codes": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "target": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "action",
+    "target",
+    "precondition_hash",
+    "ready",
+    "reason_codes",
+    "observed_at"
+  ],
+  "title": "AgentReadResult",
+  "type": "object"
+}

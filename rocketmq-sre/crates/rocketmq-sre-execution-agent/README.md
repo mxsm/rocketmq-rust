@@ -2,30 +2,49 @@
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](../../../LICENSE-APACHE)
 
-`rocketmq-sre-execution-agent` reserves the future process boundary for
-policy-controlled change execution. In Phase 00 it is a library-only marker
-that reports the execution agent as disabled.
+`rocketmq-sre-execution-agent` is the only SRE workload allowed to hold
+RocketMQ Admin mutation, Kubernetes, or configuration-system write
+credentials. It exposes no generic command surface: all reads, writes,
+reconciliation, and compensation pass through an explicitly registered typed
+handler.
 
-## Responsibilities
+## Fence and effect invariants
 
-- Expose the explicit disabled execution-agent state.
-- Keep future execution wiring separate from diagnostics and evidence
-  collection.
+- Only the exact `spiffe://rocketmq-sre/executor` workload identity plus its
+  bearer token can call internal routes.
+- Each dispatch verifies the fresh Lease Authority grant both before and after
+  acquiring the PostgreSQL shared dispatch barrier.
+- The Agent rejects any grant whose epoch is not its durable highest accepted
+  cluster epoch.
+- `Prepared` and then `Dispatched` are persisted before the driver is called.
+  `Confirmed` is written only for a bounded, verifiable outcome.
+- A duplicate idempotency key replays a prior `Confirmed` result and never
+  invokes the driver twice. A non-terminal duplicate returns
+  `unresolved_old_effects`.
+- `AdvanceFence` takes the exclusive cluster barrier, waits for in-flight
+  shared dispatches, rejects any old `Prepared`/`Dispatched`/`Unknown` effect,
+  persists the new highest epoch, and returns a nonce-bound signed `FenceAck`.
+- Lease Authority or PostgreSQL unavailability fails closed before a target
+  write.
 
-## Phase 00 boundary
+The three driver families are `AdminCoreDriver`, `KubernetesDriver`, and
+`ConfigDriver`. Raw Admin request codes, shell execution, deletion/cleaning
+operations, and arbitrary Kubernetes patches do not exist in the protocol or
+registry.
 
-There is no binary, scheduler, target credential, mutation driver, queue
-consumer, approval workflow, or connection to `rocketmq-sre-executor`.
-Importing this crate cannot start or authorize an operation.
+The service listens on `8095` by default. `/healthz` is liveness only;
+`/readyz` requires the PostgreSQL effect ledger. The production Agent starts
+with an empty registry until action-specific milestones install reviewed
+handlers.
 
 ## Validation
 
-Run from `rocketmq-sre/`:
+Run from `rocketmq-sre/` with a non-system target directory:
 
 ```powershell
-cargo check --locked -p rocketmq-sre-execution-agent
 cargo test --locked -p rocketmq-sre-execution-agent
+cargo clippy --locked -p rocketmq-sre-execution-agent --all-targets -- -D warnings
 ```
 
-Validation confirms the public state remains disabled and the dependency graph
-contains only the shared contracts boundary.
+The Executor integration tests exercise the Agent against Docker PostgreSQL,
+including exact dispatch/fence interleavings and crash recovery.

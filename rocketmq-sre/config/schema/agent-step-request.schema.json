@@ -86,6 +86,9 @@
       "additionalProperties": false,
       "description": "Short-lived grant authorizing one active epoch to dispatch.",
       "properties": {
+        "action": {
+          "$ref": "#/$defs/ExecutionAction"
+        },
         "audience": {
           "type": "string"
         },
@@ -94,6 +97,9 @@
         },
         "epoch": {
           "$ref": "#/$defs/LeaseEpoch"
+        },
+        "execution_id": {
+          "$ref": "#/$defs/ExecutionId"
         },
         "expires_at": {
           "format": "date-time",
@@ -112,8 +118,17 @@
         "owner": {
           "type": "string"
         },
+        "plan_step_id": {
+          "$ref": "#/$defs/PlanStepId"
+        },
+        "resource": {
+          "type": "string"
+        },
         "signature": {
           "type": "string"
+        },
+        "step_id": {
+          "$ref": "#/$defs/ExecutionStepId"
         }
       },
       "required": [
@@ -121,6 +136,11 @@
         "owner",
         "cluster_id",
         "epoch",
+        "execution_id",
+        "step_id",
+        "plan_step_id",
+        "action",
+        "resource",
         "audience",
         "issued_at",
         "expires_at",

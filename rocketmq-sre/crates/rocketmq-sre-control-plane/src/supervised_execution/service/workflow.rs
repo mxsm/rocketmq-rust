@@ -203,9 +203,10 @@ impl SupervisedExecutionService {
                     "idempotency key is bound to a different execution",
                 ));
             }
+            let receipt = self.executor.submit(&existing.request).await?;
             return Ok(ExecutionSubmissionView {
                 execution: existing.request,
-                state: existing.state,
+                state: receipt.state,
                 submitted_at: existing.submitted_at,
             });
         }
@@ -316,9 +317,10 @@ impl SupervisedExecutionService {
             )
             .await?;
         self.publish_audits(std::slice::from_ref(&audit));
+        let receipt = self.executor.submit(&stored.request).await?;
         Ok(ExecutionSubmissionView {
             execution: stored.request,
-            state: stored.state,
+            state: receipt.state,
             submitted_at: stored.submitted_at,
         })
     }

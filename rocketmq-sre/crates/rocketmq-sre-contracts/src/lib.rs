@@ -18,6 +18,7 @@
 //! model SDK, or RocketMQ implementation dependency.
 
 mod action;
+mod agent;
 mod alert;
 mod api;
 mod approval;
@@ -121,11 +122,21 @@ pub use execution::ExecutionState;
 pub use execution::ExecutionTransition;
 pub use execution::StepIntent;
 pub use execution::StepResult;
+pub use fencing::ActivateLeaseRequest;
+pub use fencing::BeginLeaseTakeoverRequest;
+pub use fencing::BeginLeaseTakeoverResponse;
+pub use fencing::ExecutorLease;
 pub use fencing::FenceAck;
+pub use fencing::GrantVerification;
+pub use fencing::IssueFenceGrantRequest;
+pub use fencing::LEASE_AUTHORITY_SCHEMA_VERSION;
 pub use fencing::LeaseEpoch;
 pub use fencing::LeaseFenceGrant;
 pub use fencing::LeaseState;
 pub use fencing::ReconcileGrant;
+pub use fencing::VerifyExecutionRequest;
+pub use fencing::VerifyFenceGrantRequest;
+pub use fencing::VerifyReconcileGrantRequest;
 pub use ids::ActionItemId;
 pub use ids::ActionPlanId;
 pub use ids::AlertEventId;
@@ -280,6 +291,17 @@ pub const EVIDENCE_SCHEMA_MINOR: u16 = 0;
 pub fn current_evidence_schema() -> SchemaVersion {
     SchemaVersion::new(EVIDENCE_SCHEMA_FAMILY, EVIDENCE_SCHEMA_MAJOR, EVIDENCE_SCHEMA_MINOR)
 }
+pub use agent::AdvanceFenceRequest;
+pub use agent::AdvanceFenceResponse;
+pub use agent::AgentDispatchRequest;
+pub use agent::AgentDispatchResponse;
+pub use agent::AgentReadRequest;
+pub use agent::AgentReadResult;
+pub use agent::EXECUTION_AGENT_SCHEMA_VERSION;
+pub use agent::ExecutionAgentCapabilities;
+pub use agent::ReconcileEffectRequest;
+pub use agent::ReconcileEffectResponse;
+pub use agent::ReconcileEffectState;
 pub use correlation::IncidentRelation;
 pub use correlation::IncidentRelationKind;
 pub use correlation::TimelineEventKind;

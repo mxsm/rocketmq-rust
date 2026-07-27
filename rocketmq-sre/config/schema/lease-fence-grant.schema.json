@@ -5,6 +5,27 @@
       "format": "uuid",
       "type": "string"
     },
+    "ExecutionAction": {
+      "description": "Closed set of Phase 3 actions that may enter supervised execution.\n\nR3 and unknown actions are intentionally not representable.",
+      "enum": [
+        "observability.logger_level_ttl.v1",
+        "proxy.scale_out_one.v1",
+        "proxy.restart_one.v1",
+        "broker.config.patch_allowlisted.v1",
+        "topic.config.patch_allowlisted.v1"
+      ],
+      "type": "string"
+    },
+    "ExecutionId": {
+      "description": "Stable identifier for a supervised execution.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ExecutionStepId": {
+      "description": "Stable identifier for an execution step.",
+      "format": "uuid",
+      "type": "string"
+    },
     "LeaseEpoch": {
       "description": "Monotonically increasing cluster fencing epoch.",
       "format": "uint64",
@@ -15,12 +36,20 @@
       "description": "Stable identifier for an executor lease generation.",
       "format": "uuid",
       "type": "string"
+    },
+    "PlanStepId": {
+      "description": "Stable identifier for an immutable action plan step.",
+      "format": "uuid",
+      "type": "string"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "Short-lived grant authorizing one active epoch to dispatch.",
   "properties": {
+    "action": {
+      "$ref": "#/$defs/ExecutionAction"
+    },
     "audience": {
       "type": "string"
     },
@@ -29,6 +58,9 @@
     },
     "epoch": {
       "$ref": "#/$defs/LeaseEpoch"
+    },
+    "execution_id": {
+      "$ref": "#/$defs/ExecutionId"
     },
     "expires_at": {
       "format": "date-time",
@@ -47,8 +79,17 @@
     "owner": {
       "type": "string"
     },
+    "plan_step_id": {
+      "$ref": "#/$defs/PlanStepId"
+    },
+    "resource": {
+      "type": "string"
+    },
     "signature": {
       "type": "string"
+    },
+    "step_id": {
+      "$ref": "#/$defs/ExecutionStepId"
     }
   },
   "required": [
@@ -56,6 +97,11 @@
     "owner",
     "cluster_id",
     "epoch",
+    "execution_id",
+    "step_id",
+    "plan_step_id",
+    "action",
+    "resource",
     "audience",
     "issued_at",
     "expires_at",

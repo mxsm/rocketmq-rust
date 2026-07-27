@@ -70,10 +70,19 @@ kubectl --kubeconfig .\target\phase00-kind\kubeconfig `
 ```
 
 The internal SRE ports are Control Plane API `8090`, Connector mTLS `8444`,
-Connector-only loopback upstream `8093`, Connector diagnostics `8091`, and UI
-`3004`; MCP remains loopback-only on `8089` inside its Pod. The Phase 01 model
+Connector-only loopback upstream `8093`, Connector diagnostics `8091`, Change
+Executor `8094`, Execution Agent `8095`, and UI `3004`; MCP remains
+loopback-only on `8089` inside its Pod. The Phase 01 model
 fixture is a separate ClusterIP-only workload on `8094`. Its NetworkPolicy
 allows ingress only from the Control Plane and denies all egress.
+
+The Executor and Agent run as separate Deployments with different
+ServiceAccounts. NetworkPolicy permits only Control Plane → Executor,
+Executor → Control Plane Lease Authority, and Executor → Agent. Executor has no
+target namespace/Kubernetes API path and mounts no target credential. Only the
+Agent ServiceAccount is bound to the closed workload mutation Role; the Agent
+still requires an active epoch grant and durable shared/exclusive PostgreSQL
+barrier before invoking any registered handler.
 
 `Up` builds and loads all local RocketMQ/SRE images. Use `-SkipBuild` only when
 every required image already exists in the local Docker engine. Re-running

@@ -1,0 +1,84 @@
+{
+  "$defs": {
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "FenceAck": {
+      "additionalProperties": false,
+      "description": "Agent acknowledgement that the durable highest epoch has advanced.",
+      "properties": {
+        "acknowledged_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "agent_subject": {
+          "type": "string"
+        },
+        "cluster_id": {
+          "$ref": "#/$defs/ClusterId"
+        },
+        "epoch": {
+          "$ref": "#/$defs/LeaseEpoch"
+        },
+        "pending_nonce": {
+          "type": "string"
+        },
+        "signature": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cluster_id",
+        "epoch",
+        "pending_nonce",
+        "agent_subject",
+        "acknowledged_at",
+        "signature"
+      ],
+      "type": "object"
+    },
+    "LeaseEpoch": {
+      "description": "Monotonically increasing cluster fencing epoch.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "LeaseId": {
+      "description": "Stable identifier for an executor lease generation.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Signed Agent acknowledgement submitted to activate a pending lease.",
+  "properties": {
+    "fence_ack": {
+      "$ref": "#/$defs/FenceAck"
+    },
+    "lease_id": {
+      "$ref": "#/$defs/LeaseId"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    }
+  },
+  "required": [
+    "schema_version",
+    "tenant_id",
+    "lease_id",
+    "fence_ack"
+  ],
+  "title": "ActivateLeaseRequest",
+  "type": "object"
+}

@@ -14,6 +14,57 @@
 
 use thiserror::Error;
 
+use rocketmq_sre_core::ActionCatalogError;
+
+/// Sanitized Change Executor service failure.
+#[derive(Debug, Error)]
+pub enum ExecutorError {
+    #[error("change executor configuration is invalid")]
+    Configuration,
+    #[error("change executor request is unauthorized")]
+    Unauthorized,
+    #[error("execution request is invalid")]
+    InvalidRequest,
+    #[error("execution request signature or scope was rejected")]
+    AuthorityRejected,
+    #[error("Lease Authority is unavailable")]
+    AuthorityUnavailable,
+    #[error("Execution Agent rejected the request")]
+    AgentRejected,
+    #[error("Execution Agent is unavailable")]
+    AgentUnavailable,
+    #[error("approved preconditions changed before dispatch")]
+    PreconditionChanged,
+    #[error("active lease handoff is blocked by an unresolved effect")]
+    ReconcileBlocked,
+    #[error("the action descriptor is not executable")]
+    Catalog(#[source] ActionCatalogError),
+    #[error("durable execution state is unavailable")]
+    Journal(#[from] JournalError),
+    #[error("change executor HTTP client is unavailable")]
+    Http(#[source] reqwest::Error),
+    #[error("change executor listener is unavailable")]
+    Io(#[source] std::io::Error),
+}
+
+impl From<ActionCatalogError> for ExecutorError {
+    fn from(error: ActionCatalogError) -> Self {
+        Self::Catalog(error)
+    }
+}
+
+impl From<reqwest::Error> for ExecutorError {
+    fn from(error: reqwest::Error) -> Self {
+        Self::Http(error)
+    }
+}
+
+impl From<std::io::Error> for ExecutorError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
 /// Fail-closed durable execution journal error.
 #[derive(Debug, Error)]
 pub enum JournalError {

@@ -14,6 +14,49 @@
 
 use thiserror::Error;
 
+/// Sanitized Execution Agent service failure.
+#[derive(Debug, Error)]
+pub enum ExecutionAgentError {
+    #[error("execution agent configuration is invalid")]
+    Configuration,
+    #[error("execution agent request is unauthorized")]
+    Unauthorized,
+    #[error("execution agent request is invalid")]
+    InvalidRequest,
+    #[error("action is not registered in the typed driver registry")]
+    ActionNotRegistered,
+    #[error("Lease Authority rejected the request")]
+    AuthorityRejected,
+    #[error("Lease Authority is unavailable")]
+    AuthorityUnavailable,
+    #[error("a previous effect remains non-terminal")]
+    UnresolvedEffect,
+    #[error("typed driver returned a sanitized failure")]
+    DriverFailed,
+    #[error("typed driver result is unknown")]
+    DriverUnknown,
+    #[error("dispatch barrier is unavailable")]
+    DispatchBarrierUnavailable,
+    #[error("execution agent persistence is unavailable")]
+    Store(#[from] AgentStoreError),
+    #[error("execution agent HTTP client is unavailable")]
+    Http(#[source] reqwest::Error),
+    #[error("execution agent listener is unavailable")]
+    Io(#[source] std::io::Error),
+}
+
+impl From<reqwest::Error> for ExecutionAgentError {
+    fn from(error: reqwest::Error) -> Self {
+        Self::Http(error)
+    }
+}
+
+impl From<std::io::Error> for ExecutionAgentError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
 /// Fail-closed Agent fence/effect persistence error.
 #[derive(Debug, Error)]
 pub enum AgentStoreError {

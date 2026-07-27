@@ -1,0 +1,94 @@
+# Copyright 2026 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0.
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sre-executor-isolation
+  namespace: rocketmq-sre
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: rocketmq-sre-executor
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: rocketmq-sre-control-plane
+      ports:
+        - {protocol: TCP, port: 8094}
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: rocketmq-sre-control-plane
+      ports:
+        - {protocol: TCP, port: 8090}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: rocketmq-sre-execution-agent
+      ports:
+        - {protocol: TCP, port: 8095}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: rocketmq-sre-postgres
+      ports:
+        - {protocol: TCP, port: 5432}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sre-execution-agent-isolation
+  namespace: rocketmq-sre
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: rocketmq-sre-execution-agent
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: rocketmq-sre-executor
+      ports:
+        - {protocol: TCP, port: 8095}
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: rocketmq-sre-control-plane
+      ports:
+        - {protocol: TCP, port: 8090}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: rocketmq-sre-postgres
+      ports:
+        - {protocol: TCP, port: 5432}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+        - {protocol: TCP, port: 443}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: rocketmq-system
+      ports:
+        - {protocol: TCP, port: 9876}
+        - {protocol: TCP, port: 10911}
+        - {protocol: TCP, port: 8080}
+        - {protocol: TCP, port: 8081}

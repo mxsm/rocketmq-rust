@@ -1,0 +1,796 @@
+// Copyright 2026 The RocketMQ Rust Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
+use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
+
+use chrono::TimeDelta;
+use chrono::Utc;
+use rocketmq_sre_contracts::ActivateLeaseRequest;
+use rocketmq_sre_contracts::AdvanceFenceRequest;
+use rocketmq_sre_contracts::AgentDispatchRequest;
+use rocketmq_sre_contracts::AgentStepRequest;
+use rocketmq_sre_contracts::AuditEvent;
+use rocketmq_sre_contracts::AuditEventId;
+use rocketmq_sre_contracts::AuditEventKind;
+use rocketmq_sre_contracts::BeginLeaseTakeoverRequest;
+use rocketmq_sre_contracts::ClusterId;
+use rocketmq_sre_contracts::EXECUTION_AGENT_SCHEMA_VERSION;
+use rocketmq_sre_contracts::ExecutionId;
+use rocketmq_sre_contracts::ExecutionRequest;
+use rocketmq_sre_contracts::ExecutionState;
+use rocketmq_sre_contracts::ExecutionStepId;
+use rocketmq_sre_contracts::ExecutionTransition;
+use rocketmq_sre_contracts::ExecutorLease;
+use rocketmq_sre_contracts::IssueFenceGrantRequest;
+use rocketmq_sre_contracts::LEASE_AUTHORITY_SCHEMA_VERSION;
+use rocketmq_sre_contracts::LeaseState;
+use rocketmq_sre_contracts::ReconcileEffectRequest;
+use rocketmq_sre_contracts::ReconcileEffectState;
+use rocketmq_sre_contracts::ReconcileGrant;
+use rocketmq_sre_contracts::ResourceLockId;
+use rocketmq_sre_contracts::StepIntent;
+use rocketmq_sre_contracts::StepResult;
+use rocketmq_sre_contracts::VerifyExecutionRequest;
+use serde::Serialize;
+use serde_json::json;
+use tokio::sync::Mutex;
+
+use crate::ExecutionAgentClient;
+use crate::ExecutionJournal;
+use crate::ExecutionPrechecker;
+use crate::ExecutorAuthorityClient;
+use crate::ExecutorError;
+use crate::ResourceLock;
+use crate::ResourceLockRequest;
+use crate::ResourceSafetyStore;
+
+const MAX_RECOVERY_INTENTS: u32 = 1_000;
+
+/// Bounded result returned by the internal Executor API.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct ExecuteOutcome {
+    pub execution_id: ExecutionId,
+    pub state: ExecutionState,
+    pub replayed: bool,
+    pub accepted_steps: usize,
+}
+
+/// Low-cardinality process counters.
+#[derive(Default)]
+pub struct ExecutorMetrics {
+    active_executions: AtomicUsize,
+    execution_total: AtomicU64,
+    replay_total: AtomicU64,
+    precondition_rejections_total: AtomicU64,
+    fence_rejections_total: AtomicU64,
+    reconcile_blocks_total: AtomicU64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct ExecutorMetricsSnapshot {
+    pub active_executions: usize,
+    pub execution_total: u64,
+    pub replay_total: u64,
+    pub precondition_rejections_total: u64,
+    pub fence_rejections_total: u64,
+    pub reconcile_blocks_total: u64,
+}
+
+impl ExecutorMetrics {
+    #[must_use]
+    pub fn snapshot(&self) -> ExecutorMetricsSnapshot {
+        ExecutorMetricsSnapshot {
+            active_executions: self.active_executions.load(Ordering::Relaxed),
+            execution_total: self.execution_total.load(Ordering::Relaxed),
+            replay_total: self.replay_total.load(Ordering::Relaxed),
+            precondition_rejections_total: self.precondition_rejections_total.load(Ordering::Relaxed),
+            fence_rejections_total: self.fence_rejections_total.load(Ordering::Relaxed),
+            reconcile_blocks_total: self.reconcile_blocks_total.load(Ordering::Relaxed),
+        }
+    }
+}
+
+/// Single-active supervised execution engine.
+#[derive(Clone)]
+pub struct ChangeExecutor {
+    journal: ExecutionJournal,
+    safety: ResourceSafetyStore,
+    authority: Arc<dyn ExecutorAuthorityClient>,
+    agent: Arc<dyn ExecutionAgentClient>,
+    prechecker: ExecutionPrechecker,
+    executor_subject: Arc<str>,
+    lease_ttl_seconds: u32,
+    resource_lock_ttl: Duration,
+    leases: Arc<Mutex<BTreeMap<ClusterId, ExecutorLease>>>,
+    metrics: Arc<ExecutorMetrics>,
+}
+
+impl ChangeExecutor {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "security boundaries are injected explicitly and are not optional"
+    )]
+    #[must_use]
+    pub fn new(
+        journal: ExecutionJournal,
+        safety: ResourceSafetyStore,
+        authority: Arc<dyn ExecutorAuthorityClient>,
+        agent: Arc<dyn ExecutionAgentClient>,
+        prechecker: ExecutionPrechecker,
+        executor_subject: impl Into<Arc<str>>,
+        lease_ttl_seconds: u32,
+        resource_lock_ttl: Duration,
+    ) -> Self {
+        Self {
+            journal,
+            safety,
+            authority,
+            agent,
+            prechecker,
+            executor_subject: executor_subject.into(),
+            lease_ttl_seconds,
+            resource_lock_ttl,
+            leases: Arc::new(Mutex::new(BTreeMap::new())),
+            metrics: Arc::new(ExecutorMetrics::default()),
+        }
+    }
+
+    /// Returns true when PostgreSQL and the typed Agent boundary are ready.
+    pub async fn ready(&self) -> bool {
+        self.journal.ready().await.is_ok() && self.agent.capabilities().await.is_ok()
+    }
+
+    #[must_use]
+    pub fn metrics(&self) -> ExecutorMetricsSnapshot {
+        self.metrics.snapshot()
+    }
+
+    /// Executes every approved step in order and stops before Phase 3 generic
+    /// verification.
+    ///
+    /// The method never talks to a target system directly. It verifies the
+    /// signed request online, obtains an active fenced lease, rechecks live
+    /// preconditions, writes each intent before dispatch, and persists every
+    /// Agent result.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed on identity, descriptor, precondition, quarantine, lock,
+    /// Authority, Agent, journal, or reconciliation uncertainty.
+    pub async fn execute(&self, request: &ExecutionRequest) -> Result<ExecuteOutcome, ExecutorError> {
+        self.metrics.execution_total.fetch_add(1, Ordering::Relaxed);
+        self.metrics.active_executions.fetch_add(1, Ordering::Relaxed);
+        let result = self.execute_inner(request).await;
+        self.metrics.active_executions.fetch_sub(1, Ordering::Relaxed);
+        result
+    }
+
+    async fn execute_inner(&self, request: &ExecutionRequest) -> Result<ExecuteOutcome, ExecutorError> {
+        self.authority
+            .verify_execution(&VerifyExecutionRequest {
+                schema_version: LEASE_AUTHORITY_SCHEMA_VERSION.to_owned(),
+                execution: request.clone(),
+            })
+            .await?;
+        if request.plan.steps.is_empty() {
+            return Err(ExecutorError::InvalidRequest);
+        }
+        for step in &request.plan.steps {
+            self.prechecker.registry().validate_step(step)?;
+        }
+        let (resource_key, action) = execution_projection(request)?;
+        let creation = self
+            .journal
+            .create_execution(request, &resource_key, action, Utc::now())
+            .await?;
+        if !creation.created {
+            self.metrics.replay_total.fetch_add(1, Ordering::Relaxed);
+            let state = self.journal.execution_state(creation.id).await?;
+            let force_takeover = !matches!(state, ExecutionState::Pending);
+            self.ensure_active_lease(request, force_takeover).await?;
+            let recovered = self.journal.execution_state(creation.id).await?;
+            if !matches!(recovered, ExecutionState::Pending) {
+                return Ok(ExecuteOutcome {
+                    execution_id: creation.id,
+                    state: recovered,
+                    replayed: true,
+                    accepted_steps: request.plan.steps.len(),
+                });
+            }
+        } else {
+            self.ensure_active_lease(request, false).await?;
+        }
+
+        self.transition(
+            request,
+            ExecutionState::Pending,
+            ExecutionState::Prechecking,
+            "execution_precheck_started",
+        )
+        .await?;
+        if let Err(error) = self.prechecker.check(request).await {
+            if matches!(error, ExecutorError::PreconditionChanged) {
+                self.metrics
+                    .precondition_rejections_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            let _ = self
+                .transition(
+                    request,
+                    ExecutionState::Prechecking,
+                    ExecutionState::Escalated,
+                    "execution_precheck_rejected",
+                )
+                .await;
+            return Err(error);
+        }
+
+        let locks = match self.acquire_locks(request).await {
+            Ok(locks) => locks,
+            Err(error) => {
+                let _ = self
+                    .transition(
+                        request,
+                        ExecutionState::Prechecking,
+                        ExecutionState::Escalated,
+                        "resource_lock_rejected",
+                    )
+                    .await;
+                return Err(error);
+            }
+        };
+        let dispatch_result = self.dispatch_steps(request).await;
+        if dispatch_result.is_err() && !self.journal.has_intent(request.id).await.unwrap_or(true) {
+            self.release_locks(&locks, request.id, "execution_rejected_before_dispatch")
+                .await;
+        }
+        dispatch_result?;
+        Ok(ExecuteOutcome {
+            execution_id: request.id,
+            state: ExecutionState::Verifying,
+            replayed: false,
+            accepted_steps: request.plan.steps.len(),
+        })
+    }
+
+    async fn dispatch_steps(&self, request: &ExecutionRequest) -> Result<(), ExecutorError> {
+        for (index, step) in request.plan.steps.iter().enumerate() {
+            let lease = self.current_lease(request.cluster_id).await?;
+            let step_id = ExecutionStepId::new();
+            let grant = self
+                .authority
+                .issue_fence_grant(&IssueFenceGrantRequest {
+                    schema_version: LEASE_AUTHORITY_SCHEMA_VERSION.to_owned(),
+                    tenant_id: request.tenant_id,
+                    cluster_id: request.cluster_id,
+                    lease_id: lease.id,
+                    epoch: lease.epoch,
+                    execution_id: request.id,
+                    step_id,
+                    plan_step_id: step.id,
+                })
+                .await
+                .inspect_err(|_| {
+                    self.metrics.fence_rejections_total.fetch_add(1, Ordering::Relaxed);
+                })?;
+            let now = Utc::now();
+            let intent = StepIntent {
+                execution_id: request.id,
+                step_id,
+                plan_hash: request.plan.plan_hash.clone(),
+                step: step.clone(),
+                attempt: 1,
+                idempotency_key: format!("{}:{}:forward:1", request.idempotency_key, step.id),
+                fence_grant: grant,
+                intended_at: now,
+                compensation: false,
+            };
+            self.journal
+                .append_intent_with_audit(
+                    &intent,
+                    &self.audit(
+                        request,
+                        AuditEventKind::StepIntentPersisted,
+                        "step_intent",
+                        intent.step_id.to_string(),
+                        "step_intent_persisted",
+                        json!({
+                            "plan_step_id": step.id,
+                            "sequence": step.sequence,
+                            "action": step.action,
+                            "lease_epoch": intent.fence_grant.epoch,
+                        }),
+                        now,
+                    ),
+                )
+                .await?;
+            if index == 0 {
+                self.transition(
+                    request,
+                    ExecutionState::Prechecking,
+                    ExecutionState::IntentPersisted,
+                    "first_step_intent_persisted",
+                )
+                .await?;
+                self.transition(
+                    request,
+                    ExecutionState::IntentPersisted,
+                    ExecutionState::Applying,
+                    "agent_dispatch_started",
+                )
+                .await?;
+            }
+            let response = self
+                .agent
+                .dispatch(&AgentDispatchRequest {
+                    schema_version: EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
+                    tenant_id: request.tenant_id,
+                    request: AgentStepRequest {
+                        intent: intent.clone(),
+                        action: step.action,
+                        descriptor_version: step.descriptor_version.clone(),
+                        target: step.resource.clone(),
+                        parameters: step.parameters.clone(),
+                    },
+                })
+                .await;
+            let response = match response {
+                Ok(response) => response,
+                Err(error) => {
+                    self.transition(
+                        request,
+                        ExecutionState::Applying,
+                        ExecutionState::Unknown,
+                        "agent_effect_unknown",
+                    )
+                    .await?;
+                    self.transition(
+                        request,
+                        ExecutionState::Unknown,
+                        ExecutionState::Reconciling,
+                        "read_only_reconcile_required",
+                    )
+                    .await?;
+                    let reconcile = self.ensure_active_lease(request, true).await;
+                    return match reconcile {
+                        Ok(_) => Err(error),
+                        Err(ExecutorError::ReconcileBlocked) => {
+                            self.metrics.reconcile_blocks_total.fetch_add(1, Ordering::Relaxed);
+                            Err(ExecutorError::ReconcileBlocked)
+                        }
+                        Err(other) => Err(other),
+                    };
+                }
+            };
+            let completed_at = Utc::now();
+            let result = StepResult {
+                step_id,
+                state: ExecutionState::Verifying,
+                agent_result: Some(response.result),
+                verification: None,
+                reason_code: if response.replayed {
+                    "agent_effect_replayed"
+                } else {
+                    "agent_effect_confirmed"
+                }
+                .to_owned(),
+                completed_at,
+            };
+            self.journal
+                .append_result_with_audit(
+                    request.id,
+                    1,
+                    &result,
+                    &self.audit(
+                        request,
+                        AuditEventKind::StepResultPersisted,
+                        "step_result",
+                        step_id.to_string(),
+                        &result.reason_code,
+                        json!({"sequence": step.sequence, "action": step.action}),
+                        completed_at,
+                    ),
+                )
+                .await?;
+        }
+        self.transition(
+            request,
+            ExecutionState::Applying,
+            ExecutionState::Verifying,
+            "all_agent_effects_confirmed",
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn ensure_active_lease(
+        &self,
+        request: &ExecutionRequest,
+        force_takeover: bool,
+    ) -> Result<ExecutorLease, ExecutorError> {
+        let mut leases = self.leases.lock().await;
+        if !force_takeover
+            && let Some(lease) = leases.get(&request.cluster_id)
+            && lease.state == LeaseState::Active
+            && lease.expires_at > Utc::now() + TimeDelta::seconds(5)
+        {
+            return Ok(lease.clone());
+        }
+        leases.remove(&request.cluster_id);
+        let takeover = self
+            .authority
+            .begin_takeover(&BeginLeaseTakeoverRequest {
+                schema_version: LEASE_AUTHORITY_SCHEMA_VERSION.to_owned(),
+                tenant_id: request.tenant_id,
+                cluster_id: request.cluster_id,
+                requested_ttl_seconds: self.lease_ttl_seconds,
+            })
+            .await?;
+        self.reconcile_old_effects(request, &takeover.reconcile_grant).await?;
+        let response = self
+            .agent
+            .advance_fence(&AdvanceFenceRequest {
+                schema_version: EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
+                tenant_id: request.tenant_id,
+                reconcile_grant: takeover.reconcile_grant,
+            })
+            .await?;
+        let active = self
+            .authority
+            .activate(
+                request.tenant_id,
+                request.cluster_id,
+                &ActivateLeaseRequest {
+                    schema_version: LEASE_AUTHORITY_SCHEMA_VERSION.to_owned(),
+                    tenant_id: request.tenant_id,
+                    lease_id: takeover.lease.id,
+                    fence_ack: response.fence_ack,
+                },
+            )
+            .await?;
+        leases.insert(request.cluster_id, active.clone());
+        Ok(active)
+    }
+
+    async fn reconcile_old_effects(
+        &self,
+        request: &ExecutionRequest,
+        grant: &ReconcileGrant,
+    ) -> Result<(), ExecutorError> {
+        let pending = self
+            .journal
+            .pending_intents_for_cluster(request.cluster_id, MAX_RECOVERY_INTENTS)
+            .await?;
+        let mut outcomes: BTreeMap<ExecutionId, (ReconcileAggregate, ExecutionRequest)> = BTreeMap::new();
+        for pending in pending {
+            let recovery_scope = ExecutionRequest {
+                id: pending.intent.execution_id,
+                tenant_id: pending.tenant_id,
+                cluster_id: pending.cluster_id,
+                correlation_id: pending.correlation_id,
+                ..request.clone()
+            };
+            self.enter_reconciling(pending.execution_state, &recovery_scope).await?;
+            let response = self
+                .agent
+                .reconcile(&ReconcileEffectRequest {
+                    schema_version: EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
+                    tenant_id: pending.tenant_id,
+                    reconcile_grant: grant.clone(),
+                    idempotency_key: pending.intent.idempotency_key.clone(),
+                })
+                .await?;
+            if response.state == ReconcileEffectState::Unknown {
+                return Err(ExecutorError::ReconcileBlocked);
+            }
+            let reason_code = match response.state {
+                ReconcileEffectState::Applied => "reconciled_applied",
+                ReconcileEffectState::NotApplied => "reconciled_not_applied",
+                ReconcileEffectState::Failed => "reconciled_failed",
+                ReconcileEffectState::Unknown => return Err(ExecutorError::ReconcileBlocked),
+            };
+            let result = StepResult {
+                step_id: pending.intent.step_id,
+                state: if response.state == ReconcileEffectState::Applied {
+                    ExecutionState::Verifying
+                } else {
+                    ExecutionState::Compensating
+                },
+                agent_result: None,
+                verification: None,
+                reason_code: reason_code.to_owned(),
+                completed_at: response.observed_at,
+            };
+            self.journal
+                .append_result_with_audit(
+                    pending.intent.execution_id,
+                    pending.intent.attempt,
+                    &result,
+                    &self.audit_for_intent(
+                        &recovery_scope,
+                        &pending.intent,
+                        AuditEventKind::StepResultPersisted,
+                        reason_code,
+                        json!({"outcome_code": response.outcome_code}),
+                        response.observed_at,
+                    ),
+                )
+                .await?;
+            outcomes
+                .entry(pending.intent.execution_id)
+                .or_insert_with(|| (ReconcileAggregate::default(), recovery_scope))
+                .0
+                .observe(response.state);
+        }
+        for (execution_id, (aggregate, recovery_scope)) in outcomes {
+            let state = self.journal.execution_state(execution_id).await?;
+            if state == ExecutionState::Reconciling {
+                let to = if aggregate.requires_compensation {
+                    ExecutionState::Compensating
+                } else {
+                    ExecutionState::Verifying
+                };
+                self.transition(
+                    &recovery_scope,
+                    ExecutionState::Reconciling,
+                    to,
+                    if to == ExecutionState::Verifying {
+                        "reconcile_confirmed_applied"
+                    } else {
+                        "reconcile_requires_compensation"
+                    },
+                )
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn enter_reconciling(&self, state: ExecutionState, scope: &ExecutionRequest) -> Result<(), ExecutorError> {
+        let synthetic = scope.clone();
+        match state {
+            ExecutionState::IntentPersisted => {
+                self.transition(
+                    &synthetic,
+                    ExecutionState::IntentPersisted,
+                    ExecutionState::Applying,
+                    "restart_found_persisted_intent",
+                )
+                .await?;
+                self.transition(
+                    &synthetic,
+                    ExecutionState::Applying,
+                    ExecutionState::Unknown,
+                    "restart_effect_unknown",
+                )
+                .await?;
+                self.transition(
+                    &synthetic,
+                    ExecutionState::Unknown,
+                    ExecutionState::Reconciling,
+                    "restart_reconcile_started",
+                )
+                .await?;
+            }
+            ExecutionState::Applying => {
+                self.transition(
+                    &synthetic,
+                    ExecutionState::Applying,
+                    ExecutionState::Unknown,
+                    "restart_effect_unknown",
+                )
+                .await?;
+                self.transition(
+                    &synthetic,
+                    ExecutionState::Unknown,
+                    ExecutionState::Reconciling,
+                    "restart_reconcile_started",
+                )
+                .await?;
+            }
+            ExecutionState::Unknown => {
+                self.transition(
+                    &synthetic,
+                    ExecutionState::Unknown,
+                    ExecutionState::Reconciling,
+                    "restart_reconcile_started",
+                )
+                .await?;
+            }
+            ExecutionState::Reconciling => {}
+            _ => return Err(ExecutorError::ReconcileBlocked),
+        }
+        Ok(())
+    }
+
+    async fn acquire_locks(&self, request: &ExecutionRequest) -> Result<Vec<ResourceLock>, ExecutorError> {
+        let now = Utc::now();
+        let ttl = TimeDelta::from_std(self.resource_lock_ttl).map_err(|_| ExecutorError::Configuration)?;
+        let mut unique = BTreeSet::new();
+        let mut locks = Vec::new();
+        for step in &request.plan.steps {
+            let key = (step.resource.clone(), step.action);
+            if !unique.insert(key.clone()) {
+                continue;
+            }
+            match self
+                .safety
+                .acquire(&ResourceLockRequest {
+                    id: ResourceLockId::new(),
+                    tenant_id: request.tenant_id,
+                    cluster_id: request.cluster_id,
+                    resource_key: key.0,
+                    action: key.1,
+                    holder_execution_id: request.id,
+                    acquired_at: now,
+                    expires_at: now + ttl,
+                })
+                .await
+            {
+                Ok(lock) => locks.push(lock),
+                Err(error) => {
+                    self.release_locks(&locks, request.id, "partial_lock_acquisition_failed")
+                        .await;
+                    return Err(error.into());
+                }
+            }
+        }
+        Ok(locks)
+    }
+
+    async fn release_locks(&self, locks: &[ResourceLock], execution_id: ExecutionId, reason: &str) {
+        for lock in locks {
+            if let Err(error) = self.safety.release(lock.id, execution_id, Utc::now(), reason).await {
+                tracing::warn!(
+                    execution_id = %execution_id,
+                    resource_lock_id = %lock.id,
+                    error = %error,
+                    "failed to release Executor resource lock"
+                );
+            }
+        }
+    }
+
+    async fn current_lease(&self, cluster_id: ClusterId) -> Result<ExecutorLease, ExecutorError> {
+        self.leases
+            .lock()
+            .await
+            .get(&cluster_id)
+            .filter(|lease| lease.state == LeaseState::Active && lease.expires_at > Utc::now() + TimeDelta::seconds(2))
+            .cloned()
+            .ok_or(ExecutorError::AuthorityRejected)
+    }
+
+    async fn transition(
+        &self,
+        request: &ExecutionRequest,
+        from: ExecutionState,
+        to: ExecutionState,
+        reason: &str,
+    ) -> Result<(), ExecutorError> {
+        let occurred_at = Utc::now();
+        let transition = ExecutionTransition {
+            from,
+            to,
+            reason_code: reason.to_owned(),
+            occurred_at,
+        };
+        let audit = self.audit(
+            request,
+            AuditEventKind::StateChanged,
+            "execution",
+            request.id.to_string(),
+            reason,
+            json!({"from": from, "to": to}),
+            occurred_at,
+        );
+        if self
+            .journal
+            .transition_with_audit(request.id, &transition, &audit)
+            .await?
+        {
+            Ok(())
+        } else {
+            Err(ExecutorError::InvalidRequest)
+        }
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "audit scope and identity fields are intentionally explicit"
+    )]
+    fn audit(
+        &self,
+        request: &ExecutionRequest,
+        event_kind: AuditEventKind,
+        resource_kind: &str,
+        resource_id: String,
+        reason_code: &str,
+        details: serde_json::Value,
+        occurred_at: chrono::DateTime<Utc>,
+    ) -> AuditEvent {
+        AuditEvent {
+            id: AuditEventId::new(),
+            tenant_id: request.tenant_id,
+            cluster_id: request.cluster_id,
+            correlation_id: request.correlation_id,
+            event_kind,
+            actor_subject: self.executor_subject.to_string(),
+            actor_role: "executor_service".to_owned(),
+            resource_kind: resource_kind.to_owned(),
+            resource_id,
+            reason_code: reason_code.to_owned(),
+            details,
+            occurred_at,
+        }
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "recovery audit fields are intentionally explicit"
+    )]
+    fn audit_for_intent(
+        &self,
+        scope: &ExecutionRequest,
+        intent: &StepIntent,
+        event_kind: AuditEventKind,
+        reason_code: &str,
+        details: serde_json::Value,
+        occurred_at: chrono::DateTime<Utc>,
+    ) -> AuditEvent {
+        AuditEvent {
+            id: AuditEventId::new(),
+            tenant_id: scope.tenant_id,
+            cluster_id: scope.cluster_id,
+            correlation_id: scope.correlation_id,
+            event_kind,
+            actor_subject: self.executor_subject.to_string(),
+            actor_role: "executor_service".to_owned(),
+            resource_kind: "step_result".to_owned(),
+            resource_id: intent.step_id.to_string(),
+            reason_code: reason_code.to_owned(),
+            details,
+            occurred_at,
+        }
+    }
+}
+
+#[derive(Default)]
+struct ReconcileAggregate {
+    requires_compensation: bool,
+}
+
+impl ReconcileAggregate {
+    fn observe(&mut self, state: ReconcileEffectState) {
+        self.requires_compensation |= matches!(state, ReconcileEffectState::NotApplied | ReconcileEffectState::Failed);
+    }
+}
+
+fn execution_projection(
+    request: &ExecutionRequest,
+) -> Result<(String, rocketmq_sre_contracts::ExecutionAction), ExecutorError> {
+    let first = request.plan.steps.first().ok_or(ExecutorError::InvalidRequest)?;
+    let resource = if request.plan.steps.len() == 1 {
+        first.resource.clone()
+    } else {
+        format!("plan/{}", request.plan.id)
+    };
+    Ok((resource, first.action))
+}

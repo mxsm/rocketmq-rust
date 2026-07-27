@@ -39,6 +39,8 @@ pub enum ControlPlaneError {
     Database(#[source] sqlx::Error),
     #[error("identity provider is unavailable")]
     IdentityProvider(#[source] reqwest::Error),
+    #[error("change executor is unavailable")]
+    Executor(#[source] reqwest::Error),
     #[error("evidence object storage is unavailable")]
     ObjectStore,
     #[error("capability document is invalid")]
@@ -90,7 +92,7 @@ impl ControlPlaneError {
             Self::Forbidden { code, .. } => (StatusCode::FORBIDDEN, code, false),
             Self::NotFound => (StatusCode::NOT_FOUND, "source_unavailable", false),
             Self::Conflict { code, .. } => (StatusCode::CONFLICT, code, false),
-            Self::Database(_) | Self::IdentityProvider(_) | Self::ObjectStore | Self::Io(_) => {
+            Self::Database(_) | Self::IdentityProvider(_) | Self::Executor(_) | Self::ObjectStore | Self::Io(_) => {
                 (StatusCode::SERVICE_UNAVAILABLE, "source_unavailable", true)
             }
         }
@@ -107,6 +109,7 @@ impl ControlPlaneError {
             Self::Unauthorized => "an authenticated internal identity is required".to_owned(),
             Self::Database(_) => "persistent state is temporarily unavailable".to_owned(),
             Self::IdentityProvider(_) => "identity provider is temporarily unavailable".to_owned(),
+            Self::Executor(_) => "Change Executor is temporarily unavailable".to_owned(),
             Self::ObjectStore => "evidence object storage is temporarily unavailable".to_owned(),
             Self::Io(_) => "service endpoint is temporarily unavailable".to_owned(),
         }

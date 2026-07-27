@@ -53,6 +53,7 @@ use super::catalog::ActionCatalog;
 use super::catalog::CatalogResolution;
 use super::catalog::ManualAction;
 use super::catalog::validate_parameters;
+use super::executor_client::ExecutorSubmissionClient;
 use super::model::ActionPlanView;
 use super::model::ApprovalDecisionRequest;
 use super::model::ApprovalDecisionResponse;
@@ -101,6 +102,7 @@ pub(crate) struct SupervisedExecutionService {
     signer: GrantSigner,
     model_gateway: ModelGatewayService,
     workflow: WorkflowService,
+    executor: ExecutorSubmissionClient,
     clock: Clock,
 }
 
@@ -113,13 +115,21 @@ struct LivePlanState {
 }
 
 impl SupervisedExecutionService {
-    pub(crate) fn new(
+    pub(crate) fn new_with_executor(
         repository: PostgresRepository,
         workflow: WorkflowService,
         signing_key: impl AsRef<[u8]>,
         model_gateway: ModelGatewayService,
+        executor: ExecutorSubmissionClient,
     ) -> Result<Self, ControlPlaneError> {
-        Self::new_with_clock_inner(repository, workflow, signing_key, model_gateway, Arc::new(Utc::now))
+        Self::new_with_clock_inner(
+            repository,
+            workflow,
+            signing_key,
+            model_gateway,
+            executor,
+            Arc::new(Utc::now),
+        )
     }
 
     #[cfg(test)]
@@ -130,7 +140,14 @@ impl SupervisedExecutionService {
         clock: Clock,
     ) -> Result<Self, ControlPlaneError> {
         let model_gateway = ModelGatewayService::disabled(repository.clone());
-        Self::new_with_clock_inner(repository, workflow, signing_key, model_gateway, clock)
+        Self::new_with_clock_inner(
+            repository,
+            workflow,
+            signing_key,
+            model_gateway,
+            ExecutorSubmissionClient::disabled(),
+            clock,
+        )
     }
 
     #[cfg(test)]
@@ -141,7 +158,14 @@ impl SupervisedExecutionService {
         model_gateway: ModelGatewayService,
         clock: Clock,
     ) -> Result<Self, ControlPlaneError> {
-        Self::new_with_clock_inner(repository, workflow, signing_key, model_gateway, clock)
+        Self::new_with_clock_inner(
+            repository,
+            workflow,
+            signing_key,
+            model_gateway,
+            ExecutorSubmissionClient::disabled(),
+            clock,
+        )
     }
 
     fn new_with_clock_inner(
@@ -149,6 +173,7 @@ impl SupervisedExecutionService {
         workflow: WorkflowService,
         signing_key: impl AsRef<[u8]>,
         model_gateway: ModelGatewayService,
+        executor: ExecutorSubmissionClient,
         clock: Clock,
     ) -> Result<Self, ControlPlaneError> {
         Ok(Self {
@@ -158,6 +183,7 @@ impl SupervisedExecutionService {
             signer: GrantSigner::new(signing_key)?,
             model_gateway,
             workflow,
+            executor,
             clock,
         })
     }

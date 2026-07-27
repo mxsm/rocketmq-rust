@@ -1,0 +1,357 @@
+{
+  "$defs": {
+    "AgentStepRequest": {
+      "additionalProperties": false,
+      "description": "Narrow request accepted by the Execution Agent registry.",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/ExecutionAction"
+        },
+        "descriptor_version": {
+          "type": "string"
+        },
+        "intent": {
+          "$ref": "#/$defs/StepIntent"
+        },
+        "parameters": true,
+        "target": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "intent",
+        "action",
+        "descriptor_version",
+        "target",
+        "parameters"
+      ],
+      "type": "object"
+    },
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "CompensationMode": {
+      "description": "Deterministic compensation mode.",
+      "enum": [
+        "automatic",
+        "manual_takeover",
+        "not_available"
+      ],
+      "type": "string"
+    },
+    "CompensationSpec": {
+      "additionalProperties": false,
+      "description": "Compensation behavior frozen by an action descriptor.",
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/CompensationMode"
+        },
+        "required_before_fields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "timeout_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "mode",
+        "timeout_seconds"
+      ],
+      "type": "object"
+    },
+    "EvidenceId": {
+      "description": "Stable identifier for an evidence snapshot.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ExecutionAction": {
+      "description": "Closed set of Phase 3 actions that may enter supervised execution.\n\nR3 and unknown actions are intentionally not representable.",
+      "enum": [
+        "observability.logger_level_ttl.v1",
+        "proxy.scale_out_one.v1",
+        "proxy.restart_one.v1",
+        "broker.config.patch_allowlisted.v1",
+        "topic.config.patch_allowlisted.v1"
+      ],
+      "type": "string"
+    },
+    "ExecutionId": {
+      "description": "Stable identifier for a supervised execution.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ExecutionStepId": {
+      "description": "Stable identifier for an execution step.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ImpactScope": {
+      "description": "Maximum descriptor-authorized blast radius.",
+      "enum": [
+        "single_resource",
+        "single_instance",
+        "one_replica",
+        "allowlisted_fields"
+      ],
+      "type": "string"
+    },
+    "LeaseEpoch": {
+      "description": "Monotonically increasing cluster fencing epoch.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "LeaseFenceGrant": {
+      "additionalProperties": false,
+      "description": "Short-lived grant authorizing one active epoch to dispatch.",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/ExecutionAction"
+        },
+        "audience": {
+          "type": "string"
+        },
+        "cluster_id": {
+          "$ref": "#/$defs/ClusterId"
+        },
+        "epoch": {
+          "$ref": "#/$defs/LeaseEpoch"
+        },
+        "execution_id": {
+          "$ref": "#/$defs/ExecutionId"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "issued_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "lease_id": {
+          "$ref": "#/$defs/LeaseId"
+        },
+        "nonce": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "plan_step_id": {
+          "$ref": "#/$defs/PlanStepId"
+        },
+        "resource": {
+          "type": "string"
+        },
+        "signature": {
+          "type": "string"
+        },
+        "step_id": {
+          "$ref": "#/$defs/ExecutionStepId"
+        }
+      },
+      "required": [
+        "lease_id",
+        "owner",
+        "cluster_id",
+        "epoch",
+        "execution_id",
+        "step_id",
+        "plan_step_id",
+        "action",
+        "resource",
+        "audience",
+        "issued_at",
+        "expires_at",
+        "nonce",
+        "signature"
+      ],
+      "type": "object"
+    },
+    "LeaseId": {
+      "description": "Stable identifier for an executor lease generation.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "PlanStep": {
+      "additionalProperties": false,
+      "description": "One typed and bounded step in an immutable plan.",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/ExecutionAction"
+        },
+        "compensation": {
+          "$ref": "#/$defs/CompensationSpec"
+        },
+        "descriptor_version": {
+          "type": "string"
+        },
+        "evidence_ids": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          },
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/PlanStepId"
+        },
+        "max_impact": {
+          "$ref": "#/$defs/ImpactScope"
+        },
+        "parameters": true,
+        "precondition_hash": {
+          "type": "string"
+        },
+        "resource": {
+          "type": "string"
+        },
+        "sequence": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "verification": {
+          "$ref": "#/$defs/VerificationSpec"
+        }
+      },
+      "required": [
+        "id",
+        "sequence",
+        "action",
+        "descriptor_version",
+        "resource",
+        "parameters",
+        "precondition_hash",
+        "max_impact",
+        "verification",
+        "compensation"
+      ],
+      "type": "object"
+    },
+    "PlanStepId": {
+      "description": "Stable identifier for an immutable action plan step.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "StepIntent": {
+      "additionalProperties": false,
+      "description": "Durable intent written before an Agent dispatch.",
+      "properties": {
+        "attempt": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "compensation": {
+          "type": "boolean"
+        },
+        "execution_id": {
+          "$ref": "#/$defs/ExecutionId"
+        },
+        "fence_grant": {
+          "$ref": "#/$defs/LeaseFenceGrant"
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "intended_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "plan_hash": {
+          "type": "string"
+        },
+        "step": {
+          "$ref": "#/$defs/PlanStep"
+        },
+        "step_id": {
+          "$ref": "#/$defs/ExecutionStepId"
+        }
+      },
+      "required": [
+        "execution_id",
+        "step_id",
+        "plan_hash",
+        "step",
+        "attempt",
+        "idempotency_key",
+        "fence_grant",
+        "intended_at",
+        "compensation"
+      ],
+      "type": "object"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "VerificationSpec": {
+      "additionalProperties": false,
+      "description": "Verification policy frozen by an action descriptor.",
+      "properties": {
+        "max_wait_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "resource_conditions": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "stable_window_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "technical_slis": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "stable_window_seconds",
+        "max_wait_seconds"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Exact typed dispatch request accepted only from Executor workload identity.",
+  "properties": {
+    "request": {
+      "$ref": "#/$defs/AgentStepRequest"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    }
+  },
+  "required": [
+    "schema_version",
+    "tenant_id",
+    "request"
+  ],
+  "title": "AgentDispatchRequest",
+  "type": "object"
+}

@@ -1,0 +1,193 @@
+# Copyright 2026 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0.
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sre-executor
+  namespace: rocketmq-sre
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sre-execution-agent
+  namespace: rocketmq-sre
+automountServiceAccountToken: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sre-executor
+  namespace: rocketmq-sre
+spec:
+  selector:
+    app.kubernetes.io/name: rocketmq-sre-executor
+  ports:
+    - name: http
+      port: 8094
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sre-executor
+  namespace: rocketmq-sre
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rocketmq-sre-executor
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rocketmq-sre-executor
+        app.kubernetes.io/part-of: rocketmq-sre
+        rocketmq.apache.org/execution-role: executor
+    spec:
+      serviceAccountName: sre-executor
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: executor
+          image: rocketmq-rust/sre-executor:phase03-local
+          imagePullPolicy: Never
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-sre-postgres
+                  key: database-url
+            - {name: ROCKETMQ_SRE_EXECUTOR_BIND_ADDR, value: "0.0.0.0:8094"}
+            - {name: ROCKETMQ_SRE_LEASE_AUTHORITY_URL, value: "http://sre-control-plane:8090"}
+            - {name: ROCKETMQ_SRE_EXECUTION_AGENT_URL, value: "http://sre-execution-agent:8095"}
+            - {name: ROCKETMQ_SRE_EXECUTOR_SUBJECT, value: "rocketmq-sre-executor"}
+            - {name: ROCKETMQ_SRE_EXECUTOR_DEV_INSECURE_HTTP, value: "true"}
+            - name: ROCKETMQ_SRE_EXECUTOR_AUTHORITY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-sre-kind-secrets
+                  key: internal-token
+            - name: ROCKETMQ_SRE_EXECUTOR_AGENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-sre-kind-secrets
+                  key: internal-token
+            - name: ROCKETMQ_SRE_CONTROL_PLANE_EXECUTOR_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-sre-kind-secrets
+                  key: internal-token
+          ports:
+            - name: http
+              containerPort: 8094
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 3
+            timeoutSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: 25m, memory: 48Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sre-execution-agent
+  namespace: rocketmq-sre
+spec:
+  selector:
+    app.kubernetes.io/name: rocketmq-sre-execution-agent
+  ports:
+    - name: http
+      port: 8095
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sre-execution-agent
+  namespace: rocketmq-sre
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rocketmq-sre-execution-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rocketmq-sre-execution-agent
+        app.kubernetes.io/part-of: rocketmq-sre
+        rocketmq.apache.org/execution-role: agent
+    spec:
+      serviceAccountName: sre-execution-agent
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: execution-agent
+          image: rocketmq-rust/sre-execution-agent:phase03-local
+          imagePullPolicy: Never
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-sre-postgres
+                  key: database-url
+            - {name: ROCKETMQ_SRE_AGENT_BIND_ADDR, value: "0.0.0.0:8095"}
+            - {name: ROCKETMQ_SRE_LEASE_AUTHORITY_URL, value: "http://sre-control-plane:8090"}
+            - {name: ROCKETMQ_SRE_AGENT_SUBJECT, value: "rocketmq-sre-execution-agent"}
+            - {name: ROCKETMQ_SRE_AGENT_DEV_INSECURE_HTTP, value: "true"}
+            - name: ROCKETMQ_SRE_AGENT_AUTHORITY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-sre-kind-secrets
+                  key: internal-token
+            - name: ROCKETMQ_SRE_EXECUTOR_AGENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-sre-kind-secrets
+                  key: internal-token
+            - name: ROCKETMQ_SRE_AGENT_ACK_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-sre-kind-secrets
+                  key: internal-token
+          ports:
+            - name: http
+              containerPort: 8095
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 3
+            timeoutSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: 25m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 384Mi}

@@ -27,6 +27,9 @@ use rocketmq_sre_contracts::ClusterId;
 use rocketmq_sre_contracts::CorrelationId;
 use rocketmq_sre_contracts::ExecutionId;
 use rocketmq_sre_contracts::ExecutionRequest;
+use rocketmq_sre_contracts::FenceAck;
+use rocketmq_sre_contracts::LeaseFenceGrant;
+use rocketmq_sre_contracts::ReconcileGrant;
 use rocketmq_sre_contracts::TenantId;
 use serde::Serialize;
 use sha2::Sha256;
@@ -36,7 +39,7 @@ use crate::ControlPlaneError;
 const SIGNATURE_PREFIX: &str = "hmac-sha256:";
 
 #[derive(Clone)]
-pub(super) struct GrantSigner {
+pub(crate) struct GrantSigner {
     key: Arc<[u8]>,
 }
 
@@ -74,8 +77,46 @@ struct UnsignedExecutionRequest<'a> {
     nonce: &'a str,
 }
 
+#[derive(Serialize)]
+struct UnsignedLeaseFenceGrant<'a> {
+    lease_id: rocketmq_sre_contracts::LeaseId,
+    owner: &'a str,
+    cluster_id: ClusterId,
+    epoch: rocketmq_sre_contracts::LeaseEpoch,
+    execution_id: ExecutionId,
+    step_id: rocketmq_sre_contracts::ExecutionStepId,
+    plan_step_id: rocketmq_sre_contracts::PlanStepId,
+    action: rocketmq_sre_contracts::ExecutionAction,
+    resource: &'a str,
+    audience: &'a str,
+    issued_at: chrono::DateTime<chrono::Utc>,
+    expires_at: chrono::DateTime<chrono::Utc>,
+    nonce: &'a str,
+}
+
+#[derive(Serialize)]
+struct UnsignedReconcileGrant<'a> {
+    lease_id: rocketmq_sre_contracts::LeaseId,
+    owner: &'a str,
+    cluster_id: ClusterId,
+    pending_epoch: rocketmq_sre_contracts::LeaseEpoch,
+    audience: &'a str,
+    issued_at: chrono::DateTime<chrono::Utc>,
+    expires_at: chrono::DateTime<chrono::Utc>,
+    nonce: &'a str,
+}
+
+#[derive(Serialize)]
+struct UnsignedFenceAck<'a> {
+    cluster_id: ClusterId,
+    epoch: rocketmq_sre_contracts::LeaseEpoch,
+    pending_nonce: &'a str,
+    agent_subject: &'a str,
+    acknowledged_at: chrono::DateTime<chrono::Utc>,
+}
+
 impl GrantSigner {
-    pub(super) fn new(key: impl AsRef<[u8]>) -> Result<Self, ControlPlaneError> {
+    pub(crate) fn new(key: impl AsRef<[u8]>) -> Result<Self, ControlPlaneError> {
         let key = key.as_ref();
         if key.is_empty() {
             return Err(ControlPlaneError::configuration("grant signing key must not be empty"));
@@ -99,8 +140,36 @@ impl GrantSigner {
         Ok(())
     }
 
-    pub(super) fn verify_execution(&self, request: &ExecutionRequest) -> Result<(), ControlPlaneError> {
+    pub(crate) fn verify_execution(&self, request: &ExecutionRequest) -> Result<(), ControlPlaneError> {
         self.verify(&execution_payload(request)?, &request.signature)
+    }
+
+    pub(crate) fn sign_fence_grant(&self, grant: &mut LeaseFenceGrant) -> Result<(), ControlPlaneError> {
+        grant.signature = self.sign(&lease_fence_payload(grant)?)?;
+        Ok(())
+    }
+
+    pub(crate) fn verify_fence_grant(&self, grant: &LeaseFenceGrant) -> Result<(), ControlPlaneError> {
+        self.verify(&lease_fence_payload(grant)?, &grant.signature)
+    }
+
+    pub(crate) fn sign_reconcile_grant(&self, grant: &mut ReconcileGrant) -> Result<(), ControlPlaneError> {
+        grant.signature = self.sign(&reconcile_payload(grant)?)?;
+        Ok(())
+    }
+
+    pub(crate) fn verify_reconcile_grant(&self, grant: &ReconcileGrant) -> Result<(), ControlPlaneError> {
+        self.verify(&reconcile_payload(grant)?, &grant.signature)
+    }
+
+    pub(crate) fn verify_fence_ack(&self, ack: &FenceAck) -> Result<(), ControlPlaneError> {
+        self.verify(&fence_ack_payload(ack)?, &ack.signature)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn sign_fence_ack(&self, ack: &mut FenceAck) -> Result<(), ControlPlaneError> {
+        ack.signature = self.sign(&fence_ack_payload(ack)?)?;
+        Ok(())
     }
 
     fn sign(&self, payload: &[u8]) -> Result<String, ControlPlaneError> {
@@ -173,6 +242,52 @@ fn execution_payload(request: &ExecutionRequest) -> Result<Vec<u8>, ControlPlane
         nonce: &request.nonce,
     })
     .map_err(|error| ControlPlaneError::configuration(format!("execution request cannot be canonicalized: {error}")))
+}
+
+fn lease_fence_payload(grant: &LeaseFenceGrant) -> Result<Vec<u8>, ControlPlaneError> {
+    serde_jcs::to_vec(&UnsignedLeaseFenceGrant {
+        lease_id: grant.lease_id,
+        owner: &grant.owner,
+        cluster_id: grant.cluster_id,
+        epoch: grant.epoch,
+        execution_id: grant.execution_id,
+        step_id: grant.step_id,
+        plan_step_id: grant.plan_step_id,
+        action: grant.action,
+        resource: &grant.resource,
+        audience: &grant.audience,
+        issued_at: grant.issued_at,
+        expires_at: grant.expires_at,
+        nonce: &grant.nonce,
+    })
+    .map_err(|error| ControlPlaneError::configuration(format!("lease fence grant cannot be canonicalized: {error}")))
+}
+
+fn reconcile_payload(grant: &ReconcileGrant) -> Result<Vec<u8>, ControlPlaneError> {
+    serde_jcs::to_vec(&UnsignedReconcileGrant {
+        lease_id: grant.lease_id,
+        owner: &grant.owner,
+        cluster_id: grant.cluster_id,
+        pending_epoch: grant.pending_epoch,
+        audience: &grant.audience,
+        issued_at: grant.issued_at,
+        expires_at: grant.expires_at,
+        nonce: &grant.nonce,
+    })
+    .map_err(|error| ControlPlaneError::configuration(format!("reconcile grant cannot be canonicalized: {error}")))
+}
+
+fn fence_ack_payload(ack: &FenceAck) -> Result<Vec<u8>, ControlPlaneError> {
+    serde_jcs::to_vec(&UnsignedFenceAck {
+        cluster_id: ack.cluster_id,
+        epoch: ack.epoch,
+        pending_nonce: &ack.pending_nonce,
+        agent_subject: &ack.agent_subject,
+        acknowledged_at: ack.acknowledged_at,
+    })
+    .map_err(|error| {
+        ControlPlaneError::configuration(format!("fence acknowledgement cannot be canonicalized: {error}"))
+    })
 }
 
 #[cfg(test)]

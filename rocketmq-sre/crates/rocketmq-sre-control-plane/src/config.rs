@@ -37,6 +37,11 @@ pub struct ControlPlaneConfig {
     shutdown_timeout: Duration,
     internal_token: String,
     grant_signing_key: String,
+    agent_ack_verification_key: String,
+    executor_url: Option<Url>,
+    executor_token: Option<String>,
+    executor_timeout: Duration,
+    executor_allow_insecure_http: bool,
     dev_auth_enabled: bool,
     oidc_issuer: Option<String>,
     oidc_audience: Option<String>,
@@ -107,6 +112,48 @@ impl ControlPlaneConfig {
                 ));
             }
         };
+        let agent_ack_verification_key = match optional_env("ROCKETMQ_SRE_AGENT_ACK_KEY") {
+            Some(value) if value.len() >= 32 => value,
+            Some(_) => {
+                return Err(ControlPlaneError::configuration(
+                    "ROCKETMQ_SRE_AGENT_ACK_KEY must contain at least 32 bytes",
+                ));
+            }
+            None if dev_auth_enabled => internal_token.clone(),
+            None => {
+                return Err(ControlPlaneError::configuration(
+                    "production mode requires ROCKETMQ_SRE_AGENT_ACK_KEY",
+                ));
+            }
+        };
+        let executor_url: Option<Url> = optional_env("ROCKETMQ_SRE_EXECUTOR_URL")
+            .map(|value| {
+                value.parse().map_err(|error| {
+                    ControlPlaneError::configuration(format!("ROCKETMQ_SRE_EXECUTOR_URL is invalid: {error}"))
+                })
+            })
+            .transpose()?;
+        let executor_token = optional_env("ROCKETMQ_SRE_CONTROL_PLANE_EXECUTOR_TOKEN");
+        if executor_url.is_some() != executor_token.is_some() {
+            return Err(ControlPlaneError::configuration(
+                "ROCKETMQ_SRE_EXECUTOR_URL and ROCKETMQ_SRE_CONTROL_PLANE_EXECUTOR_TOKEN must be configured together",
+            ));
+        }
+        let executor_timeout_seconds = parse_env("ROCKETMQ_SRE_EXECUTOR_TIMEOUT_SECONDS", 30_u64)?;
+        if executor_timeout_seconds == 0 || executor_timeout_seconds > 300 {
+            return Err(ControlPlaneError::configuration(
+                "ROCKETMQ_SRE_EXECUTOR_TIMEOUT_SECONDS must be between 1 and 300",
+            ));
+        }
+        let executor_allow_insecure_http = parse_env("ROCKETMQ_SRE_EXECUTOR_ALLOW_INSECURE_HTTP", false)?;
+        if executor_allow_insecure_http && !dev_auth_enabled {
+            return Err(ControlPlaneError::configuration(
+                "plaintext Executor transport is allowed only with development auth",
+            ));
+        }
+        if let Some(url) = &executor_url {
+            validate_internal_service_url(url, executor_allow_insecure_http)?;
+        }
         let oidc_issuer = optional_env("ROCKETMQ_SRE_OIDC_ISSUER");
         let oidc_audience = optional_env("ROCKETMQ_SRE_OIDC_AUDIENCE");
         let oidc_jwks_url = optional_env("ROCKETMQ_SRE_OIDC_JWKS_URL")
@@ -141,6 +188,11 @@ impl ControlPlaneConfig {
             shutdown_timeout: Duration::from_secs(shutdown_seconds),
             internal_token,
             grant_signing_key,
+            agent_ack_verification_key,
+            executor_url,
+            executor_token,
+            executor_timeout: Duration::from_secs(executor_timeout_seconds),
+            executor_allow_insecure_http,
             dev_auth_enabled,
             oidc_issuer,
             oidc_audience,
@@ -189,6 +241,32 @@ impl ControlPlaneConfig {
         &self.grant_signing_key
     }
 
+    /// Returns the key used only to verify Execution Agent fence acknowledgements.
+    #[must_use]
+    pub fn agent_ack_verification_key(&self) -> &str {
+        &self.agent_ack_verification_key
+    }
+
+    #[must_use]
+    pub const fn executor_url(&self) -> Option<&Url> {
+        self.executor_url.as_ref()
+    }
+
+    #[must_use]
+    pub fn executor_token(&self) -> Option<&str> {
+        self.executor_token.as_deref()
+    }
+
+    #[must_use]
+    pub const fn executor_timeout(&self) -> Duration {
+        self.executor_timeout
+    }
+
+    #[must_use]
+    pub const fn executor_allow_insecure_http(&self) -> bool {
+        self.executor_allow_insecure_http
+    }
+
     #[must_use]
     pub const fn dev_auth_enabled(&self) -> bool {
         self.dev_auth_enabled
@@ -229,6 +307,11 @@ impl ControlPlaneConfig {
             shutdown_timeout: Duration::from_secs(1),
             internal_token: "test-internal-token".to_owned(),
             grant_signing_key: "test-grant-signing-key-at-least-32-bytes".to_owned(),
+            agent_ack_verification_key: "test-agent-ack-key-at-least-32-bytes".to_owned(),
+            executor_url: None,
+            executor_token: None,
+            executor_timeout: Duration::from_secs(1),
+            executor_allow_insecure_http: false,
             dev_auth_enabled: true,
             oidc_issuer: None,
             oidc_audience: None,
@@ -250,6 +333,11 @@ impl Debug for ControlPlaneConfig {
             .field("shutdown_timeout", &self.shutdown_timeout)
             .field("internal_token", &"[REDACTED]")
             .field("grant_signing_key", &"[REDACTED]")
+            .field("agent_ack_verification_key", &"[REDACTED]")
+            .field("executor_url", &self.executor_url)
+            .field("executor_token", &"[REDACTED]")
+            .field("executor_timeout", &self.executor_timeout)
+            .field("executor_allow_insecure_http", &self.executor_allow_insecure_http)
             .field("dev_auth_enabled", &self.dev_auth_enabled)
             .field("oidc_issuer", &self.oidc_issuer)
             .field("oidc_audience", &self.oidc_audience)
@@ -265,6 +353,23 @@ impl Debug for ControlPlaneConfig {
 
 fn optional_env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|value| !value.trim().is_empty())
+}
+
+pub(crate) fn validate_internal_service_url(url: &Url, allow_insecure_http: bool) -> Result<(), ControlPlaneError> {
+    let transport_allowed = if allow_insecure_http {
+        matches!(url.scheme(), "http" | "https")
+    } else {
+        url.scheme() == "https"
+    };
+    let authority_is_clean = url.host_str().is_some() && url.username().is_empty() && url.password().is_none();
+    let root_only = matches!(url.path(), "" | "/") && url.query().is_none() && url.fragment().is_none();
+    if transport_allowed && !url.cannot_be_a_base() && authority_is_clean && root_only {
+        Ok(())
+    } else {
+        Err(ControlPlaneError::configuration(
+            "internal service URL must be an HTTP(S) origin without credentials, path, query, or fragment",
+        ))
+    }
 }
 
 fn parse_env<T>(name: &str, default: T) -> Result<T, ControlPlaneError>
@@ -291,13 +396,40 @@ mod tests {
     fn debug_output_redacts_database_credentials() {
         let mut config = ControlPlaneConfig::test_config();
         config.dashboard_deep_link_origins = vec!["https://internal-dashboard.example.test".to_owned()];
+        config.executor_url = Some("https://executor.example.test".parse().expect("Executor URL"));
+        config.executor_token = Some("executor-workload-secret".to_owned());
         let debug = format!("{config:?}");
 
         assert!(debug.contains("[REDACTED]"));
         assert!(!debug.contains("postgres://redacted"));
         assert!(!debug.contains("test-internal-token"));
         assert!(!debug.contains("test-grant-signing-key-at-least-32-bytes"));
+        assert!(!debug.contains("test-agent-ack-key-at-least-32-bytes"));
+        assert!(!debug.contains("executor-workload-secret"));
         assert!(!debug.contains("internal-dashboard"));
         assert!(debug.contains("dashboard_deep_link_origin_count"));
+    }
+
+    #[test]
+    fn internal_service_urls_are_closed_origins() {
+        let valid_tls: Url = "https://executor.example.test:8094".parse().expect("valid URL");
+        let valid_dev: Url = "http://executor:8094".parse().expect("valid URL");
+        assert!(validate_internal_service_url(&valid_tls, false).is_ok());
+        assert!(validate_internal_service_url(&valid_dev, true).is_ok());
+        assert!(validate_internal_service_url(&valid_dev, false).is_err());
+
+        for value in [
+            "https://user:password@executor.example.test:8094",
+            "https://executor.example.test:8094/base",
+            "https://executor.example.test:8094?token=secret",
+            "https://executor.example.test:8094#fragment",
+            "file:///internal/executor",
+        ] {
+            let url: Url = value.parse().expect("syntactically valid URL");
+            assert!(
+                validate_internal_service_url(&url, true).is_err(),
+                "{value} must be rejected"
+            );
+        }
     }
 }

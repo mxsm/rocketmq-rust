@@ -124,7 +124,7 @@ fn unknown_and_r3_actions_cannot_deserialize_into_execution_requests() {
 fn committed_phase_three_schemas_match_public_contracts() {
     let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/schema");
     let generated = phase3_generated_schemas().expect("schemas should generate");
-    assert_eq!(generated.len(), 26);
+    assert_eq!(generated.len(), 44);
 
     for (name, schema) in generated {
         let committed = fs::read_to_string(directory.join(name)).expect("committed schema");

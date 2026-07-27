@@ -14,11 +14,12 @@
 
 mod api;
 mod catalog;
+mod executor_client;
 mod model;
 mod policy;
 mod repository;
 mod service;
-mod signing;
+pub(crate) mod signing;
 
 #[cfg(test)]
 mod critic_tests;
@@ -26,4 +27,5 @@ mod critic_tests;
 mod service_tests;
 
 pub(crate) use api::routes;
+pub(crate) use executor_client::ExecutorSubmissionClient;
 pub(crate) use service::SupervisedExecutionService;

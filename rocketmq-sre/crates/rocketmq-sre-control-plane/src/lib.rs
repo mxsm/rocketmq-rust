@@ -29,6 +29,7 @@ mod connector_channel;
 mod coverage;
 mod error;
 mod evidence;
+mod execution_authority;
 mod forecast;
 mod inspection;
 mod knowledge;

@@ -1,0 +1,44 @@
+{
+  "$defs": {
+    "ReconcileEffectState": {
+      "description": "Closed reconciliation outcome; `unknown` never causes a redispatch.",
+      "enum": [
+        "applied",
+        "not_applied",
+        "failed",
+        "unknown"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Durable reconciliation response.",
+  "properties": {
+    "observed_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "outcome_code": {
+      "type": "string"
+    },
+    "sanitized_summary": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "state": {
+      "$ref": "#/$defs/ReconcileEffectState"
+    }
+  },
+  "required": [
+    "schema_version",
+    "state",
+    "outcome_code",
+    "sanitized_summary",
+    "observed_at"
+  ],
+  "title": "ReconcileEffectResponse",
+  "type": "object"
+}

@@ -1,0 +1,78 @@
+{
+  "$defs": {
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ExecutionAction": {
+      "description": "Closed set of Phase 3 actions that may enter supervised execution.\n\nR3 and unknown actions are intentionally not representable.",
+      "enum": [
+        "observability.logger_level_ttl.v1",
+        "proxy.scale_out_one.v1",
+        "proxy.restart_one.v1",
+        "broker.config.patch_allowlisted.v1",
+        "topic.config.patch_allowlisted.v1"
+      ],
+      "type": "string"
+    },
+    "ExecutionId": {
+      "description": "Stable identifier for a supervised execution.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "PlanStepId": {
+      "description": "Stable identifier for an immutable action plan step.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Narrow read-side request used for precheck and live-state reconciliation.",
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/ExecutionAction"
+    },
+    "cluster_id": {
+      "$ref": "#/$defs/ClusterId"
+    },
+    "descriptor_version": {
+      "type": "string"
+    },
+    "execution_id": {
+      "$ref": "#/$defs/ExecutionId"
+    },
+    "parameters": true,
+    "plan_step_id": {
+      "$ref": "#/$defs/PlanStepId"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "target": {
+      "type": "string"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    }
+  },
+  "required": [
+    "schema_version",
+    "tenant_id",
+    "cluster_id",
+    "execution_id",
+    "plan_step_id",
+    "action",
+    "descriptor_version",
+    "target",
+    "parameters"
+  ],
+  "title": "AgentReadRequest",
+  "type": "object"
+}

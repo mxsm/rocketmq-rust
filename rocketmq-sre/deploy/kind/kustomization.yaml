@@ -10,6 +10,9 @@ resources:
   - connector-service.yaml
   - connector-rbac.yaml
   - control-plane-network-policy.yaml
+  - execution-stack.yaml
+  - execution-rbac.yaml
+  - execution-network-policy.yaml
 
 configMapGenerator:
   - name: sre-control-plane-mtls-proxy

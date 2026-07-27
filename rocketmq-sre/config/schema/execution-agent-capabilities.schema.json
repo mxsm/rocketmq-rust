@@ -1,0 +1,51 @@
+{
+  "$defs": {
+    "ExecutionAction": {
+      "description": "Closed set of Phase 3 actions that may enter supervised execution.\n\nR3 and unknown actions are intentionally not representable.",
+      "enum": [
+        "observability.logger_level_ttl.v1",
+        "proxy.scale_out_one.v1",
+        "proxy.restart_one.v1",
+        "broker.config.patch_allowlisted.v1",
+        "topic.config.patch_allowlisted.v1"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Bounded service capabilities used by readiness and deployment smoke tests.",
+  "properties": {
+    "arbitrary_json_patch_supported": {
+      "type": "boolean"
+    },
+    "durable_fencing": {
+      "type": "boolean"
+    },
+    "raw_admin_request_supported": {
+      "type": "boolean"
+    },
+    "registered_actions": {
+      "items": {
+        "$ref": "#/$defs/ExecutionAction"
+      },
+      "type": "array"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "shell_supported": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "schema_version",
+    "registered_actions",
+    "raw_admin_request_supported",
+    "arbitrary_json_patch_supported",
+    "shell_supported",
+    "durable_fencing"
+  ],
+  "title": "ExecutionAgentCapabilities",
+  "type": "object"
+}
