@@ -22,6 +22,7 @@ use rocketmq_sre_contracts::IncidentId;
 use rocketmq_sre_contracts::ModelInvocationId;
 use rocketmq_sre_contracts::ModelProfileId;
 use rocketmq_sre_contracts::TenantId;
+use rocketmq_sre_core::postmortem::PostmortemAssembly;
 use rocketmq_sre_model_gateway::ProviderProfile;
 use serde::Deserialize;
 use serde::Serialize;
@@ -76,6 +77,12 @@ pub(crate) struct ModelDiagnosisDecision {
     pub(crate) input_tokens: u32,
     pub(crate) output_tokens: u32,
     pub(crate) schema_repairs_used: u8,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ModelPostmortemDecision {
+    pub(crate) content: PostmortemAssembly,
+    pub(crate) invocation_id: Option<ModelInvocationId>,
 }
 
 impl ModelDiagnosisDecision {

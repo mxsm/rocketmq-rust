@@ -37,6 +37,8 @@ mod tests {
     const REQUIRED_PUBLIC_PATHS: &[&str] = &[
         "/healthz",
         "/readyz",
+        "/v1/action-items",
+        "/v1/action-items/{id}",
         "/v1/assets",
         "/v1/assets/dashboard-link",
         "/v1/capabilities",
@@ -66,6 +68,7 @@ mod tests {
         "/v1/incidents/{id}",
         "/v1/incidents/{id}/diagnose",
         "/v1/incidents/{id}/notes",
+        "/v1/incidents/{id}/postmortems",
         "/v1/incidents/{id}/timeline",
         "/v1/incidents/{id}/topology",
         "/v1/integrations/alertmanager/events",
@@ -90,6 +93,8 @@ mod tests {
         "/v1/models/invocations",
         "/v1/models/status",
         "/v1/openapi.json",
+        "/v1/postmortems/{id}",
+        "/v1/postmortems/{id}/publish",
         "/v1/recommendations",
         "/v1/recommendations/{id}/disposition",
         "/v1/simulations",
@@ -118,7 +123,7 @@ mod tests {
             let operations = path_item.as_object().expect("OpenAPI path item must be an object");
             for (method, operation) in operations {
                 assert!(
-                    matches!(method.as_str(), "get" | "post"),
+                    matches!(method.as_str(), "get" | "post" | "patch"),
                     "unsupported method {method} at {path}"
                 );
                 let operation_id = operation["operationId"]

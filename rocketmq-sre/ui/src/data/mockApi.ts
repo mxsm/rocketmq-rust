@@ -1,11 +1,16 @@
 import { ApiError, type SreApi } from "@/api/client";
 import type {
+  ActionItem,
+  ActionItemPatchRequest,
   CollectionEnvelope,
   ConversationView,
   IncidentTopologyView,
   IncidentView,
   InspectionView,
   InvestigationView,
+  PostmortemPatchRequest,
+  PostmortemPublishRequest,
+  PostmortemView,
   Recommendation,
 } from "@/api/types";
 import type { ApiRequestContext } from "@/auth/AuthContext";
@@ -44,6 +49,8 @@ import {
 } from "./phase2ForecastDemo";
 
 const WAIT_MS = 90;
+const mockPostmortems: PostmortemView[] = [];
+const mockActionItems: ActionItem[] = [];
 
 function wait(signal?: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
@@ -79,6 +86,8 @@ export function createMockSreApi(auth?: ApiRequestContext): SreApi {
   const inspections = clone(phase1Inspections.items);
   const recommendations = clone(phase1Recommendations.items);
   const evidence = clone(phase1Evidence.items);
+  const postmortems = mockPostmortems;
+  const actionItems = mockActionItems;
 
   const scope = (clusterId: string) => {
     if (auth && !auth.clusterIds.includes(clusterId)) {
@@ -444,6 +453,235 @@ export function createMockSreApi(auth?: ApiRequestContext): SreApi {
         ),
         warnings: [],
       });
+    },
+    createPostmortem: async (incidentId, _input, signal) => {
+      await wait(signal);
+      const existing = postmortems.find(
+        (item) => item.postmortem.incident_id === incidentId,
+      );
+      if (existing) {
+        return clone(existing);
+      }
+      const incident =
+        incidents.find((item) => item.incident.id === incidentId) ??
+        unavailable("incident");
+      scope(incident.incident.cluster_id);
+      const now = new Date().toISOString();
+      const postmortemId = crypto.randomUUID();
+      const evidenceIds =
+        incident.diagnosis_revisions.at(-1)?.evidence_ids ?? [];
+      const rootCause = {
+        code: "consumer_lag_growth",
+        statement:
+          "消费速率低于到达速率，导致队列堆积持续增长。",
+        evidence_ids: evidenceIds.slice(0, 2),
+      };
+      const action: ActionItem = {
+        id: crypto.randomUUID(),
+        tenant_id: incident.incident.tenant_id,
+        cluster_id: incident.incident.cluster_id,
+        postmortem_id: postmortemId,
+        incident_id: incidentId,
+        title: "验证消费者扩容后的净消费速率",
+        owner: null,
+        due_at: null,
+        status: "open",
+        verification: null,
+        evidence_ids: evidenceIds.slice(0, 1),
+        execution_journal: null,
+        created_at: now,
+        updated_at: now,
+        completed_at: null,
+      };
+      const result: PostmortemView = {
+        postmortem: {
+          id: postmortemId,
+          tenant_id: incident.incident.tenant_id,
+          cluster_id: incident.incident.cluster_id,
+          incident_id: incidentId,
+          status: "draft",
+          current_revision: 1,
+          confirmed_by: null,
+          confirmed_at: null,
+          published_knowledge_item_id: null,
+          created_by:
+            auth?.subject ?? "rocketmq-sre-development",
+          created_at: now,
+          updated_at: now,
+        },
+        revisions: [
+          {
+            id: crypto.randomUUID(),
+            postmortem_id: postmortemId,
+            revision: 1,
+            summary: `${incident.incident.title}；AI 已生成证据化复盘草稿。`,
+            impact: `影响资源：${incident.incident.resource ?? "cluster"}；严重度：${incident.incident.severity ?? "未分类"}。`,
+            detection: `由 ${incident.incident.symptom_family ?? "operator_query"} 检测。`,
+            timeline: clone(incident.timeline),
+            root_causes: evidenceIds.length > 0 ? [rootCause] : [],
+            contributing_factors: [],
+            conclusions:
+              evidenceIds.length > 0
+                ? [
+                    {
+                      code: "incident_scope_confirmed",
+                      statement: "影响范围已由只读 Evidence 确认。",
+                      evidence_ids: evidenceIds.slice(0, 2),
+                    },
+                  ]
+                : [],
+            recovery: "恢复步骤尚待操作员确认。",
+            effective_actions: [],
+            ineffective_actions: [],
+            evidence_ids: evidenceIds,
+            model_invocation_id: crypto.randomUUID(),
+            edited_by:
+              auth?.subject ?? "rocketmq-sre-development",
+            human_confirmed: false,
+            created_at: now,
+          },
+        ],
+        action_items: [action],
+        recurrences: [],
+        todos: [],
+        knowledge_item: null,
+        execution_journal_empty: true,
+      };
+      postmortems.push(result);
+      actionItems.push(action);
+      return clone(result);
+    },
+    getPostmortem: async (id, signal) => {
+      await wait(signal);
+      const result =
+        postmortems.find((item) => item.postmortem.id === id) ??
+        unavailable("postmortem");
+      scope(result.postmortem.cluster_id);
+      return clone(result);
+    },
+    patchPostmortem: async (
+      id,
+      input: PostmortemPatchRequest,
+      signal,
+    ) => {
+      await wait(signal);
+      const result =
+        postmortems.find((item) => item.postmortem.id === id) ??
+        unavailable("postmortem");
+      scope(result.postmortem.cluster_id);
+      const current = result.revisions.at(-1);
+      if (!current) {
+        return unavailable("postmortem revision");
+      }
+      const now = new Date().toISOString();
+      result.revisions.push({
+        ...clone(current),
+        ...clone(input),
+        id: crypto.randomUUID(),
+        revision: current.revision + 1,
+        postmortem_id: id,
+        edited_by: auth?.subject ?? "rocketmq-sre-development",
+        human_confirmed: input.human_confirmed,
+        created_at: now,
+      });
+      result.postmortem.current_revision += 1;
+      result.postmortem.status = input.human_confirmed
+        ? "confirmed"
+        : "in_review";
+      result.postmortem.updated_at = now;
+      result.postmortem.confirmed_by = input.human_confirmed
+        ? auth?.subject ?? "rocketmq-sre-development"
+        : result.postmortem.confirmed_by;
+      result.postmortem.confirmed_at = input.human_confirmed
+        ? now
+        : result.postmortem.confirmed_at;
+      return clone(result);
+    },
+    publishPostmortem: async (
+      id,
+      input: PostmortemPublishRequest,
+      signal,
+    ) => {
+      await wait(signal);
+      const result =
+        postmortems.find((item) => item.postmortem.id === id) ??
+        unavailable("postmortem");
+      scope(result.postmortem.cluster_id);
+      if (
+        !input.human_confirmed ||
+        result.postmortem.status !== "confirmed"
+      ) {
+        throw new ApiError(
+          400,
+          "human_validation_required",
+          "当前 Revision 需要人工确认后才能发布。",
+        );
+      }
+      const now = new Date().toISOString();
+      const knowledgeId = crypto.randomUUID();
+      result.postmortem.status = "published";
+      result.postmortem.published_knowledge_item_id = knowledgeId;
+      result.postmortem.updated_at = now;
+      result.knowledge_item = {
+        id: knowledgeId,
+        tenant_id: result.postmortem.tenant_id,
+        cluster_id: result.postmortem.cluster_id,
+        title: `Postmortem: ${result.revisions.at(-1)?.summary ?? id}`,
+        component: input.component,
+        rocketmq_version_range: input.rocketmq_version_range,
+        source_uri: `rocketmq-sre://postmortems/${id}`,
+        source_version: `revision-${result.postmortem.current_revision}`,
+        valid_from: now,
+        valid_until: null,
+        owner: input.owner,
+        review_status: "validated",
+        review_due_at: input.review_due_at,
+        sensitivity: "internal",
+        content_hash: `sha256:${"0".repeat(64)}`,
+        conflict: false,
+        created_at: now,
+        updated_at: now,
+      };
+      return clone(result);
+    },
+    listActionItems: async (clusterId, signal) => {
+      await wait(signal);
+      scope(clusterId);
+      return {
+        items: clone(
+          actionItems.filter((item) => item.cluster_id === clusterId),
+        ),
+        partial: false,
+        observed_at: new Date().toISOString(),
+      };
+    },
+    patchActionItem: async (
+      id,
+      input: ActionItemPatchRequest,
+      signal,
+    ) => {
+      await wait(signal);
+      const item =
+        actionItems.find((candidate) => candidate.id === id) ??
+        unavailable("action item");
+      scope(item.cluster_id);
+      item.status = input.status;
+      item.owner = input.owner ?? item.owner;
+      item.due_at = input.due_at ?? item.due_at;
+      item.verification = input.verification ?? null;
+      item.evidence_ids = input.evidence_ids ?? [];
+      item.updated_at = new Date().toISOString();
+      item.completed_at =
+        input.status === "completed" ? item.updated_at : null;
+      for (const postmortem of postmortems) {
+        const index = postmortem.action_items.findIndex(
+          (candidate) => candidate.id === id,
+        );
+        if (index >= 0) {
+          postmortem.action_items[index] = clone(item);
+        }
+      }
+      return clone(item);
     },
     diagnoseIncident: async (id, signal) => {
       await wait(signal);

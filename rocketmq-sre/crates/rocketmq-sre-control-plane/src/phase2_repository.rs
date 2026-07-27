@@ -486,7 +486,7 @@ impl Phase2Repository for PostgresRepository {
     ) -> Result<Vec<PostmortemRevision>, ControlPlaneError> {
         let rows = sqlx::query(
             "SELECT id, postmortem_id, revision, summary, impact, detection,
-                    timeline, root_causes, contributing_factors, recovery,
+                    timeline, root_causes, contributing_factors, conclusions, recovery,
                     effective_actions, ineffective_actions, evidence_ids,
                     model_invocation_id, edited_by, human_confirmed, created_at
              FROM postmortem_revisions
@@ -547,12 +547,12 @@ async fn insert_postmortem_revision(
     sqlx::query(
         "INSERT INTO postmortem_revisions (
             id, postmortem_id, revision, summary, impact, detection, timeline,
-            root_causes, contributing_factors, recovery, effective_actions,
+            root_causes, contributing_factors, conclusions, recovery, effective_actions,
             ineffective_actions, evidence_ids, model_invocation_id, edited_by,
             human_confirmed, created_at
          ) VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-            $11, $12, $13, $14, $15, $16, $17
+            $11, $12, $13, $14, $15, $16, $17, $18
          )",
     )
     .bind(revision.id.as_uuid())
@@ -566,6 +566,7 @@ async fn insert_postmortem_revision(
     .bind(&revision.timeline)
     .bind(json_value(&revision.root_causes)?)
     .bind(json_value(&revision.contributing_factors)?)
+    .bind(json_value(&revision.conclusions)?)
     .bind(&revision.recovery)
     .bind(json_value(&revision.effective_actions)?)
     .bind(json_value(&revision.ineffective_actions)?)
@@ -613,6 +614,7 @@ fn postmortem_revision_from_row(row: &sqlx::postgres::PgRow) -> Result<Postmorte
         timeline: row.try_get("timeline")?,
         root_causes: value_from_column(row.try_get("root_causes")?, "root causes")?,
         contributing_factors: value_from_column(row.try_get("contributing_factors")?, "contributing factors")?,
+        conclusions: value_from_column(row.try_get("conclusions")?, "conclusions")?,
         recovery: row.try_get("recovery")?,
         effective_actions: value_from_column(row.try_get("effective_actions")?, "effective actions")?,
         ineffective_actions: value_from_column(row.try_get("ineffective_actions")?, "ineffective actions")?,

@@ -4,6 +4,7 @@ import {
   Bot,
   Boxes,
   CircleHelp,
+  ClipboardList,
   Clock3,
   DatabaseZap,
   GitBranch,
@@ -59,6 +60,12 @@ const groups = [
       { to: "/incidents", label: "事件诊断", icon: Siren },
       { to: "/inspections", label: "巡检建议", icon: ListChecks },
       { to: "/forecasts", label: "容量预测", icon: TrendingUp },
+      {
+        to: "/action-items",
+        label: "复盘改进",
+        icon: ClipboardList,
+        end: false,
+      },
     ],
   },
   {

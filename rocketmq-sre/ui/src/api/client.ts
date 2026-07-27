@@ -2,6 +2,9 @@ import type { ApiRequestContext } from "@/auth/AuthContext";
 
 import type {
   AssetSnapshot,
+  ActionItem,
+  ActionItemPage,
+  ActionItemPatchRequest,
   CapabilityCatalogResponse,
   CapabilitySnapshot,
   ClusterSummary,
@@ -10,6 +13,7 @@ import type {
   ConversationView,
   CoverageMatrix,
   CreateConversationRequest,
+  CreatePostmortemRequest,
   CreateInspectionRequest,
   DiagnosisDispatch,
   DrReadinessReport,
@@ -26,6 +30,9 @@ import type {
   OnboardClusterRequest,
   OnboardOutcome,
   Phase2ContractManifest,
+  PostmortemPatchRequest,
+  PostmortemPublishRequest,
+  PostmortemView,
   ClusterHealthReport,
   PromoteInvestigationRequest,
   Recommendation,
@@ -52,7 +59,7 @@ export class ApiError extends Error {
 interface RequestOptions {
   signal?: AbortSignal;
   auth?: ApiRequestContext;
-  method?: "GET" | "POST";
+  method?: "GET" | "POST" | "PATCH";
   body?: unknown;
 }
 
@@ -230,6 +237,34 @@ export interface SreApi {
     id: string,
     signal?: AbortSignal,
   ) => Promise<IncidentTopologyView>;
+  createPostmortem: (
+    incidentId: string,
+    input?: CreatePostmortemRequest,
+    signal?: AbortSignal,
+  ) => Promise<PostmortemView>;
+  getPostmortem: (
+    id: string,
+    signal?: AbortSignal,
+  ) => Promise<PostmortemView>;
+  patchPostmortem: (
+    id: string,
+    input: PostmortemPatchRequest,
+    signal?: AbortSignal,
+  ) => Promise<PostmortemView>;
+  publishPostmortem: (
+    id: string,
+    input: PostmortemPublishRequest,
+    signal?: AbortSignal,
+  ) => Promise<PostmortemView>;
+  listActionItems: (
+    clusterId: string,
+    signal?: AbortSignal,
+  ) => Promise<ActionItemPage>;
+  patchActionItem: (
+    id: string,
+    input: ActionItemPatchRequest,
+    signal?: AbortSignal,
+  ) => Promise<ActionItem>;
   diagnoseIncident: (
     id: string,
     signal?: AbortSignal,
@@ -299,6 +334,8 @@ export function createHttpSreApi(auth?: ApiRequestContext): SreApi {
     request<T>(path, { auth, signal });
   const post = <T>(path: string, body: unknown, signal?: AbortSignal) =>
     request<T>(path, { auth, body, method: "POST", signal });
+  const patch = <T>(path: string, body: unknown, signal?: AbortSignal) =>
+    request<T>(path, { auth, body, method: "PATCH", signal });
 
   return {
     listClusters: (signal) => get<ClusterSummary[]>("/v1/clusters", signal),
@@ -419,6 +456,40 @@ export function createHttpSreApi(auth?: ApiRequestContext): SreApi {
     getIncidentTopology: (id, signal) =>
       get<IncidentTopologyView>(
         `/v1/incidents/${encodeURIComponent(id)}/topology`,
+        signal,
+      ),
+    createPostmortem: (incidentId, input = {}, signal) =>
+      post<PostmortemView>(
+        `/v1/incidents/${encodeURIComponent(incidentId)}/postmortems`,
+        input,
+        signal,
+      ),
+    getPostmortem: (id, signal) =>
+      get<PostmortemView>(
+        `/v1/postmortems/${encodeURIComponent(id)}`,
+        signal,
+      ),
+    patchPostmortem: (id, input, signal) =>
+      patch<PostmortemView>(
+        `/v1/postmortems/${encodeURIComponent(id)}`,
+        input,
+        signal,
+      ),
+    publishPostmortem: (id, input, signal) =>
+      post<PostmortemView>(
+        `/v1/postmortems/${encodeURIComponent(id)}/publish`,
+        input,
+        signal,
+      ),
+    listActionItems: (clusterId, signal) =>
+      get<ActionItemPage>(
+        query("/v1/action-items", { cluster_id: clusterId }),
+        signal,
+      ),
+    patchActionItem: (id, input, signal) =>
+      patch<ActionItem>(
+        `/v1/action-items/${encodeURIComponent(id)}`,
+        input,
         signal,
       ),
     diagnoseIncident: (id, signal) =>

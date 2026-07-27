@@ -113,4 +113,45 @@ describe("mock SRE API", () => {
     );
     expect(JSON.stringify(topology)).not.toContain("execution");
   });
+
+  it("keeps postmortem publication human-controlled and action journals empty", async () => {
+    const api = createMockSreApi(auth);
+    const incident = (await api.listIncidents(DEMO_CLUSTER_ID)).items[0]!;
+    const draft = await api.createPostmortem(incident.incident.id, {});
+
+    expect(draft.postmortem.status).toBe("draft");
+    expect(draft.execution_journal_empty).toBe(true);
+    await expect(
+      api.publishPostmortem(draft.postmortem.id, {
+        human_confirmed: true,
+        owner: "test-sre",
+        component: "consumer",
+        rocketmq_version_range: "*",
+        review_due_at: "2027-01-01T00:00:00Z",
+      }),
+    ).rejects.toMatchObject({ code: "human_validation_required" });
+
+    const confirmed = await api.patchPostmortem(
+      draft.postmortem.id,
+      {
+        summary: "人工确认的证据化摘要",
+        human_confirmed: true,
+      },
+    );
+    expect(confirmed.revisions).toHaveLength(2);
+    expect(confirmed.postmortem.status).toBe("confirmed");
+
+    const published = await api.publishPostmortem(
+      draft.postmortem.id,
+      {
+        human_confirmed: true,
+        owner: "test-sre",
+        component: "consumer",
+        rocketmq_version_range: "*",
+        review_due_at: "2027-01-01T00:00:00Z",
+      },
+    );
+    expect(published.knowledge_item?.review_status).toBe("validated");
+    expect(published.execution_journal_empty).toBe(true);
+  });
 });

@@ -15,6 +15,19 @@ export type UpgradeReadinessReport =
   ApiSchemas["UpgradeReadinessReport"];
 export type DrReadinessReport = ApiSchemas["DrReadinessReport"];
 export type IncidentTopologyView = ApiSchemas["IncidentTopologyView"];
+export type CreatePostmortemRequest =
+  ApiSchemas["CreatePostmortemRequest"];
+export type PostmortemPatchRequest =
+  ApiSchemas["PostmortemPatchRequest"];
+export type PostmortemPublishRequest =
+  ApiSchemas["PostmortemPublishRequest"];
+export type PostmortemView = ApiSchemas["PostmortemView"];
+export type ActionItem = ApiSchemas["ActionItem"];
+export type ActionItemStatus =
+  ApiSchemas["ActionItem__ActionItemStatus"];
+export type ActionItemPatchRequest =
+  ApiSchemas["ActionItemPatchRequest"];
+export type ActionItemPage = ApiSchemas["ActionItemPage"];
 export type HealthStatus =
   ApiSchemas["ClusterHealthReport__HealthStatus"];
 export type HealthDataQuality =

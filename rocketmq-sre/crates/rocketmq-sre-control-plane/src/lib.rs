@@ -36,6 +36,7 @@ mod openapi;
 mod orchestrator;
 mod phase1_api;
 mod phase2_repository;
+mod postmortem;
 mod read_audit;
 mod repository;
 mod slo;

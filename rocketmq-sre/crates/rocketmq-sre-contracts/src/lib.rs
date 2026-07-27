@@ -144,6 +144,7 @@ pub use operations::TopologyRelation;
 pub use operations::WorkflowActor;
 pub use postmortem::ActionItem;
 pub use postmortem::ActionItemStatus;
+pub use postmortem::PostmortemConclusion;
 pub use postmortem::PostmortemDraft;
 pub use postmortem::PostmortemRevision;
 pub use postmortem::PostmortemStatus;

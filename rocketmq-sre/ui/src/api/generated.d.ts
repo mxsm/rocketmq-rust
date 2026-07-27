@@ -964,6 +964,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/incidents/{id}/postmortems": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["createPostmortem"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/postmortems/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getPostmortem"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["patchPostmortem"];
+        trace?: never;
+    };
+    "/v1/postmortems/{id}/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["publishPostmortem"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/action-items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listActionItems"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/action-items/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["patchActionItem"];
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2438,7 +2518,8 @@ export interface components {
          * @description Immutable content revision with explicit Evidence citations.
          */
         PostmortemRevision: {
-            contributing_factors: string[];
+            conclusions: components["schemas"]["PostmortemRevision__PostmortemConclusion"][];
+            contributing_factors: components["schemas"]["PostmortemRevision__PostmortemConclusion"][];
             /** Format: date-time */
             created_at: string;
             detection: string;
@@ -2454,7 +2535,7 @@ export interface components {
             recovery: string;
             /** Format: uint32 */
             revision: number;
-            root_causes: string[];
+            root_causes: components["schemas"]["PostmortemRevision__PostmortemConclusion"][];
             summary: string;
             timeline: unknown;
         };
@@ -2468,6 +2549,15 @@ export interface components {
          * @description Stable identifier for a model invocation.
          */
         PostmortemRevision__ModelInvocationId: string;
+        /**
+         * @description Evidence-backed conclusion used by a postmortem root cause or other
+         *     material claim.
+         */
+        PostmortemRevision__PostmortemConclusion: {
+            code: string;
+            evidence_ids: components["schemas"]["PostmortemRevision__EvidenceId"][];
+            statement: string;
+        };
         /**
          * Format: uuid
          * @description Stable identifier for a postmortem.
@@ -2780,6 +2870,113 @@ export interface components {
             sanitized_summary: string;
             /** Format: uri */
             deep_link: string;
+        };
+        CreatePostmortemRequest: {
+            operator_notes?: string[];
+        };
+        PostmortemPatchRequest: {
+            summary?: string;
+            impact?: string;
+            detection?: string;
+            timeline?: components["schemas"]["IncidentTimelineEvent"][];
+            root_causes?: components["schemas"]["PostmortemRevision__PostmortemConclusion"][];
+            contributing_factors?: components["schemas"]["PostmortemRevision__PostmortemConclusion"][];
+            conclusions?: components["schemas"]["PostmortemRevision__PostmortemConclusion"][];
+            recovery?: string;
+            effective_actions?: string[];
+            ineffective_actions?: string[];
+            evidence_ids?: string[];
+            /** @default false */
+            human_confirmed: boolean;
+        };
+        PostmortemPublishRequest: {
+            human_confirmed: boolean;
+            owner: string;
+            component: string;
+            /** @default * */
+            rocketmq_version_range: string;
+            /** Format: date-time */
+            review_due_at: string;
+        };
+        ActionItemPatchRequest: {
+            status: components["schemas"]["ActionItem__ActionItemStatus"];
+            owner?: string;
+            /** Format: date-time */
+            due_at?: string;
+            verification?: string;
+            evidence_ids?: string[];
+        };
+        OperatorTodo: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            tenant_id: string;
+            cluster_id?: string | null;
+            /** @enum {string} */
+            kind: "action_item_due" | "knowledge_review_due";
+            /** Format: uuid */
+            aggregate_id: string;
+            title: string;
+            /** Format: date-time */
+            due_at: string;
+            /** @enum {string} */
+            status: "open" | "completed" | "dismissed";
+            /** Format: date-time */
+            created_at: string;
+        };
+        IncidentRecurrenceView: {
+            /** Format: uuid */
+            incident_id: string;
+            /** Format: uuid */
+            previous_incident_id: string;
+            /** Format: uuid */
+            postmortem_id: string;
+            fingerprint: string;
+            root_cause_code: string;
+            affected_component: string;
+            /** Format: date-time */
+            matched_at: string;
+        };
+        KnowledgeItem: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            tenant_id: string;
+            cluster_id?: string | null;
+            title: string;
+            component: string;
+            rocketmq_version_range: string;
+            source_uri: string;
+            source_version: string;
+            valid_from?: string | null;
+            valid_until?: string | null;
+            owner: string;
+            /** @enum {string} */
+            review_status: "draft" | "in_review" | "validated" | "deprecated" | "expired";
+            /** Format: date-time */
+            review_due_at: string;
+            sensitivity: string;
+            content_hash: string;
+            conflict: boolean;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        PostmortemView: {
+            postmortem: components["schemas"]["PostmortemDraft"];
+            revisions: components["schemas"]["PostmortemRevision"][];
+            action_items: components["schemas"]["ActionItem"][];
+            recurrences: components["schemas"]["IncidentRecurrenceView"][];
+            todos: components["schemas"]["OperatorTodo"][];
+            knowledge_item?: components["schemas"]["KnowledgeItem"] | null;
+            execution_journal_empty: boolean;
+        };
+        ActionItemPage: {
+            items: components["schemas"]["ActionItem"][];
+            partial: boolean;
+            /** Format: date-time */
+            observed_at: string;
         };
     };
     responses: {
@@ -3983,6 +4180,157 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DrReadinessReport"];
+                };
+            };
+        };
+    };
+    createPostmortem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreatePostmortemRequest"];
+            };
+        };
+        responses: {
+            /** @description AI-assisted draft that remains human-controlled */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PostmortemView"];
+                };
+            };
+        };
+    };
+    getPostmortem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Postmortem head, immutable revisions and follow-up metadata */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PostmortemView"];
+                };
+            };
+        };
+    };
+    patchPostmortem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PostmortemPatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Appended immutable operator revision */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PostmortemView"];
+                };
+            };
+        };
+    };
+    publishPostmortem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PostmortemPublishRequest"];
+            };
+        };
+        responses: {
+            /** @description Human-published postmortem and validated knowledge */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PostmortemView"];
+                };
+            };
+        };
+    };
+    listActionItems: {
+        parameters: {
+            query: {
+                cluster_id: string;
+                status?: components["schemas"]["ActionItem__ActionItemStatus"];
+                owner?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Human-owned postmortem follow-up items */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActionItemPage"];
+                };
+            };
+        };
+    };
+    patchActionItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ActionItemPatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated SRE metadata with immutable lifecycle event */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActionItem"];
                 };
             };
         };

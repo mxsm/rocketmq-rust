@@ -531,6 +531,233 @@ Object.assign(document.components.schemas, {
       },
     },
   },
+  CreatePostmortemRequest: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      operator_notes: {
+        type: "array",
+        maxItems: 32,
+        items: { type: "string", maxLength: 1024 },
+      },
+    },
+  },
+  PostmortemPatchRequest: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      summary: { type: "string", minLength: 1, maxLength: 4000 },
+      impact: { type: "string", minLength: 1, maxLength: 4000 },
+      detection: { type: "string", minLength: 1, maxLength: 4000 },
+      timeline: {
+        type: "array",
+        maxItems: 256,
+        items: { $ref: "#/components/schemas/IncidentTimelineEvent" },
+      },
+      root_causes: {
+        type: "array",
+        maxItems: 16,
+        items: { $ref: "#/components/schemas/PostmortemRevision__PostmortemConclusion" },
+      },
+      contributing_factors: {
+        type: "array",
+        maxItems: 32,
+        items: { $ref: "#/components/schemas/PostmortemRevision__PostmortemConclusion" },
+      },
+      conclusions: {
+        type: "array",
+        maxItems: 32,
+        items: { $ref: "#/components/schemas/PostmortemRevision__PostmortemConclusion" },
+      },
+      recovery: { type: "string", minLength: 1, maxLength: 8000 },
+      effective_actions: {
+        type: "array",
+        maxItems: 32,
+        items: { type: "string", maxLength: 1024 },
+      },
+      ineffective_actions: {
+        type: "array",
+        maxItems: 32,
+        items: { type: "string", maxLength: 1024 },
+      },
+      evidence_ids: {
+        type: "array",
+        maxItems: 128,
+        items: uuid,
+      },
+      human_confirmed: { type: "boolean", default: false },
+    },
+  },
+  PostmortemPublishRequest: {
+    type: "object",
+    additionalProperties: false,
+    required: ["human_confirmed", "owner", "component", "review_due_at"],
+    properties: {
+      human_confirmed: { type: "boolean" },
+      owner: { type: "string", minLength: 1, maxLength: 200 },
+      component: { type: "string", minLength: 1, maxLength: 200 },
+      rocketmq_version_range: { type: "string", default: "*" },
+      review_due_at: dateTime,
+    },
+  },
+  ActionItemPatchRequest: {
+    type: "object",
+    additionalProperties: false,
+    required: ["status"],
+    properties: {
+      status: { $ref: "#/components/schemas/ActionItem__ActionItemStatus" },
+      owner: { type: "string", minLength: 1, maxLength: 200 },
+      due_at: dateTime,
+      verification: { type: "string", maxLength: 4000 },
+      evidence_ids: {
+        type: "array",
+        maxItems: 128,
+        items: uuid,
+      },
+    },
+  },
+  OperatorTodo: {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "id",
+      "tenant_id",
+      "kind",
+      "aggregate_id",
+      "title",
+      "due_at",
+      "status",
+      "created_at",
+    ],
+    properties: {
+      id: uuid,
+      tenant_id: uuid,
+      cluster_id: { oneOf: [uuid, { type: "null" }] },
+      kind: { type: "string", enum: ["action_item_due", "knowledge_review_due"] },
+      aggregate_id: uuid,
+      title: { type: "string", maxLength: 1024 },
+      due_at: dateTime,
+      status: { type: "string", enum: ["open", "completed", "dismissed"] },
+      created_at: dateTime,
+    },
+  },
+  IncidentRecurrenceView: {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "incident_id",
+      "previous_incident_id",
+      "postmortem_id",
+      "fingerprint",
+      "root_cause_code",
+      "affected_component",
+      "matched_at",
+    ],
+    properties: {
+      incident_id: uuid,
+      previous_incident_id: uuid,
+      postmortem_id: uuid,
+      fingerprint: { type: "string" },
+      root_cause_code: { type: "string" },
+      affected_component: { type: "string" },
+      matched_at: dateTime,
+    },
+  },
+  KnowledgeItem: {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "id",
+      "tenant_id",
+      "title",
+      "component",
+      "rocketmq_version_range",
+      "source_uri",
+      "source_version",
+      "owner",
+      "review_status",
+      "review_due_at",
+      "sensitivity",
+      "content_hash",
+      "conflict",
+      "created_at",
+      "updated_at",
+    ],
+    properties: {
+      id: uuid,
+      tenant_id: uuid,
+      cluster_id: { oneOf: [uuid, { type: "null" }] },
+      title: { type: "string" },
+      component: { type: "string" },
+      rocketmq_version_range: { type: "string" },
+      source_uri: { type: "string" },
+      source_version: { type: "string" },
+      valid_from: { oneOf: [dateTime, { type: "null" }] },
+      valid_until: { oneOf: [dateTime, { type: "null" }] },
+      owner: { type: "string" },
+      review_status: {
+        type: "string",
+        enum: ["draft", "in_review", "validated", "deprecated", "expired"],
+      },
+      review_due_at: dateTime,
+      sensitivity: { type: "string" },
+      content_hash: { type: "string" },
+      conflict: { type: "boolean" },
+      created_at: dateTime,
+      updated_at: dateTime,
+    },
+  },
+  PostmortemView: {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "postmortem",
+      "revisions",
+      "action_items",
+      "recurrences",
+      "todos",
+      "execution_journal_empty",
+    ],
+    properties: {
+      postmortem: { $ref: "#/components/schemas/PostmortemDraft" },
+      revisions: {
+        type: "array",
+        items: { $ref: "#/components/schemas/PostmortemRevision" },
+      },
+      action_items: {
+        type: "array",
+        items: { $ref: "#/components/schemas/ActionItem" },
+      },
+      recurrences: {
+        type: "array",
+        items: { $ref: "#/components/schemas/IncidentRecurrenceView" },
+      },
+      todos: {
+        type: "array",
+        items: { $ref: "#/components/schemas/OperatorTodo" },
+      },
+      knowledge_item: {
+        oneOf: [
+          { $ref: "#/components/schemas/KnowledgeItem" },
+          { type: "null" },
+        ],
+      },
+      execution_journal_empty: { type: "boolean" },
+    },
+  },
+  ActionItemPage: {
+    type: "object",
+    additionalProperties: false,
+    required: ["items", "partial", "observed_at"],
+    properties: {
+      items: {
+        type: "array",
+        items: { $ref: "#/components/schemas/ActionItem" },
+      },
+      partial: { type: "boolean" },
+      observed_at: dateTime,
+    },
+  },
 });
 
 document.paths["/v1/capabilities/phase2-contract"] = {
@@ -896,6 +1123,162 @@ document.paths["/v1/clusters/{id}/readiness/dr"] = {
             schema: {
               $ref: "#/components/schemas/DrReadinessReport",
             },
+          },
+        },
+      },
+    },
+  },
+};
+
+document.paths["/v1/incidents/{id}/postmortems"] = {
+  post: {
+    operationId: "createPostmortem",
+    parameters: [{ $ref: "#/components/parameters/Id" }],
+    requestBody: {
+      required: true,
+      content: {
+        "application/json": {
+          schema: { $ref: "#/components/schemas/CreatePostmortemRequest" },
+        },
+      },
+    },
+    responses: {
+      200: {
+        description: "AI-assisted draft that remains human-controlled",
+        content: {
+          "application/json": {
+            schema: { $ref: "#/components/schemas/PostmortemView" },
+          },
+        },
+      },
+    },
+  },
+};
+
+document.paths["/v1/postmortems/{id}"] = {
+  get: {
+    operationId: "getPostmortem",
+    parameters: [{ $ref: "#/components/parameters/Id" }],
+    responses: {
+      200: {
+        description: "Postmortem head, immutable revisions and follow-up metadata",
+        content: {
+          "application/json": {
+            schema: { $ref: "#/components/schemas/PostmortemView" },
+          },
+        },
+      },
+    },
+  },
+  patch: {
+    operationId: "patchPostmortem",
+    parameters: [{ $ref: "#/components/parameters/Id" }],
+    requestBody: {
+      required: true,
+      content: {
+        "application/json": {
+          schema: { $ref: "#/components/schemas/PostmortemPatchRequest" },
+        },
+      },
+    },
+    responses: {
+      200: {
+        description: "Appended immutable operator revision",
+        content: {
+          "application/json": {
+            schema: { $ref: "#/components/schemas/PostmortemView" },
+          },
+        },
+      },
+    },
+  },
+};
+
+document.paths["/v1/postmortems/{id}/publish"] = {
+  post: {
+    operationId: "publishPostmortem",
+    parameters: [{ $ref: "#/components/parameters/Id" }],
+    requestBody: {
+      required: true,
+      content: {
+        "application/json": {
+          schema: { $ref: "#/components/schemas/PostmortemPublishRequest" },
+        },
+      },
+    },
+    responses: {
+      200: {
+        description: "Human-published postmortem and validated knowledge",
+        content: {
+          "application/json": {
+            schema: { $ref: "#/components/schemas/PostmortemView" },
+          },
+        },
+      },
+    },
+  },
+};
+
+document.paths["/v1/action-items"] = {
+  get: {
+    operationId: "listActionItems",
+    parameters: [
+      {
+        name: "cluster_id",
+        in: "query",
+        required: true,
+        schema: uuid,
+      },
+      {
+        name: "status",
+        in: "query",
+        required: false,
+        schema: { $ref: "#/components/schemas/ActionItem__ActionItemStatus" },
+      },
+      {
+        name: "owner",
+        in: "query",
+        required: false,
+        schema: { type: "string", maxLength: 200 },
+      },
+      {
+        name: "limit",
+        in: "query",
+        required: false,
+        schema: { type: "integer", minimum: 1, maximum: 200, default: 100 },
+      },
+    ],
+    responses: {
+      200: {
+        description: "Human-owned postmortem follow-up items",
+        content: {
+          "application/json": {
+            schema: { $ref: "#/components/schemas/ActionItemPage" },
+          },
+        },
+      },
+    },
+  },
+};
+
+document.paths["/v1/action-items/{id}"] = {
+  patch: {
+    operationId: "patchActionItem",
+    parameters: [{ $ref: "#/components/parameters/Id" }],
+    requestBody: {
+      required: true,
+      content: {
+        "application/json": {
+          schema: { $ref: "#/components/schemas/ActionItemPatchRequest" },
+        },
+      },
+    },
+    responses: {
+      200: {
+        description: "Updated SRE metadata with immutable lifecycle event",
+        content: {
+          "application/json": {
+            schema: { $ref: "#/components/schemas/ActionItem" },
           },
         },
       },

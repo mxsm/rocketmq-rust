@@ -23,7 +23,9 @@ use rocketmq_sre_contracts::EvidenceId;
 use rocketmq_sre_contracts::EvidenceSnapshot;
 use rocketmq_sre_contracts::IncidentId;
 use rocketmq_sre_contracts::ModelInvocationId;
+use rocketmq_sre_contracts::PostmortemConclusion;
 use rocketmq_sre_contracts::Sensitivity;
+use rocketmq_sre_core::postmortem::PostmortemAssembly;
 use rocketmq_sre_model_gateway::AsyncBuiltinProviderClient;
 use rocketmq_sre_model_gateway::AsyncModelTransport;
 use rocketmq_sre_model_gateway::CanonicalModelRequest;
@@ -73,6 +75,7 @@ use super::model::ModelCapabilitiesStatus;
 use super::model::ModelDiagnosisDecision;
 use super::model::ModelInvocationListQuery;
 use super::model::ModelInvocationPage;
+use super::model::ModelPostmortemDecision;
 use super::model::PersistInvocation;
 use super::model::RuntimeModelProfile;
 use super::model::StructuredModelDiagnosis;
@@ -204,6 +207,63 @@ impl ModelGatewayService {
             return Ok(samples);
         }
         Ok(configured_unknown_health_samples(&self.config.profiles, limit))
+    }
+
+    pub(crate) async fn draft_postmortem(
+        &self,
+        auth: &AuthContext,
+        incident_id: IncidentId,
+        cluster_id: rocketmq_sre_contracts::ClusterId,
+        incident_title: &str,
+        mut deterministic: PostmortemAssembly,
+        evidence: &[EvidenceSnapshot],
+        correlation_id: CorrelationId,
+    ) -> Result<ModelPostmortemDecision, ControlPlaneError> {
+        let report = json!({
+            "schema_version": "rocketmq-sre.postmortem-draft-input.v1",
+            "summary": deterministic.summary,
+            "impact": deterministic.impact,
+            "detection": deterministic.detection,
+            "root_causes": deterministic.root_causes,
+            "contributing_factors": deterministic.contributing_factors,
+            "recovery": deterministic.recovery,
+            "effective_actions": deterministic.effective_actions,
+            "ineffective_actions": deterministic.ineffective_actions,
+            "evidence_ids": deterministic.evidence_ids,
+            "constraints": {
+                "draft_only": true,
+                "mutation_allowed": false,
+                "all_material_claims_require_evidence": true
+            }
+        });
+        let decision = self
+            .diagnose(
+                auth,
+                incident_id,
+                cluster_id,
+                incident_title,
+                "postmortem-summary.v1",
+                &report,
+                evidence,
+                correlation_id,
+            )
+            .await?;
+        if let Some(value) = decision.conclusion {
+            let structured = serde_json::from_value::<StructuredModelDiagnosis>(value)
+                .map_err(|_| ControlPlaneError::configuration("validated model diagnosis cannot be decoded"))?;
+            if !structured.cited_evidence_ids.is_empty() {
+                deterministic.summary = structured.summary;
+                deterministic.conclusions.push(PostmortemConclusion {
+                    code: "model_postmortem_assessment".to_owned(),
+                    statement: structured.assessment,
+                    evidence_ids: structured.cited_evidence_ids,
+                });
+            }
+        }
+        Ok(ModelPostmortemDecision {
+            content: deterministic,
+            invocation_id: decision.invocation_id,
+        })
     }
 
     #[allow(

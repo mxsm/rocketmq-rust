@@ -1,4 +1,4 @@
-// Copyright 2023 The RocketMQ Rust Authors
+// Copyright 2026 The RocketMQ Rust Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,18 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Provider-neutral coordination primitives for RocketMQ AI SRE.
+//! Deterministic postmortem assembly, rendering, and lifecycle validation.
 
-pub mod correlation;
-pub mod diagnostics;
-pub mod health;
-mod incident_manager;
-pub mod postmortem;
-pub mod prediction;
-mod registry;
-pub mod slo;
+mod assembler;
+mod template;
+mod validation;
 
-pub use incident_manager::IncidentManager;
-pub use incident_manager::IncidentManagerError;
-pub use registry::DescriptorRegistry;
-pub use registry::RegistryError;
+pub use assembler::PostmortemActionProposal;
+pub use assembler::PostmortemAssembly;
+pub use assembler::PostmortemAssemblyInput;
+pub use assembler::assemble;
+pub use template::render_markdown;
+pub use validation::PostmortemValidationError;
+pub use validation::validate_action_item_transition;
+pub use validation::validate_revision;

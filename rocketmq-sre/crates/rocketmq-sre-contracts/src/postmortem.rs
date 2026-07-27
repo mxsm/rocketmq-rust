@@ -56,6 +56,15 @@ pub struct PostmortemDraft {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Evidence-backed conclusion used by a postmortem root cause or other
+/// material claim.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+pub struct PostmortemConclusion {
+    pub code: String,
+    pub statement: String,
+    pub evidence_ids: Vec<EvidenceId>,
+}
+
 /// Immutable content revision with explicit Evidence citations.
 #[derive(Clone, Debug, JsonSchema, PartialEq, Serialize, Deserialize)]
 pub struct PostmortemRevision {
@@ -66,8 +75,9 @@ pub struct PostmortemRevision {
     pub impact: String,
     pub detection: String,
     pub timeline: Value,
-    pub root_causes: Vec<String>,
-    pub contributing_factors: Vec<String>,
+    pub root_causes: Vec<PostmortemConclusion>,
+    pub contributing_factors: Vec<PostmortemConclusion>,
+    pub conclusions: Vec<PostmortemConclusion>,
     pub recovery: String,
     pub effective_actions: Vec<String>,
     pub ineffective_actions: Vec<String>,
@@ -125,8 +135,13 @@ mod tests {
             impact: "impact".into(),
             detection: "alert".into(),
             timeline: serde_json::json!([]),
-            root_causes: vec!["store_pressure".into()],
+            root_causes: vec![PostmortemConclusion {
+                code: "store_pressure".into(),
+                statement: "Disk usage exhausted the configured runway".into(),
+                evidence_ids: vec![EvidenceId::new()],
+            }],
             contributing_factors: Vec::new(),
+            conclusions: Vec::new(),
             recovery: "manual recovery".into(),
             effective_actions: Vec::new(),
             ineffective_actions: Vec::new(),

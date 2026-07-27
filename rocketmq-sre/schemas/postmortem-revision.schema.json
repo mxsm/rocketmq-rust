@@ -10,6 +10,29 @@
       "format": "uuid",
       "type": "string"
     },
+    "PostmortemConclusion": {
+      "description": "Evidence-backed conclusion used by a postmortem root cause or other\nmaterial claim.",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "evidence_ids": {
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          },
+          "type": "array"
+        },
+        "statement": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "statement",
+        "evidence_ids"
+      ],
+      "type": "object"
+    },
     "PostmortemId": {
       "description": "Stable identifier for a postmortem.",
       "format": "uuid",
@@ -24,9 +47,15 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "Immutable content revision with explicit Evidence citations.",
   "properties": {
+    "conclusions": {
+      "items": {
+        "$ref": "#/$defs/PostmortemConclusion"
+      },
+      "type": "array"
+    },
     "contributing_factors": {
       "items": {
-        "type": "string"
+        "$ref": "#/$defs/PostmortemConclusion"
       },
       "type": "array"
     },
@@ -90,7 +119,7 @@
     },
     "root_causes": {
       "items": {
-        "type": "string"
+        "$ref": "#/$defs/PostmortemConclusion"
       },
       "type": "array"
     },
@@ -109,6 +138,7 @@
     "timeline",
     "root_causes",
     "contributing_factors",
+    "conclusions",
     "recovery",
     "effective_actions",
     "ineffective_actions",

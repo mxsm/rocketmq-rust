@@ -747,6 +747,12 @@ export function IncidentDetailPage() {
               <Bot size={15} />
               {dispatching ? "排队中…" : "运行只读诊断"}
             </Button>
+            <Button asChild>
+              <Link to={`/incidents/${incidentId}/postmortem`}>
+                <FileText size={15} />
+                复盘与改进
+              </Link>
+            </Button>
           </>
         }
       />

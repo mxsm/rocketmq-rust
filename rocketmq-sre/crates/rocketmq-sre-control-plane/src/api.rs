@@ -523,6 +523,7 @@ pub(crate) struct AppState {
     pub(crate) model_gateway: ModelGatewayService,
     pub(crate) observability: SreObservability,
     pub(crate) observability_status: ObservabilityStatusHandle,
+    pub(crate) postmortems: crate::postmortem::PostmortemService,
     pub(crate) sre_metrics: Arc<SreMetrics>,
     pub(crate) slo: SloService,
     pub(crate) workflow: WorkflowService,
@@ -573,6 +574,12 @@ fn build_routers_with_auth(
     let evidence = EvidenceService::new(repository.clone(), evidence_blobs);
     let assets = AssetTopologyService::new(repository.clone(), dashboard_links);
     let knowledge = KnowledgeService::new(repository.clone());
+    let postmortems = crate::postmortem::PostmortemService::new(
+        repository.clone(),
+        evidence.clone(),
+        model_gateway.clone(),
+        workflow.clone(),
+    );
     let connector_channel = PostgresConnectorChannelService::postgres(repository.clone(), internal_token.clone())?;
     let slo = SloService::new(
         repository.clone(),
@@ -609,6 +616,7 @@ fn build_routers_with_auth(
         model_gateway,
         observability,
         observability_status: ObservabilityStatusHandle::default(),
+        postmortems,
         sre_metrics,
         slo: slo.clone(),
         workflow,
@@ -627,6 +635,7 @@ fn build_routers_with_auth(
         .route("/v1/capabilities/coverage", get(coverage))
         .route("/v1/capabilities/phase2-contract", get(phase2_contract_manifest))
         .merge(crate::phase1_api::public_routes())
+        .merge(crate::postmortem::routes())
         .with_state(state.clone())
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -678,6 +687,32 @@ pub async fn run(config: ControlPlaneConfig, service_context: ChildServiceContex
         })
         .map_err(|error| {
             ControlPlaneError::configuration(format!("notification outbox worker could not be started: {error}"))
+        })?;
+    let todo_repository = repository.clone();
+    let todo_tasks = service_context.scheduled_tasks("postmortem-operator-todos");
+    let mut todo_schedule = ScheduledTaskConfig::fixed_rate_no_overlap(
+        "phase2-postmortem-operator-todos",
+        std::time::Duration::from_secs(60),
+    );
+    todo_schedule.initial_delay = std::time::Duration::from_secs(11);
+    todo_schedule.max_run_time = Some(std::time::Duration::from_secs(30));
+    todo_schedule.shutdown_timeout = config.shutdown_timeout();
+    todo_tasks
+        .schedule_fixed_rate_no_overlap(todo_schedule, move || {
+            let repository = todo_repository.clone();
+            async move {
+                if let Err(error) = crate::postmortem::materialize_due_operator_todos(&repository).await {
+                    tracing::warn!(
+                        error = %error,
+                        "postmortem operator todo scan failed"
+                    );
+                }
+            }
+        })
+        .map_err(|error| {
+            ControlPlaneError::configuration(format!(
+                "postmortem operator todo scheduler could not be started: {error}"
+            ))
         })?;
     let scheduler_evidence = EvidenceService::new(repository.clone(), evidence_blobs.clone());
     let scheduled_inspections = InspectionService::new(repository.clone(), workflow.clone(), scheduler_evidence)?;

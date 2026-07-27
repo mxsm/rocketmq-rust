@@ -55,5 +55,13 @@ describe("checked-in Phase 2 OpenAPI", () => {
     expect(
       specification.paths["/v1/clusters/{id}/readiness/dr"],
     ).toBeDefined();
+    expect(
+      specification.paths["/v1/incidents/{id}/postmortems"],
+    ).toBeDefined();
+    expect(specification.paths["/v1/postmortems/{id}"]?.patch).toBeDefined();
+    expect(
+      specification.paths["/v1/postmortems/{id}/publish"],
+    ).toBeDefined();
+    expect(specification.paths["/v1/action-items/{id}"]?.patch).toBeDefined();
   });
 });

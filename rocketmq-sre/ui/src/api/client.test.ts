@@ -55,6 +55,24 @@ describe("stateLabel", () => {
     await api.getClusterHealth("cluster/id");
     await api.getFleetHealth("cn/shanghai");
     await api.getIncidentTopology("incident/id");
+    await api.createPostmortem("incident/id", {});
+    await api.patchPostmortem("postmortem/id", {
+      summary: "operator edit",
+      human_confirmed: true,
+    });
+    await api.publishPostmortem("postmortem/id", {
+      human_confirmed: true,
+      owner: "test-operator",
+      component: "broker",
+      rocketmq_version_range: "*",
+      review_due_at: "2027-01-01T00:00:00Z",
+    });
+    await api.listActionItems("cluster/id");
+    await api.patchActionItem("action/id", {
+      status: "in_progress",
+      owner: "test-operator",
+      evidence_ids: [],
+    });
 
     expect(
       fetchMock.mock.calls.map(([input]) => String(input)),
@@ -71,6 +89,11 @@ describe("stateLabel", () => {
       "/v1/clusters/cluster%2Fid/health",
       "/v1/fleet/health?region=cn%2Fshanghai",
       "/v1/incidents/incident%2Fid/topology",
+      "/v1/incidents/incident%2Fid/postmortems",
+      "/v1/postmortems/postmortem%2Fid",
+      "/v1/postmortems/postmortem%2Fid/publish",
+      "/v1/action-items?cluster_id=cluster%2Fid",
+      "/v1/action-items/action%2Fid",
     ]);
     const healthHeaders = new Headers(
       fetchMock.mock.calls[9]?.[1]?.headers,
@@ -92,6 +115,8 @@ describe("stateLabel", () => {
       status: "promoted",
       promote_to: "incident",
     });
+    expect(fetchMock.mock.calls[13]?.[1]?.method).toBe("PATCH");
+    expect(fetchMock.mock.calls[16]?.[1]?.method).toBe("PATCH");
   });
 
   it("parses backend SSE payloads with an optional transport event id", () => {

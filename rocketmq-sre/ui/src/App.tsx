@@ -83,6 +83,21 @@ const ForecastPage = lazy(() =>
     default: module.ForecastPage,
   })),
 );
+const IncidentPostmortemPage = lazy(() =>
+  import("./pages/PostmortemPages").then((module) => ({
+    default: module.IncidentPostmortemPage,
+  })),
+);
+const PostmortemDetailPage = lazy(() =>
+  import("./pages/PostmortemPages").then((module) => ({
+    default: module.PostmortemDetailPage,
+  })),
+);
+const ActionItemsPage = lazy(() =>
+  import("./pages/PostmortemPages").then((module) => ({
+    default: module.ActionItemsPage,
+  })),
+);
 
 function RouteLoading() {
   return (
@@ -119,6 +134,15 @@ const router = createBrowserRouter([
       },
       { path: "incidents", element: <IncidentsPage /> },
       { path: "incidents/:incidentId", element: <IncidentDetailPage /> },
+      {
+        path: "incidents/:incidentId/postmortem",
+        element: <IncidentPostmortemPage />,
+      },
+      {
+        path: "postmortems/:postmortemId",
+        element: <PostmortemDetailPage />,
+      },
+      { path: "action-items", element: <ActionItemsPage /> },
       { path: "inspections", element: <InspectionsPage /> },
       { path: "forecasts", element: <ForecastPage /> },
       {
