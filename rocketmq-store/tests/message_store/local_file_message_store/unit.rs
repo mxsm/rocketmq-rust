@@ -1638,6 +1638,7 @@ async fn started_store_reput_dispatches_schedule_topic_messages_after_normal_mes
         &temp_dir,
         MessageStoreConfig {
             flush_disk_type: FlushDiskType::AsyncFlush,
+            ha_listen_port: allocate_local_test_port() as usize,
             ..MessageStoreConfig::default()
         },
     );
@@ -2951,7 +2952,7 @@ async fn store_stats_records_batch_put_append_totals() {
 }
 
 #[tokio::test]
-async fn shared_put_message_serializes_concurrent_appends() {
+async fn shared_put_message_micro_batches_concurrent_appends() {
     let temp_dir = tempdir().unwrap();
     let store = new_async_flush_test_store(&temp_dir);
     let topic = CheetahString::from_static_str("shared-put-message-topic");
@@ -2966,7 +2967,7 @@ async fn shared_put_message_serializes_concurrent_appends() {
         first.append_message_result().expect("first append").wrote_offset,
         second.append_message_result().expect("second append").wrote_offset
     );
-    assert_eq!(store.get_runtime_info()["putMessageLockAcquireTotal"], "2");
+    assert_eq!(store.get_runtime_info()["putMessageLockAcquireTotal"], "1");
 }
 
 #[tokio::test]

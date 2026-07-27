@@ -32,10 +32,13 @@ use std::sync::Arc;
 use bytes::BytesMut;
 use rocketmq_model::common::message::message_batch::MessageExtBatch;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_store_local::commit_log::append::prepared_payload::PreparedPayload;
+use tracing::error;
 
 use crate::base::message_result::PutMessageResult;
 use crate::base::put_message_context::PutMessageContext;
 use crate::config::message_store_config::MessageStoreConfig;
+use crate::log_file::commit_log::CRC32_RESERVED_LEN;
 use crate::message_encoder::message_ext_encoder::MessageExtEncoder;
 
 /// Thread-local pool for MessageExtEncoder instances
@@ -77,6 +80,30 @@ impl MessageEncoderPool {
         (result, bytes)
     }
 
+    /// Encodes and structurally validates one immutable CommitLog payload.
+    pub fn prepare_message(
+        &self,
+        message: &MessageExtBrokerInner,
+        config: &Arc<MessageStoreConfig>,
+    ) -> Result<PreparedPayload, PutMessageResult> {
+        let (encode_result, bytes) = self.encode_message(message, config);
+        if let Some(result) = encode_result {
+            return Err(result);
+        }
+        let crc_trailer_bytes = if config.enabled_append_prop_crc {
+            CRC32_RESERVED_LEN as usize
+        } else {
+            0
+        };
+        PreparedPayload::try_single(bytes.freeze(), crc_trailer_bytes).map_err(|validation_error| {
+            error!(
+                error = %validation_error,
+                "Message encoder produced an invalid CommitLog frame"
+            );
+            PutMessageResult::new_default(crate::base::message_status_enum::PutMessageStatus::MessageIllegal)
+        })
+    }
+
     /// Encode a batch of messages using pooled encoder
     pub fn encode_message_batch(
         &self,
@@ -86,6 +113,30 @@ impl MessageEncoderPool {
     ) -> Option<BytesMut> {
         let mut encoder = self.get_or_create_encoder(config);
         encoder.encode_batch(batch, context)
+    }
+
+    /// Encodes and structurally validates one immutable CommitLog frame batch.
+    pub fn prepare_message_batch(
+        &self,
+        batch: &MessageExtBatch,
+        context: &mut PutMessageContext,
+        config: &Arc<MessageStoreConfig>,
+    ) -> Result<PreparedPayload, PutMessageResult> {
+        let bytes = self.encode_message_batch(batch, context, config).ok_or_else(|| {
+            PutMessageResult::new_default(crate::base::message_status_enum::PutMessageStatus::MessageIllegal)
+        })?;
+        let crc_trailer_bytes = if config.enabled_append_prop_crc {
+            CRC32_RESERVED_LEN as usize
+        } else {
+            0
+        };
+        PreparedPayload::try_batch(bytes.freeze(), crc_trailer_bytes).map_err(|validation_error| {
+            error!(
+                error = %validation_error,
+                "Batch encoder produced an invalid CommitLog frame partition"
+            );
+            PutMessageResult::new_default(crate::base::message_status_enum::PutMessageStatus::MessageIllegal)
+        })
     }
 
     /// Generate topic-queue key using pooled string buffer
@@ -118,6 +169,15 @@ pub fn encode_message_with_pool(
     ENCODER_POOL.with(|pool| pool.encode_message(message, config))
 }
 
+/// Encode and validate one immutable payload using the thread-local encoder pool.
+#[inline]
+pub fn prepare_message_with_pool(
+    message: &MessageExtBrokerInner,
+    config: &Arc<MessageStoreConfig>,
+) -> Result<PreparedPayload, PutMessageResult> {
+    ENCODER_POOL.with(|pool| pool.prepare_message(message, config))
+}
+
 /// Encode a batch of messages using the thread-local encoder pool
 #[inline]
 pub fn encode_message_batch_with_pool(
@@ -126,6 +186,16 @@ pub fn encode_message_batch_with_pool(
     config: &Arc<MessageStoreConfig>,
 ) -> Option<BytesMut> {
     ENCODER_POOL.with(|pool| pool.encode_message_batch(batch, context, config))
+}
+
+/// Encode and validate one immutable frame batch using the thread-local encoder pool.
+#[inline]
+pub fn prepare_message_batch_with_pool(
+    batch: &MessageExtBatch,
+    context: &mut PutMessageContext,
+    config: &Arc<MessageStoreConfig>,
+) -> Result<PreparedPayload, PutMessageResult> {
+    ENCODER_POOL.with(|pool| pool.prepare_message_batch(batch, context, config))
 }
 
 /// Generate topic-queue key using pooled buffer

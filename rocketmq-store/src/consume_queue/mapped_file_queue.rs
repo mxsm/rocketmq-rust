@@ -221,6 +221,19 @@ pub(crate) struct MappedFileQueueAppendHandle {
 }
 
 impl MappedFileQueueAppendHandle {
+    /// Returns the current absolute append position without exposing the mapped-file generation.
+    pub(crate) fn current_append_offset(&self) -> u64 {
+        self.mapped_files
+            .load()
+            .last()
+            .map(|mapped_file| {
+                mapped_file
+                    .get_file_from_offset()
+                    .saturating_add(mapped_file.get_wrote_position().max(0) as u64)
+            })
+            .unwrap_or_default()
+    }
+
     pub(crate) fn get_last_mapped_file(&self, start_offset: u64, need_create: bool) -> Option<Arc<DefaultMappedFile>> {
         get_last_mapped_file_for_append(
             &self.mapped_files,

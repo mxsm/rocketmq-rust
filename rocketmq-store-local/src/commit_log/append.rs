@@ -15,6 +15,11 @@
 use std::fmt::Display;
 use std::sync::Arc;
 
+pub mod finalized_append;
+pub mod micro_batch;
+pub mod prepared_payload;
+pub mod sequencer;
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum AppendMessageStatus {
     #[default]

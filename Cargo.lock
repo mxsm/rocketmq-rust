@@ -5050,6 +5050,7 @@ version = "1.0.0"
 dependencies = [
  "bytes",
  "cheetah-string",
+ "criterion",
  "dashmap",
  "libc",
  "loom",
@@ -5059,6 +5060,7 @@ dependencies = [
  "rayon",
  "rocketmq-error",
  "rocketmq-observability",
+ "rocketmq-runtime",
  "rocketmq-store-api",
  "serde",
  "serde_json",

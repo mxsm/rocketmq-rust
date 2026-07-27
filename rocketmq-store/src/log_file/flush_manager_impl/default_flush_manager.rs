@@ -60,9 +60,9 @@ pub struct DefaultFlushManager {
     root: FlushManagerRoot<DefaultFlushManagerAdapter>,
 }
 
-/// Narrow wake-up capability for internal messages that never wait for durable acknowledgement.
+/// Narrow wake-up capability shared by sequenced CommitLog append requests.
 #[derive(Clone)]
-pub(crate) struct InternalMessageFlushHandle {
+pub(crate) struct CommitLogFlushWakeup {
     flush_disk_type: FlushDiskType,
     transient_store_pool_enable: bool,
     group_commit_notified: Option<Arc<Notify>>,
@@ -70,28 +70,32 @@ pub(crate) struct InternalMessageFlushHandle {
     commit_real_time_notified: Option<Arc<Notify>>,
 }
 
-impl InternalMessageFlushHandle {
-    pub(crate) fn wakeup(&self) {
+impl CommitLogFlushWakeup {
+    /// Wakes the owning flush service once after a sequencer batch commits one or more requests.
+    pub(crate) fn wakeup_after_append_batch(&self, committed_requests: usize) {
+        if committed_requests == 0 {
+            return;
+        }
         match self.flush_disk_type {
             FlushDiskType::SyncFlush => {
                 if let Some(notified) = &self.group_commit_notified {
                     notified.notify_one();
                 } else {
-                    warn!("sync flush wake-up is unavailable for internal message");
+                    warn!("sync flush wake-up is unavailable after CommitLog append");
                 }
             }
             FlushDiskType::AsyncFlush if self.transient_store_pool_enable => {
                 if let Some(notified) = &self.commit_real_time_notified {
                     notified.notify_one();
                 } else {
-                    warn!("commit wake-up is unavailable for internal message");
+                    warn!("commit wake-up is unavailable after CommitLog append");
                 }
             }
             FlushDiskType::AsyncFlush => {
                 if let Some(notified) = &self.flush_real_time_notified {
                     notified.notify_one();
                 } else {
-                    warn!("flush wake-up is unavailable for internal message");
+                    warn!("flush wake-up is unavailable after CommitLog append");
                 }
             }
         }
@@ -216,8 +220,8 @@ impl DefaultFlushManager {
         self.store_health_recorder = store_health_recorder;
     }
 
-    pub(crate) fn internal_message_flush_handle(&self) -> InternalMessageFlushHandle {
-        InternalMessageFlushHandle {
+    pub(crate) fn commit_log_flush_wakeup(&self) -> CommitLogFlushWakeup {
+        CommitLogFlushWakeup {
             flush_disk_type: self.message_store_config.flush_disk_type,
             transient_store_pool_enable: self.message_store_config.transient_store_pool_enable,
             group_commit_notified: self

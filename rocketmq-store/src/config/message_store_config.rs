@@ -344,6 +344,30 @@ mod defaults {
         32
     }
 
+    pub const fn commit_log_append_queue_capacity() -> usize {
+        1024
+    }
+
+    pub const fn commit_log_append_queue_bytes() -> usize {
+        64 * 1024 * 1024
+    }
+
+    pub const fn commit_log_micro_batch_enabled() -> bool {
+        true
+    }
+
+    pub const fn commit_log_micro_batch_max_items() -> usize {
+        32
+    }
+
+    pub const fn commit_log_micro_batch_max_bytes() -> usize {
+        1024 * 1024
+    }
+
+    pub const fn commit_log_micro_batch_max_wait_micros() -> u64 {
+        50
+    }
+
     pub const fn max_ha_transfer_byte_in_second() -> usize {
         100 * 1024 * 1024
     }
@@ -1208,6 +1232,24 @@ pub struct MessageStoreConfig {
     #[serde(default = "defaults::topic_queue_lock_num")]
     pub topic_queue_lock_num: usize,
 
+    #[serde(default = "defaults::commit_log_append_queue_capacity")]
+    pub commit_log_append_queue_capacity: usize,
+
+    #[serde(default = "defaults::commit_log_append_queue_bytes")]
+    pub commit_log_append_queue_bytes: usize,
+
+    #[serde(default = "defaults::commit_log_micro_batch_enabled")]
+    pub commit_log_micro_batch_enabled: bool,
+
+    #[serde(default = "defaults::commit_log_micro_batch_max_items")]
+    pub commit_log_micro_batch_max_items: usize,
+
+    #[serde(default = "defaults::commit_log_micro_batch_max_bytes")]
+    pub commit_log_micro_batch_max_bytes: usize,
+
+    #[serde(default = "defaults::commit_log_micro_batch_max_wait_micros")]
+    pub commit_log_micro_batch_max_wait_micros: u64,
+
     #[serde(default = "defaults::max_filter_message_size")]
     pub max_filter_message_size: i32,
 
@@ -1452,6 +1494,12 @@ impl Default for MessageStoreConfig {
             real_time_persist_rocksdb_config: false,
             enable_rocksdb_log: false,
             topic_queue_lock_num: 32,
+            commit_log_append_queue_capacity: defaults::commit_log_append_queue_capacity(),
+            commit_log_append_queue_bytes: defaults::commit_log_append_queue_bytes(),
+            commit_log_micro_batch_enabled: defaults::commit_log_micro_batch_enabled(),
+            commit_log_micro_batch_max_items: defaults::commit_log_micro_batch_max_items(),
+            commit_log_micro_batch_max_bytes: defaults::commit_log_micro_batch_max_bytes(),
+            commit_log_micro_batch_max_wait_micros: defaults::commit_log_micro_batch_max_wait_micros(),
             max_filter_message_size: 16000,
             enable_dleger_commit_log: false,
             rocksdb_cq_double_write_enable: false,
@@ -2168,6 +2216,30 @@ impl MessageStoreConfig {
             self.max_slave_resend_length.to_string(),
         );
         properties.insert("syncFromLastFile".to_string(), self.sync_from_last_file.to_string());
+        properties.insert(
+            "commitLogAppendQueueCapacity".to_string(),
+            self.commit_log_append_queue_capacity.to_string(),
+        );
+        properties.insert(
+            "commitLogAppendQueueBytes".to_string(),
+            self.commit_log_append_queue_bytes.to_string(),
+        );
+        properties.insert(
+            "commitLogMicroBatchEnabled".to_string(),
+            self.commit_log_micro_batch_enabled.to_string(),
+        );
+        properties.insert(
+            "commitLogMicroBatchMaxItems".to_string(),
+            self.commit_log_micro_batch_max_items.to_string(),
+        );
+        properties.insert(
+            "commitLogMicroBatchMaxBytes".to_string(),
+            self.commit_log_micro_batch_max_bytes.to_string(),
+        );
+        properties.insert(
+            "commitLogMicroBatchMaxWaitMicros".to_string(),
+            self.commit_log_micro_batch_max_wait_micros.to_string(),
+        );
         properties.insert("asyncLearner".to_string(), self.async_learner.to_string());
         properties.insert(
             "maxConsumeQueueScan".to_string(),
@@ -2299,6 +2371,48 @@ mod tests {
     #[test]
     fn default_max_checksum_range_matches_java_default() {
         assert_eq!(MessageStoreConfig::default().max_checksum_range, 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn commit_log_append_sequencer_has_bounded_production_defaults() {
+        let config = MessageStoreConfig::default();
+
+        assert_eq!(config.commit_log_append_queue_capacity, 1024);
+        assert_eq!(config.commit_log_append_queue_bytes, 64 * 1024 * 1024);
+        assert!(config.commit_log_micro_batch_enabled);
+        assert_eq!(config.commit_log_micro_batch_max_items, 32);
+        assert_eq!(config.commit_log_micro_batch_max_bytes, 1024 * 1024);
+        assert_eq!(config.commit_log_micro_batch_max_wait_micros, 50);
+
+        let properties = config.get_properties();
+        assert_eq!(properties["commitLogAppendQueueCapacity"], "1024");
+        assert_eq!(properties["commitLogAppendQueueBytes"], (64 * 1024 * 1024).to_string());
+        assert_eq!(properties["commitLogMicroBatchEnabled"], "true");
+        assert_eq!(properties["commitLogMicroBatchMaxItems"], "32");
+        assert_eq!(properties["commitLogMicroBatchMaxBytes"], (1024 * 1024).to_string());
+        assert_eq!(properties["commitLogMicroBatchMaxWaitMicros"], "50");
+    }
+
+    #[test]
+    fn serde_loads_commit_log_append_sequencer_settings() -> Result<(), serde_json::Error> {
+        let config: MessageStoreConfig = serde_json::from_str(
+            r#"{
+                "commitLogAppendQueueCapacity": 64,
+                "commitLogAppendQueueBytes": 8388608,
+                "commitLogMicroBatchEnabled": false,
+                "commitLogMicroBatchMaxItems": 8,
+                "commitLogMicroBatchMaxBytes": 524288,
+                "commitLogMicroBatchMaxWaitMicros": 125
+            }"#,
+        )?;
+
+        assert_eq!(config.commit_log_append_queue_capacity, 64);
+        assert_eq!(config.commit_log_append_queue_bytes, 8 * 1024 * 1024);
+        assert!(!config.commit_log_micro_batch_enabled);
+        assert_eq!(config.commit_log_micro_batch_max_items, 8);
+        assert_eq!(config.commit_log_micro_batch_max_bytes, 512 * 1024);
+        assert_eq!(config.commit_log_micro_batch_max_wait_micros, 125);
+        Ok(())
     }
 
     #[test]

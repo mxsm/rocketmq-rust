@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod append_sequencer;
+
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::ops::Deref;
@@ -49,8 +51,8 @@ use rocketmq_model::utils::queue_type_utils::QueueTypeUtils;
 use rocketmq_protocol::common::message::message_decoder::cheetah_from_utf8_lossy;
 use rocketmq_protocol::common::message::message_decoder::string_to_message_properties;
 use rocketmq_runtime::common::system_clock::SystemClock;
-use rocketmq_runtime::common::time_utils;
-use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_runtime::resource_budget::QueueSnapshot;
+#[cfg(feature = "observability")]
 use tokio::time::Instant;
 use tracing::error;
 use tracing::info;
@@ -73,7 +75,6 @@ use crate::base::select_result::SelectMappedBufferResult;
 use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::base::store_stats_service::StoreStatsService;
 use crate::base::swappable::Swappable;
-use crate::base::topic_queue_lock::TopicQueueLock;
 use crate::config::flush_disk_type::FlushDiskType;
 use crate::config::message_store_config::LinuxMemoryLockMode;
 use crate::config::message_store_config::LinuxRecoveryFadviseMode;
@@ -93,13 +94,12 @@ use crate::log_file::commit_log_loader::CommitLogLoader;
 use crate::log_file::commit_log_loader::LoadStatistics;
 use crate::log_file::commit_log_loader::RecoveryFilePrefetch;
 use crate::log_file::commit_log_loader::RecoveryMmapAdvice;
+use crate::log_file::flush_manager_impl::default_flush_manager::CommitLogFlushWakeup;
 use crate::log_file::flush_manager_impl::default_flush_manager::DefaultFlushManager;
-use crate::log_file::flush_manager_impl::default_flush_manager::InternalMessageFlushHandle;
 use crate::log_file::group_commit_request::GroupCommitRequest;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::default_mapped_file_impl::LazyMmapStats;
 use crate::log_file::mapped_file::MappedFile;
-use crate::log_file::mapped_file::MappedFileAppend;
 use crate::message_store::local_file_message_store::CommitLogDispatchHandle;
 use crate::message_store::runtime_state::StoreRuntimeState;
 use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
@@ -116,9 +116,8 @@ use crate::utils::ffi::MADV_RANDOM;
 use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoveryObservation;
 use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoveryRecord;
 use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoverySegmentOutcome;
-use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendAttempt;
-use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendFailure;
-use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendResolution;
+use rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy;
+use rocketmq_store_local::commit_log::append::sequencer::AppendSequencerConfig;
 use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendStatus;
 use rocketmq_store_local::commit_log::load_orchestration::drive_commit_log_load;
 use rocketmq_store_local::commit_log::load_orchestration::parallel_commit_log_load_enabled;
@@ -149,6 +148,11 @@ use rocketmq_store_local::commit_log::recovery::NormalRecoveryState;
 use rocketmq_store_local::commit_log::root::CommitLogRoot;
 use rocketmq_store_local::commit_log::runtime_state::CommitLogActiveMemoryLock;
 use rocketmq_store_local::commit_log::runtime_state::CommitLogRuntimeState;
+
+use self::append_sequencer::CommitLogAppendDependencies;
+use self::append_sequencer::CommitLogAppendPort;
+use self::append_sequencer::CommitLogAppendProcessor;
+use self::append_sequencer::CommitLogAppendRuntime;
 
 pub use rocketmq_store_local::commit_log::record::BLANK_MAGIC_CODE;
 pub use rocketmq_store_local::commit_log::record::MESSAGE_MAGIC_CODE;
@@ -284,18 +288,6 @@ fn encode_message_ext(
     message_store_config: &Arc<MessageStoreConfig>,
 ) -> (Option<PutMessageResult>, BytesMut) {
     message_encoder_pool::encode_message_with_pool(message_ext, message_store_config)
-}
-
-fn encode_message_ext_batch(
-    message_ext_batch: &MessageExtBatch,
-    put_message_context: &mut PutMessageContext,
-    message_store_config: &Arc<MessageStoreConfig>,
-) -> Option<BytesMut> {
-    message_encoder_pool::encode_message_batch_with_pool(message_ext_batch, put_message_context, message_store_config)
-}
-
-fn generate_key(msg: &MessageExtBrokerInner) -> String {
-    message_encoder_pool::generate_key_with_pool(msg)
 }
 
 fn parse_property_crc(properties_map: &HashMap<CheetahString, CheetahString>) -> Result<Option<u32>, ()> {
@@ -542,18 +534,10 @@ impl CommitLogReadHandle {
 /// by that invariant; recovery and CommitLog lifecycle remain exclusively owned by `CommitLog`.
 #[derive(Clone)]
 pub(crate) struct CommitLogInternalMessageWriteHandle {
-    append: MappedFileQueueAppendHandle,
     message_store_config: Arc<MessageStoreConfig>,
     store_runtime_state: Arc<StoreRuntimeState>,
     enabled_append_prop_crc: bool,
-    store_context: CommitLogStoreContext,
-    runtime_state: Arc<CommitLogRuntimeState>,
-    append_message_callback: Arc<DefaultAppendMessageCallback>,
-    put_message_lock: Arc<tokio::sync::Mutex<()>>,
-    topic_queue_lock: Arc<TopicQueueLock>,
-    topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
-    consume_queue_store: ConsumeQueueStore,
-    flush: InternalMessageFlushHandle,
+    append_port: CommitLogAppendPort,
 }
 
 impl CommitLogInternalMessageWriteHandle {
@@ -590,183 +574,16 @@ impl CommitLogInternalMessageWriteHandle {
             msg.with_store_host_v6_flag();
         }
 
-        let topic_queue_key = generate_key(&msg);
-        let mapped_file = self.append.get_last_mapped_file(0, false);
         let need_assign_offset = !(self.message_store_config.duplication_enable
             && self.store_runtime_state.broker_role() != BrokerRole::Slave);
-        let (put_message_result, encoded_buff) = encode_message_ext(&msg, &self.message_store_config);
-        if let Some(result) = put_message_result {
-            return result;
-        }
-        msg.encoded_buff = Some(encoded_buff);
-        let put_message_context = PutMessageContext::new(topic_queue_key.clone());
-
-        let topic_queue_lock = need_assign_offset.then(|| Arc::clone(&self.topic_queue_lock));
-        let _topic_queue_guard = if let Some(topic_queue_lock) = topic_queue_lock.as_ref() {
-            let guard = topic_queue_lock.lock(topic_queue_key.as_str()).await;
-            self.assign_offset(&mut msg);
-            Some(guard)
-        } else {
-            None
+        let prepared = match message_encoder_pool::prepare_message_with_pool(&msg, &self.message_store_config) {
+            Ok(prepared) => prepared,
+            Err(result) => return result,
         };
-
-        let lock_wait_start = Instant::now();
-        let _put_message_lock = self.put_message_lock.lock().await;
-        let lock_wait_millis = lock_wait_start.elapsed().as_millis() as u64;
-        let begin_lock_timestamp = time_utils::current_millis();
-        self.runtime_state.set_begin_time_in_lock(begin_lock_timestamp);
-        let start_time = Instant::now();
-        if !self.message_store_config.duplication_enable {
-            msg.message_ext_inner.store_timestamp = begin_lock_timestamp as i64;
-        }
-
-        let append_attempt = {
-            let (active_memory_lock, active_memory_lock_present) = self.runtime_state.active_memory_lock_parts();
-            CommitLogAppendAttempt::run(
-                mapped_file,
-                |mapped_file| mapped_file.is_full(),
-                || self.append.get_last_mapped_file(0, true),
-                |mapped_file| {
-                    let target = CommitLog::active_memory_lock_target_for_config(
-                        self.message_store_config.as_ref(),
-                        mapped_file.get_wrote_position().max(0) as u64,
-                        mapped_file.get_file_size(),
-                    );
-                    lock_active_mapped_file_parts!(
-                        active_memory_lock,
-                        active_memory_lock_present,
-                        mapped_file,
-                        target,
-                        crate::utils::ffi::mlock,
-                        crate::utils::ffi::munlock,
-                    )
-                },
-                |mapped_file| {
-                    mapped_file.append_message(&mut msg, self.append_message_callback.as_ref(), &put_message_context)
-                },
-            )
-        };
-        let (put_message_result, unlock_mapped_file) = match append_attempt.resolve() {
-            CommitLogAppendResolution::Continue {
-                status,
-                result,
-                unlock_segment,
-            } => (
-                PutMessageResult::new_append_result(CommitLog::put_message_status(status), Some(result)),
-                unlock_segment,
-            ),
-            CommitLogAppendResolution::Return {
-                status,
-                append_result,
-                abandoned_segment,
-                failure,
-            } => {
-                self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
-                drop(_topic_queue_guard);
-                match failure {
-                    CommitLogAppendFailure::InitialSegmentUnavailable
-                    | CommitLogAppendFailure::RolledSegmentUnavailable => {
-                        error!(
-                            "create mapped file error, topic: {} clientAddr: {}",
-                            msg.topic(),
-                            msg.born_host()
-                        );
-                    }
-                    CommitLogAppendFailure::InitialActiveLockFailed { error } => {
-                        error!(
-                            "lock active commitlog mapped file error, topic: {} clientAddr: {} error: {}",
-                            msg.topic(),
-                            msg.born_host(),
-                            error
-                        );
-                    }
-                    CommitLogAppendFailure::RolledActiveLockFailed { error } => {
-                        error!(
-                            "lock rolled commitlog mapped file error, topic: {} clientAddr: {} error: {}",
-                            msg.topic(),
-                            msg.born_host(),
-                            error
-                        );
-                    }
-                    CommitLogAppendFailure::InitialMessageIllegal | CommitLogAppendFailure::InitialUnknown => {}
-                }
-                drop(abandoned_segment);
-                return PutMessageResult::new_append_result(CommitLog::put_message_status(status), append_result);
-            }
-        };
-        let elapsed_time_in_lock = self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
-        #[cfg(feature = "observability")]
-        rocketmq_observability::metrics::store::record_append_latency(elapsed_time_in_lock);
-        if elapsed_time_in_lock > 500 {
-            warn!(
-                "[NOTIFYME]internal putMessage in lock cost time(ms)={}, bodyLength={} AppendMessageResult={}",
-                elapsed_time_in_lock,
-                msg.body_len(),
-                put_message_result.append_message_result().as_ref().unwrap(),
-            );
-        }
-
-        if let (Some(unlock_mf), true) = (unlock_mapped_file, self.message_store_config.warm_mapped_file_enable) {
-            unlock_mf.munlock();
-        }
-
-        if put_message_result.put_message_status() == PutMessageStatus::PutOk {
-            let message_num = get_message_num(&self.topic_config_table, &msg);
-            self.increase_offset(&msg, message_num);
-            if let Some(append_result) = put_message_result.append_message_result() {
-                self.record_put_message_stats(msg.topic(), append_result);
-            }
-            drop(_topic_queue_guard);
-            self.flush.wakeup();
-            put_message_result
-        } else {
-            drop(_topic_queue_guard);
-            warn!(
-                "Failed to append internal message to CommitLog, offset hole created for topic={} queue={}, will be \
-                 recovered",
-                msg.topic(),
-                msg.queue_id()
-            );
-            put_message_result
-        }
-    }
-
-    fn release_put_message_lock(
-        &self,
-        put_message_lock: tokio::sync::MutexGuard<'_, ()>,
-        lock_wait_millis: u64,
-        lock_hold_start: Instant,
-    ) -> u64 {
-        let elapsed_time_in_lock = lock_hold_start.elapsed().as_millis() as u64;
-        self.runtime_state
-            .record_put_message_lock(lock_wait_millis, elapsed_time_in_lock);
-        drop(put_message_lock);
-        self.runtime_state.clear_begin_time_in_lock();
-        elapsed_time_in_lock
-    }
-
-    fn increase_offset(&self, msg: &MessageExtBrokerInner, message_num: i16) {
-        let tran_type = MessageSysFlag::get_transaction_value(msg.sys_flag());
-        if MessageSysFlag::TRANSACTION_NOT_TYPE == tran_type || MessageSysFlag::TRANSACTION_COMMIT_TYPE == tran_type {
-            self.consume_queue_store.increase_queue_offset(msg, message_num);
-        }
-    }
-
-    fn assign_offset(&self, msg: &mut MessageExtBrokerInner) {
-        let tran_type = MessageSysFlag::get_transaction_value(msg.sys_flag());
-        if MessageSysFlag::TRANSACTION_NOT_TYPE == tran_type || MessageSysFlag::TRANSACTION_COMMIT_TYPE == tran_type {
-            self.consume_queue_store.assign_queue_offset(msg);
-        }
-    }
-
-    fn record_put_message_stats(&self, topic: &CheetahString, append_result: &AppendMessageResult) {
-        let stats = &self.store_context.store_stats_service;
-        if append_result.msg_num > 0 {
-            stats.add_single_put_message_topic_times_total(topic.as_str(), append_result.msg_num as usize);
-        }
-        if append_result.wrote_bytes > 0 {
-            stats.add_single_put_message_topic_size_total(topic.as_str(), append_result.wrote_bytes as usize);
-        }
+        self.append_port
+            .append_message(msg, prepared, need_assign_offset)
+            .await
+            .result
     }
 }
 
@@ -897,10 +714,8 @@ mod adapter {
         pub(super) dispatcher: super::CommitLogDispatchHandle,
         pub(super) runtime_state: super::Arc<super::CommitLogRuntimeState>,
         pub(super) store_checkpoint: super::Arc<super::StoreCheckpoint>,
-        pub(super) append_message_callback: super::Arc<super::DefaultAppendMessageCallback>,
+        pub(super) append_runtime: super::CommitLogAppendRuntime,
         pub(super) put_message_lock: super::Arc<tokio::sync::Mutex<()>>,
-        pub(super) topic_queue_lock: super::Arc<super::TopicQueueLock>,
-        pub(super) topic_config_table: super::Arc<super::DashMap<super::CheetahString, super::Arc<super::TopicConfig>>>,
         pub(super) consume_queue_store: super::ConsumeQueueStore,
         pub(super) flush_manager: super::DefaultFlushManager,
         pub(super) cold_data_check_service: super::Arc<super::ColdDataCheckService>,
@@ -925,7 +740,7 @@ impl DerefMut for CommitLog {
 }
 
 impl CommitLog {
-    pub(crate) fn new(
+    pub(crate) fn try_new(
         runtime_scope: crate::runtime::StoreRuntimeScope,
         message_store_config: Arc<MessageStoreConfig>,
         store_runtime_state: Arc<StoreRuntimeState>,
@@ -936,7 +751,7 @@ impl CommitLog {
         topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
         consume_queue_store: ConsumeQueueStore,
         allocate_mapped_file_service: AllocateMappedFileService,
-    ) -> Self {
+    ) -> Result<Self, StoreError> {
         let enabled_append_prop_crc = message_store_config.enabled_append_prop_crc;
         let store_path = message_store_config.get_store_path_commit_log();
         let mapped_file_size = message_store_config.mapped_file_size_commit_log;
@@ -946,7 +761,62 @@ impl CommitLog {
         let mapped_file_queue =
             MappedFileQueue::new(store_path, mapped_file_size as u64, Some(allocate_mapped_file_service));
         let mapped_file_flush = mapped_file_queue.flush_handle();
-        Self {
+        let runtime_state = Arc::new(CommitLogRuntimeState::new(
+            message_store_config.linux_memory_lock_warn_only,
+            memory_lock_budget_bytes,
+        ));
+        let append_message_callback = Arc::new(DefaultAppendMessageCallback::new(
+            message_store_config.clone(),
+            topic_config_table.clone(),
+        ));
+        let put_message_lock = Arc::new(tokio::sync::Mutex::new(()));
+        let flush_manager = DefaultFlushManager::new(
+            runtime_scope.clone(),
+            message_store_config.clone(),
+            mapped_file_flush,
+            store_checkpoint.clone(),
+        );
+        let micro_batch = if message_store_config.commit_log_micro_batch_enabled {
+            MicroBatchPolicy::try_new(
+                message_store_config.commit_log_micro_batch_max_items,
+                message_store_config.commit_log_micro_batch_max_bytes,
+                std::time::Duration::from_micros(message_store_config.commit_log_micro_batch_max_wait_micros),
+            )
+        } else {
+            MicroBatchPolicy::disabled(message_store_config.commit_log_append_queue_bytes)
+        }
+        .map_err(|error| {
+            StoreError::storage(
+                StoreOperation::Start,
+                format!("invalid CommitLog micro-batch policy: {error}"),
+            )
+        })?;
+        let append_processor = CommitLogAppendProcessor::new(CommitLogAppendDependencies {
+            append: mapped_file_queue.append_handle(),
+            message_store_config: Arc::clone(&message_store_config),
+            store_context: store_context.clone(),
+            runtime_state: Arc::clone(&runtime_state),
+            append_callback: Arc::clone(&append_message_callback),
+            put_message_lock: Arc::clone(&put_message_lock),
+            consume_queue_store: consume_queue_store.clone(),
+            flush: flush_manager.commit_log_flush_wakeup(),
+        });
+        let append_runtime = CommitLogAppendRuntime::start(
+            runtime_scope,
+            AppendSequencerConfig {
+                queue_capacity: message_store_config.commit_log_append_queue_capacity,
+                queue_bytes: message_store_config.commit_log_append_queue_bytes,
+                micro_batch,
+            },
+            append_processor,
+        )
+        .map_err(|error| {
+            StoreError::storage(
+                StoreOperation::Start,
+                format!("failed to initialize CommitLog append sequencer: {error}"),
+            )
+        })?;
+        Ok(Self {
             root: CommitLogRoot::new(CommitLogAdapter {
                 mapped_file_queue,
                 message_store_config: message_store_config.clone(),
@@ -955,28 +825,15 @@ impl CommitLog {
                 enabled_append_prop_crc,
                 store_context,
                 dispatcher,
-                runtime_state: Arc::new(CommitLogRuntimeState::new(
-                    message_store_config.linux_memory_lock_warn_only,
-                    memory_lock_budget_bytes,
-                )),
+                runtime_state,
                 store_checkpoint: store_checkpoint.clone(),
-                append_message_callback: Arc::new(DefaultAppendMessageCallback::new(
-                    message_store_config.clone(),
-                    topic_config_table.clone(),
-                )),
-                put_message_lock: Arc::new(Default::default()),
-                topic_queue_lock: Arc::new(TopicQueueLock::with_size(message_store_config.topic_queue_lock_num)),
-                topic_config_table,
+                append_runtime,
+                put_message_lock,
                 consume_queue_store,
-                flush_manager: DefaultFlushManager::new(
-                    runtime_scope,
-                    message_store_config.clone(),
-                    mapped_file_flush,
-                    store_checkpoint,
-                ),
+                flush_manager,
                 cold_data_check_service: Arc::new(Default::default()),
             }),
-        }
+        })
     }
 
     #[inline]
@@ -1000,18 +857,10 @@ impl CommitLog {
 
     pub(crate) fn internal_message_write_handle(&self) -> CommitLogInternalMessageWriteHandle {
         CommitLogInternalMessageWriteHandle {
-            append: self.mapped_file_queue.append_handle(),
             message_store_config: Arc::clone(&self.message_store_config),
             store_runtime_state: Arc::clone(&self.store_runtime_state),
             enabled_append_prop_crc: self.enabled_append_prop_crc,
-            store_context: self.store_context.clone(),
-            runtime_state: Arc::clone(&self.runtime_state),
-            append_message_callback: Arc::clone(&self.append_message_callback),
-            put_message_lock: Arc::clone(&self.put_message_lock),
-            topic_queue_lock: Arc::clone(&self.topic_queue_lock),
-            topic_config_table: Arc::clone(&self.topic_config_table),
-            consume_queue_store: self.consume_queue_store.clone(),
-            flush: self.flush_manager.internal_message_flush_handle(),
+            append_port: self.append_runtime.port(),
         }
     }
 
@@ -1304,6 +1153,7 @@ impl CommitLog {
     }
 
     pub fn shutdown(&mut self) {
+        self.append_runtime.close();
         self.flush_manager.shutdown();
     }
 
@@ -1315,23 +1165,15 @@ impl CommitLog {
         self.runtime_state.put_message_lock_runtime_info()
     }
 
-    fn release_put_message_lock(
-        &self,
-        put_message_lock: tokio::sync::MutexGuard<'_, ()>,
-        lock_wait_millis: u64,
-        lock_hold_start: Instant,
-    ) -> u64 {
-        let elapsed_time_in_lock = lock_hold_start.elapsed().as_millis() as u64;
-        self.runtime_state
-            .record_put_message_lock(lock_wait_millis, elapsed_time_in_lock);
-        drop(put_message_lock);
-        self.runtime_state.clear_begin_time_in_lock();
-        elapsed_time_in_lock
+    /// Returns bounded admission and saturation state for the CommitLog append sequencer.
+    pub fn append_sequencer_runtime_info(&self) -> QueueSnapshot {
+        self.append_runtime.port().snapshot()
     }
 
     pub async fn shutdown_gracefully(
         &mut self,
     ) -> Result<crate::consume_queue::mapped_file_queue::FlushProgress, StoreError> {
+        self.append_runtime.shutdown_gracefully().await;
         self.flush_manager.shutdown_gracefully().await
     }
 
@@ -1453,7 +1295,6 @@ impl CommitLog {
             msg_batch.message_ext_broker_inner.get_properties(),
             msg_batch.message_ext_broker_inner.get_body().map(|body| body.len()),
         );
-        msg_batch.message_ext_broker_inner.message_ext_inner.store_timestamp = current_millis() as i64;
         let tran_type = MessageSysFlag::get_transaction_value(msg_batch.message_ext_broker_inner.sys_flag());
         if MessageSysFlag::TRANSACTION_NOT_TYPE != tran_type {
             return PutMessageResult::new_default(PutMessageStatus::MessageIllegal);
@@ -1479,12 +1320,7 @@ impl CommitLog {
             msg_batch.message_ext_broker_inner.with_store_host_v6_flag();
         }
 
-        let mapped_file = self.mapped_file_queue.get_last_mapped_file();
-        let curr_offset = if let Some(ref mapped_file_inner) = mapped_file {
-            mapped_file_inner.get_wrote_position() as u64 + mapped_file_inner.get_file_from_offset()
-        } else {
-            0
-        };
+        let curr_offset = self.mapped_file_queue.append_handle().current_append_offset();
         let need_handle_ha = self.need_handle_ha(&msg_batch.message_ext_broker_inner);
         let need_ack_nums = match self.handle_ha_service(curr_offset, need_handle_ha) {
             Ok(ack_nums) => ack_nums,
@@ -1496,150 +1332,29 @@ impl CommitLog {
             msg_batch.message_ext_broker_inner.version = MessageVersion::V2;
         }
         let mut put_message_context = PutMessageContext::default();
-        let encoded_buff = encode_message_ext_batch(&msg_batch, &mut put_message_context, &self.message_store_config);
-
-        let topic_queue_key = generate_key(&msg_batch.message_ext_broker_inner);
-        put_message_context.set_topic_queue_table_key(topic_queue_key.clone());
-        msg_batch.encoded_buff = encoded_buff;
-
-        let topic_queue_lock = self.topic_queue_lock.clone();
-        let _topic_queue_guard = topic_queue_lock.lock(topic_queue_key.as_str()).await;
-        self.assign_offset(&mut msg_batch.message_ext_broker_inner);
-
-        let lock_wait_start = Instant::now();
-        let put_message_lock = self.put_message_lock.clone();
-        let _put_message_lock = put_message_lock.lock().await;
-        let lock_wait_millis = lock_wait_start.elapsed().as_millis() as u64;
-        self.runtime_state.set_begin_time_in_lock(time_utils::current_millis());
-        let start_time = Instant::now();
-        // Here settings are stored timestamp, in order to ensure an orderly global
-        msg_batch.message_ext_broker_inner.message_ext_inner.store_timestamp = time_utils::current_millis() as i64;
-
-        let append_attempt = {
-            let adapter = self.root.adapter();
-            let mapped_file_queue = &adapter.mapped_file_queue;
-            let message_store_config = adapter.message_store_config.as_ref();
-            let (active_memory_lock, active_memory_lock_present) = adapter.runtime_state.active_memory_lock_parts();
-            let append_message_callback = adapter.append_message_callback.as_ref();
-            let enabled_append_prop_crc = adapter.enabled_append_prop_crc;
-            CommitLogAppendAttempt::run(
-                mapped_file,
-                |mapped_file| mapped_file.is_full(),
-                || mapped_file_queue.get_last_mapped_file_mut_start_offset(0, true),
-                |mapped_file| {
-                    let target = Self::active_memory_lock_target_for_config(
-                        message_store_config,
-                        mapped_file.get_wrote_position().max(0) as u64,
-                        mapped_file.get_file_size(),
-                    );
-                    lock_active_mapped_file_parts!(
-                        active_memory_lock,
-                        active_memory_lock_present,
-                        mapped_file,
-                        target,
-                        crate::utils::ffi::mlock,
-                        crate::utils::ffi::munlock,
-                    )
-                },
-                |mapped_file| {
-                    mapped_file.append_messages(
-                        &mut msg_batch,
-                        append_message_callback,
-                        &mut put_message_context,
-                        enabled_append_prop_crc,
-                    )
-                },
-            )
+        let prepared = match message_encoder_pool::prepare_message_batch_with_pool(
+            &msg_batch,
+            &mut put_message_context,
+            &self.message_store_config,
+        ) {
+            Ok(prepared) => prepared,
+            Err(result) => return result,
         };
-        let (put_message_result, unlock_mapped_file) = match append_attempt.resolve() {
-            CommitLogAppendResolution::Continue {
-                status,
-                result,
-                unlock_segment,
-            } => (
-                PutMessageResult::new_append_result(Self::put_message_status(status), Some(result)),
-                unlock_segment,
-            ),
-            CommitLogAppendResolution::Return {
-                status,
-                append_result,
-                abandoned_segment,
-                failure,
-            } => {
-                self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
-                drop(_topic_queue_guard);
-                match failure {
-                    CommitLogAppendFailure::InitialSegmentUnavailable
-                    | CommitLogAppendFailure::RolledSegmentUnavailable => {
-                        error!(
-                            "create mapped file error, topic: {}  clientAddr: {}",
-                            msg_batch.message_ext_broker_inner.topic(),
-                            msg_batch.message_ext_broker_inner.born_host()
-                        );
-                    }
-                    CommitLogAppendFailure::InitialActiveLockFailed { error } => {
-                        error!(
-                            "lock active commitlog mapped file error, topic: {} clientAddr: {} error: {}",
-                            msg_batch.message_ext_broker_inner.topic(),
-                            msg_batch.message_ext_broker_inner.born_host(),
-                            error
-                        );
-                    }
-                    CommitLogAppendFailure::RolledActiveLockFailed { error } => {
-                        error!(
-                            "lock rolled commitlog mapped file error, topic: {} clientAddr: {} error: {}",
-                            msg_batch.message_ext_broker_inner.topic(),
-                            msg_batch.message_ext_broker_inner.born_host(),
-                            error
-                        );
-                    }
-                    CommitLogAppendFailure::InitialMessageIllegal | CommitLogAppendFailure::InitialUnknown => {}
-                }
-                drop(abandoned_segment);
-                return PutMessageResult::new_append_result(Self::put_message_status(status), append_result);
-            }
-        };
-        let elapsed_time_in_lock = self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
-        #[cfg(feature = "observability")]
-        rocketmq_observability::metrics::store::record_append_latency(elapsed_time_in_lock);
-        if elapsed_time_in_lock > 500 {
-            warn!(
-                "[NOTIFYME]putMessage in lock cost time(ms)={}, bodyLength={} AppendMessageResult={}",
-                elapsed_time_in_lock,
-                msg_batch.message_ext_broker_inner.body_len(),
-                put_message_result.append_message_result().as_ref().unwrap(),
-            );
+        let sequenced = self
+            .append_runtime
+            .port()
+            .append_batch(msg_batch, prepared, put_message_context)
+            .await;
+        if sequenced.result.put_message_status() != PutMessageStatus::PutOk {
+            return sequenced.result;
         }
-        if let (Some(unlock_mf), true) = (unlock_mapped_file, self.message_store_config.warm_mapped_file_enable) {
-            unlock_mf.munlock();
-        }
-        if put_message_result.put_message_status() == PutMessageStatus::PutOk {
-            self.increase_offset(
-                &msg_batch.message_ext_broker_inner,
-                put_message_context.get_batch_size() as i16,
-            );
-            if let Some(append_result) = put_message_result.append_message_result() {
-                self.record_put_message_stats(msg_batch.message_ext_broker_inner.topic(), append_result);
-            }
-            // Topic-queue lock released here after successful write
-            drop(_topic_queue_guard);
-            self.handle_disk_flush_and_ha(
-                put_message_result,
-                msg_batch.message_ext_broker_inner,
-                need_ack_nums,
-                need_handle_ha,
-            )
-            .await
-        } else {
-            // Write failed - topic_queue_lock will be released, but offset is already assigned
-            drop(_topic_queue_guard);
-            warn!(
-                "Failed to append batch messages to CommitLog, offset hole created for topic={} queue={}",
-                msg_batch.message_ext_broker_inner.topic(),
-                msg_batch.message_ext_broker_inner.queue_id()
-            );
-            put_message_result
-        }
+        self.handle_disk_flush_and_ha(
+            sequenced.result,
+            sequenced.batch.message_ext_broker_inner,
+            need_ack_nums,
+            need_handle_ha,
+        )
+        .await
     }
 
     #[tracing::instrument(
@@ -1684,16 +1399,9 @@ impl CommitLog {
             msg.with_store_host_v6_flag();
         }
 
-        let topic_queue_key = generate_key(&msg);
-
         //get last mapped file from mapped file queue
-        let mapped_file = self.mapped_file_queue.get_last_mapped_file();
         // current offset is physical offset
-        let curr_offset = if let Some(ref mapped_file_inner) = mapped_file {
-            mapped_file_inner.get_wrote_position() as u64 + mapped_file_inner.get_file_from_offset()
-        } else {
-            0
-        };
+        let curr_offset = self.mapped_file_queue.append_handle().current_append_offset();
         let need_handle_ha = self.need_handle_ha(&msg);
         let need_ack_nums = match self.handle_ha_service(curr_offset, need_handle_ha) {
             Ok(ack_nums) => ack_nums,
@@ -1703,164 +1411,20 @@ impl CommitLog {
         let need_assign_offset = !(self.message_store_config.duplication_enable
             && self.store_runtime_state.broker_role() != BrokerRole::Slave);
 
-        // Encode message BEFORE acquiring any locks
-        let (put_message_result, encoded_buff) = encode_message_ext(&msg, &self.message_store_config);
-        if let Some(result) = put_message_result {
-            return result;
-        }
-        msg.encoded_buff = Some(encoded_buff);
-        let put_message_context = PutMessageContext::new(topic_queue_key.clone());
-
-        let topic_queue_lock = need_assign_offset.then(|| self.topic_queue_lock.clone());
-        let _topic_queue_guard = if let Some(topic_queue_lock) = topic_queue_lock.as_ref() {
-            let guard = topic_queue_lock.lock(topic_queue_key.as_str()).await;
-            self.assign_offset(&mut msg);
-            Some(guard)
-        } else {
-            None
+        let prepared = match message_encoder_pool::prepare_message_with_pool(&msg, &self.message_store_config) {
+            Ok(prepared) => prepared,
+            Err(result) => return result,
         };
-
-        let lock_wait_start = Instant::now();
-        let put_message_lock = self.put_message_lock.clone();
-        let _put_message_lock = put_message_lock.lock().await;
-        let lock_wait_millis = lock_wait_start.elapsed().as_millis() as u64;
-        let begin_lock_timestamp = time_utils::current_millis();
-        self.runtime_state.set_begin_time_in_lock(begin_lock_timestamp);
-        let start_time = Instant::now();
-        // Here settings are stored timestamp, in order to ensure an orderly global
-        if !self.message_store_config.duplication_enable {
-            msg.message_ext_inner.store_timestamp = begin_lock_timestamp as i64;
+        let sequenced = self
+            .append_runtime
+            .port()
+            .append_message(msg, prepared, need_assign_offset)
+            .await;
+        if sequenced.result.put_message_status() != PutMessageStatus::PutOk {
+            return sequenced.result;
         }
-
-        let append_attempt = {
-            let adapter = self.root.adapter();
-            let mapped_file_queue = &adapter.mapped_file_queue;
-            let message_store_config = adapter.message_store_config.as_ref();
-            let (active_memory_lock, active_memory_lock_present) = adapter.runtime_state.active_memory_lock_parts();
-            let append_message_callback = adapter.append_message_callback.as_ref();
-            CommitLogAppendAttempt::run(
-                mapped_file,
-                |mapped_file| mapped_file.is_full(),
-                || mapped_file_queue.get_last_mapped_file_mut_start_offset(0, true),
-                |mapped_file| {
-                    let target = Self::active_memory_lock_target_for_config(
-                        message_store_config,
-                        mapped_file.get_wrote_position().max(0) as u64,
-                        mapped_file.get_file_size(),
-                    );
-                    lock_active_mapped_file_parts!(
-                        active_memory_lock,
-                        active_memory_lock_present,
-                        mapped_file,
-                        target,
-                        crate::utils::ffi::mlock,
-                        crate::utils::ffi::munlock,
-                    )
-                },
-                |mapped_file| mapped_file.append_message(&mut msg, append_message_callback, &put_message_context),
-            )
-        };
-        let (put_message_result, unlock_mapped_file) = match append_attempt.resolve() {
-            CommitLogAppendResolution::Continue {
-                status,
-                result,
-                unlock_segment,
-            } => (
-                PutMessageResult::new_append_result(Self::put_message_status(status), Some(result)),
-                unlock_segment,
-            ),
-            CommitLogAppendResolution::Return {
-                status,
-                append_result,
-                abandoned_segment,
-                failure,
-            } => {
-                self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
-                drop(_topic_queue_guard);
-                match failure {
-                    CommitLogAppendFailure::InitialSegmentUnavailable
-                    | CommitLogAppendFailure::RolledSegmentUnavailable => {
-                        error!(
-                            "create mapped file error, topic: {}  clientAddr: {}",
-                            msg.topic(),
-                            msg.born_host()
-                        );
-                    }
-                    CommitLogAppendFailure::InitialActiveLockFailed { error } => {
-                        error!(
-                            "lock active commitlog mapped file error, topic: {} clientAddr: {} error: {}",
-                            msg.topic(),
-                            msg.born_host(),
-                            error
-                        );
-                    }
-                    CommitLogAppendFailure::RolledActiveLockFailed { error } => {
-                        error!(
-                            "lock rolled commitlog mapped file error, topic: {} clientAddr: {} error: {}",
-                            msg.topic(),
-                            msg.born_host(),
-                            error
-                        );
-                    }
-                    CommitLogAppendFailure::InitialMessageIllegal | CommitLogAppendFailure::InitialUnknown => {}
-                }
-                drop(abandoned_segment);
-                return PutMessageResult::new_append_result(Self::put_message_status(status), append_result);
-            }
-        };
-        let elapsed_time_in_lock = self.release_put_message_lock(_put_message_lock, lock_wait_millis, start_time);
-        #[cfg(feature = "observability")]
-        rocketmq_observability::metrics::store::record_append_latency(elapsed_time_in_lock);
-        if elapsed_time_in_lock > 500 {
-            warn!(
-                "[NOTIFYME]putMessage in lock cost time(ms)={}, bodyLength={} AppendMessageResult={}",
-                elapsed_time_in_lock,
-                msg.body_len(),
-                put_message_result.append_message_result().as_ref().unwrap(),
-            );
-        }
-
-        if let (Some(unlock_mf), true) = (unlock_mapped_file, self.message_store_config.warm_mapped_file_enable) {
-            unlock_mf.munlock();
-        }
-
-        if put_message_result.put_message_status() == PutMessageStatus::PutOk {
-            let message_num = get_message_num(&self.topic_config_table, &msg);
-            self.increase_offset(&msg, message_num);
-            if let Some(append_result) = put_message_result.append_message_result() {
-                self.record_put_message_stats(msg.topic(), append_result);
-            }
-            // Topic-queue lock released here after successful write
-            drop(_topic_queue_guard);
-            self.handle_disk_flush_and_ha(put_message_result, msg, need_ack_nums, need_handle_ha)
-                .await
-        } else {
-            // Write failed - topic_queue_lock will be released, but offset is already assigned
-            // This creates a hole in ConsumeQueue that will be filled by recovery process
-            drop(_topic_queue_guard);
-            warn!(
-                "Failed to append message to CommitLog, offset hole created for topic={} queue={}, will be recovered",
-                msg.topic(),
-                msg.queue_id()
-            );
-            put_message_result
-        }
-    }
-
-    fn increase_offset(&self, msg: &MessageExtBrokerInner, message_num: i16) {
-        let tran_type = MessageSysFlag::get_transaction_value(msg.sys_flag());
-        if MessageSysFlag::TRANSACTION_NOT_TYPE == tran_type || MessageSysFlag::TRANSACTION_COMMIT_TYPE == tran_type {
-            self.consume_queue_store.increase_queue_offset(msg, message_num);
-        }
-    }
-
-    #[inline]
-    fn assign_offset(&self, msg: &mut MessageExtBrokerInner) {
-        let tran_type = MessageSysFlag::get_transaction_value(msg.sys_flag());
-        // if the message is not transaction message or transaction commit message
-        if MessageSysFlag::TRANSACTION_NOT_TYPE == tran_type || MessageSysFlag::TRANSACTION_COMMIT_TYPE == tran_type {
-            self.consume_queue_store.assign_queue_offset(msg);
-        }
+        self.handle_disk_flush_and_ha(sequenced.result, sequenced.message, need_ack_nums, need_handle_ha)
+            .await
     }
 
     #[inline]
@@ -1921,35 +1485,17 @@ impl CommitLog {
                     put_message_result.set_put_message_status(flush_status);
                 }
             }
-            // Async flush + HA: Only wait for HA, flush happens asynchronously
+            // The sequencer already issued one aggregate async-flush wake-up for this micro-batch.
             (FlushDiskType::AsyncFlush, true) => {
-                // Trigger async flush (no waiting)
-                let _ = self.handle_disk_flush(append_message_result, &msg).await;
-                // Wait for HA replication
                 let replica_status = self.handle_ha(append_message_result, need_ack_nums).await;
                 if replica_status != PutMessageStatus::PutOk {
                     put_message_result.set_put_message_status(replica_status);
                 }
             }
-            // Async flush only: Don't wait for anything (fastest path)
-            (FlushDiskType::AsyncFlush, false) => {
-                // Trigger async flush and return immediately
-                let _ = self.handle_disk_flush(append_message_result, &msg).await;
-                // No waiting needed - this is the hot path for high-throughput scenarios
-            }
+            (FlushDiskType::AsyncFlush, false) => {}
         }
 
         put_message_result
-    }
-
-    fn record_put_message_stats(&self, topic: &CheetahString, append_result: &AppendMessageResult) {
-        let stats = &self.store_context.store_stats_service;
-        if append_result.msg_num > 0 {
-            stats.add_single_put_message_topic_times_total(topic.as_str(), append_result.msg_num as usize);
-        }
-        if append_result.wrote_bytes > 0 {
-            stats.add_single_put_message_topic_size_total(topic.as_str(), append_result.wrote_bytes as usize);
-        }
     }
 
     async fn handle_ha(&self, put_message_result: &AppendMessageResult, need_ack_nums: i32) -> PutMessageStatus {
@@ -3413,6 +2959,7 @@ mod tests {
     use std::path::Path;
     use std::path::PathBuf;
     use std::sync::Arc;
+    use std::time::Duration;
 
     use super::*;
     use crate::base::memory_lock_manager::MemoryLockCategory;
@@ -3498,6 +3045,15 @@ mod tests {
         fs::create_dir_all(root).expect("create mapped file dir");
         let file_path = root.join(format!("{offset:020}"));
         DefaultMappedFile::new(CheetahString::from(file_path.to_string_lossy().as_ref()), file_size)
+    }
+
+    fn append_test_message(topic: &'static str, body: &'static [u8]) -> MessageExtBrokerInner {
+        let mut message = MessageExtBrokerInner::default();
+        message.set_topic(CheetahString::from_static_str(topic));
+        message.message_ext_inner.set_queue_id(0);
+        message.set_body(Bytes::from_static(body));
+        message.set_wait_store_msg_ok(false);
+        message
     }
 
     fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -3928,6 +3484,160 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn append_sequencer_projects_fifo_offsets_across_segment_rollover() {
+        let temp_dir = tempfile::tempdir().expect("create append sequencer temp dir");
+        let mut store = new_test_message_store_with_config(
+            temp_dir.path(),
+            MessageStoreConfig {
+                flush_disk_type: FlushDiskType::AsyncFlush,
+                mapped_file_size_commit_log: 256,
+                ha_listen_port: 0,
+                commit_log_micro_batch_max_items: 4,
+                commit_log_micro_batch_max_bytes: 4096,
+                commit_log_micro_batch_max_wait_micros: 1000,
+                ..MessageStoreConfig::default()
+            },
+            BrokerRole::AsyncMaster,
+            false,
+        );
+        store.init().await.expect("init append sequencer store");
+        assert!(store.load().await, "load append sequencer store");
+        store.start().await.expect("start append sequencer store");
+
+        let commit_log = store.get_commit_log();
+        let (first, second, third) = tokio::join!(
+            commit_log.put_message(append_test_message("append-sequencer-rollover", b"first-message-body")),
+            commit_log.put_message(append_test_message("append-sequencer-rollover", b"second-message-body")),
+            commit_log.put_message(append_test_message("append-sequencer-rollover", b"third-message-body")),
+        );
+        let results = [first, second, third];
+
+        assert!(results
+            .iter()
+            .all(|result| result.put_message_status() == PutMessageStatus::PutOk));
+        assert_eq!(
+            results
+                .iter()
+                .map(|result| {
+                    result
+                        .append_message_result()
+                        .expect("successful append result")
+                        .logics_offset
+                })
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+        let physical_offsets = results
+            .iter()
+            .map(|result| {
+                result
+                    .append_message_result()
+                    .expect("successful append result")
+                    .wrote_offset
+            })
+            .collect::<Vec<_>>();
+        assert!(physical_offsets.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(
+            physical_offsets
+                .iter()
+                .map(|offset| offset / 256)
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                >= 2,
+            "three appends should cross the configured CommitLog segment boundary"
+        );
+
+        let queue = commit_log.append_sequencer_runtime_info();
+        assert_eq!(queue.depth, 0);
+        assert_eq!(queue.reserved_count, 0);
+        assert_eq!(commit_log.put_message_lock_runtime_info().acquire_total, 1);
+
+        store.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn caller_drop_does_not_cancel_admitted_append_and_capacity_stays_bounded() {
+        let temp_dir = tempfile::tempdir().expect("create caller-drop temp dir");
+        let mut store = new_test_message_store_with_config(
+            temp_dir.path(),
+            MessageStoreConfig {
+                flush_disk_type: FlushDiskType::AsyncFlush,
+                mapped_file_size_commit_log: 4096,
+                ha_listen_port: 0,
+                commit_log_append_queue_capacity: 1,
+                commit_log_append_queue_bytes: 4096,
+                commit_log_micro_batch_max_items: 1,
+                commit_log_micro_batch_max_bytes: 4096,
+                commit_log_micro_batch_max_wait_micros: 0,
+                ..MessageStoreConfig::default()
+            },
+            BrokerRole::AsyncMaster,
+            false,
+        );
+        store.init().await.expect("init caller-drop store");
+        assert!(store.load().await, "load caller-drop store");
+        store.start().await.expect("start caller-drop store");
+        let store = Arc::new(store);
+
+        let writer_lock = Arc::clone(&store.get_commit_log().put_message_lock).lock_owned().await;
+        let caller_store = Arc::clone(&store);
+        let caller = tokio::spawn(async move {
+            caller_store
+                .get_commit_log()
+                .put_message(append_test_message(
+                    "append-sequencer-caller-drop",
+                    b"admitted-before-caller-drop",
+                ))
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if store.get_commit_log().append_sequencer_runtime_info().reserved_count == 1 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("first append should retain one bounded queue permit");
+
+        let saturated = store
+            .get_commit_log()
+            .put_message(append_test_message(
+                "append-sequencer-caller-drop",
+                b"rejected-while-capacity-is-held",
+            ))
+            .await;
+        assert_eq!(saturated.put_message_status(), PutMessageStatus::OsPageCacheBusy);
+
+        caller.abort();
+        let caller_error = match caller.await {
+            Ok(_) => panic!("caller task should be cancelled"),
+            Err(error) => error,
+        };
+        assert!(caller_error.is_cancelled());
+        drop(writer_lock);
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let commit_log = store.get_commit_log();
+                if commit_log.get_max_offset() > 0 && commit_log.append_sequencer_runtime_info().reserved_count == 0 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("admitted append should finish after its caller is dropped");
+
+        let mut store = match Arc::try_unwrap(store) {
+            Ok(store) => store,
+            Err(_) => panic!("caller-drop test should release every LocalFileMessageStore owner"),
+        };
+        store.shutdown().await;
     }
 
     #[tokio::test]

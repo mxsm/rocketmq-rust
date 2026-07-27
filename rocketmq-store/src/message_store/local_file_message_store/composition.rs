@@ -123,7 +123,7 @@ impl LocalFileMessageStore {
             delay_level_table.clone(),
         );
         let store_runtime_state = Arc::new(StoreRuntimeState::new(message_store_config.as_ref()));
-        let mut commit_log = CommitLog::new(
+        let mut commit_log = CommitLog::try_new(
             runtime_scope.clone(),
             message_store_config.clone(),
             Arc::clone(&store_runtime_state),
@@ -134,7 +134,7 @@ impl LocalFileMessageStore {
             topic_config_table.clone(),
             consume_queue_store.clone(),
             (*allocate_mapped_file_service).clone(),
-        );
+        )?;
         commit_log.set_store_health_recorder(store_health_recorder.clone());
         let commit_log_read = commit_log.read_handle();
         let commit_log_cleanup = commit_log.cleanup_handle();
