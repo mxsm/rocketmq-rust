@@ -17,6 +17,7 @@
 use rocketmq_admin_cli::rocketmq_cli::RocketMQCli;
 use rocketmq_admin_core::client_adapter::ClientRuntime;
 use rocketmq_admin_core::client_adapter::ClientRuntimeConfig;
+use rocketmq_admin_core::client_adapter::TelemetryHandle;
 use rocketmq_model::common::mq_version::CURRENT_VERSION;
 use rocketmq_model::utils::env_utils::EnvUtils;
 use rocketmq_protocol::protocol::remoting_command;
@@ -35,6 +36,7 @@ fn main() {
             let client_runtime = ClientRuntime::new(
                 owner.root_context().child("rocketmq-admin-client"),
                 ClientRuntimeConfig::default(),
+                TelemetryHandle::noop(),
             );
             let exit_code = owner.block_on(async_main(client_runtime.clone()));
             let client_report = owner.block_on(client_runtime.shutdown());

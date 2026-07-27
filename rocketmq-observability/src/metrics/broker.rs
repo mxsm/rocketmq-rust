@@ -39,7 +39,7 @@ pub use crate::semantic::metrics::TOPIC_CREATE_EXECUTION_TIME;
 pub use crate::semantic::metrics::TOPIC_NUMBER;
 
 #[cfg(not(feature = "otel-metrics"))]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct BrokerMetrics;
 
 #[cfg(not(feature = "otel-metrics"))]
@@ -61,6 +61,7 @@ impl BrokerMetrics {
 #[cfg(feature = "otel-metrics")]
 #[derive(Clone)]
 pub struct BrokerMetrics {
+    telemetry: Option<crate::TelemetryRecorder>,
     messages_in_total: opentelemetry::metrics::Counter<u64>,
     messages_out_total: opentelemetry::metrics::Counter<u64>,
     throughput_in_total: opentelemetry::metrics::Counter<u64>,
@@ -72,7 +73,19 @@ pub struct BrokerMetrics {
 
 #[cfg(feature = "otel-metrics")]
 impl BrokerMetrics {
-    pub fn new(meter: &opentelemetry::metrics::Meter) -> Self {
+    /// Creates a lifecycle-gated recorder from an explicit telemetry handle.
+    #[must_use]
+    pub fn from_handle(telemetry: &crate::TelemetryHandle) -> Option<Self> {
+        let telemetry = telemetry.child(crate::BROKER_METER_SCOPE);
+        let meter = telemetry.meter()?;
+        Some(Self::build(&meter, Some(telemetry)))
+    }
+
+    pub(crate) fn new(meter: &opentelemetry::metrics::Meter) -> Self {
+        Self::build(meter, None)
+    }
+
+    fn build(meter: &opentelemetry::metrics::Meter, telemetry: Option<crate::TelemetryRecorder>) -> Self {
         let messages_in_total = meter
             .u64_counter(MESSAGES_IN_TOTAL)
             .with_description("Total number of messages received by broker")
@@ -116,6 +129,7 @@ impl BrokerMetrics {
             .build();
 
         Self {
+            telemetry,
             messages_in_total,
             messages_out_total,
             throughput_in_total,
@@ -127,38 +141,57 @@ impl BrokerMetrics {
     }
 
     #[inline]
+    fn is_active(&self) -> bool {
+        self.telemetry.as_ref().is_none_or(crate::TelemetryRecorder::is_active)
+    }
+
+    #[inline]
     pub fn record_messages_in_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.messages_in_total.add(count, attributes);
+        if self.is_active() {
+            self.messages_in_total.add(count, attributes);
+        }
     }
 
     #[inline]
     pub fn record_messages_out_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.messages_out_total.add(count, attributes);
+        if self.is_active() {
+            self.messages_out_total.add(count, attributes);
+        }
     }
 
     #[inline]
     pub fn record_throughput_in_total(&self, bytes: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.throughput_in_total.add(bytes, attributes);
+        if self.is_active() {
+            self.throughput_in_total.add(bytes, attributes);
+        }
     }
 
     #[inline]
     pub fn record_throughput_out_total(&self, bytes: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.throughput_out_total.add(bytes, attributes);
+        if self.is_active() {
+            self.throughput_out_total.add(bytes, attributes);
+        }
     }
 
     #[inline]
     pub fn record_message_size(&self, size: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.message_size.record(size, attributes);
+        if self.is_active() {
+            self.message_size.record(size, attributes);
+        }
     }
 
     #[inline]
     pub fn record_send_message_latency(&self, latency_ms: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.send_message_latency.record(latency_ms, attributes);
+        if self.is_active() {
+            self.send_message_latency.record(latency_ms, attributes);
+        }
     }
 
     #[inline]
     pub fn record_metrics_label_dropped_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.metrics_label_dropped_total.add(count, attributes);
+        if self.is_active() {
+            self.metrics_label_dropped_total.add(count, attributes);
+        }
     }
 }
 

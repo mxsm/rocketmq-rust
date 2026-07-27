@@ -116,10 +116,10 @@ impl LogFilterReloadRequest {
 type ReloadOperation = dyn Fn(EnvFilter) -> Result<(), ObservabilityError> + Send + Sync + 'static;
 
 struct LogFilterHandleInner {
-    service_name: Arc<str>,
     current: RwLock<ResolvedLogFilter>,
     reload: Box<ReloadOperation>,
     operation_lock: Mutex<()>,
+    metrics: crate::metrics::log_filter::LogFilterMetrics,
 }
 
 #[derive(Clone)]
@@ -128,13 +128,17 @@ pub struct LogFilterHandle {
 }
 
 impl LogFilterHandle {
-    pub(crate) fn new<F>(service_name: impl Into<Arc<str>>, initial: ResolvedLogFilter, reload: F) -> Self
+    pub(crate) fn new<F>(
+        initial: ResolvedLogFilter,
+        metrics: crate::metrics::log_filter::LogFilterMetrics,
+        reload: F,
+    ) -> Self
     where
         F: Fn(EnvFilter) -> Result<(), ObservabilityError> + Send + Sync + 'static,
     {
         Self {
             inner: Arc::new(LogFilterHandleInner {
-                service_name: service_name.into(),
+                metrics,
                 current: RwLock::new(initial),
                 reload: Box::new(reload),
                 operation_lock: Mutex::new(()),
@@ -158,11 +162,7 @@ impl LogFilterHandle {
         let resolved = match resolved {
             Ok(resolved) => resolved,
             Err(error) => {
-                crate::metrics::log_filter::record_reload(
-                    self.inner.service_name.as_ref(),
-                    false,
-                    LogFilterSource::Runtime,
-                );
+                self.inner.metrics.record_reload(false, LogFilterSource::Runtime);
                 return Err(error);
             }
         };
@@ -185,7 +185,7 @@ impl LogFilterHandle {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let previous = self.current();
         if let Err(error) = (self.inner.reload)(filter) {
-            crate::metrics::log_filter::record_reload(self.inner.service_name.as_ref(), false, resolved.source());
+            self.inner.metrics.record_reload(false, resolved.source());
             return Err(error);
         }
         *self
@@ -193,13 +193,31 @@ impl LogFilterHandle {
             .current
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = resolved.clone();
-        crate::metrics::log_filter::record_reload(self.inner.service_name.as_ref(), true, resolved.source());
-        crate::metrics::log_filter::set_active(
-            self.inner.service_name.as_ref(),
-            Some(previous.source()),
-            resolved.source(),
-        );
+        self.inner.metrics.record_reload(true, resolved.source());
+        self.inner
+            .metrics
+            .set_active(Some(previous.source()), resolved.source());
         Ok(resolved)
+    }
+
+    /// Records the absolute expiry timestamp of a temporary filter override.
+    pub fn set_expiry_timestamp(&self, timestamp_seconds: u64) {
+        self.inner.metrics.set_expiry_timestamp(timestamp_seconds);
+    }
+
+    /// Records a failed durable audit write.
+    pub fn record_audit_failure(&self) {
+        self.inner.metrics.record_audit_failure();
+    }
+
+    /// Records a failed automatic restore after an override expires.
+    pub fn record_auto_restore_failure(&self) {
+        self.inner.metrics.record_auto_restore_failure();
+    }
+
+    /// Records a failed rollback to the startup filter.
+    pub fn record_rollback_failure(&self) {
+        self.inner.metrics.record_rollback_failure();
     }
 }
 

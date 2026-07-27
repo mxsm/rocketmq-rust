@@ -1040,6 +1040,13 @@ pub const RUST_METRICS: &[MetricDescriptor] = &[
         labels: &[],
         source: MetricSource::Observability,
     },
+    MetricDescriptor {
+        name: metrics::RELEASE_INFO,
+        kind: MetricKind::Gauge,
+        unit: "1",
+        labels: &[labels::SERVICE, labels::RELEASE_COMMIT, labels::RELEASE_NONCE],
+        source: MetricSource::Observability,
+    },
 ];
 
 pub const fn java_metrics() -> &'static [MetricDescriptor] {
@@ -1173,8 +1180,8 @@ mod tests {
             .collect::<HashSet<_>>();
 
         assert_eq!(JAVA_METRICS.len(), 93);
-        assert_eq!(RUST_METRICS.len(), 32);
-        assert_eq!(combined.len(), 125, "duplicate metric names across catalogs");
+        assert_eq!(RUST_METRICS.len(), 33);
+        assert_eq!(combined.len(), 126, "duplicate metric names across catalogs");
     }
 
     #[test]
@@ -1227,6 +1234,22 @@ mod tests {
             assert_eq!(descriptor.source, MetricSource::Observability);
             assert!(descriptor.labels.is_empty());
         }
+    }
+
+    #[test]
+    fn release_info_has_low_cardinality_catalog_contract() {
+        let descriptor = RUST_METRICS
+            .iter()
+            .find(|descriptor| descriptor.name == metrics::RELEASE_INFO)
+            .expect("release info metric descriptor");
+
+        assert_eq!(descriptor.kind, MetricKind::Gauge);
+        assert_eq!(descriptor.unit, "1");
+        assert_eq!(
+            descriptor.labels,
+            &[labels::SERVICE, labels::RELEASE_COMMIT, labels::RELEASE_NONCE]
+        );
+        assert_eq!(descriptor.source, MetricSource::Observability);
     }
 
     #[test]

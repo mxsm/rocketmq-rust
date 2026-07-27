@@ -14,5 +14,7 @@
 
 pub const BROKER_RECEIVE_SEND: &str = "RocketMQ BROKER RECEIVE_SEND";
 pub const STORE_APPEND: &str = "RocketMQ STORE APPEND";
+pub const STORE_FLUSH: &str = "RocketMQ STORE FLUSH";
+pub const STORE_DISPATCH: &str = "RocketMQ STORE DISPATCH";
 pub const PRODUCER_SEND: &str = "RocketMQ PRODUCER SEND";
 pub const CONSUMER_PROCESS: &str = "RocketMQ CONSUMER PROCESS";

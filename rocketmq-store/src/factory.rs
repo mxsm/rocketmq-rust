@@ -32,6 +32,7 @@ use crate::message_store::rocksdb_message_store::RocksDBMessageStore;
 use crate::message_store::OwnedMessageStore;
 use crate::stats::broker_stats_manager::BrokerStatsManager;
 use crate::store_error::StoreError;
+use crate::telemetry::StoreTelemetry;
 use crate::timer::timer_message_store::TimerMessageStore;
 
 /// Complete configuration required to open one Broker message store.
@@ -41,6 +42,7 @@ pub struct StoreFactoryConfig {
     topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
     broker_stats_manager: Option<Arc<BrokerStatsManager>>,
     notify_message_arrive_in_batch: bool,
+    telemetry: StoreTelemetry,
 }
 
 impl StoreFactoryConfig {
@@ -50,6 +52,7 @@ impl StoreFactoryConfig {
         topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
         broker_stats_manager: Option<Arc<BrokerStatsManager>>,
         notify_message_arrive_in_batch: bool,
+        telemetry: StoreTelemetry,
     ) -> Self {
         Self {
             message_store,
@@ -57,6 +60,7 @@ impl StoreFactoryConfig {
             topic_config_table,
             broker_stats_manager,
             notify_message_arrive_in_batch,
+            telemetry,
         }
     }
 
@@ -120,13 +124,14 @@ impl StoreFactory {
         service_context: ChildServiceContext,
     ) -> Result<OpenedStore, StoreFactoryError> {
         let backend = StoreType::LocalFile;
-        let mut store = LocalFileMessageStore::try_new(
+        let mut store = LocalFileMessageStore::try_new_with_telemetry(
             config.message_store,
             config.runtime,
             config.topic_config_table,
             config.broker_stats_manager,
             config.notify_message_arrive_in_batch,
             service_context.child("local"),
+            config.telemetry,
         )
         .map_err(|source| StoreFactoryError::Open { backend, source })?;
         store
@@ -146,13 +151,14 @@ impl StoreFactory {
         service_context: ChildServiceContext,
     ) -> Result<OpenedStore, StoreFactoryError> {
         let backend = StoreType::RocksDB;
-        let store = RocksDBMessageStore::try_new(
+        let store = RocksDBMessageStore::try_new_with_telemetry(
             config.message_store,
             config.runtime,
             config.topic_config_table,
             config.broker_stats_manager,
             config.notify_message_arrive_in_batch,
             service_context.child("rocksdb"),
+            config.telemetry,
         )
         .map_err(|source| StoreFactoryError::Open { backend, source })?;
         let timer_message_store = store.get_timer_message_store().cloned();

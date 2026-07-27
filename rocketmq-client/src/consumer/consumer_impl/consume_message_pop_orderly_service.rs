@@ -32,6 +32,8 @@ use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::message::MessageConst;
 use rocketmq_model::common::message::MessageTrait;
+use rocketmq_observability::metrics::client::ClientMetrics;
+use rocketmq_observability::TelemetryHandle;
 use rocketmq_protocol::protocol::body::cm_result::CMResult;
 use rocketmq_protocol::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
@@ -66,6 +68,8 @@ use rocketmq_runtime::ChildServiceContext;
 
 pub struct ConsumeMessagePopOrderlyService {
     service_context: ChildServiceContext,
+    telemetry_handle: TelemetryHandle,
+    client_metrics: ClientMetrics,
     pub(crate) default_mqpush_consumer_impl: Option<Weak<DefaultMQPushConsumerImpl>>,
     pub(crate) client_config: Arc<ClientConfig>,
     pub(crate) consumer_config: Arc<ConsumerConfig>,
@@ -203,6 +207,8 @@ fn record_orderly_process_event<E>(
 impl ConsumeMessagePopOrderlyService {
     pub fn new(
         service_context: ChildServiceContext,
+        telemetry_handle: TelemetryHandle,
+        client_metrics: ClientMetrics,
         client_config: Arc<ClientConfig>,
         consumer_config: Arc<ConsumerConfig>,
         consumer_group: CheetahString,
@@ -212,6 +218,8 @@ impl ConsumeMessagePopOrderlyService {
         let consume_thread = consumer_config.consume_thread_min;
         Self {
             service_context,
+            telemetry_handle,
+            client_metrics,
             default_mqpush_consumer_impl,
             client_config,
             consumer_config,
@@ -704,6 +712,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
         let listener = self.message_listener.clone();
         let msgs_cloned: Vec<MessageExt> = msgs.iter().map(|m| m.as_ref().clone()).collect();
         let group_for_span = self.consumer_group.clone();
+        let telemetry_handle = self.telemetry_handle.clone();
         let blocking_result = spawn_client_blocking_io_with_context(
             &self.service_context,
             "client.pop_orderly.consume_direct",
@@ -711,7 +720,8 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
                 let msg_refs: Vec<&MessageExt> = msgs_cloned.iter().collect();
                 let mut ctx = ConsumeOrderlyContext::new(mq);
                 let process_span = crate::consumer::consumer_impl::observability::consumer_process_span(
-                    msg_refs.first().copied(),
+                    &telemetry_handle,
+                    msg_refs.iter().copied(),
                     msg_refs.len(),
                     group_for_span.as_str(),
                     ctx.get_message_queue(),
@@ -726,7 +736,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
         .await;
 
         let consume_rt = begin_timestamp.elapsed().as_millis() as u64;
-        rocketmq_observability::metrics::client::record_consume(msgs.len(), consume_rt);
+        self.client_metrics.record_consume(msgs.len(), consume_rt);
 
         let mut result = ConsumeMessageDirectlyResult::default();
         result.set_order(true);
@@ -861,7 +871,8 @@ impl ConsumeRequest {
         let listener = consume_message_pop_orderly_service.message_listener.clone();
         let msgs_cloned: Vec<MessageExt> = msgs.iter().map(|m| m.as_ref().clone()).collect();
         let process_span = crate::consumer::consumer_impl::observability::consumer_process_span(
-            msgs.first().map(|msg| msg.as_ref()),
+            &consume_message_pop_orderly_service.telemetry_handle,
+            msgs.iter().map(|msg| msg.as_ref()),
             msgs.len(),
             consume_message_pop_orderly_service.consumer_group.as_str(),
             &self.message_queue,
@@ -897,7 +908,9 @@ impl ConsumeRequest {
         };
         record_orderly_process_event(&process_span, &status, msgs.len());
         let consume_rt = begin_timestamp.elapsed().as_millis() as u64;
-        rocketmq_observability::metrics::client::record_consume(msgs.len(), consume_rt);
+        consume_message_pop_orderly_service
+            .client_metrics
+            .record_consume(msgs.len(), consume_rt);
 
         let continue_consume = consume_message_pop_orderly_service
             .process_consume_result(msgs, status, &context)
@@ -970,6 +983,8 @@ pub async fn run_pop_orderly_lock_refresh_lifecycle_probe(
         Arc::new(|_msgs: &[&MessageExt], _context: &mut ConsumeOrderlyContext| Ok(ConsumeOrderlyStatus::Success));
     let service = Arc::new(ConsumeMessagePopOrderlyService::new(
         client_runtime.child("pop-orderly-probe"),
+        client_runtime.telemetry_handle().clone(),
+        client_runtime.client_metrics().clone(),
         Arc::new(ClientConfig::default()),
         Arc::new(ConsumerConfig {
             message_model: MessageModel::Clustering,
@@ -1059,6 +1074,8 @@ mod tests {
     fn new_service(default_impl: Option<Arc<DefaultMQPushConsumerImpl>>) -> ConsumeMessagePopOrderlyService {
         ConsumeMessagePopOrderlyService::new(
             test_context(),
+            TelemetryHandle::noop(),
+            ClientMetrics::noop(),
             Arc::new(ClientConfig::default()),
             Arc::new(ConsumerConfig::default()),
             CheetahString::from_static_str("group"),
@@ -1070,6 +1087,8 @@ mod tests {
     fn new_service_with_config(consumer_config: ConsumerConfig) -> ConsumeMessagePopOrderlyService {
         ConsumeMessagePopOrderlyService::new(
             test_context(),
+            TelemetryHandle::noop(),
+            ClientMetrics::noop(),
             Arc::new(ClientConfig::default()),
             Arc::new(consumer_config),
             CheetahString::from_static_str("group"),
@@ -1081,6 +1100,8 @@ mod tests {
     fn new_service_with_client_config(client_config: ClientConfig) -> ConsumeMessagePopOrderlyService {
         ConsumeMessagePopOrderlyService::new(
             test_context(),
+            TelemetryHandle::noop(),
+            ClientMetrics::noop(),
             Arc::new(client_config),
             Arc::new(ConsumerConfig::default()),
             CheetahString::from_static_str("group"),

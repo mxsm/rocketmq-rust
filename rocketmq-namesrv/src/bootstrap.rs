@@ -36,6 +36,8 @@ use rocketmq_controller::ControllerManager;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_error::UnifiedServiceError;
+use rocketmq_observability::metrics::namesrv::NameServerMetrics;
+use rocketmq_observability::TelemetryHandle;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_runtime::wait_for_signal;
 use rocketmq_runtime::ChildServiceContext;
@@ -59,10 +61,12 @@ use rocketmq_transport::RocketMQServer;
 use rocketmq_transport::RocketmqDefaultClient;
 use rocketmq_transport::ServerConfig;
 use rocketmq_transport::TokioClientConfig;
+use rocketmq_transport::TransportTelemetry;
 use serde::Serialize;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -135,12 +139,14 @@ impl RuntimeState {
     #[inline]
     fn can_transition_to(&self, next: RuntimeState) -> bool {
         match (self, next) {
-            // Created can only go to Initialized or Stopped (on error)
+            // Created can initialize normally or enter cleanup after partial startup.
             (Self::Created, Self::Initialized) => true,
+            (Self::Created, Self::ShuttingDown) => true,
             (Self::Created, Self::Stopped) => true,
 
-            // Initialized can go to Running or Stopped (on error)
+            // Initialized can run normally or enter cleanup after startup failure.
             (Self::Initialized, Self::Running) => true,
+            (Self::Initialized, Self::ShuttingDown) => true,
             (Self::Initialized, Self::Stopped) => true,
 
             // Running can only go to ShuttingDown
@@ -168,6 +174,11 @@ pub struct NameServerBootstrap {
     name_server_runtime: NameServerRuntime,
 }
 
+#[derive(Default)]
+struct NameServerStartupJournal {
+    shutdown_relay: Option<TaskGroup>,
+}
+
 #[doc(hidden)]
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct NameServerInFlightDrainReport {
@@ -190,6 +201,7 @@ impl NameServerInFlightDrainReport {
 pub struct NameServerShutdownReport {
     pub elapsed_ms: u64,
     pub deadline_expired: bool,
+    pub shutdown_relay: Option<ShutdownReport>,
     pub in_flight: NameServerInFlightDrainReport,
     pub scheduled: Option<ShutdownReport>,
     pub embedded_controller_healthy: Option<bool>,
@@ -206,6 +218,7 @@ impl NameServerShutdownReport {
     #[doc(hidden)]
     pub fn is_healthy(&self) -> bool {
         !self.deadline_expired
+            && self.shutdown_relay.as_ref().is_none_or(ShutdownReport::is_healthy)
             && self.in_flight.is_healthy()
             && self.scheduled.as_ref().is_none_or(ShutdownReport::is_healthy)
             && self.embedded_controller_healthy.unwrap_or(true)
@@ -288,6 +301,7 @@ pub struct Builder {
     server_config: Option<ServerConfig>,
     controller_config: Option<ControllerConfig>,
     cluster_test_route_lookup: Option<Arc<dyn ClusterTestRouteLookup>>,
+    telemetry: TelemetryHandle,
     service_context: ChildServiceContext,
 }
 
@@ -379,48 +393,89 @@ impl NameServerBootstrap {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         self.name_server_runtime.shutdown_tx = Some(shutdown_tx.clone());
         self.name_server_runtime.shutdown_rx = Some(shutdown_rx);
-        self.name_server_runtime.initialize().await?;
+        let mut startup_journal = NameServerStartupJournal::default();
+
+        if let Err(primary_error) = self.name_server_runtime.initialize().await {
+            let primary_error = self
+                .rollback_startup(primary_error, lifecycle.as_ref(), &mut startup_journal)
+                .await;
+            return Err(primary_error);
+        }
 
         let relay_group = self
             .name_server_runtime
             .inner
             .task_group()
-            .map(|task_group| task_group.child("namesrv.shutdown-relay"))
-            .ok_or_else(|| namesrv_task_group_unavailable("spawn shutdown relay"))?;
-        relay_group
-            .spawn_service(
-                "namesrv.shutdown-relay",
-                relay_shutdown_signal(shutdown_tx, shutdown_signal),
-            )
-            .map_err(|error| namesrv_startup_failed("spawn shutdown relay", error))?;
-        let start_result = self
+            .ok_or_else(|| namesrv_task_group_unavailable("create shutdown relay task group"))
+            .and_then(|task_group| {
+                task_group
+                    .try_child("namesrv.shutdown-relay")
+                    .map_err(|error| namesrv_startup_failed("create shutdown relay task group", error))
+            });
+        let relay_group = match relay_group {
+            Ok(relay_group) => relay_group,
+            Err(primary_error) => {
+                let primary_error = self
+                    .rollback_startup(primary_error, lifecycle.as_ref(), &mut startup_journal)
+                    .await;
+                return Err(primary_error);
+            }
+        };
+        startup_journal.shutdown_relay = Some(relay_group);
+
+        let relay_spawn_result = match startup_journal.shutdown_relay.as_ref() {
+            Some(relay_group) => {
+                let relay_cancellation = relay_group.cancellation_token();
+                relay_group
+                    .spawn_service(
+                        "namesrv.shutdown-relay",
+                        relay_shutdown_signal(shutdown_tx, shutdown_signal, relay_cancellation),
+                    )
+                    .map_err(|error| namesrv_startup_failed("spawn shutdown relay", error))
+            }
+            None => Err(namesrv_task_group_unavailable("spawn shutdown relay")),
+        };
+        if let Err(primary_error) = relay_spawn_result {
+            let primary_error = self
+                .rollback_startup(primary_error, lifecycle.as_ref(), &mut startup_journal)
+                .await;
+            return Err(primary_error);
+        }
+
+        let mut shutdown_report = match self
             .name_server_runtime
             .start_with_shutdown_report(lifecycle.as_ref())
-            .await;
-        if start_result.is_err() {
-            if let Some(lifecycle) = lifecycle.as_ref() {
-                lifecycle.mark_failed();
-                lifecycle.request_shutdown(ShutdownReason::Internal);
+            .await
+        {
+            Ok(shutdown_report) => shutdown_report,
+            Err(primary_error) => {
+                let primary_error = self
+                    .rollback_startup(primary_error, lifecycle.as_ref(), &mut startup_journal)
+                    .await;
+                return Err(primary_error);
             }
-        }
-        let relay_timeout = lifecycle
+        };
+        let relay_deadline = lifecycle
             .as_ref()
             .and_then(ServiceLifecycle::shutdown_request)
-            .map(|request| request.deadline.remaining())
-            .unwrap_or(Duration::from_secs(5));
-        let report = relay_group.shutdown(relay_timeout).await;
-        if let Err(error) = report.assert_no_task_leak() {
-            warn!("NameServer shutdown relay task group stopped with report: {error}");
+            .map(|request| request.deadline)
+            .unwrap_or_else(|| ShutdownDeadline::after(Duration::from_secs(5)));
+        shutdown_report.shutdown_relay = shutdown_startup_relay_until(&mut startup_journal, relay_deadline).await;
+        if let Some(report) = shutdown_report
+            .shutdown_relay
+            .as_ref()
+            .filter(|report| !report.is_healthy())
+        {
+            if let Err(error) = report.assert_no_task_leak() {
+                warn!("NameServer shutdown relay task group stopped with report: {error}");
+            }
             if let Some(lifecycle) = lifecycle.as_ref() {
                 lifecycle.mark_failed();
                 lifecycle.request_shutdown(ShutdownReason::Internal);
             }
         }
-        let shutdown_report = start_result?;
         if let Some(lifecycle) = lifecycle {
-            if shutdown_report.is_healthy() {
-                lifecycle.mark_stopped();
-            } else {
+            if !shutdown_report.is_healthy() {
                 lifecycle.mark_failed();
             }
         }
@@ -428,18 +483,70 @@ impl NameServerBootstrap {
         info!("NameServer shutdown completed");
         Ok(shutdown_report)
     }
+
+    async fn rollback_startup(
+        &mut self,
+        primary_error: RocketMQError,
+        lifecycle: Option<&ServiceLifecycle>,
+        startup_journal: &mut NameServerStartupJournal,
+    ) -> RocketMQError {
+        let deadline = lifecycle.map_or_else(
+            || ShutdownDeadline::after(Duration::from_secs(30)),
+            |lifecycle| {
+                lifecycle.mark_failed();
+                lifecycle.request_shutdown(ShutdownReason::Internal).deadline
+            },
+        );
+
+        if let Some(shutdown_tx) = self.name_server_runtime.shutdown_tx.as_ref() {
+            let _ = shutdown_tx.send(true);
+        }
+
+        let relay_report = shutdown_startup_relay_until(startup_journal, deadline).await;
+        let cleanup_report = self.name_server_runtime.shutdown_until(deadline).await;
+
+        if let Some(relay_report) = relay_report.as_ref().filter(|report| !report.is_healthy()) {
+            warn!(
+                primary_error = %primary_error,
+                relay_cleanup = %relay_report.to_json(),
+                "NameServer startup failed and shutdown relay cleanup was unhealthy"
+            );
+        }
+        if !cleanup_report.is_healthy() {
+            warn!(
+                primary_error = %primary_error,
+                runtime_cleanup = ?cleanup_report,
+                "NameServer startup failed and runtime cleanup was unhealthy"
+            );
+        }
+
+        primary_error
+    }
+}
+
+async fn shutdown_startup_relay_until(
+    startup_journal: &mut NameServerStartupJournal,
+    deadline: ShutdownDeadline,
+) -> Option<ShutdownReport> {
+    let relay_group = startup_journal.shutdown_relay.take()?;
+    Some(relay_group.shutdown_until(deadline).await)
 }
 
 #[inline]
-async fn relay_shutdown_signal<F>(shutdown_tx: watch::Sender<bool>, shutdown_signal: F)
+async fn relay_shutdown_signal<F>(shutdown_tx: watch::Sender<bool>, shutdown_signal: F, cancellation: CancellationToken)
 where
     F: Future<Output = ()>,
 {
-    shutdown_signal.await;
-    info!("Shutdown signal received, broadcasting to all components...");
-    // Broadcast shutdown to all listeners
-    if let Err(e) = shutdown_tx.send(true) {
-        error!("Failed to broadcast shutdown signal: {}", e);
+    tokio::select! {
+        _ = shutdown_signal => {
+            info!("Shutdown signal received, broadcasting to all components...");
+            if let Err(error) = shutdown_tx.send(true) {
+                error!("Failed to broadcast shutdown signal: {error}");
+            }
+        }
+        _ = cancellation.cancelled() => {
+            debug!("NameServer shutdown relay cancelled by its lifecycle owner");
+        }
     }
 }
 
@@ -546,7 +653,6 @@ impl NameServerRuntime {
         info!("Phase 1/4: Loading configuration...");
         if let Err(e) = self.load_config().await {
             error!("Initialization failed during config load: {}", e);
-            let _ = self.transition_to(RuntimeState::Stopped);
             return Err(e);
         }
 
@@ -629,8 +735,15 @@ impl NameServerRuntime {
                 .as_ref()
                 .expect("NameServerRuntime always has an injected ChildServiceContext")
                 .child("namesrv.embedded-controller");
-            let controller_manager =
-                Arc::new(ControllerManager::new((*controller_config).clone(), controller_context).await?);
+            let controller_manager = Arc::new(
+                ControllerManager::new(
+                    (*controller_config).clone(),
+                    controller_context,
+                    self.inner.telemetry.clone(),
+                )
+                .await?,
+            );
+            self.inner.install_controller_manager(Arc::clone(&controller_manager))?;
             let initialized = controller_manager.initialize().await?;
             if !initialized {
                 return Err(namesrv_startup_failed(
@@ -638,7 +751,6 @@ impl NameServerRuntime {
                     "controller manager initialization returned false",
                 ));
             }
-            self.inner.install_controller_manager(controller_manager)?;
             debug!("Embedded controller initialized successfully");
         }
         Ok(())
@@ -652,7 +764,11 @@ impl NameServerRuntime {
             .service_context
             .as_ref()
             .expect("NameServerRuntime always has an injected ChildServiceContext");
-        let server = RocketMQServer::new_with_service_context(config, context.child("namesrv.remoting-server"));
+        let server = RocketMQServer::new_with_telemetry(
+            config,
+            context.child("namesrv.remoting-server"),
+            self.inner.transport_telemetry.clone(),
+        );
         self.server_inner = Some(server);
         debug!(
             "Network server initialized on port {}",
@@ -798,13 +914,7 @@ impl NameServerRuntime {
         self.inner.remoting_client.start(weak_client).await;
 
         if let Some(controller_manager) = self.inner.controller_manager() {
-            if let Err(error) = controller_manager.start().await {
-                if let Some(shutdown_tx) = self.shutdown_tx.as_ref() {
-                    let _ = shutdown_tx.send(true);
-                }
-                let _ = self.shutdown().await;
-                return Err(error.into());
-            }
+            controller_manager.start().await?;
         }
 
         // Transition to Running state
@@ -816,7 +926,8 @@ impl NameServerRuntime {
         info!("NameServer is now running and accepting requests");
         if let Some(lifecycle) = lifecycle {
             if let Err(error) = lifecycle.mark_ready() {
-                warn!(error = %error, "NameServer entered drain before readiness publication");
+                warn!(error = %error, "NameServer readiness publication failed");
+                return Err(namesrv_startup_failed("publish readiness", error));
             }
         }
 
@@ -841,22 +952,25 @@ impl NameServerRuntime {
     /// 4. Wait for server task to complete (with timeout)
     /// 5. Release all resources
     #[instrument(skip(self), name = "runtime_shutdown")]
-    async fn shutdown(&mut self) -> NameServerShutdownReport {
-        self.shutdown_until(ShutdownDeadline::after(Duration::from_secs(30)))
-            .await
-    }
-
     async fn shutdown_until(&mut self, deadline: ShutdownDeadline) -> NameServerShutdownReport {
         let started_at = Instant::now();
         let mut shutdown_report = NameServerShutdownReport::default();
-        // Validate we're in Running state and transition to ShuttingDown
-        if let Err(e) = self.validate_state(&[RuntimeState::Running], "shutdown") {
-            warn!("Shutdown called in unexpected state: {}", e);
-            // Allow shutdown even in unexpected state for safety
+        if let Some(shutdown_tx) = self.shutdown_tx.as_ref() {
+            let _ = shutdown_tx.send(true);
         }
 
-        if let Err(e) = self.transition_to(RuntimeState::ShuttingDown) {
-            error!("Failed to transition to ShuttingDown state: {}", e);
+        match self.current_state() {
+            RuntimeState::Created | RuntimeState::Initialized | RuntimeState::Running => {
+                if let Err(error) = self.transition_to(RuntimeState::ShuttingDown) {
+                    error!("Failed to transition to ShuttingDown state: {error}");
+                }
+            }
+            RuntimeState::ShuttingDown => {
+                debug!("NameServer shutdown is already in progress");
+            }
+            RuntimeState::Stopped => {
+                debug!("NameServer is stopped; sweeping any remaining partially initialized resources");
+            }
         }
 
         const TASK_JOIN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -966,8 +1080,10 @@ impl NameServerRuntime {
         }
 
         // Transition to Stopped state
-        if let Err(e) = self.transition_to(RuntimeState::Stopped) {
-            error!("Failed to transition to Stopped state: {}", e);
+        if self.current_state() != RuntimeState::Stopped {
+            if let Err(error) = self.transition_to(RuntimeState::Stopped) {
+                error!("Failed to transition to Stopped state: {error}");
+            }
         }
 
         shutdown_report.deadline_expired = deadline.is_expired();
@@ -1052,8 +1168,10 @@ impl NameServerRuntime {
         let default_request_processor =
             crate::processor::default_request_processor::DefaultRequestProcessor::new(runtime_handle);
 
-        let mut name_server_request_processor =
-            NameServerRequestProcessor::new_with_in_flight_tracker(self.inner.in_flight_request_tracker());
+        let mut name_server_request_processor = NameServerRequestProcessor::new_with_in_flight_tracker(
+            self.inner.in_flight_request_tracker(),
+            self.inner.namesrv_metrics(),
+        );
 
         // Register topic route query processor
         name_server_request_processor.register_processor(RequestCode::GetRouteinfoByTopic, route_request_processor);
@@ -1087,12 +1205,13 @@ impl Drop for NameServerRuntime {
 
 impl Builder {
     #[inline]
-    pub fn new(service_context: ChildServiceContext) -> Self {
+    pub fn new(service_context: ChildServiceContext, telemetry: TelemetryHandle) -> Self {
         Builder {
             name_server_config: None,
             server_config: None,
             controller_config: None,
             cluster_test_route_lookup: None,
+            telemetry,
             service_context,
         }
     }
@@ -1135,6 +1254,11 @@ impl Builder {
     /// Creates all necessary components and initializes them immediately.
     #[instrument(skip(self), name = "build_bootstrap")]
     pub fn build(self) -> NameServerBootstrap {
+        let namesrv_metrics = NameServerMetrics::from_handle(&self.telemetry);
+        #[cfg(any(feature = "observability", feature = "otel-traces"))]
+        let transport_telemetry = TransportTelemetry::from_handle(&self.telemetry);
+        #[cfg(not(any(feature = "observability", feature = "otel-traces")))]
+        let transport_telemetry = TransportTelemetry::noop();
         let name_server_config = self.name_server_config.unwrap_or_default();
         let tokio_client_config = TokioClientConfig::default();
         let server_config = self.server_config.unwrap_or_default();
@@ -1162,6 +1286,7 @@ impl Builder {
                 Some(Arc::new(TransportClusterTestRouteLookup::new(
                     &name_server_config.product_env_name,
                     service_context.child("namesrv.cluster-test-route-lookup"),
+                    transport_telemetry.clone(),
                 )) as Arc<dyn ClusterTestRouteLookup>)
             })
         } else {
@@ -1169,10 +1294,11 @@ impl Builder {
         };
 
         // Create remoting client
-        let remoting_client = Arc::new(RocketmqDefaultClient::new_with_service_context(
+        let remoting_client = Arc::new(RocketmqDefaultClient::new_with_telemetry(
             Arc::new(tokio_client_config.clone()),
             DefaultRemotingRequestProcessor,
             service_context.child("namesrv.remoting-client"),
+            transport_telemetry.clone(),
         ));
 
         let unregister_broker_queue_capacity = name_server_config.unregister_broker_queue_capacity as usize;
@@ -1187,7 +1313,11 @@ impl Builder {
         // root own every service without creating a service -> runtime strong cycle.
         let inner = Arc::new_cyclic(|weak_inner| {
             let runtime_handle = NameServerRuntimeHandle::from_weak(weak_inner.clone());
-            let route_info_manager = RouteInfoManager::new(runtime_handle.clone(), unregister_broker_queue_capacity);
+            let route_info_manager = RouteInfoManager::new(
+                runtime_handle.clone(),
+                unregister_broker_queue_capacity,
+                namesrv_metrics.clone(),
+            );
 
             NameServerRuntimeInner {
                 config: ArcSwap::from(Arc::clone(&initial_config)),
@@ -1201,6 +1331,9 @@ impl Builder {
                 service_context: Some(service_context),
                 task_group: OnceLock::new(),
                 in_flight_requests: Arc::new(InFlightRequestTracker::default()),
+                namesrv_metrics: namesrv_metrics.clone(),
+                telemetry: self.telemetry.clone(),
+                transport_telemetry,
             }
         });
 
@@ -1233,10 +1366,13 @@ pub(crate) struct NameServerRuntimeInner {
     remoting_client: Arc<RocketmqDefaultClient>,
     broker_housekeeping_service: Arc<BrokerHousekeepingService>,
     controller_manager: OnceLock<Arc<ControllerManager>>,
+    telemetry: TelemetryHandle,
+    transport_telemetry: TransportTelemetry,
     cluster_test_route_lookup: Option<Arc<dyn ClusterTestRouteLookup>>,
     service_context: Option<ChildServiceContext>,
     task_group: OnceLock<TaskGroup>,
     in_flight_requests: Arc<InFlightRequestTracker>,
+    namesrv_metrics: NameServerMetrics,
 }
 
 struct NameServerRuntimeConfig {
@@ -1334,6 +1470,10 @@ impl NameServerRuntimeInner {
 
     pub(crate) fn in_flight_request_tracker(&self) -> Arc<InFlightRequestTracker> {
         Arc::clone(&self.in_flight_requests)
+    }
+
+    pub(crate) fn namesrv_metrics(&self) -> NameServerMetrics {
+        self.namesrv_metrics.clone()
     }
 
     pub(crate) fn in_flight_request_guard(&self) -> InFlightRequestGuard {
@@ -1802,6 +1942,7 @@ where
 mod tests {
     use std::net::TcpListener;
     use std::str;
+    use std::sync::atomic::AtomicBool;
     use std::time::Duration;
 
     use cheetah_string::CheetahString;
@@ -1884,13 +2025,66 @@ mod tests {
     }
 
     fn build_bootstrap_with_config(namesrv_config: NamesrvConfig) -> NameServerBootstrap {
-        Builder::new(test_service_context())
+        Builder::new(test_service_context(), TelemetryHandle::noop())
             .set_name_server_config(namesrv_config)
             .build()
     }
 
     fn build_default_bootstrap() -> NameServerBootstrap {
         build_bootstrap_with_config(NamesrvConfig::default())
+    }
+
+    struct PartiallyStartedRouteLookup {
+        task_group: TaskGroup,
+        started: AtomicBool,
+        shutdown_called: AtomicBool,
+    }
+
+    type TestRouteLookupFuture<'a, T> = std::pin::Pin<Box<dyn Future<Output = RocketMQResult<T>> + Send + 'a>>;
+
+    impl PartiallyStartedRouteLookup {
+        fn new(service_context: ChildServiceContext) -> Self {
+            Self {
+                task_group: service_context.task_group().clone(),
+                started: AtomicBool::new(false),
+                shutdown_called: AtomicBool::new(false),
+            }
+        }
+    }
+
+    impl ClusterTestRouteLookup for PartiallyStartedRouteLookup {
+        fn start(&self) -> TestRouteLookupFuture<'_, ()> {
+            Box::pin(async move {
+                self.started.store(true, Ordering::Release);
+                let cancellation = self.task_group.cancellation_token();
+                self.task_group
+                    .spawn_service("namesrv.test-partial-route-lookup", async move {
+                        cancellation.cancelled().await;
+                    })
+                    .map_err(|error| namesrv_startup_failed("start test route lookup task", error))?;
+                Err(RocketMQError::network_connection_failed(
+                    "namesrv.test-partial-route-lookup",
+                    "simulated partial startup failure",
+                ))
+            })
+        }
+
+        fn lookup_topic_route(&self, _topic: &CheetahString) -> TestRouteLookupFuture<'_, Option<TopicRouteData>> {
+            Box::pin(async { Ok(None) })
+        }
+
+        fn shutdown(&self) -> TestRouteLookupFuture<'_, ()> {
+            Box::pin(async move {
+                self.shutdown_called.store(true, Ordering::Release);
+                let report = self
+                    .task_group
+                    .shutdown_until(ShutdownDeadline::after(Duration::from_secs(1)))
+                    .await;
+                report.assert_no_task_leak().map_err(|error| {
+                    RocketMQError::network_connection_failed("namesrv.test-partial-route-lookup", error)
+                })
+            })
+        }
     }
 
     #[test]
@@ -1949,7 +2143,7 @@ mod tests {
             listen_port: 10000,
             ..ServerConfig::default()
         };
-        let bootstrap = Builder::new(test_service_context())
+        let bootstrap = Builder::new(test_service_context(), TelemetryHandle::noop())
             .set_name_server_config(namesrv_config)
             .set_server_config(server_config)
             .build();
@@ -2056,7 +2250,7 @@ mod tests {
     async fn builder_service_context_parents_namesrv_task_group() {
         let context = RuntimeContext::from_current("namesrv-context-runtime-test");
         let service = context.service_context("namesrv-service");
-        let bootstrap = Builder::new(service.clone()).build();
+        let bootstrap = Builder::new(service.clone(), TelemetryHandle::noop()).build();
 
         let task_group = bootstrap
             .name_server_runtime
@@ -2076,7 +2270,7 @@ mod tests {
         let context = RuntimeContext::from_current("namesrv-runtime-owner-test");
         let service = context.service_context("namesrv-service");
         let (namesrv_config, _namesrv_root) = isolated_namesrv_config(NamesrvConfig::default());
-        let bootstrap = Builder::new(service)
+        let bootstrap = Builder::new(service, TelemetryHandle::noop())
             .set_name_server_config(namesrv_config)
             .set_server_config(namesrv_server_config())
             .build();
@@ -3678,13 +3872,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn boot_rolls_back_partially_started_cluster_lookup() {
+        let runtime = RuntimeContext::from_current("namesrv-partial-startup-rollback");
+        let service_context = runtime.service_context("namesrv");
+        let route_lookup = Arc::new(PartiallyStartedRouteLookup::new(
+            service_context.child("partial-route-lookup"),
+        ));
+        let (namesrv_config, _namesrv_root) = isolated_namesrv_config(NamesrvConfig {
+            cluster_test: true,
+            ..NamesrvConfig::default()
+        });
+        let bootstrap = Builder::new(service_context, TelemetryHandle::noop())
+            .set_name_server_config(namesrv_config)
+            .set_server_config(namesrv_server_config())
+            .set_cluster_test_route_lookup(route_lookup.clone())
+            .build();
+        let runtime_state = Arc::clone(&bootstrap.name_server_runtime.state);
+
+        let error = tokio::time::timeout(
+            Duration::from_secs(5),
+            bootstrap.boot_with_shutdown_report(std::future::pending()),
+        )
+        .await
+        .expect("startup rollback should honor its deadline")
+        .expect_err("partially started route lookup should fail startup");
+
+        assert!(error.to_string().contains("simulated partial startup failure"));
+        assert!(route_lookup.started.load(Ordering::Acquire));
+        assert!(route_lookup.shutdown_called.load(Ordering::Acquire));
+        assert_eq!(route_lookup.task_group.task_count(), 0);
+        assert_eq!(
+            RuntimeState::from_u8(runtime_state.load(Ordering::Acquire)),
+            Some(RuntimeState::Stopped)
+        );
+
+        runtime
+            .shutdown_tasks(Duration::from_secs(1))
+            .await
+            .assert_no_task_leak()
+            .expect("startup rollback must not leak owned tasks");
+    }
+
+    #[tokio::test]
     async fn boot_supports_cluster_test_mode() {
         let runtime = RuntimeContext::from_current("namesrv-cluster-test-mode");
         let (namesrv_config, _namesrv_root) = isolated_namesrv_config(NamesrvConfig {
             cluster_test: true,
             ..NamesrvConfig::default()
         });
-        let bootstrap = Builder::new(runtime.service_context("namesrv"))
+        let bootstrap = Builder::new(runtime.service_context("namesrv"), TelemetryHandle::noop())
             .set_name_server_config(namesrv_config)
             .set_server_config(namesrv_server_config())
             .build();
@@ -3707,7 +3943,7 @@ mod tests {
             ..NamesrvConfig::default()
         });
         let (controller_config, _controller_root) = embedded_controller_config();
-        let bootstrap = Builder::new(test_service_context())
+        let bootstrap = Builder::new(test_service_context(), TelemetryHandle::noop())
             .set_name_server_config(namesrv_config)
             .set_server_config(namesrv_server_config())
             .set_controller_config(controller_config)
@@ -3722,7 +3958,7 @@ mod tests {
     #[tokio::test]
     async fn boot_shutdown_report_includes_remoting_server_report() {
         let (namesrv_config, _namesrv_root) = isolated_namesrv_config(NamesrvConfig::default());
-        let bootstrap = Builder::new(test_service_context())
+        let bootstrap = Builder::new(test_service_context(), TelemetryHandle::noop())
             .set_name_server_config(namesrv_config)
             .set_server_config(namesrv_server_config())
             .build();
@@ -3733,6 +3969,10 @@ mod tests {
             .expect("namesrv should boot and return shutdown report");
 
         assert!(report.is_healthy(), "{report:?}");
+        assert!(
+            report.shutdown_relay.as_ref().is_some_and(ShutdownReport::is_healthy),
+            "shutdown relay report should be present and healthy: {report:?}"
+        );
         let route_report = report
             .route_unregistration
             .as_ref()
@@ -3754,7 +3994,7 @@ mod tests {
         let addr = format!("127.0.0.1:{}", server_config.listen_port);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let (namesrv_config, namesrv_root) = isolated_namesrv_config(NamesrvConfig::default());
-        let bootstrap = Builder::new(test_service_context())
+        let bootstrap = Builder::new(test_service_context(), TelemetryHandle::noop())
             .set_name_server_config(namesrv_config)
             .set_server_config(server_config)
             .build();
@@ -3807,7 +4047,7 @@ mod tests {
             enable_controller_in_namesrv: true,
             ..NamesrvConfig::default()
         };
-        let mut bootstrap = Builder::new(test_service_context())
+        let mut bootstrap = Builder::new(test_service_context(), TelemetryHandle::noop())
             .set_name_server_config(namesrv_config)
             .set_server_config(server_config)
             .set_controller_config(conflicting_controller)
@@ -3829,7 +4069,7 @@ mod tests {
             ..NamesrvConfig::default()
         });
         let (controller_config, _controller_root) = embedded_controller_config();
-        let mut bootstrap = Builder::new(test_service_context())
+        let mut bootstrap = Builder::new(test_service_context(), TelemetryHandle::noop())
             .set_name_server_config(namesrv_config)
             .set_server_config(namesrv_server_config())
             .set_controller_config(controller_config)
@@ -3905,7 +4145,7 @@ mod tests {
             bind_address: "127.0.0.2".to_string(),
             ..ServerConfig::default()
         };
-        let bootstrap = Builder::new(test_service_context())
+        let bootstrap = Builder::new(test_service_context(), TelemetryHandle::noop())
             .set_name_server_config(namesrv_config)
             .set_server_config(server_config)
             .build();
@@ -4099,7 +4339,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("NameServer metadata test directory should be created");
         let config_path = temp.path().join("kv-config.json");
         let context = RuntimeContext::try_from_current("namesrv-metadata-io-test").unwrap();
-        let bootstrap = Builder::new(context.service_context("namesrv"))
+        let bootstrap = Builder::new(context.service_context("namesrv"), TelemetryHandle::noop())
             .set_name_server_config(NamesrvConfig {
                 kv_config_path: config_path.to_string_lossy().into_owned(),
                 ..NamesrvConfig::default()

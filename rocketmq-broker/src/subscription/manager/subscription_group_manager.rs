@@ -45,6 +45,7 @@ use tracing::warn;
 use crate::broker_path_config_helper::get_subscription_group_path;
 #[cfg(feature = "rocksdb_store")]
 use crate::config::rocksdb_manager::RocksDbBrokerConfigManager;
+use crate::metrics::broker_metrics_manager::BrokerMetricsManager;
 
 pub const CHARACTER_MAX_LENGTH: usize = 255;
 pub const TOPIC_MAX_LENGTH: usize = 127;
@@ -84,6 +85,7 @@ pub(crate) struct SubscriptionGroupManager {
 
     config: SubscriptionGroupManagerConfig,
     state_machine_version: StateMachineVersionView,
+    broker_metrics_manager: Option<Arc<BrokerMetricsManager>>,
     #[cfg(feature = "rocksdb_store")]
     rocksdb_config_manager: Option<Arc<RocksDbBrokerConfigManager>>,
     metadata_io: Option<MetadataIoActor>,
@@ -110,13 +112,17 @@ impl SubscriptionGroupConfigLookup {
 
 impl SubscriptionGroupManager {
     #[inline]
-    fn record_consumer_group_create_latency(start_time: Instant) {
-        if let Some(metrics) = crate::metrics::broker_metrics_manager::BrokerMetricsManager::try_global() {
+    fn record_consumer_group_create_latency(&self, start_time: Instant) {
+        if let Some(metrics) = self.broker_metrics_manager.as_ref() {
             metrics.record_consumer_group_create_time(start_time.elapsed().as_millis().min(u64::MAX as u128) as u64);
         }
     }
 
-    pub fn new(config: SubscriptionGroupManagerConfig, state_machine_version: StateMachineVersionView) -> Self {
+    pub fn new(
+        config: SubscriptionGroupManagerConfig,
+        state_machine_version: StateMachineVersionView,
+        broker_metrics_manager: Option<Arc<BrokerMetricsManager>>,
+    ) -> Self {
         let mut manager = Self {
             subscription_group_table: Arc::new(DashMap::new()),
             forbidden_table: Arc::new(DashMap::new()),
@@ -125,6 +131,7 @@ impl SubscriptionGroupManager {
             )),
             config,
             state_machine_version,
+            broker_metrics_manager,
             #[cfg(feature = "rocksdb_store")]
             rocksdb_config_manager: None,
             metadata_io: None,
@@ -167,8 +174,9 @@ impl SubscriptionGroupManager {
         config: SubscriptionGroupManagerConfig,
         state_machine_version: StateMachineVersionView,
         rocksdb_config_manager: Arc<RocksDbBrokerConfigManager>,
+        broker_metrics_manager: Option<Arc<BrokerMetricsManager>>,
     ) -> Self {
-        let mut manager = Self::new(config, state_machine_version);
+        let mut manager = Self::new(config, state_machine_version, broker_metrics_manager);
         manager.rocksdb_config_manager = Some(rocksdb_config_manager);
         manager
     }
@@ -368,7 +376,7 @@ impl SubscriptionGroupManager {
             }
             None => {
                 info!("create new subscription group, {:?}", config);
-                Self::record_consumer_group_create_latency(start_time);
+                self.record_consumer_group_create_latency(start_time);
             }
         }
 
@@ -731,7 +739,7 @@ impl SubscriptionGroupManager {
                 .insert(group.clone(), Arc::clone(&arc_config));
             if pre_config.is_none() {
                 info!("auto create a subscription group, {:?}", subscription_group_config_new);
-                Self::record_consumer_group_create_latency(start_time);
+                self.record_consumer_group_create_latency(start_time);
             }
             self.update_data_version();
             self.persist_after_mutation("auto-create");
@@ -1296,6 +1304,7 @@ mod tests {
                 ))
                 .expect("rocksdb config manager should open"),
             ),
+            None,
         );
         let group = CheetahString::from_static_str("GroupA");
         let topic = CheetahString::from_static_str("TopicA");
@@ -1312,6 +1321,7 @@ mod tests {
                 RocksDbBrokerConfigManager::open(RocksDbBrokerConfigManagerConfig::subscription_group(rocksdb_path))
                     .expect("rocksdb config manager should reopen"),
             ),
+            None,
         );
 
         assert!(restarted.load());
@@ -1350,6 +1360,7 @@ mod tests {
                 ))
                 .expect("rocksdb config manager should open"),
             ),
+            None,
         );
         let group = CheetahString::from_static_str("GroupDelete");
         let topic = CheetahString::from_static_str("TopicA");
@@ -1367,6 +1378,7 @@ mod tests {
                 RocksDbBrokerConfigManager::open(RocksDbBrokerConfigManagerConfig::subscription_group(rocksdb_path))
                     .expect("rocksdb config manager should reopen"),
             ),
+            None,
         );
 
         assert!(restarted.load());

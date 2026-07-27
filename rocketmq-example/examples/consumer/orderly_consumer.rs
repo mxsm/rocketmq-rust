@@ -42,9 +42,6 @@ pub fn main() -> RocketMQResult<()> {
 }
 
 async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> RocketMQResult<()> {
-    let telemetry_guard =
-        rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())
-            .expect("telemetry logging bootstrap should initialize");
     let mut consumer = DefaultMQPushConsumer::builder(client_runtime.clone())
         .consumer_group(CONSUMER_GROUP)
         .name_server_addr(DEFAULT_NAMESRVADDR)
@@ -60,10 +57,6 @@ async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>
     info!("orderly consumer started. group={}, topic={}", CONSUMER_GROUP, TOPIC);
     let _ = wait_for_signal().await;
     consumer.shutdown().await;
-    telemetry_guard
-        .shutdown()
-        .into_result()
-        .expect("telemetry logging shutdown should succeed");
 
     Ok(())
 }

@@ -18,21 +18,23 @@ use rocketmq_model::common::message::MessageTrait;
 
 pub(crate) use rocketmq_observability::trace::client::record_process_event;
 
-pub(crate) fn consumer_process_span(
-    first_message: Option<&MessageExt>,
+pub(crate) fn consumer_process_span<'a>(
+    telemetry: &rocketmq_observability::TelemetryHandle,
+    messages: impl IntoIterator<Item = &'a MessageExt>,
     message_count: usize,
     consumer_group: &str,
     message_queue: &MessageQueue,
     consume_mode: &'static str,
 ) -> tracing::Span {
-    let first_message = first_message.map(|message| {
+    let messages = messages.into_iter().map(|message| {
         rocketmq_observability::trace::client::MessageSpanContext::new(
             message.get_properties(),
             message.get_body().map(|body| body.len()),
         )
     });
     rocketmq_observability::trace::client::consumer_process_span(
-        first_message,
+        telemetry,
+        messages,
         message_count,
         consumer_group,
         message_queue,

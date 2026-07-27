@@ -38,6 +38,7 @@ use crate::runtime::RocksDbRuntimeScope;
 use crate::snapshot::RocksDbSnapshot;
 use rocketmq_observability::metrics::rocksdb::RocksDbMetrics;
 use rocketmq_observability::metrics::rocksdb::RocksDbMetricsCollector;
+use rocketmq_observability::metrics::rocksdb::RocksDbMetricsRecorder;
 use rocketmq_observability::metrics::rocksdb::RocksDbTickerMetrics;
 use tracing::warn;
 
@@ -80,24 +81,40 @@ pub struct RocksDbStore {
     state: AtomicU8,
     write_options: ::rocksdb::WriteOptions,
     metrics: Arc<RocksDbMetricsCollector>,
+    otel_metrics: RocksDbMetricsRecorder,
 }
 
 impl RocksDbStore {
     pub fn open(config: RocksDbConfig) -> Result<Self, RocketMQError> {
+        Self::open_with_metrics(config, RocksDbMetricsRecorder::noop())
+    }
+
+    pub fn open_with_metrics(
+        config: RocksDbConfig,
+        otel_metrics: RocksDbMetricsRecorder,
+    ) -> Result<Self, RocketMQError> {
         let db_options = RocksDbOptionsFactory::db_options(&config)?;
-        Self::open_with_column_families(config.clone(), db_options, config.column_families)
+        Self::open_with_column_families(config.clone(), db_options, config.column_families, otel_metrics)
     }
 
     pub fn open_with_existing_column_families(config: RocksDbConfig) -> Result<Self, RocketMQError> {
+        Self::open_with_existing_column_families_and_metrics(config, RocksDbMetricsRecorder::noop())
+    }
+
+    pub fn open_with_existing_column_families_and_metrics(
+        config: RocksDbConfig,
+        otel_metrics: RocksDbMetricsRecorder,
+    ) -> Result<Self, RocketMQError> {
         let db_options = RocksDbOptionsFactory::db_options(&config)?;
         let column_families = merge_existing_column_families(&config, &db_options)?;
-        Self::open_with_column_families(config, db_options, column_families)
+        Self::open_with_column_families(config, db_options, column_families, otel_metrics)
     }
 
     fn open_with_column_families(
         config: RocksDbConfig,
         db_options: ::rocksdb::Options,
         column_families: Vec<RocksDbColumnFamilyConfig>,
+        otel_metrics: RocksDbMetricsRecorder,
     ) -> Result<Self, RocketMQError> {
         let descriptors = column_families
             .iter()
@@ -119,6 +136,7 @@ impl RocksDbStore {
             state: AtomicU8::new(RocksDbStoreState::Open.as_u8()),
             write_options: RocksDbOptionsFactory::write_options(config.write_profile()),
             metrics: Arc::new(RocksDbMetricsCollector::default()),
+            otel_metrics,
         })
     }
 
@@ -332,6 +350,10 @@ impl RocksDbStore {
 
     pub fn metrics(&self) -> RocksDbMetrics {
         self.metrics.snapshot()
+    }
+
+    pub fn metrics_recorder(&self) -> RocksDbMetricsRecorder {
+        self.otel_metrics.clone()
     }
 
     pub fn ticker_metrics(&self) -> RocksDbTickerMetrics {

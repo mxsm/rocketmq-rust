@@ -1,13 +1,14 @@
 error[E0308]: mismatched types
- --> tests/ui/proxy_runtime/root_context_is_rejected.rs:8:59
-  |
-8 |     let _ = ProxyRuntime::builder(ProxyConfig::default(), owner.root_context());
-  |             ---------------------                         ^^^^^^^^^^^^^^^^^^^^ expected `ChildServiceContext`, found `&RootServiceContext`
-  |             |
-  |             arguments to this function are incorrect
-  |
+  --> tests/ui/proxy_runtime/root_context_is_rejected.rs:10:9
+   |
+ 8 |     let _ = ProxyRuntime::builder(
+   |             --------------------- arguments to this function are incorrect
+ 9 |         ProxyConfig::default(),
+10 |         owner.root_context(),
+   |         ^^^^^^^^^^^^^^^^^^^^ expected `ChildServiceContext`, found `&RootServiceContext`
+   |
 note: associated function defined here
- --> src/bootstrap.rs
-  |
-  |     pub fn builder(config: ProxyConfig, service_context: ChildServiceContext) -> ProxyRuntimeBuilder {
-  |            ^^^^^^^
+  --> src/bootstrap.rs
+   |
+   |     pub fn builder(
+   |            ^^^^^^^

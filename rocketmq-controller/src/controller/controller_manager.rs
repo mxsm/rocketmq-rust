@@ -33,11 +33,12 @@ use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
 #[cfg(feature = "metrics")]
 use crate::metrics::controller_metrics_manager::active_broker_count_from_snapshot;
 #[cfg(feature = "metrics")]
-use crate::metrics::ControllerMetricsManager;
+use crate::metrics::controller_metrics_manager::ControllerMetricsManager;
 use crate::processor::controller_request_processor::ControllerRequestProcessor;
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
+use rocketmq_observability::TelemetryHandle;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::body::elect_master_response_body::ElectMasterResponseBody;
@@ -66,6 +67,7 @@ use rocketmq_transport::RocketMQServer;
 use rocketmq_transport::RocketmqDefaultClient;
 use rocketmq_transport::ServerConfig;
 use rocketmq_transport::TokioClientConfig;
+use rocketmq_transport::TransportTelemetry;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::Mutex as AsyncMutex;
@@ -417,7 +419,11 @@ impl ControllerManager {
     /// Returns `ControllerError` if:
     /// - Raft controller creation fails
     /// - Configuration is invalid
-    pub async fn new(config: ControllerConfig, service_context: ChildServiceContext) -> Result<Self> {
+    pub async fn new(
+        config: ControllerConfig,
+        service_context: ChildServiceContext,
+        telemetry_handle: TelemetryHandle,
+    ) -> Result<Self> {
         let config = ControllerConfigHandle::new(config);
         let parent_task_group = service_context.task_group().clone();
 
@@ -448,18 +454,24 @@ impl ControllerManager {
             listen_port,
             ..Default::default()
         };
-        let remoting_server = Some(RocketMQServer::new_with_service_context(
+        #[cfg(any(feature = "metrics", feature = "otel-traces"))]
+        let transport_telemetry = TransportTelemetry::from_handle(&telemetry_handle);
+        #[cfg(not(any(feature = "metrics", feature = "otel-traces")))]
+        let transport_telemetry = TransportTelemetry::noop();
+        let remoting_server = Some(RocketMQServer::new_with_telemetry(
             Arc::new(server_config),
             service_context.child("controller.remoting-server"),
+            transport_telemetry.clone(),
         ));
         info!("Remoting server created on port {}", listen_port);
 
         // Initialize remoting client for outbound RPC
         let client_config = TokioClientConfig::default();
-        let remoting_client = Arc::new(RocketmqDefaultClient::new(
+        let remoting_client = Arc::new(RocketmqDefaultClient::new_with_telemetry(
             Arc::new(client_config),
             DefaultRemotingRequestProcessor,
             service_context.child("controller.remoting-client"),
+            transport_telemetry,
         ));
         info!("Remoting client created");
 
@@ -468,10 +480,12 @@ impl ControllerManager {
         let metrics_manager = {
             info!("Initializing metrics manager");
             let active_broker_heartbeat_manager = heartbeat_manager.clone();
-            ControllerMetricsManager::get_instance_with_active_broker_source(config.reader(), move || {
+            ControllerMetricsManager::new_with_active_broker_source(config.reader(), &telemetry_handle, move || {
                 active_broker_count_from_snapshot(&active_broker_heartbeat_manager.get_active_brokers_num())
             })
         };
+        #[cfg(not(feature = "metrics"))]
+        let _ = telemetry_handle;
 
         info!("Controller manager created successfully");
 
@@ -594,7 +608,7 @@ impl ControllerManager {
         self.register_processor();
         info!("Request processors registered to remoting server");
 
-        // Metrics manager is already initialized via get_instance() in new()
+        // Metrics manager is already initialized from the injected telemetry handle in new().
         #[cfg(feature = "metrics")]
         info!("Metrics manager is ready");
 
@@ -868,8 +882,15 @@ impl ControllerManager {
 
         // Shutdown remoting client
         {
-            self.remoting_client.shutdown();
-            info!("Remoting client shut down");
+            let report = self.remoting_client.shutdown_with_report(deadline.remaining()).await;
+            if report.is_healthy() {
+                info!("Remoting client shut down");
+            } else {
+                let detail = serde_json::to_string(&report)
+                    .unwrap_or_else(|error| format!("failed to serialize remoting shutdown report: {error}"));
+                warn!(report = %detail, "Remoting client shutdown was unhealthy");
+                failures.push(format!("remoting client: {detail}"));
+            }
         }
 
         // Shutdown Raft controller last (it coordinates distributed operations)
@@ -1422,6 +1443,10 @@ mod tests {
     use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
     use rocketmq_transport::ResponseFuture;
 
+    fn test_telemetry_handle() -> TelemetryHandle {
+        TelemetryHandle::noop()
+    }
+
     async fn wait_until<F>(timeout: Duration, mut predicate: F, context: &str)
     where
         F: FnMut() -> bool,
@@ -1475,7 +1500,7 @@ mod tests {
     async fn test_manager_lifecycle() {
         let config = ControllerConfig::default().with_node_info(1, "127.0.0.1:9878".parse::<SocketAddr>().unwrap());
 
-        let manager = ControllerManager::new(config, test_service_context())
+        let manager = ControllerManager::new(config, test_service_context(), test_telemetry_handle())
             .await
             .expect("Failed to create manager");
         let manager_arc = Arc::new(manager);
@@ -1503,7 +1528,7 @@ mod tests {
     async fn concurrent_initialize_is_serialized_and_manager_handles_do_not_form_a_cycle() {
         let config = ControllerConfig::default().with_node_info(1, reserve_controller_addresses().0);
         let manager = Arc::new(
-            ControllerManager::new(config, test_service_context())
+            ControllerManager::new(config, test_service_context(), test_telemetry_handle())
                 .await
                 .expect("create manager"),
         );
@@ -1535,7 +1560,7 @@ mod tests {
             .with_raft_peers(vec![crate::config::RaftPeer { id: 1, addr: raft_addr }])
             .with_storage_backend(crate::config::StorageBackendType::Memory);
         let manager = Arc::new(
-            ControllerManager::new(config, test_service_context())
+            ControllerManager::new(config, test_service_context(), test_telemetry_handle())
                 .await
                 .expect("create manager"),
         );
@@ -1559,7 +1584,7 @@ mod tests {
             .with_raft_peers(vec![crate::config::RaftPeer { id: 1, addr: raft_addr }])
             .with_storage_backend(crate::config::StorageBackendType::Memory);
         let manager = Arc::new(
-            ControllerManager::new(config, test_service_context())
+            ControllerManager::new(config, test_service_context(), test_telemetry_handle())
                 .await
                 .expect("create manager"),
         );
@@ -1590,7 +1615,7 @@ mod tests {
     async fn test_manager_shutdown() {
         let config = ControllerConfig::default().with_node_info(1, "127.0.0.1:9879".parse::<SocketAddr>().unwrap());
 
-        let manager = ControllerManager::new(config, test_service_context())
+        let manager = ControllerManager::new(config, test_service_context(), test_telemetry_handle())
             .await
             .expect("Failed to create manager");
         let manager_arc = Arc::new(manager);
@@ -1609,7 +1634,7 @@ mod tests {
     async fn test_start_without_initialize() {
         let config = ControllerConfig::default().with_node_info(1, "127.0.0.1:9880".parse::<SocketAddr>().unwrap());
 
-        let manager = ControllerManager::new(config, test_service_context())
+        let manager = ControllerManager::new(config, test_service_context(), test_telemetry_handle())
             .await
             .expect("Failed to create manager");
         let manager_arc = Arc::new(manager);
@@ -1627,7 +1652,7 @@ mod tests {
     async fn test_atomic_state_checks() {
         let config = ControllerConfig::default().with_node_info(1, "127.0.0.1:9881".parse::<SocketAddr>().unwrap());
 
-        let manager = ControllerManager::new(config, test_service_context())
+        let manager = ControllerManager::new(config, test_service_context(), test_telemetry_handle())
             .await
             .expect("Failed to create manager");
 
@@ -1646,7 +1671,7 @@ mod tests {
     #[tokio::test]
     async fn test_notify_cache_skips_duplicate_and_stale_role_changes() {
         let config = ControllerConfig::default().with_node_info(1, "127.0.0.1:9882".parse::<SocketAddr>().unwrap());
-        let manager = ControllerManager::new(config, test_service_context())
+        let manager = ControllerManager::new(config, test_service_context(), test_telemetry_handle())
             .await
             .expect("Failed to create manager");
 
@@ -1689,7 +1714,7 @@ mod tests {
     #[tokio::test]
     async fn test_notify_dispatch_replaces_stale_pending_task() {
         let config = ControllerConfig::default().with_node_info(1, "127.0.0.1:9884".parse::<SocketAddr>().unwrap());
-        let manager = ControllerManager::new(config, test_service_context())
+        let manager = ControllerManager::new(config, test_service_context(), test_telemetry_handle())
             .await
             .expect("Failed to create manager");
 
@@ -1726,7 +1751,7 @@ mod tests {
     #[tokio::test]
     async fn test_notify_dispatch_reset_invalidates_old_generation() {
         let config = ControllerConfig::default().with_node_info(1, "127.0.0.1:9885".parse::<SocketAddr>().unwrap());
-        let manager = ControllerManager::new(config, test_service_context())
+        let manager = ControllerManager::new(config, test_service_context(), test_telemetry_handle())
             .await
             .expect("Failed to create manager");
 
@@ -1764,7 +1789,7 @@ mod tests {
             .with_storage_backend(crate::config::StorageBackendType::Memory);
 
         let manager = Arc::new(
-            ControllerManager::new(config, test_service_context())
+            ControllerManager::new(config, test_service_context(), test_telemetry_handle())
                 .await
                 .expect("Failed to create manager"),
         );
@@ -1813,7 +1838,7 @@ mod tests {
             .with_notify_broker_role_changed(false);
 
         let manager = Arc::new(
-            ControllerManager::new(config, test_service_context())
+            ControllerManager::new(config, test_service_context(), test_telemetry_handle())
                 .await
                 .expect("create manager"),
         );
@@ -1995,7 +2020,7 @@ mod tests {
             .with_notify_broker_role_changed(true);
 
         let manager = Arc::new(
-            ControllerManager::new(config, test_service_context())
+            ControllerManager::new(config, test_service_context(), test_telemetry_handle())
                 .await
                 .expect("create manager"),
         );

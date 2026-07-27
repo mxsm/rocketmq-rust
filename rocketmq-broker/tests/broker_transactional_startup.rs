@@ -20,6 +20,7 @@ use rocketmq_broker::config::error::ConfigSection;
 use rocketmq_broker::config::validated::ValidatedBrokerConfig;
 use rocketmq_broker::BrokerStartupError;
 use rocketmq_broker::Builder;
+use rocketmq_observability::TelemetryRuntimeGuard;
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_store::MessageStoreConfig;
 
@@ -89,12 +90,15 @@ async fn listener_bind_failure_rolls_back_already_started_components() {
     let validated_config = ValidatedBrokerConfig::try_from_parts(broker_config, message_store_config)
         .expect("listener rollback test configuration should be valid");
     let runtime_context = RuntimeContext::from_current("broker-transactional-startup-test");
-    let initialized = Builder::new(runtime_context.service_context("broker-under-test"))
-        .with_validated_config(validated_config)
-        .build()
-        .initialize()
-        .await
-        .expect("broker initialization should succeed before bind fault injection");
+    let initialized = Builder::new(
+        runtime_context.service_context("broker-under-test"),
+        TelemetryRuntimeGuard::noop(),
+    )
+    .with_validated_config(validated_config)
+    .build()
+    .initialize()
+    .await
+    .expect("broker initialization should succeed before bind fault injection");
 
     let error = match initialized.start().await {
         Ok(running) => {
@@ -138,12 +142,15 @@ async fn unsupported_cold_data_hold_capability_fails_before_listener_startup() {
     let validated_config = ValidatedBrokerConfig::try_from_parts(broker_config, message_store_config)
         .expect("unsupported capability test configuration should remain structurally valid");
     let runtime_context = RuntimeContext::from_current("broker-unsupported-capability-test");
-    let initialized = Builder::new(runtime_context.service_context("broker-under-test"))
-        .with_validated_config(validated_config)
-        .build()
-        .initialize()
-        .await
-        .expect("metadata initialization should remain available for configuration diagnostics");
+    let initialized = Builder::new(
+        runtime_context.service_context("broker-under-test"),
+        TelemetryRuntimeGuard::noop(),
+    )
+    .with_validated_config(validated_config)
+    .build()
+    .initialize()
+    .await
+    .expect("metadata initialization should remain available for configuration diagnostics");
 
     let error = match initialized.start().await {
         Ok(running) => {
@@ -181,12 +188,15 @@ async fn configured_but_unreachable_name_server_prevents_readiness() {
     let validated_config = ValidatedBrokerConfig::try_from_parts(broker_config, message_store_config)
         .expect("registration readiness test configuration should be valid");
     let runtime_context = RuntimeContext::from_current("broker-registration-readiness-test");
-    let initialized = Builder::new(runtime_context.service_context("broker-under-test"))
-        .with_validated_config(validated_config)
-        .build()
-        .initialize()
-        .await
-        .expect("broker initialization should succeed before registration");
+    let initialized = Builder::new(
+        runtime_context.service_context("broker-under-test"),
+        TelemetryRuntimeGuard::noop(),
+    )
+    .with_validated_config(validated_config)
+    .build()
+    .initialize()
+    .await
+    .expect("broker initialization should succeed before registration");
 
     let error = match initialized.start().await {
         Ok(running) => {

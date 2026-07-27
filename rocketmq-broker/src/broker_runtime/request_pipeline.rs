@@ -97,11 +97,13 @@ impl BrokerRuntime {
         ));
         let send_message_context = Arc::new(SendMessageProcessorContext::new(
             self.composition.state.send_message_policy_state.clone(),
+            self.composition.state.telemetry_handle.clone(),
             SendMessageStoreCapability::new(&self.composition.data_plane.escape_bridge_owner),
             send_message_topic_capability,
             self.composition.state.subscription_group_manager().config_lookup(),
             self.composition.state.rebalance_lock_manager().clone(),
             self.composition.state.broker_stats_manager_handle(),
+            self.composition.state.broker_metrics_manager.clone(),
             self.composition.state.producer_manager().reply_channel_registry(),
         ));
         let send_message_processor = SendMessageProcessor::new(
@@ -114,6 +116,7 @@ impl BrokerRuntime {
         let pull_message_result_handler = Arc::new(DefaultPullMessageResultHandler::new(
             Arc::new(Default::default()), //optimize
             Arc::clone(&pull_message_context),
+            self.composition.state.broker_metrics_manager.clone(),
         ));
 
         let pull_message_processor = Arc::new(PullMessageProcessor::new(
@@ -530,6 +533,7 @@ impl BrokerRuntime {
                     ),
                     EndTransactionStoreCapability::new(&self.composition.data_plane.escape_bridge_owner),
                     self.composition.state.broker_stats_manager_handle(),
+                    self.composition.state.broker_metrics_manager.clone(),
                 ),
             ))),
         );
@@ -594,9 +598,10 @@ impl BrokerRuntime {
                     component: "service_context",
                     detail: "broker remoting servers require an injected service context".to_owned(),
                 })?;
-        let mut server = RocketMQServer::new(
+        let mut server = RocketMQServer::new_with_telemetry(
             Arc::new(broker_config.broker_server_config.clone()),
             service_context.child("broker.remoting-server.normal"),
+            self.composition.state.transport_telemetry.clone(),
         );
         //start nomarl broker remoting_server
         let client_housekeeping_service_main = self
@@ -630,9 +635,10 @@ impl BrokerRuntime {
         //start fast broker remoting_server
         let mut fast_server_config = broker_config.broker_server_config.clone();
         fast_server_config.listen_port = broker_config.broker_server_config.listen_port - 2;
-        let mut fast_server = RocketMQServer::new(
+        let mut fast_server = RocketMQServer::new_with_telemetry(
             Arc::new(fast_server_config),
             service_context.child("broker.remoting-server.fast"),
+            self.composition.state.transport_telemetry.clone(),
         );
         let shutdown_token = remoting_server_task_group.cancellation_token();
         let (fast_report_tx, fast_report_rx) = oneshot::channel();

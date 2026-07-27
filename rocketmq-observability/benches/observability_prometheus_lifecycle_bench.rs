@@ -34,7 +34,10 @@ fn run_lifecycle_probe() -> PrometheusLifecycleProbe {
         .build()
         .expect("observability prometheus benchmark runtime should start");
 
-    runtime.block_on(run_prometheus_lifecycle_probe())
+    runtime.block_on(async {
+        let runtime_context = rocketmq_runtime::RuntimeContext::from_current("rocketmq-observability-prometheus-bench");
+        run_prometheus_lifecycle_probe(runtime_context.service_context("prometheus-probe")).await
+    })
 }
 
 fn workspace_root() -> PathBuf {

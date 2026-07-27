@@ -19,88 +19,24 @@ pub use crate::semantic::metrics::NAMESRV_ROUTE_REQUEST_TOTAL;
 
 use std::time::Duration;
 
-#[cfg(feature = "otel-metrics")]
-use std::sync::OnceLock;
-
-#[cfg(feature = "otel-metrics")]
-static NAMESRV_METRICS: OnceLock<NameServerMetrics> = OnceLock::new();
-
-#[cfg(feature = "otel-metrics")]
-static NAMESRV_GLOBAL_METRICS: OnceLock<NameServerMetrics> = OnceLock::new();
-
-#[cfg(feature = "otel-metrics")]
-pub fn init_global(meter: &opentelemetry::metrics::Meter) -> bool {
-    NAMESRV_METRICS.set(NameServerMetrics::new(meter)).is_ok()
-}
-
-#[cfg(feature = "otel-metrics")]
-fn global_metrics() -> &'static NameServerMetrics {
-    if let Some(metrics) = NAMESRV_METRICS.get() {
-        return metrics;
-    }
-
-    NAMESRV_GLOBAL_METRICS.get_or_init(|| NameServerMetrics::new(&opentelemetry::global::meter("rocketmq-namesrv")))
-}
-
-pub fn record_route_request_total(count: u64) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record_route_request_total(count, &[]);
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = count;
-}
-
-pub fn record_route_request_latency(latency_ms: u64) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record_route_request_latency(latency_ms, &[]);
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = latency_ms;
-}
-
-pub fn record_broker_registrations(count: u64) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record_broker_registrations(count, &[]);
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = count;
-}
-
-pub fn record_active_brokers(count: u64) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record_active_brokers(count, &[]);
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = count;
-}
-
-pub fn record_route_request(elapsed: Duration) {
-    record_route_request_total(1);
-    record_route_request_latency(duration_millis_u64(elapsed));
-}
-
-pub fn record_broker_registration(active_brokers: usize) {
-    record_broker_registrations(1);
-    record_active_brokers(active_brokers as u64);
-}
-
-pub fn record_active_broker_count(active_brokers: usize) {
-    record_active_brokers(active_brokers as u64);
-}
-
 #[inline]
+#[cfg(feature = "otel-metrics")]
 fn duration_millis_u64(duration: Duration) -> u64 {
     duration.as_millis().clamp(0, u128::from(u64::MAX)) as u64
 }
 
 #[cfg(not(feature = "otel-metrics"))]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct NameServerMetrics;
 
 #[cfg(not(feature = "otel-metrics"))]
 impl NameServerMetrics {
     pub fn noop() -> Self {
         Self
+    }
+
+    pub fn from_handle(_telemetry: &crate::TelemetryHandle) -> Self {
+        Self::noop()
     }
 
     #[inline]
@@ -114,11 +50,27 @@ impl NameServerMetrics {
 
     #[inline]
     pub fn record_active_brokers(&self, _count: u64) {}
+
+    #[inline]
+    pub fn record_route_request(&self, _elapsed: Duration) {}
+
+    #[inline]
+    pub fn record_broker_registration(&self, _active_brokers: usize) {}
+
+    #[inline]
+    pub fn record_active_broker_count(&self, _active_brokers: usize) {}
+}
+
+#[cfg(feature = "otel-metrics")]
+#[derive(Clone, Default)]
+pub struct NameServerMetrics {
+    telemetry: Option<crate::TelemetryHandle>,
+    instruments: Option<NameServerMetricInstruments>,
 }
 
 #[cfg(feature = "otel-metrics")]
 #[derive(Clone)]
-pub struct NameServerMetrics {
+struct NameServerMetricInstruments {
     route_request_total: opentelemetry::metrics::Counter<u64>,
     route_request_latency: opentelemetry::metrics::Histogram<u64>,
     broker_registrations: opentelemetry::metrics::Counter<u64>,
@@ -127,7 +79,86 @@ pub struct NameServerMetrics {
 
 #[cfg(feature = "otel-metrics")]
 impl NameServerMetrics {
-    pub fn new(meter: &opentelemetry::metrics::Meter) -> Self {
+    pub fn noop() -> Self {
+        Self::default()
+    }
+
+    pub fn from_handle(telemetry: &crate::TelemetryHandle) -> Self {
+        let Some(meter) = telemetry.meter(crate::NAMESRV_METER_SCOPE) else {
+            return Self::noop();
+        };
+        Self {
+            telemetry: Some(telemetry.clone()),
+            instruments: Some(NameServerMetricInstruments::new(&meter)),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new(meter: &opentelemetry::metrics::Meter) -> Self {
+        Self {
+            telemetry: None,
+            instruments: Some(NameServerMetricInstruments::new(meter)),
+        }
+    }
+
+    fn is_active(&self) -> bool {
+        self.telemetry.as_ref().is_none_or(crate::TelemetryHandle::is_active)
+    }
+
+    #[inline]
+    pub fn record_route_request_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.route_request_total.add(count, attributes);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn record_route_request_latency(&self, latency_ms: u64, attributes: &[opentelemetry::KeyValue]) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.route_request_latency.record(latency_ms, attributes);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn record_broker_registrations(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.broker_registrations.add(count, attributes);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn record_active_brokers(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.active_brokers.record(count, attributes);
+            }
+        }
+    }
+
+    pub fn record_route_request(&self, elapsed: Duration) {
+        self.record_route_request_total(1, &[]);
+        self.record_route_request_latency(duration_millis_u64(elapsed), &[]);
+    }
+
+    pub fn record_broker_registration(&self, active_brokers: usize) {
+        self.record_broker_registrations(1, &[]);
+        self.record_active_brokers(active_brokers as u64, &[]);
+    }
+
+    pub fn record_active_broker_count(&self, active_brokers: usize) {
+        self.record_active_brokers(active_brokers as u64, &[]);
+    }
+}
+
+#[cfg(feature = "otel-metrics")]
+impl NameServerMetricInstruments {
+    fn new(meter: &opentelemetry::metrics::Meter) -> Self {
         let route_request_total = meter
             .u64_counter(NAMESRV_ROUTE_REQUEST_TOTAL)
             .with_description("Total number of NameServer route requests")
@@ -159,26 +190,6 @@ impl NameServerMetrics {
             active_brokers,
         }
     }
-
-    #[inline]
-    pub fn record_route_request_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.route_request_total.add(count, attributes);
-    }
-
-    #[inline]
-    pub fn record_route_request_latency(&self, latency_ms: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.route_request_latency.record(latency_ms, attributes);
-    }
-
-    #[inline]
-    pub fn record_broker_registrations(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.broker_registrations.add(count, attributes);
-    }
-
-    #[inline]
-    pub fn record_active_brokers(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.active_brokers.record(count, attributes);
-    }
 }
 
 #[cfg(all(test, feature = "otel-metrics"))]
@@ -202,26 +213,10 @@ mod tests {
     }
 
     #[test]
-    fn namesrv_global_recorders_lazy_initialize() {
-        record_route_request_total(1);
-        record_route_request_latency(3);
-        record_broker_registrations(1);
-        record_active_brokers(2);
-
-        assert!(NAMESRV_METRICS.get().is_some() || NAMESRV_GLOBAL_METRICS.get().is_some());
-    }
-}
-
-#[cfg(test)]
-mod helper_tests {
-    use std::time::Duration;
-
-    use super::*;
-
-    #[test]
-    fn namesrv_high_level_recorders_are_safe_without_explicit_meter() {
-        record_route_request(Duration::from_millis(1));
-        record_broker_registration(2);
-        record_active_broker_count(2);
+    fn namesrv_noop_recorder_is_safe_without_explicit_meter() {
+        let metrics = NameServerMetrics::from_handle(&crate::TelemetryHandle::noop());
+        metrics.record_route_request(Duration::from_millis(1));
+        metrics.record_broker_registration(2);
+        metrics.record_active_broker_count(2);
     }
 }

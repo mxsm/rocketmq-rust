@@ -112,10 +112,7 @@ fn best_effort_traces_report_blocked_subscriber_install_status() {
     let guard = rocketmq_observability::init_observability(&config)
         .expect("best-effort mode should keep existing compatibility behavior");
 
-    assert!(
-        guard.tracer_provider().is_some(),
-        "the tracer provider initializes even though the tracing subscriber layer is blocked"
-    );
+    assert!(guard.handle().trace_policy().enabled);
     assert_eq!(
         guard.subscriber_install_status(),
         rocketmq_observability::SubscriberInstallStatus {
@@ -124,7 +121,10 @@ fn best_effort_traces_report_blocked_subscriber_install_status() {
         }
     );
 
-    guard.shutdown().expect("trace provider shutdown should succeed");
+    guard
+        .shutdown()
+        .into_result()
+        .expect("trace provider shutdown should succeed");
 }
 
 #[cfg(feature = "otel-traces")]
@@ -243,7 +243,16 @@ fn bootstrap_metrics_only() {
 
     let guard = rocketmq_observability::install_global(&config).expect("metrics-only bootstrap should initialize");
 
-    assert!(guard.telemetry_guard().meter_provider().is_some());
+    let identity = rocketmq_observability::metrics::release_identity::ValidatedReleaseIdentity::try_new(
+        rocketmq_observability::BROKER_METER_SCOPE,
+        "0123456789abcdef0123456789abcdef01234567",
+        "metrics-only",
+    )
+    .expect("metrics-only release identity should be valid");
+    guard
+        .handle()
+        .register_release_identity(identity)
+        .expect("metrics-only provider should accept a release identity");
     assert_eq!(
         guard.subscriber_install_status(),
         rocketmq_observability::SubscriberInstallStatus {
@@ -271,7 +280,16 @@ fn bootstrap_metrics_best_effort_conflict() {
     let guard = rocketmq_observability::install_global(&config)
         .expect("best-effort conflict should keep initialized providers");
 
-    assert!(guard.telemetry_guard().meter_provider().is_some());
+    let identity = rocketmq_observability::metrics::release_identity::ValidatedReleaseIdentity::try_new(
+        rocketmq_observability::BROKER_METER_SCOPE,
+        "0123456789abcdef0123456789abcdef01234567",
+        "metrics-conflict",
+    )
+    .expect("best-effort release identity should be valid");
+    guard
+        .handle()
+        .register_release_identity(identity)
+        .expect("best-effort conflict should retain the metrics provider");
     assert_eq!(
         guard.subscriber_install_status(),
         rocketmq_observability::SubscriberInstallStatus {
@@ -297,7 +315,7 @@ fn bootstrap_traces_enabled() {
 
     let guard = rocketmq_observability::install_global(&config).expect("trace bootstrap should install");
 
-    assert!(guard.telemetry_guard().tracer_provider().is_some());
+    assert!(guard.handle().trace_policy().enabled);
     assert!(
         guard.log_filter_handle().is_some(),
         "trace-only subscriber layers must retain the shared filter"
@@ -327,7 +345,7 @@ fn bootstrap_logs_enabled() {
 
     let guard = rocketmq_observability::install_global(&config).expect("logs bootstrap should install");
 
-    assert!(guard.telemetry_guard().logger_provider().is_some());
+    assert_eq!(guard.handle().state(), rocketmq_observability::TelemetryState::Active);
     assert!(
         guard.log_filter_handle().is_some(),
         "OTLP-log-only subscriber layers must retain the shared filter"

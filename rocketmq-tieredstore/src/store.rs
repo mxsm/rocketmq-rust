@@ -30,6 +30,7 @@ use crate::provider::TieredStoreProvider;
 use crate::service::CommitLogRecoverService;
 use crate::service::TieredServiceSet;
 use rocketmq_observability::metrics::tiered_store::TieredStoreMetrics;
+use rocketmq_observability::metrics::tiered_store::TieredStoreMetricsRecorder;
 
 pub struct TieredStore<P = ProviderKind>
 where
@@ -47,8 +48,15 @@ where
 
 impl TieredStore<ProviderKind> {
     pub fn new(config: TieredStoreConfig) -> Result<Self, RocketMQError> {
+        Self::new_with_metrics(config, TieredStoreMetricsRecorder::noop())
+    }
+
+    pub fn new_with_metrics(
+        config: TieredStoreConfig,
+        metrics: TieredStoreMetricsRecorder,
+    ) -> Result<Self, RocketMQError> {
         let provider = ProviderKind::from_config(&config)?;
-        Self::with_provider(config, provider)
+        Self::with_provider_and_metrics(config, provider, metrics)
     }
 }
 
@@ -57,14 +65,23 @@ where
     P: TieredStoreProvider,
 {
     pub fn with_provider(config: TieredStoreConfig, provider: P) -> Result<Self, RocketMQError> {
+        Self::with_provider_and_metrics(config, provider, TieredStoreMetricsRecorder::noop())
+    }
+
+    pub fn with_provider_and_metrics(
+        config: TieredStoreConfig,
+        provider: P,
+        metrics: TieredStoreMetricsRecorder,
+    ) -> Result<Self, RocketMQError> {
         let config = Arc::new(config);
         let shutdown = CancellationToken::new();
         let metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
-        let metrics = Arc::new(TieredStoreMetrics::default());
-        let flat_file_store = Arc::new(TieredFlatFileStore::new(
+        let metrics = Arc::new(TieredStoreMetrics::new(metrics));
+        let flat_file_store = Arc::new(TieredFlatFileStore::new_with_metrics(
             config.clone(),
             metadata_store.clone(),
             provider,
+            metrics.clone(),
         ));
         let dispatcher = Arc::new(DefaultTieredDispatcher::new_with_metrics(
             config.clone(),

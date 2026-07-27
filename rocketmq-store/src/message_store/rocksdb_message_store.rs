@@ -152,29 +152,51 @@ impl RocksDBMessageStore {
         notify_message_arrive_in_batch: bool,
         service_context: ChildServiceContext,
     ) -> Result<Self, StoreError> {
+        Self::try_new_with_telemetry(
+            message_store_config,
+            broker_config,
+            topic_config_table,
+            broker_stats_manager,
+            notify_message_arrive_in_batch,
+            service_context,
+            crate::telemetry::StoreTelemetry::noop(),
+        )
+    }
+
+    pub fn try_new_with_telemetry(
+        message_store_config: Arc<MessageStoreConfig>,
+        broker_config: Arc<StoreRuntimeConfig>,
+        topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
+        broker_stats_manager: Option<Arc<BrokerStatsManager>>,
+        notify_message_arrive_in_batch: bool,
+        service_context: ChildServiceContext,
+        telemetry: crate::telemetry::StoreTelemetry,
+    ) -> Result<Self, StoreError> {
         let message_store_config_for_index = Arc::clone(&message_store_config);
         let message_store_config_for_timer = Arc::clone(&message_store_config);
         let message_store_config_for_trans = Arc::clone(&message_store_config);
-        let derived = RocksDbDerivedStore::open(
+        let derived = RocksDbDerivedStore::open_with_metrics(
             message_store_config.as_ref(),
             RocksDbMessageStoreOptions {
                 timer_enabled: message_store_config.timer_rocksdb_enable,
                 transaction_enabled: message_store_config.trans_rocksdb_enable,
             },
             service_context.child("rocksdb-derived"),
+            telemetry.rocksdb().clone(),
         )
         .map_err(message_store_adapter_error)?;
         let consume_queue_store = derived.consume_queue_store().clone();
         let rocksdb_index_service = derived.rocksdb_index_service();
         let rocksdb_timer_service = derived.rocksdb_timer_service();
         let rocksdb_trans_service = derived.rocksdb_trans_service();
-        let mut local_file_store = Box::new(LocalFileMessageStore::try_new(
+        let mut local_file_store = Box::new(LocalFileMessageStore::try_new_with_telemetry(
             Arc::clone(&message_store_config),
             broker_config,
             topic_config_table,
             broker_stats_manager,
             notify_message_arrive_in_batch,
             service_context.child("local-file"),
+            telemetry,
         )?);
         local_file_store.wire_owned_root_dependencies()?;
         let local_queue_offsets = local_file_store.consume_queue_store_mut().clone();

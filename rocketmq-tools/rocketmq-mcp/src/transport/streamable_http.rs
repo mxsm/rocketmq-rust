@@ -356,7 +356,12 @@ mod tests {
         config.audit.enabled = true;
         config.audit.sink = "memory".to_string();
         let runtime = rocketmq_runtime::RuntimeContext::from_current("mcp-streamable-http-test");
-        let app = McpApp::new(config, runtime.service_context("mcp-app")).unwrap();
+        let app = McpApp::new(
+            config,
+            runtime.service_context("mcp-app"),
+            rocketmq_observability::TelemetryHandle::noop(),
+        )
+        .unwrap();
         let router = build_router_typed(app.clone(), CancellationToken::new()).unwrap();
 
         let metadata = router

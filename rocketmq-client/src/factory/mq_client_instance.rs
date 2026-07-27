@@ -43,6 +43,8 @@ use rocketmq_model::common::message::message_queue_assignment::MessageQueueAssig
 use rocketmq_model::common::message::message_single::Message;
 use rocketmq_model::common::mix_all;
 use rocketmq_model::common::mq_version::CURRENT_VERSION;
+use rocketmq_observability::metrics::client::ClientMetrics;
+use rocketmq_observability::TelemetryHandle;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_protocol::protocol::body::acl_info::AclInfo;
 use rocketmq_protocol::protocol::body::broker_body::cluster_info::ClusterInfo;
@@ -235,6 +237,8 @@ fn schedule_rebalance_wakeup(
 pub struct MQClientInstance {
     service_context: ChildServiceContext,
     resource_budget: ResourceBudget,
+    telemetry_handle: TelemetryHandle,
+    client_metrics: ClientMetrics,
     request_future_holder: Arc<RequestFutureHolder>,
     pub(crate) client_config: Arc<ClientConfig>,
     pub(crate) client_id: CheetahString,
@@ -342,10 +346,12 @@ impl MQClientInstance {
         client_id: impl Into<CheetahString>,
         rpc_hook: Option<Arc<dyn RPCHook>>,
         service_context: ChildServiceContext,
+        telemetry_handle: TelemetryHandle,
         request_future_holder: Arc<RequestFutureHolder>,
     ) -> Arc<MQClientInstance> {
         let resource_budget = crate::runtime::standalone_client_resource_budget()
             .expect("standalone MQClientInstance resource budget must be valid");
+        let client_metrics = ClientMetrics::from_handle(&telemetry_handle);
         Self::new_arc_with_resource_budget(
             client_config,
             instance_generation,
@@ -354,6 +360,8 @@ impl MQClientInstance {
             service_context,
             request_future_holder,
             resource_budget,
+            telemetry_handle,
+            client_metrics,
         )
     }
 
@@ -365,6 +373,8 @@ impl MQClientInstance {
         service_context: ChildServiceContext,
         request_future_holder: Arc<RequestFutureHolder>,
         resource_budget: ResourceBudget,
+        telemetry_handle: TelemetryHandle,
+        client_metrics: ClientMetrics,
     ) -> Arc<MQClientInstance> {
         let client_id = client_id.into();
         let shared_config = Arc::new(client_config.clone());
@@ -391,9 +401,12 @@ impl MQClientInstance {
             ),
         );
         let default_producer = Mutex::new(default_producer);
+        let rebalance_service = RebalanceService::new(client_metrics.clone());
         let instance = Arc::new(MQClientInstance {
             service_context: service_context.clone(),
             resource_budget: resource_budget.clone(),
+            telemetry_handle,
+            client_metrics,
             request_future_holder,
             client_config: shared_config,
             client_id,
@@ -415,7 +428,7 @@ impl MQClientInstance {
                 client_config.pull_message_service_shards,
                 resource_budget,
             )),
-            rebalance_service: RebalanceService::new(),
+            rebalance_service,
             default_producer,
             broker_addr_table,
             broker_version_table,
@@ -450,6 +463,7 @@ impl MQClientInstance {
             Arc::new(client_config.clone()),
             Some(tx),
             service_context.child("remoting"),
+            instance.telemetry_handle.clone(),
         ));
 
         if let Some(namesrv_addr) = client_config.namesrv_addr.as_deref() {
@@ -479,6 +493,14 @@ impl MQClientInstance {
 
     pub(crate) fn resource_budget(&self) -> ResourceBudget {
         self.resource_budget.clone()
+    }
+
+    pub(crate) fn telemetry_handle(&self) -> &TelemetryHandle {
+        &self.telemetry_handle
+    }
+
+    pub(crate) fn client_metrics(&self) -> &ClientMetrics {
+        &self.client_metrics
     }
 
     pub(crate) fn request_future_holder(&self) -> Arc<RequestFutureHolder> {
@@ -2730,6 +2752,7 @@ fn new_probe_client_instance(
         scope,
         None,
         client_runtime.child(scope),
+        client_runtime.telemetry_handle().clone(),
         client_runtime.pool().request_future_holder(),
     )
 }
@@ -2948,6 +2971,7 @@ mod tests {
             client_id,
             None,
             runtime.child(client_id),
+            runtime.telemetry_handle().clone(),
             runtime.pool().request_future_holder(),
         )
     }

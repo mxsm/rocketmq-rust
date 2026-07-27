@@ -28,6 +28,7 @@ use rocketmq_model::common::constant::PermName;
 use rocketmq_model::common::message::message_batch::MessageExtBatch;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_observability::TelemetryHandle;
 use rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
 use rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigSerializeWrapper;
 use rocketmq_protocol::protocol::header::message_operation_header::TopicRequestHeaderTrait;
@@ -51,6 +52,7 @@ use crate::client::manager::producer_manager::ProducerReplyChannelRegistry;
 use crate::client::rebalance::rebalance_lock_manager::RebalanceLockManager;
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::failover::escape_bridge::MessageStoreUnavailable;
+use crate::metrics::broker_metrics_manager::BrokerMetricsManager;
 use crate::out_api::broker_outer_api::BrokerOuterAPI;
 use crate::slave::slave_synchronize::SlaveMasterAddress;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupConfigLookup;
@@ -577,11 +579,13 @@ where
 /// Complete dependency set shared by send and reply request processors.
 pub(crate) struct SendMessageProcessorContext<MS: MessageStore> {
     pub(crate) policy: SendMessagePolicyState,
+    pub(crate) telemetry: TelemetryHandle,
     pub(crate) store: SendMessageStoreCapability<MS>,
     pub(crate) topics: Arc<SendMessageTopicCapability<MS>>,
     pub(crate) subscription_groups: SubscriptionGroupConfigLookup,
     pub(crate) rebalance_locks: RebalanceLockManager,
     pub(crate) broker_stats_manager: Arc<BrokerStatsManager>,
+    pub(crate) broker_metrics_manager: Option<Arc<BrokerMetricsManager>>,
     pub(crate) producer_reply_channels: ProducerReplyChannelRegistry,
 }
 
@@ -589,11 +593,13 @@ impl<MS: MessageStore> Clone for SendMessageProcessorContext<MS> {
     fn clone(&self) -> Self {
         Self {
             policy: self.policy.clone(),
+            telemetry: self.telemetry.clone(),
             store: self.store.clone(),
             topics: Arc::clone(&self.topics),
             subscription_groups: self.subscription_groups.clone(),
             rebalance_locks: self.rebalance_locks.clone(),
             broker_stats_manager: Arc::clone(&self.broker_stats_manager),
+            broker_metrics_manager: self.broker_metrics_manager.clone(),
             producer_reply_channels: self.producer_reply_channels.clone(),
         }
     }
@@ -606,20 +612,24 @@ impl<MS: MessageStore> SendMessageProcessorContext<MS> {
     )]
     pub(crate) fn new(
         policy: SendMessagePolicyState,
+        telemetry: TelemetryHandle,
         store: SendMessageStoreCapability<MS>,
         topics: Arc<SendMessageTopicCapability<MS>>,
         subscription_groups: SubscriptionGroupConfigLookup,
         rebalance_locks: RebalanceLockManager,
         broker_stats_manager: Arc<BrokerStatsManager>,
+        broker_metrics_manager: Option<Arc<BrokerMetricsManager>>,
         producer_reply_channels: ProducerReplyChannelRegistry,
     ) -> Self {
         Self {
             policy,
+            telemetry,
             store,
             topics,
             subscription_groups,
             rebalance_locks,
             broker_stats_manager,
+            broker_metrics_manager,
             producer_reply_channels,
         }
     }

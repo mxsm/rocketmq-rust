@@ -21,12 +21,6 @@ pub use crate::semantic::metrics::TIMER_ENQUEUE_TOTAL;
 pub use crate::semantic::metrics::TIMER_MESSAGE_SNAPSHOT;
 pub use crate::semantic::metrics::TIMING_MESSAGES;
 
-#[cfg(feature = "otel-metrics")]
-use std::sync::OnceLock;
-
-#[cfg(feature = "otel-metrics")]
-static TIMER_METRICS: OnceLock<TimerMetrics> = OnceLock::new();
-
 #[derive(Debug, Clone, Default)]
 pub struct TimerObservableValues {
     pub enqueue_lag: i64,
@@ -37,38 +31,113 @@ pub struct TimerObservableValues {
     pub message_snapshot: Vec<(i32, i64)>,
 }
 
-#[cfg(feature = "otel-metrics")]
-pub fn init_global_with_observables<F>(meter: &opentelemetry::metrics::Meter, source: F) -> bool
-where
-    F: Fn() -> TimerObservableValues + Send + Sync + 'static,
-{
-    TIMER_METRICS
-        .set(TimerMetrics::new_with_observables(meter, source))
-        .is_ok()
+/// Cloneable Timer recorder bound to one explicit Store telemetry scope.
+#[derive(Clone)]
+pub struct TimerMetricsRecorder {
+    #[cfg(feature = "otel-metrics")]
+    telemetry: crate::TelemetryRecorder,
+    #[cfg(feature = "otel-metrics")]
+    metrics: Option<TimerMetrics>,
 }
 
-pub fn record_enqueue_total(topic: Option<&str>) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = TIMER_METRICS.get() {
-        metrics.record_enqueue_total(topic);
+impl std::fmt::Debug for TimerMetricsRecorder {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TimerMetricsRecorder")
+            .field("enabled", &self.is_enabled())
+            .finish()
     }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = topic;
 }
 
-pub fn record_dequeue_total(topic: &str) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = TIMER_METRICS.get() {
-        metrics.record_dequeue_total(topic);
+impl Default for TimerMetricsRecorder {
+    fn default() -> Self {
+        Self::noop()
+    }
+}
+
+impl TimerMetricsRecorder {
+    /// Creates a recorder that never reads process-global OpenTelemetry state.
+    #[must_use]
+    pub fn noop() -> Self {
+        Self::from_handle(&crate::TelemetryHandle::noop())
     }
 
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = topic;
+    /// Creates a recorder from the fixed Store instrumentation scope.
+    #[must_use]
+    pub fn from_handle(handle: &crate::TelemetryHandle) -> Self {
+        #[cfg(feature = "otel-metrics")]
+        {
+            let telemetry = handle.child(crate::STORE_METER_SCOPE);
+            let metrics = telemetry
+                .meter()
+                .map(|meter| TimerMetrics::new_with_label_policy(&meter, telemetry.metric_label_policy()));
+            Self { telemetry, metrics }
+        }
+
+        #[cfg(not(feature = "otel-metrics"))]
+        {
+            let _ = handle;
+            Self {}
+        }
+    }
+
+    /// Returns whether this recorder is backed by an active Store meter.
+    #[must_use]
+    pub fn is_enabled(&self) -> bool {
+        #[cfg(feature = "otel-metrics")]
+        {
+            self.telemetry.is_active() && self.metrics.is_some()
+        }
+
+        #[cfg(not(feature = "otel-metrics"))]
+        {
+            false
+        }
+    }
+
+    /// Registers Timer observable gauges on this recorder's explicit meter.
+    pub fn register_observables<F>(&self, source: F)
+    where
+        F: Fn() -> TimerObservableValues + Send + Sync + 'static,
+    {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(meter) = self.telemetry.meter() {
+            TimerMetrics::register_observables_with_label_policy(&meter, source, self.telemetry.metric_label_policy());
+        }
+
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = source;
+    }
+
+    #[inline]
+    pub fn record_enqueue_total(&self, topic: Option<&str>) {
+        #[cfg(feature = "otel-metrics")]
+        if self.telemetry.is_active() {
+            if let Some(metrics) = self.metrics.as_ref() {
+                metrics.record_enqueue_total(topic);
+            }
+        }
+
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = topic;
+    }
+
+    #[inline]
+    pub fn record_dequeue_total(&self, topic: &str) {
+        #[cfg(feature = "otel-metrics")]
+        if self.telemetry.is_active() {
+            if let Some(metrics) = self.metrics.as_ref() {
+                metrics.record_dequeue_total(topic);
+            }
+        }
+
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = topic;
+    }
 }
 
 #[cfg(not(feature = "otel-metrics"))]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct TimerMetrics;
 
 #[cfg(not(feature = "otel-metrics"))]
@@ -89,24 +158,50 @@ impl TimerMetrics {
 pub struct TimerMetrics {
     enqueue_total: opentelemetry::metrics::Counter<u64>,
     dequeue_total: opentelemetry::metrics::Counter<u64>,
+    label_policy: crate::MetricLabelPolicy,
 }
 
 #[cfg(feature = "otel-metrics")]
 impl TimerMetrics {
-    pub fn new_with_observables<F>(meter: &opentelemetry::metrics::Meter, source: F) -> Self
+    #[cfg(test)]
+    pub(crate) fn new(meter: &opentelemetry::metrics::Meter) -> Self {
+        Self::new_with_label_policy(meter, crate::MetricLabelPolicy::default())
+    }
+
+    pub(crate) fn new_with_label_policy(
+        meter: &opentelemetry::metrics::Meter,
+        label_policy: crate::MetricLabelPolicy,
+    ) -> Self {
+        Self {
+            enqueue_total: meter
+                .u64_counter(TIMER_ENQUEUE_TOTAL)
+                .with_description("Total number of timer enqueue")
+                .build(),
+            dequeue_total: meter
+                .u64_counter(TIMER_DEQUEUE_TOTAL)
+                .with_description("Total number of timer dequeue")
+                .build(),
+            label_policy,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_with_observables<F>(meter: &opentelemetry::metrics::Meter, source: F) -> Self
     where
         F: Fn() -> TimerObservableValues + Send + Sync + 'static,
     {
-        let enqueue_total = meter
-            .u64_counter(TIMER_ENQUEUE_TOTAL)
-            .with_description("Total number of timer enqueue")
-            .build();
+        let metrics = Self::new(meter);
+        Self::register_observables_with_label_policy(meter, source, metrics.label_policy.clone());
+        metrics
+    }
 
-        let dequeue_total = meter
-            .u64_counter(TIMER_DEQUEUE_TOTAL)
-            .with_description("Total number of timer dequeue")
-            .build();
-
+    pub(crate) fn register_observables_with_label_policy<F>(
+        meter: &opentelemetry::metrics::Meter,
+        source: F,
+        label_policy: crate::MetricLabelPolicy,
+    ) where
+        F: Fn() -> TimerObservableValues + Send + Sync + 'static,
+    {
         let source = std::sync::Arc::new(source);
 
         let enqueue_lag_source = source.clone();
@@ -163,7 +258,7 @@ impl TimerMetrics {
                 let values = timing_messages_source();
                 for (topic, count) in values.timing_messages {
                     let mut attrs = store_attributes().to_vec();
-                    attrs.push(opentelemetry::KeyValue::new(crate::semantic::labels::TOPIC, topic));
+                    attrs.push(topic_attribute(&label_policy, &topic));
                     observer.observe(count.max(0), &attrs);
                 }
             })
@@ -178,27 +273,19 @@ impl TimerMetrics {
                     let mut attrs = store_attributes().to_vec();
                     attrs.push(opentelemetry::KeyValue::new(
                         crate::semantic::labels::TIMER_BOUND_SECONDS,
-                        timer_bound_seconds.to_string(),
+                        i64::from(timer_bound_seconds),
                     ));
                     observer.observe(count.max(0), &attrs);
                 }
             })
             .build();
-
-        Self {
-            enqueue_total,
-            dequeue_total,
-        }
     }
 
     #[inline]
     pub fn record_enqueue_total(&self, topic: Option<&str>) {
         let mut attrs = store_attributes().to_vec();
         if let Some(topic) = topic {
-            attrs.push(opentelemetry::KeyValue::new(
-                crate::semantic::labels::TOPIC,
-                topic.to_owned(),
-            ));
+            attrs.push(topic_attribute(&self.label_policy, topic));
         }
         self.enqueue_total.add(1, &attrs);
     }
@@ -206,11 +293,19 @@ impl TimerMetrics {
     #[inline]
     pub fn record_dequeue_total(&self, topic: &str) {
         let mut attrs = store_attributes().to_vec();
-        attrs.push(opentelemetry::KeyValue::new(
-            crate::semantic::labels::TOPIC,
-            topic.to_owned(),
-        ));
+        attrs.push(topic_attribute(&self.label_policy, topic));
         self.dequeue_total.add(1, &attrs);
+    }
+}
+
+#[cfg(feature = "otel-metrics")]
+#[inline]
+fn topic_attribute(policy: &crate::MetricLabelPolicy, topic: &str) -> opentelemetry::KeyValue {
+    let (topic, dropped) = policy.normalize_metric_label_with_outcome(crate::semantic::labels::TOPIC, topic);
+    if dropped {
+        opentelemetry::KeyValue::new(crate::semantic::labels::TOPIC, crate::METRIC_LABEL_SENTINEL)
+    } else {
+        opentelemetry::KeyValue::new(crate::semantic::labels::TOPIC, topic.into_owned())
     }
 }
 
@@ -245,5 +340,16 @@ mod tests {
         metrics.record_enqueue_total(Some("topic-a"));
         metrics.record_enqueue_total(None);
         metrics.record_dequeue_total("topic-a");
+    }
+
+    #[test]
+    fn timer_topic_attributes_use_the_bounded_policy() {
+        let policy = crate::MetricLabelPolicy::new(1, true, true);
+
+        assert_eq!(topic_attribute(&policy, "topic-a").value.to_string(), "topic-a");
+        assert_eq!(
+            topic_attribute(&policy, "topic-b").value.to_string(),
+            crate::METRIC_LABEL_SENTINEL
+        );
     }
 }

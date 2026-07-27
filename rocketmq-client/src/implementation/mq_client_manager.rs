@@ -20,6 +20,8 @@ use std::sync::Arc;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use parking_lot::RwLock;
+use rocketmq_observability::metrics::client::ClientMetrics;
+use rocketmq_observability::TelemetryHandle;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::ShutdownDeadline;
@@ -70,6 +72,8 @@ pub struct ClientPool {
 struct ClientPoolInner {
     service_context: ChildServiceContext,
     resource_budget: ResourceBudget,
+    telemetry_handle: TelemetryHandle,
+    client_metrics: ClientMetrics,
     factory_table: Arc<ClientInstanceHashMap>,
     accumulator_table: Arc<AccumulatorHashMap>,
     request_future_holder: Arc<RequestFutureHolder>,
@@ -100,12 +104,19 @@ impl PooledClient {
 }
 
 impl ClientPool {
-    pub(crate) fn new(service_context: ChildServiceContext, resource_budget: ResourceBudget) -> Self {
+    pub(crate) fn new(
+        service_context: ChildServiceContext,
+        resource_budget: ResourceBudget,
+        telemetry_handle: TelemetryHandle,
+        client_metrics: ClientMetrics,
+    ) -> Self {
         let request_future_holder = Arc::new(RequestFutureHolder::new(service_context.child("request-futures")));
         Self {
             inner: Arc::new(ClientPoolInner {
                 service_context,
                 resource_budget,
+                telemetry_handle,
+                client_metrics,
                 factory_table: Arc::new(DashMap::with_capacity(128)),
                 accumulator_table: Arc::new(DashMap::with_capacity(128)),
                 request_future_holder,
@@ -151,6 +162,8 @@ impl ClientPool {
                 self.inner.service_context.child(format!("instance-{generation}")),
                 Arc::clone(&self.inner.request_future_holder),
                 self.inner.resource_budget.clone(),
+                self.inner.telemetry_handle.clone(),
+                self.inner.client_metrics.clone(),
             );
             ClientPoolEntry {
                 generation,

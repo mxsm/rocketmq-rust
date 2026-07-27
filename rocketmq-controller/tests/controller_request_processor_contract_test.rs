@@ -77,9 +77,13 @@ impl ProcessorHarness {
             .with_election_timeout_ms(300);
         let runtime = rocketmq_runtime::RuntimeContext::from_current("controller-processor-contract-test");
         let manager = Arc::new(
-            ControllerManager::new(config, runtime.service_context("controller"))
-                .await
-                .expect("create controller manager"),
+            ControllerManager::new(
+                config,
+                runtime.service_context("controller"),
+                rocketmq_observability::TelemetryHandle::noop(),
+            )
+            .await
+            .expect("create controller manager"),
         );
         manager.initialize().await.expect("initialize controller manager");
         manager.start().await.expect("start controller manager");

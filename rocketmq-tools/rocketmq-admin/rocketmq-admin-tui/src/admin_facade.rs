@@ -83,6 +83,7 @@ pub(crate) fn test_client_runtime() -> Arc<ClientRuntime> {
     use std::sync::LazyLock;
 
     use rocketmq_admin_core::client_adapter::ClientRuntimeConfig;
+    use rocketmq_admin_core::client_adapter::TelemetryHandle;
     use rocketmq_runtime::RuntimeConfig;
     use rocketmq_runtime::RuntimeOwner;
 
@@ -91,7 +92,11 @@ pub(crate) fn test_client_runtime() -> Arc<ClientRuntime> {
             .expect("admin TUI test runtime should start")
     });
 
-    ClientRuntime::new(OWNER.root_context().child("client"), ClientRuntimeConfig::default())
+    ClientRuntime::new(
+        OWNER.root_context().child("client"),
+        ClientRuntimeConfig::default(),
+        TelemetryHandle::noop(),
+    )
 }
 
 mod operations;

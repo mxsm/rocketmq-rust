@@ -51,6 +51,7 @@ mod stats;
 mod store;
 mod store_error;
 mod store_path_config_helper;
+mod telemetry;
 #[cfg(feature = "tieredstore")]
 mod tieredstore;
 mod timer;

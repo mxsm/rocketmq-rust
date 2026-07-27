@@ -17,6 +17,7 @@ use std::sync::LazyLock;
 
 use rocketmq_client_rust::ClientRuntime;
 use rocketmq_client_rust::ClientRuntimeConfig;
+use rocketmq_client_rust::TelemetryHandle;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 
@@ -32,5 +33,6 @@ pub fn client_runtime(scope: impl Into<rocketmq_runtime::ScopeId>) -> Arc<Client
     ClientRuntime::new(
         TEST_RUNTIME_OWNER.root_context().child(scope),
         ClientRuntimeConfig::default(),
+        TelemetryHandle::noop(),
     )
 }

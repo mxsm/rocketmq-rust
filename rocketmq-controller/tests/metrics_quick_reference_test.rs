@@ -16,6 +16,7 @@
 
 #[cfg(test)]
 mod quick_reference_tests {
+    use std::sync::Arc;
     use std::time::Instant;
 
     use rocketmq_controller::ControllerConfig;
@@ -31,14 +32,16 @@ mod quick_reference_tests {
         let config = ControllerConfigReader::new(
             ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()),
         );
-        let _metrics = ControllerMetricsManager::get_instance(config);
+        let _metrics = ControllerMetricsManager::new(config, &rocketmq_observability::TelemetryHandle::noop());
     }
 
     #[test]
     fn test_role_recording() {
-        ControllerMetricsManager::record_role_change(2, 0);
-        ControllerMetricsManager::record_role_change(3, 2);
-        ControllerMetricsManager::record_role_change(2, 3);
+        let config = ControllerConfigReader::new(ControllerConfig::default());
+        let metrics = ControllerMetricsManager::new(config, &rocketmq_observability::TelemetryHandle::noop());
+        metrics.record_role_change(2, 0);
+        metrics.record_role_change(3, 2);
+        metrics.record_role_change(2, 3);
     }
 
     #[test]
@@ -46,13 +49,13 @@ mod quick_reference_tests {
         let config = ControllerConfigReader::new(
             ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()),
         );
-        let metrics = ControllerMetricsManager::get_instance(config);
+        let metrics = ControllerMetricsManager::new(config, &rocketmq_observability::TelemetryHandle::noop());
 
         metrics.inc_request_total("controller_register_broker", RequestHandleStatus::Success);
         metrics.record_request_latency("controller_register_broker", 1500);
 
-        ControllerMetricsManager::inc_request_total_static("controller_elect_master", RequestHandleStatus::Failed);
-        ControllerMetricsManager::record_request_latency_static("controller_elect_master", 2500);
+        metrics.inc_request_total("controller_elect_master", RequestHandleStatus::Failed);
+        metrics.record_request_latency("controller_elect_master", 2500);
     }
 
     #[test]
@@ -60,13 +63,13 @@ mod quick_reference_tests {
         let config = ControllerConfigReader::new(
             ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()),
         );
-        let metrics = ControllerMetricsManager::get_instance(config);
+        let metrics = ControllerMetricsManager::new(config, &rocketmq_observability::TelemetryHandle::noop());
 
         metrics.inc_dledger_op_total(DLedgerOperation::Append, DLedgerOperationStatus::Success);
         metrics.record_dledger_op_latency(DLedgerOperation::Append, 800);
 
-        ControllerMetricsManager::inc_dledger_op_total_static(DLedgerOperation::Append, DLedgerOperationStatus::Failed);
-        ControllerMetricsManager::record_dledger_op_latency_static(DLedgerOperation::Append, 1200);
+        metrics.inc_dledger_op_total(DLedgerOperation::Append, DLedgerOperationStatus::Failed);
+        metrics.record_dledger_op_latency(DLedgerOperation::Append, 1200);
     }
 
     #[test]
@@ -74,12 +77,12 @@ mod quick_reference_tests {
         let config = ControllerConfigReader::new(
             ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()),
         );
-        let metrics = ControllerMetricsManager::get_instance(config);
+        let metrics = ControllerMetricsManager::new(config, &rocketmq_observability::TelemetryHandle::noop());
 
         metrics.inc_election_total(ElectionResult::NewMasterElected);
         metrics.inc_election_total(ElectionResult::KeepCurrentMaster);
 
-        ControllerMetricsManager::inc_election_total_static(ElectionResult::NoMasterElected);
+        metrics.inc_election_total(ElectionResult::NoMasterElected);
     }
 
     #[test]
@@ -87,7 +90,7 @@ mod quick_reference_tests {
         let config = ControllerConfigReader::new(
             ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()),
         );
-        let metrics = ControllerMetricsManager::get_instance(config);
+        let metrics = ControllerMetricsManager::new(config, &rocketmq_observability::TelemetryHandle::noop());
 
         let start = Instant::now();
         std::thread::sleep(std::time::Duration::from_micros(100));
@@ -104,7 +107,7 @@ mod quick_reference_tests {
         let config = ControllerConfigReader::new(
             ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()),
         );
-        let metrics = ControllerMetricsManager::get_instance(config);
+        let metrics = ControllerMetricsManager::new(config, &rocketmq_observability::TelemetryHandle::noop());
 
         metrics.inc_request_total("test", RequestHandleStatus::Success);
         metrics.inc_request_total("test", RequestHandleStatus::Failed);
@@ -116,7 +119,7 @@ mod quick_reference_tests {
         let config = ControllerConfigReader::new(
             ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()),
         );
-        let metrics = ControllerMetricsManager::get_instance(config);
+        let metrics = ControllerMetricsManager::new(config, &rocketmq_observability::TelemetryHandle::noop());
 
         metrics.inc_dledger_op_total(DLedgerOperation::Append, DLedgerOperationStatus::Success);
         metrics.inc_dledger_op_total(DLedgerOperation::Append, DLedgerOperationStatus::Failed);
@@ -128,7 +131,7 @@ mod quick_reference_tests {
         let config = ControllerConfigReader::new(
             ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()),
         );
-        let metrics = ControllerMetricsManager::get_instance(config);
+        let metrics = ControllerMetricsManager::new(config, &rocketmq_observability::TelemetryHandle::noop());
 
         metrics.inc_election_total(ElectionResult::NewMasterElected);
         metrics.inc_election_total(ElectionResult::KeepCurrentMaster);
@@ -142,16 +145,14 @@ mod quick_reference_tests {
         let config = ControllerConfigReader::new(
             ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()),
         );
-        let _metrics = ControllerMetricsManager::get_instance(config);
+        let metrics = ControllerMetricsManager::new(config, &rocketmq_observability::TelemetryHandle::noop());
 
         let handles: Vec<_> = (0..10)
             .map(|i| {
+                let metrics = Arc::clone(&metrics);
                 thread::spawn(move || {
                     for _ in 0..100 {
-                        ControllerMetricsManager::inc_request_total_static(
-                            &format!("request_{}", i),
-                            RequestHandleStatus::Success,
-                        );
+                        metrics.inc_request_total(&format!("request_{}", i), RequestHandleStatus::Success);
                     }
                 })
             })

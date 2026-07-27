@@ -19,6 +19,8 @@ use std::sync::atomic::Ordering;
 use bytes::Bytes;
 use parking_lot::Mutex;
 use rocketmq_error::RocketMQError;
+use rocketmq_observability::metrics::tiered_store::TieredStoreMetrics;
+use std::sync::Arc;
 
 use crate::error::TieredStoreErrorKind;
 use crate::error::{self};
@@ -74,6 +76,7 @@ pub struct TieredFileSegment<P> {
     metadata: Mutex<FileSegmentMetadata>,
     pending: Mutex<Vec<Bytes>>,
     provider: P,
+    metrics: Arc<TieredStoreMetrics>,
 }
 
 impl<P> TieredFileSegment<P> {
@@ -84,6 +87,26 @@ impl<P> TieredFileSegment<P> {
         max_size: u64,
         metadata: FileSegmentMetadata,
         provider: P,
+    ) -> Self {
+        Self::new_with_metrics(
+            path,
+            segment_type,
+            base_offset,
+            max_size,
+            metadata,
+            provider,
+            Arc::new(TieredStoreMetrics::default()),
+        )
+    }
+
+    pub fn new_with_metrics(
+        path: String,
+        segment_type: FileSegmentType,
+        base_offset: u64,
+        max_size: u64,
+        metadata: FileSegmentMetadata,
+        provider: P,
+        metrics: Arc<TieredStoreMetrics>,
     ) -> Self {
         let size = metadata.size;
         Self {
@@ -96,7 +119,13 @@ impl<P> TieredFileSegment<P> {
             metadata: Mutex::new(metadata),
             pending: Mutex::new(Vec::new()),
             provider,
+            metrics,
         }
+    }
+
+    pub fn with_metrics(mut self, metrics: Arc<TieredStoreMetrics>) -> Self {
+        self.metrics = metrics;
+        self
     }
 
     fn current_status(&self) -> FileSegmentStatus {
@@ -227,7 +256,7 @@ where
             .provider
             .read(self.path.clone(), range.start, (end - range.start) as usize)
             .await;
-        rocketmq_observability::metrics::tiered_store::record_provider_read(
+        self.metrics.record_provider_read(
             &self.path,
             result.as_ref().map(|bytes| bytes.len() as u64).unwrap_or(0),
             result.is_ok(),
@@ -250,7 +279,7 @@ where
             let buffer_len = buffer.len();
             let started = std::time::Instant::now();
             let result = self.provider.write(self.path.clone(), position, buffer).await;
-            rocketmq_observability::metrics::tiered_store::record_provider_write(
+            self.metrics.record_provider_write(
                 &self.path,
                 result.as_ref().map(|written| *written as u64).unwrap_or(0),
                 result.is_ok(),

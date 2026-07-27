@@ -29,16 +29,12 @@ pub const TAG: &str = "TagA";
 
 #[tokio::main]
 pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let example_runtime = support::ExampleClientRuntime::new("simple-producer");
+    let example_runtime = support::ExampleClientRuntime::try_new("simple-producer")?;
     let client_runtime = example_runtime.client_runtime();
-    let config = rocketmq_observability::TelemetryBootstrapConfig::default();
-    let telemetry_guard = rocketmq_observability::install_global(&config)?;
 
     let run_result = run(client_runtime).await;
-    let shutdown_result = telemetry_guard.shutdown().into_result();
 
     run_result?;
-    shutdown_result?;
     example_runtime.shutdown().await;
 
     Ok(())

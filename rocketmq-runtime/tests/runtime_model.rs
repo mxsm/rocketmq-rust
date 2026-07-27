@@ -956,6 +956,175 @@ async fn blocking_executor_rejects_work_when_bounded_queue_is_full() {
 }
 
 #[tokio::test]
+async fn blocking_executor_rejects_expired_deadline_before_running_operation() {
+    let context = RuntimeContext::from_current("blocking-expired-deadline-test");
+    let executor = BlockingExecutor::new(BlockingPoolPolicy::default(), context.root_group().child("blocking"))
+        .expect("blocking executor should start");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let operation_calls = Arc::clone(&calls);
+
+    let error = executor
+        .spawn_io_until("expired", ShutdownDeadline::after(Duration::ZERO), move || {
+            operation_calls.fetch_add(1, Ordering::SeqCst);
+        })
+        .await
+        .expect_err("an expired deadline must reject blocking work");
+
+    assert!(matches!(error, RuntimeError::BlockingQueueTimeout { .. }));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert!(executor.snapshot().tasks.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn blocking_executor_absolute_deadline_bounds_running_task_and_reaps_it() {
+    let context = RuntimeContext::from_current("blocking-absolute-deadline-test");
+    let executor = BlockingExecutor::new(
+        BlockingPoolPolicy {
+            name: "blocking-absolute-deadline-test".to_string(),
+            task_timeout: Duration::from_secs(30),
+            ..BlockingPoolPolicy::default()
+        },
+        context.root_group().child("blocking"),
+    )
+    .expect("blocking executor should start");
+    let (started_tx, started_rx) = oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+
+    let task_executor = executor.clone();
+    let task = tokio::spawn(async move {
+        task_executor
+            .spawn_io_until(
+                "deadline-bound",
+                ShutdownDeadline::after(Duration::from_millis(200)),
+                move || {
+                    let _ = started_tx.send(());
+                    let _ = release_rx.recv();
+                },
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(1), started_rx)
+        .await
+        .expect("the blocking operation should start before its deadline")
+        .expect("the blocking operation should report that it started");
+    let error = task
+        .await
+        .expect("the deadline-bound task should join")
+        .expect_err("the absolute deadline must bound a running blocking task");
+    assert!(matches!(error, RuntimeError::BlockingTaskTimeoutStillRunning { .. }));
+    assert_eq!(executor.snapshot().timed_out_still_running, 1);
+
+    release_tx
+        .send(())
+        .expect("the timed-out blocking operation should be released");
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !executor.snapshot().tasks.is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the blocking reaper should remove the completed task");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelling_queued_blocking_work_removes_its_task_entry() {
+    let context = RuntimeContext::from_current("blocking-queued-cancellation-test");
+    let executor = BlockingExecutor::new(
+        BlockingPoolPolicy {
+            name: "blocking-queued-cancellation-test".to_string(),
+            max_concurrency: 1,
+            queue_timeout: Duration::from_secs(30),
+            task_timeout: Duration::from_secs(30),
+            ..BlockingPoolPolicy::default()
+        },
+        context.root_group().child("blocking"),
+    )
+    .expect("blocking executor should start");
+    let (started_tx, started_rx) = oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+
+    let running_executor = executor.clone();
+    let running = tokio::spawn(async move {
+        running_executor
+            .spawn_io("running", move || {
+                let _ = started_tx.send(());
+                let _ = release_rx.recv();
+            })
+            .await
+    });
+    started_rx.await.expect("the first blocking operation should start");
+
+    let queued_executor = executor.clone();
+    let queued = tokio::spawn(async move { queued_executor.spawn_io("queued", || ()).await });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while executor.snapshot().queued != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the second blocking operation should enter the bounded queue");
+
+    queued.abort();
+    let cancelled = queued.await.expect_err("the queued caller should be cancelled");
+    assert!(cancelled.is_cancelled());
+    assert_eq!(executor.snapshot().queued, 0);
+
+    release_tx
+        .send(())
+        .expect("the running blocking operation should be released");
+    running
+        .await
+        .expect("the running caller should join")
+        .expect("the running blocking operation should complete");
+    assert!(executor.snapshot().tasks.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelling_running_blocking_work_hands_its_join_to_the_reaper() {
+    let context = RuntimeContext::from_current("blocking-running-cancellation-test");
+    let executor = BlockingExecutor::new(
+        BlockingPoolPolicy {
+            name: "blocking-running-cancellation-test".to_string(),
+            task_timeout: Duration::from_secs(30),
+            ..BlockingPoolPolicy::default()
+        },
+        context.root_group().child("blocking"),
+    )
+    .expect("blocking executor should start");
+    let (started_tx, started_rx) = oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+
+    let task_executor = executor.clone();
+    let task = tokio::spawn(async move {
+        task_executor
+            .spawn_io("cancelled-running", move || {
+                let _ = started_tx.send(());
+                let _ = release_rx.recv();
+            })
+            .await
+    });
+    started_rx
+        .await
+        .expect("the blocking operation should report that it started");
+
+    task.abort();
+    let cancelled = task.await.expect_err("the running caller should be cancelled");
+    assert!(cancelled.is_cancelled());
+    assert_eq!(executor.snapshot().timed_out_still_running, 1);
+
+    release_tx
+        .send(())
+        .expect("the cancelled blocking operation should be released");
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !executor.snapshot().tasks.is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the blocking reaper should remove the cancelled task");
+}
+
+#[tokio::test]
 async fn blocking_executor_rejects_long_running_spawn_blocking() {
     let context = RuntimeContext::from_current("blocking-long-running-test");
 

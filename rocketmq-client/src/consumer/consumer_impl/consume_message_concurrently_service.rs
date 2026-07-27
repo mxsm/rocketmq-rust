@@ -29,6 +29,8 @@ use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::mix_all;
+use rocketmq_observability::metrics::client::ClientMetrics;
+use rocketmq_observability::TelemetryHandle;
 use rocketmq_protocol::protocol::body::cm_result::CMResult;
 use rocketmq_protocol::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
@@ -60,6 +62,8 @@ use rocketmq_runtime::ChildServiceContext;
 
 pub struct ConsumeMessageConcurrentlyService {
     service_context: ChildServiceContext,
+    telemetry_handle: TelemetryHandle,
+    client_metrics: ClientMetrics,
     pub(crate) default_mqpush_consumer_impl: RwLock<Option<Weak<DefaultMQPushConsumerImpl>>>,
     pub(crate) client_config: Arc<ClientConfig>,
     pub(crate) consumer_config: Arc<ConsumerConfig>,
@@ -177,6 +181,8 @@ fn spawn_tracked_concurrent_task<F>(
 impl ConsumeMessageConcurrentlyService {
     pub fn new(
         service_context: ChildServiceContext,
+        telemetry_handle: TelemetryHandle,
+        client_metrics: ClientMetrics,
         client_config: Arc<ClientConfig>,
         consumer_config: Arc<ConsumerConfig>,
         consumer_group: CheetahString,
@@ -186,6 +192,8 @@ impl ConsumeMessageConcurrentlyService {
         let core_pool_size = consumer_config.consume_thread_min as usize;
         Self {
             service_context,
+            telemetry_handle,
+            client_metrics,
             default_mqpush_consumer_impl: RwLock::new(default_mqpush_consumer_impl),
             client_config,
             consumer_config,
@@ -511,6 +519,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
 
         let listener = self.message_listener.clone();
         let group_for_span = self.consumer_group.clone();
+        let telemetry_handle = self.telemetry_handle.clone();
         let status = spawn_client_blocking_io_with_context(
             &self.service_context,
             "client.concurrent.consume_direct",
@@ -518,7 +527,8 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
                 let context = ConsumeConcurrentlyContext::new(mq);
                 let msgs_refs: Vec<&MessageExt> = msgs.iter().map(|m| m.as_ref()).collect();
                 let process_span = crate::consumer::consumer_impl::observability::consumer_process_span(
-                    msgs_refs.first().copied(),
+                    &telemetry_handle,
+                    msgs_refs.iter().copied(),
                     msgs_refs.len(),
                     group_for_span.as_str(),
                     &context.message_queue,
@@ -564,7 +574,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
         });
 
         let consume_rt = begin_timestamp.elapsed().as_millis() as u64;
-        rocketmq_observability::metrics::client::record_consume(1, consume_rt);
+        self.client_metrics.record_consume(1, consume_rt);
 
         let mut result = ConsumeMessageDirectlyResult::default();
         result.set_order(false);
@@ -730,7 +740,8 @@ impl ConsumeRequest {
         let mut has_exception = false;
         let mut status = None;
         let process_span = crate::consumer::consumer_impl::observability::consumer_process_span(
-            self.msgs.first().map(|msg| msg.as_ref()),
+            &consume_message_concurrently_service.telemetry_handle,
+            self.msgs.iter().map(|msg| msg.as_ref()),
             self.msgs.len(),
             self.consumer_group.as_str(),
             &self.message_queue,
@@ -808,7 +819,9 @@ impl ConsumeRequest {
         }
 
         let consume_rt = begin_timestamp.elapsed().as_millis() as u64;
-        rocketmq_observability::metrics::client::record_consume(self.msgs.len(), consume_rt);
+        consume_message_concurrently_service
+            .client_metrics
+            .record_consume(self.msgs.len(), consume_rt);
 
         let return_type = classify_concurrent_consume_return_type(
             status,
@@ -950,6 +963,8 @@ pub async fn run_concurrent_clean_expire_lifecycle_probe(
         });
     let service = ConsumeMessageConcurrentlyService::new(
         service_context.child("service"),
+        TelemetryHandle::noop(),
+        ClientMetrics::noop(),
         Arc::new(ClientConfig::default()),
         Arc::new(ConsumerConfig::default()),
         CheetahString::from_static_str("concurrent-clean-expire-probe"),
@@ -958,6 +973,8 @@ pub async fn run_concurrent_clean_expire_lifecycle_probe(
     );
     let this = Arc::new(ConsumeMessageConcurrentlyService::new(
         service_context.child("runner"),
+        TelemetryHandle::noop(),
+        ClientMetrics::noop(),
         Arc::new(ClientConfig::default()),
         Arc::new(ConsumerConfig::default()),
         CheetahString::from_static_str("concurrent-clean-expire-probe"),
@@ -1017,6 +1034,8 @@ mod tests {
     fn new_service(default_impl: Option<Arc<DefaultMQPushConsumerImpl>>) -> ConsumeMessageConcurrentlyService {
         ConsumeMessageConcurrentlyService::new(
             test_context(),
+            TelemetryHandle::noop(),
+            ClientMetrics::noop(),
             Arc::new(ClientConfig::default()),
             Arc::new(ConsumerConfig::default()),
             consumer_group(),
@@ -1028,6 +1047,8 @@ mod tests {
     fn new_service_with_config(consumer_config: ConsumerConfig) -> ConsumeMessageConcurrentlyService {
         ConsumeMessageConcurrentlyService::new(
             test_context(),
+            TelemetryHandle::noop(),
+            ClientMetrics::noop(),
             Arc::new(ClientConfig::default()),
             Arc::new(consumer_config),
             consumer_group(),
@@ -1042,6 +1063,8 @@ mod tests {
         let consumer_config = Arc::new(ConsumerConfig::default());
         let service = ConsumeMessageConcurrentlyService::new(
             test_context(),
+            TelemetryHandle::noop(),
+            ClientMetrics::noop(),
             client_config.clone(),
             consumer_config.clone(),
             consumer_group(),

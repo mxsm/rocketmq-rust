@@ -30,6 +30,7 @@ default = ["tls"]
 simd = ["rocketmq-protocol/simd"]
 tls = ["arc-swap", "rcgen", "rustls-native-certs", "rustls-pemfile", "tokio-rustls"]
 observability = ["dep:rocketmq-observability", "rocketmq-observability/otel-metrics"]
+observability-traces = ["dep:rocketmq-observability"]
 
 [dependencies]
 rocketmq-error = { workspace = true }

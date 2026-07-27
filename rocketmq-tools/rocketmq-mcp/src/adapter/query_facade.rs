@@ -1071,6 +1071,7 @@ mod tests {
         let client_runtime = rocketmq_admin_core::client_adapter::ClientRuntime::new(
             OWNER.root_context().child("client"),
             rocketmq_admin_core::client_adapter::ClientRuntimeConfig::default(),
+            rocketmq_admin_core::client_adapter::TelemetryHandle::noop(),
         );
         let _: QueryFacade<AdminCoreSessionFactory> = QueryFacade::new(example_config(), client_runtime);
     }

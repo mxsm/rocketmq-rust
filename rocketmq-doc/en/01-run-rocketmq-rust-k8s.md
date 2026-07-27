@@ -2,7 +2,7 @@
 title: "Run RocketMQ Rust with Kubernetes"
 permalink: /docs/run-rocketmq-rust-k8s/
 excerpt: "Run RocketMQ Rust with Kubernetes"
-last_modified_at: 2026-07-24T00:00:00+08:00
+last_modified_at: 2026-07-27T00:00:00+08:00
 redirect_from:
   - /theme-setup/
 toc: true
@@ -37,19 +37,42 @@ addresses are already allocated.
 
 ## Build local images
 
-Run these commands from the repository root. `--load` writes each result to the
-local Docker image store; there is intentionally no `--push`.
+Run these commands from a clean repository root. Capture the source revision
+once and provide a required rollout nonce through the environment. The same
+revision is embedded in all five binaries and must be passed to Helm later.
+`--load` writes each result to the local Docker image store; there is
+intentionally no `--push`.
 
 ```powershell
+$sourceRevision = (git rev-parse HEAD).Trim()
+if ($sourceRevision -notmatch '^[0-9a-f]{40}$' -or $sourceRevision -match '^0{40}$') {
+  throw "git rev-parse HEAD did not return a real 40-character lowercase revision"
+}
+if (git status --porcelain) {
+  throw "Commit or stash local changes before producing release-identified images"
+}
+$rolloutNonce = $env:ROCKETMQ_ROLLOUT_NONCE
+if (
+  [string]::IsNullOrWhiteSpace($rolloutNonce) -or
+  $rolloutNonce -notmatch '^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$'
+) {
+  throw "Set ROCKETMQ_ROLLOUT_NONCE to a 1..=63 character lowercase rollout identifier"
+}
+
 docker buildx build --load --file .\docker\Dockerfile.base --target broker `
+  --build-arg "SOURCE_REVISION=$sourceRevision" `
   --tag rocketmq-rust/broker:local .
 docker buildx build --load --file .\docker\Dockerfile.base --target namesrv `
+  --build-arg "SOURCE_REVISION=$sourceRevision" `
   --tag rocketmq-rust/namesrv:local .
 docker buildx build --load --file .\docker\Dockerfile.base --target controller `
+  --build-arg "SOURCE_REVISION=$sourceRevision" `
   --tag rocketmq-rust/controller:local .
 docker buildx build --load --file .\docker\Dockerfile.base --target proxy `
+  --build-arg "SOURCE_REVISION=$sourceRevision" `
   --tag rocketmq-rust/proxy:local .
 docker buildx build --load --file .\docker\Dockerfile.base --target mcp `
+  --build-arg "SOURCE_REVISION=$sourceRevision" `
   --tag rocketmq-rust/mcp:local .
 
 docker image inspect `
@@ -147,23 +170,34 @@ Use a Secrets Store CSI provider instead by clearing
 ## Validate locally
 
 ```powershell
-helm lint .\distribution\helm\rocketmq-rust --strict
+$releaseIdentityArgs = @(
+  '--set-string', "releaseIdentity.commit=$sourceRevision",
+  '--set-string', "releaseIdentity.nonce=$rolloutNonce"
+)
+
 helm lint .\distribution\helm\rocketmq-rust --strict `
-  -f .\distribution\helm\rocketmq-rust\values-dev-single.yaml
+  -f .\distribution\helm\rocketmq-rust\values-dev-single.yaml @releaseIdentityArgs
 helm lint .\distribution\helm\rocketmq-rust --strict `
-  -f .\distribution\helm\rocketmq-rust\values-production-controller-ha.yaml
+  -f .\distribution\helm\rocketmq-rust\values-production-controller-ha.yaml @releaseIdentityArgs
 
 helm template rocketmq .\distribution\helm\rocketmq-rust `
   --namespace rocketmq `
-  -f .\distribution\helm\rocketmq-rust\values-dev-single.yaml > $null
+  -f .\distribution\helm\rocketmq-rust\values-dev-single.yaml `
+  @releaseIdentityArgs > $null
 helm template rocketmq .\distribution\helm\rocketmq-rust `
   --namespace rocketmq `
-  -f .\distribution\helm\rocketmq-rust\values-production-controller-ha.yaml > $null
+  -f .\distribution\helm\rocketmq-rust\values-production-controller-ha.yaml `
+  @releaseIdentityArgs > $null
 ```
 
-The production schema rejects an even or undersized Controller set, fewer than
-three Brokers, missing Controller endpoints, disabled required persistence, and
-a Controller backend other than RocksDB.
+The bare chart defaults intentionally do not render: deployment requires an
+explicit profile/image choice, release commit, and rollout nonce. The
+production schema rejects an even or undersized Controller set, fewer than
+three Brokers, missing Controller endpoints, disabled required persistence,
+and a Controller backend other than RocksDB. The chart also rejects missing or
+all-zero release commits, missing rollout nonces, and a ServiceMonitor
+`scrapeTimeout` greater than its `interval`. ServiceMonitor durations use
+positive whole seconds or minutes such as `30s` or `2m`.
 
 ## Install `dev-single`
 
@@ -171,6 +205,8 @@ a Controller backend other than RocksDB.
 helm upgrade --install rocketmq .\distribution\helm\rocketmq-rust `
   --namespace rocketmq `
   -f .\distribution\helm\rocketmq-rust\values-dev-single.yaml `
+  --set-string "releaseIdentity.commit=$sourceRevision" `
+  --set-string "releaseIdentity.nonce=$rolloutNonce" `
   --wait --timeout 10m
 ```
 
@@ -194,6 +230,8 @@ helm upgrade --install rocketmq .\distribution\helm\rocketmq-rust `
   --namespace rocketmq `
   -f .\distribution\helm\rocketmq-rust\values-production-controller-ha.yaml `
   -f <local-production-overrides.yaml> `
+  --set-string "releaseIdentity.commit=$sourceRevision" `
+  --set-string "releaseIdentity.nonce=$rolloutNonce" `
   --atomic --wait --timeout 15m
 ```
 
@@ -217,6 +255,9 @@ ordinal recovers the same identity file.
 The HTTP probe on port `8088` is intentionally not exposed by a Service.
 Startup readiness is published only after:
 
+- every service has validated that the chart release commit is non-null and
+  matches the commit embedded in its binary, and has registered its release
+  identity metric;
 - Controller has observed a Raft leader and applied committed state;
 - Broker has a writable Store, bound listeners, active processors, initialized
   security, Controller registration, and an assigned runtime role;
@@ -233,9 +274,12 @@ kubectl -n rocketmq rollout status deployment/rocketmq-proxy --timeout=10m
 kubectl -n rocketmq get pods,pvc,pdb
 ```
 
-Upgrade one release at a time with the same production override file. Do not
-change Controller node IDs, Controller ClusterIPs, Broker group names, or PVC
-ownership during an ordinary upgrade.
+Upgrade one release at a time with the same production override file. Capture
+the build revision once, use it for both `SOURCE_REVISION` and
+`releaseIdentity.commit`, and choose a new required rollout nonce for each
+rollout. A null or mismatched identity stops the process before readiness. Do
+not change Controller node IDs, Controller ClusterIPs, Broker group names, or
+PVC ownership during an ordinary upgrade.
 
 ## Recovery
 

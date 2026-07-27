@@ -30,3 +30,4 @@ pub use lifecycle::AdminGuard;
 pub use lifecycle::AdminSession;
 pub use rocketmq_client_rust::ClientRuntime;
 pub use rocketmq_client_rust::ClientRuntimeConfig;
+pub use rocketmq_client_rust::TelemetryHandle;

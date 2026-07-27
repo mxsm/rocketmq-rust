@@ -30,7 +30,21 @@ use criterion::BenchmarkId;
 use criterion::Criterion;
 use rocketmq_observability::metrics::labels::LabelGuard;
 use rocketmq_observability::SamplingGate;
-use rocketmq_observability::TracesConfig;
+
+#[cfg(feature = "otel-traces")]
+fn trace_runtime(record_message_id: bool, record_message_keys: bool) -> rocketmq_observability::TelemetryRuntimeGuard {
+    let mut config = rocketmq_observability::ObservabilityConfig {
+        enabled: true,
+        ..rocketmq_observability::ObservabilityConfig::default()
+    };
+    config.traces.enabled = true;
+    config.traces.exporter = rocketmq_observability::TraceExporter::Disable;
+    config.traces.propagate_context = true;
+    config.traces.record_message_id = record_message_id;
+    config.traces.record_message_keys = record_message_keys;
+    config.traces.record_body_size = true;
+    rocketmq_observability::init_observability(&config).expect("benchmark telemetry runtime should initialize")
+}
 
 fn bench_label_guard(c: &mut Criterion) {
     let mut group = c.benchmark_group("observability_label_guard");
@@ -65,14 +79,19 @@ fn bench_broker_metrics_record(c: &mut Criterion) {
 
     #[cfg(feature = "otel-metrics")]
     {
-        use opentelemetry::metrics::MeterProvider;
         use opentelemetry::KeyValue;
-        use opentelemetry_sdk::metrics::SdkMeterProvider;
         use rocketmq_observability::metrics::broker::BrokerMetrics;
 
-        let provider = SdkMeterProvider::builder().build();
-        let meter = provider.meter("observability-hot-path-bench");
-        let metrics = BrokerMetrics::new(&meter);
+        let mut config = rocketmq_observability::ObservabilityConfig {
+            enabled: true,
+            ..rocketmq_observability::ObservabilityConfig::default()
+        };
+        config.metrics.enabled = true;
+        config.metrics.exporter = rocketmq_observability::MetricsExporter::Disable;
+        let runtime =
+            rocketmq_observability::init_observability(&config).expect("benchmark metrics runtime should initialize");
+        let metrics =
+            BrokerMetrics::from_handle(&runtime.handle()).expect("benchmark broker metrics should be available");
         let attributes = [
             KeyValue::new("cluster", "DefaultCluster"),
             KeyValue::new("node_type", "broker"),
@@ -86,6 +105,10 @@ fn bench_broker_metrics_record(c: &mut Criterion) {
         group.bench_function("message_size", |b| {
             b.iter(|| metrics.record_message_size(black_box(1024), black_box(&attributes)))
         });
+        runtime
+            .shutdown()
+            .into_result()
+            .expect("benchmark metrics runtime should shut down");
     }
 
     #[cfg(not(feature = "otel-metrics"))]
@@ -129,17 +152,16 @@ fn bench_trace_property_carrier(c: &mut Criterion) {
 
     #[cfg(feature = "otel-traces")]
     {
-        use rocketmq_observability::extract_context;
-        use rocketmq_observability::inject_current_context;
-        use rocketmq_observability::install_trace_context_propagators;
+        use rocketmq_observability::extract_context_with_handle;
+        use rocketmq_observability::inject_current_context_with_handle;
 
-        install_trace_context_propagators();
-
+        let runtime = trace_runtime(false, false);
+        let telemetry = runtime.handle();
         group.bench_function("inject_current_context", |b| {
             b.iter_batched(
                 build_message_properties,
                 |mut properties| {
-                    inject_current_context(black_box(&mut properties));
+                    inject_current_context_with_handle(black_box(&telemetry), black_box(&mut properties));
                     black_box(properties)
                 },
                 BatchSize::SmallInput,
@@ -147,12 +169,23 @@ fn bench_trace_property_carrier(c: &mut Criterion) {
         });
 
         let mut properties = build_message_properties();
-        inject_current_context(&mut properties);
+        inject_current_context_with_handle(&telemetry, &mut properties);
         group.bench_with_input(
             BenchmarkId::new("extract_context", "hash_map_properties"),
             &properties,
-            |b, properties| b.iter(|| black_box(extract_context(black_box(properties)))),
+            |b, properties| {
+                b.iter(|| {
+                    black_box(extract_context_with_handle(
+                        black_box(&telemetry),
+                        black_box(properties),
+                    ))
+                })
+            },
         );
+        runtime
+            .shutdown()
+            .into_result()
+            .expect("benchmark telemetry runtime should shut down");
     }
 
     #[cfg(not(feature = "otel-traces"))]
@@ -167,38 +200,53 @@ fn bench_trace_property_carrier(c: &mut Criterion) {
 
 fn bench_trace_message_attributes(c: &mut Criterion) {
     let mut group = c.benchmark_group("observability_trace_message_attributes");
-    let properties = build_message_properties();
-    let span = tracing::Span::none();
 
-    rocketmq_observability::trace::configure_message_span_recording(&TracesConfig::default());
-    group.bench_function("record_default_body_size", |b| {
-        b.iter(|| {
-            rocketmq_observability::trace::record_message_properties(
-                black_box(&span),
-                black_box(&properties),
-                black_box(Some(1024)),
-            )
-        })
-    });
+    #[cfg(feature = "otel-traces")]
+    {
+        let properties = build_message_properties();
+        let span = tracing::Span::none();
 
-    rocketmq_observability::trace::configure_message_span_recording(&TracesConfig {
-        record_message_id: true,
-        record_message_keys: true,
-        record_body_size: true,
-        ..TracesConfig::default()
-    });
-    group.bench_function("record_all_message_fields", |b| {
-        b.iter(|| {
-            rocketmq_observability::trace::record_message_properties(
-                black_box(&span),
-                black_box(&properties),
-                black_box(Some(1024)),
-            )
-        })
-    });
+        let default_runtime = trace_runtime(false, false);
+        let default_telemetry = default_runtime.handle();
+        group.bench_function("record_default_body_size", |b| {
+            b.iter(|| {
+                rocketmq_observability::trace::record_message_properties_with_handle(
+                    black_box(&default_telemetry),
+                    black_box(&span),
+                    black_box(&properties),
+                    black_box(Some(1024)),
+                )
+            })
+        });
 
-    rocketmq_observability::trace::configure_message_span_recording(&TracesConfig::default());
-    group.finish();
+        let all_fields_runtime = trace_runtime(true, true);
+        let all_fields_telemetry = all_fields_runtime.handle();
+        group.bench_function("record_all_message_fields", |b| {
+            b.iter(|| {
+                rocketmq_observability::trace::record_message_properties_with_handle(
+                    black_box(&all_fields_telemetry),
+                    black_box(&span),
+                    black_box(&properties),
+                    black_box(Some(1024)),
+                )
+            })
+        });
+        group.finish();
+        default_runtime
+            .shutdown()
+            .into_result()
+            .expect("default benchmark telemetry runtime should shut down");
+        all_fields_runtime
+            .shutdown()
+            .into_result()
+            .expect("all-fields benchmark telemetry runtime should shut down");
+    }
+
+    #[cfg(not(feature = "otel-traces"))]
+    {
+        group.bench_function("otel_traces_feature_disabled", |b| b.iter(|| black_box(())));
+        group.finish();
+    }
 }
 
 criterion_group!(

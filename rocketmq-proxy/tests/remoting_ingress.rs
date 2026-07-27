@@ -143,6 +143,7 @@ async fn query_route_over_remoting_integration_injects_transport_context() {
             ..ProxyConfig::default()
         },
         runtime_context.service_context("proxy-remoting-route"),
+        rocketmq_observability::TelemetryHandle::noop(),
     )
     .with_service_manager(service_manager)
     .build()
@@ -264,6 +265,7 @@ accounts:
             ..ProxyConfig::default()
         },
         runtime_context.service_context("proxy-remoting-auth"),
+        rocketmq_observability::TelemetryHandle::noop(),
     )
     .with_service_manager(service_manager)
     .with_auth_runtime(auth_runtime)
@@ -352,6 +354,7 @@ async fn request_code_not_supported_over_remoting_integration_returns_compatible
             ..ProxyConfig::default()
         },
         runtime_context.service_context("proxy-remoting-unsupported"),
+        rocketmq_observability::TelemetryHandle::noop(),
     )
     .with_service_manager(service_manager)
     .build()

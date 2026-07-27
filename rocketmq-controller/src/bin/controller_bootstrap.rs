@@ -38,7 +38,9 @@ use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ServiceLifecycle;
 use rocketmq_runtime::ServiceLifecycleState;
+use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReason;
+use rocketmq_runtime::TaskGroup;
 use rocketmq_security_api::SecurityBootstrapConfig;
 use rocketmq_security_api::SecurityBootstrapProfile;
 use rocketmq_security_api::ValidatedSecurityBootstrap;
@@ -138,6 +140,11 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     }
 
     let logging_overrides = load_logging_overrides(cli.config_file.as_deref())?;
+    let process_telemetry =
+        rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig::from_process_env(
+            "rocketmq-controller",
+        )
+        .context("failed to validate Controller release identity and metrics configuration")?;
     let security_config =
         SecurityBootstrapConfig::from_env().context("failed to load Controller security bootstrap configuration")?;
     let raft_bind_addr = resolve_controller_raft_bind_addr(config.local_raft_addr())
@@ -146,6 +153,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         &security_config,
         &config,
         raft_bind_addr,
+        process_telemetry.prometheus_listener_addr(),
         lifecycle.config().probe_bind_addr,
     )
     .context("Controller security bootstrap failed before listener bind")?;
@@ -154,10 +162,30 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     let resolved_filter = resolve_startup_log_filter(&cli, &logging_overrides, environment_filter.as_deref())
         .context("failed to resolve controller log filter")?;
     let mut bootstrap_config = build_controller_telemetry_bootstrap_config(&config);
+    process_telemetry.apply_to(&mut bootstrap_config.observability);
     bootstrap_config.logging.reload = logging_overrides.logging.reload;
-    let telemetry_guard =
-        rocketmq_observability::install_global_with_filter(&bootstrap_config, resolved_filter.clone())
-            .context("failed to initialize controller telemetry bootstrap")?;
+    let telemetry_guard = rocketmq_observability::install_global_with_filter_and_service_context(
+        &bootstrap_config,
+        resolved_filter.clone(),
+        &service_context,
+    )
+    .await
+    .context("failed to initialize controller telemetry bootstrap")?;
+    let telemetry_handle = telemetry_guard.handle();
+    if let Err(error) = register_controller_release_identity(&process_telemetry, &telemetry_handle) {
+        let request = lifecycle.request_shutdown(ShutdownReason::Internal);
+        if let Err(shutdown_error) = telemetry_guard
+            .shutdown_with_service_context(&service_context, request.deadline.remaining())
+            .await
+            .into_result()
+        {
+            tracing::warn!(
+                error = %shutdown_error,
+                "controller telemetry cleanup after release identity failure was unhealthy"
+            );
+        }
+        return Err(error);
+    }
     log_telemetry_bootstrap(
         &bootstrap_config,
         &resolved_filter,
@@ -169,7 +197,8 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         lifecycle.mark_failed();
         let request = lifecycle.request_shutdown(ShutdownReason::Internal);
         if let Err(shutdown_error) = telemetry_guard
-            .shutdown_with_timeout(request.deadline.remaining())
+            .shutdown_with_service_context(&service_context, request.deadline.remaining())
+            .await
             .into_result()
         {
             tracing::warn!(error = %shutdown_error, "controller telemetry cleanup after lifecycle startup failure was unhealthy");
@@ -185,7 +214,14 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     info!("Node ID: {}, Listen Address: {}", config.node_id, config.listen_addr);
     info!("ROCKETMQ_HOME: {}", rocketmq_home);
 
-    let controller_result = run_controller(config, service_context, lifecycle.clone()).await;
+    let controller_result = run_controller(
+        config,
+        service_context.clone(),
+        lifecycle.clone(),
+        telemetry_handle,
+        process_telemetry.metrics_enabled(),
+    )
+    .await;
     if controller_result.is_err() {
         lifecycle.mark_failed();
         lifecycle.request_shutdown(ShutdownReason::Internal);
@@ -193,15 +229,32 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     let shutdown_request = lifecycle
         .shutdown_request()
         .unwrap_or_else(|| lifecycle.request_shutdown(ShutdownReason::Internal));
-    let telemetry_report = telemetry_guard.shutdown_with_timeout(shutdown_request.deadline.remaining());
+    let controller_result = finish_controller_process_shutdown(
+        controller_result,
+        service_context.task_group(),
+        shutdown_request.deadline,
+    )
+    .await;
+    let telemetry_report = telemetry_guard
+        .shutdown_with_service_context(&service_context, shutdown_request.deadline.remaining())
+        .await;
     let shutdown_result = telemetry_report
         .into_result()
         .context("failed to shutdown controller telemetry bootstrap");
 
     match (controller_result, shutdown_result) {
-        (Err(error), _) => Err(error),
-        (Ok(()), Err(error)) => Err(error),
-        (Ok(()), Ok(_report)) => Ok(()),
+        (Err(controller_error), Err(telemetry_error)) => Err(controller_error).context(format!(
+            "Controller telemetry shutdown also failed: {telemetry_error:#}"
+        )),
+        (Err(error), Ok(_report)) => Err(error),
+        (Ok(()), Err(error)) => {
+            lifecycle.mark_failed();
+            Err(error)
+        }
+        (Ok(()), Ok(_report)) => {
+            lifecycle.mark_stopped();
+            Ok(())
+        }
     }
 }
 
@@ -209,9 +262,13 @@ fn validate_controller_security(
     security_config: &SecurityBootstrapConfig,
     controller_config: &ControllerConfig,
     raft_bind_addr: SocketAddr,
+    prometheus_bind_addr: Option<SocketAddr>,
     probe_bind_addr: Option<SocketAddr>,
 ) -> Result<ValidatedSecurityBootstrap> {
     let mut listeners = vec![controller_config.listen_addr, raft_bind_addr];
+    if let Some(prometheus_bind_addr) = prometheus_bind_addr {
+        listeners.push(prometheus_bind_addr);
+    }
     if let Some(probe_bind_addr) = probe_bind_addr {
         listeners.push(probe_bind_addr);
     }
@@ -237,10 +294,12 @@ async fn run_controller(
     config: ControllerConfig,
     service_context: ChildServiceContext,
     lifecycle: ServiceLifecycle,
+    telemetry_handle: rocketmq_observability::TelemetryHandle,
+    release_identity_required: bool,
 ) -> Result<()> {
     // Create controller manager
     info!("Creating Controller Manager...");
-    let controller_manager = ControllerManager::new(config, service_context).await?;
+    let controller_manager = ControllerManager::new(config, service_context.clone(), telemetry_handle.clone()).await?;
     let controller_manager = Arc::new(controller_manager);
     // Initialize controller
     info!("Initializing Controller...");
@@ -269,6 +328,10 @@ async fn run_controller(
         shutdown_controller_after_startup_failure(&controller_manager, &lifecycle).await;
         return Err(error);
     }
+    if release_identity_required && !telemetry_handle.release_identity_registered() {
+        shutdown_controller_after_startup_failure(&controller_manager, &lifecycle).await;
+        bail!("Controller release identity was not registered before readiness");
+    }
     if let Err(error) = lifecycle.mark_ready() {
         shutdown_controller_after_startup_failure(&controller_manager, &lifecycle).await;
         return Err(error.into());
@@ -294,10 +357,29 @@ async fn run_controller(
 
     // Graceful shutdown
     controller_manager.shutdown_until(shutdown_request.deadline).await?;
-    lifecycle.mark_stopped();
-
     info!("Controller shutdown completed.");
     Ok(())
+}
+
+async fn finish_controller_process_shutdown(
+    controller_result: Result<()>,
+    service_tasks: &TaskGroup,
+    deadline: ShutdownDeadline,
+) -> Result<()> {
+    let service_report = service_tasks.shutdown_until(deadline).await;
+    match (controller_result, service_report.is_healthy()) {
+        (Ok(()), true) => Ok(()),
+        (Err(controller_error), true) => Err(controller_error),
+        (Ok(()), false) => Err(ControllerError::runtime_error(format!(
+            "Controller service task shutdown was unhealthy: {}",
+            service_report.to_json()
+        ))
+        .into()),
+        (Err(controller_error), false) => Err(controller_error).context(format!(
+            "Controller service task shutdown was unhealthy: {}",
+            service_report.to_json()
+        )),
+    }
 }
 
 async fn shutdown_controller_after_startup_failure(
@@ -329,6 +411,29 @@ fn build_controller_telemetry_bootstrap_config(
     logging.file.file_name_prefix = "rocketmq-controller".to_string();
 
     rocketmq_observability::TelemetryBootstrapConfig { observability, logging }
+}
+
+fn register_controller_release_identity(
+    process_telemetry: &rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig,
+    telemetry_handle: &rocketmq_observability::TelemetryHandle,
+) -> Result<()> {
+    if !process_telemetry.metrics_enabled() {
+        return Ok(());
+    }
+
+    #[cfg(feature = "metrics")]
+    {
+        telemetry_handle
+            .register_release_identity(process_telemetry.release_identity().clone())
+            .context("failed to register Controller release identity before readiness")?;
+        Ok(())
+    }
+
+    #[cfg(not(feature = "metrics"))]
+    {
+        let _ = telemetry_handle;
+        bail!("Controller metrics were enabled without the `metrics` Cargo feature");
+    }
 }
 
 fn controller_log_directory(controller_config: &ControllerConfig) -> String {
@@ -499,12 +604,32 @@ mod tests {
             &security,
             &controller,
             controller.local_raft_addr(),
+            None,
             Some(SocketAddr::from(([127, 0, 0, 1], 8088))),
         )
         .expect("loopback-only Controller bootstrap should pass");
 
         controller.listen_addr = SocketAddr::from(([0, 0, 0, 0], 60109));
-        assert!(validate_controller_security(&security, &controller, controller.local_raft_addr(), None).is_err());
+        assert!(
+            validate_controller_security(&security, &controller, controller.local_raft_addr(), None, None).is_err()
+        );
+    }
+
+    #[test]
+    fn development_security_rejects_public_prometheus_listener() {
+        let security = SecurityBootstrapConfig::new(SecurityBootstrapProfile::DevelopmentInsecureLoopback);
+        let controller = ControllerConfig::default()
+            .with_node_info(1, SocketAddr::from(([127, 0, 0, 1], 60109)))
+            .with_raft_peers(Vec::new());
+
+        assert!(validate_controller_security(
+            &security,
+            &controller,
+            controller.local_raft_addr(),
+            Some(SocketAddr::from(([0, 0, 0, 0], 5557))),
+            None,
+        )
+        .is_err());
     }
 
     #[test]
@@ -540,6 +665,63 @@ mod tests {
         assert_eq!(
             std::path::PathBuf::from(config.logging.file.directory.as_str()),
             expected_log_dir
+        );
+    }
+
+    #[test]
+    fn controller_release_identity_config_is_applied_before_bootstrap() {
+        let process_telemetry =
+            rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig::try_from_values(
+                "rocketmq-controller",
+                Some("0123456789abcdef0123456789abcdef01234567"),
+                Some("rollout-07"),
+                Some("true"),
+                Some("prometheus"),
+                Some("0.0.0.0:5557"),
+                Some("/metrics"),
+            )
+            .expect("valid Controller process telemetry");
+        let mut bootstrap_config = build_controller_telemetry_bootstrap_config(&ControllerConfig::default());
+
+        process_telemetry.apply_to(&mut bootstrap_config.observability);
+
+        assert_eq!(process_telemetry.release_identity().service(), "rocketmq-controller");
+        assert!(bootstrap_config.observability.enabled);
+        assert!(bootstrap_config.observability.metrics.enabled);
+        assert_eq!(
+            bootstrap_config.observability.metrics.exporter,
+            rocketmq_observability::MetricsExporter::Prometheus
+        );
+        assert_eq!(bootstrap_config.observability.prometheus.host, "0.0.0.0");
+        assert_eq!(bootstrap_config.observability.prometheus.port, 5557);
+    }
+
+    #[tokio::test]
+    async fn controller_failure_still_runs_expired_service_root_barrier() {
+        let service_context = rocketmq_runtime::RuntimeContext::from_current("controller-shutdown-barrier-test")
+            .service_context("controller");
+        let service_tasks = service_context.task_group();
+        service_tasks
+            .spawn_service("pending-service", std::future::pending())
+            .expect("pending service should be owned by the Controller service root");
+        let cancellation = service_tasks.cancellation_token();
+        let deadline = ShutdownDeadline::after(Duration::ZERO);
+
+        let error = finish_controller_process_shutdown(
+            Err(ControllerError::runtime_error("synthetic Controller shutdown failure").into()),
+            service_tasks,
+            deadline,
+        )
+        .await
+        .expect_err("manager and service-root failures should be aggregated");
+
+        assert!(cancellation.is_cancelled(), "service-root barrier was not executed");
+        assert_eq!(service_tasks.shutdown_deadline(), Some(deadline));
+        let message = format!("{error:#}");
+        assert!(message.contains("synthetic Controller shutdown failure"), "{message}");
+        assert!(
+            message.contains("Controller service task shutdown was unhealthy"),
+            "{message}"
         );
     }
 }

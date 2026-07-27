@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use rocketmq_client_rust::ClientRuntime;
 use rocketmq_client_rust::ClientRuntimeConfig;
+use rocketmq_client_rust::TelemetryHandle;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
@@ -37,7 +38,11 @@ impl BenchClientRuntime {
             ..Default::default()
         })
         .expect("benchmark runtime owner should start");
-        let client_runtime = ClientRuntime::new(owner.root_context().child("client"), ClientRuntimeConfig::default());
+        let client_runtime = ClientRuntime::new(
+            owner.root_context().child("client"),
+            ClientRuntimeConfig::default(),
+            TelemetryHandle::noop(),
+        );
         Self { owner, client_runtime }
     }
 

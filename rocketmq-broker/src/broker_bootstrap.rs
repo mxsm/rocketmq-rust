@@ -34,6 +34,7 @@ use crate::lifecycle::Running;
 
 pub struct BrokerBootstrap<State = Configured> {
     broker_runtime: BrokerRuntime,
+    release_identity_required: bool,
     state: State,
 }
 
@@ -44,6 +45,7 @@ impl BrokerBootstrap<Configured> {
         }
         Ok(BrokerBootstrap {
             broker_runtime: self.broker_runtime,
+            release_identity_required: self.release_identity_required,
             state: Initialized,
         })
     }
@@ -96,13 +98,67 @@ impl BrokerBootstrap<Configured> {
                 message: error.to_string(),
             }
         })?;
-        lifecycle.mark_ready()?;
+        if running.release_identity_required && !running.broker_runtime.release_identity_registered() {
+            lifecycle.mark_failed();
+            let request = lifecycle.request_shutdown(ShutdownReason::Internal);
+            let report = running
+                .broker_runtime
+                .shutdown_basic_service_until(request.deadline)
+                .await;
+            let cleanup = if report.is_healthy() {
+                "startup cleanup completed".to_string()
+            } else {
+                format!(
+                    "startup cleanup left unhealthy components: {:?}",
+                    report.unhealthy_component_names()
+                )
+            };
+            return Err(RuntimeError::LifecycleOperation {
+                operation: "register_broker_release_identity",
+                message: format!("Broker release identity was not registered before readiness; {cleanup}"),
+            });
+        }
+        if let Err(error) = lifecycle.mark_ready() {
+            lifecycle.mark_failed();
+            let request = lifecycle.request_shutdown(ShutdownReason::Internal);
+            let report = running
+                .broker_runtime
+                .shutdown_basic_service_until(request.deadline)
+                .await;
+            let cleanup = if report.is_healthy() {
+                "startup cleanup completed".to_string()
+            } else {
+                format!(
+                    "startup cleanup left unhealthy components: {:?}",
+                    report.unhealthy_component_names()
+                )
+            };
+            return Err(RuntimeError::LifecycleOperation {
+                operation: "publish_broker_readiness",
+                message: format!("failed to publish Broker readiness: {error}; {cleanup}"),
+            });
+        }
         let shutdown_request = match lifecycle.wait_for_shutdown_signal().await {
             Ok(request) => request,
             Err(error) => {
                 lifecycle.mark_failed();
-                lifecycle.request_shutdown(ShutdownReason::Internal);
-                return Err(error);
+                let request = lifecycle.request_shutdown(ShutdownReason::Internal);
+                let report = running
+                    .broker_runtime
+                    .shutdown_basic_service_until(request.deadline)
+                    .await;
+                let cleanup = if report.is_healthy() {
+                    "shutdown cleanup completed".to_string()
+                } else {
+                    format!(
+                        "shutdown cleanup left unhealthy components: {:?}",
+                        report.unhealthy_component_names()
+                    )
+                };
+                return Err(RuntimeError::LifecycleOperation {
+                    operation: "observe_broker_shutdown",
+                    message: format!("{error}; {cleanup}"),
+                });
             }
         };
         info!(
@@ -140,6 +196,7 @@ impl BrokerBootstrap<Initialized> {
         let readiness = self.broker_runtime.start().await?;
         Ok(BrokerBootstrap {
             broker_runtime: self.broker_runtime,
+            release_identity_required: self.release_identity_required,
             state: Running::new(readiness),
         })
     }
@@ -159,16 +216,18 @@ impl BrokerBootstrap<Running> {
 pub struct Builder {
     validated_config: ValidatedBrokerConfig,
     service_context: ChildServiceContext,
-    telemetry_runtime_guard: Option<TelemetryRuntimeGuard>,
+    telemetry_runtime_guard: TelemetryRuntimeGuard,
+    release_identity_required: bool,
 }
 
 impl Builder {
     #[inline]
-    pub fn new(service_context: ChildServiceContext) -> Self {
+    pub fn new(service_context: ChildServiceContext, telemetry_runtime_guard: TelemetryRuntimeGuard) -> Self {
         Builder {
             validated_config: ValidatedBrokerConfig::default(),
             service_context,
-            telemetry_runtime_guard: None,
+            telemetry_runtime_guard,
+            release_identity_required: false,
         }
     }
 
@@ -179,20 +238,24 @@ impl Builder {
     }
 
     #[inline]
-    pub fn set_telemetry_runtime_guard(mut self, telemetry_runtime_guard: TelemetryRuntimeGuard) -> Self {
-        self.telemetry_runtime_guard = Some(telemetry_runtime_guard);
+    pub fn require_release_identity_registration(mut self, required: bool) -> Self {
+        self.release_identity_required = required;
         self
     }
+
     #[inline]
     pub fn build(self) -> BrokerBootstrap<Configured> {
-        let mut broker_runtime =
-            BrokerRuntime::new_with_validated_config(Arc::new(self.validated_config), self.service_context);
-        if let Some(telemetry_runtime_guard) = self.telemetry_runtime_guard {
-            broker_runtime.set_telemetry_runtime_guard(telemetry_runtime_guard);
-        }
+        let telemetry_handle = self.telemetry_runtime_guard.handle();
+        let mut broker_runtime = BrokerRuntime::new_with_validated_config_and_telemetry(
+            Arc::new(self.validated_config),
+            self.service_context,
+            telemetry_handle,
+        );
+        broker_runtime.set_telemetry_runtime_guard(self.telemetry_runtime_guard);
 
         BrokerBootstrap {
             broker_runtime,
+            release_identity_required: self.release_identity_required,
             state: Configured,
         }
     }
@@ -209,7 +272,7 @@ mod tests {
         let context = RuntimeContext::from_current("broker-bootstrap-context-test");
         let service_context = context.service_context("broker-bootstrap-service");
 
-        let mut bootstrap = Builder::new(service_context.clone()).build();
+        let mut bootstrap = Builder::new(service_context.clone(), TelemetryRuntimeGuard::noop()).build();
 
         let broker_task_group = bootstrap
             .broker_runtime

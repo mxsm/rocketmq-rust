@@ -78,6 +78,7 @@ impl BrokerRuntime {
             self.composition.state.topic_config_manager().topic_config_table(),
             self.composition.state.broker_stats_manager.clone(),
             false,
+            self.composition.state.store_telemetry.clone(),
         );
         let opened = match StoreFactory::open(factory_config, service_context.child("broker.store")) {
             Ok(opened) => opened,

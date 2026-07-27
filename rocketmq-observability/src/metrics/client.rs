@@ -21,95 +21,33 @@ pub use crate::semantic::metrics::CLIENT_SEND_TOTAL;
 use std::time::Duration;
 
 #[cfg(feature = "otel-metrics")]
-use std::sync::OnceLock;
-
-#[cfg(feature = "otel-metrics")]
-static CLIENT_METRICS: OnceLock<ClientMetrics> = OnceLock::new();
-
-#[cfg(feature = "otel-metrics")]
-static CLIENT_GLOBAL_METRICS: OnceLock<ClientMetrics> = OnceLock::new();
-
-#[cfg(feature = "otel-metrics")]
-pub fn init_global(meter: &opentelemetry::metrics::Meter) -> bool {
-    CLIENT_METRICS.set(ClientMetrics::new(meter)).is_ok()
-}
-
-#[cfg(feature = "otel-metrics")]
-fn global_metrics() -> &'static ClientMetrics {
-    if let Some(metrics) = CLIENT_METRICS.get() {
-        return metrics;
-    }
-
-    CLIENT_GLOBAL_METRICS.get_or_init(|| ClientMetrics::new(&opentelemetry::global::meter("rocketmq-client")))
-}
-
-pub fn record_send_total(count: u64) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record_send_total(count, &[]);
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = count;
-}
-
-pub fn record_send_latency(latency_ms: u64) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record_send_latency(latency_ms, &[]);
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = latency_ms;
-}
-
-pub fn record_consume_total(count: u64) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record_consume_total(count, &[]);
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = count;
-}
-
-pub fn record_consume_latency(latency_ms: u64) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record_consume_latency(latency_ms, &[]);
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = latency_ms;
-}
-
-pub fn record_rebalance_total(count: u64) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record_rebalance_total(count, &[]);
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = count;
-}
-
-pub fn record_send(elapsed: Duration) {
-    record_send_total(1);
-    record_send_latency(duration_millis_u64(elapsed));
-}
-
-pub fn record_consume(message_count: usize, latency_ms: u64) {
-    record_consume_total(message_count as u64);
-    record_consume_latency(latency_ms);
-}
-
-pub fn record_rebalance() {
-    record_rebalance_total(1);
-}
-
 #[inline]
 fn duration_millis_u64(duration: Duration) -> u64 {
     duration.as_millis().clamp(0, u128::from(u64::MAX)) as u64
 }
 
 #[cfg(not(feature = "otel-metrics"))]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ClientMetrics;
 
 #[cfg(not(feature = "otel-metrics"))]
 impl ClientMetrics {
-    pub fn noop() -> Self {
+    /// Creates an instance-scoped recorder that never emits metrics.
+    #[must_use]
+    pub const fn noop() -> Self {
         Self
+    }
+
+    /// Creates a recorder from an explicit telemetry capability.
+    #[must_use]
+    pub fn from_handle(_telemetry: &crate::TelemetryHandle) -> Self {
+        Self::noop()
+    }
+
+    /// Returns whether this recorder can currently emit metrics.
+    #[must_use]
+    pub const fn is_enabled(&self) -> bool {
+        false
     }
 
     #[inline]
@@ -126,11 +64,27 @@ impl ClientMetrics {
 
     #[inline]
     pub fn record_rebalance_total(&self, _count: u64) {}
+
+    #[inline]
+    pub fn record_send(&self, _elapsed: Duration) {}
+
+    #[inline]
+    pub fn record_consume(&self, _message_count: usize, _latency_ms: u64) {}
+
+    #[inline]
+    pub fn record_rebalance(&self) {}
+}
+
+#[cfg(feature = "otel-metrics")]
+#[derive(Clone, Default)]
+pub struct ClientMetrics {
+    telemetry: Option<crate::TelemetryHandle>,
+    instruments: Option<ClientMetricInstruments>,
 }
 
 #[cfg(feature = "otel-metrics")]
 #[derive(Clone)]
-pub struct ClientMetrics {
+struct ClientMetricInstruments {
     send_total: opentelemetry::metrics::Counter<u64>,
     send_latency: opentelemetry::metrics::Histogram<u64>,
     consume_total: opentelemetry::metrics::Counter<u64>,
@@ -140,7 +94,109 @@ pub struct ClientMetrics {
 
 #[cfg(feature = "otel-metrics")]
 impl ClientMetrics {
-    pub fn new(meter: &opentelemetry::metrics::Meter) -> Self {
+    /// Creates an instance-scoped recorder that never emits metrics.
+    #[must_use]
+    pub fn noop() -> Self {
+        Self::default()
+    }
+
+    /// Creates a lifecycle-gated recorder from an explicit telemetry capability.
+    #[must_use]
+    pub fn from_handle(telemetry: &crate::TelemetryHandle) -> Self {
+        let Some(meter) = telemetry.meter(crate::CLIENT_METER_SCOPE) else {
+            return Self::noop();
+        };
+        Self {
+            telemetry: Some(telemetry.clone()),
+            instruments: Some(ClientMetricInstruments::new(&meter)),
+        }
+    }
+
+    /// Creates an unmanaged recorder from a caller-owned meter.
+    ///
+    /// Runtime composition should prefer [`Self::from_handle`] so records stop when the owning
+    /// telemetry runtime closes.
+    #[must_use]
+    #[cfg(test)]
+    pub(crate) fn new(meter: &opentelemetry::metrics::Meter) -> Self {
+        Self {
+            telemetry: None,
+            instruments: Some(ClientMetricInstruments::new(meter)),
+        }
+    }
+
+    /// Returns whether this recorder can currently emit metrics.
+    #[must_use]
+    pub fn is_enabled(&self) -> bool {
+        self.instruments.is_some() && self.telemetry.as_ref().is_none_or(crate::TelemetryHandle::is_active)
+    }
+
+    #[inline]
+    pub fn record_send_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
+        if self.is_enabled() {
+            if let Some(instruments) = &self.instruments {
+                instruments.send_total.add(count, attributes);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn record_send_latency(&self, latency_ms: u64, attributes: &[opentelemetry::KeyValue]) {
+        if self.is_enabled() {
+            if let Some(instruments) = &self.instruments {
+                instruments.send_latency.record(latency_ms, attributes);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn record_consume_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
+        if self.is_enabled() {
+            if let Some(instruments) = &self.instruments {
+                instruments.consume_total.add(count, attributes);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn record_consume_latency(&self, latency_ms: u64, attributes: &[opentelemetry::KeyValue]) {
+        if self.is_enabled() {
+            if let Some(instruments) = &self.instruments {
+                instruments.consume_latency.record(latency_ms, attributes);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn record_rebalance_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
+        if self.is_enabled() {
+            if let Some(instruments) = &self.instruments {
+                instruments.rebalance_total.add(count, attributes);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn record_send(&self, elapsed: Duration) {
+        self.record_send_total(1, &[]);
+        self.record_send_latency(duration_millis_u64(elapsed), &[]);
+    }
+
+    #[inline]
+    pub fn record_consume(&self, message_count: usize, latency_ms: u64) {
+        self.record_consume_total(message_count as u64, &[]);
+        self.record_consume_latency(latency_ms, &[]);
+    }
+
+    #[inline]
+    pub fn record_rebalance(&self) {
+        self.record_rebalance_total(1, &[]);
+    }
+}
+
+#[cfg(feature = "otel-metrics")]
+impl ClientMetricInstruments {
+    fn new(meter: &opentelemetry::metrics::Meter) -> Self {
         let send_total = meter
             .u64_counter(CLIENT_SEND_TOTAL)
             .with_description("Total number of messages sent by client")
@@ -179,31 +235,6 @@ impl ClientMetrics {
             rebalance_total,
         }
     }
-
-    #[inline]
-    pub fn record_send_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.send_total.add(count, attributes);
-    }
-
-    #[inline]
-    pub fn record_send_latency(&self, latency_ms: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.send_latency.record(latency_ms, attributes);
-    }
-
-    #[inline]
-    pub fn record_consume_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.consume_total.add(count, attributes);
-    }
-
-    #[inline]
-    pub fn record_consume_latency(&self, latency_ms: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.consume_latency.record(latency_ms, attributes);
-    }
-
-    #[inline]
-    pub fn record_rebalance_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.rebalance_total.add(count, attributes);
-    }
 }
 
 #[cfg(all(test, feature = "otel-metrics"))]
@@ -225,30 +256,39 @@ mod tests {
         metrics.record_consume_total(1, &attrs);
         metrics.record_consume_latency(8, &attrs);
         metrics.record_rebalance_total(1, &attrs);
+        metrics.record_send(Duration::from_millis(10));
+        metrics.record_consume(1, 8);
+        metrics.record_rebalance();
+        assert!(metrics.is_enabled());
     }
 
     #[test]
-    fn client_global_recorders_lazy_initialize() {
-        record_send_total(1);
-        record_send_latency(10);
-        record_consume_total(1);
-        record_consume_latency(8);
-        record_rebalance_total(1);
+    fn client_noop_recorder_is_disabled() {
+        let metrics = ClientMetrics::from_handle(&crate::TelemetryHandle::noop());
 
-        assert!(CLIENT_METRICS.get().is_some() || CLIENT_GLOBAL_METRICS.get().is_some());
+        metrics.record_send(Duration::from_millis(1));
+        metrics.record_consume(1, 2);
+        metrics.record_rebalance();
+
+        assert!(!metrics.is_enabled());
     }
-}
-
-#[cfg(test)]
-mod helper_tests {
-    use std::time::Duration;
-
-    use super::*;
 
     #[test]
-    fn client_high_level_recorders_are_safe_without_explicit_meter() {
-        record_send(Duration::from_millis(1));
-        record_consume(1, 2);
-        record_rebalance();
+    fn client_metrics_source_has_no_process_global_facade() {
+        let source = include_str!("client.rs");
+
+        for forbidden in [
+            concat!("Once", "Lock"),
+            concat!("fn ", "init_global"),
+            concat!("fn ", "global_metrics"),
+            concat!("pub fn ", "record_send(elapsed"),
+            concat!("pub fn ", "record_consume(message_count"),
+            concat!("pub fn ", "record_rebalance()"),
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "client metrics must remain instance scoped: found {forbidden}"
+            );
+        }
     }
 }

@@ -177,6 +177,7 @@ pub use crate::store_path_config_helper::get_timer_check_path;
 pub use crate::store_path_config_helper::get_timer_log_path;
 pub use crate::store_path_config_helper::get_timer_metrics_path;
 pub use crate::store_path_config_helper::get_timer_wheel_path;
+pub use crate::telemetry::StoreTelemetry;
 pub use crate::timer::timer_checkpoint::TimerCheckpoint;
 pub use crate::timer::timer_checkpoint::TimerCheckpointSnapshot;
 pub use crate::timer::timer_message_store::build_delete_key;

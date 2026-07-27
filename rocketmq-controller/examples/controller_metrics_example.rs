@@ -43,23 +43,24 @@ async fn main() {
     println!("1. Initializing controller configuration...");
     let config = ControllerConfigReader::new(ControllerConfig::new_node(1, "127.0.0.1:60109".parse().unwrap()));
 
-    // 2. Initialize metrics manager (singleton)
+    // 2. Initialize an instance-owned metrics manager
     println!("2. Initializing metrics manager...");
-    let metrics_manager = ControllerMetricsManager::get_instance(config.clone());
+    let metrics_manager =
+        ControllerMetricsManager::new(config.clone(), &rocketmq_observability::TelemetryHandle::noop());
     println!("    Metrics manager initialized\n");
 
     // 3. Simulate role change
     println!("3. Simulating role changes...");
     println!("   - Initial role: FOLLOWER (2)");
-    ControllerMetricsManager::record_role_change(2, 0); // UNKNOWN -> FOLLOWER
+    metrics_manager.record_role_change(2, 0); // UNKNOWN -> FOLLOWER
     sleep(Duration::from_millis(100)).await;
 
     println!("   - Becoming CANDIDATE (1)");
-    ControllerMetricsManager::record_role_change(1, 2); // FOLLOWER -> CANDIDATE
+    metrics_manager.record_role_change(1, 2); // FOLLOWER -> CANDIDATE
     sleep(Duration::from_millis(500)).await;
 
     println!("   - Elected as LEADER (3)");
-    ControllerMetricsManager::record_role_change(3, 1); // CANDIDATE -> LEADER
+    metrics_manager.record_role_change(3, 1); // CANDIDATE -> LEADER
     println!("    Role changes recorded\n");
 
     // 4. Simulate controller requests

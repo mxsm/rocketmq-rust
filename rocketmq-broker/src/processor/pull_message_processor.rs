@@ -1203,6 +1203,7 @@ mod tests {
         let handler = Arc::new(DefaultPullMessageResultHandler::new(
             Arc::new(vec![]),
             Arc::clone(&context),
+            None,
         ));
         PullMessageProcessor::new(handler, context)
     }

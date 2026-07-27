@@ -23,6 +23,7 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::config::store_runtime_config::StoreRuntimeConfig;
 use arc_swap::ArcSwapOption;
@@ -52,11 +53,10 @@ use rocketmq_protocol::common::message::message_decoder::cheetah_from_utf8_lossy
 use rocketmq_protocol::common::message::message_decoder::string_to_message_properties;
 use rocketmq_runtime::common::system_clock::SystemClock;
 use rocketmq_runtime::resource_budget::QueueSnapshot;
-#[cfg(feature = "observability")]
-use tokio::time::Instant;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
+use tracing::Instrument;
 
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
 use crate::base::append_message_callback::DefaultAppendMessageCallback;
@@ -538,23 +538,17 @@ pub(crate) struct CommitLogInternalMessageWriteHandle {
     store_runtime_state: Arc<StoreRuntimeState>,
     enabled_append_prop_crc: bool,
     append_port: CommitLogAppendPort,
+    telemetry_handle: rocketmq_observability::TelemetryHandle,
 }
 
 impl CommitLogInternalMessageWriteHandle {
-    #[tracing::instrument(
-        level = "debug",
-        name = "RocketMQ STORE INTERNAL APPEND",
-        skip_all,
-        fields(
-            messaging.message.id = tracing::field::Empty,
-            messaging.message.body.size = tracing::field::Empty,
-            messaging.rocketmq.message.keys = tracing::field::Empty,
-        )
-    )]
     pub(crate) async fn put_message(&self, mut msg: MessageExtBrokerInner) -> PutMessageResult {
+        let append_span = rocketmq_observability::trace::store::append_span(&self.telemetry_handle);
         msg.set_wait_store_msg_ok(false);
         #[cfg(any(feature = "observability", feature = "observability-traces"))]
-        rocketmq_observability::trace::record_current_message_properties(
+        rocketmq_observability::trace::record_message_properties_with_handle(
+            &self.telemetry_handle,
+            &append_span,
             msg.get_properties(),
             msg.get_body().map(|body| body.len()),
         );
@@ -582,6 +576,7 @@ impl CommitLogInternalMessageWriteHandle {
         };
         self.append_port
             .append_message(msg, prepared, need_assign_offset)
+            .instrument(append_span)
             .await
             .result
     }
@@ -719,6 +714,8 @@ mod adapter {
         pub(super) consume_queue_store: super::ConsumeQueueStore,
         pub(super) flush_manager: super::DefaultFlushManager,
         pub(super) cold_data_check_service: super::Arc<super::ColdDataCheckService>,
+        pub(super) telemetry_handle: rocketmq_observability::TelemetryHandle,
+        pub(super) store_metrics: rocketmq_observability::metrics::store::StoreMetricsRecorder,
     }
 }
 
@@ -751,6 +748,8 @@ impl CommitLog {
         topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
         consume_queue_store: ConsumeQueueStore,
         allocate_mapped_file_service: AllocateMappedFileService,
+        telemetry_handle: rocketmq_observability::TelemetryHandle,
+        store_metrics: rocketmq_observability::metrics::store::StoreMetricsRecorder,
     ) -> Result<Self, StoreError> {
         let enabled_append_prop_crc = message_store_config.enabled_append_prop_crc;
         let store_path = message_store_config.get_store_path_commit_log();
@@ -761,6 +760,13 @@ impl CommitLog {
         let mapped_file_queue =
             MappedFileQueue::new(store_path, mapped_file_size as u64, Some(allocate_mapped_file_service));
         let mapped_file_flush = mapped_file_queue.flush_handle();
+        #[cfg(feature = "observability")]
+        let runtime_state = Arc::new(CommitLogRuntimeState::new_with_store_metrics(
+            message_store_config.linux_memory_lock_warn_only,
+            memory_lock_budget_bytes,
+            store_metrics.clone(),
+        ));
+        #[cfg(not(feature = "observability"))]
         let runtime_state = Arc::new(CommitLogRuntimeState::new(
             message_store_config.linux_memory_lock_warn_only,
             memory_lock_budget_bytes,
@@ -800,6 +806,7 @@ impl CommitLog {
             put_message_lock: Arc::clone(&put_message_lock),
             consume_queue_store: consume_queue_store.clone(),
             flush: flush_manager.commit_log_flush_wakeup(),
+            store_metrics: store_metrics.clone(),
         });
         let append_runtime = CommitLogAppendRuntime::start(
             runtime_scope,
@@ -832,6 +839,8 @@ impl CommitLog {
                 consume_queue_store,
                 flush_manager,
                 cold_data_check_service: Arc::new(Default::default()),
+                telemetry_handle,
+                store_metrics,
             }),
         })
     }
@@ -861,6 +870,7 @@ impl CommitLog {
             store_runtime_state: Arc::clone(&self.store_runtime_state),
             enabled_append_prop_crc: self.enabled_append_prop_crc,
             append_port: self.append_runtime.port(),
+            telemetry_handle: self.telemetry_handle.clone(),
         }
     }
 
@@ -1279,19 +1289,12 @@ impl CommitLog {
         }
     }
 
-    #[tracing::instrument(
-        level = "debug",
-        name = "RocketMQ STORE APPEND",
-        skip_all,
-        fields(
-            messaging.message.id = tracing::field::Empty,
-            messaging.message.body.size = tracing::field::Empty,
-            messaging.rocketmq.message.keys = tracing::field::Empty,
-        )
-    )]
     pub async fn put_messages(&self, mut msg_batch: MessageExtBatch) -> PutMessageResult {
+        let append_span = rocketmq_observability::trace::store::append_span(&self.telemetry_handle);
         #[cfg(any(feature = "observability", feature = "observability-traces"))]
-        rocketmq_observability::trace::record_current_message_properties(
+        rocketmq_observability::trace::record_message_properties_with_handle(
+            &self.telemetry_handle,
+            &append_span,
             msg_batch.message_ext_broker_inner.get_properties(),
             msg_batch.message_ext_broker_inner.get_body().map(|body| body.len()),
         );
@@ -1344,6 +1347,7 @@ impl CommitLog {
             .append_runtime
             .port()
             .append_batch(msg_batch, prepared, put_message_context)
+            .instrument(append_span)
             .await;
         if sequenced.result.put_message_status() != PutMessageStatus::PutOk {
             return sequenced.result;
@@ -1357,19 +1361,12 @@ impl CommitLog {
         .await
     }
 
-    #[tracing::instrument(
-        level = "debug",
-        name = "RocketMQ STORE APPEND",
-        skip_all,
-        fields(
-            messaging.message.id = tracing::field::Empty,
-            messaging.message.body.size = tracing::field::Empty,
-            messaging.rocketmq.message.keys = tracing::field::Empty,
-        )
-    )]
     pub async fn put_message(&self, mut msg: MessageExtBrokerInner) -> PutMessageResult {
+        let append_span = rocketmq_observability::trace::store::append_span(&self.telemetry_handle);
         #[cfg(any(feature = "observability", feature = "observability-traces"))]
-        rocketmq_observability::trace::record_current_message_properties(
+        rocketmq_observability::trace::record_message_properties_with_handle(
+            &self.telemetry_handle,
+            &append_span,
             msg.get_properties(),
             msg.get_body().map(|body| body.len()),
         );
@@ -1419,6 +1416,7 @@ impl CommitLog {
             .append_runtime
             .port()
             .append_message(msg, prepared, need_assign_offset)
+            .instrument(append_span)
             .await;
         if sequenced.result.put_message_status() != PutMessageStatus::PutOk {
             return sequenced.result;
@@ -1531,16 +1529,16 @@ impl CommitLog {
         put_message_result: &AppendMessageResult,
         msg: &MessageExtBrokerInner,
     ) -> PutMessageStatus {
-        #[cfg(feature = "observability")]
         let start_time = Instant::now();
 
         let status = self
             .flush_manager
             .handle_disk_flush_shared(put_message_result, msg)
+            .instrument(rocketmq_observability::trace::store::flush_span(&self.telemetry_handle))
             .await;
 
-        #[cfg(feature = "observability")]
-        rocketmq_observability::metrics::store::record_flush_latency(start_time.elapsed().as_millis() as u64);
+        self.store_metrics
+            .record_flush_latency(start_time.elapsed().as_millis() as u64);
 
         status
     }
@@ -1572,11 +1570,11 @@ impl CommitLog {
         is_file_end: bool,
     ) {
         if do_dispatch && !is_file_end {
-            #[cfg(feature = "observability")]
             let start_time = Instant::now();
-            self.dispatcher.dispatch(request);
-            #[cfg(feature = "observability")]
-            rocketmq_observability::metrics::store::record_dispatch_latency(start_time.elapsed().as_millis() as u64);
+            rocketmq_observability::trace::store::dispatch_span(&self.telemetry_handle)
+                .in_scope(|| self.dispatcher.dispatch(request));
+            self.store_metrics
+                .record_dispatch_latency(start_time.elapsed().as_millis() as u64);
         }
     }
 

@@ -27,6 +27,8 @@ rust-version.workspace = true
 
 [features]
 default = []
+observability = ["rocketmq-client-rust/observability-metrics"]
+observability-traces = ["rocketmq-client-rust/observability"]
 
 [dependencies]
 rocketmq-client-rust = { workspace = true }

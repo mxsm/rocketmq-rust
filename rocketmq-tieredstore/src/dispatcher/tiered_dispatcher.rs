@@ -252,7 +252,7 @@ where
                 _byte_permit: byte_permit,
             })
             .map_err(|err| RocketMQError::storage_write_failed("tiered_dispatch_queue", err.to_string()))?;
-        rocketmq_observability::metrics::tiered_store::record_dispatch_queued(&self.metrics);
+        self.metrics.record_dispatch_queued();
         Ok(())
     }
 
@@ -277,7 +277,7 @@ where
                 _byte_permit: byte_permit,
             })
             .map_err(|err| RocketMQError::storage_write_failed("tiered_dispatch_queue", err.to_string()))?;
-        rocketmq_observability::metrics::tiered_store::record_dispatch_queued(&self.metrics);
+        self.metrics.record_dispatch_queued();
         Ok(())
     }
 
@@ -628,7 +628,7 @@ where
             _byte_permit: byte_permit,
         })
         .await?;
-        rocketmq_observability::metrics::tiered_store::record_dispatch_queued(&self.metrics);
+        self.metrics.record_dispatch_queued();
         Ok(())
     }
 
@@ -648,7 +648,7 @@ where
             _byte_permit: byte_permit,
         })
         .await?;
-        rocketmq_observability::metrics::tiered_store::record_dispatch_queued(&self.metrics);
+        self.metrics.record_dispatch_queued();
         Ok(())
     }
 

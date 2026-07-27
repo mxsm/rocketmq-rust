@@ -128,12 +128,20 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         return Ok(());
     }
 
+    let process_telemetry =
+        rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig::from_process_env("rocketmq-broker")
+            .context("failed to validate Broker release identity and metrics configuration")?;
+    let mut bootstrap_config = build_broker_telemetry_bootstrap_config(broker_config);
+    process_telemetry.apply_to(&mut bootstrap_config.observability);
+    bootstrap_config.logging.reload = logging_overrides.logging.reload;
+
     let security_config =
         SecurityBootstrapConfig::from_env().context("failed to load broker security bootstrap configuration")?;
     let validated_security = validate_broker_security(
         &security_config,
         broker_config,
         message_store_config,
+        &bootstrap_config.observability,
         lifecycle.config().probe_bind_addr,
     )
     .context("broker security bootstrap failed before listener bind")?;
@@ -141,11 +149,28 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     let environment_filter = rocketmq_observability::read_rust_log().context("failed to read RUST_LOG")?;
     let resolved_filter = resolve_startup_log_filter(&args, logging_overrides, environment_filter.as_deref())
         .context("failed to resolve broker log filter")?;
-    let mut bootstrap_config = build_broker_telemetry_bootstrap_config(broker_config);
-    bootstrap_config.logging.reload = logging_overrides.logging.reload;
-    let telemetry_guard =
-        rocketmq_observability::install_global_with_filter(&bootstrap_config, resolved_filter.clone())
-            .context("failed to initialize broker telemetry bootstrap")?;
+    let telemetry_guard = rocketmq_observability::install_global_with_filter_and_service_context(
+        &bootstrap_config,
+        resolved_filter.clone(),
+        &service_context,
+    )
+    .await
+    .context("failed to initialize broker telemetry bootstrap")?;
+    let telemetry_handle = telemetry_guard.handle();
+    if let Err(error) = register_broker_release_identity(&process_telemetry, &telemetry_handle) {
+        let request = lifecycle.request_shutdown(ShutdownReason::Internal);
+        if let Err(shutdown_error) = telemetry_guard
+            .shutdown_with_service_context(&service_context, request.deadline.remaining())
+            .await
+            .into_result()
+        {
+            tracing::warn!(
+                error = %shutdown_error,
+                "broker telemetry cleanup after release identity failure was unhealthy"
+            );
+        }
+        return Err(error);
+    }
     log_telemetry_bootstrap(
         &bootstrap_config,
         &resolved_filter,
@@ -162,7 +187,8 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         lifecycle.mark_failed();
         let request = lifecycle.request_shutdown(ShutdownReason::Internal);
         if let Err(shutdown_error) = telemetry_guard
-            .shutdown_with_timeout(request.deadline.remaining())
+            .shutdown_with_service_context(&service_context, request.deadline.remaining())
+            .await
             .into_result()
         {
             tracing::warn!(error = %shutdown_error, "broker telemetry cleanup after lifecycle startup failure was unhealthy");
@@ -171,9 +197,9 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     }
 
     // Start broker
-    Builder::new(service_context)
+    Builder::new(service_context, telemetry_guard)
         .with_validated_config(validated_config)
-        .set_telemetry_runtime_guard(telemetry_guard)
+        .require_release_identity_registration(process_telemetry.metrics_enabled())
         .build()
         .boot_with_lifecycle(lifecycle)
         .await
@@ -186,6 +212,7 @@ fn validate_broker_security(
     security_config: &SecurityBootstrapConfig,
     broker_config: &BrokerConfig,
     message_store_config: &MessageStoreConfig,
+    observability_config: &rocketmq_observability::ObservabilityConfig,
     probe_bind_addr: Option<SocketAddr>,
 ) -> Result<ValidatedSecurityBootstrap> {
     let bind_ip = broker_config
@@ -207,17 +234,47 @@ fn validate_broker_security(
             u16::try_from(message_store_config.ha_listen_port).context("broker haListenPort must fit a TCP port")?;
         listeners.push(SocketAddr::new(message_store_config.ha_listen_address, ha_listen_port));
     }
-    if broker_config.metrics_exporter_type == rocketmq_observability::MetricsExporterType::Prom {
-        let metrics_ip = broker_config
-            .metrics_prom_exporter_host
-            .parse::<IpAddr>()
-            .context("broker metricsPromExporterHost must be an IP address")?;
-        listeners.push(SocketAddr::new(metrics_ip, broker_config.metrics_prom_exporter_port));
+    if observability_config.metrics.enabled
+        && observability_config.metrics.exporter == rocketmq_observability::MetricsExporter::Prometheus
+    {
+        let metrics_addr = format!(
+            "{}:{}",
+            observability_config.prometheus.host, observability_config.prometheus.port
+        )
+        .parse::<SocketAddr>()
+        .context("broker Prometheus listener must be an IP socket address")?;
+        listeners.push(metrics_addr);
     }
     if let Some(probe_bind_addr) = probe_bind_addr {
         listeners.push(probe_bind_addr);
     }
     security_config.validate(&listeners).map_err(anyhow::Error::from)
+}
+
+fn register_broker_release_identity(
+    process_telemetry: &rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig,
+    telemetry_handle: &rocketmq_observability::TelemetryHandle,
+) -> Result<()> {
+    if !process_telemetry.metrics_enabled() {
+        return Ok(());
+    }
+
+    #[cfg(feature = "otel-metrics")]
+    {
+        telemetry_handle
+            .register_release_identity(process_telemetry.release_identity().clone())
+            .context("failed to register Broker release identity before readiness")?;
+        if !telemetry_handle.release_identity_registered() {
+            anyhow::bail!("Broker release identity was not registered before readiness");
+        }
+        Ok(())
+    }
+
+    #[cfg(not(feature = "otel-metrics"))]
+    {
+        let _ = telemetry_handle;
+        anyhow::bail!("Broker metrics were enabled without the `otel-metrics` Cargo feature");
+    }
 }
 
 fn log_security_bootstrap(validated: ValidatedSecurityBootstrap) {
@@ -520,26 +577,58 @@ mod tests {
             ha_listen_address: IpAddr::from([127, 0, 0, 1]),
             ..MessageStoreConfig::default()
         };
+        let mut observability = build_broker_telemetry_bootstrap_config(&broker).observability;
 
         validate_broker_security(
             &security,
             &broker,
             &store,
+            &observability,
             Some(SocketAddr::from(([127, 0, 0, 1], 8088))),
         )
         .expect("loopback-only Broker bootstrap should pass");
 
         store.ha_listen_address = IpAddr::from([0, 0, 0, 0]);
-        assert!(validate_broker_security(&security, &broker, &store, None).is_err());
+        assert!(validate_broker_security(&security, &broker, &store, &observability, None).is_err());
         store.ha_listen_address = IpAddr::from([127, 0, 0, 1]);
 
         broker.metrics_exporter_type = rocketmq_observability::MetricsExporterType::Prom;
         broker.metrics_prom_exporter_host = "0.0.0.0".into();
-        assert!(validate_broker_security(&security, &broker, &store, None).is_err());
+        observability = build_broker_telemetry_bootstrap_config(&broker).observability;
+        assert!(validate_broker_security(&security, &broker, &store, &observability, None).is_err());
         broker.metrics_exporter_type = rocketmq_observability::MetricsExporterType::Disable;
+        observability = build_broker_telemetry_bootstrap_config(&broker).observability;
 
         broker.broker_server_config.bind_address = "0.0.0.0".to_string();
-        assert!(validate_broker_security(&security, &broker, &store, None).is_err());
+        assert!(validate_broker_security(&security, &broker, &store, &observability, None).is_err());
+    }
+
+    #[test]
+    fn broker_release_identity_config_is_applied_before_bootstrap() {
+        let process_telemetry =
+            rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig::try_from_values(
+                "rocketmq-broker",
+                Some("0123456789abcdef0123456789abcdef01234567"),
+                Some("rollout-07"),
+                Some("true"),
+                Some("prometheus"),
+                Some("127.0.0.1:5557"),
+                Some("/metrics"),
+            )
+            .expect("valid Broker process telemetry");
+        let mut bootstrap_config = build_broker_telemetry_bootstrap_config(&BrokerConfig::default());
+
+        process_telemetry.apply_to(&mut bootstrap_config.observability);
+
+        assert_eq!(process_telemetry.release_identity().service(), "rocketmq-broker");
+        assert!(bootstrap_config.observability.enabled);
+        assert!(bootstrap_config.observability.metrics.enabled);
+        assert_eq!(
+            bootstrap_config.observability.metrics.exporter,
+            rocketmq_observability::MetricsExporter::Prometheus
+        );
+        assert_eq!(bootstrap_config.observability.prometheus.host, "127.0.0.1");
+        assert_eq!(bootstrap_config.observability.prometheus.port, 5557);
     }
 
     #[test]

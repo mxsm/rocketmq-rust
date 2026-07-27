@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use rocketmq_auth::AuthMetricsSnapshot;
+use rocketmq_observability::metrics::proxy::ProxyMetrics as OtelProxyMetrics;
 use rocketmq_observability::metrics::proxy::ProxyRpcMetrics;
 pub use rocketmq_observability::metrics::proxy::ProxyRpcMetricsSnapshot;
 use rocketmq_observability::metrics::proxy::ProxyRpcOutcome;
@@ -23,9 +24,7 @@ use tonic::Code as TonicCode;
 use tonic::Status as TonicStatus;
 use tracing::warn;
 
-#[cfg(feature = "observability")]
 use crate::config::ProxyConfig;
-#[cfg(feature = "observability")]
 use crate::config::ProxyMode;
 use crate::context::ProxyContext;
 use crate::error::ProxyResult;
@@ -33,12 +32,6 @@ use crate::proto::v2;
 use crate::session::ClientSessionRegistry;
 use crate::status::ProxyPayloadStatus;
 
-#[cfg(feature = "observability")]
-pub(crate) fn init_observability_metrics(config: &ProxyConfig) {
-    let _ = rocketmq_observability::metrics::proxy::init_global_with_proxy_up_attributes(proxy_up_attributes(config));
-}
-
-#[cfg(feature = "observability")]
 fn proxy_up_attributes(config: &ProxyConfig) -> rocketmq_observability::metrics::proxy::ProxyUpAttributes {
     let (cluster, node_id) = match config.mode {
         #[cfg(feature = "cluster-mode")]
@@ -165,11 +158,20 @@ pub struct ProxyMetricsSnapshot {
 #[derive(Clone, Default)]
 pub struct ProxyMetrics {
     rpcs: ProxyRpcMetrics,
+    otel: OtelProxyMetrics,
 }
 
 impl ProxyMetrics {
+    pub fn from_telemetry(telemetry: &rocketmq_observability::TelemetryHandle, config: &ProxyConfig) -> Self {
+        Self {
+            rpcs: ProxyRpcMetrics::default(),
+            otel: OtelProxyMetrics::from_handle_with_proxy_up(telemetry, proxy_up_attributes(config)),
+        }
+    }
+
     pub fn record_request_started(&self, rpc_name: &'static str) {
         self.rpcs.record_request_started(rpc_name);
+        self.otel.record_grpc_requests_total(1);
     }
 
     pub fn record_request_completed(
@@ -180,6 +182,13 @@ impl ProxyMetrics {
     ) {
         self.rpcs
             .record_request_completed(rpc_name, outcome.rpc_metrics_outcome(), elapsed);
+        self.otel
+            .record_grpc_request_latency(elapsed.as_millis().clamp(0, u128::from(u64::MAX)) as u64);
+    }
+
+    pub fn record_forward_latency(&self, elapsed: std::time::Duration) {
+        self.otel
+            .record_forward_latency(elapsed.as_millis().clamp(0, u128::from(u64::MAX)) as u64);
     }
 
     pub fn snapshot(
@@ -187,7 +196,7 @@ impl ProxyMetrics {
         sessions: &ClientSessionRegistry,
         auth: Option<AuthMetricsSnapshot>,
     ) -> ProxyMetricsSnapshot {
-        rocketmq_observability::metrics::proxy::record_active_connections(sessions.len() as u64);
+        self.otel.record_active_connections(sessions.len() as u64);
 
         ProxyMetricsSnapshot {
             rpcs: self.rpcs.snapshot(),
@@ -209,13 +218,10 @@ impl ProxyMetrics {
 mod tests {
     use tonic::Status;
 
-    #[cfg(feature = "observability")]
     use super::proxy_up_attributes;
     use super::ProxyMetrics;
     use super::ProxyRequestOutcome;
-    #[cfg(feature = "observability")]
     use crate::config::ProxyConfig;
-    #[cfg(feature = "observability")]
     use crate::config::ProxyMode;
     use crate::proto::v2;
     use crate::session::ClientSessionRegistry;
@@ -257,7 +263,6 @@ mod tests {
         assert_eq!(snapshot.pending_lite_unsubscribe_notices, 0);
     }
 
-    #[cfg(feature = "observability")]
     #[test]
     fn proxy_up_attributes_use_runtime_identity() {
         let mut cluster_config = ProxyConfig::default();

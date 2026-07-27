@@ -20,7 +20,6 @@
 pub use opentelemetry::metrics::Counter;
 pub use opentelemetry::metrics::Histogram;
 pub use opentelemetry::metrics::Meter;
-pub use opentelemetry::metrics::MeterProvider;
+pub use opentelemetry::metrics::ObservableGauge;
 pub use opentelemetry::metrics::UpDownCounter;
 pub use opentelemetry::KeyValue;
-pub use opentelemetry_sdk::metrics::SdkMeterProvider;

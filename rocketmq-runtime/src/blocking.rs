@@ -24,6 +24,7 @@ use tokio::sync::Semaphore;
 
 use crate::error::RuntimeError;
 use crate::error::RuntimeResult;
+use crate::shutdown_deadline::ShutdownDeadline;
 use crate::task_group::TaskGroup;
 use crate::task_group::TaskKind;
 
@@ -167,6 +168,101 @@ pub struct BlockingExecutor {
     next_task_id: Arc<AtomicU64>,
 }
 
+struct QueuedBlockingTaskGuard {
+    tasks: Arc<DashMap<BlockingTaskId, BlockingTaskMeta>>,
+    task_id: BlockingTaskId,
+    armed: bool,
+}
+
+impl QueuedBlockingTaskGuard {
+    fn new(tasks: Arc<DashMap<BlockingTaskId, BlockingTaskMeta>>, task_id: BlockingTaskId) -> Self {
+        Self {
+            tasks,
+            task_id,
+            armed: true,
+        }
+    }
+
+    fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for QueuedBlockingTaskGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            self.tasks.remove(&self.task_id);
+        }
+    }
+}
+
+struct RunningBlockingTaskGuard<R>
+where
+    R: Send + 'static,
+{
+    join_handle: Option<tokio::task::JoinHandle<R>>,
+    tasks: Arc<DashMap<BlockingTaskId, BlockingTaskMeta>>,
+    reaper_group: TaskGroup,
+    task_id: BlockingTaskId,
+    name: Arc<str>,
+}
+
+impl<R> RunningBlockingTaskGuard<R>
+where
+    R: Send + 'static,
+{
+    fn new(
+        join_handle: tokio::task::JoinHandle<R>,
+        tasks: Arc<DashMap<BlockingTaskId, BlockingTaskMeta>>,
+        reaper_group: TaskGroup,
+        task_id: BlockingTaskId,
+        name: Arc<str>,
+    ) -> Self {
+        Self {
+            join_handle: Some(join_handle),
+            tasks,
+            reaper_group,
+            task_id,
+            name,
+        }
+    }
+
+    fn join_handle(&mut self) -> Option<&mut tokio::task::JoinHandle<R>> {
+        self.join_handle.as_mut()
+    }
+
+    fn disarm(&mut self) {
+        self.join_handle.take();
+    }
+
+    fn schedule_reaper(&mut self) {
+        let Some(join_handle) = self.join_handle.take() else {
+            return;
+        };
+        if let Some(mut meta) = self.tasks.get_mut(&self.task_id) {
+            meta.state = BlockingTaskState::TimedOutStillRunning;
+        }
+        let tasks = self.tasks.clone();
+        let task_id = self.task_id;
+        let reaper_name = format!("blocking-reaper:{}", self.name);
+        let _ = self
+            .reaper_group
+            .spawn_detached(reaper_name, TaskKind::BlockingReaper, async move {
+                let _ = join_handle.await;
+                tasks.remove(&task_id);
+            });
+    }
+}
+
+impl<R> Drop for RunningBlockingTaskGuard<R>
+where
+    R: Send + 'static,
+{
+    fn drop(&mut self) {
+        self.schedule_reaper();
+    }
+}
+
 #[derive(Debug, Clone)]
 struct BlockingTaskMeta {
     id: BlockingTaskId,
@@ -224,14 +320,59 @@ impl BlockingExecutor {
         self.spawn(name, BlockingKind::ShortIo, operation).await
     }
 
+    /// Runs short blocking I/O without admitting or waiting for work beyond `deadline`.
+    pub async fn spawn_io_until<F, R>(
+        &self,
+        name: impl Into<Arc<str>>,
+        deadline: ShutdownDeadline,
+        operation: F,
+    ) -> RuntimeResult<R>
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        self.spawn_until(name, BlockingKind::ShortIo, deadline, operation).await
+    }
+
     pub async fn spawn<F, R>(&self, name: impl Into<Arc<str>>, kind: BlockingKind, operation: F) -> RuntimeResult<R>
     where
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        let name = name.into();
+        self.spawn_inner(name.into(), kind, None, operation).await
+    }
+
+    /// Runs blocking work while bounding queue admission and execution by one absolute deadline.
+    pub async fn spawn_until<F, R>(
+        &self,
+        name: impl Into<Arc<str>>,
+        kind: BlockingKind,
+        deadline: ShutdownDeadline,
+        operation: F,
+    ) -> RuntimeResult<R>
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        self.spawn_inner(name.into(), kind, Some(deadline), operation).await
+    }
+
+    async fn spawn_inner<F, R>(
+        &self,
+        name: Arc<str>,
+        kind: BlockingKind,
+        deadline: Option<ShutdownDeadline>,
+        operation: F,
+    ) -> RuntimeResult<R>
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
         if kind == BlockingKind::LongRunning {
             return Err(RuntimeError::UnsupportedBlockingKind { name, kind });
+        }
+        if deadline.is_some_and(ShutdownDeadline::is_expired) {
+            return Err(RuntimeError::BlockingQueueTimeout { name });
         }
 
         let queue_permit =
@@ -254,33 +395,59 @@ impl BlockingExecutor {
                 started_at: None,
             },
         );
+        let queued_task_guard = QueuedBlockingTaskGuard::new(self.tasks.clone(), task_id);
 
-        let permit = match tokio::time::timeout(self.policy.queue_timeout, self.permits.clone().acquire_owned()).await {
+        let queue_deadline = phase_deadline(self.policy.queue_timeout, deadline);
+        let permit = match tokio::time::timeout_at(
+            tokio::time::Instant::from_std(queue_deadline),
+            self.permits.clone().acquire_owned(),
+        )
+        .await
+        {
             Ok(Ok(permit)) => permit,
             Ok(Err(_closed)) => {
-                self.tasks.remove(&task_id);
                 return Err(RuntimeError::BlockingQueueTimeout { name });
             }
             Err(_elapsed) => {
-                self.tasks.remove(&task_id);
                 return Err(RuntimeError::BlockingQueueTimeout { name });
             }
         };
         drop(queue_permit);
 
+        let task_deadline = phase_deadline(self.policy.task_timeout, deadline);
+        if task_deadline <= Instant::now() {
+            return Err(RuntimeError::BlockingQueueTimeout { name });
+        }
+
         if let Some(mut meta) = self.tasks.get_mut(&task_id) {
             meta.state = BlockingTaskState::Running;
             meta.started_at = Some(Instant::now());
         }
+        queued_task_guard.disarm();
 
         let tasks = self.tasks.clone();
-        let mut join_handle = tokio::task::spawn_blocking(move || {
+        let join_handle = tokio::task::spawn_blocking(move || {
             let _permit = permit;
             operation()
         });
+        let mut running_task_guard = RunningBlockingTaskGuard::new(
+            join_handle,
+            tasks.clone(),
+            self.reaper_group.clone(),
+            task_id,
+            name.clone(),
+        );
+        let Some(join_handle) = running_task_guard.join_handle() else {
+            self.finish_task(task_id, BlockingTaskState::JoinFailed);
+            return Err(RuntimeError::LifecycleOperation {
+                operation: "run_blocking_task",
+                message: format!("blocking task {name} lost its owned join handle"),
+            });
+        };
 
-        match tokio::time::timeout(self.policy.task_timeout, &mut join_handle).await {
+        match tokio::time::timeout_at(tokio::time::Instant::from_std(task_deadline), join_handle).await {
             Ok(Ok(value)) => {
+                running_task_guard.disarm();
                 let elapsed = tasks
                     .get(&task_id)
                     .and_then(|meta| meta.started_at.map(|started_at| started_at.elapsed()));
@@ -298,21 +465,12 @@ impl BlockingExecutor {
                 Ok(value)
             }
             Ok(Err(error)) => {
+                running_task_guard.disarm();
                 self.finish_task(task_id, BlockingTaskState::JoinFailed);
                 Err(RuntimeError::BlockingJoin { name, error })
             }
             Err(_elapsed) => {
-                if let Some(mut meta) = self.tasks.get_mut(&task_id) {
-                    meta.state = BlockingTaskState::TimedOutStillRunning;
-                }
-                let tasks = self.tasks.clone();
-                let reaper_name = format!("blocking-reaper:{name}");
-                let _ = self
-                    .reaper_group
-                    .spawn_detached(reaper_name, TaskKind::BlockingReaper, async move {
-                        let _ = join_handle.await;
-                        tasks.remove(&task_id);
-                    });
+                running_task_guard.schedule_reaper();
                 Err(RuntimeError::BlockingTaskTimeoutStillRunning { name, task_id })
             }
         }
@@ -367,6 +525,11 @@ impl BlockingExecutor {
         }
         self.tasks.remove(&task_id);
     }
+}
+
+fn phase_deadline(policy_timeout: Duration, deadline: Option<ShutdownDeadline>) -> Instant {
+    let policy_deadline = Instant::now() + policy_timeout;
+    deadline.map_or(policy_deadline, |deadline| policy_deadline.min(deadline.instant()))
 }
 
 impl BlockingTaskMeta {

@@ -112,9 +112,18 @@ storage-file    = []
 dev-single      = ["storage-file"]
 metrics         = [
   "rocketmq-observability/otel-metrics",
+  "rocketmq-transport/observability",
 ]
 metrics-otlp    = ["metrics", "rocketmq-observability/otlp-metrics"]
 metrics-prometheus = ["metrics", "rocketmq-observability/prometheus"]
+otel-traces = [
+  "rocketmq-observability/otel-traces",
+  "rocketmq-transport/observability-traces",
+]
+otel-logs = ["rocketmq-observability/otel-logs"]
+otlp-traces = ["otel-traces", "rocketmq-observability/otlp-traces"]
+otlp-logs = ["otel-logs", "rocketmq-observability/otlp-logs"]
+production-observability = ["metrics-prometheus", "otlp-traces", "otlp-logs"]
 debug           = []
 
 [[bin]]

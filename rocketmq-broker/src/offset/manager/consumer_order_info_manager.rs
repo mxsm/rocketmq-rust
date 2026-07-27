@@ -635,6 +635,7 @@ mod tests {
             &broker_config,
             &MessageStoreConfig::default(),
             false,
+            None,
         ));
         let subscription_group_table = Arc::new(DashMap::new());
         let manager = ConsumerOrderInfoManager::new(

@@ -40,12 +40,6 @@ pub use crate::semantic::metrics::STORE_TRANSFER_ENGINE_TOTAL;
 pub use crate::semantic::metrics::STORE_TRANSFER_FALLBACK_TOTAL;
 pub use crate::semantic::metrics::STORE_TRANSFER_PARTIAL_WRITE_TOTAL;
 
-#[cfg(feature = "otel-metrics")]
-use std::sync::OnceLock;
-
-#[cfg(feature = "otel-metrics")]
-static STORE_METRICS: OnceLock<StoreMetrics> = OnceLock::new();
-
 #[derive(Debug, Clone, Copy, Default)]
 pub struct StoreObservableValues {
     pub storage_size_bytes: i64,
@@ -54,273 +48,353 @@ pub struct StoreObservableValues {
     pub message_reserve_time_millis: i64,
 }
 
-#[cfg(feature = "otel-metrics")]
-pub fn init_global(meter: &opentelemetry::metrics::Meter) -> bool {
-    STORE_METRICS.set(StoreMetrics::new(meter)).is_ok()
-}
-
-#[cfg(feature = "otel-metrics")]
-pub fn init_global_with_observables<F>(meter: &opentelemetry::metrics::Meter, source: F) -> bool
-where
-    F: Fn() -> StoreObservableValues + Send + Sync + 'static,
-{
-    STORE_METRICS
-        .set(StoreMetrics::new_with_observables(meter, source))
-        .is_ok()
-}
-
-pub fn record_append_latency(latency_ms: u64) {
+/// Cloneable Store recorder bound to one explicit telemetry runtime.
+#[derive(Clone)]
+pub struct StoreMetricsRecorder {
     #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = STORE_METRICS.get() {
-        metrics.record_append_latency(latency_ms, &[]);
+    telemetry: crate::TelemetryRecorder,
+    #[cfg(feature = "otel-metrics")]
+    metrics: Option<StoreMetrics>,
+    #[cfg(feature = "otel-metrics")]
+    label_policy: crate::MetricLabelPolicy,
+}
+
+impl std::fmt::Debug for StoreMetricsRecorder {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("StoreMetricsRecorder")
+            .field("enabled", &self.is_enabled())
+            .finish()
+    }
+}
+
+impl Default for StoreMetricsRecorder {
+    fn default() -> Self {
+        Self::noop()
+    }
+}
+
+impl StoreMetricsRecorder {
+    /// Creates a recorder that never reads process-global OpenTelemetry state.
+    #[must_use]
+    pub fn noop() -> Self {
+        Self::from_handle(&crate::TelemetryHandle::noop())
     }
 
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = latency_ms;
-}
+    /// Creates a recorder from the fixed Store instrumentation scope.
+    #[must_use]
+    pub fn from_handle(handle: &crate::TelemetryHandle) -> Self {
+        #[cfg(feature = "otel-metrics")]
+        {
+            let telemetry = handle.child(crate::STORE_METER_SCOPE);
+            let metrics = telemetry.meter().map(|meter| StoreMetrics::new(&meter));
+            let label_policy = telemetry.metric_label_policy();
+            Self {
+                telemetry,
+                metrics,
+                label_policy,
+            }
+        }
 
-pub fn record_flush_latency(latency_ms: u64) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = STORE_METRICS.get() {
-        metrics.record_flush_latency(latency_ms, &[]);
-    }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = latency_ms;
-}
-
-pub fn record_dispatch_latency(latency_ms: u64) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = STORE_METRICS.get() {
-        metrics.record_dispatch_latency(latency_ms, &[]);
-    }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = latency_ms;
-}
-
-pub fn record_disk_usage(bytes: u64) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = STORE_METRICS.get() {
-        metrics.record_disk_usage(bytes, &[]);
-    }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = bytes;
-}
-
-pub fn record_delay_message_latency(latency_seconds: u64) {
-    record_delay_message_latency_with_topic(latency_seconds, None);
-}
-
-pub fn record_delay_message_latency_with_topic(latency_seconds: u64, topic: Option<&str>) {
-    #[cfg(feature = "otel-metrics")]
-    {
-        let Some(topic) = topic else {
-            return;
-        };
-        if let Some(metrics) = STORE_METRICS.get() {
-            let attrs = delay_message_latency_attributes(topic);
-            metrics.record_delay_message_latency(latency_seconds, &attrs);
+        #[cfg(not(feature = "otel-metrics"))]
+        {
+            let _ = handle;
+            Self {}
         }
     }
 
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = (latency_seconds, topic);
-}
+    /// Returns whether this recorder is backed by an active Store meter.
+    #[must_use]
+    pub fn is_enabled(&self) -> bool {
+        #[cfg(feature = "otel-metrics")]
+        {
+            self.telemetry.is_active() && self.metrics.is_some()
+        }
 
-pub fn record_delay_message_latency_from_timestamps(deliver_time_ms: i64, born_timestamp_ms: i64, topic: Option<&str>) {
-    let latency_ms = deliver_time_ms.saturating_sub(born_timestamp_ms);
-    if latency_ms > 0 {
-        record_delay_message_latency_with_topic((latency_ms / 1000) as u64, topic);
+        #[cfg(not(feature = "otel-metrics"))]
+        {
+            false
+        }
     }
-}
 
-pub fn record_transfer_batch(count: u64) {
+    /// Registers Store observable gauges on this recorder's explicit meter.
+    pub fn register_observables<F>(&self, source: F)
+    where
+        F: Fn() -> StoreObservableValues + Send + Sync + 'static,
+    {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(meter) = self.telemetry.meter() {
+            StoreMetrics::register_observables(&meter, source);
+        }
+
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = source;
+    }
+
+    #[inline]
+    pub fn record_append_latency(&self, latency_ms: u64) {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(metrics) = self.active_metrics() {
+            metrics.record_append_latency(latency_ms, &[]);
+        }
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = latency_ms;
+    }
+
+    #[inline]
+    pub fn record_flush_latency(&self, latency_ms: u64) {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(metrics) = self.active_metrics() {
+            metrics.record_flush_latency(latency_ms, &[]);
+        }
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = latency_ms;
+    }
+
+    #[inline]
+    pub fn record_dispatch_latency(&self, latency_ms: u64) {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(metrics) = self.active_metrics() {
+            metrics.record_dispatch_latency(latency_ms, &[]);
+        }
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = latency_ms;
+    }
+
+    #[inline]
+    pub fn record_disk_usage(&self, bytes: u64) {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(metrics) = self.active_metrics() {
+            metrics.record_disk_usage(bytes, &[]);
+        }
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = bytes;
+    }
+
+    #[inline]
+    pub fn record_delay_message_latency(&self, latency_seconds: u64, topic: Option<&str>) {
+        #[cfg(feature = "otel-metrics")]
+        if let (Some(metrics), Some(topic)) = (self.active_metrics(), topic) {
+            metrics.record_delay_message_latency(
+                latency_seconds,
+                &delay_message_latency_attributes(&self.label_policy, topic),
+            );
+        }
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = (latency_seconds, topic);
+    }
+
+    #[inline]
+    pub fn record_delay_message_latency_from_timestamps(
+        &self,
+        deliver_time_ms: i64,
+        born_timestamp_ms: i64,
+        topic: Option<&str>,
+    ) {
+        let latency_ms = deliver_time_ms.saturating_sub(born_timestamp_ms);
+        if latency_ms > 0 {
+            self.record_delay_message_latency((latency_ms / 1000) as u64, topic);
+        }
+    }
+
+    #[inline]
+    pub fn record_transfer_batch(&self, count: u64) {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(metrics) = self.active_metrics() {
+            metrics.record_transfer_batch_total(count, &[]);
+        }
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = count;
+    }
+
+    #[inline]
+    pub fn record_transfer_bytes(&self, bytes: u64) {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(metrics) = self.active_metrics() {
+            metrics.record_transfer_bytes_total(bytes, &[]);
+        }
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = bytes;
+    }
+
+    #[inline]
+    pub fn record_transfer_engine(&self, engine: &'static str, count: u64) {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(metrics) = self.active_metrics() {
+            metrics.record_transfer_engine_total(count, &transfer_engine_attributes(engine));
+        }
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = (engine, count);
+    }
+
+    #[inline]
+    pub fn record_transfer_fallback(&self, from: &'static str, to: &'static str, reason: &'static str, count: u64) {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(metrics) = self.active_metrics() {
+            metrics.record_transfer_fallback_total(count, &transfer_fallback_attributes(from, to, reason));
+        }
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = (from, to, reason, count);
+    }
+
+    #[inline]
+    pub fn record_transfer_partial_write(&self, count: u64) {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(metrics) = self.active_metrics() {
+            metrics.record_transfer_partial_write_total(count, &[]);
+        }
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = count;
+    }
+
+    #[inline]
+    pub fn record_linux_sendfile_bytes(&self, bytes: u64) {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(metrics) = self.active_metrics() {
+            metrics.record_linux_sendfile_bytes_total(bytes, &[]);
+        }
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = bytes;
+    }
+
+    #[inline]
+    pub fn record_ha_replication_lag_bytes(&self, bytes: u64) {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(metrics) = self.active_metrics() {
+            metrics.record_ha_replication_lag_bytes(bytes, &[]);
+        }
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = bytes;
+    }
+
+    #[inline]
+    pub fn record_ha_ack_latency_millis(&self, latency_ms: u64) {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(metrics) = self.active_metrics() {
+            metrics.record_ha_ack_latency_millis(latency_ms, &[]);
+        }
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = latency_ms;
+    }
+
+    #[inline]
+    pub fn record_linux_mlock_bytes(&self, bytes: u64) {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(metrics) = self.active_metrics() {
+            metrics.record_linux_mlock_bytes(bytes, &[]);
+        }
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = bytes;
+    }
+
+    #[inline]
+    pub fn record_linux_mlock_attempt(&self, category: &'static str, count: u64) {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(metrics) = self.active_metrics() {
+            metrics.record_linux_mlock_attempt_total(count, &memory_lock_category_attributes(category));
+        }
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = (category, count);
+    }
+
+    #[inline]
+    pub fn record_linux_mlock_success(&self, category: &'static str, count: u64) {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(metrics) = self.active_metrics() {
+            metrics.record_linux_mlock_success_total(count, &memory_lock_category_attributes(category));
+        }
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = (category, count);
+    }
+
+    #[inline]
+    pub fn record_linux_mlock_failure(&self, category: &'static str, errno: i32, count: u64) {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(metrics) = self.active_metrics() {
+            metrics.record_linux_mlock_failure_total(count, &memory_lock_errno_attributes(category, errno));
+        }
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = (category, errno, count);
+    }
+
+    #[inline]
+    pub fn record_linux_mlock_skipped(&self, category: &'static str, reason: &'static str, count: u64) {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(metrics) = self.active_metrics() {
+            metrics.record_linux_mlock_skipped_total(count, &memory_lock_skip_attributes(category, reason));
+        }
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = (category, reason, count);
+    }
+
+    #[inline]
+    pub fn record_linux_locked_bytes(&self, category: &'static str, bytes: u64) {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(metrics) = self.active_metrics() {
+            metrics.record_linux_locked_bytes(bytes, &memory_lock_category_attributes(category));
+        }
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = (category, bytes);
+    }
+
+    #[inline]
+    pub fn record_linux_munlock_failure(&self, category: &'static str, errno: i32, count: u64) {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(metrics) = self.active_metrics() {
+            metrics.record_linux_munlock_failure_total(count, &memory_lock_errno_attributes(category, errno));
+        }
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = (category, errno, count);
+    }
+
+    #[inline]
+    pub fn record_linux_page_cache_warmup_millis(&self, latency_ms: u64) {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(metrics) = self.active_metrics() {
+            metrics.record_linux_page_cache_warmup_millis(latency_ms, &[]);
+        }
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = latency_ms;
+    }
+
+    #[inline]
+    pub fn record_linux_storage_degradation(
+        &self,
+        operation: &'static str,
+        reason: &'static str,
+        errno: i32,
+        count: u64,
+    ) {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(metrics) = self.active_metrics() {
+            metrics.record_linux_storage_degradation_total(
+                count,
+                &linux_storage_degradation_attributes(operation, reason, errno),
+            );
+        }
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = (operation, reason, errno, count);
+    }
+
+    #[inline]
+    pub fn record_commitlog_segment_lease_active(&self, count: u64) {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(metrics) = self.active_metrics() {
+            metrics.record_commitlog_segment_lease_active(count, &[]);
+        }
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = count;
+    }
+
     #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = STORE_METRICS.get() {
-        metrics.record_transfer_batch_total(count, &[]);
+    fn active_metrics(&self) -> Option<&StoreMetrics> {
+        self.telemetry.is_active().then_some(())?;
+        self.metrics.as_ref()
     }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = count;
-}
-
-pub fn record_transfer_bytes(bytes: u64) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = STORE_METRICS.get() {
-        metrics.record_transfer_bytes_total(bytes, &[]);
-    }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = bytes;
-}
-
-pub fn record_transfer_engine(engine: &str, count: u64) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = STORE_METRICS.get() {
-        metrics.record_transfer_engine_total(count, &transfer_engine_attributes(engine));
-    }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = (engine, count);
-}
-
-pub fn record_transfer_fallback(from: &str, to: &str, reason: &str, count: u64) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = STORE_METRICS.get() {
-        metrics.record_transfer_fallback_total(count, &transfer_fallback_attributes(from, to, reason));
-    }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = (from, to, reason, count);
-}
-
-pub fn record_transfer_partial_write(count: u64) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = STORE_METRICS.get() {
-        metrics.record_transfer_partial_write_total(count, &[]);
-    }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = count;
-}
-
-pub fn record_linux_sendfile_bytes(bytes: u64) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = STORE_METRICS.get() {
-        metrics.record_linux_sendfile_bytes_total(bytes, &[]);
-    }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = bytes;
-}
-
-pub fn record_ha_replication_lag_bytes(bytes: u64) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = STORE_METRICS.get() {
-        metrics.record_ha_replication_lag_bytes(bytes, &[]);
-    }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = bytes;
-}
-
-pub fn record_ha_ack_latency_millis(latency_ms: u64) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = STORE_METRICS.get() {
-        metrics.record_ha_ack_latency_millis(latency_ms, &[]);
-    }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = latency_ms;
-}
-
-pub fn record_linux_mlock_bytes(bytes: u64) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = STORE_METRICS.get() {
-        metrics.record_linux_mlock_bytes(bytes, &[]);
-    }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = bytes;
-}
-
-pub fn record_linux_mlock_attempt(category: &str, count: u64) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = STORE_METRICS.get() {
-        metrics.record_linux_mlock_attempt_total(count, &memory_lock_category_attributes(category));
-    }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = (category, count);
-}
-
-pub fn record_linux_mlock_success(category: &str, count: u64) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = STORE_METRICS.get() {
-        metrics.record_linux_mlock_success_total(count, &memory_lock_category_attributes(category));
-    }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = (category, count);
-}
-
-pub fn record_linux_mlock_failure(category: &str, errno: i32, count: u64) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = STORE_METRICS.get() {
-        metrics.record_linux_mlock_failure_total(count, &memory_lock_errno_attributes(category, errno));
-    }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = (category, errno, count);
-}
-
-pub fn record_linux_mlock_skipped(category: &str, reason: &str, count: u64) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = STORE_METRICS.get() {
-        metrics.record_linux_mlock_skipped_total(count, &memory_lock_skip_attributes(category, reason));
-    }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = (category, reason, count);
-}
-
-pub fn record_linux_locked_bytes(category: &str, bytes: u64) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = STORE_METRICS.get() {
-        metrics.record_linux_locked_bytes(bytes, &memory_lock_category_attributes(category));
-    }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = (category, bytes);
-}
-
-pub fn record_linux_munlock_failure(category: &str, errno: i32, count: u64) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = STORE_METRICS.get() {
-        metrics.record_linux_munlock_failure_total(count, &memory_lock_errno_attributes(category, errno));
-    }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = (category, errno, count);
-}
-
-pub fn record_linux_page_cache_warmup_millis(latency_ms: u64) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = STORE_METRICS.get() {
-        metrics.record_linux_page_cache_warmup_millis(latency_ms, &[]);
-    }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = latency_ms;
-}
-
-pub fn record_linux_storage_degradation(operation: &str, reason: &str, errno: i32, count: u64) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = STORE_METRICS.get() {
-        metrics.record_linux_storage_degradation_total(
-            count,
-            &linux_storage_degradation_attributes(operation, reason, errno),
-        );
-    }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = (operation, reason, errno, count);
-}
-
-pub fn record_commitlog_segment_lease_active(count: u64) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = STORE_METRICS.get() {
-        metrics.record_commitlog_segment_lease_active(count, &[]);
-    }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = count;
 }
 
 #[cfg(not(feature = "otel-metrics"))]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct StoreMetrics;
 
 #[cfg(not(feature = "otel-metrics"))]
@@ -429,7 +503,7 @@ pub struct StoreMetrics {
 
 #[cfg(feature = "otel-metrics")]
 impl StoreMetrics {
-    pub fn new(meter: &opentelemetry::metrics::Meter) -> Self {
+    pub(crate) fn new(meter: &opentelemetry::metrics::Meter) -> Self {
         let append_latency = meter
             .u64_histogram(STORE_APPEND_LATENCY)
             .with_description("Store commit log append latency")
@@ -595,11 +669,20 @@ impl StoreMetrics {
         }
     }
 
-    pub fn new_with_observables<F>(meter: &opentelemetry::metrics::Meter, source: F) -> Self
+    #[cfg(test)]
+    pub(crate) fn new_with_observables<F>(meter: &opentelemetry::metrics::Meter, source: F) -> Self
     where
         F: Fn() -> StoreObservableValues + Send + Sync + 'static,
     {
         let metrics = Self::new(meter);
+        Self::register_observables(meter, source);
+        metrics
+    }
+
+    pub(crate) fn register_observables<F>(meter: &opentelemetry::metrics::Meter, source: F)
+    where
+        F: Fn() -> StoreObservableValues + Send + Sync + 'static,
+    {
         let source = std::sync::Arc::new(source);
 
         let storage_size_source = source.clone();
@@ -648,8 +731,6 @@ impl StoreMetrics {
                 observer.observe(values.message_reserve_time_millis.max(0), &attrs);
             })
             .build();
-
-        metrics
     }
 
     #[inline]
@@ -777,61 +858,71 @@ fn store_attributes() -> [opentelemetry::KeyValue; 2] {
 }
 
 #[cfg(feature = "otel-metrics")]
-fn delay_message_latency_attributes(topic: &str) -> Vec<opentelemetry::KeyValue> {
+fn delay_message_latency_attributes(
+    label_policy: &crate::MetricLabelPolicy,
+    topic: &str,
+) -> Vec<opentelemetry::KeyValue> {
     let mut attrs = Vec::from(store_attributes());
-    attrs.push(opentelemetry::KeyValue::new(
-        crate::semantic::labels::TOPIC,
-        topic.to_owned(),
-    ));
+    let (topic, dropped) = label_policy.normalize_metric_label_with_outcome(crate::semantic::labels::TOPIC, topic);
+    attrs.push(if dropped {
+        opentelemetry::KeyValue::new(crate::semantic::labels::TOPIC, crate::METRIC_LABEL_SENTINEL)
+    } else {
+        opentelemetry::KeyValue::new(crate::semantic::labels::TOPIC, topic.into_owned())
+    });
     attrs
 }
 
 #[cfg(feature = "otel-metrics")]
-fn transfer_engine_attributes(engine: &str) -> [opentelemetry::KeyValue; 1] {
-    [opentelemetry::KeyValue::new(
-        crate::semantic::labels::ENGINE,
-        engine.to_owned(),
-    )]
+fn transfer_engine_attributes(engine: &'static str) -> [opentelemetry::KeyValue; 1] {
+    [opentelemetry::KeyValue::new(crate::semantic::labels::ENGINE, engine)]
 }
 
 #[cfg(feature = "otel-metrics")]
-fn transfer_fallback_attributes(from: &str, to: &str, reason: &str) -> [opentelemetry::KeyValue; 3] {
+fn transfer_fallback_attributes(
+    from: &'static str,
+    to: &'static str,
+    reason: &'static str,
+) -> [opentelemetry::KeyValue; 3] {
     [
-        opentelemetry::KeyValue::new(crate::semantic::labels::FROM, from.to_owned()),
-        opentelemetry::KeyValue::new(crate::semantic::labels::TO, to.to_owned()),
-        opentelemetry::KeyValue::new(crate::semantic::labels::REASON, reason.to_owned()),
+        opentelemetry::KeyValue::new(crate::semantic::labels::FROM, from),
+        opentelemetry::KeyValue::new(crate::semantic::labels::TO, to),
+        opentelemetry::KeyValue::new(crate::semantic::labels::REASON, reason),
     ]
 }
 
 #[cfg(feature = "otel-metrics")]
-fn memory_lock_category_attributes(category: &str) -> [opentelemetry::KeyValue; 1] {
+fn memory_lock_category_attributes(category: &'static str) -> [opentelemetry::KeyValue; 1] {
     [opentelemetry::KeyValue::new(
         crate::semantic::labels::CATEGORY,
-        category.to_owned(),
+        category,
     )]
 }
 
 #[cfg(feature = "otel-metrics")]
-fn memory_lock_errno_attributes(category: &str, errno: i32) -> [opentelemetry::KeyValue; 2] {
+fn memory_lock_errno_attributes(category: &'static str, errno: i32) -> [opentelemetry::KeyValue; 2] {
     [
-        opentelemetry::KeyValue::new(crate::semantic::labels::CATEGORY, category.to_owned()),
+        opentelemetry::KeyValue::new(crate::semantic::labels::CATEGORY, category),
         opentelemetry::KeyValue::new(crate::semantic::labels::ERRNO, errno as i64),
     ]
 }
 
 #[cfg(feature = "otel-metrics")]
-fn memory_lock_skip_attributes(category: &str, reason: &str) -> [opentelemetry::KeyValue; 2] {
+fn memory_lock_skip_attributes(category: &'static str, reason: &'static str) -> [opentelemetry::KeyValue; 2] {
     [
-        opentelemetry::KeyValue::new(crate::semantic::labels::CATEGORY, category.to_owned()),
-        opentelemetry::KeyValue::new(crate::semantic::labels::REASON, reason.to_owned()),
+        opentelemetry::KeyValue::new(crate::semantic::labels::CATEGORY, category),
+        opentelemetry::KeyValue::new(crate::semantic::labels::REASON, reason),
     ]
 }
 
 #[cfg(feature = "otel-metrics")]
-fn linux_storage_degradation_attributes(operation: &str, reason: &str, errno: i32) -> [opentelemetry::KeyValue; 3] {
+fn linux_storage_degradation_attributes(
+    operation: &'static str,
+    reason: &'static str,
+    errno: i32,
+) -> [opentelemetry::KeyValue; 3] {
     [
-        opentelemetry::KeyValue::new(crate::semantic::labels::OPERATION, operation.to_owned()),
-        opentelemetry::KeyValue::new(crate::semantic::labels::REASON, reason.to_owned()),
+        opentelemetry::KeyValue::new(crate::semantic::labels::OPERATION, operation),
+        opentelemetry::KeyValue::new(crate::semantic::labels::REASON, reason),
         opentelemetry::KeyValue::new(crate::semantic::labels::ERRNO, errno as i64),
     ]
 }
@@ -879,7 +970,6 @@ mod tests {
             1,
             &linux_storage_degradation_attributes("fallocate", "unsupported", 95),
         );
-        record_delay_message_latency(30);
     }
 
     #[test]
@@ -898,11 +988,16 @@ mod tests {
 
     #[test]
     fn delay_message_latency_attributes_include_real_topic() {
-        let attrs = delay_message_latency_attributes("topic-a");
+        let policy = crate::MetricLabelPolicy::new(1, true, true);
+        let attrs = delay_message_latency_attributes(&policy, "topic-a");
 
         assert!(attrs
             .iter()
             .any(|kv| kv.key.as_str() == crate::semantic::labels::TOPIC && kv.value.to_string() == "topic-a"));
+        let overflow = delay_message_latency_attributes(&policy, "topic-b");
+        assert!(overflow.iter().any(|kv| {
+            kv.key.as_str() == crate::semantic::labels::TOPIC && kv.value.to_string() == crate::METRIC_LABEL_SENTINEL
+        }));
     }
 }
 
@@ -912,34 +1007,38 @@ mod helper_tests {
 
     #[test]
     fn delay_message_latency_from_timestamps_ignores_non_positive_latency() {
-        record_delay_message_latency_from_timestamps(1, 2, Some("topic-a"));
-        record_delay_message_latency_from_timestamps(2, 2, Some("topic-a"));
+        let recorder = StoreMetricsRecorder::noop();
+
+        recorder.record_delay_message_latency_from_timestamps(1, 2, Some("topic-a"));
+        recorder.record_delay_message_latency_from_timestamps(2, 2, Some("topic-a"));
     }
 
     #[test]
     fn delay_message_latency_from_timestamps_records_positive_latency() {
-        record_delay_message_latency_from_timestamps(2_000, 1_000, Some("topic-a"));
+        StoreMetricsRecorder::noop().record_delay_message_latency_from_timestamps(2_000, 1_000, Some("topic-a"));
     }
 
     #[test]
     fn ha_transfer_recorders_are_safe_without_explicit_meter() {
-        record_transfer_batch(1);
-        record_transfer_bytes(1024);
-        record_transfer_engine("sendfile", 1);
-        record_transfer_fallback("io_uring", "vectored", "unsupported", 1);
-        record_transfer_partial_write(2);
-        record_linux_sendfile_bytes(512);
-        record_ha_replication_lag_bytes(4096);
-        record_ha_ack_latency_millis(12);
-        record_linux_mlock_bytes(8192);
-        record_linux_page_cache_warmup_millis(20);
-        record_commitlog_segment_lease_active(3);
-        record_linux_mlock_attempt("transient_store_pool", 1);
-        record_linux_mlock_success("transient_store_pool", 1);
-        record_linux_mlock_failure("commitlog_active_file", 12, 1);
-        record_linux_mlock_skipped("commitlog_active_window", "budget_exhausted", 1);
-        record_linux_locked_bytes("transient_store_pool", 8192);
-        record_linux_munlock_failure("transient_store_pool", 22, 1);
-        record_linux_storage_degradation("fallocate", "unsupported", 95, 1);
+        let recorder = StoreMetricsRecorder::noop();
+
+        recorder.record_transfer_batch(1);
+        recorder.record_transfer_bytes(1024);
+        recorder.record_transfer_engine("sendfile", 1);
+        recorder.record_transfer_fallback("io_uring", "vectored", "unsupported", 1);
+        recorder.record_transfer_partial_write(2);
+        recorder.record_linux_sendfile_bytes(512);
+        recorder.record_ha_replication_lag_bytes(4096);
+        recorder.record_ha_ack_latency_millis(12);
+        recorder.record_linux_mlock_bytes(8192);
+        recorder.record_linux_page_cache_warmup_millis(20);
+        recorder.record_commitlog_segment_lease_active(3);
+        recorder.record_linux_mlock_attempt("transient_store_pool", 1);
+        recorder.record_linux_mlock_success("transient_store_pool", 1);
+        recorder.record_linux_mlock_failure("commitlog_active_file", 12, 1);
+        recorder.record_linux_mlock_skipped("commitlog_active_window", "budget_exhausted", 1);
+        recorder.record_linux_locked_bytes("transient_store_pool", 8192);
+        recorder.record_linux_munlock_failure("transient_store_pool", 22, 1);
+        recorder.record_linux_storage_degradation("fallocate", "unsupported", 95, 1);
     }
 }

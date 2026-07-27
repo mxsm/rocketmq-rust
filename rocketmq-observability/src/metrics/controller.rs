@@ -25,59 +25,8 @@ pub use crate::semantic::metrics::CONTROLLER_REQUEST_LATENCY;
 pub use crate::semantic::metrics::CONTROLLER_REQUEST_TOTAL;
 pub use crate::semantic::metrics::CONTROLLER_ROLE;
 
-#[cfg(feature = "otel-metrics")]
-use std::sync::OnceLock;
-
-#[cfg(feature = "otel-metrics")]
-static CONTROLLER_METRICS: OnceLock<ControllerMetrics> = OnceLock::new();
-
-#[cfg(feature = "otel-metrics")]
-pub fn init_global(meter: &opentelemetry::metrics::Meter) -> bool {
-    CONTROLLER_METRICS.set(ControllerMetrics::new(meter)).is_ok()
-}
-
-pub fn record_election_total(count: u64) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = CONTROLLER_METRICS.get() {
-        metrics.record_election_total(count, &[]);
-    }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = count;
-}
-
-pub fn record_election_latency(latency_ms: u64) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = CONTROLLER_METRICS.get() {
-        metrics.record_election_latency(latency_ms, &[]);
-    }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = latency_ms;
-}
-
-pub fn record_leader_changes_total(count: u64) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = CONTROLLER_METRICS.get() {
-        metrics.record_leader_changes_total(count, &[]);
-    }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = count;
-}
-
-pub fn record_active_brokers(count: u64) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = CONTROLLER_METRICS.get() {
-        metrics.record_active_brokers(count, &[]);
-    }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = count;
-}
-
 #[cfg(not(feature = "otel-metrics"))]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ControllerMetrics;
 
 #[cfg(not(feature = "otel-metrics"))]
@@ -102,6 +51,12 @@ impl ControllerMetrics {
 #[cfg(feature = "otel-metrics")]
 #[derive(Clone)]
 pub struct ControllerMetrics {
+    instruments: Option<ControllerMetricInstruments>,
+}
+
+#[cfg(feature = "otel-metrics")]
+#[derive(Clone)]
+struct ControllerMetricInstruments {
     election_total: opentelemetry::metrics::Counter<u64>,
     election_latency: opentelemetry::metrics::Histogram<u64>,
     leader_changes_total: opentelemetry::metrics::Counter<u64>,
@@ -110,7 +65,15 @@ pub struct ControllerMetrics {
 
 #[cfg(feature = "otel-metrics")]
 impl ControllerMetrics {
-    pub fn new(meter: &opentelemetry::metrics::Meter) -> Self {
+    /// Creates an instance-scoped no-op controller recorder.
+    #[must_use]
+    pub const fn noop() -> Self {
+        Self { instruments: None }
+    }
+
+    /// Creates controller instruments from the caller-owned meter.
+    #[must_use]
+    pub(crate) fn new(meter: &opentelemetry::metrics::Meter) -> Self {
         let election_total = meter
             .u64_counter(CONTROLLER_ELECTION_TOTAL)
             .with_description("Total number of controller elections")
@@ -136,31 +99,41 @@ impl ControllerMetrics {
             .build();
 
         Self {
-            election_total,
-            election_latency,
-            leader_changes_total,
-            active_brokers,
+            instruments: Some(ControllerMetricInstruments {
+                election_total,
+                election_latency,
+                leader_changes_total,
+                active_brokers,
+            }),
         }
     }
 
     #[inline]
     pub fn record_election_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.election_total.add(count, attributes);
+        if let Some(instruments) = &self.instruments {
+            instruments.election_total.add(count, attributes);
+        }
     }
 
     #[inline]
     pub fn record_election_latency(&self, latency_ms: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.election_latency.record(latency_ms, attributes);
+        if let Some(instruments) = &self.instruments {
+            instruments.election_latency.record(latency_ms, attributes);
+        }
     }
 
     #[inline]
     pub fn record_leader_changes_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.leader_changes_total.add(count, attributes);
+        if let Some(instruments) = &self.instruments {
+            instruments.leader_changes_total.add(count, attributes);
+        }
     }
 
     #[inline]
     pub fn record_active_brokers(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.active_brokers.record(count, attributes);
+        if let Some(instruments) = &self.instruments {
+            instruments.active_brokers.record(count, attributes);
+        }
     }
 }
 
@@ -182,5 +155,32 @@ mod tests {
         metrics.record_election_latency(15, &attrs);
         metrics.record_leader_changes_total(1, &attrs);
         metrics.record_active_brokers(3, &attrs);
+    }
+
+    #[test]
+    fn noop_controller_metrics_accept_records() {
+        let metrics = ControllerMetrics::noop();
+
+        metrics.record_election_total(1, &[]);
+        metrics.record_election_latency(15, &[]);
+        metrics.record_leader_changes_total(1, &[]);
+        metrics.record_active_brokers(3, &[]);
+    }
+
+    #[test]
+    fn controller_metrics_source_has_no_global_facade() {
+        let source = include_str!("controller.rs");
+
+        for forbidden in [
+            concat!("static ", "CONTROLLER_METRICS"),
+            concat!("fn ", "init_global"),
+            concat!("pub fn ", "record_election_total(count"),
+            concat!("pub fn ", "record_leader_changes_total(count"),
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "controller metrics must be instance-scoped: {forbidden}"
+            );
+        }
     }
 }

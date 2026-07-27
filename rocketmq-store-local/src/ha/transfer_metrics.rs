@@ -36,6 +36,8 @@ pub struct HaTransferMetrics {
     io_uring_engine_total: AtomicU64,
     fallback_total: AtomicU64,
     fallbacks: Mutex<BTreeMap<TransferFallbackKey, u64>>,
+    #[cfg(feature = "observability")]
+    store_metrics: rocketmq_observability::metrics::store::StoreMetricsRecorder,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -77,6 +79,16 @@ struct TransferFallbackKey {
 }
 
 impl HaTransferMetrics {
+    /// Binds HA transfer observations to the owning Store telemetry instance.
+    #[cfg(feature = "observability")]
+    #[doc(hidden)]
+    pub fn with_store_metrics(store_metrics: rocketmq_observability::metrics::store::StoreMetricsRecorder) -> Self {
+        Self {
+            store_metrics,
+            ..Self::default()
+        }
+    }
+
     pub fn record_transfer(&self, stats: &TransferStats) {
         self.batch_total.fetch_add(stats.frame_count as u64, Ordering::Relaxed);
         self.bytes_total
@@ -102,7 +114,7 @@ impl HaTransferMetrics {
         }
         .fetch_add(1, Ordering::Relaxed);
 
-        emit_transfer_observability(stats);
+        self.emit_transfer_observability(stats);
     }
 
     pub fn record_fallback(&self, from: TransferEngineKind, to: TransferEngineKind, reason: &'static str) {
@@ -112,7 +124,7 @@ impl HaTransferMetrics {
         let mut fallbacks = self.fallbacks.lock().expect("lock HA transfer fallback metrics");
         *fallbacks.entry(key).or_insert(0) += 1;
 
-        emit_fallback_observability(from, to, reason);
+        self.emit_fallback_observability(from, to, reason);
     }
 
     pub fn snapshot(&self) -> HaTransferMetricsSnapshot {
@@ -147,6 +159,34 @@ impl HaTransferMetrics {
             fallback_total: self.fallback_total.load(Ordering::Relaxed),
             fallbacks,
         }
+    }
+
+    fn emit_transfer_observability(&self, stats: &TransferStats) {
+        #[cfg(feature = "observability")]
+        {
+            let event = transfer_observability_event(stats);
+            self.store_metrics.record_transfer_batch(event.batch_count);
+            self.store_metrics.record_transfer_bytes(event.bytes);
+            self.store_metrics.record_transfer_engine(event.engine, 1);
+            self.store_metrics.record_linux_sendfile_bytes(event.sendfile_bytes);
+            self.store_metrics
+                .record_transfer_partial_write(event.partial_write_count);
+        }
+
+        #[cfg(not(feature = "observability"))]
+        let _ = stats;
+    }
+
+    fn emit_fallback_observability(&self, from: TransferEngineKind, to: TransferEngineKind, reason: &'static str) {
+        #[cfg(feature = "observability")]
+        {
+            let event = fallback_observability_event(from, to, reason);
+            self.store_metrics
+                .record_transfer_fallback(event.from, event.to, event.reason, event.count);
+        }
+
+        #[cfg(not(feature = "observability"))]
+        let _ = (from, to, reason);
     }
 }
 
@@ -202,37 +242,6 @@ fn transfer_engine_label(engine: TransferEngineKind) -> &'static str {
         TransferEngineKind::Sendfile => "sendfile",
         TransferEngineKind::IoUring => "io_uring",
     }
-}
-
-fn emit_transfer_observability(stats: &TransferStats) {
-    #[cfg(feature = "observability")]
-    {
-        let event = transfer_observability_event(stats);
-        rocketmq_observability::metrics::store::record_transfer_batch(event.batch_count);
-        rocketmq_observability::metrics::store::record_transfer_bytes(event.bytes);
-        rocketmq_observability::metrics::store::record_transfer_engine(event.engine, 1);
-        rocketmq_observability::metrics::store::record_linux_sendfile_bytes(event.sendfile_bytes);
-        rocketmq_observability::metrics::store::record_transfer_partial_write(event.partial_write_count);
-    }
-
-    #[cfg(not(feature = "observability"))]
-    let _ = stats;
-}
-
-fn emit_fallback_observability(from: TransferEngineKind, to: TransferEngineKind, reason: &'static str) {
-    #[cfg(feature = "observability")]
-    {
-        let event = fallback_observability_event(from, to, reason);
-        rocketmq_observability::metrics::store::record_transfer_fallback(
-            event.from,
-            event.to,
-            event.reason,
-            event.count,
-        );
-    }
-
-    #[cfg(not(feature = "observability"))]
-    let _ = (from, to, reason);
 }
 
 #[cfg(test)]

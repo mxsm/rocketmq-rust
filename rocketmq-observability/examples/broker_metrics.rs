@@ -1,6 +1,5 @@
 #[cfg(feature = "otlp-metrics")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    use opentelemetry::metrics::MeterProvider;
     use opentelemetry::KeyValue;
     use rocketmq_observability::metrics::broker::BrokerMetrics;
     use rocketmq_observability::MetricsExporter;
@@ -20,9 +19,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     config.otlp.endpoint = "http://127.0.0.1:4317".to_string();
 
     let guard = rocketmq_observability::init_observability(&config)?;
-    let provider = guard.meter_provider().expect("meter provider should be initialized");
-    let meter = provider.meter("rocketmq-broker-example");
-    let metrics = BrokerMetrics::new(&meter);
+    let metrics = BrokerMetrics::from_handle(&guard.handle()).expect("broker metrics should be initialized");
     let attributes = [KeyValue::new("topic", "example-topic")];
 
     metrics.record_messages_in_total(1, &attributes);
@@ -30,8 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     metrics.record_message_size(128, &attributes);
     metrics.record_send_message_latency(12, &attributes);
 
-    provider.force_flush()?;
-    guard.shutdown()?;
+    guard.shutdown().into_result()?;
     Ok(())
 }
 

@@ -81,15 +81,21 @@ fn mcp_runtime_config() -> RuntimeConfig {
 async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) -> Result<(), McpError> {
     let args = Args::parse();
     let config = McpConfig::load_with_overrides(&args)?;
+    let process_telemetry =
+        rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig::from_process_env("rocketmq-mcp")
+            .map_err(|error| {
+                McpError::InvalidConfig(format!("invalid MCP process telemetry configuration: {error}"))
+            })?;
     let security_config = SecurityBootstrapConfig::from_env()
         .map_err(|error| McpError::InvalidConfig(format!("MCP security bootstrap configuration failed: {error}")))?;
     let validated_security = validate_mcp_security(
         &security_config,
         config.server.transport,
         &config.server.http.bind,
+        process_telemetry.prometheus_listener_addr(),
         lifecycle.config().probe_bind_addr,
     )?;
-    let app = McpApp::bootstrap_typed(config, validated_security, service_context).await?;
+    let app = McpApp::bootstrap_typed(config, process_telemetry, validated_security, service_context).await?;
     log_security_bootstrap(validated_security);
     if let Err(error) = app.start_lifecycle(&lifecycle).await {
         lifecycle.mark_failed();
@@ -147,15 +153,19 @@ fn validate_mcp_security(
     security_config: &SecurityBootstrapConfig,
     transport: TransportKind,
     http_bind: &str,
+    prometheus_bind_addr: Option<std::net::SocketAddr>,
     probe_bind_addr: Option<std::net::SocketAddr>,
 ) -> Result<ValidatedSecurityBootstrap, McpError> {
-    let mut listeners = Vec::with_capacity(2);
+    let mut listeners = Vec::with_capacity(3);
     if transport == TransportKind::StreamableHttp {
         listeners.push(
             http_bind
                 .parse::<std::net::SocketAddr>()
                 .map_err(|_| McpError::InvalidConfig("server.http.bind must be a socket address".to_string()))?,
         );
+    }
+    if let Some(prometheus_bind_addr) = prometheus_bind_addr {
+        listeners.push(prometheus_bind_addr);
     }
     if let Some(probe_bind_addr) = probe_bind_addr {
         listeners.push(probe_bind_addr);
@@ -219,11 +229,26 @@ mod tests {
             &security,
             TransportKind::StreamableHttp,
             "127.0.0.1:8089",
+            None,
             Some("127.0.0.1:8088".parse().expect("probe address")),
         )
         .expect("loopback-only MCP bootstrap should pass");
 
-        assert!(validate_mcp_security(&security, TransportKind::StreamableHttp, "0.0.0.0:8089", None,).is_err());
+        assert!(validate_mcp_security(&security, TransportKind::StreamableHttp, "0.0.0.0:8089", None, None,).is_err());
+    }
+
+    #[test]
+    fn development_security_rejects_public_prometheus_listener() {
+        let security = SecurityBootstrapConfig::new(SecurityBootstrapProfile::DevelopmentInsecureLoopback);
+
+        assert!(validate_mcp_security(
+            &security,
+            TransportKind::Stdio,
+            "127.0.0.1:8089",
+            Some("0.0.0.0:5557".parse().expect("metrics address")),
+            None,
+        )
+        .is_err());
     }
 
     #[test]

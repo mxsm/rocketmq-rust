@@ -7,6 +7,8 @@
   "required": [
     "deploymentProfile",
     "global",
+    "releaseIdentity",
+    "metrics",
     "namespace",
     "networkPolicy",
     "services"
@@ -99,6 +101,133 @@
             "fsGroup": {
               "type": "integer",
               "minimum": 1
+            }
+          }
+        }
+      }
+    },
+    "releaseIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "commit",
+        "nonce"
+      ],
+      "properties": {
+        "commit": {
+          "type": "string",
+          "description": "Exact non-zero lowercase 40-character source revision embedded in every service image.",
+          "pattern": "^[0-9a-f]{40}$",
+          "not": {
+            "const": "0000000000000000000000000000000000000000"
+          }
+        },
+        "nonce": {
+          "type": "string",
+          "description": "Required stable identifier for this rollout.",
+          "minLength": 1,
+          "maxLength": 63,
+          "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "port",
+        "path",
+        "service",
+        "serviceMonitor",
+        "networkPolicy"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 65535
+        },
+        "path": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^/[A-Za-z0-9._/-]*$"
+        },
+        "service": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            }
+          }
+        },
+        "serviceMonitor": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "interval",
+            "scrapeTimeout",
+            "labels"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "interval": {
+              "type": "string",
+              "description": "Positive whole seconds or minutes with at most nine digits, for example 30s or 2m.",
+              "maxLength": 10,
+              "pattern": "^[1-9][0-9]{0,8}(?:s|m)$"
+            },
+            "scrapeTimeout": {
+              "type": "string",
+              "description": "Positive whole seconds or minutes with at most nine digits; must not exceed interval.",
+              "maxLength": 10,
+              "pattern": "^[1-9][0-9]{0,8}(?:s|m)$"
+            },
+            "labels": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "networkPolicy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "scraperNamespaceLabels",
+            "scraperPodLabels"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "scraperNamespaceLabels": {
+              "type": "object",
+              "minProperties": 1,
+              "additionalProperties": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "scraperPodLabels": {
+              "type": "object",
+              "minProperties": 1,
+              "additionalProperties": {
+                "type": "string",
+                "minLength": 1
+              }
             }
           }
         }

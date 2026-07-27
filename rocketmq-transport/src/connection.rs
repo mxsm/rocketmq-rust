@@ -39,6 +39,7 @@ use crate::codec::remoting_command_codec::FrameLimits;
 use crate::codec::remoting_command_codec::RemotingCommandCodec;
 use crate::codec::remoting_command_codec::SessionCommandDecoder;
 use crate::deadline::RequestDeadline;
+use crate::telemetry::TransportTelemetry;
 use crate::write_strategy::FrameWriteMode;
 use crate::write_strategy::FrameWriter;
 use crate::write_strategy::OutboundPayload;
@@ -247,6 +248,8 @@ pub struct Connection {
     /// Generated via UUID, stable across the connection lifetime
     connection_id: ConnectionId,
 
+    telemetry: TransportTelemetry,
+
     #[cfg(test)]
     enqueue_gate: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
 }
@@ -293,6 +296,11 @@ impl Connection {
     /// ```
     pub fn new(tcp_stream: TcpStream) -> Connection {
         Self::new_with_plaintext_stream(tcp_stream)
+    }
+
+    /// Creates a TCP connection bound to one explicit transport telemetry instance.
+    pub fn new_with_telemetry(tcp_stream: TcpStream, telemetry: TransportTelemetry) -> Connection {
+        Self::new(tcp_stream).with_telemetry(telemetry)
     }
 
     pub fn new_with_limits(tcp_stream: TcpStream, limits: FrameLimits) -> Connection {
@@ -364,9 +372,17 @@ impl Connection {
             state_tx,
             state_rx,
             connection_id: CheetahString::from_string(Uuid::new_v4().to_string()),
+            telemetry: TransportTelemetry::noop(),
             #[cfg(test)]
             enqueue_gate: None,
         }
+    }
+
+    /// Replaces this connection's no-op recorder with an explicitly composed transport recorder.
+    #[must_use]
+    pub fn with_telemetry(mut self, telemetry: TransportTelemetry) -> Self {
+        self.telemetry = telemetry;
+        self
     }
 
     pub(crate) fn new_queued(
@@ -378,6 +394,7 @@ impl Connection {
         connection_id: ConnectionId,
         response_class: Option<AdmissionClass>,
         lifecycle: Arc<SessionLifecycle>,
+        telemetry: TransportTelemetry,
     ) -> Self {
         Self {
             inbound: None,
@@ -391,6 +408,7 @@ impl Connection {
             state_tx,
             state_rx,
             connection_id,
+            telemetry,
             #[cfg(test)]
             enqueue_gate: None,
         }
@@ -411,6 +429,10 @@ impl Connection {
             .unwrap_or_else(|| unreachable!("session runtime requires an owned transport reader"))
             .map_decoder(SessionCommandDecoder::from);
         (writer, reader)
+    }
+
+    pub(crate) fn telemetry(&self) -> TransportTelemetry {
+        self.telemetry.clone()
     }
 
     /// Receives the next `RemotingCommand` from the peer.
@@ -615,8 +637,7 @@ impl Connection {
             .response_class()
             .unwrap_or_else(|| AdmissionClass::for_request_code(command.code()));
         let frame = EncodedFrame::from_command(command)?;
-        #[cfg(feature = "observability")]
-        rocketmq_observability::metrics::remoting::record_network_bytes(frame.encoded_len() as u64);
+        self.telemetry.record_network_bytes(frame.encoded_len());
         self.send_payload(
             OutboundPayload::Frame(frame),
             class,
@@ -649,8 +670,7 @@ impl Connection {
         let frame = EncodedFrame::from_command(command)?;
         deadline.ensure_before_send(target.clone())?;
 
-        #[cfg(feature = "observability")]
-        rocketmq_observability::metrics::remoting::record_network_bytes(frame.encoded_len() as u64);
+        self.telemetry.record_network_bytes(frame.encoded_len());
         self.send_payload(OutboundPayload::Frame(frame), class, Some(deadline), target)
             .await
     }
@@ -681,8 +701,7 @@ impl Connection {
         let owned = command.clone();
         let _ = command.take_body();
         let frame = EncodedFrame::from_command(owned)?;
-        #[cfg(feature = "observability")]
-        rocketmq_observability::metrics::remoting::record_network_bytes(frame.encoded_len() as u64);
+        self.telemetry.record_network_bytes(frame.encoded_len());
         self.send_payload(
             OutboundPayload::Frame(frame),
             class,
@@ -723,8 +742,7 @@ impl Connection {
             .map(EncodedFrame::from_command)
             .collect::<rocketmq_error::RocketMQResult<Vec<_>>>()?;
         let payload = OutboundPayload::batch(frames)?;
-        #[cfg(feature = "observability")]
-        rocketmq_observability::metrics::remoting::record_network_bytes(payload.encoded_len() as u64);
+        self.telemetry.record_network_bytes(payload.encoded_len());
         self.send_payload(
             payload,
             AdmissionClass::Data,
@@ -754,8 +772,7 @@ impl Connection {
     /// This is the most efficient send method as it avoids intermediate buffering
     /// and serialization overhead.
     pub async fn send_bytes(&mut self, bytes: Bytes) -> rocketmq_error::RocketMQResult<()> {
-        #[cfg(feature = "observability")]
-        rocketmq_observability::metrics::remoting::record_network_bytes(bytes.len() as u64);
+        self.telemetry.record_network_bytes(bytes.len());
         self.send_payload(
             OutboundPayload::Contiguous(bytes),
             AdmissionClass::Data,
@@ -787,8 +804,7 @@ impl Connection {
     /// connection.send_slice(PING).await?;
     /// ```
     pub async fn send_slice(&mut self, slice: &'static [u8]) -> rocketmq_error::RocketMQResult<()> {
-        #[cfg(feature = "observability")]
-        rocketmq_observability::metrics::remoting::record_network_bytes(slice.len() as u64);
+        self.telemetry.record_network_bytes(slice.len());
         let bytes = Bytes::from_static(slice);
         self.send_payload(
             OutboundPayload::Contiguous(bytes),

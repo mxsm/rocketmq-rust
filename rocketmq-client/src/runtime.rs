@@ -23,6 +23,8 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+pub use rocketmq_observability::metrics::client::ClientMetrics;
+pub use rocketmq_observability::TelemetryHandle;
 use rocketmq_runtime::BudgetCapacity;
 use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::ChildServiceContext;
@@ -73,6 +75,8 @@ impl Default for ClientRuntimeConfig {
 /// Tokio runtime and never creates a fallback runtime.
 pub struct ClientRuntime {
     service_context: ChildServiceContext,
+    telemetry_handle: TelemetryHandle,
+    client_metrics: ClientMetrics,
     pool: ClientPool,
     resource_budget: ResourceBudget,
     config: ClientRuntimeConfig,
@@ -87,16 +91,32 @@ impl ClientRuntime {
     /// Panics when the configured process memory limit or managed-memory
     /// fraction is invalid. Production composition should use
     /// [`Self::try_new`].
-    pub fn new(service_context: ChildServiceContext, config: ClientRuntimeConfig) -> Arc<Self> {
-        Self::try_new(service_context, config).expect("client runtime resource budget must be valid")
+    pub fn new(
+        service_context: ChildServiceContext,
+        config: ClientRuntimeConfig,
+        telemetry_handle: TelemetryHandle,
+    ) -> Arc<Self> {
+        Self::try_new(service_context, config, telemetry_handle).expect("client runtime resource budget must be valid")
     }
 
     /// Creates a client runtime with one shared process-derived resource root.
-    pub fn try_new(service_context: ChildServiceContext, config: ClientRuntimeConfig) -> RocketMQResult<Arc<Self>> {
+    pub fn try_new(
+        service_context: ChildServiceContext,
+        config: ClientRuntimeConfig,
+        telemetry_handle: TelemetryHandle,
+    ) -> RocketMQResult<Arc<Self>> {
         let resource_budget = build_client_resource_budget(&config)?;
-        let pool = ClientPool::new(service_context.child("pool"), resource_budget.clone());
+        let client_metrics = ClientMetrics::from_handle(&telemetry_handle);
+        let pool = ClientPool::new(
+            service_context.child("pool"),
+            resource_budget.clone(),
+            telemetry_handle.clone(),
+            client_metrics.clone(),
+        );
         Ok(Arc::new(Self {
             service_context,
+            telemetry_handle,
+            client_metrics,
             pool,
             resource_budget,
             config,
@@ -112,6 +132,16 @@ impl ClientRuntime {
     /// Returns the root client scope injected by the application.
     pub fn service_context(&self) -> &ChildServiceContext {
         &self.service_context
+    }
+
+    /// Returns the cloneable telemetry capability injected by the application.
+    pub fn telemetry_handle(&self) -> &TelemetryHandle {
+        &self.telemetry_handle
+    }
+
+    /// Returns this runtime's typed, lifecycle-gated client metric recorder.
+    pub fn client_metrics(&self) -> &ClientMetrics {
+        &self.client_metrics
     }
 
     /// Returns the shared parent budget for every client component owned by
@@ -202,6 +232,7 @@ pub(crate) fn test_client_runtime(scope: &'static str) -> Arc<ClientRuntime> {
     ClientRuntime::new(
         TEST_RUNTIME_OWNER.root_context().child(scope),
         ClientRuntimeConfig::default(),
+        TelemetryHandle::noop(),
     )
 }
 
@@ -516,6 +547,7 @@ mod tests {
                 managed_memory_denominator: 1,
                 ..ClientRuntimeConfig::default()
             },
+            TelemetryHandle::noop(),
         )
         .expect("client runtime budget");
         let parent = runtime.resource_budget();

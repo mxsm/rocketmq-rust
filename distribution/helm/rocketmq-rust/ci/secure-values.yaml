@@ -1,4 +1,9 @@
 # Rendering fixture only. These non-zero digests are deliberately non-publishable and must never be deployed.
+releaseIdentity:
+  # Real repository revision used only to keep the canonical render non-null.
+  commit: "698f053f149784be1be1ddda403270b579607089"
+  nonce: render-fixture
+
 global:
   secretRefs:
     existingSecret: rocketmq-runtime-secrets

@@ -241,4 +241,31 @@ spec:
             cidr: 0.0.0.0/0
       ports:
         - {protocol: TCP, port: 443}
+{{- if and .Values.metrics.enabled .Values.metrics.networkPolicy.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rocketmq-metrics-scrape
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/part-of: rocketmq-rust
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/part-of: rocketmq-rust
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+{{ toYaml .Values.metrics.networkPolicy.scraperNamespaceLabels | indent 14 }}
+          podSelector:
+            matchLabels:
+{{ toYaml .Values.metrics.networkPolicy.scraperPodLabels | indent 14 }}
+      ports:
+        - {protocol: TCP, port: {{ .Values.metrics.port }}}
+{{- end }}
 {{- end }}

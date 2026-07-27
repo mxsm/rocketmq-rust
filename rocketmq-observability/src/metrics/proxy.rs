@@ -25,73 +25,6 @@ use std::time::Duration;
 
 use dashmap::DashMap;
 
-#[cfg(feature = "otel-metrics")]
-use std::sync::OnceLock;
-
-#[cfg(feature = "otel-metrics")]
-static PROXY_METRICS: OnceLock<ProxyMetrics> = OnceLock::new();
-
-#[cfg(feature = "otel-metrics")]
-static PROXY_GLOBAL_METRICS: OnceLock<ProxyMetrics> = OnceLock::new();
-
-#[cfg(feature = "otel-metrics")]
-pub fn init_global(meter: &opentelemetry::metrics::Meter) -> bool {
-    PROXY_METRICS.set(ProxyMetrics::new(meter)).is_ok()
-}
-
-#[cfg(feature = "otel-metrics")]
-pub fn init_global_with_proxy_up(meter: &opentelemetry::metrics::Meter, attributes: ProxyUpAttributes) -> bool {
-    PROXY_METRICS
-        .set(ProxyMetrics::new_with_proxy_up(meter, attributes))
-        .is_ok()
-}
-
-#[cfg(feature = "otel-metrics")]
-pub fn init_global_with_proxy_up_attributes(attributes: ProxyUpAttributes) -> bool {
-    init_global_with_proxy_up(&opentelemetry::global::meter("rocketmq-proxy"), attributes)
-}
-
-#[cfg(feature = "otel-metrics")]
-fn global_metrics() -> &'static ProxyMetrics {
-    if let Some(metrics) = PROXY_METRICS.get() {
-        return metrics;
-    }
-
-    PROXY_GLOBAL_METRICS.get_or_init(|| ProxyMetrics::new(&opentelemetry::global::meter("rocketmq-proxy")))
-}
-
-pub fn record_grpc_requests_total(count: u64) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record_grpc_requests_total(count, &[]);
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = count;
-}
-
-pub fn record_grpc_request_latency(latency_ms: u64) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record_grpc_request_latency(latency_ms, &[]);
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = latency_ms;
-}
-
-pub fn record_forward_latency(latency_ms: u64) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record_forward_latency(latency_ms, &[]);
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = latency_ms;
-}
-
-pub fn record_active_connections(count: u64) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record_active_connections(count, &[]);
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = count;
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProxyRpcOutcome {
     Succeeded,
@@ -132,7 +65,6 @@ impl ProxyRpcMetrics {
         let bucket = self.bucket(rpc_name);
         bucket.started.fetch_add(1, Ordering::Relaxed);
         bucket.in_flight.fetch_add(1, Ordering::Relaxed);
-        record_grpc_requests_total(1);
     }
 
     pub fn record_request_completed(&self, rpc_name: &'static str, outcome: ProxyRpcOutcome, elapsed: Duration) {
@@ -155,8 +87,6 @@ impl ProxyRpcMetrics {
                 bucket.transport_failures.fetch_add(1, Ordering::Relaxed);
             }
         }
-
-        record_grpc_request_latency(duration_millis_u64(elapsed));
     }
 
     pub fn snapshot(&self) -> Vec<ProxyRpcMetricsSnapshot> {
@@ -196,11 +126,6 @@ fn decrement_saturating(counter: &AtomicU64) {
     });
 }
 
-#[inline]
-fn duration_millis_u64(duration: Duration) -> u64 {
-    duration.as_millis().clamp(0, u128::from(u64::MAX)) as u64
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProxyUpAttributes {
     pub node_type: String,
@@ -232,13 +157,24 @@ impl Default for ProxyUpAttributes {
 }
 
 #[cfg(not(feature = "otel-metrics"))]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ProxyMetrics;
 
 #[cfg(not(feature = "otel-metrics"))]
 impl ProxyMetrics {
     pub fn noop() -> Self {
         Self
+    }
+
+    pub fn from_handle(_telemetry: &crate::TelemetryHandle) -> Self {
+        Self::noop()
+    }
+
+    pub fn from_handle_with_proxy_up(
+        _telemetry: &crate::TelemetryHandle,
+        _proxy_up_attributes: ProxyUpAttributes,
+    ) -> Self {
+        Self::noop()
     }
 
     #[inline]
@@ -255,8 +191,15 @@ impl ProxyMetrics {
 }
 
 #[cfg(feature = "otel-metrics")]
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ProxyMetrics {
+    telemetry: Option<crate::TelemetryHandle>,
+    instruments: Option<ProxyMetricInstruments>,
+}
+
+#[cfg(feature = "otel-metrics")]
+#[derive(Clone)]
+struct ProxyMetricInstruments {
     grpc_requests_total: opentelemetry::metrics::Counter<u64>,
     grpc_request_latency: opentelemetry::metrics::Histogram<u64>,
     forward_latency: opentelemetry::metrics::Histogram<u64>,
@@ -265,11 +208,87 @@ pub struct ProxyMetrics {
 
 #[cfg(feature = "otel-metrics")]
 impl ProxyMetrics {
-    pub fn new(meter: &opentelemetry::metrics::Meter) -> Self {
+    pub fn noop() -> Self {
+        Self::default()
+    }
+
+    pub fn from_handle(telemetry: &crate::TelemetryHandle) -> Self {
+        Self::from_handle_with_proxy_up(telemetry, ProxyUpAttributes::default())
+    }
+
+    pub fn from_handle_with_proxy_up(
+        telemetry: &crate::TelemetryHandle,
+        proxy_up_attributes: ProxyUpAttributes,
+    ) -> Self {
+        let Some(meter) = telemetry.meter(crate::PROXY_METER_SCOPE) else {
+            return Self::noop();
+        };
+        Self {
+            telemetry: Some(telemetry.clone()),
+            instruments: Some(ProxyMetricInstruments::new(&meter, proxy_up_attributes)),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new(meter: &opentelemetry::metrics::Meter) -> Self {
         Self::new_with_proxy_up(meter, ProxyUpAttributes::default())
     }
 
-    pub fn new_with_proxy_up(meter: &opentelemetry::metrics::Meter, proxy_up_attributes: ProxyUpAttributes) -> Self {
+    #[cfg(test)]
+    pub(crate) fn new_with_proxy_up(
+        meter: &opentelemetry::metrics::Meter,
+        proxy_up_attributes: ProxyUpAttributes,
+    ) -> Self {
+        Self {
+            telemetry: None,
+            instruments: Some(ProxyMetricInstruments::new(meter, proxy_up_attributes)),
+        }
+    }
+
+    fn is_active(&self) -> bool {
+        self.telemetry.as_ref().is_none_or(crate::TelemetryHandle::is_active)
+    }
+
+    #[inline]
+    pub fn record_grpc_requests_total(&self, count: u64) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.grpc_requests_total.add(count, &[]);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn record_grpc_request_latency(&self, latency_ms: u64) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.grpc_request_latency.record(latency_ms, &[]);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn record_forward_latency(&self, latency_ms: u64) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.forward_latency.record(latency_ms, &[]);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn record_active_connections(&self, count: u64) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.active_connections.record(count, &[]);
+            }
+        }
+    }
+}
+
+#[cfg(feature = "otel-metrics")]
+impl ProxyMetricInstruments {
+    fn new(meter: &opentelemetry::metrics::Meter, proxy_up_attributes: ProxyUpAttributes) -> Self {
         let grpc_requests_total = meter
             .u64_counter(PROXY_GRPC_REQUESTS_TOTAL)
             .with_description("Total number of proxy gRPC requests")
@@ -311,26 +330,6 @@ impl ProxyMetrics {
             active_connections,
         }
     }
-
-    #[inline]
-    pub fn record_grpc_requests_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.grpc_requests_total.add(count, attributes);
-    }
-
-    #[inline]
-    pub fn record_grpc_request_latency(&self, latency_ms: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.grpc_request_latency.record(latency_ms, attributes);
-    }
-
-    #[inline]
-    pub fn record_forward_latency(&self, latency_ms: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.forward_latency.record(latency_ms, attributes);
-    }
-
-    #[inline]
-    pub fn record_active_connections(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.active_connections.record(count, attributes);
-    }
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -357,12 +356,10 @@ mod tests {
         let provider = SdkMeterProvider::builder().build();
         let meter = provider.meter("proxy-metrics-test");
         let metrics = ProxyMetrics::new(&meter);
-        let attrs = [opentelemetry::KeyValue::new("protocol", "grpc")];
-
-        metrics.record_grpc_requests_total(1, &attrs);
-        metrics.record_grpc_request_latency(6, &attrs);
-        metrics.record_forward_latency(12, &attrs);
-        metrics.record_active_connections(4, &attrs);
+        metrics.record_grpc_requests_total(1);
+        metrics.record_grpc_request_latency(6);
+        metrics.record_forward_latency(12);
+        metrics.record_active_connections(4);
     }
 
     #[test]
@@ -372,17 +369,16 @@ mod tests {
         let metrics =
             ProxyMetrics::new_with_proxy_up(&meter, ProxyUpAttributes::new("proxy", "ClusterA", "proxy-a", "local"));
 
-        metrics.record_active_connections(1, &[]);
+        metrics.record_active_connections(1);
     }
 
     #[test]
-    fn proxy_global_recorders_lazy_initialize() {
-        record_grpc_requests_total(1);
-        record_grpc_request_latency(6);
-        record_forward_latency(12);
-        record_active_connections(4);
-
-        assert!(PROXY_METRICS.get().is_some() || PROXY_GLOBAL_METRICS.get().is_some());
+    fn proxy_noop_recorder_is_safe_without_explicit_meter() {
+        let metrics = ProxyMetrics::from_handle(&crate::TelemetryHandle::noop());
+        metrics.record_grpc_requests_total(1);
+        metrics.record_grpc_request_latency(6);
+        metrics.record_forward_latency(12);
+        metrics.record_active_connections(4);
     }
 }
 

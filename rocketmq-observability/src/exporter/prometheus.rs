@@ -20,8 +20,6 @@ use std::time::Duration;
 #[cfg(feature = "prometheus")]
 use opentelemetry_sdk::metrics::SdkMeterProvider;
 #[cfg(feature = "prometheus")]
-use rocketmq_runtime::RuntimeHandle;
-#[cfg(feature = "prometheus")]
 use rocketmq_runtime::ShutdownReport;
 #[cfg(feature = "prometheus")]
 use rocketmq_runtime::TaskGroup;
@@ -38,50 +36,46 @@ const PROMETHEUS_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8"
 
 #[cfg(feature = "prometheus")]
 #[derive(Clone)]
-pub struct PrometheusMetrics {
+pub(crate) struct PrometheusMetrics {
     provider: SdkMeterProvider,
     registry: prometheus::Registry,
 }
 
 #[cfg(feature = "prometheus")]
 impl PrometheusMetrics {
-    pub fn provider(&self) -> &SdkMeterProvider {
+    pub(crate) fn provider(&self) -> &SdkMeterProvider {
         &self.provider
     }
 
-    pub fn registry(&self) -> &prometheus::Registry {
+    pub(crate) fn registry(&self) -> &prometheus::Registry {
         &self.registry
     }
 
-    pub fn into_parts(self) -> (SdkMeterProvider, prometheus::Registry) {
+    pub(crate) fn into_parts(self) -> (SdkMeterProvider, prometheus::Registry) {
         (self.provider, self.registry)
     }
 }
 
 #[cfg(feature = "prometheus")]
 #[derive(Debug)]
-pub struct PrometheusHttpHandle {
+pub(crate) struct PrometheusHttpHandle {
     local_addr: SocketAddr,
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
     task_group: TaskGroup,
+    connection_group: TaskGroup,
 }
 
 #[cfg(feature = "prometheus")]
 impl PrometheusHttpHandle {
-    pub fn local_addr(&self) -> SocketAddr {
+    pub(crate) fn local_addr(&self) -> SocketAddr {
         self.local_addr
     }
 
-    pub fn task_count(&self) -> usize {
-        self.task_group.task_count()
+    pub(crate) fn task_count(&self) -> usize {
+        self.task_group.task_count() + self.connection_group.task_count()
     }
 
-    pub fn shutdown(mut self) {
-        self.signal_shutdown();
-        self.task_group.cancel();
-    }
-
-    pub async fn shutdown_gracefully(mut self, timeout: Duration) -> ShutdownReport {
+    pub(crate) async fn shutdown_gracefully(mut self, timeout: Duration) -> ShutdownReport {
         self.signal_shutdown();
         self.task_group.shutdown(timeout).await
     }
@@ -94,7 +88,17 @@ impl PrometheusHttpHandle {
 }
 
 #[cfg(feature = "prometheus")]
-pub fn init_prometheus_metrics(config: &ObservabilityConfig) -> Result<PrometheusMetrics, ObservabilityError> {
+impl Drop for PrometheusHttpHandle {
+    fn drop(&mut self) {
+        // Explicit graceful shutdown owns the join and report. Drop is only a fail-safe that
+        // prevents an endpoint from accepting new scrapes after startup rollback or unwinding.
+        self.signal_shutdown();
+        self.task_group.cancel();
+    }
+}
+
+#[cfg(feature = "prometheus")]
+pub(crate) fn init_prometheus_metrics(config: &ObservabilityConfig) -> Result<PrometheusMetrics, ObservabilityError> {
     let registry = prometheus::Registry::new();
     let exporter = opentelemetry_prometheus::exporter()
         .with_registry(registry.clone())
@@ -112,12 +116,7 @@ pub fn init_prometheus_metrics(config: &ObservabilityConfig) -> Result<Prometheu
 }
 
 #[cfg(feature = "prometheus")]
-pub fn init_prometheus_meter_provider(config: &ObservabilityConfig) -> Result<SdkMeterProvider, ObservabilityError> {
-    Ok(init_prometheus_metrics(config)?.into_parts().0)
-}
-
-#[cfg(feature = "prometheus")]
-pub fn render_prometheus_metrics(registry: &prometheus::Registry) -> Result<String, ObservabilityError> {
+pub(crate) fn render_prometheus_metrics(registry: &prometheus::Registry) -> Result<String, ObservabilityError> {
     use prometheus::Encoder;
 
     let encoder = prometheus::TextEncoder::new();
@@ -130,27 +129,10 @@ pub fn render_prometheus_metrics(registry: &prometheus::Registry) -> Result<Stri
 }
 
 #[cfg(feature = "prometheus")]
-pub fn spawn_prometheus_http_endpoint(
-    config: &ObservabilityConfig,
-    registry: prometheus::Registry,
-) -> Result<PrometheusHttpHandle, ObservabilityError> {
-    spawn_prometheus_http_endpoint_with_optional_task_group(config, registry, None)
-}
-
-#[cfg(feature = "prometheus")]
-pub fn spawn_prometheus_http_endpoint_with_task_group(
+pub(crate) fn spawn_prometheus_http_endpoint_with_task_group(
     config: &ObservabilityConfig,
     registry: prometheus::Registry,
     parent_task_group: TaskGroup,
-) -> Result<PrometheusHttpHandle, ObservabilityError> {
-    spawn_prometheus_http_endpoint_with_optional_task_group(config, registry, Some(parent_task_group))
-}
-
-#[cfg(feature = "prometheus")]
-fn spawn_prometheus_http_endpoint_with_optional_task_group(
-    config: &ObservabilityConfig,
-    registry: prometheus::Registry,
-    parent_task_group: Option<TaskGroup>,
 ) -> Result<PrometheusHttpHandle, ObservabilityError> {
     let path = normalize_prometheus_path(&config.prometheus.path)?;
     let listener = bind_prometheus_listener(config)?;
@@ -160,19 +142,12 @@ fn spawn_prometheus_http_endpoint_with_optional_task_group(
     let listener = tokio::net::TcpListener::from_std(listener)
         .map_err(|error| ObservabilityError::metrics_init(format!("create Prometheus listener: {error}")))?;
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-    let task_group = if let Some(parent_task_group) = parent_task_group {
-        parent_task_group.child("rocketmq.observability.prometheus")
-    } else {
-        let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
-            ObservabilityError::metrics_init(format!("Prometheus metrics endpoint requires a Tokio runtime: {error}"))
-        })?;
-        TaskGroup::root("rocketmq.observability.prometheus", RuntimeHandle::new(runtime.clone()))
-    };
+    let task_group = parent_task_group.child("rocketmq.observability.prometheus");
     let connection_group = task_group.child("prometheus.connection");
     task_group
         .spawn_service(
             "prometheus.accept",
-            run_prometheus_http_endpoint(listener, registry, path, shutdown_rx, connection_group),
+            run_prometheus_http_endpoint(listener, registry, path, shutdown_rx, connection_group.clone()),
         )
         .map_err(|error| ObservabilityError::metrics_init(format!("spawn Prometheus endpoint: {error}")))?;
 
@@ -180,6 +155,7 @@ fn spawn_prometheus_http_endpoint_with_optional_task_group(
         local_addr,
         shutdown: Some(shutdown_tx),
         task_group,
+        connection_group,
     })
 }
 
@@ -223,17 +199,25 @@ async fn run_prometheus_http_endpoint(
     mut shutdown: tokio::sync::oneshot::Receiver<()>,
     connection_group: TaskGroup,
 ) {
+    let endpoint_cancellation = connection_group.cancellation_token();
     loop {
         tokio::select! {
             _ = &mut shutdown => break,
+            _ = endpoint_cancellation.cancelled() => break,
             accepted = listener.accept() => {
                 match accepted {
                     Ok((stream, _peer_addr)) => {
                         let registry = registry.clone();
                         let path = path.clone();
+                        let cancellation = connection_group.cancellation_token();
                         if let Err(error) = connection_group.spawn("prometheus.connection", TaskKind::Worker, async move {
-                                if let Err(error) = handle_prometheus_connection(stream, registry, path).await {
-                                    tracing::debug!(%error, "failed to serve Prometheus metrics scrape");
+                                tokio::select! {
+                                    _ = cancellation.cancelled() => {}
+                                    result = handle_prometheus_connection(stream, registry, path) => {
+                                        if let Err(error) = result {
+                                            tracing::debug!(%error, "failed to serve Prometheus metrics scrape");
+                                        }
+                                    }
                                 }
                             }) {
                             tracing::debug!(%error, "failed to track Prometheus metrics scrape task");

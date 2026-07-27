@@ -7,9 +7,33 @@ rocketmq-rust
 rocketmq-{{ .service }}
 {{- end -}}
 
+{{/* Parse the chart's deliberately narrow positive whole-second/minute duration format. */}}
+{{- define "rocketmq.durationSeconds" -}}
+{{- $value := .value -}}
+{{- if not (regexMatch "^[1-9][0-9]{0,8}[sm]$" $value) -}}
+  {{- fail (printf "%s must be a positive whole number of seconds or minutes (for example 30s or 2m, with at most nine digits)" .field) -}}
+{{- end -}}
+{{- $magnitude := int (trimSuffix "s" (trimSuffix "m" $value)) -}}
+{{- if hasSuffix "m" $value -}}
+{{ mul $magnitude 60 }}
+{{- else -}}
+{{ $magnitude }}
+{{- end -}}
+{{- end -}}
+
 {{/* Fail early when cross-field topology invariants cannot be expressed by JSON Schema. */}}
 {{- define "rocketmq.validateValues" -}}
 {{- $profile := .Values.deploymentProfile -}}
+{{- $releaseCommit := required "releaseIdentity.commit is required" .Values.releaseIdentity.commit -}}
+{{- if or
+      (eq $releaseCommit "0000000000000000000000000000000000000000")
+      (not (regexMatch "^[0-9a-f]{40}$" $releaseCommit)) -}}
+  {{- fail "releaseIdentity.commit must be a non-zero 40-character lowercase hexadecimal commit" -}}
+{{- end -}}
+{{- $releaseNonce := required "releaseIdentity.nonce is required for every rollout" .Values.releaseIdentity.nonce -}}
+{{- if not (regexMatch "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" $releaseNonce) -}}
+  {{- fail "releaseIdentity.nonce must be 1..=63 lowercase ASCII letters, digits, or interior hyphens" -}}
+{{- end -}}
 {{- if eq $profile "production-controller-ha" -}}
   {{- $controllerReplicas := int .Values.services.controller.replicas -}}
   {{- $controllerQuorum := add (div $controllerReplicas 2) 1 -}}
@@ -46,6 +70,42 @@ rocketmq-{{ .service }}
     {{- fail (printf "services.%s.pdb.minAvailable cannot exceed replicas" $service) -}}
   {{- end -}}
 {{- end -}}
+{{- if and .Values.metrics.enabled (not .Values.metrics.service.enabled) -}}
+  {{- fail "metrics.enabled=true requires metrics.service.enabled=true" -}}
+{{- end -}}
+{{- if and .Values.metrics.serviceMonitor.enabled (not .Values.metrics.enabled) -}}
+  {{- fail "metrics.serviceMonitor.enabled=true requires metrics.enabled=true" -}}
+{{- end -}}
+{{- if and .Values.metrics.serviceMonitor.enabled (not .Values.metrics.service.enabled) -}}
+  {{- fail "metrics.serviceMonitor.enabled=true requires metrics.service.enabled=true" -}}
+{{- end -}}
+{{- if and .Values.metrics.enabled .Values.networkPolicy.enabled (not .Values.metrics.networkPolicy.enabled) -}}
+  {{- fail "metrics.enabled=true with the chart NetworkPolicy requires metrics.networkPolicy.enabled=true" -}}
+{{- end -}}
+{{- $metricsPath := .Values.metrics.path -}}
+{{- if or
+      (and (ne $metricsPath "/") (hasSuffix "/" $metricsPath))
+      (contains "//" $metricsPath)
+      (contains "/./" $metricsPath)
+      (contains "/../" $metricsPath)
+      (hasSuffix "/." $metricsPath)
+      (hasSuffix "/.." $metricsPath) -}}
+  {{- fail "metrics.path must be canonical and cannot contain empty, dot, or parent segments" -}}
+{{- end -}}
+{{- if has (int .Values.metrics.port) (list 8080 8081 8088 8089 9876 10911 10912 60109 60110) -}}
+  {{- fail "metrics.port conflicts with a fixed RocketMQ service or health port" -}}
+{{- end -}}
+{{- if .Values.metrics.serviceMonitor.enabled -}}
+  {{- $intervalSeconds := int (include "rocketmq.durationSeconds" (dict
+        "field" "metrics.serviceMonitor.interval"
+        "value" .Values.metrics.serviceMonitor.interval)) -}}
+  {{- $scrapeTimeoutSeconds := int (include "rocketmq.durationSeconds" (dict
+        "field" "metrics.serviceMonitor.scrapeTimeout"
+        "value" .Values.metrics.serviceMonitor.scrapeTimeout)) -}}
+  {{- if gt $scrapeTimeoutSeconds $intervalSeconds -}}
+    {{- fail "metrics.serviceMonitor.scrapeTimeout must be less than or equal to metrics.serviceMonitor.interval" -}}
+  {{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{- define "rocketmq.labels" -}}
@@ -70,6 +130,21 @@ rocketmq.apache.org/architecture-milestone: P0-05
 - {name: ROCKETMQ_SECURITY_SECRET_PROVIDER, value: "mounted-files"}
 - {name: ROCKETMQ_SECURITY_ADMIN_IDENTITY, value: "/var/run/secrets/rocketmq/admin.identity"}
 - {name: ROCKETMQ_SECURITY_REQUEST_POLICY, value: "/var/run/secrets/rocketmq/request-policy.json"}
+{{- end -}}
+
+{{/* Release identity and the local pull-based metrics listener are process-root inputs. */}}
+{{- define "rocketmq.telemetryEnv" -}}
+- {name: ROCKETMQ_RELEASE_COMMIT, value: {{ required "releaseIdentity.commit is required" .Values.releaseIdentity.commit | quote }}}
+- {name: ROCKETMQ_RELEASE_NONCE, value: {{ required "releaseIdentity.nonce is required" .Values.releaseIdentity.nonce | quote }}}
+- {name: ROCKETMQ_METRICS_ENABLED, value: {{ .Values.metrics.enabled | quote }}}
+- {name: ROCKETMQ_METRICS_EXPORTER, value: {{ ternary "prometheus" "disable" .Values.metrics.enabled | quote }}}
+- {name: ROCKETMQ_METRICS_BIND_ADDR, value: {{ printf "0.0.0.0:%d" (int .Values.metrics.port) | quote }}}
+- {name: ROCKETMQ_METRICS_PATH, value: {{ .Values.metrics.path | quote }}}
+{{- end -}}
+
+{{- define "rocketmq.releaseAnnotations" -}}
+rocketmq.apache.org/release-commit: {{ .Values.releaseIdentity.commit | quote }}
+rocketmq.apache.org/release-nonce: {{ .Values.releaseIdentity.nonce | quote }}
 {{- end -}}
 
 {{- define "rocketmq.lifecycleProbes" -}}

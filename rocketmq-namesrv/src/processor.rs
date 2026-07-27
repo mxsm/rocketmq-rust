@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
+use rocketmq_observability::metrics::namesrv::NameServerMetrics;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_transport::request_code_not_supported_with_opaque;
@@ -86,6 +87,7 @@ pub struct NameServerRequestProcessor {
     processor_table: HashMap<RequestCodeType, NameServerRequestProcessorWrapper>,
     default_request_processor: Option<NameServerRequestProcessorWrapper>,
     in_flight_requests: Option<Arc<InFlightRequestTracker>>,
+    metrics: NameServerMetrics,
 }
 
 impl NameServerRequestProcessor {
@@ -94,12 +96,17 @@ impl NameServerRequestProcessor {
             processor_table: HashMap::new(),
             default_request_processor: None,
             in_flight_requests: None,
+            metrics: NameServerMetrics::noop(),
         }
     }
 
-    pub(crate) fn new_with_in_flight_tracker(in_flight_requests: Arc<InFlightRequestTracker>) -> Self {
+    pub(crate) fn new_with_in_flight_tracker(
+        in_flight_requests: Arc<InFlightRequestTracker>,
+        metrics: NameServerMetrics,
+    ) -> Self {
         Self {
             in_flight_requests: Some(in_flight_requests),
+            metrics,
             ..Self::new()
         }
     }
@@ -136,7 +143,7 @@ impl RequestProcessor for NameServerRequestProcessor {
             Some(processor) => RequestProcessor::process_request(processor, channel, ctx, request).await,
         };
         if let Some(started) = route_request_started {
-            rocketmq_observability::metrics::namesrv::record_route_request(started.elapsed());
+            self.metrics.record_route_request(started.elapsed());
         }
         response
     }

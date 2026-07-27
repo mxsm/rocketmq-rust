@@ -41,6 +41,11 @@ client-adapter = [
   "dep:rocketmq-runtime",
   "dep:rocketmq-transport",
 ]
+client-observability = [
+  "client-adapter",
+  "rocketmq-client-rust/observability",
+  "rocketmq-client-rust/observability-metrics",
+]
 rocksdb-export = ["dep:rocksdb"]
 
 [dependencies]

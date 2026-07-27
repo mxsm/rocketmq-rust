@@ -36,6 +36,7 @@ use crate::config::TlsConfig;
 use crate::connection::Connection;
 use crate::deadline::RequestDeadline;
 use crate::security::TransportSecurity;
+use crate::telemetry::TransportTelemetry;
 #[cfg(feature = "tls")]
 use crate::tls::connect_tls_stream;
 #[cfg(not(feature = "tls"))]
@@ -76,6 +77,17 @@ pub async fn connect_with_config(
     frame_limits: FrameLimits,
     deadline: RequestDeadline,
 ) -> RocketMQResult<ConnectedTransport> {
+    connect_with_config_and_telemetry(address, tls_config, frame_limits, deadline, TransportTelemetry::noop()).await
+}
+
+/// Connects a framed TCP/TLS transport bound to one explicit telemetry instance.
+pub async fn connect_with_config_and_telemetry(
+    address: &str,
+    tls_config: &TlsConfig,
+    frame_limits: FrameLimits,
+    deadline: RequestDeadline,
+    telemetry: TransportTelemetry,
+) -> RocketMQResult<ConnectedTransport> {
     let stream = deadline
         .timeout(tokio::net::TcpStream::connect(address))
         .await
@@ -91,7 +103,7 @@ pub async fn connect_with_config(
                 .timeout(connect_tls_stream(stream, &server_name, tls_config))
                 .await
                 .map_err(|_| RocketMQError::network_connection_timeout(address, deadline.budget_millis()))??;
-            Connection::new_with_tls_stream_and_limits(tls_stream, frame_limits)
+            Connection::new_with_tls_stream_and_limits(tls_stream, frame_limits).with_telemetry(telemetry)
         }
         #[cfg(not(feature = "tls"))]
         {
@@ -99,7 +111,7 @@ pub async fn connect_with_config(
             return Err(tls_disabled_error());
         }
     } else {
-        Connection::new_with_limits(stream, frame_limits)
+        Connection::new_with_limits(stream, frame_limits).with_telemetry(telemetry)
     };
     Ok(ConnectedTransport {
         connection,
@@ -128,6 +140,7 @@ pub struct TransportClient {
     pending: PendingRequestTable,
     next_opaque: AtomicI32,
     security: Arc<TransportSecurity>,
+    telemetry: TransportTelemetry,
 }
 
 impl TransportClient {
@@ -166,6 +179,7 @@ impl TransportClient {
             })?,
             next_opaque: AtomicI32::new(1),
             security,
+            telemetry: TransportTelemetry::noop(),
         })
     }
 
@@ -182,6 +196,13 @@ impl TransportClient {
     ) -> Self {
         Self::try_new_with_security(service_context, admission, security)
             .unwrap_or_else(|error| panic!("invalid Transport client resource limits: {error}"))
+    }
+
+    /// Binds newly opened connections to one explicit telemetry instance.
+    #[must_use]
+    pub fn with_telemetry(mut self, telemetry: TransportTelemetry) -> Self {
+        self.telemetry = telemetry;
+        self
     }
 
     pub fn pending_usage(&self) -> PendingRequestUsage {
@@ -210,7 +231,14 @@ impl TransportClient {
         tls_config: &TlsConfig,
         deadline: RequestDeadline,
     ) -> RocketMQResult<RemotingCommand> {
-        let connected = connect_with_config(&address.to_string(), tls_config, FrameLimits::default(), deadline).await?;
+        let connected = connect_with_config_and_telemetry(
+            &address.to_string(),
+            tls_config,
+            FrameLimits::default(),
+            deadline,
+            self.telemetry.clone(),
+        )
+        .await?;
         let (mut connection, local_addr, remote_addr, negotiated_tls) = connected.into_parts_with_tls();
         let scope = AdmissionScope::new(remote_addr.ip()).with_session(remote_addr.port() as u64);
         let peer = PeerInfo::new(remote_addr, negotiated_tls);

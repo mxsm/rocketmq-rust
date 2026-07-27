@@ -23,6 +23,7 @@ use std::time::Duration;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_error::UnifiedServiceError;
+use rocketmq_observability::metrics::client::ClientMetrics;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::Shutdown;
 use serde::Serialize;
@@ -182,6 +183,7 @@ impl RebalanceConfig {
 #[derive(Clone)]
 pub struct RebalanceService {
     config: RebalanceConfig,
+    client_metrics: ClientMetrics,
     lifecycle_transition: Arc<Mutex<()>>,
     notify: Arc<Notify>,
     stopped_notify: Arc<Notify>,
@@ -205,8 +207,8 @@ pub struct RebalanceServiceLifecycleProbe {
 
 impl RebalanceService {
     /// Create a new RebalanceService with default configuration from environment variables.
-    pub fn new() -> Self {
-        Self::with_config(RebalanceConfig::from_env())
+    pub fn new(client_metrics: ClientMetrics) -> Self {
+        Self::with_config(RebalanceConfig::from_env(), client_metrics)
     }
 
     /// Create a new RebalanceService with custom configuration.
@@ -214,7 +216,8 @@ impl RebalanceService {
     /// # Arguments
     ///
     /// * `config` - RebalanceConfig to use
-    pub fn with_config(mut config: RebalanceConfig) -> Self {
+    /// * `client_metrics` - Recorder owned by the same client runtime
+    pub fn with_config(mut config: RebalanceConfig, client_metrics: ClientMetrics) -> Self {
         if let Err(e) = config.validate() {
             warn!("Invalid RebalanceConfig: {}; using default rebalance configuration", e);
             config = RebalanceConfig::default();
@@ -222,6 +225,7 @@ impl RebalanceService {
 
         RebalanceService {
             config,
+            client_metrics,
             lifecycle_transition: Arc::new(Mutex::new(())),
             notify: Arc::new(Notify::new()),
             stopped_notify: Arc::new(Notify::new()),
@@ -261,6 +265,7 @@ impl RebalanceService {
         let total_count = self.total_rebalance_count.clone();
         let success_count_clone = self.success_count.clone();
         let fail_count_clone = self.fail_count.clone();
+        let client_metrics = self.client_metrics.clone();
 
         // Clone config for use in spawned task
         let config = self.config.clone();
@@ -297,7 +302,7 @@ impl RebalanceService {
                     // Rebalance operation with exception handling and metrics
                     let start_time = tokio::time::Instant::now();
                     total_count.fetch_add(1, Ordering::Relaxed);
-                    rocketmq_observability::metrics::client::record_rebalance();
+                    client_metrics.record_rebalance();
 
                     let balanced = match instance.do_rebalance().await {
                         Ok(result) => {
@@ -499,13 +504,14 @@ pub async fn run_rebalance_service_lifecycle_probe(
         min_interval_ms: 1,
         enable_dynamic_interval: true,
     };
-    let service = RebalanceService::with_config(config);
+    let service = RebalanceService::with_config(config, client_runtime.client_metrics().clone());
     let instance = MQClientInstance::new_arc(
         crate::base::client_config::ClientConfig::default(),
         0,
         "rebalance-service-probe",
         None,
         client_runtime.child("rebalance-service-probe"),
+        client_runtime.telemetry_handle().clone(),
         client_runtime.pool().request_future_holder(),
     );
 
@@ -542,6 +548,7 @@ mod tests {
             client_id,
             None,
             runtime.child(client_id),
+            runtime.telemetry_handle().clone(),
             runtime.pool().request_future_holder(),
         )
     }
@@ -645,7 +652,7 @@ mod tests {
 
     #[test]
     fn test_rebalance_service_new() {
-        let service = RebalanceService::new();
+        let service = RebalanceService::new(ClientMetrics::noop());
         assert!(!service.is_running());
         assert_eq!(service.get_service_name(), "RebalanceService");
         assert_eq!(service.config().wait_interval_ms, 20000);
@@ -659,7 +666,7 @@ mod tests {
             min_interval_ms: 1,
             enable_dynamic_interval: true,
         };
-        let service = RebalanceService::with_config(config);
+        let service = RebalanceService::with_config(config, ClientMetrics::noop());
         let instance = test_instance("rebalance-explicit-runtime-client");
 
         futures::executor::block_on(service.start(instance))
@@ -690,7 +697,7 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_without_task_handle_waits_for_stop_notification() {
-        let service = RebalanceService::new();
+        let service = RebalanceService::new(ClientMetrics::noop());
         let (mut shutdown, tx_shutdown) = Shutdown::new(1);
         *service
             .tx_shutdown
@@ -721,7 +728,7 @@ mod tests {
             min_interval_ms: 1,
             enable_dynamic_interval: true,
         };
-        let service = RebalanceService::with_config(config);
+        let service = RebalanceService::with_config(config, ClientMetrics::noop());
         let instance = test_instance("rebalance-join-client");
 
         service.start(instance).await.expect("rebalance service should start");
@@ -754,7 +761,7 @@ mod tests {
             min_interval_ms: 500,
             enable_dynamic_interval: false,
         };
-        let service = RebalanceService::with_config(config.clone());
+        let service = RebalanceService::with_config(config.clone(), ClientMetrics::noop());
         assert_eq!(service.config().wait_interval_ms, 10000);
         assert_eq!(service.config().min_interval_ms, 500);
         assert!(!service.config().enable_dynamic_interval);
@@ -767,7 +774,7 @@ mod tests {
             min_interval_ms: 1000,
             enable_dynamic_interval: true,
         };
-        let service = RebalanceService::with_config(config);
+        let service = RebalanceService::with_config(config, ClientMetrics::noop());
 
         assert_eq!(
             service.config().wait_interval_ms,
@@ -781,7 +788,7 @@ mod tests {
 
     #[test]
     fn test_rebalance_service_initial_state() {
-        let service = RebalanceService::new();
+        let service = RebalanceService::new(ClientMetrics::noop());
         assert!(!service.is_running());
 
         let (total, success, fail, last_ts) = service.get_metrics();
@@ -793,7 +800,7 @@ mod tests {
 
     #[test]
     fn test_rebalance_service_is_healthy_not_started() {
-        let service = RebalanceService::new();
+        let service = RebalanceService::new(ClientMetrics::noop());
         // Service not started should be unhealthy
         assert!(!service.is_healthy(60000));
     }
@@ -805,7 +812,7 @@ mod tests {
             min_interval_ms: 750,
             enable_dynamic_interval: true,
         };
-        let service = RebalanceService::with_config(config);
+        let service = RebalanceService::with_config(config, ClientMetrics::noop());
 
         let retrieved_config = service.config();
         assert_eq!(retrieved_config.wait_interval_ms, 15000);
@@ -838,7 +845,7 @@ mod tests {
 
     #[test]
     fn test_rebalance_service_get_service_name() {
-        let service = RebalanceService::new();
+        let service = RebalanceService::new(ClientMetrics::noop());
         assert_eq!(service.get_service_name(), "RebalanceService");
     }
 

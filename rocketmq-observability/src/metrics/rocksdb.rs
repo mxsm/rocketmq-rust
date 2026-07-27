@@ -25,11 +25,6 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 #[cfg(feature = "otel-metrics")]
 use std::sync::Arc;
-#[cfg(feature = "otel-metrics")]
-use std::sync::OnceLock;
-
-#[cfg(feature = "otel-metrics")]
-static ROCKSDB_METRICS: OnceLock<RocksDbOtelMetrics> = OnceLock::new();
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct RocksDbMetrics {
@@ -142,18 +137,83 @@ pub struct RocksDbObservableValues {
     pub times_read: u64,
 }
 
-#[cfg(feature = "otel-metrics")]
-pub fn init_global_with_observables<F>(meter: &opentelemetry::metrics::Meter, source: F) -> bool
-where
-    F: Fn() -> RocksDbObservableValues + Send + Sync + 'static,
-{
-    ROCKSDB_METRICS
-        .set(RocksDbOtelMetrics::new_with_observables(meter, source))
-        .is_ok()
+/// Cloneable RocksDB recorder bound to one explicit Store telemetry scope.
+#[derive(Clone)]
+pub struct RocksDbMetricsRecorder {
+    #[cfg(feature = "otel-metrics")]
+    telemetry: crate::TelemetryRecorder,
+}
+
+impl std::fmt::Debug for RocksDbMetricsRecorder {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RocksDbMetricsRecorder")
+            .field("enabled", &self.is_enabled())
+            .finish()
+    }
+}
+
+impl Default for RocksDbMetricsRecorder {
+    fn default() -> Self {
+        Self::noop()
+    }
+}
+
+impl RocksDbMetricsRecorder {
+    /// Creates a recorder that never reads process-global OpenTelemetry state.
+    #[must_use]
+    pub fn noop() -> Self {
+        Self::from_handle(&crate::TelemetryHandle::noop())
+    }
+
+    /// Creates a recorder from the fixed Store instrumentation scope.
+    #[must_use]
+    pub fn from_handle(handle: &crate::TelemetryHandle) -> Self {
+        #[cfg(feature = "otel-metrics")]
+        {
+            Self {
+                telemetry: handle.child(crate::STORE_METER_SCOPE),
+            }
+        }
+
+        #[cfg(not(feature = "otel-metrics"))]
+        {
+            let _ = handle;
+            Self {}
+        }
+    }
+
+    /// Returns whether this recorder is backed by an active Store meter.
+    #[must_use]
+    pub fn is_enabled(&self) -> bool {
+        #[cfg(feature = "otel-metrics")]
+        {
+            self.telemetry.is_active() && self.telemetry.meter().is_some()
+        }
+
+        #[cfg(not(feature = "otel-metrics"))]
+        {
+            false
+        }
+    }
+
+    /// Registers RocksDB observable gauges on this recorder's explicit meter.
+    pub fn register_observables<F>(&self, source: F)
+    where
+        F: Fn() -> RocksDbObservableValues + Send + Sync + 'static,
+    {
+        #[cfg(feature = "otel-metrics")]
+        if let Some(meter) = self.telemetry.meter() {
+            let _metrics = RocksDbOtelMetrics::new_with_observables(&meter, source);
+        }
+
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = source;
+    }
 }
 
 #[cfg(not(feature = "otel-metrics"))]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct RocksDbOtelMetrics;
 
 #[cfg(not(feature = "otel-metrics"))]
@@ -169,7 +229,7 @@ pub struct RocksDbOtelMetrics;
 
 #[cfg(feature = "otel-metrics")]
 impl RocksDbOtelMetrics {
-    pub fn new_with_observables<F>(meter: &opentelemetry::metrics::Meter, source: F) -> Self
+    pub(crate) fn new_with_observables<F>(meter: &opentelemetry::metrics::Meter, source: F) -> Self
     where
         F: Fn() -> RocksDbObservableValues + Send + Sync + 'static,
     {

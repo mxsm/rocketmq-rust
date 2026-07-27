@@ -248,6 +248,7 @@ use rocketmq_transport::RemotingService;
 use rocketmq_transport::RpcRequestHeader;
 use rocketmq_transport::TokioClientConfig;
 use rocketmq_transport::TopicRequestHeader;
+use rocketmq_transport::TransportTelemetry;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;

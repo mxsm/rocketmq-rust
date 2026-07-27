@@ -112,6 +112,23 @@ impl CommitLogActiveMemoryLock {
         }
     }
 
+    /// Creates active-lock state bound to an explicit Store recorder.
+    #[cfg(feature = "observability")]
+    #[doc(hidden)]
+    pub fn new_with_store_metrics(
+        warn_only: bool,
+        budget_bytes: u64,
+        store_metrics: rocketmq_observability::metrics::store::StoreMetricsRecorder,
+    ) -> Self {
+        Self {
+            manager: MemoryLockManager::new_with_store_metrics(warn_only, budget_bytes, store_metrics),
+            handle: None,
+            file_from_offset: None,
+            region_offset: 0,
+            region_len: 0,
+        }
+    }
+
     /// Returns whether `target` is already covered by the current locked region.
     #[doc(hidden)]
     pub fn is_current(&self, file_from_offset: u64, target: CommitLogMemoryLockTarget) -> bool {
@@ -184,6 +201,28 @@ impl CommitLogRuntimeState {
             active_memory_lock: Mutex::new(CommitLogActiveMemoryLock::new(
                 memory_lock_warn_only,
                 memory_lock_budget_bytes,
+            )),
+            active_memory_lock_present: AtomicBool::new(false),
+            last_load_statistics: Mutex::new(LoadStatistics::default()),
+        }
+    }
+
+    /// Creates runtime state bound to an explicit Store recorder.
+    #[cfg(feature = "observability")]
+    #[doc(hidden)]
+    pub fn new_with_store_metrics(
+        memory_lock_warn_only: bool,
+        memory_lock_budget_bytes: u64,
+        store_metrics: rocketmq_observability::metrics::store::StoreMetricsRecorder,
+    ) -> Self {
+        Self {
+            confirm_offset: AtomicI64::new(-1),
+            put_message_lock_stats: CommitLogPutMessageLockStats::default(),
+            begin_time_in_lock: Arc::new(AtomicU64::new(0)),
+            active_memory_lock: Mutex::new(CommitLogActiveMemoryLock::new_with_store_metrics(
+                memory_lock_warn_only,
+                memory_lock_budget_bytes,
+                store_metrics,
             )),
             active_memory_lock_present: AtomicBool::new(false),
             last_load_statistics: Mutex::new(LoadStatistics::default()),

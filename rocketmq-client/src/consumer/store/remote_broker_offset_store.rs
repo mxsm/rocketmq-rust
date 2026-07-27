@@ -351,6 +351,7 @@ mod tests {
             "remote-offset-coalescing-test",
             None,
             runtime.child("instance"),
+            runtime.telemetry_handle().clone(),
             runtime.pool().request_future_holder(),
         );
         RemoteBrokerOffsetStore::new(client_instance, CheetahString::from_static_str("group-a"))
