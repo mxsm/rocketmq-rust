@@ -4216,6 +4216,1925 @@
           }
         }
       }
+    },
+    "/v1/integrations/descriptors": {
+      "get": {
+        "operationId": "listIntegrationDescriptorsV1",
+        "summary": "List versioned integration adapter capabilities",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationDescriptorList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/integrations/targets": {
+      "get": {
+        "operationId": "listIntegrationTargetsV1",
+        "summary": "List scoped integration targets",
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "adapter_kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/IntegrationAdapterKind"
+            }
+          },
+          {
+            "name": "enabled",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationTargetPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "registerIntegrationTargetV1",
+        "summary": "Register a tenant- and cluster-scoped integration target",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterIntegrationTargetRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationTargetView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/integrations/targets/{id}": {
+      "get": {
+        "operationId": "getIntegrationTargetV1",
+        "summary": "Read one authorized integration target",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationTargetView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/integrations/targets/{id}/state": {
+      "post": {
+        "operationId": "setIntegrationTargetStateV1",
+        "summary": "Enable or disable one integration target",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetIntegrationTargetStateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationTargetView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/integrations/deliveries": {
+      "get": {
+        "operationId": "listIntegrationDeliveriesV1",
+        "summary": "List bounded idempotent integration deliveries",
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "target_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationDeliveryPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/integrations/approvals/external": {
+      "post": {
+        "operationId": "applyExternalApprovalV1",
+        "summary": "Validate an external approval through the normal approval service",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExternalApprovalRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalApprovalView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/releases": {
+      "get": {
+        "operationId": "listReleaseWorkflowsV1",
+        "summary": "List bounded release escort workflows",
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ReleaseStatus"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleasePage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createReleaseWorkflowV1",
+        "summary": "Create a release bound to approved typed plans and a runbook",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateReleaseRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/releases/{id}": {
+      "get": {
+        "operationId": "getReleaseWorkflowV1",
+        "summary": "Read one release workflow, observations, and report",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/releases/{id}/prepare": {
+      "post": {
+        "operationId": "prepareReleaseWorkflowV1",
+        "summary": "Run deterministic readiness and what-if gates",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrepareReleaseRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleasePreparationView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/releases/{id}/start": {
+      "post": {
+        "operationId": "startReleaseWorkflowV1",
+        "summary": "Start the approved canary or one-by-one release execution",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReleaseExecutionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseExecutionView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/releases/{id}/observations": {
+      "post": {
+        "operationId": "recordReleaseObservationV1",
+        "summary": "Record a bounded SLO and synthetic-probe observation",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordReleaseObservationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/releases/{id}/pause": {
+      "post": {
+        "operationId": "pauseReleaseWorkflowV1",
+        "summary": "Pause an active release escort workflow",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReleaseTransitionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/releases/{id}/resume": {
+      "post": {
+        "operationId": "resumeReleaseWorkflowV1",
+        "summary": "Resume a paused release after regression recovery",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReleaseTransitionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/releases/{id}/verification/start": {
+      "post": {
+        "operationId": "beginReleaseVerificationV1",
+        "summary": "Move an active release into post-release verification",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/releases/{id}/complete": {
+      "post": {
+        "operationId": "completeReleaseWorkflowV1",
+        "summary": "Complete a verified release and generate its immutable report",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/releases/{id}/rollback/start": {
+      "post": {
+        "operationId": "startReleaseRollbackV1",
+        "summary": "Start an already-approved typed rollback plan",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReleaseExecutionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseExecutionView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/releases/{id}/rollback/complete": {
+      "post": {
+        "operationId": "completeReleaseRollbackV1",
+        "summary": "Reconcile rollback outcome and generate the release report",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompleteRollbackRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/releases/{id}/manual-takeover": {
+      "post": {
+        "operationId": "enterReleaseManualTakeoverV1",
+        "summary": "Escalate a release into audited manual takeover",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReleaseTransitionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -11395,7 +13314,16 @@
           "change_window_created",
           "change_schedule_created",
           "change_schedule_state_changed",
-          "manual_gate_decided"
+          "manual_gate_decided",
+          "integration_target_registered",
+          "integration_delivery_queued",
+          "integration_delivery_completed",
+          "external_approval_received",
+          "release_created",
+          "release_readiness_evaluated",
+          "release_state_changed",
+          "release_observation_captured",
+          "release_report_generated"
         ],
         "type": "string"
       },
@@ -12146,6 +14074,318 @@
         "title": "ExecutionRequest",
         "type": "object"
       },
+      "IntegrationTargetId": {
+        "description": "Stable identifier for one tenant-scoped external integration target.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "ExternalApprovalInput": {
+        "additionalProperties": false,
+        "description": "Provider-neutral inbound approval signal.\n\nIt is only an input to the normal Control Plane approval service. The\nservice must still verify scope, role, step-up, plan hash, expiry, and\nseparation of duties before recording an Approval.",
+        "properties": {
+          "decision": {
+            "$ref": "#/components/schemas/ApprovalDecision"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "external_event_id": {
+            "type": "string"
+          },
+          "external_ticket_key": {
+            "type": "string"
+          },
+          "mfa_verified": {
+            "type": "boolean"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "plan_hash": {
+            "type": "string"
+          },
+          "plan_id": {
+            "$ref": "#/components/schemas/ActionPlanId"
+          },
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "step_up_verified": {
+            "type": "boolean"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "target_id": {
+            "$ref": "#/components/schemas/IntegrationTargetId"
+          }
+        },
+        "required": [
+          "schema_version",
+          "target_id",
+          "external_event_id",
+          "external_ticket_key",
+          "plan_id",
+          "plan_hash",
+          "decision",
+          "subject",
+          "roles",
+          "mfa_verified",
+          "step_up_verified",
+          "expires_at",
+          "occurred_at"
+        ],
+        "title": "ExternalApprovalInput",
+        "type": "object"
+      },
+      "IntegrationDeliveryId": {
+        "description": "Stable identifier for one idempotent integration delivery.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "IntegrationDeliveryStatus": {
+        "description": "Durable state of an idempotent integration delivery.",
+        "enum": [
+          "pending",
+          "delivering",
+          "delivered",
+          "retry_scheduled",
+          "failed"
+        ],
+        "type": "string"
+      },
+      "IntegrationEventKind": {
+        "description": "Events an external adapter may receive.",
+        "enum": [
+          "plan_submitted",
+          "approval_changed",
+          "release_started",
+          "release_paused",
+          "release_rolling_back",
+          "release_completed",
+          "manual_takeover_required"
+        ],
+        "type": "string"
+      },
+      "ReleaseId": {
+        "description": "Stable identifier for one supervised release workflow.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "IntegrationDelivery": {
+        "additionalProperties": false,
+        "description": "One bounded outbox record. The idempotency key is unique per target.",
+        "properties": {
+          "attempt_count": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cluster_id": {
+            "$ref": "#/components/schemas/ClusterId"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "deep_link": {
+            "type": "string"
+          },
+          "delivered_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "descriptor_id": {
+            "type": "string"
+          },
+          "descriptor_version": {
+            "type": "string"
+          },
+          "event_kind": {
+            "$ref": "#/components/schemas/IntegrationEventKind"
+          },
+          "id": {
+            "$ref": "#/components/schemas/IntegrationDeliveryId"
+          },
+          "idempotency_key": {
+            "type": "string"
+          },
+          "incident_id": {
+            "$ref": "#/components/schemas/IncidentId"
+          },
+          "last_error_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "next_attempt_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "plan_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ActionPlanId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "release_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReleaseId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sanitized_summary": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/IntegrationDeliveryStatus"
+          },
+          "target_id": {
+            "$ref": "#/components/schemas/IntegrationTargetId"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId"
+          }
+        },
+        "required": [
+          "schema_version",
+          "id",
+          "target_id",
+          "descriptor_id",
+          "descriptor_version",
+          "tenant_id",
+          "cluster_id",
+          "incident_id",
+          "event_kind",
+          "idempotency_key",
+          "sanitized_summary",
+          "deep_link",
+          "status",
+          "attempt_count",
+          "created_at"
+        ],
+        "title": "IntegrationDelivery",
+        "type": "object"
+      },
+      "IntegrationAdapterKind": {
+        "description": "Closed adapter families supported by the first integration SPI.",
+        "enum": [
+          "mock_itsm",
+          "signed_webhook_itsm",
+          "chat_ops_webhook",
+          "pager",
+          "email"
+        ],
+        "type": "string"
+      },
+      "IntegrationTarget": {
+        "additionalProperties": false,
+        "description": "Tenant- and cluster-scoped adapter configuration.\n\nCredentials are represented only by a secret reference and are never part\nof a delivery, model input, audit detail, or operator-facing view.",
+        "properties": {
+          "adapter_kind": {
+            "$ref": "#/components/schemas/IntegrationAdapterKind"
+          },
+          "cluster_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ClusterId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "descriptor_id": {
+            "type": "string"
+          },
+          "descriptor_version": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/IntegrationTargetId"
+          },
+          "inbound_approval": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "outbound_events": {
+            "items": {
+              "$ref": "#/components/schemas/IntegrationEventKind"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "secret_reference": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "descriptor_id",
+          "descriptor_version",
+          "name",
+          "adapter_kind",
+          "endpoint",
+          "enabled",
+          "inbound_approval",
+          "outbound_events",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "IntegrationTarget",
+        "type": "object"
+      },
       "ManualRunbookDraft": {
         "additionalProperties": false,
         "description": "Non-executable fallback produced for rules-only or R3 recommendations.",
@@ -12269,6 +14509,340 @@
           "evaluated_at"
         ],
         "title": "PolicyDecision",
+        "type": "object"
+      },
+      "ReleaseObservationPhase": {
+        "description": "Phase associated with one SLO/probe observation.",
+        "enum": [
+          "before",
+          "during",
+          "after"
+        ],
+        "type": "string"
+      },
+      "ReleaseObservation": {
+        "additionalProperties": false,
+        "description": "Bounded observation used for pause, rollback, and release reporting.",
+        "properties": {
+          "evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceId"
+            },
+            "type": "array"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "phase": {
+            "$ref": "#/components/schemas/ReleaseObservationPhase"
+          },
+          "regression_detected": {
+            "type": "boolean"
+          },
+          "sanitized_summary": {
+            "type": "string"
+          },
+          "slo_healthy": {
+            "type": "boolean"
+          },
+          "synthetic_probe_healthy": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "phase",
+          "slo_healthy",
+          "synthetic_probe_healthy",
+          "regression_detected",
+          "evidence_ids",
+          "sanitized_summary",
+          "observed_at"
+        ],
+        "type": "object"
+      },
+      "ReadinessReportId": {
+        "description": "Stable identifier for an immutable readiness report.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "SimulationId": {
+        "description": "Stable identifier for a read-only what-if simulation.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "ReleaseReadinessSnapshot": {
+        "additionalProperties": false,
+        "description": "Immutable release gate projection from readiness and what-if checks.",
+        "properties": {
+          "capacity_ready": {
+            "type": "boolean"
+          },
+          "evidence_ids": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceId"
+            },
+            "type": "array"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "pdb_ready": {
+            "type": "boolean"
+          },
+          "quorum_ready": {
+            "type": "boolean"
+          },
+          "simulation_id": {
+            "$ref": "#/components/schemas/SimulationId"
+          },
+          "store_recovery_ready": {
+            "type": "boolean"
+          },
+          "synthetic_probe_ready": {
+            "type": "boolean"
+          },
+          "upgrade_readiness_id": {
+            "$ref": "#/components/schemas/ReadinessReportId"
+          },
+          "valid_until": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "upgrade_readiness_id",
+          "simulation_id",
+          "pdb_ready",
+          "capacity_ready",
+          "quorum_ready",
+          "store_recovery_ready",
+          "synthetic_probe_ready",
+          "evidence_ids",
+          "observed_at",
+          "valid_until"
+        ],
+        "type": "object"
+      },
+      "ReleaseReportId": {
+        "description": "Stable identifier for one immutable release report.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "ReleaseStatus": {
+        "description": "Durable release escort lifecycle.",
+        "enum": [
+          "planned",
+          "readiness_checking",
+          "ready",
+          "canary_running",
+          "paused",
+          "verifying",
+          "rolling_back",
+          "rolled_back",
+          "completed",
+          "manual_takeover",
+          "failed"
+        ],
+        "type": "string"
+      },
+      "ReleaseReport": {
+        "additionalProperties": false,
+        "description": "Immutable before/during/after result of one release workflow.",
+        "properties": {
+          "after": {
+            "items": {
+              "$ref": "#/components/schemas/ReleaseObservation"
+            },
+            "type": "array"
+          },
+          "before": {
+            "items": {
+              "$ref": "#/components/schemas/ReleaseObservation"
+            },
+            "type": "array"
+          },
+          "change_id": {
+            "type": "string"
+          },
+          "cluster_id": {
+            "$ref": "#/components/schemas/ClusterId"
+          },
+          "during": {
+            "items": {
+              "$ref": "#/components/schemas/ReleaseObservation"
+            },
+            "type": "array"
+          },
+          "final_status": {
+            "$ref": "#/components/schemas/ReleaseStatus"
+          },
+          "generated_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ReleaseReportId"
+          },
+          "incident_id": {
+            "$ref": "#/components/schemas/IncidentId"
+          },
+          "release_id": {
+            "$ref": "#/components/schemas/ReleaseId"
+          },
+          "release_ref": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId"
+          }
+        },
+        "required": [
+          "schema_version",
+          "id",
+          "release_id",
+          "tenant_id",
+          "cluster_id",
+          "incident_id",
+          "change_id",
+          "release_ref",
+          "final_status",
+          "before",
+          "during",
+          "after",
+          "generated_at"
+        ],
+        "title": "ReleaseReport",
+        "type": "object"
+      },
+      "ReleaseWorkflow": {
+        "additionalProperties": false,
+        "description": "Persistent release workflow linked to immutable plans and a typed Runbook.",
+        "properties": {
+          "active_execution_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExecutionId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "change_id": {
+            "type": "string"
+          },
+          "cluster_id": {
+            "$ref": "#/components/schemas/ClusterId"
+          },
+          "correlation_id": {
+            "$ref": "#/components/schemas/CorrelationId"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ReleaseId"
+          },
+          "incident_id": {
+            "$ref": "#/components/schemas/IncidentId"
+          },
+          "pause_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "plan_hash": {
+            "type": "string"
+          },
+          "plan_id": {
+            "$ref": "#/components/schemas/ActionPlanId"
+          },
+          "readiness": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReleaseReadinessSnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "regression_detected": {
+            "type": "boolean"
+          },
+          "release_ref": {
+            "type": "string"
+          },
+          "rollback_plan_hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rollback_plan_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ActionPlanId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "runbook_id": {
+            "$ref": "#/components/schemas/RunbookId"
+          },
+          "runbook_version": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ReleaseStatus"
+          },
+          "target_version": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "id",
+          "tenant_id",
+          "cluster_id",
+          "incident_id",
+          "correlation_id",
+          "change_id",
+          "release_ref",
+          "target_version",
+          "runbook_id",
+          "runbook_version",
+          "plan_id",
+          "plan_hash",
+          "status",
+          "regression_detected",
+          "created_by",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ReleaseWorkflow",
         "type": "object"
       },
       "ResourceQuarantineId": {
@@ -13315,6 +15889,715 @@
             "maxLength": 2048
           }
         }
+      },
+      "DescriptorStatus": {
+        "type": "string",
+        "enum": [
+          "active",
+          "disabled",
+          "deprecated"
+        ]
+      },
+      "Deprecation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "since",
+          "replacement",
+          "message"
+        ],
+        "properties": {
+          "since": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "replacement": {
+            "oneOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        }
+      },
+      "IntegrationDescriptor": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "version",
+          "owner",
+          "supported_versions",
+          "config_schema",
+          "status",
+          "deprecation",
+          "integration_kind",
+          "inbound",
+          "outbound"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "owner": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "supported_versions": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 16,
+            "items": {
+              "$ref": "#/components/schemas/SchemaVersion"
+            }
+          },
+          "required_capabilities": {
+            "type": "array",
+            "uniqueItems": true,
+            "maxItems": 64,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            }
+          },
+          "config_schema": {
+            "type": "object"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DescriptorStatus"
+          },
+          "deprecation": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Deprecation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "integration_kind": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "inbound": {
+            "type": "boolean"
+          },
+          "outbound": {
+            "type": "boolean"
+          }
+        }
+      },
+      "IntegrationDescriptorList": {
+        "type": "array",
+        "maxItems": 32,
+        "items": {
+          "$ref": "#/components/schemas/IntegrationDescriptor"
+        }
+      },
+      "RegisterIntegrationTargetRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "cluster_id",
+          "descriptor_id",
+          "descriptor_version",
+          "name",
+          "adapter_kind",
+          "endpoint"
+        ],
+        "properties": {
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "descriptor_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "descriptor_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "adapter_kind": {
+            "$ref": "#/components/schemas/IntegrationAdapterKind"
+          },
+          "endpoint": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "secret_reference": {
+            "oneOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "notification_target_id": {
+            "oneOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "inbound_approval": {
+            "type": "boolean",
+            "default": false
+          },
+          "outbound_events": {
+            "type": "array",
+            "uniqueItems": true,
+            "maxItems": 16,
+            "items": {
+              "$ref": "#/components/schemas/IntegrationEventKind"
+            },
+            "default": []
+          }
+        }
+      },
+      "SetIntegrationTargetStateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "IntegrationTargetView": {
+        "additionalProperties": false,
+        "description": "Tenant- and cluster-scoped adapter configuration.\n\nCredentials are represented only by a secret reference and are never part\nof a delivery, model input, audit detail, or operator-facing view.",
+        "properties": {
+          "adapter_kind": {
+            "$ref": "#/components/schemas/IntegrationAdapterKind"
+          },
+          "cluster_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ClusterId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "descriptor_id": {
+            "type": "string"
+          },
+          "descriptor_version": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/IntegrationTargetId"
+          },
+          "inbound_approval": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "outbound_events": {
+            "items": {
+              "$ref": "#/components/schemas/IntegrationEventKind"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "secret_reference": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "notification_target_id": {
+            "oneOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "descriptor_id",
+          "descriptor_version",
+          "name",
+          "adapter_kind",
+          "endpoint",
+          "enabled",
+          "inbound_approval",
+          "outbound_events",
+          "created_at",
+          "updated_at",
+          "notification_target_id"
+        ],
+        "title": "IntegrationTarget",
+        "type": "object"
+      },
+      "IntegrationTargetPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "items",
+          "partial"
+        ],
+        "properties": {
+          "schema_version": {
+            "const": "rocketmq-sre.integration-target-page.v1"
+          },
+          "items": {
+            "type": "array",
+            "maxItems": 200,
+            "items": {
+              "$ref": "#/components/schemas/IntegrationTargetView"
+            }
+          },
+          "partial": {
+            "type": "boolean"
+          }
+        }
+      },
+      "IntegrationDeliveryPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "items",
+          "partial"
+        ],
+        "properties": {
+          "schema_version": {
+            "const": "rocketmq-sre.integration-delivery-page.v1"
+          },
+          "items": {
+            "type": "array",
+            "maxItems": 200,
+            "items": {
+              "$ref": "#/components/schemas/IntegrationDelivery"
+            }
+          },
+          "partial": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ExternalApprovalRequest": {
+        "$ref": "#/components/schemas/ExternalApprovalInput"
+      },
+      "ExternalApprovalView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "duplicate",
+          "approval",
+          "plan_status"
+        ],
+        "properties": {
+          "schema_version": {
+            "const": "rocketmq-sre.external-approval-view.v1"
+          },
+          "duplicate": {
+            "type": "boolean"
+          },
+          "approval": {
+            "$ref": "#/components/schemas/ApprovalRecord"
+          },
+          "plan_status": {
+            "$ref": "#/components/schemas/PlanStatus"
+          }
+        }
+      },
+      "CreateReleaseRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "cluster_id",
+          "incident_id",
+          "change_id",
+          "release_ref",
+          "target_version",
+          "runbook_id",
+          "runbook_version",
+          "plan_id",
+          "plan_hash"
+        ],
+        "properties": {
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "incident_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "change_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "release_ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "target_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "runbook_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "runbook_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "plan_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "plan_hash": {
+            "type": "string",
+            "pattern": "^sha256:[0-9A-Fa-f]{64}$"
+          },
+          "rollback_plan_id": {
+            "oneOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rollback_plan_hash": {
+            "oneOf": [
+              {
+                "type": "string",
+                "pattern": "^sha256:[0-9A-Fa-f]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "PrepareReleaseRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "pdb_ready",
+          "synthetic_probe_ready",
+          "evidence_ids"
+        ],
+        "properties": {
+          "pdb_ready": {
+            "type": "boolean"
+          },
+          "synthetic_probe_ready": {
+            "type": "boolean"
+          },
+          "evidence_ids": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 64,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "affected_resource_keys": {
+            "type": "array",
+            "maxItems": 64,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "default": []
+          },
+          "configuration_changes": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "default": []
+          }
+        }
+      },
+      "ReleaseExecutionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "precondition_hash",
+          "idempotency_key"
+        ],
+        "properties": {
+          "precondition_hash": {
+            "type": "string",
+            "pattern": "^sha256:[0-9A-Fa-f]{64}$"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 256,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          }
+        }
+      },
+      "RecordReleaseObservationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "phase",
+          "slo_healthy",
+          "synthetic_probe_healthy",
+          "sanitized_summary"
+        ],
+        "properties": {
+          "phase": {
+            "$ref": "#/components/schemas/ReleaseObservationPhase"
+          },
+          "slo_healthy": {
+            "type": "boolean"
+          },
+          "synthetic_probe_healthy": {
+            "type": "boolean"
+          },
+          "evidence_ids": {
+            "type": "array",
+            "maxItems": 64,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "default": []
+          },
+          "sanitized_summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        }
+      },
+      "ReleaseTransitionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        }
+      },
+      "CompleteRollbackRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "succeeded",
+          "reason",
+          "observation"
+        ],
+        "properties": {
+          "succeeded": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "observation": {
+            "$ref": "#/components/schemas/RecordReleaseObservationRequest"
+          }
+        }
+      },
+      "ReleasePage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "items",
+          "partial"
+        ],
+        "properties": {
+          "schema_version": {
+            "const": "rocketmq-sre.release-page.v1"
+          },
+          "items": {
+            "type": "array",
+            "maxItems": 200,
+            "items": {
+              "$ref": "#/components/schemas/ReleaseWorkflow"
+            }
+          },
+          "partial": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ReleaseDetail": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "workflow",
+          "observations",
+          "report"
+        ],
+        "properties": {
+          "schema_version": {
+            "const": "rocketmq-sre.release-detail.v1"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/ReleaseWorkflow"
+          },
+          "observations": {
+            "type": "array",
+            "maxItems": 512,
+            "items": {
+              "$ref": "#/components/schemas/ReleaseObservation"
+            }
+          },
+          "report": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ReleaseReport"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "ReleasePreparationView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "workflow",
+          "upgrade_readiness",
+          "simulation"
+        ],
+        "properties": {
+          "schema_version": {
+            "const": "rocketmq-sre.release-preparation-view.v1"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/ReleaseWorkflow"
+          },
+          "upgrade_readiness": {
+            "$ref": "#/components/schemas/UpgradeReadinessReport"
+          },
+          "simulation": {
+            "$ref": "#/components/schemas/WhatIfSimulation"
+          }
+        }
+      },
+      "ReleaseExecutionView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "workflow",
+          "execution_id"
+        ],
+        "properties": {
+          "schema_version": {
+            "const": "rocketmq-sre.release-execution-view.v1"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/ReleaseWorkflow"
+          },
+          "execution_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
       }
     }
   },
@@ -13345,6 +16628,7 @@
     "ShiftHandoffSummary",
     "OperationsReport"
   ],
+  "x-rocketmq-release-management-schema": "rocketmq-sre.release-management.v1",
   "x-rocketmq-unattended-mutation-supported": false,
   "x-rocketmq-arbitrary-mutation-supported": false,
   "x-rocketmq-phase3-contracts": [
@@ -13359,8 +16643,15 @@
     "CriticGateState",
     "CriticReview",
     "ExecutionRequest",
+    "ExternalApprovalInput",
+    "IntegrationDelivery",
+    "IntegrationTarget",
     "ManualRunbookDraft",
     "PolicyDecision",
+    "ReleaseObservation",
+    "ReleaseReadinessSnapshot",
+    "ReleaseReport",
+    "ReleaseWorkflow",
     "ResourceQuarantine",
     "RunbookDefinition",
     "RunbookStepPlanBinding"
