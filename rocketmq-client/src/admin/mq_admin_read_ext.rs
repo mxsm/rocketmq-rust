@@ -45,6 +45,7 @@ pub struct BrokerConfigAllowlisted {
     pub send_message_thread_pool_nums: Option<u32>,
     pub pull_message_thread_pool_nums: Option<u32>,
     pub flush_delay_offset_interval_ms: Option<u64>,
+    pub max_client_event_count: Option<i32>,
 }
 
 #[allow(async_fn_in_trait)]
@@ -57,7 +58,7 @@ pub trait MQAdminReadExt: Send {
 
     async fn fetch_broker_runtime_stats(&self, broker_addr: CheetahString) -> rocketmq_error::RocketMQResult<KVTable>;
 
-    /// Reads only the three non-sensitive Broker fields supported by the SRE
+    /// Reads only the fixed non-sensitive Broker fields evaluated by the SRE
     /// generation-CAS action.
     async fn get_broker_config_allowlisted(
         &self,
@@ -150,6 +151,7 @@ impl MQAdminReadExt for DefaultMQAdminExt {
             send_message_thread_pool_nums: parse_allowlisted_value(&properties, "sendMessageThreadPoolNums")?,
             pull_message_thread_pool_nums: parse_allowlisted_value(&properties, "pullMessageThreadPoolNums")?,
             flush_delay_offset_interval_ms: parse_allowlisted_value(&properties, "flushDelayOffsetInterval")?,
+            max_client_event_count: parse_allowlisted_value(&properties, "maxClientEventCount")?,
         })
     }
 
@@ -381,6 +383,10 @@ mod tests {
                 CheetahString::from_static_str("32"),
             ),
             (
+                CheetahString::from_static_str("maxClientEventCount"),
+                CheetahString::from_static_str("100"),
+            ),
+            (
                 CheetahString::from_static_str("accessKey"),
                 CheetahString::from_static_str("must-not-cross-boundary"),
             ),
@@ -388,6 +394,10 @@ mod tests {
 
         let value = parse_allowlisted_value::<u32>(&properties, "sendMessageThreadPoolNums");
         assert_eq!(value.unwrap(), Some(32));
+        assert_eq!(
+            parse_allowlisted_value::<i32>(&properties, "maxClientEventCount").unwrap(),
+            Some(100)
+        );
         assert_eq!(
             parse_allowlisted_value::<u32>(&properties, "pullMessageThreadPoolNums").unwrap(),
             None

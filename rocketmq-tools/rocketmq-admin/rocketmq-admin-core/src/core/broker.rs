@@ -266,6 +266,7 @@ pub struct BrokerAllowlistedConfig {
     pub send_message_thread_pool_nums: Option<u32>,
     pub pull_message_thread_pool_nums: Option<u32>,
     pub flush_delay_offset_interval_ms: Option<u64>,
+    pub max_client_event_count: Option<i32>,
 }
 
 pub trait BrokerAdmin: Send {

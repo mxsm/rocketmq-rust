@@ -112,6 +112,22 @@ Offboard 是保留历史的终态。成功运行一次 smoke 后，如需从头�
 执行 `dev.ps1 -Action Reset -Force` 清除本地测试 volume，再重新 `Up`；系统不会
 为了测试方便而自动复活已下线的集群。
 
+## Phase 03 Broker generation CAS smoke
+
+下面的聚焦 smoke 在 G 盘构建并启动一套一次性的 loopback NameServer/Broker，
+使用 Docker PostgreSQL 记录 Agent 写前快照和追加式结果。它依次验证 fresh
+generation apply、旧 generation 原子拒绝、live state/operation reconciliation，
+以及基于最新 generation 的反向 patch。Broker 和 NameServer 进程、Store 数据和
+日志在结束时清理；Cargo 输出仍保留在 G 盘共享 target 中。
+
+```powershell
+.\rocketmq-sre\scripts\phase03-broker-cas-smoke.ps1
+```
+
+该脚本不会连接或修改已有业务集群。默认使用 `19876/20911/20909/20912` 四个
+loopback 端口；端口已占用时直接拒绝启动。PostgreSQL 仍使用 Compose 容器，主机
+无需安装数据库。
+
 ## 清理
 
 ```powershell

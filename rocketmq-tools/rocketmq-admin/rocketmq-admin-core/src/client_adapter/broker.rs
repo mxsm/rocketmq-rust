@@ -179,6 +179,7 @@ impl BrokerAdmin for AdminSession {
                 send_message_thread_pool_nums: config.send_message_thread_pool_nums,
                 pull_message_thread_pool_nums: config.pull_message_thread_pool_nums,
                 flush_delay_offset_interval_ms: config.flush_delay_offset_interval_ms,
+                max_client_event_count: config.max_client_event_count,
             })
         })
     }

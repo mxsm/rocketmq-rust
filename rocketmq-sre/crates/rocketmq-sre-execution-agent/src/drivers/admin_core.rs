@@ -29,6 +29,7 @@ pub struct BrokerConfigPatch {
     pub send_message_thread_pool_nums: Option<u32>,
     pub pull_message_thread_pool_nums: Option<u32>,
     pub flush_delay_offset_interval_ms: Option<u64>,
+    pub max_client_event_count: Option<i32>,
 }
 
 impl BrokerConfigPatch {
@@ -41,6 +42,7 @@ impl BrokerConfigPatch {
                 .map(|_| "pull_message_thread_pool_nums".to_owned()),
             self.flush_delay_offset_interval_ms
                 .map(|_| "flush_delay_offset_interval_ms".to_owned()),
+            self.max_client_event_count.map(|_| "max_client_event_count".to_owned()),
         ]
         .into_iter()
         .flatten()
@@ -52,6 +54,7 @@ impl BrokerConfigPatch {
         self.send_message_thread_pool_nums.is_none()
             && self.pull_message_thread_pool_nums.is_none()
             && self.flush_delay_offset_interval_ms.is_none()
+            && self.max_client_event_count.is_none()
     }
 }
 
@@ -100,7 +103,7 @@ pub enum BrokerConfigPatchApplyOutcome {
 
 /// Exact Admin operations available to the allowlisted Broker config action.
 ///
-/// Forward apply must persist the three-field before snapshot with the effect
+/// Forward apply must persist the closed-field before snapshot with the effect
 /// identity before issuing the Admin Core CAS call. Restore must read the
 /// latest generation and apply that snapshot as an inverse CAS; it must never
 /// write the old generation value or use the legacy non-CAS update path.

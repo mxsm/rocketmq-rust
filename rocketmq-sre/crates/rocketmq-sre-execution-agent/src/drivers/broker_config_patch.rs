@@ -56,7 +56,7 @@ struct BrokerPatchPrecondition<'a> {
     live_state: &'a BrokerConfigPatchState,
 }
 
-/// Generation-CAS Broker patch handler for three restart-free fields.
+/// Generation-CAS Broker patch handler for a closed, capability-checked field set.
 #[derive(Clone)]
 pub struct BrokerConfigPatchHandler<C> {
     client: Arc<C>,
@@ -274,6 +274,10 @@ fn validate_parameters(parameters: &BrokerConfigPatchParameters) -> Vec<String> 
             .patch
             .flush_delay_offset_interval_ms
             .is_some_and(|value| !(1_000..=60_000).contains(&value))
+        || parameters
+            .patch
+            .max_client_event_count
+            .is_some_and(|value| !(1..=10_000).contains(&value))
     {
         reasons.push("broker_config_value_out_of_range".to_owned());
     }
@@ -298,6 +302,9 @@ fn patch_matches(patch: &BrokerConfigPatch, state: &BrokerConfigPatch) -> bool {
         && patch
             .flush_delay_offset_interval_ms
             .is_none_or(|value| state.flush_delay_offset_interval_ms == Some(value))
+        && patch
+            .max_client_event_count
+            .is_none_or(|value| state.max_client_event_count == Some(value))
 }
 
 #[cfg(test)]

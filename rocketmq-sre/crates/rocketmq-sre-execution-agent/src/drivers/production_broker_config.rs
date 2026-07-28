@@ -55,6 +55,7 @@ use crate::config::BrokerAdminDriverConfig;
 const SEND_THREADS: &str = "send_message_thread_pool_nums";
 const PULL_THREADS: &str = "pull_message_thread_pool_nums";
 const FLUSH_DELAY: &str = "flush_delay_offset_interval_ms";
+const MAX_CLIENT_EVENTS: &str = "max_client_event_count";
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 struct BrokerBeforeState {
@@ -347,8 +348,17 @@ impl ProductionBrokerConfigPatchClient {
             send_message_thread_pool_nums: config.send_message_thread_pool_nums,
             pull_message_thread_pool_nums: config.pull_message_thread_pool_nums,
             flush_delay_offset_interval_ms: config.flush_delay_offset_interval_ms,
+            max_client_event_count: config.max_client_event_count,
         };
-        let supported_fields = [
+        // Only fields with a Broker-side live transaction and a runtime
+        // consumer of the newly published generation are executable. Visible
+        // fields that still require restart remain useful for a precise
+        // fail-closed precheck but never enter the mutation surface.
+        let supported_fields = [values.max_client_event_count.map(|_| MAX_CLIENT_EVENTS.to_owned())]
+            .into_iter()
+            .flatten()
+            .collect::<BTreeSet<_>>();
+        let restart_required_fields = [
             values.send_message_thread_pool_nums.map(|_| SEND_THREADS.to_owned()),
             values.pull_message_thread_pool_nums.map(|_| PULL_THREADS.to_owned()),
             values.flush_delay_offset_interval_ms.map(|_| FLUSH_DELAY.to_owned()),
@@ -364,7 +374,7 @@ impl ProductionBrokerConfigPatchClient {
             generation: config.generation,
             values,
             supported_fields,
-            restart_required_fields: BTreeSet::new(),
+            restart_required_fields,
             last_operation_id,
         })
     }
@@ -518,6 +528,10 @@ fn select_before_values(
             .flush_delay_offset_interval_ms
             .map(|_| live.flush_delay_offset_interval_ms)
             .transpose_required()?,
+        max_client_event_count: requested
+            .max_client_event_count
+            .map(|_| live.max_client_event_count)
+            .transpose_required()?,
     })
 }
 
@@ -546,6 +560,9 @@ fn broker_properties(patch: &BrokerConfigPatch) -> Result<BTreeMap<String, Strin
     if let Some(value) = patch.flush_delay_offset_interval_ms {
         properties.insert("flushDelayOffsetInterval".to_owned(), value.to_string());
     }
+    if let Some(value) = patch.max_client_event_count {
+        properties.insert("maxClientEventCount".to_owned(), value.to_string());
+    }
     if properties.is_empty() {
         Err(ExecutionAgentError::InvalidRequest)
     } else {
@@ -563,6 +580,9 @@ fn patch_matches(patch: &BrokerConfigPatch, state: &BrokerConfigPatch) -> bool {
         && patch
             .flush_delay_offset_interval_ms
             .is_none_or(|value| state.flush_delay_offset_interval_ms == Some(value))
+        && patch
+            .max_client_event_count
+            .is_none_or(|value| state.max_client_event_count == Some(value))
 }
 
 fn generation_i64(generation: u64) -> Result<i64, AgentStoreError> {

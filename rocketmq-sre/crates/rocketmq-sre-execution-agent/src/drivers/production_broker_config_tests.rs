@@ -15,6 +15,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use rocketmq_admin_core::core::security::AdminCredentials;
+use rocketmq_runtime::RuntimeContext;
 use rocketmq_sre_contracts::ExecutionId;
 use rocketmq_sre_contracts::PlanStepId;
 use sqlx::postgres::PgPoolOptions;
@@ -27,6 +29,7 @@ fn before_snapshot_contains_only_fields_changed_by_the_plan() {
         send_message_thread_pool_nums: Some(16),
         pull_message_thread_pool_nums: Some(12),
         flush_delay_offset_interval_ms: Some(10_000),
+        max_client_event_count: Some(100),
     };
     let requested = BrokerConfigPatch {
         flush_delay_offset_interval_ms: Some(20_000),
@@ -160,6 +163,157 @@ async fn journal_is_append_only_idempotent_and_detects_conflicts() {
     );
 
     cleanup_schema(&pool, &schema).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires an explicitly configured disposable RocketMQ Broker and Docker PostgreSQL"]
+async fn real_broker_generation_cas_rejects_stale_write_and_rolls_back() {
+    let database_url = std::env::var("ROCKETMQ_SRE_TEST_DATABASE_URL").expect("test database URL must be explicit");
+    let namesrv_addr =
+        std::env::var("ROCKETMQ_SRE_TEST_NAMESRV_ADDR").expect("test NameServer address must be explicit");
+    let broker_addr = std::env::var("ROCKETMQ_SRE_TEST_BROKER_ADDR").expect("test Broker address must be explicit");
+    let schema = format!("phase3_broker_cas_{}", Uuid::new_v4().simple());
+    let pool = isolated_pool(&database_url, &schema).await;
+    sqlx::migrate!("../../migrations")
+        .run(&pool)
+        .await
+        .expect("empty-schema migrations");
+    let runtime = RuntimeContext::from_current("phase3-broker-cas-smoke");
+    let client = ProductionBrokerConfigPatchClient::start(
+        &BrokerAdminDriverConfig {
+            namesrv_addr,
+            use_tls: false,
+            request_timeout: Duration::from_secs(10),
+            shutdown_timeout: Duration::from_secs(10),
+            read_credentials: test_credentials("READ"),
+            mutation_credentials: test_credentials("MUTATION"),
+        },
+        pool.clone(),
+        runtime.service_context("broker-config-driver"),
+    )
+    .await
+    .expect("start real Broker adapter");
+
+    let before = client.live_state(&broker_addr).await.expect("read live Broker state");
+    assert!(
+        before.supported_fields.contains(MAX_CLIENT_EVENTS),
+        "live maxClientEventCount must be executable"
+    );
+    assert!(
+        before.restart_required_fields.contains(FLUSH_DELAY),
+        "visible flushDelayOffsetInterval must remain fail-closed"
+    );
+    let original = before
+        .values
+        .max_client_event_count
+        .expect("test Broker must expose maxClientEventCount");
+    let changed = if original == 101 { 102 } else { 101 };
+    let execution_id = ExecutionId::new();
+    let plan_step_id = PlanStepId::new();
+    let forward_operation = format!("phase3-forward-{}", Uuid::new_v4());
+    let forward = client
+        .patch_broker_config(&BrokerConfigPatchWrite {
+            broker_addr: broker_addr.clone(),
+            expected_generation: before.generation,
+            patch: BrokerConfigPatch {
+                max_client_event_count: Some(changed),
+                ..BrokerConfigPatch::default()
+            },
+            operation_id: forward_operation.clone(),
+            execution_id,
+            plan_step_id,
+        })
+        .await;
+
+    let scenario = async {
+        let BrokerConfigPatchApplyOutcome::Applied {
+            previous_generation,
+            generation: forward_generation,
+        } = forward.map_err(|error| format!("forward patch failed: {error:?}"))?
+        else {
+            return Err("fresh generation unexpectedly conflicted".to_owned());
+        };
+        if previous_generation != before.generation || forward_generation <= before.generation {
+            return Err("forward patch did not advance from the observed generation".to_owned());
+        }
+        let after_forward = client
+            .live_state(&broker_addr)
+            .await
+            .map_err(|error| format!("forward verification failed: {error:?}"))?;
+        if after_forward.generation != forward_generation
+            || after_forward.values.max_client_event_count != Some(changed)
+            || after_forward.last_operation_id.as_deref() != Some(&forward_operation)
+        {
+            return Err("forward state or durable operation reconciliation drifted".to_owned());
+        }
+
+        let stale = client
+            .patch_broker_config(&BrokerConfigPatchWrite {
+                broker_addr: broker_addr.clone(),
+                expected_generation: before.generation,
+                patch: BrokerConfigPatch {
+                    max_client_event_count: Some(original),
+                    ..BrokerConfigPatch::default()
+                },
+                operation_id: format!("phase3-stale-{}", Uuid::new_v4()),
+                execution_id: ExecutionId::new(),
+                plan_step_id: PlanStepId::new(),
+            })
+            .await
+            .map_err(|error| format!("stale patch returned an unknown result: {error:?}"))?;
+        if stale
+            != (BrokerConfigPatchApplyOutcome::GenerationConflict {
+                expected_generation: before.generation,
+                actual_generation: forward_generation,
+            })
+        {
+            return Err("stale generation was not rejected without overwrite".to_owned());
+        }
+        Ok::<u64, String>(forward_generation)
+    }
+    .await;
+
+    let rollback_operation = format!("phase3-rollback-{}", Uuid::new_v4());
+    let rollback = client
+        .restore_broker_config(&BrokerConfigPatchRestore {
+            broker_addr: broker_addr.clone(),
+            operation_id: rollback_operation.clone(),
+            execution_id,
+            plan_step_id,
+        })
+        .await;
+    let restored = client.live_state(&broker_addr).await;
+    client.shutdown().await;
+    let shutdown = runtime.shutdown_tasks(Duration::from_secs(10)).await;
+    cleanup_schema(&pool, &schema).await;
+
+    let forward_generation = scenario.expect("real generation-CAS scenario");
+    let BrokerConfigPatchApplyOutcome::Applied {
+        previous_generation,
+        generation: rollback_generation,
+    } = rollback.expect("inverse patch at latest generation")
+    else {
+        panic!("inverse patch unexpectedly conflicted");
+    };
+    assert_eq!(previous_generation, forward_generation);
+    assert!(rollback_generation > forward_generation);
+    let restored = restored.expect("read restored Broker state");
+    assert_eq!(restored.generation, rollback_generation);
+    assert_eq!(restored.values.max_client_event_count, Some(original));
+    assert_eq!(restored.last_operation_id.as_deref(), Some(rollback_operation.as_str()));
+    assert!(shutdown.is_healthy(), "runtime shutdown report: {shutdown:?}");
+}
+
+fn test_credentials(identity: &str) -> Option<AdminCredentials> {
+    let access_key = std::env::var(format!("ROCKETMQ_SRE_TEST_BROKER_{identity}_ACCESS_KEY")).ok();
+    let secret_key = std::env::var(format!("ROCKETMQ_SRE_TEST_BROKER_{identity}_SECRET_KEY")).ok();
+    match (access_key, secret_key) {
+        (None, None) => None,
+        (Some(access_key), Some(secret_key)) => {
+            Some(AdminCredentials::try_new(access_key, secret_key, None).expect("valid explicit test credentials"))
+        }
+        _ => panic!("test Broker credentials must provide both access and secret keys"),
+    }
 }
 
 async fn isolated_pool(database_url: &str, schema: &str) -> PgPool {

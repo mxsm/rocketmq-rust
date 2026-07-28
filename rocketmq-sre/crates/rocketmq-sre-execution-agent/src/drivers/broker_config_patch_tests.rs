@@ -56,6 +56,7 @@ impl FakeBrokerConfigClient {
                     send_message_thread_pool_nums: Some(16),
                     pull_message_thread_pool_nums: Some(16),
                     flush_delay_offset_interval_ms: Some(10_000),
+                    max_client_event_count: Some(100),
                 },
                 supported_fields: [
                     "send_message_thread_pool_nums".to_owned(),
@@ -208,6 +209,9 @@ fn merge_patch(current: &mut BrokerConfigPatch, patch: &BrokerConfigPatch) {
     }
     if let Some(value) = patch.flush_delay_offset_interval_ms {
         current.flush_delay_offset_interval_ms = Some(value);
+    }
+    if let Some(value) = patch.max_client_event_count {
+        current.max_client_event_count = Some(value);
     }
 }
 

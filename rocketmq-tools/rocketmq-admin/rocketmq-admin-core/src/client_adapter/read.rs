@@ -1109,6 +1109,7 @@ fn project_allowlisted_config(config: rocketmq_client_rust::BrokerConfigAllowlis
         send_message_thread_pool_nums: config.send_message_thread_pool_nums,
         pull_message_thread_pool_nums: config.pull_message_thread_pool_nums,
         flush_delay_offset_interval_ms: config.flush_delay_offset_interval_ms,
+        max_client_event_count: config.max_client_event_count,
     }
 }
 
@@ -1198,6 +1199,7 @@ mod tests {
             send_message_thread_pool_nums: Some(32),
             pull_message_thread_pool_nums: Some(16),
             flush_delay_offset_interval_ms: Some(10_000),
+            max_client_event_count: Some(100),
         });
 
         assert_eq!(
@@ -1207,9 +1209,10 @@ mod tests {
                 send_message_thread_pool_nums: Some(32),
                 pull_message_thread_pool_nums: Some(16),
                 flush_delay_offset_interval_ms: Some(10_000),
+                max_client_event_count: Some(100),
             }
         );
-        assert_eq!(serde_json::to_value(projected).unwrap().as_object().unwrap().len(), 4);
+        assert_eq!(serde_json::to_value(projected).unwrap().as_object().unwrap().len(), 5);
     }
 
     fn protocol_connection(client_id: &str, client_addr: &str, language: LanguageCode, version: i32) -> Connection {
