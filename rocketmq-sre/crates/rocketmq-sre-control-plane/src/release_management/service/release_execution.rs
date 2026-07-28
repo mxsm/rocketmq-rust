@@ -49,7 +49,7 @@ use crate::supervised_execution::ExecutionSubmissionView;
 use crate::supervised_execution::SubmitExecutionRequest;
 
 impl ReleaseManagementService {
-    pub(crate) async fn start_release(
+    pub(in crate::release_management) async fn start_release(
         &self,
         auth: &AuthContext,
         release_id: ReleaseId,
@@ -119,7 +119,7 @@ impl ReleaseManagementService {
         })
     }
 
-    pub(crate) async fn record_release_observation(
+    pub(in crate::release_management) async fn record_release_observation(
         &self,
         auth: &AuthContext,
         release_id: ReleaseId,
@@ -188,7 +188,7 @@ impl ReleaseManagementService {
         self.release(auth, current.id).await
     }
 
-    pub(crate) async fn pause_release(
+    pub(in crate::release_management) async fn pause_release(
         &self,
         auth: &AuthContext,
         release_id: ReleaseId,
@@ -217,7 +217,7 @@ impl ReleaseManagementService {
         self.release(auth, release_id).await
     }
 
-    pub(crate) async fn resume_release(
+    pub(in crate::release_management) async fn resume_release(
         &self,
         auth: &AuthContext,
         release_id: ReleaseId,
@@ -252,7 +252,7 @@ impl ReleaseManagementService {
         self.release(auth, release_id).await
     }
 
-    pub(crate) async fn begin_release_verification(
+    pub(in crate::release_management) async fn begin_release_verification(
         &self,
         auth: &AuthContext,
         release_id: ReleaseId,
@@ -290,7 +290,7 @@ impl ReleaseManagementService {
         self.release(auth, release_id).await
     }
 
-    pub(crate) async fn complete_release(
+    pub(in crate::release_management) async fn complete_release(
         &self,
         auth: &AuthContext,
         release_id: ReleaseId,
