@@ -22,6 +22,7 @@ use rocketmq_sre_contracts::AutonomyPolicyId;
 use rocketmq_sre_contracts::AutonomyQualificationCohort;
 use rocketmq_sre_contracts::AutonomyQualificationLevel;
 use rocketmq_sre_contracts::ClusterId;
+use rocketmq_sre_contracts::DynamicSafetyDecision;
 use rocketmq_sre_contracts::ExecutionAction;
 use rocketmq_sre_contracts::TenantId;
 use serde_json::Value;
@@ -559,6 +560,133 @@ impl PostgresRepository {
         })
     }
 
+    pub(super) async fn store_autonomy_cohort(
+        &self,
+        policy_id: AutonomyPolicyId,
+        cohort: &AutonomyQualificationCohort,
+    ) -> Result<AutonomyQualificationCohort, ControlPlaneError> {
+        sqlx::query(
+            "INSERT INTO autonomy_qualification_cohorts (
+                id, level, tenant_id, cluster_id, action_id, action_version,
+                policy_id, policy_definition_version, descriptor_digest,
+                diagnostic_pack_id, diagnostic_pack_version,
+                primary_actual_model_identity_hash,
+                critic_actual_model_identity_hash, cohort_hash, created_at
+             ) VALUES (
+                $1, $2, $3, $4, $5, $6,
+                $7, $8, $9,
+                $10, $11,
+                $12,
+                $13, $14, $15
+             )
+             ON CONFLICT (cohort_hash) DO NOTHING",
+        )
+        .bind(cohort.id.as_uuid())
+        .bind(qualification_level_name(cohort.level))
+        .bind(cohort.tenant_id.as_uuid())
+        .bind(cohort.cluster_id.as_uuid())
+        .bind(cohort.action.id())
+        .bind(&cohort.action_version)
+        .bind(policy_id.as_uuid())
+        .bind(
+            i64::try_from(cohort.policy_definition_version)
+                .map_err(|_| invalid_request("cohort policy version is too large"))?,
+        )
+        .bind(&cohort.descriptor_digest)
+        .bind(&cohort.diagnostic_pack_id)
+        .bind(&cohort.diagnostic_pack_version)
+        .bind(&cohort.primary_actual_model_identity_hash)
+        .bind(&cohort.critic_actual_model_identity_hash)
+        .bind(&cohort.cohort_hash)
+        .bind(cohort.created_at)
+        .execute(&self.pool)
+        .await?;
+
+        let row = sqlx::query(
+            "SELECT *
+             FROM autonomy_qualification_cohorts
+             WHERE cohort_hash = $1",
+        )
+        .bind(&cohort.cohort_hash)
+        .fetch_one(&self.pool)
+        .await?;
+        let stored = cohort_from_row(&row)?;
+        if stored.level != cohort.level
+            || stored.tenant_id != cohort.tenant_id
+            || stored.cluster_id != cohort.cluster_id
+            || stored.action != cohort.action
+            || stored.action_version != cohort.action_version
+            || stored.policy_definition_version != cohort.policy_definition_version
+            || stored.descriptor_digest != cohort.descriptor_digest
+            || stored.diagnostic_pack_id != cohort.diagnostic_pack_id
+            || stored.diagnostic_pack_version != cohort.diagnostic_pack_version
+            || stored.primary_actual_model_identity_hash != cohort.primary_actual_model_identity_hash
+            || stored.critic_actual_model_identity_hash != cohort.critic_actual_model_identity_hash
+        {
+            return Err(ControlPlaneError::conflict_code(
+                "autonomy_cohort_hash_collision",
+                "stored autonomy cohort does not match the canonical qualification key",
+            ));
+        }
+        Ok(stored)
+    }
+
+    pub(super) async fn store_dynamic_safety_decision(
+        &self,
+        decision: &DynamicSafetyDecision,
+    ) -> Result<(), ControlPlaneError> {
+        sqlx::query(
+            "INSERT INTO autonomy_dynamic_safety_decisions (
+                id, tenant_id, cluster_id, action_id, action_version,
+                plan_id, plan_hash, execution_id, execution_step_id,
+                policy_definition_version, lifecycle_revision,
+                error_budget_available, freeze_revision, kill_switch_revision,
+                evidence_fresh, allowed, reason_codes, decision_snapshot,
+                issued_at, expires_at
+             ) VALUES (
+                $1, $2, $3, $4, $5,
+                $6, $7, $8, $9,
+                $10, $11,
+                $12, $13, $14,
+                $15, $16, $17, $18,
+                $19, $20
+             )
+             ON CONFLICT (id) DO NOTHING",
+        )
+        .bind(decision.id.as_uuid())
+        .bind(decision.tenant_id.as_uuid())
+        .bind(decision.cluster_id.as_uuid())
+        .bind(decision.action.id())
+        .bind(&decision.action_version)
+        .bind(decision.plan_id.as_uuid())
+        .bind(&decision.plan_hash)
+        .bind(decision.execution_id.as_uuid())
+        .bind(decision.execution_step_id.as_uuid())
+        .bind(
+            i64::try_from(decision.policy_definition_version)
+                .map_err(|_| invalid_request("safety policy version is too large"))?,
+        )
+        .bind(
+            i64::try_from(decision.lifecycle_revision)
+                .map_err(|_| invalid_request("safety lifecycle revision is too large"))?,
+        )
+        .bind(decision.error_budget_available)
+        .bind(i64::try_from(decision.freeze_revision).map_err(|_| invalid_request("freeze revision is too large"))?)
+        .bind(
+            i64::try_from(decision.kill_switch_revision)
+                .map_err(|_| invalid_request("kill-switch revision is too large"))?,
+        )
+        .bind(decision.evidence_fresh)
+        .bind(decision.allowed)
+        .bind(&decision.reason_codes)
+        .bind(json_value(decision)?)
+        .bind(decision.issued_at)
+        .bind(decision.expires_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     async fn autonomy_qualification(
         &self,
         policy: &AutonomyPolicyDefinition,
@@ -900,6 +1028,13 @@ const fn mode_name(mode: AutonomyMode) -> &'static str {
         AutonomyMode::Supervised => "supervised",
         AutonomyMode::Autonomous => "autonomous",
         AutonomyMode::Paused => "paused",
+    }
+}
+
+const fn qualification_level_name(level: AutonomyQualificationLevel) -> &'static str {
+    match level {
+        AutonomyQualificationLevel::Shadow => "shadow",
+        AutonomyQualificationLevel::Autonomous => "autonomous",
     }
 }
 
