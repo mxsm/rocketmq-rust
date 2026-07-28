@@ -29,6 +29,8 @@ use crate::core::AdminResult;
 
 /// Stable schema version emitted by the read-only broker diagnostics query.
 pub const BROKER_DIAGNOSTICS_SCHEMA_VERSION: &str = "rocketmq.admin-broker-diagnostics.v1";
+/// Stable schema version emitted by the bounded Broker log-filter query.
+pub const BROKER_LOG_FILTER_STATE_SCHEMA_VERSION: &str = "rocketmq.admin-broker-log-filter-state.v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListBrokersRequest {
@@ -269,6 +271,122 @@ pub struct BrokerAllowlistedConfig {
     pub max_client_event_count: Option<i32>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum BrokerLogLevel {
+    Info,
+    Debug,
+}
+
+impl BrokerLogLevel {
+    #[must_use]
+    pub const fn as_uppercase(self) -> &'static str {
+        match self {
+            Self::Info => "INFO",
+            Self::Debug => "DEBUG",
+        }
+    }
+
+    #[must_use]
+    pub const fn as_filter_value(self) -> &'static str {
+        match self {
+            Self::Info => "info",
+            Self::Debug => "debug",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueryBrokerLogFilterStateRequest {
+    pub broker_addr: String,
+    pub logger: String,
+}
+
+impl QueryBrokerLogFilterStateRequest {
+    /// Creates a query for one allowlisted Broker logger target.
+    ///
+    /// # Errors
+    ///
+    /// Rejects blank addresses and logger targets outside
+    /// `rocketmq_broker::`.
+    pub fn try_new(broker_addr: impl Into<String>, logger: impl Into<String>) -> AdminResult<Self> {
+        Ok(Self {
+            broker_addr: required("broker_addr", broker_addr)?,
+            logger: broker_logger(logger)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrokerLogFilterState {
+    pub schema_version: String,
+    pub supported: bool,
+    pub logger: String,
+    pub level: Option<BrokerLogLevel>,
+    pub active_operation_id: Option<String>,
+    pub last_completed_operation_id: Option<String>,
+    pub expires_at_millis: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetBrokerLogFilterTtlRequest {
+    pub broker_addr: String,
+    pub logger: String,
+    pub level: BrokerLogLevel,
+    pub ttl_seconds: u32,
+    pub operation_id: String,
+}
+
+impl SetBrokerLogFilterTtlRequest {
+    /// Creates an exact, short-lived Broker log-filter request.
+    ///
+    /// # Errors
+    ///
+    /// Rejects targets outside `rocketmq_broker::`, blank operation IDs, and
+    /// TTLs outside 60 through 900 seconds.
+    pub fn try_new(
+        broker_addr: impl Into<String>,
+        logger: impl Into<String>,
+        level: BrokerLogLevel,
+        ttl_seconds: u32,
+        operation_id: impl Into<String>,
+    ) -> AdminResult<Self> {
+        if !(60..=900).contains(&ttl_seconds) {
+            return Err(crate::core::AdminError::invalid_argument(
+                "ttl_seconds",
+                "must be between 60 and 900",
+            ));
+        }
+        Ok(Self {
+            broker_addr: required("broker_addr", broker_addr)?,
+            logger: broker_logger(logger)?,
+            level,
+            ttl_seconds,
+            operation_id: bounded_operation_id(operation_id)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RestoreBrokerLogFilterRequest {
+    pub broker_addr: String,
+    pub operation_id: String,
+}
+
+impl RestoreBrokerLogFilterRequest {
+    /// Creates a restoration request bound to one SRE operation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects blank addresses and invalid operation IDs.
+    pub fn try_new(broker_addr: impl Into<String>, operation_id: impl Into<String>) -> AdminResult<Self> {
+        Ok(Self {
+            broker_addr: required("broker_addr", broker_addr)?,
+            operation_id: bounded_operation_id(operation_id)?,
+        })
+    }
+}
+
 pub trait BrokerAdmin: Send {
     fn list_brokers<'a>(&'a mut self, request: &'a ListBrokersRequest) -> AdminFuture<'a, ListBrokersResult>;
 
@@ -286,6 +404,18 @@ pub trait BrokerAdmin: Send {
         &'a mut self,
         request: &'a QueryBrokerAllowlistedConfigRequest,
     ) -> AdminFuture<'a, BrokerAllowlistedConfig>;
+
+    fn query_log_filter_state<'a>(
+        &'a mut self,
+        _request: &'a QueryBrokerLogFilterStateRequest,
+    ) -> AdminFuture<'a, BrokerLogFilterState> {
+        Box::pin(async {
+            Err(crate::core::AdminError::backend(
+                "query_log_filter_state",
+                "typed Broker log-filter query is not implemented by this adapter",
+            ))
+        })
+    }
 }
 
 /// Read-only broker administration capability.
@@ -306,6 +436,18 @@ pub trait BrokerQueryAdmin: Send {
         &'a mut self,
         request: &'a QueryBrokerAllowlistedConfigRequest,
     ) -> AdminFuture<'a, BrokerAllowlistedConfig>;
+
+    fn query_log_filter_state<'a>(
+        &'a mut self,
+        _request: &'a QueryBrokerLogFilterStateRequest,
+    ) -> AdminFuture<'a, BrokerLogFilterState> {
+        Box::pin(async {
+            Err(crate::core::AdminError::backend(
+                "query_log_filter_state",
+                "typed Broker log-filter query is not implemented by this adapter",
+            ))
+        })
+    }
 }
 
 impl<T: BrokerAdmin + ?Sized> BrokerQueryAdmin for T {
@@ -332,6 +474,13 @@ impl<T: BrokerAdmin + ?Sized> BrokerQueryAdmin for T {
         request: &'a QueryBrokerAllowlistedConfigRequest,
     ) -> AdminFuture<'a, BrokerAllowlistedConfig> {
         BrokerAdmin::query_allowlisted_config(self, request)
+    }
+
+    fn query_log_filter_state<'a>(
+        &'a mut self,
+        request: &'a QueryBrokerLogFilterStateRequest,
+    ) -> AdminFuture<'a, BrokerLogFilterState> {
+        BrokerAdmin::query_log_filter_state(self, request)
     }
 }
 
@@ -376,6 +525,96 @@ pub trait BrokerMutationAdmin: Send {
         &'a mut self,
         request: &'a PatchBrokerConfigRequest,
     ) -> AdminFuture<'a, PatchBrokerConfigOutcome>;
+
+    fn set_log_filter_ttl<'a>(&'a mut self, _request: &'a SetBrokerLogFilterTtlRequest) -> AdminFuture<'a, ()> {
+        Box::pin(async {
+            Err(crate::core::AdminError::backend(
+                "set_log_filter_ttl",
+                "typed Broker log-filter mutation is not implemented by this adapter",
+            ))
+        })
+    }
+
+    fn restore_log_filter<'a>(&'a mut self, _request: &'a RestoreBrokerLogFilterRequest) -> AdminFuture<'a, ()> {
+        Box::pin(async {
+            Err(crate::core::AdminError::backend(
+                "restore_log_filter",
+                "typed Broker log-filter mutation is not implemented by this adapter",
+            ))
+        })
+    }
+}
+
+#[cfg(any(feature = "read-client-adapter", test))]
+pub(crate) fn project_broker_log_filter_state(logger: String, runtime: &KVTable) -> BrokerLogFilterState {
+    let supported = runtime_bool(runtime, "sreLogFilterControlSupported").unwrap_or(false);
+    BrokerLogFilterState {
+        schema_version: BROKER_LOG_FILTER_STATE_SCHEMA_VERSION.to_owned(),
+        supported,
+        level: supported
+            .then(|| runtime_value(runtime, "sreLogFilterEffective"))
+            .flatten()
+            .and_then(|filter| effective_log_level(filter, &logger)),
+        active_operation_id: bounded_runtime_identifier(runtime, "sreLogFilterActiveOperationId"),
+        last_completed_operation_id: bounded_runtime_identifier(runtime, "sreLogFilterLastCompletedOperationId"),
+        expires_at_millis: runtime_u64(runtime, "sreLogFilterExpiresAtMillis"),
+        logger,
+    }
+}
+
+fn broker_logger(logger: impl Into<String>) -> AdminResult<String> {
+    let logger = required("logger", logger)?;
+    if logger.len() > 128 || !logger.starts_with("rocketmq_broker::") {
+        Err(crate::core::AdminError::invalid_argument(
+            "logger",
+            "must be an allowlisted rocketmq_broker:: target of at most 128 bytes",
+        ))
+    } else {
+        Ok(logger)
+    }
+}
+
+fn bounded_operation_id(operation_id: impl Into<String>) -> AdminResult<String> {
+    let operation_id = required("operation_id", operation_id)?;
+    if operation_id.len() > 128 || operation_id.chars().any(char::is_control) {
+        Err(crate::core::AdminError::invalid_argument(
+            "operation_id",
+            "must be at most 128 bytes and contain no control characters",
+        ))
+    } else {
+        Ok(operation_id)
+    }
+}
+
+#[cfg(any(feature = "read-client-adapter", test))]
+fn bounded_runtime_identifier(runtime: &KVTable, key: &str) -> Option<String> {
+    runtime_value(runtime, key)
+        .filter(|value| !value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control))
+        .map(ToOwned::to_owned)
+}
+
+#[cfg(any(feature = "read-client-adapter", test))]
+fn effective_log_level(filter: &str, logger: &str) -> Option<BrokerLogLevel> {
+    let mut selected = None;
+    let mut selected_target_len = 0usize;
+    for directive in filter.split(',').map(str::trim).filter(|value| !value.is_empty()) {
+        let (target, level) = match directive.split_once('=') {
+            Some((target, level)) => (Some(target.trim()), level.trim()),
+            None => (None, directive),
+        };
+        let target_len = target.map_or(0, str::len);
+        if target.is_some_and(|target| !logger.starts_with(target)) || target_len < selected_target_len {
+            continue;
+        }
+        let level = match level.to_ascii_lowercase().as_str() {
+            "info" => BrokerLogLevel::Info,
+            "debug" => BrokerLogLevel::Debug,
+            _ => continue,
+        };
+        selected = Some(level);
+        selected_target_len = target_len;
+    }
+    selected
 }
 
 #[cfg(any(feature = "read-client-adapter", test))]
@@ -646,5 +885,60 @@ mod tests {
         let diagnostics = project_broker_diagnostics("broker-a".to_owned(), 0, &KVTable { table: HashMap::new() });
         assert_eq!(diagnostics.coverage, BrokerDiagnosticsCoverage::Unsupported);
         assert!(diagnostics.config.is_none());
+    }
+
+    #[test]
+    fn log_filter_contract_rejects_unbounded_targets_and_ttls() {
+        assert!(SetBrokerLogFilterTtlRequest::try_new(
+            "broker:10911",
+            "rocketmq_broker::processor",
+            BrokerLogLevel::Debug,
+            60,
+            "operation-1",
+        )
+        .is_ok());
+        assert!(SetBrokerLogFilterTtlRequest::try_new(
+            "broker:10911",
+            "rocketmq_store::commit_log",
+            BrokerLogLevel::Debug,
+            60,
+            "operation-1",
+        )
+        .is_err());
+        assert!(SetBrokerLogFilterTtlRequest::try_new(
+            "broker:10911",
+            "rocketmq_broker::processor",
+            BrokerLogLevel::Info,
+            59,
+            "operation-1",
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn log_filter_projection_selects_the_most_specific_target_without_exposing_raw_filter() {
+        let table = HashMap::from([
+            ("sreLogFilterControlSupported", "true"),
+            (
+                "sreLogFilterEffective",
+                "info,rocketmq_broker=info,rocketmq_broker::processor=debug",
+            ),
+            ("sreLogFilterActiveOperationId", "operation-1"),
+            ("sreLogFilterExpiresAtMillis", "123456"),
+            ("secretToken", "must-not-escape"),
+        ])
+        .into_iter()
+        .map(|(key, value)| (CheetahString::from(key), CheetahString::from(value)))
+        .collect();
+        let state = project_broker_log_filter_state("rocketmq_broker::processor::send".to_owned(), &KVTable { table });
+
+        assert!(state.supported);
+        assert_eq!(state.level, Some(BrokerLogLevel::Debug));
+        assert_eq!(state.active_operation_id.as_deref(), Some("operation-1"));
+        assert_eq!(state.expires_at_millis, Some(123456));
+        let encoded = serde_json::to_string(&state).expect("state should serialize");
+        assert!(!encoded.contains("sreLogFilterEffective"));
+        assert!(!encoded.contains("secretToken"));
+        assert!(!encoded.contains("must-not-escape"));
     }
 }
