@@ -776,6 +776,41 @@ pub async fn run(config: ControlPlaneConfig, service_context: ChildServiceContex
         config.dev_auth_enabled(),
         service_context.metadata_io().clone(),
     )?;
+    let provider_smoke_worker = model_gateway.clone();
+    let provider_smoke_tasks = service_context.scheduled_tasks("provider-smoke");
+    let mut provider_smoke_schedule =
+        ScheduledTaskConfig::fixed_rate_no_overlap("phase4-provider-smoke", std::time::Duration::from_secs(15 * 60));
+    provider_smoke_schedule.initial_delay = std::time::Duration::from_secs(30);
+    provider_smoke_schedule.max_run_time = Some(std::time::Duration::from_secs(5 * 60));
+    provider_smoke_schedule.shutdown_timeout = config.shutdown_timeout();
+    provider_smoke_tasks
+        .schedule_fixed_rate_no_overlap(provider_smoke_schedule, move || {
+            let worker = provider_smoke_worker.clone();
+            async move {
+                match worker.run_due_provider_smokes().await {
+                    Ok(summary) if summary.attempted > 0 => {
+                        tracing::info!(
+                            tenants = summary.tenants,
+                            attempted = summary.attempted,
+                            passed = summary.passed,
+                            quarantined = summary.quarantined,
+                            persistence_failures = summary.persistence_failures,
+                            "completed provider smoke scan"
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        tracing::warn!(
+                            error = %error,
+                            "provider smoke scan failed"
+                        );
+                    }
+                }
+            }
+        })
+        .map_err(|error| {
+            ControlPlaneError::configuration(format!("provider smoke scheduler could not be started: {error}"))
+        })?;
     let workflow = WorkflowService::new(repository.clone(), WorkflowEventBus::new(1_024));
     let notification_worker = NotificationOutboxWorker::new(repository.clone())?;
     let integration_worker = IntegrationOutboxWorker::new(repository.clone())?;
