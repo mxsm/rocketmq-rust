@@ -99,6 +99,7 @@ function developmentSession(): AuthSession {
       "rocketmq:diagnose",
       "operator",
       "approver",
+      "model-governance",
     ]),
     accessToken:
       import.meta.env.VITE_SRE_DEV_TOKEN ?? "phase00-internal-token",
@@ -123,7 +124,7 @@ function oidcSettings(): UserManagerSettings | undefined {
     response_type: "code",
     scope:
       import.meta.env.VITE_SRE_OIDC_SCOPE ??
-      "openid profile rocketmq:read rocketmq:diagnose",
+      "openid profile rocketmq:read rocketmq:diagnose rocketmq:model-governance",
     userStore: new WebStorageStateStore({ store: window.sessionStorage }),
     automaticSilentRenew: true,
     monitorSession: true,
