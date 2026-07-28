@@ -66,6 +66,7 @@ use rocketmq_sre_contracts::ExecutionSliObservation;
 use rocketmq_sre_contracts::ExecutionSliQuery;
 use rocketmq_sre_contracts::ExecutionTransition;
 use rocketmq_sre_contracts::ExecutorLease;
+use rocketmq_sre_contracts::ExternalApprovalInput;
 use rocketmq_sre_contracts::FenceAck;
 use rocketmq_sre_contracts::FleetHealthReport;
 use rocketmq_sre_contracts::GrantVerification;
@@ -73,7 +74,10 @@ use rocketmq_sre_contracts::Incident;
 use rocketmq_sre_contracts::IncidentOperationRequest;
 use rocketmq_sre_contracts::IncidentOperationResult;
 use rocketmq_sre_contracts::IncidentOperationsState;
+use rocketmq_sre_contracts::IntegrationDelivery;
+use rocketmq_sre_contracts::IntegrationTarget;
 use rocketmq_sre_contracts::IssueFenceGrantRequest;
+use rocketmq_sre_contracts::ItsmTicketLink;
 use rocketmq_sre_contracts::LeaseFenceGrant;
 use rocketmq_sre_contracts::ManualGate;
 use rocketmq_sre_contracts::ManualRunbookDraft;
@@ -87,6 +91,10 @@ use rocketmq_sre_contracts::PostmortemRevision;
 use rocketmq_sre_contracts::ReconcileEffectRequest;
 use rocketmq_sre_contracts::ReconcileEffectResponse;
 use rocketmq_sre_contracts::ReconcileGrant;
+use rocketmq_sre_contracts::ReleaseObservation;
+use rocketmq_sre_contracts::ReleaseReadinessSnapshot;
+use rocketmq_sre_contracts::ReleaseReport;
+use rocketmq_sre_contracts::ReleaseWorkflow;
 use rocketmq_sre_contracts::ResourceQuarantine;
 use rocketmq_sre_contracts::RunbookDefinition;
 use rocketmq_sre_contracts::RunbookStep;
@@ -334,6 +342,38 @@ pub fn phase3_generated_schemas() -> Result<Vec<(&'static str, serde_json::Value
         (
             "change-conflict.schema.json",
             serde_json::to_value(schema_for!(ChangeConflict))?,
+        ),
+        (
+            "integration-target.schema.json",
+            serde_json::to_value(schema_for!(IntegrationTarget))?,
+        ),
+        (
+            "integration-delivery.schema.json",
+            serde_json::to_value(schema_for!(IntegrationDelivery))?,
+        ),
+        (
+            "itsm-ticket-link.schema.json",
+            serde_json::to_value(schema_for!(ItsmTicketLink))?,
+        ),
+        (
+            "external-approval-input.schema.json",
+            serde_json::to_value(schema_for!(ExternalApprovalInput))?,
+        ),
+        (
+            "release-readiness-snapshot.schema.json",
+            serde_json::to_value(schema_for!(ReleaseReadinessSnapshot))?,
+        ),
+        (
+            "release-observation.schema.json",
+            serde_json::to_value(schema_for!(ReleaseObservation))?,
+        ),
+        (
+            "release-workflow.schema.json",
+            serde_json::to_value(schema_for!(ReleaseWorkflow))?,
+        ),
+        (
+            "release-report.schema.json",
+            serde_json::to_value(schema_for!(ReleaseReport))?,
         ),
         (
             "approval-record.schema.json",

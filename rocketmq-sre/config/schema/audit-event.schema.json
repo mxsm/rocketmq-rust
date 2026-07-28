@@ -30,7 +30,16 @@
         "change_window_created",
         "change_schedule_created",
         "change_schedule_state_changed",
-        "manual_gate_decided"
+        "manual_gate_decided",
+        "integration_target_registered",
+        "integration_delivery_queued",
+        "integration_delivery_completed",
+        "external_approval_received",
+        "release_created",
+        "release_readiness_evaluated",
+        "release_state_changed",
+        "release_observation_captured",
+        "release_report_generated"
       ],
       "type": "string"
     },

@@ -143,6 +143,16 @@ uuid_id!(RunbookId, "Stable identifier for a versioned change runbook.");
 uuid_id!(RunbookStepId, "Stable identifier for a typed runbook step.");
 uuid_id!(ChangeWindowId, "Stable identifier for a maintenance or freeze window.");
 uuid_id!(ChangeScheduleId, "Stable identifier for a scheduled runbook execution.");
+uuid_id!(
+    IntegrationTargetId,
+    "Stable identifier for one tenant-scoped external integration target."
+);
+uuid_id!(
+    IntegrationDeliveryId,
+    "Stable identifier for one idempotent integration delivery."
+);
+uuid_id!(ReleaseId, "Stable identifier for one supervised release workflow.");
+uuid_id!(ReleaseReportId, "Stable identifier for one immutable release report.");
 
 #[cfg(test)]
 mod tests {

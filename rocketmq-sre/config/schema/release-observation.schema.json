@@ -1,0 +1,59 @@
+{
+  "$defs": {
+    "EvidenceId": {
+      "description": "Stable identifier for an evidence snapshot.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ReleaseObservationPhase": {
+      "description": "Phase associated with one SLO/probe observation.",
+      "enum": [
+        "before",
+        "during",
+        "after"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Bounded observation used for pause, rollback, and release reporting.",
+  "properties": {
+    "evidence_ids": {
+      "items": {
+        "$ref": "#/$defs/EvidenceId"
+      },
+      "type": "array"
+    },
+    "observed_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "phase": {
+      "$ref": "#/$defs/ReleaseObservationPhase"
+    },
+    "regression_detected": {
+      "type": "boolean"
+    },
+    "sanitized_summary": {
+      "type": "string"
+    },
+    "slo_healthy": {
+      "type": "boolean"
+    },
+    "synthetic_probe_healthy": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "phase",
+    "slo_healthy",
+    "synthetic_probe_healthy",
+    "regression_detected",
+    "evidence_ids",
+    "sanitized_summary",
+    "observed_at"
+  ],
+  "title": "ReleaseObservation",
+  "type": "object"
+}

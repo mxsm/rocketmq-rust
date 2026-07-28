@@ -1,0 +1,73 @@
+{
+  "$defs": {
+    "EvidenceId": {
+      "description": "Stable identifier for an evidence snapshot.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ReadinessReportId": {
+      "description": "Stable identifier for an immutable readiness report.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "SimulationId": {
+      "description": "Stable identifier for a read-only what-if simulation.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Immutable release gate projection from readiness and what-if checks.",
+  "properties": {
+    "capacity_ready": {
+      "type": "boolean"
+    },
+    "evidence_ids": {
+      "items": {
+        "$ref": "#/$defs/EvidenceId"
+      },
+      "type": "array"
+    },
+    "observed_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "pdb_ready": {
+      "type": "boolean"
+    },
+    "quorum_ready": {
+      "type": "boolean"
+    },
+    "simulation_id": {
+      "$ref": "#/$defs/SimulationId"
+    },
+    "store_recovery_ready": {
+      "type": "boolean"
+    },
+    "synthetic_probe_ready": {
+      "type": "boolean"
+    },
+    "upgrade_readiness_id": {
+      "$ref": "#/$defs/ReadinessReportId"
+    },
+    "valid_until": {
+      "format": "date-time",
+      "type": "string"
+    }
+  },
+  "required": [
+    "upgrade_readiness_id",
+    "simulation_id",
+    "pdb_ready",
+    "capacity_ready",
+    "quorum_ready",
+    "store_recovery_ready",
+    "synthetic_probe_ready",
+    "evidence_ids",
+    "observed_at",
+    "valid_until"
+  ],
+  "title": "ReleaseReadinessSnapshot",
+  "type": "object"
+}

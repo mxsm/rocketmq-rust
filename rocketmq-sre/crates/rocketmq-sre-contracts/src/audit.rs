@@ -51,6 +51,15 @@ pub enum AuditEventKind {
     ChangeScheduleCreated,
     ChangeScheduleStateChanged,
     ManualGateDecided,
+    IntegrationTargetRegistered,
+    IntegrationDeliveryQueued,
+    IntegrationDeliveryCompleted,
+    ExternalApprovalReceived,
+    ReleaseCreated,
+    ReleaseReadinessEvaluated,
+    ReleaseStateChanged,
+    ReleaseObservationCaptured,
+    ReleaseReportGenerated,
 }
 
 /// Sanitized append-only audit event.
