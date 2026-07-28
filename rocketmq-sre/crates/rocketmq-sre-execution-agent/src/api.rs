@@ -286,7 +286,18 @@ async fn dispatch(
     Json(request): Json<AgentDispatchRequest>,
 ) -> Result<Json<AgentDispatchResponse>, ExecutionAgentError> {
     authorize(&state, &headers)?;
-    state.agent.dispatch(&request).await.map(Json)
+    match state.agent.dispatch(&request).await {
+        Ok(response) => Ok(Json(response)),
+        Err(error) => {
+            tracing::warn!(
+                error_code = error.stable_code(),
+                action = request.request.action.id(),
+                compensation = request.request.intent.compensation,
+                "Execution Agent dispatch failed before returning a result"
+            );
+            Err(error)
+        }
+    }
 }
 
 async fn reconcile(
