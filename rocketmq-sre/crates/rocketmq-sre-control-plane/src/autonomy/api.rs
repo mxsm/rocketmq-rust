@@ -38,8 +38,12 @@ use super::model::EvaluateDynamicSafetyRequest;
 use super::model::IssueAutonomyGrantRequest;
 use super::model::PrepareAutonomousCohortRequest;
 use super::model::RecordQualificationSampleRequest;
+use super::model::RecordShadowOutcomeRequest;
 use super::model::SetAutonomyFreezeRequest;
 use super::model::SetAutonomyKillSwitchRequest;
+use super::model::ShadowOutcomeListQuery;
+use super::model::ShadowOutcomePage;
+use super::model::ShadowOutcomeView;
 use crate::ControlPlaneError;
 use crate::api::AppState;
 
@@ -74,6 +78,12 @@ pub(crate) fn routes() -> Router<AppState> {
         .route(
             "/internal/v1/autonomy/qualification-samples",
             post(record_qualification_sample).layer(DefaultBodyLimit::max(64 * 1024)),
+        )
+        .route(
+            "/v1/autonomy/shadow-outcomes",
+            get(list_shadow_outcomes)
+                .post(record_shadow_outcome)
+                .layer(DefaultBodyLimit::max(128 * 1024)),
         )
         .route(
             "/internal/v1/autonomy/grants",
@@ -177,6 +187,24 @@ async fn record_qualification_sample(
         .record_qualification_sample(&auth, &request)
         .await
         .map(Json)
+}
+
+async fn record_shadow_outcome(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<RecordShadowOutcomeRequest>,
+) -> Result<Json<ShadowOutcomeView>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
+    state.autonomy.record_shadow_outcome(&auth, &request).await.map(Json)
+}
+
+async fn list_shadow_outcomes(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ShadowOutcomeListQuery>,
+) -> Result<Json<ShadowOutcomePage>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, Some(query.cluster_id)).await?;
+    state.autonomy.shadow_outcomes(&auth, &query).await.map(Json)
 }
 
 async fn issue_grant(
