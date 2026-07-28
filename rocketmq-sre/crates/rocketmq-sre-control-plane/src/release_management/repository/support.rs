@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_sre_contracts::ApprovalDecision;
 use rocketmq_sre_contracts::AuditEvent;
 use rocketmq_sre_contracts::AuditEventKind;
 use rocketmq_sre_contracts::IntegrationAdapterKind;
@@ -75,16 +74,6 @@ pub(super) fn parse_integration_event(value: &str) -> Result<IntegrationEventKin
     }
 }
 
-pub(super) const fn delivery_status_name(status: IntegrationDeliveryStatus) -> &'static str {
-    match status {
-        IntegrationDeliveryStatus::Pending => "pending",
-        IntegrationDeliveryStatus::Delivering => "delivering",
-        IntegrationDeliveryStatus::Delivered => "delivered",
-        IntegrationDeliveryStatus::RetryScheduled => "retry_scheduled",
-        IntegrationDeliveryStatus::Failed => "failed",
-    }
-}
-
 pub(super) fn parse_delivery_status(value: &str) -> Result<IntegrationDeliveryStatus, ControlPlaneError> {
     match value {
         "pending" => Ok(IntegrationDeliveryStatus::Pending),
@@ -134,13 +123,6 @@ pub(super) const fn observation_phase_name(phase: ReleaseObservationPhase) -> &'
         ReleaseObservationPhase::Before => "before",
         ReleaseObservationPhase::During => "during",
         ReleaseObservationPhase::After => "after",
-    }
-}
-
-pub(super) const fn approval_decision_name(decision: ApprovalDecision) -> &'static str {
-    match decision {
-        ApprovalDecision::Approved => "approved",
-        ApprovalDecision::Rejected => "rejected",
     }
 }
 
