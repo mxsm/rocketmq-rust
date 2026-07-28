@@ -1,5 +1,10 @@
 {
   "$defs": {
+    "ActionPlanId": {
+      "description": "Stable identifier for an immutable action plan.",
+      "format": "uuid",
+      "type": "string"
+    },
     "ChangeScheduleId": {
       "description": "Stable identifier for a scheduled runbook execution.",
       "format": "uuid",
@@ -10,6 +15,7 @@
       "enum": [
         "scheduled",
         "running",
+        "awaiting_manual_gate",
         "paused",
         "safe_stopping",
         "reconciling",
@@ -24,10 +30,50 @@
       "format": "uuid",
       "type": "string"
     },
+    "CorrelationId": {
+      "description": "Identifier propagated across one logical SRE operation.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ExecutionId": {
+      "description": "Stable identifier for a supervised execution.",
+      "format": "uuid",
+      "type": "string"
+    },
     "RunbookId": {
       "description": "Stable identifier for a versioned change runbook.",
       "format": "uuid",
       "type": "string"
+    },
+    "RunbookStepId": {
+      "description": "Stable identifier for a typed runbook step.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "RunbookStepPlanBinding": {
+      "additionalProperties": false,
+      "description": "Immutable binding from one typed runbook action to one approved plan.",
+      "properties": {
+        "plan_hash": {
+          "type": "string"
+        },
+        "plan_id": {
+          "$ref": "#/$defs/ActionPlanId"
+        },
+        "precondition_hash": {
+          "type": "string"
+        },
+        "step_id": {
+          "$ref": "#/$defs/RunbookStepId"
+        }
+      },
+      "required": [
+        "step_id",
+        "plan_id",
+        "plan_hash",
+        "precondition_hash"
+      ],
+      "type": "object"
     },
     "TenantId": {
       "description": "Stable tenant boundary identifier.",
@@ -39,6 +85,16 @@
   "additionalProperties": false,
   "description": "Scheduled runbook execution.",
   "properties": {
+    "active_execution_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExecutionId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "cancel_requested_at": {
       "format": "date-time",
       "type": [
@@ -48,6 +104,17 @@
     },
     "cluster_id": {
       "$ref": "#/$defs/ClusterId"
+    },
+    "completed_steps": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/RunbookStepId"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "correlation_id": {
+      "$ref": "#/$defs/CorrelationId"
     },
     "created_at": {
       "format": "date-time",
@@ -74,6 +141,12 @@
         "string",
         "null"
       ]
+    },
+    "plan_bindings": {
+      "items": {
+        "$ref": "#/$defs/RunbookStepPlanBinding"
+      },
+      "type": "array"
     },
     "resource_keys": {
       "default": [],
@@ -109,6 +182,16 @@
     "updated_at": {
       "format": "date-time",
       "type": "string"
+    },
+    "waiting_manual_gate": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RunbookStepId"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": [
@@ -116,8 +199,10 @@
     "id",
     "tenant_id",
     "cluster_id",
+    "correlation_id",
     "runbook_id",
     "runbook_version",
+    "plan_bindings",
     "scheduled_start",
     "scheduled_end",
     "status",

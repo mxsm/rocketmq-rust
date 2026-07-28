@@ -90,6 +90,7 @@ use rocketmq_sre_contracts::ReconcileGrant;
 use rocketmq_sre_contracts::ResourceQuarantine;
 use rocketmq_sre_contracts::RunbookDefinition;
 use rocketmq_sre_contracts::RunbookStep;
+use rocketmq_sre_contracts::RunbookStepPlanBinding;
 use rocketmq_sre_contracts::ShiftHandoffSummary;
 use rocketmq_sre_contracts::StepIntent;
 use rocketmq_sre_contracts::StepResult;
@@ -309,6 +310,10 @@ pub fn phase3_generated_schemas() -> Result<Vec<(&'static str, serde_json::Value
         (
             "runbook-step.schema.json",
             serde_json::to_value(schema_for!(RunbookStep))?,
+        ),
+        (
+            "runbook-step-plan-binding.schema.json",
+            serde_json::to_value(schema_for!(RunbookStepPlanBinding))?,
         ),
         (
             "manual-gate.schema.json",

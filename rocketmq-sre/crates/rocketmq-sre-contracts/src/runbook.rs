@@ -21,11 +21,14 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::ActionPlanId;
 use crate::ActionRisk;
 use crate::ChangeScheduleId;
 use crate::ChangeWindowId;
 use crate::ClusterId;
+use crate::CorrelationId;
 use crate::ExecutionAction;
+use crate::ExecutionId;
 use crate::RunbookId;
 use crate::RunbookStepId;
 use crate::TenantId;
@@ -170,12 +173,23 @@ impl ChangeWindow {
 pub enum ChangeScheduleStatus {
     Scheduled,
     Running,
+    AwaitingManualGate,
     Paused,
     SafeStopping,
     Reconciling,
     Completed,
     Cancelled,
     Rejected,
+}
+
+/// Immutable binding from one typed runbook action to one approved plan.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunbookStepPlanBinding {
+    pub step_id: RunbookStepId,
+    pub plan_id: ActionPlanId,
+    pub plan_hash: String,
+    pub precondition_hash: String,
 }
 
 /// Scheduled runbook execution.
@@ -186,8 +200,10 @@ pub struct ChangeSchedule {
     pub id: ChangeScheduleId,
     pub tenant_id: TenantId,
     pub cluster_id: ClusterId,
+    pub correlation_id: CorrelationId,
     pub runbook_id: RunbookId,
     pub runbook_version: String,
+    pub plan_bindings: Vec<RunbookStepPlanBinding>,
     pub scheduled_start: DateTime<Utc>,
     pub scheduled_end: DateTime<Utc>,
     #[serde(default)]
@@ -195,6 +211,10 @@ pub struct ChangeSchedule {
     pub status: ChangeScheduleStatus,
     pub intent_persisted: bool,
     pub next_step_sequence: u16,
+    pub active_execution_id: Option<ExecutionId>,
+    pub waiting_manual_gate: Option<RunbookStepId>,
+    #[serde(default)]
+    pub completed_steps: BTreeSet<RunbookStepId>,
     pub pause_requested_at: Option<DateTime<Utc>>,
     pub cancel_requested_at: Option<DateTime<Utc>>,
     pub created_by: String,

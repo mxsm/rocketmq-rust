@@ -271,6 +271,7 @@ pub use runbook::RunbookConditionOperator;
 pub use runbook::RunbookDefinition;
 pub use runbook::RunbookStep;
 pub use runbook::RunbookStepBody;
+pub use runbook::RunbookStepPlanBinding;
 /// Parsed semantic version used to order descriptor revisions.
 pub use semver::Version as DescriptorVersion;
 pub use simulation::SimulationKind;

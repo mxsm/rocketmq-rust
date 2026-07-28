@@ -47,6 +47,16 @@ impl Error for ChangeCalendarError {}
 pub struct ChangeCalendar;
 
 impl ChangeCalendar {
+    /// Validates one persisted schedule projection.
+    ///
+    /// # Errors
+    ///
+    /// Rejects incompatible schemas, invalid ranges, empty resources, or
+    /// malformed identity metadata.
+    pub fn validate_schedule(schedule: &ChangeSchedule) -> Result<(), ChangeCalendarError> {
+        validate_schedule(schedule)
+    }
+
     /// Validates a maintenance, freeze, or blackout window.
     ///
     /// # Errors
@@ -55,6 +65,9 @@ impl ChangeCalendar {
     /// resource keys, or reason metadata.
     pub fn validate_window(window: &ChangeWindow) -> Result<(), ChangeCalendarError> {
         if window.schema_version != ChangeWindow::SCHEMA_VERSION
+            || window.id.as_uuid().is_nil()
+            || window.tenant_id.as_uuid().is_nil()
+            || window.cluster_id.as_uuid().is_nil()
             || window.name.trim().is_empty()
             || window.name.chars().count() > 128
             || !valid_timezone(&window.timezone)
@@ -84,7 +97,7 @@ impl ChangeCalendar {
         windows: &[ChangeWindow],
         existing: &[ChangeSchedule],
     ) -> Result<Vec<ChangeConflict>, ChangeCalendarError> {
-        validate_schedule(schedule)?;
+        Self::validate_schedule(schedule)?;
         if !(1..=16).contains(&runbook_max_parallelism) {
             return Err(ChangeCalendarError::InvalidSchedule);
         }
@@ -139,7 +152,7 @@ impl ChangeCalendar {
 
         let mut overlapping_count = 0_u16;
         for candidate in existing {
-            validate_schedule(candidate)?;
+            Self::validate_schedule(candidate)?;
             if candidate.tenant_id != schedule.tenant_id
                 || candidate.cluster_id != schedule.cluster_id
                 || candidate.id == schedule.id
@@ -203,7 +216,7 @@ impl ChangeCalendar {
     pub fn pause(schedule: &mut ChangeSchedule, now: SreTimestamp) -> Result<(), ChangeCalendarError> {
         if !matches!(
             schedule.status,
-            ChangeScheduleStatus::Scheduled | ChangeScheduleStatus::Running
+            ChangeScheduleStatus::Scheduled | ChangeScheduleStatus::Running | ChangeScheduleStatus::AwaitingManualGate
         ) {
             return Err(ChangeCalendarError::InvalidTransition);
         }
@@ -222,7 +235,9 @@ impl ChangeCalendar {
         if schedule.status != ChangeScheduleStatus::Paused {
             return Err(ChangeCalendarError::InvalidTransition);
         }
-        schedule.status = if schedule.intent_persisted {
+        schedule.status = if schedule.waiting_manual_gate.is_some() {
+            ChangeScheduleStatus::AwaitingManualGate
+        } else if schedule.intent_persisted {
             ChangeScheduleStatus::Running
         } else {
             ChangeScheduleStatus::Scheduled
@@ -273,7 +288,12 @@ impl ChangeCalendar {
 
 fn validate_schedule(schedule: &ChangeSchedule) -> Result<(), ChangeCalendarError> {
     if schedule.schema_version != ChangeSchedule::SCHEMA_VERSION
+        || schedule.id.as_uuid().is_nil()
+        || schedule.tenant_id.as_uuid().is_nil()
+        || schedule.cluster_id.as_uuid().is_nil()
+        || schedule.runbook_id.as_uuid().is_nil()
         || schedule.runbook_version.trim().is_empty()
+        || schedule.correlation_id.as_uuid().is_nil()
         || schedule.scheduled_start >= schedule.scheduled_end
         || schedule.resource_keys.is_empty()
         || schedule.resource_keys.iter().any(|resource| invalid_resource(resource))

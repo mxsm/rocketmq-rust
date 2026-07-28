@@ -13,20 +13,13 @@
 // limitations under the License.
 
 mod api;
-mod catalog;
-mod executor_client;
 mod model;
-mod policy;
 mod repository;
+mod scheduler;
 mod service;
-pub(crate) mod signing;
-
-#[cfg(test)]
-mod critic_tests;
-#[cfg(test)]
-mod service_tests;
 
 pub(crate) use api::routes;
-pub(crate) use executor_client::ExecutorSubmissionClient;
-pub(crate) use model::SubmitExecutionRequest;
-pub(crate) use service::SupervisedExecutionService;
+pub(crate) use service::ChangeManagementService;
+
+#[cfg(test)]
+mod repository_tests;

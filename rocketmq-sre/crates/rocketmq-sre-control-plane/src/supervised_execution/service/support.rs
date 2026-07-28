@@ -382,6 +382,11 @@ pub(super) const fn audit_event_name(kind: AuditEventKind) -> &'static str {
         AuditEventKind::QuarantineClearRequested => "quarantine_clear_requested",
         AuditEventKind::QuarantineCleared => "quarantine_cleared",
         AuditEventKind::Cancelled => "cancelled",
+        AuditEventKind::RunbookCreated => "runbook_created",
+        AuditEventKind::ChangeWindowCreated => "change_window_created",
+        AuditEventKind::ChangeScheduleCreated => "change_schedule_created",
+        AuditEventKind::ChangeScheduleStateChanged => "change_schedule_state_changed",
+        AuditEventKind::ManualGateDecided => "manual_gate_decided",
     }
 }
 

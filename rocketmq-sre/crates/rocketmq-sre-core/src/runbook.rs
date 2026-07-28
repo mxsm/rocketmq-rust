@@ -18,12 +18,14 @@ use std::error::Error;
 use std::fmt;
 
 use rocketmq_sre_contracts::ActionRisk;
+use rocketmq_sre_contracts::ChangeSchedule;
 use rocketmq_sre_contracts::ContractJsonValue;
 use rocketmq_sre_contracts::DescriptorVersion;
 use rocketmq_sre_contracts::RunbookDefinition;
 use rocketmq_sre_contracts::RunbookStep;
 use rocketmq_sre_contracts::RunbookStepBody;
 use rocketmq_sre_contracts::RunbookStepId;
+use rocketmq_sre_contracts::is_sha256_digest;
 
 use crate::ActionCatalog;
 
@@ -98,10 +100,75 @@ impl RunbookValidator {
         }
         Ok(())
     }
+
+    /// Validates that every action step is bound exactly once to an approved
+    /// plan identity while manual gates remain outside the execution surface.
+    ///
+    /// # Errors
+    ///
+    /// Rejects mismatched runbooks, missing/duplicate/extra bindings, invalid
+    /// plan digests, or inconsistent scheduler projections.
+    pub fn validate_schedule_bindings(
+        definition: &RunbookDefinition,
+        schedule: &ChangeSchedule,
+    ) -> Result<(), RunbookError> {
+        if schedule.runbook_id != definition.id
+            || schedule.runbook_version != definition.version
+            || schedule.next_step_sequence == 0
+            || usize::from(schedule.next_step_sequence) > definition.steps.len() + 1
+            || (schedule.active_execution_id.is_some() && schedule.waiting_manual_gate.is_some())
+        {
+            return Err(RunbookError::InvalidDefinition(
+                "schedule projection does not match the runbook identity or step cursor".to_owned(),
+            ));
+        }
+        let all_steps = definition.steps.iter().map(|step| step.id).collect::<BTreeSet<_>>();
+        if !schedule.completed_steps.is_subset(&all_steps) {
+            return Err(RunbookError::InvalidDefinition(
+                "completed schedule steps are not present in the runbook".to_owned(),
+            ));
+        }
+        if let Some(waiting) = schedule.waiting_manual_gate {
+            let is_gate = definition
+                .steps
+                .iter()
+                .any(|step| step.id == waiting && matches!(step.body, RunbookStepBody::ManualGate { .. }));
+            if !is_gate {
+                return Err(RunbookError::InvalidDefinition(
+                    "waiting manual gate is not a runbook gate".to_owned(),
+                ));
+            }
+        }
+        let action_steps = definition
+            .steps
+            .iter()
+            .filter_map(|step| matches!(step.body, RunbookStepBody::Action { .. }).then_some(step.id))
+            .collect::<BTreeSet<_>>();
+        let mut bound_steps = BTreeSet::new();
+        for binding in &schedule.plan_bindings {
+            if binding.plan_id.as_uuid().is_nil()
+                || !action_steps.contains(&binding.step_id)
+                || !bound_steps.insert(binding.step_id)
+                || !is_sha256_digest(&binding.plan_hash)
+                || !is_sha256_digest(&binding.precondition_hash)
+            {
+                return Err(RunbookError::InvalidDefinition(
+                    "action-plan bindings are missing, duplicated, extra, or malformed".to_owned(),
+                ));
+            }
+        }
+        if action_steps != bound_steps {
+            return Err(RunbookError::InvalidDefinition(
+                "every runbook action step must have exactly one approved plan binding".to_owned(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 fn validate_header(definition: &RunbookDefinition) -> Result<(), RunbookError> {
     if definition.schema_version != RunbookDefinition::SCHEMA_VERSION
+        || definition.id.as_uuid().is_nil()
         || definition.name.trim().is_empty()
         || definition.name.chars().count() > 128
         || definition.owner.trim().is_empty()
@@ -126,7 +193,7 @@ fn index_steps(steps: &[RunbookStep]) -> Result<BTreeMap<RunbookStepId, &Runbook
     for (index, step) in steps.iter().enumerate() {
         let expected_sequence = u16::try_from(index + 1)
             .map_err(|_| RunbookError::InvalidDefinition("step sequence exceeds u16".to_owned()))?;
-        if step.sequence != expected_sequence || indexed.insert(step.id, step).is_some() {
+        if step.id.as_uuid().is_nil() || step.sequence != expected_sequence || indexed.insert(step.id, step).is_some() {
             return Err(RunbookError::InvalidDefinition(
                 "step identifiers must be unique and sequences contiguous".to_owned(),
             ));

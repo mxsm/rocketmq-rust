@@ -516,6 +516,7 @@ pub(crate) struct AppState {
     pub(crate) auth: AuthService,
     pub(crate) alerting: AlertingService,
     pub(crate) assets: AssetTopologyService,
+    pub(crate) change_management: crate::change_management::ChangeManagementService,
     pub(crate) connector_channel: PostgresConnectorChannelService,
     pub(crate) evidence: EvidenceService,
     pub(crate) lease_authority: crate::execution_authority::LeaseAuthorityService,
@@ -562,6 +563,7 @@ pub fn build_router(
 struct ControlPlaneRouters {
     public: Router,
     connector: Router,
+    change_management: crate::change_management::ChangeManagementService,
     forecast: ForecastService,
     slo: SloService,
 }
@@ -611,6 +613,8 @@ fn build_routers_with_auth(
         model_gateway.clone(),
         executor_client,
     )?;
+    let change_management =
+        crate::change_management::ChangeManagementService::new(repository.clone(), supervised_execution.clone())?;
     let lease_authority = crate::execution_authority::LeaseAuthorityService::new(
         repository.pool.clone(),
         grant_signing_key.as_bytes(),
@@ -631,6 +635,7 @@ fn build_routers_with_auth(
         auth,
         alerting,
         assets,
+        change_management: change_management.clone(),
         connector_channel,
         evidence,
         lease_authority,
@@ -663,6 +668,7 @@ fn build_routers_with_auth(
         .merge(crate::operator_workbench::routes())
         .merge(crate::postmortem::routes())
         .merge(crate::supervised_execution::routes())
+        .merge(crate::change_management::routes())
         .merge(crate::execution_authority::routes())
         .merge(crate::execution_verification::routes())
         .with_state(state.clone())
@@ -677,6 +683,7 @@ fn build_routers_with_auth(
     Ok(ControlPlaneRouters {
         public,
         connector,
+        change_management,
         forecast,
         slo,
     })
@@ -836,9 +843,25 @@ pub async fn run(config: ControlPlaneConfig, service_context: ChildServiceContex
         .map_err(|error| {
             ControlPlaneError::configuration(format!("forecast evaluator could not be started: {error}"))
         })?;
+    let change_worker = routers.change_management.clone();
+    let change_tasks = service_context.scheduled_tasks("change-scheduler");
+    let mut change_schedule =
+        ScheduledTaskConfig::fixed_rate_no_overlap("phase3-change-scheduler", std::time::Duration::from_secs(2));
+    change_schedule.initial_delay = std::time::Duration::from_secs(2);
+    change_schedule.max_run_time = Some(std::time::Duration::from_secs(60));
+    change_schedule.shutdown_timeout = config.shutdown_timeout();
+    change_tasks
+        .schedule_fixed_rate_no_overlap(change_schedule, move || {
+            let change_management = change_worker.clone();
+            async move {
+                change_management.run_due().await;
+            }
+        })
+        .map_err(|error| ControlPlaneError::configuration(format!("change scheduler could not be started: {error}")))?;
     let ControlPlaneRouters {
         public,
         connector,
+        change_management: _,
         forecast: _,
         slo: _,
     } = routers;

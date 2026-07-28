@@ -17,6 +17,7 @@ use std::collections::BTreeSet;
 use chrono::TimeDelta;
 use chrono::Utc;
 use rocketmq_sre_contracts::ActionDescriptor;
+use rocketmq_sre_contracts::ActionPlanId;
 use rocketmq_sre_contracts::ActionRisk;
 use rocketmq_sre_contracts::ChangeConflictCode;
 use rocketmq_sre_contracts::ChangeSchedule;
@@ -28,6 +29,7 @@ use rocketmq_sre_contracts::ChangeWindowKind;
 use rocketmq_sre_contracts::ClusterId;
 use rocketmq_sre_contracts::CompensationEdge;
 use rocketmq_sre_contracts::CompensationTrigger;
+use rocketmq_sre_contracts::CorrelationId;
 use rocketmq_sre_contracts::ExecutionAction;
 use rocketmq_sre_contracts::ManualGate;
 use rocketmq_sre_contracts::RunbookDefinition;
@@ -35,6 +37,7 @@ use rocketmq_sre_contracts::RunbookId;
 use rocketmq_sre_contracts::RunbookStep;
 use rocketmq_sre_contracts::RunbookStepBody;
 use rocketmq_sre_contracts::RunbookStepId;
+use rocketmq_sre_contracts::RunbookStepPlanBinding;
 use rocketmq_sre_contracts::TenantId;
 use rocketmq_sre_core::ActionCatalog;
 use rocketmq_sre_core::ChangeCalendar;
@@ -103,6 +106,24 @@ fn committed_runbook_templates_are_typed_bounded_and_valid() {
                 .all(|step| !matches!(&step.body, RunbookStepBody::Action { parameters, .. }
                     if contains_forbidden_parameter(parameters)))
         );
+        let now = Utc::now();
+        let mut scheduled = schedule(TenantId::new(), ClusterId::new(), "runbook/template", now);
+        scheduled.runbook_id = definition.id;
+        scheduled.runbook_version.clone_from(&definition.version);
+        scheduled.plan_bindings = definition
+            .steps
+            .iter()
+            .filter(|step| matches!(step.body, RunbookStepBody::Action { .. }))
+            .map(|step| RunbookStepPlanBinding {
+                step_id: step.id,
+                plan_id: ActionPlanId::new(),
+                plan_hash: sha256_fixture(),
+                precondition_hash: sha256_fixture(),
+            })
+            .collect();
+        RunbookValidator::validate_schedule_bindings(&definition, &scheduled).expect("every typed action is bound");
+        scheduled.plan_bindings.pop();
+        assert!(RunbookValidator::validate_schedule_bindings(&definition, &scheduled).is_err());
     }
 }
 
@@ -343,20 +364,29 @@ fn schedule(tenant_id: TenantId, cluster_id: ClusterId, resource: &str, now: chr
         id: ChangeScheduleId::new(),
         tenant_id,
         cluster_id,
+        correlation_id: CorrelationId::new(),
         runbook_id: RunbookId::new(),
         runbook_version: "1.0.0".to_owned(),
+        plan_bindings: Vec::new(),
         scheduled_start: now + TimeDelta::minutes(10),
         scheduled_end: now + TimeDelta::minutes(50),
         resource_keys: [resource.to_owned()].into_iter().collect(),
         status: ChangeScheduleStatus::Scheduled,
         intent_persisted: false,
         next_step_sequence: 1,
+        active_execution_id: None,
+        waiting_manual_gate: None,
+        completed_steps: BTreeSet::new(),
         pause_requested_at: None,
         cancel_requested_at: None,
         created_by: "operator".to_owned(),
         created_at: now,
         updated_at: now,
     }
+}
+
+fn sha256_fixture() -> String {
+    format!("sha256:{}", "0".repeat(64))
 }
 
 fn contains_forbidden_parameter(value: &serde_json::Value) -> bool {

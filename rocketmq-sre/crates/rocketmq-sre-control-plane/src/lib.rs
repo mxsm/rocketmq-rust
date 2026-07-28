@@ -24,6 +24,7 @@ mod alerting;
 mod api;
 mod assets;
 mod auth;
+mod change_management;
 mod config;
 mod connector_channel;
 mod coverage;

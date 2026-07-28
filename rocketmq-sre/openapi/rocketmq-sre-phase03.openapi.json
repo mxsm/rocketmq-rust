@@ -2734,6 +2734,1488 @@
           }
         }
       }
+    },
+    "/v1/runbooks": {
+      "get": {
+        "operationId": "listRunbooksV1",
+        "summary": "List immutable runbook versions in one cluster scope",
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 256
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunbookPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createRunbookV1",
+        "summary": "Create one immutable typed runbook version",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRunbookRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunbookDefinition"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/runbooks/{id}/versions/{version}": {
+      "get": {
+        "operationId": "getRunbookVersionV1",
+        "summary": "Read one immutable runbook version",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "cluster_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunbookDefinition"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/change-windows": {
+      "get": {
+        "operationId": "listChangeWindowsV1",
+        "summary": "List maintenance, freeze, and blackout windows",
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 256
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeWindowPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createChangeWindowV1",
+        "summary": "Create an immutable maintenance, freeze, or blackout window",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateChangeWindowRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeWindow"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/change-schedules/preview": {
+      "post": {
+        "operationId": "previewChangeScheduleV1",
+        "summary": "Validate plan bindings and return every blocking conflict",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateChangeScheduleRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeSchedulePreview"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/change-schedules": {
+      "get": {
+        "operationId": "listChangeSchedulesV1",
+        "summary": "List scoped runbook schedules",
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ChangeScheduleStatus"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 256
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeSchedulePage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createChangeScheduleV1",
+        "summary": "Schedule a runbook whose action steps bind approved plans",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateChangeScheduleRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeSchedule"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/change-schedules/{id}": {
+      "get": {
+        "operationId": "getChangeScheduleV1",
+        "summary": "Read one durable runbook schedule projection",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeSchedule"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/change-schedules/{id}/pause": {
+      "post": {
+        "operationId": "pauseChangeScheduleV1",
+        "summary": "pause a durable runbook schedule",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleTransitionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeSchedule"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/change-schedules/{id}/resume": {
+      "post": {
+        "operationId": "resumeChangeScheduleV1",
+        "summary": "resume a durable runbook schedule",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleTransitionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeSchedule"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/change-schedules/{id}/cancel": {
+      "post": {
+        "operationId": "cancelChangeScheduleV1",
+        "summary": "cancel a durable runbook schedule",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleTransitionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeSchedule"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/change-schedules/{id}/reconcile": {
+      "post": {
+        "operationId": "reconcileChangeScheduleV1",
+        "summary": "reconcile a durable runbook schedule",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleTransitionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeSchedule"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/change-schedules/{id}/manual-gates/{step_id}/approve": {
+      "post": {
+        "operationId": "approveRunbookManualGateV1",
+        "summary": "approve the active manual runbook gate",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "step_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManualGateDecisionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeSchedule"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/change-schedules/{id}/manual-gates/{step_id}/reject": {
+      "post": {
+        "operationId": "rejectRunbookManualGateV1",
+        "summary": "reject the active manual runbook gate",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "step_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManualGateDecisionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeSchedule"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -9494,13 +10976,33 @@
         "type": "string"
       },
       "ExecutionAction": {
-        "description": "Closed set of Phase 3 actions that may enter supervised execution.\n\nR3 and unknown actions are intentionally not representable.",
+        "description": "Closed set of Phase 3 actions that may enter supervised planning.\n\nExecution remains gated by the exact descriptor's `plan_only` and\n`execution_supported` flags. Permanently destructive R3 and unknown actions\nare intentionally not representable.",
         "enum": [
           "observability.logger_level_ttl.v1",
           "proxy.scale_out_one.v1",
           "proxy.restart_one.v1",
           "broker.config.patch_allowlisted.v1",
-          "topic.config.patch_allowlisted.v1"
+          "topic.config.patch_allowlisted.v1",
+          "subscription_group.patch_allowlisted.v1",
+          "consumer.request_mode.patch_allowlisted.v1",
+          "consumer.offset.reset_bounded.v1",
+          "topic.queue.expand_only.v1",
+          "namesrv.config.patch_allowlisted.v1",
+          "controller.config.patch_allowlisted.v1",
+          "proxy.rollout_image_canary.v1",
+          "broker.restart_one.v1",
+          "static_topic.patch_non_remap.v1",
+          "tiered.cold_data_flow.patch_allowlisted.v1",
+          "store.readahead.patch_allowlisted.v1",
+          "security.credential_rotate_overlap.v1",
+          "telemetry.collector.restart_one.v1",
+          "consumer.offset.clone_or_reset_broad.v1",
+          "message.direct_consume.v1",
+          "message.dlq.resend.v1",
+          "timer.switch.v1",
+          "controller.elect.v1",
+          "static_topic.remap.v1",
+          "broker.container.add_remove.v1"
         ],
         "type": "string"
       },
@@ -9888,7 +11390,12 @@
           "quarantine_created",
           "quarantine_clear_requested",
           "quarantine_cleared",
-          "cancelled"
+          "cancelled",
+          "runbook_created",
+          "change_window_created",
+          "change_schedule_created",
+          "change_schedule_state_changed",
+          "manual_gate_decided"
         ],
         "type": "string"
       },
@@ -9952,6 +11459,360 @@
           "occurred_at"
         ],
         "title": "AuditEvent",
+        "type": "object"
+      },
+      "ChangeConflictCode": {
+        "description": "Stable conflict classification returned by the scheduler.",
+        "enum": [
+          "outside_maintenance_window",
+          "freeze_window",
+          "blackout_window",
+          "resource_overlap",
+          "parallelism_exceeded"
+        ],
+        "type": "string"
+      },
+      "ChangeScheduleId": {
+        "description": "Stable identifier for a scheduled runbook execution.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "ChangeWindowId": {
+        "description": "Stable identifier for a maintenance or freeze window.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "ChangeConflict": {
+        "additionalProperties": false,
+        "description": "One blocking calendar or schedule conflict.",
+        "properties": {
+          "blocking": {
+            "type": "boolean"
+          },
+          "code": {
+            "$ref": "#/components/schemas/ChangeConflictCode"
+          },
+          "conflicting_schedule_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChangeScheduleId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ends_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "resource_key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "starts_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "window_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChangeWindowId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "starts_at",
+          "ends_at",
+          "blocking"
+        ],
+        "title": "ChangeConflict",
+        "type": "object"
+      },
+      "ChangeScheduleStatus": {
+        "description": "Durable scheduler lifecycle.",
+        "enum": [
+          "scheduled",
+          "running",
+          "awaiting_manual_gate",
+          "paused",
+          "safe_stopping",
+          "reconciling",
+          "completed",
+          "cancelled",
+          "rejected"
+        ],
+        "type": "string"
+      },
+      "ExecutionId": {
+        "description": "Stable identifier for a supervised execution.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "RunbookId": {
+        "description": "Stable identifier for a versioned change runbook.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "RunbookStepId": {
+        "description": "Stable identifier for a typed runbook step.",
+        "format": "uuid",
+        "type": "string"
+      },
+      "RunbookStepPlanBinding": {
+        "additionalProperties": false,
+        "description": "Immutable binding from one typed runbook action to one approved plan.",
+        "properties": {
+          "plan_hash": {
+            "type": "string"
+          },
+          "plan_id": {
+            "$ref": "#/components/schemas/ActionPlanId"
+          },
+          "precondition_hash": {
+            "type": "string"
+          },
+          "step_id": {
+            "$ref": "#/components/schemas/RunbookStepId"
+          }
+        },
+        "required": [
+          "step_id",
+          "plan_id",
+          "plan_hash",
+          "precondition_hash"
+        ],
+        "title": "RunbookStepPlanBinding",
+        "type": "object"
+      },
+      "ChangeSchedule": {
+        "additionalProperties": false,
+        "description": "Scheduled runbook execution.",
+        "properties": {
+          "active_execution_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExecutionId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cancel_requested_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cluster_id": {
+            "$ref": "#/components/schemas/ClusterId"
+          },
+          "completed_steps": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/RunbookStepId"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "correlation_id": {
+            "$ref": "#/components/schemas/CorrelationId"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ChangeScheduleId"
+          },
+          "intent_persisted": {
+            "type": "boolean"
+          },
+          "next_step_sequence": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pause_requested_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "plan_bindings": {
+            "items": {
+              "$ref": "#/components/schemas/RunbookStepPlanBinding"
+            },
+            "type": "array"
+          },
+          "resource_keys": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "runbook_id": {
+            "$ref": "#/components/schemas/RunbookId"
+          },
+          "runbook_version": {
+            "type": "string"
+          },
+          "scheduled_end": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "scheduled_start": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ChangeScheduleStatus"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "waiting_manual_gate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunbookStepId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "schema_version",
+          "id",
+          "tenant_id",
+          "cluster_id",
+          "correlation_id",
+          "runbook_id",
+          "runbook_version",
+          "plan_bindings",
+          "scheduled_start",
+          "scheduled_end",
+          "status",
+          "intent_persisted",
+          "next_step_sequence",
+          "created_by",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ChangeSchedule",
+        "type": "object"
+      },
+      "ChangeWindowKind": {
+        "description": "Calendar window semantics.",
+        "enum": [
+          "maintenance",
+          "freeze",
+          "blackout"
+        ],
+        "type": "string"
+      },
+      "ChangeWindow": {
+        "additionalProperties": false,
+        "description": "One absolute maintenance, freeze, or blackout interval.",
+        "properties": {
+          "cluster_id": {
+            "$ref": "#/components/schemas/ClusterId"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "ends_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ChangeWindowId"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ChangeWindowKind"
+          },
+          "max_parallelism": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "resource_keys": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "starts_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId"
+          },
+          "timezone": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "id",
+          "tenant_id",
+          "cluster_id",
+          "name",
+          "kind",
+          "timezone",
+          "starts_at",
+          "ends_at",
+          "max_parallelism",
+          "reason",
+          "created_by",
+          "created_at"
+        ],
+        "title": "ChangeWindow",
         "type": "object"
       },
       "CriticConclusion": {
@@ -10209,11 +12070,6 @@
         ],
         "title": "CriticReview",
         "type": "object"
-      },
-      "ExecutionId": {
-        "description": "Stable identifier for a supervised execution.",
-        "format": "uuid",
-        "type": "string"
       },
       "ExecutionRequest": {
         "additionalProperties": false,
@@ -10517,6 +12373,259 @@
           "r2",
           "r3"
         ]
+      },
+      "CompensationEdge": {
+        "additionalProperties": false,
+        "description": "Directed compensation relationship inside one runbook.",
+        "properties": {
+          "compensation_step": {
+            "$ref": "#/components/schemas/RunbookStepId"
+          },
+          "from_step": {
+            "$ref": "#/components/schemas/RunbookStepId"
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/CompensationTrigger"
+          }
+        },
+        "required": [
+          "from_step",
+          "compensation_step",
+          "trigger"
+        ],
+        "type": "object"
+      },
+      "CompensationTrigger": {
+        "description": "Trigger for a compensation edge.",
+        "enum": [
+          "verification_failed",
+          "step_failed",
+          "cancel_after_intent"
+        ],
+        "type": "string"
+      },
+      "ManualGate": {
+        "additionalProperties": false,
+        "description": "Explicit human gate inside a composite runbook.",
+        "properties": {
+          "gate_id": {
+            "type": "string"
+          },
+          "instructions": {
+            "type": "string"
+          },
+          "required_role": {
+            "type": "string"
+          },
+          "timeout_seconds": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "gate_id",
+          "title",
+          "instructions",
+          "required_role",
+          "timeout_seconds"
+        ],
+        "type": "object"
+      },
+      "RunbookCondition": {
+        "additionalProperties": false,
+        "description": "Evidence or schedule fact required before a step may start.",
+        "properties": {
+          "expected": true,
+          "fact": {
+            "type": "string"
+          },
+          "operator": {
+            "$ref": "#/components/schemas/RunbookConditionOperator"
+          }
+        },
+        "required": [
+          "fact",
+          "operator"
+        ],
+        "type": "object"
+      },
+      "RunbookConditionOperator": {
+        "description": "Deterministic condition operator available to a runbook step.",
+        "enum": [
+          "equals",
+          "not_equals",
+          "greater_than",
+          "less_than",
+          "exists"
+        ],
+        "type": "string"
+      },
+      "RunbookStep": {
+        "additionalProperties": false,
+        "description": "One dependency-aware runbook step.",
+        "properties": {
+          "body": {
+            "$ref": "#/components/schemas/RunbookStepBody"
+          },
+          "condition": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunbookCondition"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "depends_on": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/RunbookStepId"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "id": {
+            "$ref": "#/components/schemas/RunbookStepId"
+          },
+          "name": {
+            "type": "string"
+          },
+          "parallel_group": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sequence": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "sequence",
+          "name",
+          "body"
+        ],
+        "type": "object"
+      },
+      "RunbookStepBody": {
+        "description": "Closed body of one runbook step.",
+        "oneOf": [
+          {
+            "properties": {
+              "action": {
+                "$ref": "#/components/schemas/ExecutionAction"
+              },
+              "descriptor_version": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "action",
+                "type": "string"
+              },
+              "parameters": true,
+              "resource": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "action",
+              "descriptor_version",
+              "resource",
+              "parameters"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "gate": {
+                "$ref": "#/components/schemas/ManualGate"
+              },
+              "kind": {
+                "const": "manual_gate",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "gate"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "RunbookDefinition": {
+        "additionalProperties": false,
+        "description": "Versioned composite change definition.",
+        "properties": {
+          "compensation_edges": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/CompensationEdge"
+            },
+            "type": "array"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/RunbookId"
+          },
+          "max_parallelism": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "risk": {
+            "$ref": "#/components/schemas/ActionRisk"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/RunbookStep"
+            },
+            "type": "array"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "id",
+          "name",
+          "version",
+          "owner",
+          "description",
+          "risk",
+          "max_parallelism",
+          "steps",
+          "created_at"
+        ],
+        "title": "RunbookDefinition",
+        "type": "object"
       },
       "ExecutionState": {
         "type": "string",
@@ -10957,6 +13066,255 @@
             }
           }
         }
+      },
+      "CreateRunbookRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "cluster_id",
+          "definition"
+        ],
+        "properties": {
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "definition": {
+            "$ref": "#/components/schemas/RunbookDefinition"
+          }
+        }
+      },
+      "RunbookPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "items",
+          "partial"
+        ],
+        "properties": {
+          "schema_version": {
+            "const": "rocketmq-sre.runbook-page.v1"
+          },
+          "items": {
+            "type": "array",
+            "maxItems": 256,
+            "items": {
+              "$ref": "#/components/schemas/RunbookDefinition"
+            }
+          },
+          "partial": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CreateChangeWindowRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "cluster_id",
+          "name",
+          "kind",
+          "timezone",
+          "starts_at",
+          "ends_at",
+          "max_parallelism",
+          "reason"
+        ],
+        "properties": {
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ChangeWindowKind"
+          },
+          "timezone": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "starts_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ends_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "resource_keys": {
+            "type": "array",
+            "uniqueItems": true,
+            "maxItems": 64,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            }
+          },
+          "max_parallelism": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 16
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        }
+      },
+      "ChangeWindowPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "items",
+          "partial"
+        ],
+        "properties": {
+          "schema_version": {
+            "const": "rocketmq-sre.change-window-page.v1"
+          },
+          "items": {
+            "type": "array",
+            "maxItems": 256,
+            "items": {
+              "$ref": "#/components/schemas/ChangeWindow"
+            }
+          },
+          "partial": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CreateChangeScheduleRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "cluster_id",
+          "runbook_id",
+          "runbook_version",
+          "scheduled_start",
+          "scheduled_end",
+          "plan_bindings"
+        ],
+        "properties": {
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "runbook_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "runbook_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "scheduled_start": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "scheduled_end": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "plan_bindings": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 64,
+            "items": {
+              "$ref": "#/components/schemas/RunbookStepPlanBinding"
+            }
+          }
+        }
+      },
+      "ChangeSchedulePage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "items",
+          "partial"
+        ],
+        "properties": {
+          "schema_version": {
+            "const": "rocketmq-sre.change-schedule-page.v1"
+          },
+          "items": {
+            "type": "array",
+            "maxItems": 256,
+            "items": {
+              "$ref": "#/components/schemas/ChangeSchedule"
+            }
+          },
+          "partial": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ChangeSchedulePreview": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "schedule",
+          "conflicts",
+          "schedulable"
+        ],
+        "properties": {
+          "schema_version": {
+            "const": "rocketmq-sre.change-schedule-preview.v1"
+          },
+          "schedule": {
+            "$ref": "#/components/schemas/ChangeSchedule"
+          },
+          "conflicts": {
+            "type": "array",
+            "maxItems": 256,
+            "items": {
+              "$ref": "#/components/schemas/ChangeConflict"
+            }
+          },
+          "schedulable": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ScheduleTransitionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        }
+      },
+      "ManualGateDecisionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        }
       }
     }
   },
@@ -10994,12 +13352,17 @@
     "ApprovalGrant",
     "ApprovalRecord",
     "AuditEvent",
+    "ChangeConflict",
+    "ChangeSchedule",
+    "ChangeWindow",
     "CriticAssessment",
     "CriticGateState",
     "CriticReview",
     "ExecutionRequest",
     "ManualRunbookDraft",
     "PolicyDecision",
-    "ResourceQuarantine"
+    "ResourceQuarantine",
+    "RunbookDefinition",
+    "RunbookStepPlanBinding"
   ]
 }

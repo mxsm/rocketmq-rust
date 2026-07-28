@@ -46,6 +46,11 @@ pub enum AuditEventKind {
     QuarantineClearRequested,
     QuarantineCleared,
     Cancelled,
+    RunbookCreated,
+    ChangeWindowCreated,
+    ChangeScheduleCreated,
+    ChangeScheduleStateChanged,
+    ManualGateDecided,
 }
 
 /// Sanitized append-only audit event.

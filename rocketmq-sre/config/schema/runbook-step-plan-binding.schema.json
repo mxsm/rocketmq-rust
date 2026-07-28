@@ -1,0 +1,39 @@
+{
+  "$defs": {
+    "ActionPlanId": {
+      "description": "Stable identifier for an immutable action plan.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "RunbookStepId": {
+      "description": "Stable identifier for a typed runbook step.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Immutable binding from one typed runbook action to one approved plan.",
+  "properties": {
+    "plan_hash": {
+      "type": "string"
+    },
+    "plan_id": {
+      "$ref": "#/$defs/ActionPlanId"
+    },
+    "precondition_hash": {
+      "type": "string"
+    },
+    "step_id": {
+      "$ref": "#/$defs/RunbookStepId"
+    }
+  },
+  "required": [
+    "step_id",
+    "plan_id",
+    "plan_hash",
+    "precondition_hash"
+  ],
+  "title": "RunbookStepPlanBinding",
+  "type": "object"
+}

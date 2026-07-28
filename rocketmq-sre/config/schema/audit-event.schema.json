@@ -25,7 +25,12 @@
         "quarantine_created",
         "quarantine_clear_requested",
         "quarantine_cleared",
-        "cancelled"
+        "cancelled",
+        "runbook_created",
+        "change_window_created",
+        "change_schedule_created",
+        "change_schedule_state_changed",
+        "manual_gate_decided"
       ],
       "type": "string"
     },

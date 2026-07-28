@@ -58,6 +58,16 @@ mod tests {
         "/v1/clusters/{id}/slo",
         "/v1/clusters/{id}/readiness/dr",
         "/v1/clusters/{id}/readiness/upgrade",
+        "/v1/change-schedules",
+        "/v1/change-schedules/preview",
+        "/v1/change-schedules/{id}",
+        "/v1/change-schedules/{id}/cancel",
+        "/v1/change-schedules/{id}/manual-gates/{step_id}/approve",
+        "/v1/change-schedules/{id}/manual-gates/{step_id}/reject",
+        "/v1/change-schedules/{id}/pause",
+        "/v1/change-schedules/{id}/reconcile",
+        "/v1/change-schedules/{id}/resume",
+        "/v1/change-windows",
         "/v1/conversations",
         "/v1/conversations/{id}",
         "/v1/events/stream",
@@ -110,6 +120,8 @@ mod tests {
         "/v1/recommendations/{id}/disposition",
         "/v1/resource-quarantines",
         "/v1/resource-quarantines/{id}/clear",
+        "/v1/runbooks",
+        "/v1/runbooks/{id}/versions/{version}",
         "/v1/simulations",
         "/v1/topology",
         "/v1/topology/diff",
@@ -194,6 +206,17 @@ mod tests {
             "CriticReviewResponse",
             "CriticGateState",
             "SubmitExecutionRequest",
+            "RunbookDefinition",
+            "RunbookStepPlanBinding",
+            "ChangeWindow",
+            "ChangeSchedule",
+            "ChangeConflict",
+            "CreateRunbookRequest",
+            "CreateChangeWindowRequest",
+            "CreateChangeScheduleRequest",
+            "ChangeSchedulePreview",
+            "ScheduleTransitionRequest",
+            "ManualGateDecisionRequest",
         ] {
             assert!(schemas.contains_key(required), "missing Phase 3 schema {required}");
         }
@@ -208,8 +231,8 @@ mod tests {
             "#/components/schemas/ApprovalDecisionRequest"
         );
         assert_eq!(
-            document["paths"]["/v1/resource-quarantines/{id}/clear"]["post"]["requestBody"]["content"]
-                ["application/json"]["schema"]["$ref"],
+            document["paths"]["/v1/resource-quarantines/{id}/clear"]["post"]["requestBody"]["content"]["application/json"]
+                ["schema"]["$ref"],
             "#/components/schemas/ClearQuarantineRequest"
         );
     }
@@ -262,8 +285,8 @@ mod tests {
         let paths = document["paths"].as_object().expect("OpenAPI paths must be an object");
 
         assert_eq!(
-            paths["/v1/integrations/alertmanager/events"]["post"]["requestBody"]["content"]["application/json"]
-                ["schema"]["$ref"],
+            paths["/v1/integrations/alertmanager/events"]["post"]["requestBody"]["content"]["application/json"]["schema"]
+                ["$ref"],
             "#/components/schemas/AlertmanagerWebhookRequest"
         );
         assert_eq!(
@@ -275,13 +298,11 @@ mod tests {
             "#/components/schemas/IntegrationEventRequest"
         );
         assert_eq!(
-            paths["/v1/incidents/{id}/topology"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
-                ["$ref"],
+            paths["/v1/incidents/{id}/topology"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
             "#/components/schemas/IncidentTopologyView"
         );
         assert_eq!(
-            paths["/v1/clusters/{id}/health"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
-                ["$ref"],
+            paths["/v1/clusters/{id}/health"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
             "#/components/schemas/ClusterHealthReport"
         );
 
