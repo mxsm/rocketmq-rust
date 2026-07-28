@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeSet;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::net::SocketAddr;
@@ -70,6 +71,8 @@ pub struct ExecutionAgentConfig {
     pub(crate) dev_insecure_http: bool,
     pub(crate) broker_config_patch_enabled: bool,
     pub(crate) logger_ttl_enabled: bool,
+    pub(crate) proxy_scale_out_enabled: bool,
+    pub(crate) proxy_scale_targets: BTreeSet<String>,
     pub(crate) broker_admin: Option<BrokerAdminDriverConfig>,
 }
 
@@ -105,6 +108,12 @@ impl ExecutionAgentConfig {
         let shutdown_timeout = duration_env("ROCKETMQ_SRE_AGENT_SHUTDOWN_SECONDS", 30)?;
         let broker_config_patch_enabled = parse_env("ROCKETMQ_SRE_AGENT_ENABLE_BROKER_CONFIG", false)?;
         let logger_ttl_enabled = parse_env("ROCKETMQ_SRE_AGENT_ENABLE_LOGGER_TTL", false)?;
+        let proxy_scale_out_enabled = parse_env("ROCKETMQ_SRE_AGENT_ENABLE_PROXY_SCALE_OUT", false)?;
+        let proxy_scale_targets = if proxy_scale_out_enabled {
+            parse_kubernetes_targets(&required("ROCKETMQ_SRE_AGENT_PROXY_SCALE_TARGETS")?)?
+        } else {
+            BTreeSet::new()
+        };
         let broker_admin = broker_admin_from_env(
             dev_insecure_http,
             shutdown_timeout,
@@ -124,6 +133,8 @@ impl ExecutionAgentConfig {
             dev_insecure_http,
             broker_config_patch_enabled,
             logger_ttl_enabled,
+            proxy_scale_out_enabled,
+            proxy_scale_targets,
             broker_admin,
         })
     }
@@ -151,6 +162,8 @@ impl Debug for ExecutionAgentConfig {
             .field("dev_insecure_http", &self.dev_insecure_http)
             .field("broker_config_patch_enabled", &self.broker_config_patch_enabled)
             .field("logger_ttl_enabled", &self.logger_ttl_enabled)
+            .field("proxy_scale_out_enabled", &self.proxy_scale_out_enabled)
+            .field("proxy_scale_target_count", &self.proxy_scale_targets.len())
             .field("broker_admin", &self.broker_admin)
             .finish()
     }
@@ -243,6 +256,50 @@ fn optional(name: &str) -> Result<Option<String>, ExecutionAgentError> {
     }
 }
 
+fn parse_kubernetes_targets(value: &str) -> Result<BTreeSet<String>, ExecutionAgentError> {
+    let targets = value
+        .split(',')
+        .map(str::trim)
+        .filter(|target| !target.is_empty())
+        .map(|target| {
+            let Some((namespace, workload)) = target.split_once('/') else {
+                return Err(ExecutionAgentError::Configuration);
+            };
+            if namespace.is_empty()
+                || workload.is_empty()
+                || workload.contains('/')
+                || namespace.len() > 63
+                || workload.len() > 253
+                || !dns_name(namespace)
+                || !dns_name(workload)
+            {
+                return Err(ExecutionAgentError::Configuration);
+            }
+            Ok(format!("{namespace}/{workload}"))
+        })
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    if targets.is_empty() {
+        Err(ExecutionAgentError::Configuration)
+    } else {
+        Ok(targets)
+    }
+}
+
+fn dns_name(value: &str) -> bool {
+    value.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && label
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+            && label
+                .as_bytes()
+                .first()
+                .zip(label.as_bytes().last())
+                .is_some_and(|(first, last)| *first != b'-' && *last != b'-')
+    })
+}
+
 pub(crate) fn validate_internal_service_url(url: &Url, dev_insecure: bool) -> Result<(), ExecutionAgentError> {
     let transport_allowed = if dev_insecure {
         matches!(url.scheme(), "http" | "https")
@@ -304,6 +361,8 @@ mod tests {
             dev_insecure_http: false,
             broker_config_patch_enabled: false,
             logger_ttl_enabled: false,
+            proxy_scale_out_enabled: false,
+            proxy_scale_targets: BTreeSet::new(),
             broker_admin: None,
         };
         let debug = format!("{config:?}");
@@ -346,6 +405,28 @@ mod tests {
             "writer-token",
         ] {
             assert!(!debug.contains(secret));
+        }
+    }
+
+    #[test]
+    fn proxy_scale_targets_are_exact_and_wildcard_free() {
+        assert_eq!(
+            parse_kubernetes_targets("rocketmq-system/rocketmq-proxy,ops/proxy-canary").expect("target allowlist"),
+            BTreeSet::from([
+                "ops/proxy-canary".to_owned(),
+                "rocketmq-system/rocketmq-proxy".to_owned(),
+            ])
+        );
+        for invalid in [
+            "",
+            "*/*",
+            "rocketmq-system",
+            "rocketmq-system/",
+            "/rocketmq-proxy",
+            "RocketMQ/Proxy",
+            "rocketmq-system/proxy/extra",
+        ] {
+            assert!(parse_kubernetes_targets(invalid).is_err(), "{invalid}");
         }
     }
 }

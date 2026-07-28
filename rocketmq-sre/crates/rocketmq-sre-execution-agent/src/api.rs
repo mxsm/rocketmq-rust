@@ -47,9 +47,11 @@ use crate::ExecutionAgentError;
 use crate::FenceAckSigner;
 use crate::HttpLeaseAuthorityClient;
 use crate::LoggerLevelTtlHandler;
+use crate::ProxyScaleOutOneHandler;
 use crate::ReconcileEffectRequest;
 use crate::ReconcileEffectResponse;
 use crate::drivers::ProductionBrokerConfigPatchClient;
+use crate::drivers::ProductionProxyScaleClient;
 
 #[derive(Clone)]
 struct AppState {
@@ -127,6 +129,13 @@ pub async fn run(
         )),
         None => None,
     };
+    let proxy_scale_driver = if config.proxy_scale_out_enabled {
+        Some(Arc::new(
+            ProductionProxyScaleClient::start(config.proxy_scale_targets.clone()).await?,
+        ))
+    } else {
+        None
+    };
     let mut registry = AgentDriverRegistry::empty();
     if let Some(driver) = &broker_driver {
         if config.broker_config_patch_enabled {
@@ -141,6 +150,9 @@ pub async fn run(
                 LoggerLevelTtlHandler::new(Arc::clone(driver)),
             )?;
         }
+    }
+    if let Some(driver) = proxy_scale_driver {
+        registry.register_kubernetes(ExecutionAction::ProxyScaleOutOne, ProxyScaleOutOneHandler::new(driver))?;
     }
     let authority = Arc::new(HttpLeaseAuthorityClient::new(
         config.authority_url.clone(),
