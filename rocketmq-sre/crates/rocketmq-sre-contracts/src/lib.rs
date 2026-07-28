@@ -387,6 +387,8 @@ pub use agent::AgentDispatchRequest;
 pub use agent::AgentDispatchResponse;
 pub use agent::AgentReadRequest;
 pub use agent::AgentReadResult;
+pub use agent::EXECUTION_AGENT_AUDIENCE;
+pub use agent::EXECUTION_AGENT_RECONCILE_AUDIENCE;
 pub use agent::EXECUTION_AGENT_SCHEMA_VERSION;
 pub use agent::ExecutionAgentCapabilities;
 pub use agent::ReconcileEffectRequest;
