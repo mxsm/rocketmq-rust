@@ -86,6 +86,7 @@ pub use automation::NoSideEffectAutomationKind;
 pub use automation::NoSideEffectAutomationRequest;
 pub use automation::NoSideEffectAutomationRun;
 pub use automation::PreventiveAutomationRequest;
+pub use automation::PreventiveAutomationRun;
 pub use automation::PreventiveRiskFamily;
 pub use autonomy::AUTONOMY_SCHEMA_VERSION;
 pub use autonomy::AutonomousExecutionFailure;
