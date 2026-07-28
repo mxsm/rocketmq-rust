@@ -23,6 +23,7 @@ use crate::supervised_execution::SupervisedExecutionService;
 
 mod integration;
 mod release;
+mod release_validation;
 mod support;
 
 type Clock = Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>;
