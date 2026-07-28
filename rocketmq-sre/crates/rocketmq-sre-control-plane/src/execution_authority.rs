@@ -44,6 +44,7 @@ use crate::supervised_execution::signing::GrantSigner;
 pub(crate) use api::routes;
 
 const EXECUTOR_AUDIENCE: &str = "rocketmq-sre-executor";
+const CONTROL_PLANE_ISSUER: &str = "rocketmq-sre-control-plane";
 const AGENT_AUDIENCE: &str = "rocketmq-sre-execution-agent";
 const RECONCILE_AUDIENCE: &str = "rocketmq-sre-execution-agent-reconcile";
 const FENCE_GRANT_TTL_SECONDS: i64 = 20;
@@ -211,7 +212,33 @@ impl LeaseAuthorityService {
             .execution
             .validate_at(now, EXECUTOR_AUDIENCE)
             .map_err(|error| ControlPlaneError::validation("invalid_execution_request", error.to_string()))?;
+        if request.execution.issuer != CONTROL_PLANE_ISSUER {
+            return Err(ControlPlaneError::forbidden(
+                "invalid_execution_issuer",
+                "execution request was not issued by the Control Plane",
+            ));
+        }
         self.grant_signer.verify_execution(&request.execution)?;
+        if let Some(grant) = &request.execution.autonomy_grant {
+            if grant.issuer != CONTROL_PLANE_ISSUER {
+                return Err(ControlPlaneError::forbidden(
+                    "invalid_autonomy_grant_issuer",
+                    "autonomy grant was not issued by the Control Plane",
+                ));
+            }
+            self.grant_signer.verify_autonomy(grant)?;
+            self.repository.autonomy_grant_is_current(grant).await?;
+        } else {
+            for approval in &request.execution.approvals {
+                if approval.issuer != CONTROL_PLANE_ISSUER {
+                    return Err(ControlPlaneError::forbidden(
+                        "invalid_approval_issuer",
+                        "approval grant was not issued by the Control Plane",
+                    ));
+                }
+                self.grant_signer.verify_approval(approval)?;
+            }
+        }
         self.repository.execution_is_current(&request.execution, now).await?;
         Ok(GrantVerification {
             schema_version: LEASE_AUTHORITY_SCHEMA_VERSION.to_owned(),
