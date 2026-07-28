@@ -38,7 +38,9 @@ use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 
 use crate::core::broker::project_broker_diagnostics;
+use crate::core::broker::project_broker_log_filter_state;
 use crate::core::broker::BrokerAllowlistedConfig;
+use crate::core::broker::BrokerLogFilterState;
 use crate::core::broker::BrokerQueryAdmin;
 use crate::core::broker::BrokerSummary;
 use crate::core::broker::ListBrokersRequest;
@@ -48,6 +50,7 @@ use crate::core::broker::ProbeBrokerRuntimeResult;
 use crate::core::broker::QueryBrokerAllowlistedConfigRequest;
 use crate::core::broker::QueryBrokerDiagnosticsRequest;
 use crate::core::broker::QueryBrokerDiagnosticsResult;
+use crate::core::broker::QueryBrokerLogFilterStateRequest;
 use crate::core::client_connection::ClientConnectionObservation;
 use crate::core::client_connection::ClientConnectionQueryAdmin;
 use crate::core::client_connection::ListProducerConnectionsRequest;
@@ -470,6 +473,21 @@ impl BrokerQueryAdmin for ReadAdminSession {
                 .await
                 .map(project_allowlisted_config)
                 .map_err(|error| backend_error("get_broker_config_allowlisted", error))
+        })
+    }
+
+    fn query_log_filter_state<'a>(
+        &'a mut self,
+        request: &'a QueryBrokerLogFilterStateRequest,
+    ) -> AdminFuture<'a, BrokerLogFilterState> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            let runtime = self
+                .inner
+                .fetch_broker_runtime_stats(CheetahString::from(request.broker_addr.as_str()))
+                .await
+                .map_err(|error| backend_error("fetch_broker_runtime_stats", error))?;
+            Ok(project_broker_log_filter_state(request.logger.clone(), &runtime))
         })
     }
 }
