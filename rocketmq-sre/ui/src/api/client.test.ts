@@ -73,6 +73,19 @@ describe("stateLabel", () => {
       owner: "test-operator",
       evidence_ids: [],
     });
+    await api.listModelProfileLifecycles();
+    await api.transitionModelProfileLifecycle("profile/id", {
+      target_state: "certified",
+      expected_revision: 2,
+      reason_code: "operator.certified",
+      operator_confirmed: true,
+    });
+    await api.rollbackModelProfile("profile/id", {
+      expected_revision: 3,
+      reason_code: "operator.rollback",
+      operator_confirmed: true,
+    });
+    await api.runModelProfileSmoke("profile/id");
 
     expect(
       fetchMock.mock.calls.map(([input]) => String(input)),
@@ -94,6 +107,10 @@ describe("stateLabel", () => {
       "/v1/postmortems/postmortem%2Fid/publish",
       "/v1/action-items?cluster_id=cluster%2Fid",
       "/v1/action-items/action%2Fid",
+      "/v1/models/profiles/lifecycle",
+      "/v1/models/profiles/profile%2Fid/lifecycle",
+      "/v1/models/profiles/profile%2Fid/rollback",
+      "/v1/models/profiles/profile%2Fid/smoke",
     ]);
     const healthHeaders = new Headers(
       fetchMock.mock.calls[9]?.[1]?.headers,
@@ -117,6 +134,22 @@ describe("stateLabel", () => {
     });
     expect(fetchMock.mock.calls[13]?.[1]?.method).toBe("PATCH");
     expect(fetchMock.mock.calls[16]?.[1]?.method).toBe("PATCH");
+    expect(fetchMock.mock.calls[18]?.[1]?.method).toBe("POST");
+    expect(fetchMock.mock.calls[19]?.[1]?.method).toBe("POST");
+    expect(fetchMock.mock.calls[20]?.[1]?.method).toBe("POST");
+    expect(
+      JSON.parse(
+        String(
+          (fetchMock.mock.calls[18]?.[1] as RequestInit | undefined)
+            ?.body,
+        ),
+      ),
+    ).toMatchObject({
+      target_state: "certified",
+      expected_revision: 2,
+      operator_confirmed: true,
+    });
+    expect(fetchMock.mock.calls[20]?.[1]?.body).toBeUndefined();
   });
 
   it("parses backend SSE payloads with an optional transport event id", () => {
