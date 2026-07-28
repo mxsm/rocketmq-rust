@@ -87,8 +87,11 @@ pub use autonomy::AutonomyQualificationLevel;
 pub use autonomy::AutonomyQualificationSample;
 pub use autonomy::AutonomySampleKind;
 pub use autonomy::DynamicSafetyDecision;
+pub use autonomy::DynamicSafetyEvaluationRequest;
+pub use autonomy::DynamicSafetyVerification;
 pub use autonomy::EligibilityDecision;
 pub use autonomy::EligibilityPhase;
+pub use autonomy::VerifyDynamicSafetyDecisionRequest;
 pub use canonical::canonical_evidence_hash;
 pub use canonical::canonical_precondition_hash;
 pub use canonical::canonical_sha256;
@@ -363,6 +366,7 @@ pub fn current_evidence_schema() -> SchemaVersion {
 }
 pub use agent::AdvanceFenceRequest;
 pub use agent::AdvanceFenceResponse;
+pub use agent::AgentDispatchAuthorization;
 pub use agent::AgentDispatchRequest;
 pub use agent::AgentDispatchResponse;
 pub use agent::AgentReadRequest;
