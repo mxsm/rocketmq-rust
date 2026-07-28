@@ -59,6 +59,7 @@ impl FakeRestartClient {
                 replacement_ready: false,
                 synthetic_path_healthy: true,
                 slo_healthy: true,
+                active_operation_id: None,
                 last_operation_id: None,
                 drain: Some(accepting_drain()),
             }),
@@ -82,6 +83,7 @@ impl ProxyRestartClient for FakeRestartClient {
             state.pod_uid = "uid-after".to_owned();
             state.pod_ready = true;
             state.replacement_ready = true;
+            state.active_operation_id = None;
             state.last_operation_id = Some(request.operation_id.clone());
             state.drain = Some(accepting_drain());
             self.restart_calls
@@ -137,6 +139,36 @@ async fn precheck_fails_closed_without_a_healthy_remaining_replica() {
 
     assert!(!result.ready);
     assert_eq!(result.reason_codes, ["proxy_remaining_replicas_unhealthy"]);
+}
+
+#[tokio::test]
+async fn precheck_rejects_only_active_restart_operation() {
+    let client = Arc::new(FakeRestartClient::accepting());
+    client.state.lock().expect("fake state lock").active_operation_id = Some("restart-active".to_owned());
+    let handler = ProxyRestartOneHandler::new(Arc::clone(&client));
+
+    let active = handler.read_state(&read_request()).await.expect("active precheck response");
+
+    assert!(!active.ready);
+    assert_eq!(active.reason_codes, ["proxy_restart_operation_not_clear"]);
+    assert_eq!(active.resource_conditions.get("restart_operation_clear"), Some(&false));
+
+    {
+        let mut state = client.state.lock().expect("fake state lock");
+        state.active_operation_id = None;
+        state.last_operation_id = Some("restart-complete".to_owned());
+    }
+    let completed = handler
+        .read_state(&read_request())
+        .await
+        .expect("completed operation precheck response");
+
+    assert!(completed.ready);
+    assert!(completed.reason_codes.is_empty());
+    assert_eq!(
+        completed.resource_conditions.get("restart_operation_clear"),
+        Some(&true)
+    );
 }
 
 #[tokio::test]
