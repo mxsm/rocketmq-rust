@@ -15,11 +15,14 @@
 //! Provider-neutral coordination primitives for RocketMQ AI SRE.
 
 mod action_catalog;
+mod automation_state;
+mod autonomy_policy;
 mod canonical_hash;
 mod change_calendar;
 pub mod correlation;
 pub mod diagnostics;
 mod embedded_actions;
+mod eligibility;
 mod execution_state;
 pub mod health;
 mod incident_manager;
@@ -34,10 +37,22 @@ pub mod slo;
 
 pub use action_catalog::ActionCatalog;
 pub use action_catalog::ActionCatalogError;
+pub use automation_state::AutonomyActor;
+pub use automation_state::AutonomyStateMachine;
+pub use automation_state::AutonomyTransitionError;
+pub use automation_state::PromotionQualification;
+pub use autonomy_policy::ActualModelIdentity;
+pub use autonomy_policy::AutonomyPolicy;
 pub use canonical_hash::canonical_plan_hash;
 pub use change_calendar::ChangeCalendar;
 pub use change_calendar::ChangeCalendarError;
 pub use embedded_actions::EMBEDDED_ACTION_DESCRIPTOR_YAMLS;
+pub use eligibility::AutonomyCandidatePath;
+pub use eligibility::BaseEligibilityFacts;
+pub use eligibility::DynamicSafetyEvaluation;
+pub use eligibility::DynamicSafetyFacts;
+pub use eligibility::EligibilityEngine;
+pub use eligibility::FinalEligibilityFacts;
 pub use execution_state::ExecutionStateMachine;
 pub use incident_manager::IncidentManager;
 pub use incident_manager::IncidentManagerError;
