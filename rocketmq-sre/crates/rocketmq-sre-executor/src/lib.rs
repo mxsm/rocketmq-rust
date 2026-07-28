@@ -29,6 +29,7 @@ mod lock;
 mod precheck;
 mod reconcile;
 mod registry;
+mod verifier;
 
 use thiserror::Error;
 
@@ -58,6 +59,13 @@ pub use reconcile::LiveEffectState;
 pub use reconcile::ReconcileDisposition;
 pub use reconcile::ReconcilePlanner;
 pub use registry::ExecutorActionRegistry;
+pub use verifier::ExecutionVerifier;
+pub use verifier::VerificationCaptureRequest;
+pub use verifier::VerificationFuture;
+pub use verifier::VerificationObservation;
+pub use verifier::VerificationPhase;
+pub use verifier::VerificationRun;
+pub use verifier::VerificationSource;
 
 /// Compile-time-visible execution availability.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
