@@ -59,7 +59,7 @@ impl ExecutionState {
     pub const fn can_transition_to(self, next: Self) -> bool {
         matches!(
             (self, next),
-            (Self::Pending, Self::Prechecking)
+            (Self::Pending, Self::Prechecking | Self::Escalated)
                 | (Self::Prechecking, Self::IntentPersisted | Self::Escalated)
                 | (Self::IntentPersisted, Self::Applying)
                 | (Self::Applying, Self::Verifying | Self::Unknown | Self::Compensating)
@@ -352,6 +352,18 @@ mod tests {
             from: ExecutionState::Unknown,
             to: ExecutionState::Reconciling,
             reason_code: "live_state_required".to_owned(),
+            occurred_at: Utc::now(),
+        };
+
+        assert!(transition.validate().is_ok());
+    }
+
+    #[test]
+    fn transition_graph_allows_rejected_dispatch_to_escalate() {
+        let transition = ExecutionTransition {
+            from: ExecutionState::Pending,
+            to: ExecutionState::Escalated,
+            reason_code: "executor_dispatch_rejected".to_owned(),
             occurred_at: Utc::now(),
         };
 
