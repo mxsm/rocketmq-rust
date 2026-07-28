@@ -85,6 +85,7 @@
         "paused",
         "verifying",
         "rolling_back",
+        "rolled_back",
         "completed",
         "manual_takeover",
         "failed"

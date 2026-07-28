@@ -42,6 +42,7 @@ pub enum ReleaseStatus {
     Paused,
     Verifying,
     RollingBack,
+    RolledBack,
     Completed,
     ManualTakeover,
     Failed,
@@ -51,7 +52,10 @@ impl ReleaseStatus {
     /// Returns whether the workflow reached a terminal state.
     #[must_use]
     pub const fn is_terminal(self) -> bool {
-        matches!(self, Self::Completed | Self::ManualTakeover | Self::Failed)
+        matches!(
+            self,
+            Self::RolledBack | Self::Completed | Self::ManualTakeover | Self::Failed
+        )
     }
 }
 
