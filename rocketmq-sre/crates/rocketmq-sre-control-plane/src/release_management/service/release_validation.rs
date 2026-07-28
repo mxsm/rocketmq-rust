@@ -20,7 +20,6 @@ use rocketmq_sre_contracts::ActionPlan;
 use rocketmq_sre_contracts::ApprovalDecision;
 use rocketmq_sre_contracts::ClusterId;
 use rocketmq_sre_contracts::DescriptorVersion;
-use rocketmq_sre_contracts::EvidenceId;
 use rocketmq_sre_contracts::ExecutionAction;
 use rocketmq_sre_contracts::IncidentId;
 use rocketmq_sre_contracts::PlanStatus;
