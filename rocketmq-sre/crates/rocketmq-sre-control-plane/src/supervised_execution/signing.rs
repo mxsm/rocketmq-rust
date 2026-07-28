@@ -200,18 +200,12 @@ impl GrantSigner {
         self.verify(&autonomy_payload(grant)?, &grant.signature)
     }
 
-    pub(crate) fn sign_dynamic_safety(
-        &self,
-        decision: &mut DynamicSafetyDecision,
-    ) -> Result<(), ControlPlaneError> {
+    pub(crate) fn sign_dynamic_safety(&self, decision: &mut DynamicSafetyDecision) -> Result<(), ControlPlaneError> {
         decision.signature = self.sign(&dynamic_safety_payload(decision)?)?;
         Ok(())
     }
 
-    pub(crate) fn verify_dynamic_safety(
-        &self,
-        decision: &DynamicSafetyDecision,
-    ) -> Result<(), ControlPlaneError> {
+    pub(crate) fn verify_dynamic_safety(&self, decision: &DynamicSafetyDecision) -> Result<(), ControlPlaneError> {
         self.verify(&dynamic_safety_payload(decision)?, &decision.signature)
     }
 
