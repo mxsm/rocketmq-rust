@@ -22,7 +22,7 @@ impl SupervisedExecutionService {
         request: &ApprovalDecisionRequest,
         correlation_id: CorrelationId,
     ) -> Result<ApprovalDecisionResponse, ControlPlaneError> {
-        self.decide(auth, id, request, ApprovalDecision::Approved, correlation_id)
+        self.decide(auth, id, request, ApprovalDecision::Approved, correlation_id, None)
             .await
     }
 
@@ -33,7 +33,19 @@ impl SupervisedExecutionService {
         request: &ApprovalDecisionRequest,
         correlation_id: CorrelationId,
     ) -> Result<ApprovalDecisionResponse, ControlPlaneError> {
-        self.decide(auth, id, request, ApprovalDecision::Rejected, correlation_id)
+        self.decide(auth, id, request, ApprovalDecision::Rejected, correlation_id, None)
+            .await
+    }
+
+    pub(crate) async fn decide_external(
+        &self,
+        auth: &AuthContext,
+        id: ActionPlanId,
+        request: &ApprovalDecisionRequest,
+        source: &ExternalApprovalSource,
+        correlation_id: CorrelationId,
+    ) -> Result<ApprovalDecisionResponse, ControlPlaneError> {
+        self.decide(auth, id, request, source.input.decision, correlation_id, Some(source))
             .await
     }
 
@@ -44,6 +56,7 @@ impl SupervisedExecutionService {
         request: &ApprovalDecisionRequest,
         decision: ApprovalDecision,
         correlation_id: CorrelationId,
+        external_source: Option<&ExternalApprovalSource>,
     ) -> Result<ApprovalDecisionResponse, ControlPlaneError> {
         self.policy.require_approver(auth)?;
         validate_reason(&request.reason)?;
@@ -161,7 +174,38 @@ impl SupervisedExecutionService {
                 ));
             }
         };
-        let audits = approval_audits(auth, &plan, decision, correlation_id, now);
+        let mut audits = approval_audits(auth, &plan, decision, correlation_id, now);
+        if let Some(source) = external_source {
+            if source.input.plan_id != plan.id
+                || source.input.plan_hash != plan.plan_hash
+                || source.input.subject != auth.subject
+                || source.input.decision != decision
+            {
+                return Err(ControlPlaneError::forbidden(
+                    "external_approval_identity_mismatch",
+                    "external approval identity, decision, plan, or hash does not match",
+                ));
+            }
+            audits.push(audit_event(
+                auth,
+                plan.cluster_id,
+                correlation_id,
+                AuditEventKind::ExternalApprovalReceived,
+                "approver",
+                "action_plan",
+                plan.id.to_string(),
+                "ExternalApprovalValidated",
+                json!({
+                    "target_id": source.target_id,
+                    "external_event_id": &source.input.external_event_id,
+                    "external_ticket_key": &source.input.external_ticket_key,
+                    "decision": decision,
+                    "mfa_verified": source.input.mfa_verified,
+                    "step_up_verified": source.input.step_up_verified,
+                }),
+                source.received_at,
+            ));
+        }
         let updated = self
             .repository
             .persist_approval_decision(
@@ -171,6 +215,7 @@ impl SupervisedExecutionService {
                 &expected_statuses,
                 next_status,
                 &audits,
+                external_source,
             )
             .await?;
         self.publish_audits(&audits);
