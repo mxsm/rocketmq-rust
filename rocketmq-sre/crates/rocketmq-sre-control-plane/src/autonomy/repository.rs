@@ -706,7 +706,7 @@ impl PostgresRepository {
         .fetch_one(&self.pool)
         .await?;
         let stored: AutonomyQualificationSample = from_json(row.try_get("sample_snapshot")?)?;
-        if stored != *sample {
+        if !same_qualification_sample(&stored, sample) {
             return Err(ControlPlaneError::conflict_code(
                 "qualification_sample_conflict",
                 "qualification sample idempotency key already has different content",
@@ -1104,6 +1104,22 @@ async fn sample_counts(
         row.try_get("unqualified_shadow")?,
         row.try_get("supervised_successes")?,
     ))
+}
+
+fn same_qualification_sample(stored: &AutonomyQualificationSample, candidate: &AutonomyQualificationSample) -> bool {
+    stored.cohort_id == candidate.cohort_id
+        && stored.kind == candidate.kind
+        && stored.incident_id == candidate.incident_id
+        && stored.plan_id == candidate.plan_id
+        && stored.plan_hash == candidate.plan_hash
+        && stored.execution_id == candidate.execution_id
+        && stored.qualified == candidate.qualified
+        && stored.reason_codes == candidate.reason_codes
+        && stored.human_outcome_linked == candidate.human_outcome_linked
+        && stored.evidence_complete == candidate.evidence_complete
+        && stored.stable_window_passed == candidate.stable_window_passed
+        && stored.observed_at == candidate.observed_at
+        && stored.reconciled_at == candidate.reconciled_at
 }
 
 fn lifecycle_from_row(
