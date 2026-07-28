@@ -7,6 +7,7 @@ import { AuthProvider } from "@/auth/AuthContext";
 import { SreDataProvider } from "./data/SreDataContext";
 import "./styles/tokens.css";
 import "./styles/app.css";
+import "./styles/autonomy-operations.css";
 import "./styles/change-management.css";
 import "./styles/model-governance.css";
 import "./styles/release-management.css";
