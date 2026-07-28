@@ -160,6 +160,115 @@
       "format": "uuid",
       "type": "string"
     },
+    "AutonomyCohortId": {
+      "description": "Stable identifier for an action and cluster qualification cohort.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "AutonomyGrant": {
+      "additionalProperties": false,
+      "description": "Short-lived grant accepted by the Executor only for an exact R1 plan.",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/ExecutionAction"
+        },
+        "action_version": {
+          "type": "string"
+        },
+        "audience": {
+          "type": "string"
+        },
+        "autonomous_cohort_hash": {
+          "type": "string"
+        },
+        "autonomous_cohort_id": {
+          "$ref": "#/$defs/AutonomyCohortId"
+        },
+        "cluster_id": {
+          "$ref": "#/$defs/ClusterId"
+        },
+        "critic_model_invocation_id": {
+          "$ref": "#/$defs/ModelInvocationId"
+        },
+        "critic_review_id": {
+          "$ref": "#/$defs/CriticReviewId"
+        },
+        "diagnosis_revision_id": {
+          "$ref": "#/$defs/DiagnosisRevisionId"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "issued_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "issuer": {
+          "type": "string"
+        },
+        "lifecycle_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "nonce": {
+          "type": "string"
+        },
+        "plan_hash": {
+          "type": "string"
+        },
+        "plan_id": {
+          "$ref": "#/$defs/ActionPlanId"
+        },
+        "policy_definition_version": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "policy_id": {
+          "$ref": "#/$defs/AutonomyPolicyId"
+        },
+        "primary_model_invocation_id": {
+          "$ref": "#/$defs/ModelInvocationId"
+        },
+        "signature": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/TenantId"
+        }
+      },
+      "required": [
+        "issuer",
+        "audience",
+        "plan_id",
+        "plan_hash",
+        "diagnosis_revision_id",
+        "tenant_id",
+        "cluster_id",
+        "action",
+        "action_version",
+        "policy_id",
+        "policy_definition_version",
+        "lifecycle_revision",
+        "autonomous_cohort_id",
+        "autonomous_cohort_hash",
+        "critic_review_id",
+        "primary_model_invocation_id",
+        "critic_model_invocation_id",
+        "issued_at",
+        "expires_at",
+        "nonce",
+        "signature"
+      ],
+      "type": "object"
+    },
+    "AutonomyPolicyId": {
+      "description": "Stable identifier for a versioned autonomy policy definition.",
+      "format": "uuid",
+      "type": "string"
+    },
     "ClusterId": {
       "description": "Internal identifier for an onboarded cluster.",
       "format": "uuid",
@@ -202,6 +311,11 @@
     },
     "CorrelationId": {
       "description": "Identifier propagated across one logical SRE operation.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "CriticReviewId": {
+      "description": "Stable identifier for an immutable critic review.",
       "format": "uuid",
       "type": "string"
     },
@@ -400,6 +514,16 @@
     },
     "audience": {
       "type": "string"
+    },
+    "autonomy_grant": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AutonomyGrant"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "cluster_id": {
       "$ref": "#/$defs/ClusterId"
