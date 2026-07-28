@@ -39,7 +39,6 @@ use rocketmq_sre_contracts::ReleaseReport;
 use rocketmq_sre_contracts::ReleaseStatus;
 use rocketmq_sre_contracts::ReleaseWorkflow;
 use rocketmq_sre_contracts::RunbookId;
-use rocketmq_sre_contracts::TenantId;
 use rocketmq_sre_contracts::UpgradeReadinessReport;
 use rocketmq_sre_contracts::WhatIfSimulation;
 use serde::Deserialize;
@@ -270,19 +269,4 @@ pub(super) struct ReleaseEventRecord {
     pub(super) actor_subject: String,
     pub(super) details: Value,
     pub(super) occurred_at: DateTime<Utc>,
-}
-
-#[derive(Clone, Debug)]
-pub(super) struct ExternalApprovalRecord {
-    pub(super) target_id: IntegrationTargetId,
-    pub(super) input: ExternalApprovalInput,
-    pub(super) approval: ApprovalRecord,
-    pub(super) received_at: DateTime<Utc>,
-}
-
-#[derive(Clone, Debug)]
-pub(super) struct ReleaseScope {
-    pub(super) tenant_id: TenantId,
-    pub(super) cluster_id: ClusterId,
-    pub(super) incident_id: IncidentId,
 }
