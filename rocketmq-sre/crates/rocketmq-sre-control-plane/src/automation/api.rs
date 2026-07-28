@@ -23,9 +23,15 @@ use axum::routing::post;
 use rocketmq_sre_contracts::AutomationOperatorFeedback;
 use rocketmq_sre_contracts::NoSideEffectAutomationRequest;
 use rocketmq_sre_contracts::NoSideEffectAutomationRun;
+use rocketmq_sre_contracts::PreventiveAutomationRequest;
+use rocketmq_sre_contracts::PreventiveAutomationRun;
 
 use super::model::AutomationRunListQuery;
 use super::model::AutomationRunPage;
+use super::model::PreventiveRunListQuery;
+use super::model::PreventiveRunPage;
+use super::model::PreventiveScheduleRequest;
+use super::model::PreventiveScheduleView;
 use super::model::RecordAutomationFeedbackRequest;
 use crate::ControlPlaneError;
 use crate::api::AppState;
@@ -39,6 +45,16 @@ pub(crate) fn routes() -> Router<AppState> {
         .route(
             "/v1/automation/feedback",
             post(record_feedback).layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route(
+            "/v1/automation/preventive/runs",
+            get(list_preventive_runs)
+                .post(submit_preventive_run)
+                .layer(DefaultBodyLimit::max(64 * 1024)),
+        )
+        .route(
+            "/v1/automation/preventive/schedules",
+            post(schedule_preventive_run).layer(DefaultBodyLimit::max(16 * 1024)),
         )
 }
 
@@ -67,4 +83,31 @@ async fn record_feedback(
 ) -> Result<Json<AutomationOperatorFeedback>, ControlPlaneError> {
     let auth = state.auth.authorize(&headers, request.cluster_id).await?;
     state.automation.record_feedback(&auth, &request).await.map(Json)
+}
+
+async fn submit_preventive_run(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<PreventiveAutomationRequest>,
+) -> Result<Json<PreventiveAutomationRun>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
+    state.preventive_automation.submit(&auth, &request).await.map(Json)
+}
+
+async fn list_preventive_runs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<PreventiveRunListQuery>,
+) -> Result<Json<PreventiveRunPage>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, query.cluster_id).await?;
+    state.preventive_automation.list(&auth, &query).await.map(Json)
+}
+
+async fn schedule_preventive_run(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<PreventiveScheduleRequest>,
+) -> Result<Json<PreventiveScheduleView>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
+    state.preventive_automation.schedule(&auth, &request).await.map(Json)
 }
