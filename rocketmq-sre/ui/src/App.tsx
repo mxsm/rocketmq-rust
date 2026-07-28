@@ -39,7 +39,7 @@ const MessageJourneyPage = lazy(() =>
   })),
 );
 const ModelsPage = lazy(() =>
-  import("./pages/InsightsPages").then((module) => ({
+  import("./pages/ModelsPage").then((module) => ({
     default: module.ModelsPage,
   })),
 );
