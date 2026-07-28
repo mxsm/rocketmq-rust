@@ -25,7 +25,6 @@ use crate::ActionPlanId;
 use crate::AgentStepRequest;
 use crate::AgentStepResult;
 use crate::ClusterId;
-use crate::DynamicSafetyDecision;
 use crate::ExecutionAction;
 use crate::ExecutionId;
 use crate::FenceAck;
@@ -84,8 +83,6 @@ pub struct AgentDispatchRequest {
     pub plan_id: Option<ActionPlanId>,
     #[serde(default)]
     pub authorization: AgentDispatchAuthorization,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dynamic_safety: Option<DynamicSafetyDecision>,
     pub request: AgentStepRequest,
 }
 
