@@ -15,7 +15,6 @@
 use chrono::DateTime;
 use chrono::Utc;
 use rocketmq_sre_contracts::AutomationArtifact;
-use rocketmq_sre_contracts::AutomationBudget;
 use rocketmq_sre_contracts::AutomationFeedbackSubject;
 use rocketmq_sre_contracts::AutomationFeedbackVerdict;
 use rocketmq_sre_contracts::AutomationRunStatus;
@@ -98,7 +97,6 @@ pub(super) struct PreventiveScheduleRequest {
     pub(super) cluster_id: ClusterId,
     pub(super) risk_family: PreventiveRiskFamily,
     pub(super) schedule: String,
-    pub(super) budget: AutomationBudget,
 }
 
 #[derive(Clone, Debug, Serialize)]
