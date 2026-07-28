@@ -320,8 +320,9 @@ impl PostgresRepository {
              ), terminal AS (
                 SELECT outcome.cluster_id, outcome.action_id, outcome.action_version,
                        outcome.outcome_class, outcome.failure_code,
-                       EXTRACT(EPOCH FROM (execution.completed_at - execution.started_at))
-                           FILTER (WHERE execution.completed_at IS NOT NULL) AS execution_seconds
+                       CASE WHEN execution.completed_at IS NOT NULL
+                           THEN EXTRACT(EPOCH FROM (execution.completed_at - execution.started_at))
+                       END AS execution_seconds
                 FROM autonomy_outcomes outcome
                 LEFT JOIN executions execution ON execution.id = outcome.execution_id
                 WHERE outcome.tenant_id = $1 AND outcome.cluster_id = ANY($2)
