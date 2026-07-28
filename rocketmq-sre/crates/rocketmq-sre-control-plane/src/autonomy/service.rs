@@ -37,6 +37,8 @@ use rocketmq_sre_contracts::BurnRateSeverity;
 use rocketmq_sre_contracts::DynamicSafetyDecision;
 use rocketmq_sre_contracts::DynamicSafetyDecisionId;
 use rocketmq_sre_contracts::ExecutionAction;
+use rocketmq_sre_contracts::ExecutionId;
+use rocketmq_sre_contracts::ExecutionRequest;
 use rocketmq_sre_contracts::HealthDataQuality;
 use rocketmq_sre_contracts::HealthStatus;
 use rocketmq_sre_contracts::PlanStatus;
@@ -64,6 +66,7 @@ use super::model::DynamicSafetyView;
 use super::model::EvaluateDynamicSafetyRequest;
 use super::model::IssueAutonomyGrantRequest;
 use super::model::PrepareAutonomousCohortRequest;
+use super::model::PrepareAutonomousExecutionRequest;
 use super::model::RecordAutonomyOutcomeRequest;
 use super::model::RecordQualificationSampleRequest;
 use super::model::RecordShadowOutcomeRequest;
@@ -82,6 +85,8 @@ use crate::supervised_execution::signing::GrantSigner;
 
 const AUTONOMY_GRANT_TTL: Duration = Duration::minutes(2);
 const DYNAMIC_SAFETY_TTL: Duration = Duration::seconds(30);
+const CONTROL_PLANE_ISSUER: &str = "rocketmq-sre-control-plane";
+const EXECUTOR_AUDIENCE: &str = "rocketmq-sre-executor";
 const MAX_SCOPE_PAGE: u16 = 200;
 const MAX_REASON_CODES: usize = 32;
 
@@ -892,6 +897,45 @@ impl AutonomyService {
         Ok(grant)
     }
 
+    pub(crate) async fn prepare_execution(
+        &self,
+        auth: &AuthContext,
+        request: &PrepareAutonomousExecutionRequest,
+    ) -> Result<ExecutionRequest, ControlPlaneError> {
+        require_role(auth, "executor_service")?;
+        validate_idempotency_key(&request.idempotency_key)?;
+        let grant = self.issue_grant(auth, &request.grant).await?;
+        let plan = self.repository.action_plan(grant.plan_id).await?.plan;
+        let issued_at = Utc::now();
+        let expires_at = (issued_at + AUTONOMY_GRANT_TTL)
+            .min(grant.expires_at)
+            .min(plan.expires_at);
+        let mut execution = ExecutionRequest {
+            schema_version: ExecutionRequest::SCHEMA_VERSION.to_owned(),
+            id: ExecutionId::new(),
+            tenant_id: grant.tenant_id,
+            cluster_id: grant.cluster_id,
+            correlation_id: request.correlation_id,
+            plan,
+            approvals: Vec::new(),
+            autonomy_grant: Some(grant),
+            requested_by: auth.subject.clone(),
+            idempotency_key: request.idempotency_key.clone(),
+            issuer: CONTROL_PLANE_ISSUER.to_owned(),
+            audience: EXECUTOR_AUDIENCE.to_owned(),
+            issued_at,
+            expires_at,
+            nonce: uuid::Uuid::new_v4().to_string(),
+            signature: String::new(),
+        };
+        self.signer.sign_execution(&mut execution)?;
+        self.signer.verify_execution(&execution)?;
+        execution
+            .validate_at(issued_at, EXECUTOR_AUDIENCE)
+            .map_err(|error| ControlPlaneError::validation("invalid_execution_request", error.to_string()))?;
+        Ok(execution)
+    }
+
     #[allow(
         clippy::too_many_arguments,
         reason = "Critic authority bindings are intentionally explicit"
@@ -1058,6 +1102,21 @@ fn add_reason(reasons: &mut Vec<String>, condition: bool, reason: &'static str) 
     if condition && !reasons.iter().any(|existing| existing == reason) {
         reasons.push(reason.to_owned());
     }
+}
+
+fn validate_idempotency_key(value: &str) -> Result<(), ControlPlaneError> {
+    let length = value.chars().count();
+    if !(16..=200).contains(&length)
+        || value
+            .chars()
+            .any(|character| !(character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | ':' | '.')))
+    {
+        return Err(ControlPlaneError::validation(
+            "invalid_idempotency_key",
+            "idempotency key must contain 16 to 200 allowlisted ASCII characters",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_reason_codes(reason_codes: &[String]) -> Result<(), ControlPlaneError> {
