@@ -30,7 +30,6 @@ pub(crate) use api::routes;
 pub(crate) use executor_client::ExecutorSubmissionClient;
 pub(crate) use model::ActionPlanView;
 pub(crate) use model::ApprovalDecisionRequest;
-pub(crate) use model::ApprovalDecisionResponse;
 pub(crate) use model::ExecutionSubmissionView;
 pub(crate) use model::ExternalApprovalSource;
 pub(crate) use model::SubmitExecutionRequest;
