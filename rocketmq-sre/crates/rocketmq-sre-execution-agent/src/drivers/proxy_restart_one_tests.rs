@@ -147,7 +147,10 @@ async fn precheck_rejects_only_active_restart_operation() {
     client.state.lock().expect("fake state lock").active_operation_id = Some("restart-active".to_owned());
     let handler = ProxyRestartOneHandler::new(Arc::clone(&client));
 
-    let active = handler.read_state(&read_request()).await.expect("active precheck response");
+    let active = handler
+        .read_state(&read_request())
+        .await
+        .expect("active precheck response");
 
     assert!(!active.ready);
     assert_eq!(active.reason_codes, ["proxy_restart_operation_not_clear"]);
