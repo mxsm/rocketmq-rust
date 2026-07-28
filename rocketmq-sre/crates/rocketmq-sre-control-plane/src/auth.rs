@@ -171,6 +171,7 @@ fn authorize_development(
             "approver".to_owned(),
             "executor_service".to_owned(),
             "execution_agent".to_owned(),
+            "model-governance".to_owned(),
             "rocketmq:diagnose".to_owned(),
             "rocketmq:onboard".to_owned(),
         ]),
@@ -216,6 +217,7 @@ async fn authorize_oidc(
                 | "rocketmq:approve"
                 | "rocketmq:executor"
                 | "rocketmq:execution-agent"
+                | "rocketmq:model-governance"
         )
     }) {
         return Err(ControlPlaneError::forbidden(
@@ -254,6 +256,9 @@ async fn authorize_oidc(
             }
             "rocketmq:execution-agent" => {
                 roles.insert("execution_agent".to_owned());
+            }
+            "rocketmq:model-governance" => {
+                roles.insert("model-governance".to_owned());
             }
             _ => {}
         }
