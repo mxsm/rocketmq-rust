@@ -1,7 +1,10 @@
 import type {
+  ModelCapabilitiesResponse,
   ModelProfileLifecyclePage,
   ProviderSmokeResult,
 } from "@/api/types";
+
+import { phase1Models } from "./phase1Demo";
 
 const OBSERVED_AT = "2026-07-29T01:42:00Z";
 
@@ -104,4 +107,21 @@ export const phase4ModelLifecycle: ModelProfileLifecyclePage = {
       automation_eligible: false,
     },
   ],
+};
+
+export const phase4ModelCapabilities: ModelCapabilitiesResponse = {
+  ...structuredClone(phase1Models),
+  network_calls_enabled: true,
+  profiles: phase1Models.profiles?.map((profile) => {
+    switch (profile.id) {
+      case "70000000-0000-4000-8000-000000000002":
+        return { ...profile, enabled: true, health: "healthy" };
+      case "70000000-0000-4000-8000-000000000003":
+        return { ...profile, enabled: true, health: "healthy" };
+      case "70000000-0000-4000-8000-000000000004":
+        return { ...profile, enabled: false, health: "quarantined" };
+      default:
+        return profile;
+    }
+  }),
 };
