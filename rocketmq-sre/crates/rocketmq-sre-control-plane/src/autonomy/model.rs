@@ -191,7 +191,6 @@ pub(crate) struct RecordShadowOutcomeRequest {
     pub(crate) plan_id: ActionPlanId,
     pub(crate) plan_hash: String,
     pub(crate) cohort_id: AutonomyCohortId,
-    pub(crate) eligibility: EligibilityDecision,
     pub(crate) expected_effect: serde_json::Value,
     #[serde(default)]
     pub(crate) evidence_ids: Vec<EvidenceId>,
