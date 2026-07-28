@@ -16,7 +16,11 @@ use chrono::Duration;
 use chrono::Timelike;
 use chrono::Utc;
 use rocketmq_sre_contracts::ActionPlanId;
+use rocketmq_sre_contracts::AutonomousExecutionFailure;
 use rocketmq_sre_contracts::AutonomyMode;
+use rocketmq_sre_contracts::AutonomyOutcome;
+use rocketmq_sre_contracts::AutonomyOutcomeClass;
+use rocketmq_sre_contracts::AutonomyOutcomeId;
 use rocketmq_sre_contracts::AutonomyPolicyDefinition;
 use rocketmq_sre_contracts::AutonomyPolicyId;
 use rocketmq_sre_contracts::AutonomyQualificationSample;
@@ -137,6 +141,140 @@ async fn postgres_autonomy_state_cohorts_and_controls_are_durable_and_idempotent
     retry.qualified = false;
     assert!(repository.store_qualification_sample(&retry).await.is_err());
 
+    let shadow_scope = repository
+        .autonomy_scope(
+            fixture.tenant_id,
+            fixture.cluster_id,
+            ExecutionAction::ObservabilityLoggerLevelTtl,
+            "1.0.0",
+        )
+        .await
+        .expect("qualified Shadow scope");
+    let supervised = AutonomyStateMachine::transition(
+        &shadow_scope.lifecycle,
+        AutonomyMode::Supervised,
+        AutonomyActor::HumanOperator,
+        "autonomy-owner",
+        None,
+        PromotionQualification {
+            shadow_qualified: true,
+            owner_confirmed: true,
+            ..PromotionQualification::default()
+        },
+        now + Duration::seconds(5),
+    )
+    .expect("Supervised transition");
+    repository
+        .update_autonomy_lifecycle(
+            &shadow_scope.lifecycle,
+            &supervised,
+            &stored.action_version,
+            true,
+            "repository_test_supervised",
+        )
+        .await
+        .expect("persist Supervised");
+    let autonomous_candidate = AutonomyPolicy::autonomous_cohort(
+        &stored,
+        &ActualModelIdentity {
+            profile: "deepseek-primary".to_owned(),
+            model_family: "deepseek".to_owned(),
+            model_revision: "v3.2".to_owned(),
+        },
+        &ActualModelIdentity {
+            profile: "glm-critic".to_owned(),
+            model_family: "glm".to_owned(),
+            model_revision: "glm-5".to_owned(),
+        },
+        now + Duration::seconds(6),
+    )
+    .expect("Autonomous cohort");
+    let autonomous_cohort = repository
+        .store_autonomy_cohort(stored.id, &autonomous_candidate)
+        .await
+        .expect("store Autonomous cohort");
+    repository
+        .store_qualification_sample(&AutonomyQualificationSample {
+            id: AutonomySampleId::new(),
+            cohort_id: autonomous_cohort.id,
+            kind: AutonomySampleKind::SupervisedSuccess,
+            incident_id: fixture.incident_id,
+            plan_id: fixture.plan_id,
+            plan_hash: fixture.plan_hash.clone(),
+            execution_id: None,
+            qualified: true,
+            reason_codes: Vec::new(),
+            human_outcome_linked: true,
+            evidence_complete: true,
+            stable_window_passed: true,
+            observed_at: now + Duration::seconds(7),
+            reconciled_at: now + Duration::seconds(8),
+        })
+        .await
+        .expect("Supervised sample");
+    let supervised_scope = repository
+        .autonomy_scope(
+            fixture.tenant_id,
+            fixture.cluster_id,
+            ExecutionAction::ObservabilityLoggerLevelTtl,
+            "1.0.0",
+        )
+        .await
+        .expect("qualified Supervised scope");
+    let autonomous = AutonomyStateMachine::transition(
+        &supervised_scope.lifecycle,
+        AutonomyMode::Autonomous,
+        AutonomyActor::HumanOperator,
+        "autonomy-owner",
+        None,
+        PromotionQualification {
+            autonomous_qualified: true,
+            critic_ready: true,
+            owner_confirmed: true,
+            ..PromotionQualification::default()
+        },
+        now + Duration::seconds(9),
+    )
+    .expect("Autonomous transition");
+    repository
+        .update_autonomy_lifecycle(
+            &supervised_scope.lifecycle,
+            &autonomous,
+            &stored.action_version,
+            true,
+            "repository_test_autonomous",
+        )
+        .await
+        .expect("persist Autonomous");
+    let outcome = AutonomyOutcome {
+        id: AutonomyOutcomeId::new(),
+        tenant_id: fixture.tenant_id,
+        cluster_id: fixture.cluster_id,
+        action: ExecutionAction::ObservabilityLoggerLevelTtl,
+        action_version: "1.0.0".to_owned(),
+        incident_id: fixture.incident_id,
+        plan_id: fixture.plan_id,
+        plan_hash: fixture.plan_hash.clone(),
+        execution_id: None,
+        cohort_id: Some(autonomous_cohort.id),
+        class: AutonomyOutcomeClass::AutonomousExecutionFailure,
+        failure: Some(AutonomousExecutionFailure::VerificationFailed),
+        reason_codes: vec!["verification_failed".to_owned()],
+        first_positive_intent_persisted: true,
+        occurred_at: now + Duration::seconds(10),
+        reconciled_at: now + Duration::seconds(11),
+    };
+    repository
+        .record_autonomy_outcome(&outcome, "autonomy-pause-reconciler")
+        .await
+        .expect("failure outcome");
+    let mut outcome_retry = outcome.clone();
+    outcome_retry.id = AutonomyOutcomeId::new();
+    repository
+        .record_autonomy_outcome(&outcome_retry, "autonomy-pause-reconciler")
+        .await
+        .expect("idempotent failure outcome");
+
     let tenant_freeze = repository
         .set_autonomy_freeze(
             fixture.tenant_id,
@@ -206,10 +344,21 @@ async fn postgres_autonomy_state_cohorts_and_controls_are_durable_and_idempotent
         )
         .await
         .expect("scope");
-    assert_eq!(scope.lifecycle.mode, AutonomyMode::Shadow);
+    assert_eq!(scope.lifecycle.mode, AutonomyMode::Paused);
+    assert_eq!(scope.lifecycle.previous_mode, Some(AutonomyMode::Autonomous));
     assert_eq!(scope.qualification.qualified_shadow_samples, 1);
     assert_eq!(scope.active_freezes.len(), 1);
     assert!(scope.kill_switch.is_some_and(|state| state.active));
+    let pause_events: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)
+         FROM autonomy_outbox
+         WHERE outcome_id = $1 AND event_kind = 'autonomy_paused'",
+    )
+    .bind(outcome.id.as_uuid())
+    .fetch_one(&repository.pool)
+    .await
+    .expect("pause outbox count");
+    assert_eq!(pause_events, 1);
 
     let mut revised_policy = stored;
     revised_policy.created_at = now + Duration::seconds(5);
@@ -218,8 +367,8 @@ async fn postgres_autonomy_state_cohorts_and_controls_are_durable_and_idempotent
         .await
         .expect("policy revision");
     assert_eq!(revised.definition_version, 2);
-    assert_eq!(revised_lifecycle.mode, AutonomyMode::Shadow);
-    assert_eq!(revised_lifecycle.lifecycle_revision, 3);
+    assert_eq!(revised_lifecycle.mode, AutonomyMode::Paused);
+    assert_eq!(revised_lifecycle.lifecycle_revision, 6);
     let revised_scope = repository
         .autonomy_scope(
             fixture.tenant_id,
