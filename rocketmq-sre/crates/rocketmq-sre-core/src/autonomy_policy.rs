@@ -55,10 +55,7 @@ impl AutonomyPolicy {
     ///
     /// Rejects non-R1, planning-only, mismatched, disabled, or malformed
     /// policies. Execution support is deliberately not required for Shadow.
-    pub fn validate(
-        policy: &AutonomyPolicyDefinition,
-        descriptor: &ActionDescriptor,
-    ) -> Result<(), ContractError> {
+    pub fn validate(policy: &AutonomyPolicyDefinition, descriptor: &ActionDescriptor) -> Result<(), ContractError> {
         policy.validate()?;
         if descriptor.id != policy.action.id()
             || descriptor.version != policy.action_version
@@ -261,12 +258,8 @@ mod tests {
     fn shadow_can_qualify_before_execution_is_enabled() {
         let policy = policy();
         assert!(AutonomyPolicy::validate(&policy, &descriptor()).is_ok());
-        let cohort = AutonomyPolicy::shadow_cohort(
-            &policy,
-            &identity("primary", "deepseek"),
-            chrono::Utc::now(),
-        )
-        .expect("shadow cohort");
+        let cohort = AutonomyPolicy::shadow_cohort(&policy, &identity("primary", "deepseek"), chrono::Utc::now())
+            .expect("shadow cohort");
         assert_eq!(cohort.level, AutonomyQualificationLevel::Shadow);
         assert!(cohort.critic_actual_model_identity_hash.is_none());
     }
