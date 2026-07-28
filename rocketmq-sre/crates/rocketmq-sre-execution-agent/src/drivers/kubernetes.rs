@@ -78,6 +78,7 @@ pub struct ProxyRestartState {
     pub replacement_ready: bool,
     pub synthetic_path_healthy: bool,
     pub slo_healthy: bool,
+    pub active_operation_id: Option<String>,
     pub last_operation_id: Option<String>,
     pub drain: Option<ProxyDrainState>,
 }
