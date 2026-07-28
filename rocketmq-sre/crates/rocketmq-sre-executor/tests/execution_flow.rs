@@ -24,6 +24,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use chrono::TimeDelta;
@@ -36,9 +38,13 @@ use rocketmq_sre_contracts::AgentDispatchResponse;
 use rocketmq_sre_contracts::AgentReadRequest;
 use rocketmq_sre_contracts::AgentReadResult;
 use rocketmq_sre_contracts::AgentStepResult;
+use rocketmq_sre_contracts::AutonomyCohortId;
+use rocketmq_sre_contracts::AutonomyGrant;
+use rocketmq_sre_contracts::AutonomyPolicyId;
 use rocketmq_sre_contracts::BeginLeaseTakeoverRequest;
 use rocketmq_sre_contracts::BeginLeaseTakeoverResponse;
 use rocketmq_sre_contracts::CoverageStatus;
+use rocketmq_sre_contracts::CriticReviewId;
 use rocketmq_sre_contracts::DynamicSafetyDecision;
 use rocketmq_sre_contracts::DynamicSafetyDecisionId;
 use rocketmq_sre_contracts::DynamicSafetyEvaluationRequest;
@@ -96,6 +102,7 @@ struct TestAuthority {
     owner: Arc<str>,
     action: ExecutionAction,
     resource: Arc<str>,
+    dynamic_safety_calls: Arc<AtomicUsize>,
 }
 
 impl ExecutorAuthorityClient for TestAuthority {
@@ -188,6 +195,7 @@ impl ExecutorAuthorityClient for TestAuthority {
         request: &'a DynamicSafetyEvaluationRequest,
     ) -> TestFuture<'a, DynamicSafetyDecision> {
         Box::pin(async move {
+            self.dynamic_safety_calls.fetch_add(1, Ordering::Relaxed);
             let issued_at = Utc::now();
             Ok(DynamicSafetyDecision {
                 id: DynamicSafetyDecisionId::new(),
@@ -440,6 +448,30 @@ async fn failed_rollback_escalates_quarantines_and_releases_temporary_lock() {
     cleanup_schema(&run.pool, &run.schema).await;
 }
 
+#[tokio::test]
+#[ignore = "requires ROCKETMQ_SRE_TEST_DATABASE_URL pointing to Docker PostgreSQL"]
+async fn autonomous_execution_persists_live_safety_before_forward_dispatch() {
+    let signals = [signal(0, true), signal(1, true), signal(2, true), signal(122, true)];
+    let run = run_execution_with_authorization(&signals, true).await;
+
+    assert_eq!(run.state, ExecutionState::Succeeded);
+    assert_eq!(run.dynamic_safety_calls, 1);
+    assert_eq!(run.dispatches, vec![false]);
+    let safety_intents: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM execution_steps
+         WHERE execution_id = $1
+           AND record_kind = 'intent'
+           AND NOT compensation
+           AND intent_snapshot->'dynamic_safety' IS NOT NULL",
+    )
+    .bind(run.execution_id)
+    .fetch_one(&run.pool)
+    .await
+    .expect("dynamic safety intent count");
+    assert_eq!(safety_intents, 1);
+    cleanup_schema(&run.pool, &run.schema).await;
+}
+
 struct ExecutionRun {
     pool: PgPool,
     schema: String,
@@ -449,9 +481,14 @@ struct ExecutionRun {
     active_locks: i64,
     active_quarantines: i64,
     compensation_intents: i64,
+    dynamic_safety_calls: usize,
 }
 
 async fn run_execution(signals: &[Signal]) -> ExecutionRun {
+    run_execution_with_authorization(signals, false).await
+}
+
+async fn run_execution_with_authorization(signals: &[Signal], autonomous: bool) -> ExecutionRun {
     let database_url = std::env::var("ROCKETMQ_SRE_TEST_DATABASE_URL").expect("test database URL must be explicit");
     let schema = format!("phase3_flow_{}", Uuid::new_v4().simple());
     let pool = isolated_pool(&database_url, &schema).await;
@@ -459,7 +496,12 @@ async fn run_execution(signals: &[Signal]) -> ExecutionRun {
         .run(&pool)
         .await
         .expect("empty-schema migrations");
-    let fixture = seed_fixture(&pool).await;
+    let mut fixture = seed_fixture(&pool).await;
+    if autonomous {
+        fixture.request.approvals.clear();
+        fixture.request.autonomy_grant = Some(autonomy_grant(&fixture));
+        fixture.request.requested_by = "autonomy-orchestrator".to_owned();
+    }
     let mut descriptor: rocketmq_sre_contracts::ActionDescriptor =
         serde_yaml::from_str(include_str!("../../../config/actions/proxy.scale_out_one.v1.yaml"))
             .expect("proxy scale descriptor");
@@ -471,11 +513,13 @@ async fn run_execution(signals: &[Signal]) -> ExecutionRun {
         precondition_hash: Arc::from(fixture.plan.steps[0].precondition_hash.as_str()),
         dispatches: Arc::clone(&dispatches),
     });
+    let dynamic_safety_calls = Arc::new(AtomicUsize::new(0));
     let authority = Arc::new(TestAuthority {
         leases: LeaseCoordinator::new(pool.clone()),
         owner: Arc::from("spiffe://rocketmq-sre/executor"),
         action: fixture.plan.steps[0].action,
         resource: Arc::from(fixture.plan.steps[0].resource.as_str()),
+        dynamic_safety_calls: Arc::clone(&dynamic_safety_calls),
     });
     let verifier = ExecutionVerifier::new(
         Arc::new(ScriptedVerification {
@@ -530,6 +574,7 @@ async fn run_execution(signals: &[Signal]) -> ExecutionRun {
         active_locks,
         active_quarantines,
         compensation_intents,
+        dynamic_safety_calls: dynamic_safety_calls.load(Ordering::Relaxed),
     }
 }
 
@@ -553,5 +598,32 @@ fn lease_contract(record: &rocketmq_sre_executor::ExecutorLeaseRecord) -> Execut
         acquired_at: record.acquired_at,
         activated_at: record.activated_at,
         expires_at: record.expires_at,
+    }
+}
+
+fn autonomy_grant(fixture: &support::Fixture) -> AutonomyGrant {
+    let now = Utc::now();
+    AutonomyGrant {
+        issuer: "control-plane".to_owned(),
+        audience: "rocketmq-sre-executor".to_owned(),
+        plan_id: fixture.plan.id,
+        plan_hash: fixture.plan.plan_hash.clone(),
+        diagnosis_revision_id: fixture.plan.diagnosis_revision,
+        tenant_id: fixture.tenant_id,
+        cluster_id: fixture.cluster_id,
+        action: fixture.plan.steps[0].action,
+        action_version: fixture.plan.steps[0].descriptor_version.clone(),
+        policy_id: AutonomyPolicyId::new(),
+        policy_definition_version: 1,
+        lifecycle_revision: 1,
+        autonomous_cohort_id: AutonomyCohortId::new(),
+        autonomous_cohort_hash: format!("sha256:{}", "c".repeat(64)),
+        critic_review_id: CriticReviewId::new(),
+        primary_model_invocation_id: fixture.primary_invocation_id,
+        critic_model_invocation_id: fixture.critic_invocation_id,
+        issued_at: now - TimeDelta::seconds(1),
+        expires_at: now + TimeDelta::seconds(30),
+        nonce: "autonomous-execution-test".to_owned(),
+        signature: "fixture-signature".to_owned(),
     }
 }
