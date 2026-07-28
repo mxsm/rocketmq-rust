@@ -35,6 +35,7 @@ use crate::ExecutionAgentError;
 use crate::FenceAckSigner;
 use crate::LeaseAuthorityClient;
 use rocketmq_sre_contracts::AdvanceFenceRequest;
+use rocketmq_sre_contracts::AgentDispatchAuthorization;
 use rocketmq_sre_contracts::AgentDispatchRequest;
 use rocketmq_sre_contracts::AgentDispatchResponse;
 use rocketmq_sre_contracts::AgentReadRequest;
@@ -165,6 +166,7 @@ impl ExecutionAgent {
             return Err(ExecutionAgentError::InvalidRequest);
         }
         self.registry.validate_dispatch(&request.request)?;
+        self.verify_dispatch_safety(request).await?;
         self.authority
             .verify_fence_grant(request.tenant_id, &request.request.intent.fence_grant)
             .await
@@ -186,6 +188,7 @@ impl ExecutionAgent {
         &self,
         request: &AgentDispatchRequest,
     ) -> Result<AgentDispatchResponse, ExecutionAgentError> {
+        self.verify_dispatch_safety(request).await?;
         self.authority
             .verify_fence_grant(request.tenant_id, &request.request.intent.fence_grant)
             .await
@@ -262,6 +265,45 @@ impl ExecutionAgent {
                     .await?;
                 self.metrics.unknown_effects_total.fetch_add(1, Ordering::Relaxed);
                 Err(ExecutionAgentError::DriverUnknown)
+            }
+        }
+    }
+
+    async fn verify_dispatch_safety(&self, request: &AgentDispatchRequest) -> Result<(), ExecutionAgentError> {
+        match request.authorization {
+            AgentDispatchAuthorization::HumanApproved => {
+                if request.request.intent.dynamic_safety.is_some() {
+                    return Err(ExecutionAgentError::InvalidRequest);
+                }
+                Ok(())
+            }
+            AgentDispatchAuthorization::Autonomous if request.request.intent.compensation => Ok(()),
+            AgentDispatchAuthorization::Autonomous => {
+                let decision = request
+                    .request
+                    .intent
+                    .dynamic_safety
+                    .as_ref()
+                    .ok_or(ExecutionAgentError::AuthorityRejected)?;
+                let plan_id = request.plan_id.ok_or(ExecutionAgentError::InvalidRequest)?;
+                decision
+                    .validate_allow_at(Utc::now())
+                    .map_err(|_| ExecutionAgentError::AuthorityRejected)?;
+                if decision.tenant_id != request.tenant_id
+                    || decision.cluster_id != request.request.intent.fence_grant.cluster_id
+                    || decision.action != request.request.action
+                    || decision.action_version != request.request.descriptor_version
+                    || decision.plan_id != plan_id
+                    || decision.plan_hash != request.request.intent.plan_hash
+                    || decision.execution_id != request.request.intent.execution_id
+                    || decision.execution_step_id != request.request.intent.step_id
+                {
+                    return Err(ExecutionAgentError::AuthorityRejected);
+                }
+                self.authority
+                    .verify_dynamic_safety(request.tenant_id, decision)
+                    .await?;
+                Ok(())
             }
         }
     }
