@@ -42,6 +42,8 @@ mod tests {
         "/v1/audit/{correlation_id}",
         "/v1/assets",
         "/v1/assets/dashboard-link",
+        "/v1/autonomy/outcomes",
+        "/v1/autonomy/reports",
         "/v1/capabilities",
         "/v1/capabilities/coverage",
         "/v1/capabilities/phase2-contract",
@@ -348,6 +350,29 @@ mod tests {
                 .to_string()
                 .contains("runtime_diagnostics")
         );
+    }
+
+    #[test]
+    fn autonomy_operations_surface_is_bounded_and_periodic() {
+        let document = document();
+        let outcome_parameters = document["paths"]["/v1/autonomy/outcomes"]["get"]["parameters"]
+            .as_array()
+            .expect("outcome query parameters");
+        let limit = outcome_parameters
+            .iter()
+            .find(|parameter| parameter["name"] == "limit")
+            .expect("bounded outcome limit");
+        assert_eq!(limit["schema"]["maximum"], 200);
+
+        let report_parameters = document["paths"]["/v1/autonomy/reports"]["get"]["parameters"]
+            .as_array()
+            .expect("report query parameters");
+        let period = report_parameters
+            .iter()
+            .find(|parameter| parameter["name"] == "period")
+            .expect("report period");
+        assert_eq!(period["schema"]["enum"], serde_json::json!(["weekly", "monthly"]));
+        assert_eq!(period["schema"]["default"], "weekly");
     }
 
     #[test]
