@@ -41,7 +41,7 @@ use crate::ControlPlaneError;
 use crate::PostgresRepository;
 
 impl PostgresRepository {
-    pub(super) async fn insert_release_workflow(
+    pub(in crate::release_management) async fn insert_release_workflow(
         &self,
         workflow: &ReleaseWorkflow,
         event: &ReleaseEventRecord,
@@ -99,7 +99,7 @@ impl PostgresRepository {
         Ok(())
     }
 
-    pub(super) async fn release_workflow(
+    pub(in crate::release_management) async fn release_workflow(
         &self,
         tenant_id: TenantId,
         id: ReleaseId,
@@ -117,7 +117,7 @@ impl PostgresRepository {
         release_workflow_from_row(&row)
     }
 
-    pub(super) async fn release_workflows(
+    pub(in crate::release_management) async fn release_workflows(
         &self,
         tenant_id: TenantId,
         cluster_id: ClusterId,
@@ -141,7 +141,7 @@ impl PostgresRepository {
         rows.iter().map(release_workflow_from_row).collect()
     }
 
-    pub(super) async fn update_release_workflow(
+    pub(in crate::release_management) async fn update_release_workflow(
         &self,
         workflow: &ReleaseWorkflow,
         expected_status: ReleaseStatus,
@@ -165,7 +165,7 @@ impl PostgresRepository {
         Ok(())
     }
 
-    pub(super) async fn insert_release_observation(
+    pub(in crate::release_management) async fn insert_release_observation(
         &self,
         observation_id: Uuid,
         current: &ReleaseWorkflow,
@@ -209,7 +209,7 @@ impl PostgresRepository {
         Ok(())
     }
 
-    pub(super) async fn release_observations(
+    pub(in crate::release_management) async fn release_observations(
         &self,
         tenant_id: TenantId,
         release_id: ReleaseId,
@@ -230,7 +230,7 @@ impl PostgresRepository {
             .collect()
     }
 
-    pub(super) async fn release_report(
+    pub(in crate::release_management) async fn release_report(
         &self,
         tenant_id: TenantId,
         release_id: ReleaseId,
@@ -248,7 +248,7 @@ impl PostgresRepository {
         row.map(|row| from_json(row.try_get("report_snapshot")?)).transpose()
     }
 
-    pub(super) async fn insert_release_report(
+    pub(in crate::release_management) async fn insert_release_report(
         &self,
         report: &ReleaseReport,
         audit: &AuditEvent,
