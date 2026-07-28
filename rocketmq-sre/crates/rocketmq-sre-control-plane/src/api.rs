@@ -531,6 +531,7 @@ pub(crate) struct AppState {
     pub(crate) observability_status: ObservabilityStatusHandle,
     pub(crate) operations: crate::operator_workbench::OperatorWorkbenchService,
     pub(crate) postmortems: crate::postmortem::PostmortemService,
+    pub(crate) preventive_automation: crate::automation::PreventiveAutomationService,
     pub(crate) release_management: ReleaseManagementService,
     pub(crate) sre_metrics: Arc<SreMetrics>,
     pub(crate) slo: SloService,
@@ -570,6 +571,7 @@ struct ControlPlaneRouters {
     connector: Router,
     change_management: crate::change_management::ChangeManagementService,
     forecast: ForecastService,
+    preventive_automation: crate::automation::PreventiveAutomationService,
     slo: SloService,
 }
 
@@ -606,6 +608,9 @@ fn build_routers_with_auth(
     )?;
     let autonomy =
         crate::autonomy::AutonomyService::new(repository.clone(), slo.clone(), grant_signing_key.as_bytes())?;
+    let inspections = InspectionService::new(repository.clone(), workflow.clone(), evidence.clone())?;
+    let preventive_automation =
+        crate::automation::PreventiveAutomationService::new(repository.clone(), inspections, autonomy.clone());
     let automation = crate::automation::AutomationService::new(
         repository.clone(),
         connector_channel.clone(),
@@ -663,6 +668,7 @@ fn build_routers_with_auth(
         observability_status: ObservabilityStatusHandle::default(),
         operations,
         postmortems,
+        preventive_automation: preventive_automation.clone(),
         release_management,
         sre_metrics,
         slo: slo.clone(),
@@ -706,6 +712,7 @@ fn build_routers_with_auth(
         connector,
         change_management,
         forecast,
+        preventive_automation,
         slo,
     })
 }
@@ -830,24 +837,6 @@ pub async fn run(config: ControlPlaneConfig, service_context: ChildServiceContex
                 "postmortem operator todo scheduler could not be started: {error}"
             ))
         })?;
-    let scheduler_evidence = EvidenceService::new(repository.clone(), evidence_blobs.clone());
-    let scheduled_inspections = InspectionService::new(repository.clone(), workflow.clone(), scheduler_evidence)?;
-    let scheduled_tasks = service_context.scheduled_tasks("inspection-scheduler");
-    let mut schedule =
-        ScheduledTaskConfig::fixed_rate_no_overlap("phase1-inspection-scan", std::time::Duration::from_secs(30));
-    schedule.initial_delay = std::time::Duration::from_secs(5);
-    schedule.max_run_time = Some(std::time::Duration::from_secs(25));
-    schedule.shutdown_timeout = config.shutdown_timeout();
-    scheduled_tasks
-        .schedule_fixed_rate_no_overlap(schedule, move || {
-            let inspections = scheduled_inspections.clone();
-            async move {
-                inspections.run_due().await;
-            }
-        })
-        .map_err(|error| {
-            ControlPlaneError::configuration(format!("inspection scheduler could not be started: {error}"))
-        })?;
     let public_listener = tokio::net::TcpListener::bind(config.bind_addr()).await?;
     let public_addr = public_listener.local_addr()?;
     let connector_listener = tokio::net::TcpListener::bind(config.connector_bind_addr()).await?;
@@ -891,6 +880,25 @@ pub async fn run(config: ControlPlaneConfig, service_context: ChildServiceContex
         model_gateway,
         workflow,
     )?;
+    let preventive_worker = routers.preventive_automation.clone();
+    let preventive_tasks = service_context.scheduled_tasks("preventive-inspection-scheduler");
+    let mut preventive_schedule = ScheduledTaskConfig::fixed_rate_no_overlap(
+        "phase4-preventive-inspection-scan",
+        std::time::Duration::from_secs(30),
+    );
+    preventive_schedule.initial_delay = std::time::Duration::from_secs(5);
+    preventive_schedule.max_run_time = Some(std::time::Duration::from_secs(10 * 60));
+    preventive_schedule.shutdown_timeout = config.shutdown_timeout();
+    preventive_tasks
+        .schedule_fixed_rate_no_overlap(preventive_schedule, move || {
+            let preventive = preventive_worker.clone();
+            async move {
+                preventive.run_due().await;
+            }
+        })
+        .map_err(|error| {
+            ControlPlaneError::configuration(format!("preventive inspection scheduler could not be started: {error}"))
+        })?;
     let slo_worker = routers.slo.clone();
     let slo_tasks = service_context.scheduled_tasks("slo-evaluator");
     let mut slo_schedule =
@@ -943,6 +951,7 @@ pub async fn run(config: ControlPlaneConfig, service_context: ChildServiceContex
         connector,
         change_management: _,
         forecast: _,
+        preventive_automation: _,
         slo: _,
     } = routers;
     let connector_shutdown = service_context.task_group().cancellation_token();
