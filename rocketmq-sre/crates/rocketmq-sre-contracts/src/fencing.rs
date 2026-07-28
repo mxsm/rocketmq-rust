@@ -303,6 +303,7 @@ mod tests {
             execution_id: ExecutionId::new(),
             step_id: ExecutionStepId::new(),
             plan_step_id: PlanStepId::new(),
+            compensation: false,
         };
         assert!(request.validate().is_ok());
         request.epoch = LeaseEpoch(0);
