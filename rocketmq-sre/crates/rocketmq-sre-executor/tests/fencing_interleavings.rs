@@ -23,10 +23,13 @@ use std::time::Duration;
 use chrono::TimeDelta;
 use chrono::Utc;
 use rocketmq_sre_contracts::AdvanceFenceRequest;
+use rocketmq_sre_contracts::AgentDispatchAuthorization;
 use rocketmq_sre_contracts::AgentDispatchRequest;
 use rocketmq_sre_contracts::AgentReadRequest;
 use rocketmq_sre_contracts::AgentReadResult;
 use rocketmq_sre_contracts::AgentStepRequest;
+use rocketmq_sre_contracts::DynamicSafetyDecision;
+use rocketmq_sre_contracts::DynamicSafetyVerification;
 use rocketmq_sre_contracts::EffectState;
 use rocketmq_sre_contracts::FenceAck;
 use rocketmq_sre_contracts::GrantVerification;
@@ -87,6 +90,14 @@ impl LeaseAuthorityClient for AcceptingAuthority {
                 expires_at: grant.expires_at,
             })
         })
+    }
+
+    fn verify_dynamic_safety<'a>(
+        &'a self,
+        _tenant_id: TenantId,
+        _decision: &'a DynamicSafetyDecision,
+    ) -> AuthorityFuture<'a, DynamicSafetyVerification> {
+        Box::pin(async { Err(ExecutionAgentError::AuthorityRejected) })
     }
 }
 
@@ -198,6 +209,8 @@ async fn fence_ack_waits_for_inflight_dispatch_and_old_epoch_cannot_write_after_
     let request = AgentDispatchRequest {
         schema_version: rocketmq_sre_contracts::EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
         tenant_id: fixture.tenant_id,
+        plan_id: Some(fixture.plan.id),
+        authorization: AgentDispatchAuthorization::HumanApproved,
         request: AgentStepRequest {
             intent: intent.clone(),
             action: intent.step.action,
