@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use chrono::Duration;
 use chrono::Utc;
+use rocketmq_sre_contracts::AUTONOMY_SCHEMA_VERSION;
 use rocketmq_sre_contracts::ActionDescriptor;
 use rocketmq_sre_contracts::ActionRisk;
 use rocketmq_sre_contracts::AutonomousExecutionFailure;
@@ -36,12 +37,15 @@ use rocketmq_sre_contracts::AutonomySampleKind;
 use rocketmq_sre_contracts::BurnRateSeverity;
 use rocketmq_sre_contracts::DynamicSafetyDecision;
 use rocketmq_sre_contracts::DynamicSafetyDecisionId;
+use rocketmq_sre_contracts::DynamicSafetyEvaluationRequest;
+use rocketmq_sre_contracts::DynamicSafetyVerification;
 use rocketmq_sre_contracts::ExecutionAction;
 use rocketmq_sre_contracts::ExecutionId;
 use rocketmq_sre_contracts::ExecutionRequest;
 use rocketmq_sre_contracts::HealthDataQuality;
 use rocketmq_sre_contracts::HealthStatus;
 use rocketmq_sre_contracts::PlanStatus;
+use rocketmq_sre_contracts::VerifyDynamicSafetyDecisionRequest;
 use rocketmq_sre_contracts::canonical_sha256;
 use rocketmq_sre_contracts::is_sha256_digest;
 use rocketmq_sre_core::ActualModelIdentity;
@@ -62,8 +66,6 @@ use super::model::AutonomyScopeView;
 use super::model::AutonomyTransitionRequest;
 use super::model::CreateAutonomyPolicyRequest;
 use super::model::CreateShadowCohortRequest;
-use super::model::DynamicSafetyView;
-use super::model::EvaluateDynamicSafetyRequest;
 use super::model::IssueAutonomyGrantRequest;
 use super::model::PrepareAutonomousCohortRequest;
 use super::model::PrepareAutonomousExecutionRequest;
@@ -710,9 +712,18 @@ impl AutonomyService {
     pub(crate) async fn evaluate_dynamic_safety(
         &self,
         auth: &AuthContext,
-        request: &EvaluateDynamicSafetyRequest,
-    ) -> Result<DynamicSafetyView, ControlPlaneError> {
+        request: &DynamicSafetyEvaluationRequest,
+    ) -> Result<DynamicSafetyDecision, ControlPlaneError> {
         require_role(auth, "executor_service")?;
+        request
+            .validate()
+            .map_err(|error| ControlPlaneError::validation("invalid_dynamic_safety_request", error.to_string()))?;
+        if request.tenant_id != auth.tenant_id {
+            return Err(ControlPlaneError::forbidden(
+                "tenant_mismatch",
+                "dynamic safety request belongs to another tenant",
+            ));
+        }
         let scope = self
             .scope(
                 auth,
@@ -723,18 +734,20 @@ impl AutonomyService {
                 },
             )
             .await?;
-        let live = self.live_safety(auth, &scope).await;
+        let issued_at = Utc::now();
+        let current = self
+            .current_dynamic_safety(auth, &scope, request.plan_id, &request.plan_hash, issued_at)
+            .await?;
         let evaluation = EligibilityEngine::evaluate_dynamic_safety(DynamicSafetyFacts {
-            authoritative_sources_available: live.authoritative,
-            error_budget_available: live.error_budget_available,
-            freeze_active: !scope.active_freezes.is_empty(),
-            kill_switch_active: scope.kill_switch.as_ref().is_some_and(|state| state.active),
-            evidence_fresh: request.evidence_fresh,
+            authoritative_sources_available: current.live.authoritative,
+            error_budget_available: current.live.error_budget_available,
+            freeze_active: current.freeze_active,
+            kill_switch_active: current.kill_switch_active,
+            evidence_fresh: current.evidence_fresh,
             policy_definition_matches: scope.policy.definition_version == request.policy_definition_version,
             lifecycle_revision_matches: scope.lifecycle.lifecycle_revision == request.lifecycle_revision
                 && scope.lifecycle.mode == AutonomyMode::Autonomous,
         });
-        let issued_at = Utc::now();
         let mut decision = DynamicSafetyDecision {
             id: DynamicSafetyDecisionId::new(),
             tenant_id: auth.tenant_id,
@@ -747,15 +760,10 @@ impl AutonomyService {
             execution_step_id: request.execution_step_id,
             policy_definition_version: request.policy_definition_version,
             lifecycle_revision: request.lifecycle_revision,
-            error_budget_available: live.error_budget_available,
-            freeze_revision: scope
-                .active_freezes
-                .iter()
-                .map(|freeze| freeze.revision)
-                .max()
-                .unwrap_or(0),
-            kill_switch_revision: scope.kill_switch.as_ref().map_or(0, |state| state.revision),
-            evidence_fresh: request.evidence_fresh,
+            error_budget_available: current.live.error_budget_available,
+            freeze_revision: current.freeze_revision,
+            kill_switch_revision: current.kill_switch_revision,
+            evidence_fresh: current.evidence_fresh,
             allowed: evaluation.allowed,
             reason_codes: evaluation.reason_codes.into_iter().map(str::to_owned).collect(),
             issued_at,
@@ -766,10 +774,76 @@ impl AutonomyService {
         self.signer.sign_dynamic_safety(&mut decision)?;
         self.signer.verify_dynamic_safety(&decision)?;
         self.repository.store_dynamic_safety_decision(&decision).await?;
-        Ok(DynamicSafetyView {
-            decision,
-            execution_id: request.execution_id,
-            execution_step_id: request.execution_step_id,
+        Ok(decision)
+    }
+
+    pub(crate) async fn verify_dynamic_safety(
+        &self,
+        auth: &AuthContext,
+        request: &VerifyDynamicSafetyDecisionRequest,
+    ) -> Result<DynamicSafetyVerification, ControlPlaneError> {
+        require_role(auth, "execution_agent")?;
+        let now = Utc::now();
+        request
+            .validate_at(now)
+            .map_err(|error| ControlPlaneError::validation("invalid_dynamic_safety_decision", error.to_string()))?;
+        require_cluster(auth, request.decision.cluster_id)?;
+        if request.tenant_id != auth.tenant_id {
+            return Err(ControlPlaneError::forbidden(
+                "tenant_mismatch",
+                "dynamic safety decision belongs to another tenant",
+            ));
+        }
+        self.signer.verify_dynamic_safety(&request.decision)?;
+        let scope = self
+            .scope(
+                auth,
+                &AutonomyScopeQuery {
+                    cluster_id: request.decision.cluster_id,
+                    action: request.decision.action,
+                    action_version: request.decision.action_version.clone(),
+                },
+            )
+            .await?;
+        let current = self
+            .current_dynamic_safety(auth, &scope, request.decision.plan_id, &request.decision.plan_hash, now)
+            .await?;
+        let evaluation = EligibilityEngine::evaluate_dynamic_safety(DynamicSafetyFacts {
+            authoritative_sources_available: current.live.authoritative,
+            error_budget_available: current.live.error_budget_available,
+            freeze_active: current.freeze_active,
+            kill_switch_active: current.kill_switch_active,
+            evidence_fresh: current.evidence_fresh,
+            policy_definition_matches: scope.policy.definition_version == request.decision.policy_definition_version,
+            lifecycle_revision_matches: scope.lifecycle.lifecycle_revision == request.decision.lifecycle_revision
+                && scope.lifecycle.mode == AutonomyMode::Autonomous,
+        });
+        let persisted = self
+            .repository
+            .dynamic_safety_decision_is_persisted(&request.decision)
+            .await?;
+        if !persisted
+            || !evaluation.allowed
+            || current.live.error_budget_available != request.decision.error_budget_available
+            || current.evidence_fresh != request.decision.evidence_fresh
+            || current.freeze_revision != request.decision.freeze_revision
+            || current.kill_switch_revision != request.decision.kill_switch_revision
+        {
+            return Err(ControlPlaneError::forbidden(
+                "dynamic_safety_stale",
+                "dynamic safety decision no longer matches authoritative live state",
+            ));
+        }
+        Ok(DynamicSafetyVerification {
+            schema_version: AUTONOMY_SCHEMA_VERSION.to_owned(),
+            valid: true,
+            decision_id: request.decision.id,
+            tenant_id: request.decision.tenant_id,
+            cluster_id: request.decision.cluster_id,
+            plan_id: request.decision.plan_id,
+            execution_id: request.decision.execution_id,
+            execution_step_id: request.decision.execution_step_id,
+            expires_at: request.decision.expires_at,
         })
     }
 
@@ -1018,6 +1092,49 @@ impl AutonomyService {
         }
     }
 
+    async fn current_dynamic_safety(
+        &self,
+        auth: &AuthContext,
+        scope: &AutonomyScopeView,
+        plan_id: rocketmq_sre_contracts::ActionPlanId,
+        plan_hash: &str,
+        now: chrono::DateTime<Utc>,
+    ) -> Result<CurrentDynamicSafety, ControlPlaneError> {
+        let live = self.live_safety(auth, scope).await;
+        let evidence_fresh = self
+            .repository
+            .plan_evidence_is_current(
+                auth.tenant_id,
+                scope.policy.cluster_id,
+                plan_id,
+                plan_hash,
+                scope.policy.action,
+                &scope.policy.action_version,
+                scope.policy.minimum_evidence_freshness_seconds,
+                &scope.policy.required_evidence_sources,
+                now,
+            )
+            .await?;
+        let (freeze_revision, freeze_active) = self
+            .repository
+            .autonomy_freeze_state(
+                auth.tenant_id,
+                scope.policy.cluster_id,
+                scope.policy.action,
+                &scope.policy.action_version,
+                now,
+            )
+            .await?;
+        Ok(CurrentDynamicSafety {
+            live,
+            evidence_fresh,
+            freeze_revision,
+            freeze_active,
+            kill_switch_revision: scope.kill_switch.as_ref().map_or(0, |state| state.revision),
+            kill_switch_active: scope.kill_switch.as_ref().is_some_and(|state| state.active),
+        })
+    }
+
     fn descriptor(
         &self,
         action: ExecutionAction,
@@ -1040,6 +1157,16 @@ impl AutonomyService {
 struct LiveSafety {
     authoritative: bool,
     error_budget_available: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CurrentDynamicSafety {
+    live: LiveSafety,
+    evidence_fresh: bool,
+    freeze_revision: u64,
+    freeze_active: bool,
+    kill_switch_revision: u64,
+    kill_switch_active: bool,
 }
 
 fn validate_plan_scope(
