@@ -86,7 +86,13 @@ mod tests {
         "/v1/incidents/{id}/timeline",
         "/v1/incidents/{id}/topology",
         "/v1/integrations/alertmanager/events",
+        "/v1/integrations/approvals/external",
+        "/v1/integrations/deliveries",
+        "/v1/integrations/descriptors",
         "/v1/integrations/events",
+        "/v1/integrations/targets",
+        "/v1/integrations/targets/{id}",
+        "/v1/integrations/targets/{id}/state",
         "/v1/integrations/webhook/test",
         "/v1/inspections",
         "/v1/inspections/{id}",
@@ -118,6 +124,18 @@ mod tests {
         "/v1/plans/{id}/reject",
         "/v1/recommendations",
         "/v1/recommendations/{id}/disposition",
+        "/v1/releases",
+        "/v1/releases/{id}",
+        "/v1/releases/{id}/complete",
+        "/v1/releases/{id}/manual-takeover",
+        "/v1/releases/{id}/observations",
+        "/v1/releases/{id}/pause",
+        "/v1/releases/{id}/prepare",
+        "/v1/releases/{id}/resume",
+        "/v1/releases/{id}/rollback/complete",
+        "/v1/releases/{id}/rollback/start",
+        "/v1/releases/{id}/start",
+        "/v1/releases/{id}/verification/start",
         "/v1/resource-quarantines",
         "/v1/resource-quarantines/{id}/clear",
         "/v1/runbooks",
@@ -217,6 +235,31 @@ mod tests {
             "ChangeSchedulePreview",
             "ScheduleTransitionRequest",
             "ManualGateDecisionRequest",
+            "IntegrationDescriptor",
+            "IntegrationTarget",
+            "IntegrationDelivery",
+            "ExternalApprovalInput",
+            "RegisterIntegrationTargetRequest",
+            "SetIntegrationTargetStateRequest",
+            "IntegrationTargetView",
+            "IntegrationTargetPage",
+            "IntegrationDeliveryPage",
+            "ExternalApprovalRequest",
+            "ExternalApprovalView",
+            "ReleaseReadinessSnapshot",
+            "ReleaseObservation",
+            "ReleaseWorkflow",
+            "ReleaseReport",
+            "CreateReleaseRequest",
+            "PrepareReleaseRequest",
+            "ReleaseExecutionRequest",
+            "RecordReleaseObservationRequest",
+            "ReleaseTransitionRequest",
+            "CompleteRollbackRequest",
+            "ReleasePage",
+            "ReleaseDetail",
+            "ReleasePreparationView",
+            "ReleaseExecutionView",
         ] {
             assert!(schemas.contains_key(required), "missing Phase 3 schema {required}");
         }
@@ -234,6 +277,30 @@ mod tests {
             document["paths"]["/v1/resource-quarantines/{id}/clear"]["post"]["requestBody"]["content"]["application/json"]
                 ["schema"]["$ref"],
             "#/components/schemas/ClearQuarantineRequest"
+        );
+        assert_eq!(
+            document["paths"]["/v1/integrations/approvals/external"]["post"]["requestBody"]["content"]["application/json"]
+                ["schema"]["$ref"],
+            "#/components/schemas/ExternalApprovalRequest"
+        );
+        assert_eq!(
+            document["paths"]["/v1/releases"]["post"]["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/CreateReleaseRequest"
+        );
+        assert_eq!(
+            document["paths"]["/v1/releases/{id}/rollback/complete"]["post"]["requestBody"]["content"]["application/json"]
+                ["schema"]["$ref"],
+            "#/components/schemas/CompleteRollbackRequest"
+        );
+        assert!(
+            document["paths"]["/v1/releases/{id}/verification/start"]["post"]
+                .get("requestBody")
+                .is_none()
+        );
+        assert!(
+            document["paths"]["/v1/releases/{id}/complete"]["post"]
+                .get("requestBody")
+                .is_none()
         );
     }
 
