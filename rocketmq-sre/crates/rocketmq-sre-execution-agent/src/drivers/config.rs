@@ -77,5 +77,58 @@ pub trait LoggerLevelControlClient: ConfigWriteClient {
     ) -> Pin<Box<dyn Future<Output = Result<(), ExecutionAgentError>> + Send + 'a>>;
 }
 
+/// Sanitized lifecycle state for one credential set.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+pub struct CredentialRotationState {
+    pub active_version: String,
+    pub retiring_version: Option<String>,
+    pub active_healthy: bool,
+    pub candidate_probe_healthy: bool,
+    pub overlap_deadline: Option<DateTime<Utc>>,
+    pub last_operation_id: Option<String>,
+}
+
+/// Closed active-to-retiring overlap transition.
+///
+/// `candidate_secret_ref` names a workload-owned secret and never contains the
+/// credential material itself. This type intentionally has no `Debug`
+/// implementation.
+#[derive(Clone, Eq, PartialEq)]
+pub struct CredentialOverlapWrite {
+    pub credential_set: String,
+    pub active_version: String,
+    pub candidate_version: String,
+    pub candidate_secret_ref: String,
+    pub overlap_seconds: u32,
+    pub validation_probe_topic: String,
+    pub operation_id: String,
+    pub execution_id: ExecutionId,
+    pub plan_step_id: PlanStepId,
+}
+
+/// Closed rollback bound to a durable overlap snapshot.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CredentialOverlapRestore {
+    pub credential_set: String,
+    pub operation_id: String,
+    pub execution_id: ExecutionId,
+    pub plan_step_id: PlanStepId,
+}
+
+/// Narrow credential lifecycle controller.
+///
+/// Implementations must durably record the previously active version before
+/// activating the candidate, keep both versions valid for the bounded overlap,
+/// validate the candidate through the dedicated synthetic Topic, and revoke
+/// only after the verification window. No method accepts a secret value,
+/// permission change, generic ACL document, or TLS configuration.
+pub trait CredentialRotationClient: Send + Sync {
+    fn credential_rotation_state<'a>(&'a self, credential_set: &'a str) -> DriverFuture<'a, CredentialRotationState>;
+
+    fn begin_credential_overlap<'a>(&'a self, request: &'a CredentialOverlapWrite) -> DriverFuture<'a, ()>;
+
+    fn restore_previous_credential<'a>(&'a self, request: &'a CredentialOverlapRestore) -> DriverFuture<'a, ()>;
+}
+
 /// Typed configuration-system driver.
 pub trait ConfigDriver: AgentActionHandler {}

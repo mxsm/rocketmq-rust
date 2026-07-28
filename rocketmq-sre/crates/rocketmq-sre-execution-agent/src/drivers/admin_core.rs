@@ -193,6 +193,79 @@ pub trait TopicConfigPatchClient: Send + Sync {
     ) -> DriverFuture<'a, TopicConfigPatchApplyOutcome>;
 }
 
+/// Closed Subscription Group fields supported by the Wave 2 patch action.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubscriptionGroupPatch {
+    pub retry_max_times: Option<u32>,
+    pub retry_queue_nums: Option<u32>,
+    pub consume_timeout_minutes: Option<u32>,
+}
+
+impl SubscriptionGroupPatch {
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.retry_max_times.is_none() && self.retry_queue_nums.is_none() && self.consume_timeout_minutes.is_none()
+    }
+}
+
+/// Sanitized Subscription Group state and monotonic configuration version.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SubscriptionGroupPatchState {
+    pub version: u64,
+    pub values: SubscriptionGroupPatch,
+    pub retry_semantics_known: bool,
+    pub permissions_unchanged: bool,
+    pub last_operation_id: Option<String>,
+}
+
+/// Closed forward Subscription Group version-CAS mutation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SubscriptionGroupPatchWrite {
+    pub group: String,
+    pub expected_version: u64,
+    pub patch: SubscriptionGroupPatch,
+    pub operation_id: String,
+    pub execution_id: ExecutionId,
+    pub plan_step_id: PlanStepId,
+}
+
+/// Closed inverse mutation bound to the durable before snapshot.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SubscriptionGroupPatchRestore {
+    pub group: String,
+    pub operation_id: String,
+    pub execution_id: ExecutionId,
+    pub plan_step_id: PlanStepId,
+}
+
+/// Known outcome of a Subscription Group version-CAS operation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SubscriptionGroupPatchApplyOutcome {
+    Applied { previous_version: u64, version: u64 },
+    VersionConflict { expected_version: u64, actual_version: u64 },
+}
+
+/// Exact Admin operations available to the allowlisted Subscription Group
+/// action.
+///
+/// Implementations retain permissions, consume enablement, retry topic
+/// identity, and every unlisted field. They may not call delete or a generic
+/// key/value update API.
+pub trait SubscriptionGroupPatchClient: Send + Sync {
+    fn subscription_group_patch_state<'a>(&'a self, group: &'a str) -> DriverFuture<'a, SubscriptionGroupPatchState>;
+
+    fn patch_subscription_group<'a>(
+        &'a self,
+        request: &'a SubscriptionGroupPatchWrite,
+    ) -> DriverFuture<'a, SubscriptionGroupPatchApplyOutcome>;
+
+    fn restore_subscription_group<'a>(
+        &'a self,
+        request: &'a SubscriptionGroupPatchRestore,
+    ) -> DriverFuture<'a, SubscriptionGroupPatchApplyOutcome>;
+}
+
 /// Typed RocketMQ Admin mutation adapter.
 ///
 /// Implementations must map closed action DTOs to `rocketmq-admin-core`

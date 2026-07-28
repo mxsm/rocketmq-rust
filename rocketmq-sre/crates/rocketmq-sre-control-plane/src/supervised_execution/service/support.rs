@@ -399,6 +399,18 @@ mod tests {
     }
 
     #[test]
+    fn wave_two_plans_cannot_use_expired_or_overlong_windows() {
+        let now = Utc::now();
+        assert!(validated_plan_expiry(now, Some(now), 3600).is_err());
+        assert!(validated_plan_expiry(now, Some(now - Duration::seconds(1)), 3600).is_err());
+        assert!(validated_plan_expiry(now, Some(now + Duration::seconds(3601)), 3600).is_err());
+        assert_eq!(
+            validated_plan_expiry(now, Some(now + Duration::seconds(3600)), 3600).expect("maximum window"),
+            now + Duration::seconds(3600)
+        );
+    }
+
+    #[test]
     fn aggregate_risk_never_accepts_r3() {
         assert_eq!(aggregate_risk(&[ActionRisk::R1]).expect("R1"), ActionRisk::R1);
         assert_eq!(

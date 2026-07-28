@@ -129,6 +129,64 @@ pub trait ProxyRestartClient: Send + Sync {
     ) -> DriverFuture<'a, ProxyRestartRestoreOutcome>;
 }
 
+/// Sanitized Deployment state for the digest-only one-canary rollout.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ProxyImageCanaryState {
+    pub generation: u64,
+    pub observed_generation: u64,
+    pub image_digest: String,
+    pub ready_canary_replicas: u32,
+    pub old_replicas_unchanged: bool,
+    pub pdb_healthy: bool,
+    pub slo_healthy: bool,
+    pub last_operation_id: Option<String>,
+}
+
+/// Closed digest-only rollout request for exactly one Proxy canary.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProxyImageCanaryWrite {
+    pub namespace: String,
+    pub workload: String,
+    pub container: String,
+    pub expected_generation: u64,
+    pub image_digest: String,
+    pub canary_replicas: u32,
+    pub operation_id: String,
+    pub execution_id: ExecutionId,
+    pub plan_step_id: PlanStepId,
+}
+
+/// Closed restoration request bound to the rollout's durable before snapshot.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProxyImageCanaryRestore {
+    pub namespace: String,
+    pub workload: String,
+    pub container: String,
+    pub operation_id: String,
+    pub execution_id: ExecutionId,
+    pub plan_step_id: PlanStepId,
+}
+
+/// Exact Kubernetes operations available to
+/// `proxy.rollout_image_canary.v1`.
+///
+/// Implementations must patch only the named container image to a digest,
+/// stage exactly one canary, retain the previous digest durably, and compare
+/// the live Deployment generation. Generic patches, tags, environment
+/// changes, and secret mutations are outside this boundary.
+pub trait ProxyImageCanaryClient: Send + Sync {
+    fn proxy_image_canary_state<'a>(
+        &'a self,
+        namespace: &'a str,
+        workload: &'a str,
+        container: &'a str,
+    ) -> DriverFuture<'a, ProxyImageCanaryState>;
+
+    fn rollout_proxy_image_canary<'a>(&'a self, request: &'a ProxyImageCanaryWrite) -> DriverFuture<'a, ()>;
+
+    fn restore_proxy_image<'a>(&'a self, request: &'a ProxyImageCanaryRestore) -> DriverFuture<'a, ()>;
+}
+
 /// Typed Kubernetes scale/restart/rollout adapter.
 ///
 /// Implementations use concrete Kubernetes API types and never accept an

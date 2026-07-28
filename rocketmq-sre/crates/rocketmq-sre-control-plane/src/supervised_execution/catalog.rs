@@ -387,4 +387,58 @@ mod tests {
             .is_err()
         );
     }
+
+    #[test]
+    fn sensitive_wave_two_actions_reject_forbidden_and_unbounded_fields() {
+        let catalog = ActionCatalog::embedded().expect("catalog");
+        let cases = [
+            (
+                ExecutionAction::ConsumerOffsetResetBounded,
+                json!({
+                    "topic": "orders",
+                    "group": "orders-consumer",
+                    "queue_id": 0,
+                    "expected_current_offset": 100,
+                    "target_kind": "queue_offset",
+                    "target_value": 50,
+                    "preview_start_offset": 50,
+                    "preview_end_offset": 100,
+                    "max_affected_messages": 50,
+                    "all_queues": true
+                }),
+            ),
+            (
+                ExecutionAction::NameSrvConfigPatchAllowlisted,
+                json!({
+                    "nameserver": "namesrv-0",
+                    "expected_version": 4,
+                    "patch": {"auth": false}
+                }),
+            ),
+            (
+                ExecutionAction::ControllerConfigPatchAllowlisted,
+                json!({
+                    "controller": "controller-0",
+                    "expected_version": 4,
+                    "patch": {"peers": ["controller-1"]}
+                }),
+            ),
+            (
+                ExecutionAction::SecurityCredentialRotateOverlap,
+                json!({
+                    "credential_set": "broker-api",
+                    "active_version": "v1",
+                    "candidate_version": "v2",
+                    "candidate_secret_ref": "vault://rocketmq/v2",
+                    "overlap_seconds": 300,
+                    "validation_probe_topic": "SRE_PROBE_ROTATION",
+                    "secret_value": "forbidden"
+                }),
+            ),
+        ];
+        for (action, parameters) in cases {
+            let descriptor = catalog.descriptor(action).expect("descriptor");
+            assert!(validate_parameters(descriptor, &parameters).is_err(), "{}", action.id());
+        }
+    }
 }
