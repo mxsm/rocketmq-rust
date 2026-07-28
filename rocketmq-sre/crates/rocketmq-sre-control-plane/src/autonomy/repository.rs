@@ -757,6 +757,7 @@ impl PostgresRepository {
             record
                 .evidence_ids
                 .iter()
+                .copied()
                 .map(rocketmq_sre_contracts::EvidenceId::as_uuid)
                 .collect::<Vec<_>>(),
         )
