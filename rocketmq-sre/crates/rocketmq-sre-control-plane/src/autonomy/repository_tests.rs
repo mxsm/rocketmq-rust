@@ -745,6 +745,25 @@ pub(super) async fn seed_successful_supervised_execution_at(
     stable_window_seconds: i64,
     observed_at: chrono::DateTime<Utc>,
 ) -> ExecutionId {
+    seed_successful_supervised_execution_for_action_at(
+        repository,
+        fixture,
+        stable_window_seconds,
+        observed_at,
+        ExecutionAction::ObservabilityLoggerLevelTtl,
+        "broker/test",
+    )
+    .await
+}
+
+pub(super) async fn seed_successful_supervised_execution_for_action_at(
+    repository: &PostgresRepository,
+    fixture: &Fixture,
+    stable_window_seconds: i64,
+    observed_at: chrono::DateTime<Utc>,
+    action: ExecutionAction,
+    resource_key: &str,
+) -> ExecutionId {
     let execution_id = ExecutionId::new();
     let step_id = Uuid::new_v4();
     let existing_lease: Option<(Uuid, i64)> = sqlx::query_as(
@@ -799,8 +818,8 @@ pub(super) async fn seed_successful_supervised_execution_at(
             request_snapshot, requested_by, started_at, completed_at, updated_at
          ) VALUES (
             $1, $2, $3, $4, $5, $6,
-            'broker/test', $7, $8, 'succeeded',
-            $9, 'operator@example.com', $10, $11, $11
+            $7, $8, $9, 'succeeded',
+            $10, 'operator@example.com', $11, $12, $12
          )",
     )
     .bind(execution_id.as_uuid())
@@ -809,7 +828,8 @@ pub(super) async fn seed_successful_supervised_execution_at(
     .bind(Uuid::new_v4())
     .bind(fixture.plan_id.as_uuid())
     .bind(&fixture.plan_hash)
-    .bind(ExecutionAction::ObservabilityLoggerLevelTtl.id())
+    .bind(resource_key)
+    .bind(action.id())
     .bind(format!("supervised-qualification-{execution_id}"))
     .bind(serde_json::json!({
         "approvals": [{"approval_id": Uuid::new_v4()}],
