@@ -87,6 +87,57 @@ export type ManualGateDecisionRequest =
 export type RunbookStepPlanBinding =
   ApiSchemas["RunbookStepPlanBinding"];
 export type ChangeConflict = ApiSchemas["ChangeConflict"];
+export type IntegrationAdapterKind =
+  ApiSchemas["IntegrationAdapterKind"];
+export type IntegrationEventKind =
+  ApiSchemas["IntegrationEventKind"];
+export type IntegrationDeliveryStatus =
+  ApiSchemas["IntegrationDeliveryStatus"];
+export type IntegrationDescriptor =
+  ApiSchemas["IntegrationDescriptor"];
+export type IntegrationTargetView =
+  ApiSchemas["IntegrationTargetView"];
+export type IntegrationTargetPage =
+  ApiSchemas["IntegrationTargetPage"];
+export type IntegrationDelivery =
+  ApiSchemas["IntegrationDelivery"];
+export type IntegrationDeliveryPage =
+  ApiSchemas["IntegrationDeliveryPage"];
+export type RegisterIntegrationTargetRequest =
+  ApiSchemas["RegisterIntegrationTargetRequest"];
+export type SetIntegrationTargetStateRequest =
+  ApiSchemas["SetIntegrationTargetStateRequest"];
+export type ExternalApprovalInput =
+  ApiSchemas["ExternalApprovalInput"];
+export type ExternalApprovalView =
+  ApiSchemas["ExternalApprovalView"];
+export type ReleaseStatus = ApiSchemas["ReleaseStatus"];
+export type ReleaseObservationPhase =
+  ApiSchemas["ReleaseObservationPhase"];
+export type ReleaseReadinessSnapshot =
+  ApiSchemas["ReleaseReadinessSnapshot"];
+export type ReleaseObservation =
+  ApiSchemas["ReleaseObservation"];
+export type ReleaseWorkflow = ApiSchemas["ReleaseWorkflow"];
+export type ReleaseReport = ApiSchemas["ReleaseReport"];
+export type CreateReleaseRequest =
+  ApiSchemas["CreateReleaseRequest"];
+export type PrepareReleaseRequest =
+  ApiSchemas["PrepareReleaseRequest"];
+export type ReleaseExecutionRequest =
+  ApiSchemas["ReleaseExecutionRequest"];
+export type RecordReleaseObservationRequest =
+  ApiSchemas["RecordReleaseObservationRequest"];
+export type ReleaseTransitionRequest =
+  ApiSchemas["ReleaseTransitionRequest"];
+export type CompleteRollbackRequest =
+  ApiSchemas["CompleteRollbackRequest"];
+export type ReleasePage = ApiSchemas["ReleasePage"];
+export type ReleaseDetail = ApiSchemas["ReleaseDetail"];
+export type ReleasePreparationView =
+  ApiSchemas["ReleasePreparationView"];
+export type ReleaseExecutionView =
+  ApiSchemas["ReleaseExecutionView"];
 
 export type OnboardingState =
   | "pending"
