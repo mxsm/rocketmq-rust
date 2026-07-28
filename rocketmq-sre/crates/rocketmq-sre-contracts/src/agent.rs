@@ -21,9 +21,11 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::ActionPlanId;
 use crate::AgentStepRequest;
 use crate::AgentStepResult;
 use crate::ClusterId;
+use crate::DynamicSafetyDecision;
 use crate::ExecutionAction;
 use crate::ExecutionId;
 use crate::FenceAck;
@@ -63,12 +65,27 @@ pub struct AgentReadResult {
     pub observed_at: DateTime<Utc>,
 }
 
+/// Exclusive authorization path used for one Agent dispatch.
+#[derive(Clone, Copy, Debug, Default, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentDispatchAuthorization {
+    #[default]
+    HumanApproved,
+    Autonomous,
+}
+
 /// Exact typed dispatch request accepted only from Executor workload identity.
 #[derive(Clone, Debug, JsonSchema, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentDispatchRequest {
     pub schema_version: String,
     pub tenant_id: TenantId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_id: Option<ActionPlanId>,
+    #[serde(default)]
+    pub authorization: AgentDispatchAuthorization,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dynamic_safety: Option<DynamicSafetyDecision>,
     pub request: AgentStepRequest,
 }
 
