@@ -109,6 +109,26 @@ const SCHEMA_REPAIR_PURPOSE: &str = "schema_repair";
 
 mod critic;
 
+#[derive(Clone, Copy, Debug)]
+struct ModelCallBudget {
+    maximum: Option<u8>,
+    used: u8,
+}
+
+impl ModelCallBudget {
+    const fn new(maximum: Option<u8>) -> Self {
+        Self { maximum, used: 0 }
+    }
+
+    fn claim(&mut self) -> bool {
+        if self.maximum.is_some_and(|maximum| self.used >= maximum) {
+            return false;
+        }
+        self.used = self.used.saturating_add(1);
+        true
+    }
+}
+
 /// PostgreSQL-backed, reference-only model gateway integration.
 #[derive(Clone)]
 pub(crate) struct ModelGatewayService {
@@ -246,6 +266,7 @@ impl ModelGatewayService {
         mut deterministic: PostmortemAssembly,
         evidence: &[EvidenceSnapshot],
         correlation_id: CorrelationId,
+        max_model_calls: Option<u8>,
     ) -> Result<ModelPostmortemDecision, ControlPlaneError> {
         let report = json!({
             "schema_version": "rocketmq-sre.postmortem-draft-input.v1",
@@ -265,7 +286,7 @@ impl ModelGatewayService {
             }
         });
         let decision = self
-            .diagnose(
+            .diagnose_with_model_call_limit(
                 auth,
                 incident_id,
                 cluster_id,
@@ -274,6 +295,7 @@ impl ModelGatewayService {
                 &report,
                 evidence,
                 correlation_id,
+                max_model_calls,
             )
             .await?;
         if let Some(value) = decision.conclusion {
@@ -308,6 +330,36 @@ impl ModelGatewayService {
         rules_report: &Value,
         evidence: &[EvidenceSnapshot],
         correlation_id: CorrelationId,
+    ) -> Result<ModelDiagnosisDecision, ControlPlaneError> {
+        self.diagnose_with_model_call_limit(
+            auth,
+            incident_id,
+            cluster_id,
+            incident_title,
+            pack_id,
+            rules_report,
+            evidence,
+            correlation_id,
+            None,
+        )
+        .await
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "diagnosis provenance and the optional automation call budget are intentionally explicit"
+    )]
+    async fn diagnose_with_model_call_limit(
+        &self,
+        auth: &AuthContext,
+        incident_id: IncidentId,
+        cluster_id: rocketmq_sre_contracts::ClusterId,
+        incident_title: &str,
+        pack_id: &str,
+        rules_report: &Value,
+        evidence: &[EvidenceSnapshot],
+        correlation_id: CorrelationId,
+        max_model_calls: Option<u8>,
     ) -> Result<ModelDiagnosisDecision, ControlPlaneError> {
         if !self.config.enabled {
             return Ok(ModelDiagnosisDecision::rules_only());
@@ -358,6 +410,7 @@ impl ModelGatewayService {
         let mut total_input_tokens = 0_u32;
         let mut total_output_tokens = 0_u32;
         let mut schema_repairs_used = 0_u8;
+        let mut model_call_budget = ModelCallBudget::new(max_model_calls);
         let max_attempts = self.config.max_fallbacks.saturating_add(1);
         for profile in candidates.into_iter().take(max_attempts) {
             let attempt_started_at = Utc::now();
@@ -446,6 +499,13 @@ impl ModelGatewayService {
                     ));
                 }
             };
+            if !model_call_budget.claim() {
+                return Ok(ModelDiagnosisDecision::rules_only_with_usage(
+                    total_input_tokens,
+                    total_output_tokens,
+                    schema_repairs_used,
+                ));
+            }
             let response = self
                 .invoke_model(
                     &profile.profile,
@@ -580,8 +640,15 @@ impl ModelGatewayService {
                                 schema_repairs_used,
                             ));
                         }
-                        schema_repairs_used = 1;
                         let repair_started_at = Utc::now();
+                        if !model_call_budget.claim() {
+                            return Ok(ModelDiagnosisDecision::rules_only_with_usage(
+                                total_input_tokens,
+                                total_output_tokens,
+                                schema_repairs_used,
+                            ));
+                        }
+                        schema_repairs_used = 1;
                         let repair_response = self
                             .invoke_model(
                                 &profile.profile,
@@ -1920,6 +1987,21 @@ mod tests {
                 .le(&(MAX_REPAIR_OUTPUT_CHARS + 1_000))
         );
         assert!(request.messages[1].content.contains(&evidence_id.to_string()));
+    }
+
+    #[test]
+    fn automation_model_call_budget_bounds_primary_fallback_and_repair_calls() {
+        let mut one_call = ModelCallBudget::new(Some(1));
+        assert!(one_call.claim());
+        assert!(!one_call.claim());
+        assert!(!one_call.claim());
+
+        let mut disabled = ModelCallBudget::new(Some(0));
+        assert!(!disabled.claim());
+
+        let mut unbounded_manual_operation = ModelCallBudget::new(None);
+        assert!(unbounded_manual_operation.claim());
+        assert!(unbounded_manual_operation.claim());
     }
 
     #[test]
