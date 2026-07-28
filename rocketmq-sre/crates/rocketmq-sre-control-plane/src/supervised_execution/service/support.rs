@@ -109,6 +109,69 @@ pub(super) fn step_precondition_hash(
         .map_err(|error| ControlPlaneError::validation("invalid_precondition_hash", error.to_string()))
 }
 
+pub(super) fn action_precondition_hash(
+    action: rocketmq_sre_contracts::ExecutionAction,
+    resource: &str,
+    ids: &[EvidenceId],
+    evidence: &BTreeMap<EvidenceId, EvidenceSnapshot>,
+) -> Result<String, ControlPlaneError> {
+    let mut live_hashes = BTreeSet::new();
+    for id in ids {
+        let snapshot = evidence.get(id).ok_or_else(|| {
+            ControlPlaneError::validation("invalid_evidence_binding", "plan step references unknown Evidence")
+        })?;
+        if snapshot.source != "execution-agent" || snapshot.resource != resource {
+            continue;
+        }
+        let rocketmq_sre_contracts::EvidenceContent::Inline(content) = &snapshot.content else {
+            return Err(ControlPlaneError::validation(
+                "invalid_execution_precondition",
+                "Execution Agent precondition Evidence must remain inline",
+            ));
+        };
+        let reason_codes_empty = content
+            .get("reason_codes")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(Vec::is_empty);
+        let precondition_hash = content
+            .get("precondition_hash")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| rocketmq_sre_contracts::is_sha256_digest(value))
+            .ok_or_else(|| {
+                ControlPlaneError::validation(
+                    "invalid_execution_precondition",
+                    "Execution Agent Evidence does not contain a valid precondition hash",
+                )
+            })?;
+        if content.get("schema_version").and_then(serde_json::Value::as_str)
+            != Some(rocketmq_sre_contracts::EXECUTION_AGENT_SCHEMA_VERSION)
+            || content.get("action").and_then(serde_json::Value::as_str) != Some(action.id())
+            || content.get("target").and_then(serde_json::Value::as_str) != Some(resource)
+            || content.get("ready").and_then(serde_json::Value::as_bool) != Some(true)
+            || !reason_codes_empty
+        {
+            return Err(ControlPlaneError::validation(
+                "invalid_execution_precondition",
+                "Execution Agent Evidence is not ready or does not bind the exact action target",
+            ));
+        }
+        live_hashes.insert(precondition_hash.to_owned());
+    }
+    match live_hashes.len() {
+        0 => step_precondition_hash(ids, evidence),
+        1 => live_hashes.into_iter().next().ok_or_else(|| {
+            ControlPlaneError::validation(
+                "invalid_execution_precondition",
+                "Execution Agent precondition hash is unavailable",
+            )
+        }),
+        _ => Err(ControlPlaneError::validation(
+            "ambiguous_execution_precondition",
+            "plan step binds conflicting Execution Agent precondition hashes",
+        )),
+    }
+}
+
 pub(super) fn evidence_binding(snapshot: &EvidenceSnapshot) -> EvidenceBinding {
     EvidenceBinding {
         evidence_id: snapshot.evidence_id,
