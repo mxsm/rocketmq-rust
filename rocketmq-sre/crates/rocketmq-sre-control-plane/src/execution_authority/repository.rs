@@ -29,12 +29,12 @@ use sqlx::Row;
 use crate::ControlPlaneError;
 
 #[derive(Clone, Debug)]
-pub(super) struct LeaseAuthorityRepository {
+pub(crate) struct LeaseAuthorityRepository {
     pool: PgPool,
 }
 
 impl LeaseAuthorityRepository {
-    pub(super) fn new(pool: PgPool) -> Self {
+    pub(crate) fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 
@@ -353,7 +353,7 @@ impl LeaseAuthorityRepository {
         Ok(())
     }
 
-    pub(super) async fn autonomy_grant_is_current(
+    pub(crate) async fn autonomy_grant_is_current(
         &self,
         grant: &rocketmq_sre_contracts::AutonomyGrant,
     ) -> Result<(), ControlPlaneError> {
