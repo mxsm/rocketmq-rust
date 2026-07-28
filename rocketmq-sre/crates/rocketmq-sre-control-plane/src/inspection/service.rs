@@ -33,7 +33,6 @@ use serde::Serialize;
 use serde_json::Value;
 use serde_json::json;
 
-use super::DueInspection;
 use super::InspectionPackRun;
 use super::NewRecommendation;
 use crate::ControlPlaneError;
@@ -46,8 +45,6 @@ use crate::workflow::InspectionView;
 use crate::workflow::WorkflowService;
 
 const EVIDENCE_TIMEOUT: Duration = Duration::from_secs(20);
-const MAX_DUE_RUNS_PER_TICK: u32 = 16;
-
 /// Downloadable inspection summary.
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct InspectionReport {
@@ -208,34 +205,6 @@ impl InspectionService {
         self.repository
             .complete_inspection(auth, id, pack_runs, recommendations, partial, correlation_id)
             .await
-    }
-
-    /// Runs a bounded batch of persisted schedules. Each run gets a synthetic
-    /// control-plane identity scoped to exactly one tenant and cluster.
-    pub(crate) async fn run_due(&self) {
-        let due = match self.repository.due_inspections(MAX_DUE_RUNS_PER_TICK).await {
-            Ok(due) => due,
-            Err(error) => {
-                tracing::warn!(error = %error, "scheduled inspection scan failed");
-                return;
-            }
-        };
-        for DueInspection {
-            id,
-            tenant_id,
-            cluster_id,
-        } in due
-        {
-            let auth = AuthContext {
-                tenant_id,
-                subject: "rocketmq-sre-inspection-scheduler".to_owned(),
-                clusters: BTreeSet::from([cluster_id]),
-                roles: BTreeSet::from(["diagnose".to_owned()]),
-            };
-            if let Err(error) = self.execute(&auth, id, CorrelationId::new()).await {
-                tracing::warn!(inspection_id = %id, error = %error, "scheduled inspection failed");
-            }
-        }
     }
 
     pub(crate) async fn report(
