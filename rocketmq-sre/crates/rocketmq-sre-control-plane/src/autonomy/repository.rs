@@ -21,9 +21,14 @@ use rocketmq_sre_contracts::AutonomyPolicyDefinition;
 use rocketmq_sre_contracts::AutonomyPolicyId;
 use rocketmq_sre_contracts::AutonomyQualificationCohort;
 use rocketmq_sre_contracts::AutonomyQualificationLevel;
+use rocketmq_sre_contracts::AutonomyQualificationSample;
+use rocketmq_sre_contracts::AutonomySampleKind;
 use rocketmq_sre_contracts::ClusterId;
+use rocketmq_sre_contracts::CriticReviewId;
+use rocketmq_sre_contracts::DiagnosisRevisionId;
 use rocketmq_sre_contracts::DynamicSafetyDecision;
 use rocketmq_sre_contracts::ExecutionAction;
+use rocketmq_sre_contracts::ModelInvocationId;
 use rocketmq_sre_contracts::TenantId;
 use serde_json::Value;
 use sqlx::Postgres;
@@ -412,7 +417,7 @@ impl PostgresRepository {
     pub(super) async fn set_autonomy_freeze(
         &self,
         tenant_id: TenantId,
-        cluster_id: ClusterId,
+        cluster_id: Option<ClusterId>,
         action: Option<ExecutionAction>,
         action_version: Option<&str>,
         active: bool,
@@ -440,7 +445,7 @@ impl PostgresRepository {
              FOR UPDATE",
         )
         .bind(tenant_id.as_uuid())
-        .bind(cluster_id.as_uuid())
+        .bind(cluster_id.map(ClusterId::as_uuid))
         .bind(action.map(ExecutionAction::id))
         .bind(action_version)
         .fetch_optional(&mut *transaction)
@@ -482,7 +487,7 @@ impl PostgresRepository {
                 )
                 .bind(id)
                 .bind(tenant_id.as_uuid())
-                .bind(cluster_id.as_uuid())
+                .bind(cluster_id.map(ClusterId::as_uuid))
                 .bind(action.map(ExecutionAction::id))
                 .bind(action_version)
                 .bind(active)
@@ -499,7 +504,7 @@ impl PostgresRepository {
         transaction.commit().await?;
         Ok(AutonomyFreezeView {
             id,
-            cluster_id: Some(cluster_id),
+            cluster_id,
             action,
             action_version: action_version.map(str::to_owned),
             revision: u64::try_from(revision).map_err(|_| invalid_persisted("freeze revision is negative"))?,
@@ -629,6 +634,174 @@ impl PostgresRepository {
             ));
         }
         Ok(stored)
+    }
+
+    pub(super) async fn autonomy_cohort(
+        &self,
+        cohort_id: rocketmq_sre_contracts::AutonomyCohortId,
+    ) -> Result<AutonomyQualificationCohort, ControlPlaneError> {
+        let row = sqlx::query(
+            "SELECT *
+             FROM autonomy_qualification_cohorts
+             WHERE id = $1",
+        )
+        .bind(cohort_id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or(ControlPlaneError::NotFound)?;
+        cohort_from_row(&row)
+    }
+
+    pub(super) async fn store_qualification_sample(
+        &self,
+        sample: &AutonomyQualificationSample,
+    ) -> Result<AutonomyQualificationSample, ControlPlaneError> {
+        let inserted = sqlx::query(
+            "INSERT INTO autonomy_qualification_samples (
+                id, cohort_id, sample_kind, incident_id, plan_id, plan_hash,
+                execution_id, qualified, reason_codes, human_outcome_linked,
+                evidence_complete, stable_window_passed, sample_snapshot,
+                observed_at, reconciled_at
+             ) VALUES (
+                $1, $2, $3, $4, $5, $6,
+                $7, $8, $9, $10,
+                $11, $12, $13,
+                $14, $15
+             )
+             ON CONFLICT (cohort_id, sample_kind, incident_id, plan_hash)
+             DO NOTHING",
+        )
+        .bind(sample.id.as_uuid())
+        .bind(sample.cohort_id.as_uuid())
+        .bind(sample_kind_name(sample.kind))
+        .bind(sample.incident_id.as_uuid())
+        .bind(sample.plan_id.as_uuid())
+        .bind(&sample.plan_hash)
+        .bind(sample.execution_id.map(rocketmq_sre_contracts::ExecutionId::as_uuid))
+        .bind(sample.qualified)
+        .bind(&sample.reason_codes)
+        .bind(sample.human_outcome_linked)
+        .bind(sample.evidence_complete)
+        .bind(sample.stable_window_passed)
+        .bind(json_value(sample)?)
+        .bind(sample.observed_at)
+        .bind(sample.reconciled_at)
+        .execute(&self.pool)
+        .await?;
+        if inserted.rows_affected() == 1 {
+            return Ok(sample.clone());
+        }
+
+        let row = sqlx::query(
+            "SELECT sample_snapshot
+             FROM autonomy_qualification_samples
+             WHERE cohort_id = $1 AND sample_kind = $2
+               AND incident_id = $3 AND plan_hash = $4",
+        )
+        .bind(sample.cohort_id.as_uuid())
+        .bind(sample_kind_name(sample.kind))
+        .bind(sample.incident_id.as_uuid())
+        .bind(&sample.plan_hash)
+        .fetch_one(&self.pool)
+        .await?;
+        let stored: AutonomyQualificationSample = from_json(row.try_get("sample_snapshot")?)?;
+        if stored != *sample {
+            return Err(ControlPlaneError::conflict_code(
+                "qualification_sample_conflict",
+                "qualification sample idempotency key already has different content",
+            ));
+        }
+        Ok(stored)
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "exact persisted Critic binding is intentionally explicit"
+    )]
+    pub(super) async fn autonomy_critic_bindings_valid(
+        &self,
+        tenant_id: TenantId,
+        cluster_id: ClusterId,
+        diagnosis_revision_id: DiagnosisRevisionId,
+        plan_id: rocketmq_sre_contracts::ActionPlanId,
+        plan_hash: &str,
+        critic_review_id: CriticReviewId,
+        primary_invocation_id: ModelInvocationId,
+        critic_invocation_id: ModelInvocationId,
+        primary_profile: &str,
+        primary_family: &str,
+        primary_revision: &str,
+        critic_profile: &str,
+        critic_family: &str,
+        critic_revision: &str,
+    ) -> Result<bool, ControlPlaneError> {
+        let row = sqlx::query(
+            "SELECT
+                review.plan_id,
+                review.plan_hash,
+                review.primary_invocation_id,
+                review.critic_invocation_id,
+                review.primary_model_family,
+                review.critic_model_family,
+                review.status,
+                review.conclusion,
+                primary_invocation.tenant_id AS primary_tenant_id,
+                primary_invocation.cluster_id AS primary_cluster_id,
+                primary_invocation.diagnosis_revision_id AS primary_diagnosis_revision_id,
+                primary_invocation.model_family AS primary_actual_family,
+                primary_invocation.model_revision AS primary_actual_revision,
+                primary_profile.profile_name AS primary_actual_profile,
+                critic_invocation.tenant_id AS critic_tenant_id,
+                critic_invocation.cluster_id AS critic_cluster_id,
+                critic_invocation.model_family AS critic_actual_family,
+                critic_invocation.model_revision AS critic_actual_revision,
+                critic_profile.profile_name AS critic_actual_profile
+             FROM critic_reviews review
+             JOIN model_invocations primary_invocation
+               ON primary_invocation.id = review.primary_invocation_id
+             JOIN model_profiles primary_profile
+               ON primary_profile.id = primary_invocation.actual_profile_id
+             JOIN model_invocations critic_invocation
+               ON critic_invocation.id = review.critic_invocation_id
+             JOIN model_profiles critic_profile
+               ON critic_profile.id = critic_invocation.actual_profile_id
+             WHERE review.id = $1",
+        )
+        .bind(critic_review_id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some(row) = row else {
+            return Ok(false);
+        };
+        Ok(row.try_get::<Uuid, _>("plan_id")? == *plan_id.as_uuid()
+            && row.try_get::<String, _>("plan_hash")? == plan_hash
+            && row.try_get::<Uuid, _>("primary_invocation_id")? == *primary_invocation_id.as_uuid()
+            && row.try_get::<Uuid, _>("critic_invocation_id")? == *critic_invocation_id.as_uuid()
+            && row.try_get::<String, _>("status")? == "valid"
+            && row.try_get::<String, _>("conclusion")? == "accept"
+            && TenantId::from_uuid(row.try_get("primary_tenant_id")?) == tenant_id
+            && ClusterId::from_uuid(row.try_get("primary_cluster_id")?) == cluster_id
+            && row
+                .try_get::<Option<Uuid>, _>("primary_diagnosis_revision_id")?
+                .is_some_and(|id| id == *diagnosis_revision_id.as_uuid())
+            && TenantId::from_uuid(row.try_get("critic_tenant_id")?) == tenant_id
+            && ClusterId::from_uuid(row.try_get("critic_cluster_id")?) == cluster_id
+            && row
+                .try_get::<String, _>("primary_model_family")?
+                .eq_ignore_ascii_case(primary_family)
+            && row
+                .try_get::<String, _>("critic_model_family")?
+                .eq_ignore_ascii_case(critic_family)
+            && row
+                .try_get::<String, _>("primary_actual_family")?
+                .eq_ignore_ascii_case(primary_family)
+            && row.try_get::<String, _>("primary_actual_revision")? == primary_revision
+            && row.try_get::<String, _>("primary_actual_profile")? == primary_profile
+            && row
+                .try_get::<String, _>("critic_actual_family")?
+                .eq_ignore_ascii_case(critic_family)
+            && row.try_get::<String, _>("critic_actual_revision")? == critic_revision
+            && row.try_get::<String, _>("critic_actual_profile")? == critic_profile)
     }
 
     pub(super) async fn store_dynamic_safety_decision(
@@ -1035,6 +1208,13 @@ const fn qualification_level_name(level: AutonomyQualificationLevel) -> &'static
     match level {
         AutonomyQualificationLevel::Shadow => "shadow",
         AutonomyQualificationLevel::Autonomous => "autonomous",
+    }
+}
+
+const fn sample_kind_name(kind: AutonomySampleKind) -> &'static str {
+    match kind {
+        AutonomySampleKind::ShadowOutcome => "shadow_outcome",
+        AutonomySampleKind::SupervisedSuccess => "supervised_success",
     }
 }
 
