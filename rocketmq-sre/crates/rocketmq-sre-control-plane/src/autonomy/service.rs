@@ -20,8 +20,12 @@ use chrono::Duration;
 use chrono::Utc;
 use rocketmq_sre_contracts::ActionDescriptor;
 use rocketmq_sre_contracts::ActionRisk;
+use rocketmq_sre_contracts::AutonomousExecutionFailure;
 use rocketmq_sre_contracts::AutonomyGrant;
 use rocketmq_sre_contracts::AutonomyMode;
+use rocketmq_sre_contracts::AutonomyOutcome;
+use rocketmq_sre_contracts::AutonomyOutcomeClass;
+use rocketmq_sre_contracts::AutonomyOutcomeId;
 use rocketmq_sre_contracts::AutonomyPolicyDefinition;
 use rocketmq_sre_contracts::AutonomyPolicyId;
 use rocketmq_sre_contracts::AutonomyQualificationCohort;
@@ -60,6 +64,7 @@ use super::model::DynamicSafetyView;
 use super::model::EvaluateDynamicSafetyRequest;
 use super::model::IssueAutonomyGrantRequest;
 use super::model::PrepareAutonomousCohortRequest;
+use super::model::RecordAutonomyOutcomeRequest;
 use super::model::RecordQualificationSampleRequest;
 use super::model::RecordShadowOutcomeRequest;
 use super::model::SetAutonomyFreezeRequest;
@@ -572,6 +577,69 @@ impl AutonomyService {
         })
     }
 
+    pub(crate) async fn record_outcome(
+        &self,
+        auth: &AuthContext,
+        request: &RecordAutonomyOutcomeRequest,
+    ) -> Result<AutonomyOutcome, ControlPlaneError> {
+        require_role(auth, "executor_service")?;
+        let scope = self
+            .scope(
+                auth,
+                &AutonomyScopeQuery {
+                    cluster_id: request.cluster_id,
+                    action: request.action,
+                    action_version: request.action_version.clone(),
+                },
+            )
+            .await?;
+        let plan = self.repository.action_plan(request.plan_id).await?.plan;
+        validate_plan_scope(&plan, &scope, &request.plan_hash)?;
+        if plan.incident_id != request.incident_id {
+            return Err(ControlPlaneError::forbidden(
+                "autonomy_plan_binding_invalid",
+                "autonomy outcome incident does not match the immutable plan",
+            ));
+        }
+        if let Some(cohort_id) = request.cohort_id {
+            let cohort = self.repository.autonomy_cohort(cohort_id).await?;
+            if cohort.tenant_id != auth.tenant_id
+                || cohort.cluster_id != request.cluster_id
+                || cohort.action != request.action
+                || cohort.action_version != request.action_version
+                || cohort.level != AutonomyQualificationLevel::Autonomous
+            {
+                return Err(ControlPlaneError::forbidden(
+                    "autonomy_cohort_mismatch",
+                    "autonomy outcome cohort does not match the execution scope",
+                ));
+            }
+        }
+        validate_outcome_request(request)?;
+        let outcome = AutonomyOutcome {
+            id: AutonomyOutcomeId::new(),
+            tenant_id: auth.tenant_id,
+            cluster_id: request.cluster_id,
+            action: request.action,
+            action_version: request.action_version.clone(),
+            incident_id: request.incident_id,
+            plan_id: request.plan_id,
+            plan_hash: request.plan_hash.clone(),
+            execution_id: request.execution_id,
+            cohort_id: request.cohort_id,
+            class: request.class,
+            failure: request.failure,
+            reason_codes: request.reason_codes.clone(),
+            first_positive_intent_persisted: request.first_positive_intent_persisted,
+            occurred_at: request.occurred_at,
+            reconciled_at: request.reconciled_at,
+        };
+        self.repository
+            .record_autonomy_outcome(&outcome, "autonomy-pause-reconciler")
+            .await?;
+        Ok(outcome)
+    }
+
     pub(crate) async fn set_freeze(
         &self,
         auth: &AuthContext,
@@ -1003,6 +1071,42 @@ fn validate_reason_codes(reason_codes: &[String]) -> Result<(), ControlPlaneErro
         return Err(ControlPlaneError::validation(
             "invalid_reason_codes",
             "qualification reason codes must be unique bounded plain text",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_outcome_request(request: &RecordAutonomyOutcomeRequest) -> Result<(), ControlPlaneError> {
+    validate_reason_codes(&request.reason_codes)?;
+    let pre_intent_failure = matches!(
+        request.failure,
+        Some(
+            AutonomousExecutionFailure::CriticUnavailable
+                | AutonomousExecutionFailure::CriticInvalid
+                | AutonomousExecutionFailure::CriticConflict
+                | AutonomousExecutionFailure::EvidenceDegraded
+        )
+    );
+    let valid_class = match request.class {
+        AutonomyOutcomeClass::ExpectedDeny => {
+            request.failure.is_none() && !request.first_positive_intent_persisted && request.execution_id.is_none()
+        }
+        AutonomyOutcomeClass::Success => {
+            request.failure.is_none()
+                && request.first_positive_intent_persisted
+                && request.execution_id.is_some()
+                && request.cohort_id.is_some()
+        }
+        AutonomyOutcomeClass::AutonomousExecutionFailure => {
+            request.failure.is_some()
+                && request.cohort_id.is_some()
+                && (request.first_positive_intent_persisted || pre_intent_failure)
+        }
+    };
+    if !valid_class || request.reconciled_at < request.occurred_at || !is_sha256_digest(&request.plan_hash) {
+        return Err(ControlPlaneError::validation(
+            "invalid_autonomy_outcome",
+            "autonomy outcome class, intent, failure, or reconciliation invariants are invalid",
         ));
     }
     Ok(())
