@@ -16,7 +16,6 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::DateTime;
 use chrono::Utc;
 use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::apps::v1::ReplicaSet;
@@ -281,8 +280,7 @@ impl ProductionProxyRestartClient {
             .ok_or(ExecutionAgentError::DriverFailed)?;
         let original_uid = annotation(deployment, ORIGINAL_UID_ANNOTATION);
         let started_at = annotation(deployment, STARTED_AT_ANNOTATION)
-            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-            .map(|value| value.with_timezone(&Utc));
+            .and_then(|value| value.parse::<k8s_openapi::jiff::Timestamp>().ok());
         let pods = Api::<Pod>::namespaced(self.kube.clone(), &namespace)
             .list(&ListParams::default())
             .await
@@ -567,12 +565,12 @@ impl ProxyRestartClient for ProductionProxyRestartClient {
             {
                 return Err(ExecutionAgentError::DriverFailed);
             }
-            let proxy_addr = proxy_addr(&pod, resolved.allowed.remoting_port)?;
-            let before = self.query_drain(&proxy_addr).await?;
+            let original_proxy_addr = proxy_addr(&pod, resolved.allowed.remoting_port)?;
+            let before = self.query_drain(&original_proxy_addr).await?;
             if !accepting(&before) {
                 return Err(ExecutionAgentError::DriverFailed);
             }
-            let begun = self.begin_drain(&proxy_addr, &request.operation_id).await?;
+            let begun = self.begin_drain(&original_proxy_addr, &request.operation_id).await?;
             if begun.operation_id.as_deref() != Some(request.operation_id.as_str())
                 || begun.admission_open
                 || begun.routing_open
@@ -583,24 +581,24 @@ impl ProxyRestartClient for ProductionProxyRestartClient {
 
             let deadline = tokio::time::Instant::now() + Duration::from_secs(u64::from(request.drain_timeout_seconds));
             if self
-                .wait_for_zero_drain(&proxy_addr, &request.operation_id, deadline)
+                .wait_for_zero_drain(&original_proxy_addr, &request.operation_id, deadline)
                 .await
                 .is_err()
             {
-                self.cancel_drain(&proxy_addr, &request.operation_id).await?;
+                self.cancel_drain(&original_proxy_addr, &request.operation_id).await?;
                 return Err(ExecutionAgentError::DriverFailed);
             }
             if self.mark_restart(&resolved.allowed, request).await.is_err() {
-                self.cancel_drain(&proxy_addr, &request.operation_id).await?;
+                self.cancel_drain(&original_proxy_addr, &request.operation_id).await?;
                 return Err(ExecutionAgentError::DriverFailed);
             }
-            let final_drain = self.query_drain(&proxy_addr).await?;
+            let final_drain = self.query_drain(&original_proxy_addr).await?;
             if final_drain.operation_id.as_deref() != Some(request.operation_id.as_str())
                 || final_drain.phase != ProxyDrainPhase::Drained
                 || !final_drain.zero_pending
                 || !final_drain.pending.is_zero()
             {
-                self.cancel_drain(&proxy_addr, &request.operation_id).await?;
+                self.cancel_drain(&original_proxy_addr, &request.operation_id).await?;
                 self.clear_restart(&resolved.allowed, &request.operation_id).await?;
                 return Err(ExecutionAgentError::DriverFailed);
             }
@@ -609,7 +607,7 @@ impl ProxyRestartClient for ProductionProxyRestartClient {
                 .await
                 .is_err()
             {
-                self.cancel_drain(&proxy_addr, &request.operation_id).await?;
+                self.cancel_drain(&original_proxy_addr, &request.operation_id).await?;
                 self.clear_restart(&resolved.allowed, &request.operation_id).await?;
                 return Err(ExecutionAgentError::DriverFailed);
             }
