@@ -295,9 +295,20 @@ impl LeaseAuthorityRepository {
                   AND plan.tenant_id = $2
                   AND plan.cluster_id = $3
                   AND plan.plan_hash = $4
-                  AND plan.status = 'approved'
                   AND plan.expires_at > $5
                   AND cluster.onboarding_state <> 'offboarded'
+                  AND (
+                    (
+                      $6
+                      AND plan.risk = 'r1'
+                      AND plan.status IN ('ready_for_approval', 'approved')
+                    )
+                    OR (
+                      NOT $6
+                      AND plan.risk IN ('r1', 'r2')
+                      AND plan.status = 'approved'
+                    )
+                  )
             )",
         )
         .bind(execution.plan.id.as_uuid())
@@ -305,6 +316,7 @@ impl LeaseAuthorityRepository {
         .bind(execution.cluster_id.as_uuid())
         .bind(&execution.plan.plan_hash)
         .bind(now)
+        .bind(execution.is_autonomous())
         .fetch_one(&self.pool)
         .await?;
         if !plan_current {
@@ -339,6 +351,83 @@ impl LeaseAuthorityRepository {
             }
         }
         Ok(())
+    }
+
+    pub(super) async fn autonomy_grant_is_current(
+        &self,
+        grant: &rocketmq_sre_contracts::AutonomyGrant,
+    ) -> Result<(), ControlPlaneError> {
+        let valid: bool = sqlx::query_scalar(
+            "SELECT EXISTS (
+                SELECT 1
+                FROM autonomy_lifecycle_states AS lifecycle
+                JOIN autonomy_qualification_cohorts AS cohort
+                  ON cohort.id = $10
+                 AND cohort.level = 'autonomous'
+                 AND cohort.tenant_id = lifecycle.tenant_id
+                 AND cohort.cluster_id = lifecycle.cluster_id
+                 AND cohort.action_id = lifecycle.action_id
+                 AND cohort.action_version = lifecycle.action_version
+                 AND cohort.policy_id = lifecycle.policy_id
+                 AND cohort.policy_definition_version = lifecycle.policy_definition_version
+                JOIN critic_reviews AS review
+                  ON review.id = $12
+                 AND review.plan_id = $3
+                 AND review.plan_hash = $4
+                 AND review.diagnosis_revision_id = $5
+                 AND review.primary_invocation_id = $13
+                 AND review.critic_invocation_id = $14
+                 AND review.status = 'valid'
+                 AND review.conclusion = 'accept'
+                JOIN action_plans AS plan
+                  ON plan.id = review.plan_id
+                 AND plan.tenant_id = lifecycle.tenant_id
+                 AND plan.cluster_id = lifecycle.cluster_id
+                 AND plan.risk = 'r1'
+                 AND plan.status IN ('ready_for_approval', 'approved')
+                WHERE lifecycle.tenant_id = $1
+                  AND lifecycle.cluster_id = $2
+                  AND lifecycle.action_id = $6
+                  AND lifecycle.action_version = $7
+                  AND lifecycle.policy_id = $8
+                  AND lifecycle.policy_definition_version = $9
+                  AND lifecycle.lifecycle_revision = $11
+                  AND lifecycle.mode = 'autonomous'
+                  AND cohort.cohort_hash = $15
+            )",
+        )
+        .bind(grant.tenant_id.as_uuid())
+        .bind(grant.cluster_id.as_uuid())
+        .bind(grant.plan_id.as_uuid())
+        .bind(&grant.plan_hash)
+        .bind(grant.diagnosis_revision_id.as_uuid())
+        .bind(grant.action.id())
+        .bind(&grant.action_version)
+        .bind(grant.policy_id.as_uuid())
+        .bind(
+            i64::try_from(grant.policy_definition_version)
+                .map_err(|_| ControlPlaneError::validation("invalid_autonomy_grant", "policy version is too large"))?,
+        )
+        .bind(grant.autonomous_cohort_id.as_uuid())
+        .bind(
+            i64::try_from(grant.lifecycle_revision).map_err(|_| {
+                ControlPlaneError::validation("invalid_autonomy_grant", "lifecycle revision is too large")
+            })?,
+        )
+        .bind(grant.critic_review_id.as_uuid())
+        .bind(grant.primary_model_invocation_id.as_uuid())
+        .bind(grant.critic_model_invocation_id.as_uuid())
+        .bind(&grant.autonomous_cohort_hash)
+        .fetch_one(&self.pool)
+        .await?;
+        if valid {
+            Ok(())
+        } else {
+            Err(ControlPlaneError::forbidden(
+                "autonomy_grant_stale",
+                "autonomy grant no longer binds the current R1 policy, lifecycle, cohort, and Critic review",
+            ))
+        }
     }
 
     pub(super) async fn validate_fence_grant_binding(
