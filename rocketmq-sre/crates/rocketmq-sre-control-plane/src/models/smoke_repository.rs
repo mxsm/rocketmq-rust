@@ -18,6 +18,7 @@ use rocketmq_sre_contracts::CorrelationId;
 use rocketmq_sre_contracts::ModelProfileId;
 use rocketmq_sre_contracts::TenantId;
 use serde_json::Value;
+use serde_json::json;
 use sqlx::Row;
 use uuid::Uuid;
 
@@ -197,6 +198,25 @@ impl PostgresRepository {
             .await?;
             auto_quarantine_lifecycle(&mut transaction, tenant_id, profile_id, changed_by, correlation_id).await?;
         }
+        sqlx::query(
+            "INSERT INTO provider_health_events (
+                tenant_id, profile_id, health, capability,
+                credential_version_fingerprint, observed_at
+             )
+             SELECT tenant_id, id, health, $3, credential_version_fingerprint, $4
+             FROM model_profiles
+             WHERE tenant_id = $1 AND id = $2",
+        )
+        .bind(tenant_id.as_uuid())
+        .bind(profile_id.as_uuid())
+        .bind(json!({
+            "source": "provider_smoke",
+            "overall_ok": result.overall_ok(),
+            "failure_codes": &result.failure_codes,
+        }))
+        .bind(result.observed_at)
+        .execute(&mut *transaction)
+        .await?;
         transaction.commit().await?;
 
         Ok(ProviderSmokeResultView {
