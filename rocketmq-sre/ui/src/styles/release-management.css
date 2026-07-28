@@ -225,10 +225,10 @@
 .release-list-row {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(210px, 1.2fr) minmax(310px, 1fr) 116px 30px;
+  grid-template-columns: minmax(168px, 1.15fr) minmax(218px, 1fr) 76px 28px;
   align-items: center;
   min-height: 98px;
-  gap: 14px;
+  gap: 9px;
   padding: 12px 12px 12px 17px;
   border-bottom: 1px solid var(--border-subtle);
 }
