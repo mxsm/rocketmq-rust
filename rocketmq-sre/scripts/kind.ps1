@@ -235,7 +235,7 @@ function Build-Images {
                 '--build-arg', 'VITE_SRE_DEV_DISPLAY_NAME=RocketMQ SRE Kind Operator',
                 '--build-arg', 'VITE_SRE_DEV_TENANT=00000000-0000-4000-8000-000000000002',
                 '--build-arg', 'VITE_SRE_DEV_CLUSTERS=00000000-0000-4000-8000-000000000001',
-                '--build-arg', 'VITE_SRE_DEV_ROLES=rocketmq:read rocketmq:diagnose',
+                '--build-arg', 'VITE_SRE_DEV_ROLES=rocketmq:read rocketmq:diagnose operator approver',
                 '--build-arg', 'VITE_SRE_DEV_TOKEN=phase00-internal-token',
                 '--tag', $entry.Value,
                 $repositoryRoot
