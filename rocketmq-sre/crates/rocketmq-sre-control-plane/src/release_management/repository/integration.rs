@@ -51,7 +51,7 @@ use crate::PostgresRepository;
 const MAX_DELIVERY_ATTEMPTS: u16 = 6;
 
 impl PostgresRepository {
-    pub(super) async fn insert_integration_target(
+    pub(in crate::release_management) async fn insert_integration_target(
         &self,
         view: &IntegrationTargetView,
         audit: &AuditEvent,
@@ -100,7 +100,7 @@ impl PostgresRepository {
         Ok(())
     }
 
-    pub(super) async fn integration_target(
+    pub(in crate::release_management) async fn integration_target(
         &self,
         tenant_id: TenantId,
         id: IntegrationTargetId,
@@ -118,7 +118,7 @@ impl PostgresRepository {
         integration_target_from_row(&row)
     }
 
-    pub(super) async fn integration_targets(
+    pub(in crate::release_management) async fn integration_targets(
         &self,
         tenant_id: TenantId,
         cluster_id: ClusterId,
@@ -145,7 +145,7 @@ impl PostgresRepository {
         rows.iter().map(integration_target_from_row).collect()
     }
 
-    pub(super) async fn set_integration_target_state(
+    pub(in crate::release_management) async fn set_integration_target_state(
         &self,
         target: &IntegrationTargetView,
         enabled: bool,
@@ -176,7 +176,7 @@ impl PostgresRepository {
         self.integration_target(target.target.tenant_id, target.target.id).await
     }
 
-    pub(super) async fn enqueue_integration_delivery(
+    pub(in crate::release_management) async fn enqueue_integration_delivery(
         &self,
         target: &IntegrationTargetView,
         delivery: &IntegrationDelivery,
@@ -188,7 +188,7 @@ impl PostgresRepository {
         Ok(queued)
     }
 
-    pub(super) async fn integration_deliveries(
+    pub(in crate::release_management) async fn integration_deliveries(
         &self,
         tenant_id: TenantId,
         cluster_id: ClusterId,
@@ -213,7 +213,7 @@ impl PostgresRepository {
         rows.iter().map(integration_delivery_from_row).collect()
     }
 
-    pub(super) async fn claim_integration_deliveries(
+    pub(in crate::release_management) async fn claim_integration_deliveries(
         &self,
         limit: u16,
     ) -> Result<Vec<IntegrationDeliveryClaim>, ControlPlaneError> {
@@ -281,7 +281,7 @@ impl PostgresRepository {
         Ok(claims)
     }
 
-    pub(super) async fn finish_integration_delivery(
+    pub(in crate::release_management) async fn finish_integration_delivery(
         &self,
         claim: &IntegrationDeliveryClaim,
         result: Result<AdapterDeliveryReceipt, &'static str>,
@@ -357,7 +357,7 @@ impl PostgresRepository {
         Ok(())
     }
 
-    pub(super) async fn external_approval_result(
+    pub(in crate::release_management) async fn external_approval_result(
         &self,
         tenant_id: TenantId,
         target_id: IntegrationTargetId,
