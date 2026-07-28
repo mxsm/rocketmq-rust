@@ -21,7 +21,7 @@ parameter_schema:
 status: active
 deprecation: null
 risk: r1
-execution_supported: false
+execution_supported: true
 preconditions:
   - desired_replicas_equals_expected
   - quota_and_capacity_available
