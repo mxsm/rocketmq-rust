@@ -108,7 +108,7 @@ where
             {
                 reasons.push("proxy_drain_already_active".to_owned());
             }
-            if state.last_operation_id.is_some() {
+            if state.active_operation_id.is_some() {
                 reasons.push("proxy_restart_operation_not_clear".to_owned());
             }
             let precondition_hash = canonical_precondition_hash(&RestartPrecondition {
@@ -141,6 +141,10 @@ where
                     (
                         "remaining_replicas_healthy".to_owned(),
                         state.remaining_replicas_healthy,
+                    ),
+                    (
+                        "restart_operation_clear".to_owned(),
+                        state.active_operation_id.is_none(),
                     ),
                     ("accepting_and_routed".to_owned(), accepting_and_routed),
                 ]
