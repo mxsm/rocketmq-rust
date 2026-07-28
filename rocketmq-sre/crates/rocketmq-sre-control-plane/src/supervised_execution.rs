@@ -24,6 +24,8 @@ pub(crate) mod signing;
 #[cfg(test)]
 mod critic_tests;
 #[cfg(test)]
+mod proxy_restart_e2e_tests;
+#[cfg(test)]
 mod service_tests;
 
 pub(crate) use api::routes;
