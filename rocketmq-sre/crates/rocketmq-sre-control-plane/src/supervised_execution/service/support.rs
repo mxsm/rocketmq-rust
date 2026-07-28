@@ -387,6 +387,15 @@ pub(super) const fn audit_event_name(kind: AuditEventKind) -> &'static str {
         AuditEventKind::ChangeScheduleCreated => "change_schedule_created",
         AuditEventKind::ChangeScheduleStateChanged => "change_schedule_state_changed",
         AuditEventKind::ManualGateDecided => "manual_gate_decided",
+        AuditEventKind::IntegrationTargetRegistered => "integration_target_registered",
+        AuditEventKind::IntegrationDeliveryQueued => "integration_delivery_queued",
+        AuditEventKind::IntegrationDeliveryCompleted => "integration_delivery_completed",
+        AuditEventKind::ExternalApprovalReceived => "external_approval_received",
+        AuditEventKind::ReleaseCreated => "release_created",
+        AuditEventKind::ReleaseReadinessEvaluated => "release_readiness_evaluated",
+        AuditEventKind::ReleaseStateChanged => "release_state_changed",
+        AuditEventKind::ReleaseObservationCaptured => "release_observation_captured",
+        AuditEventKind::ReleaseReportGenerated => "release_report_generated",
     }
 }
 
