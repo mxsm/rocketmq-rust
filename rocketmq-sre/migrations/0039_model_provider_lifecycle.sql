@@ -9,6 +9,8 @@ ALTER TABLE model_profile_lifecycle
     FOREIGN KEY (profile_id, tenant_id)
     REFERENCES model_profiles(id, tenant_id);
 
+DROP TRIGGER provider_smoke_results_append_only ON provider_smoke_results;
+
 ALTER TABLE provider_smoke_results
     ADD COLUMN tenant_id UUID;
 
@@ -27,6 +29,10 @@ ALTER TABLE provider_smoke_results
 
 CREATE INDEX provider_smoke_results_profile_observed
     ON provider_smoke_results (tenant_id, profile_id, observed_at DESC, sequence_id DESC);
+
+CREATE TRIGGER provider_smoke_results_append_only
+    BEFORE UPDATE OR DELETE ON provider_smoke_results
+    FOR EACH ROW EXECUTE FUNCTION rocketmq_sre_reject_append_only_change();
 
 CREATE TABLE model_profile_lifecycle_events (
     sequence_id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
