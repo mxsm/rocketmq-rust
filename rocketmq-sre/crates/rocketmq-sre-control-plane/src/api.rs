@@ -518,6 +518,7 @@ pub(crate) struct AppState {
     pub(crate) auth: AuthService,
     pub(crate) alerting: AlertingService,
     pub(crate) assets: AssetTopologyService,
+    pub(crate) autonomy: crate::autonomy::AutonomyService,
     pub(crate) change_management: crate::change_management::ChangeManagementService,
     pub(crate) connector_channel: PostgresConnectorChannelService,
     pub(crate) evidence: EvidenceService,
@@ -602,6 +603,8 @@ fn build_routers_with_auth(
         evidence.clone(),
         alerting.clone(),
     )?;
+    let autonomy =
+        crate::autonomy::AutonomyService::new(repository.clone(), slo.clone(), grant_signing_key.as_bytes())?;
     let forecast = ForecastService::new(
         repository.clone(),
         connector_channel.clone(),
@@ -640,6 +643,7 @@ fn build_routers_with_auth(
         auth,
         alerting,
         assets,
+        autonomy,
         change_management: change_management.clone(),
         connector_channel,
         evidence,
@@ -674,6 +678,7 @@ fn build_routers_with_auth(
         .merge(crate::operator_workbench::routes())
         .merge(crate::postmortem::routes())
         .merge(crate::supervised_execution::routes())
+        .merge(crate::autonomy::routes())
         .merge(crate::change_management::routes())
         .merge(crate::release_management::routes())
         .merge(crate::execution_authority::routes())
