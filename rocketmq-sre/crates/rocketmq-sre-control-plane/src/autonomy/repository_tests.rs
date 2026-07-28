@@ -37,6 +37,7 @@ use rocketmq_sre_core::AutonomyStateMachine;
 use rocketmq_sre_core::PromotionQualification;
 use uuid::Uuid;
 
+use super::AutonomyPauseReconciler;
 use crate::PostgresRepository;
 
 #[tokio::test]
@@ -390,6 +391,131 @@ async fn postgres_autonomy_state_cohorts_and_controls_are_durable_and_idempotent
         .await
         .is_err()
     );
+}
+
+#[tokio::test]
+#[ignore = "requires ROCKETMQ_SRE_TEST_DATABASE_URL pointing to Docker PostgreSQL"]
+async fn postgres_pause_reconciler_repairs_a_dropped_failure_event_once() {
+    let Some(database_url) = std::env::var("ROCKETMQ_SRE_TEST_DATABASE_URL").ok() else {
+        return;
+    };
+    let repository = PostgresRepository::connect(&database_url, 5)
+        .await
+        .expect("repository with migrations");
+    let fixture = seed_fixture(&repository).await;
+    let now = Utc::now().with_nanosecond(0).expect("whole-second timestamp");
+    let (stored, lifecycle) = repository
+        .store_autonomy_policy(policy(&fixture, now), "autonomy-owner")
+        .await
+        .expect("policy");
+    assert_eq!(lifecycle.mode, AutonomyMode::Disabled);
+    sqlx::query(
+        "UPDATE autonomy_lifecycle_states
+         SET mode = 'autonomous',
+             previous_mode = NULL,
+             pause_reason = NULL,
+             lifecycle_revision = lifecycle_revision + 1,
+             updated_by = 'repository-test-fixture',
+             updated_at = $5
+         WHERE tenant_id = $1 AND cluster_id = $2
+           AND action_id = $3 AND action_version = $4",
+    )
+    .bind(fixture.tenant_id.as_uuid())
+    .bind(fixture.cluster_id.as_uuid())
+    .bind(ExecutionAction::ObservabilityLoggerLevelTtl.id())
+    .bind(&stored.action_version)
+    .bind(now + Duration::seconds(1))
+    .execute(&repository.pool)
+    .await
+    .expect("simulate an autonomous lifecycle");
+
+    let outcome = AutonomyOutcome {
+        id: AutonomyOutcomeId::new(),
+        tenant_id: fixture.tenant_id,
+        cluster_id: fixture.cluster_id,
+        action: ExecutionAction::ObservabilityLoggerLevelTtl,
+        action_version: stored.action_version,
+        incident_id: fixture.incident_id,
+        plan_id: fixture.plan_id,
+        plan_hash: fixture.plan_hash.clone(),
+        execution_id: None,
+        cohort_id: None,
+        class: AutonomyOutcomeClass::AutonomousExecutionFailure,
+        failure: Some(AutonomousExecutionFailure::UnknownEffect),
+        reason_codes: vec!["unknown_effect".to_owned()],
+        first_positive_intent_persisted: true,
+        occurred_at: now + Duration::seconds(2),
+        reconciled_at: now + Duration::seconds(3),
+    };
+    sqlx::query(
+        "INSERT INTO autonomy_outcomes (
+            id, tenant_id, cluster_id, action_id, action_version,
+            incident_id, plan_id, plan_hash, execution_id, cohort_id,
+            outcome_class, failure_code, reason_codes,
+            first_positive_intent_persisted, outcome_snapshot,
+            occurred_at, reconciled_at
+         ) VALUES (
+            $1, $2, $3, $4, $5,
+            $6, $7, $8, NULL, NULL,
+            'autonomous_execution_failure', 'unknown_effect', $9,
+            TRUE, $10, $11, $12
+         )",
+    )
+    .bind(outcome.id.as_uuid())
+    .bind(outcome.tenant_id.as_uuid())
+    .bind(outcome.cluster_id.as_uuid())
+    .bind(outcome.action.id())
+    .bind(&outcome.action_version)
+    .bind(outcome.incident_id.as_uuid())
+    .bind(outcome.plan_id.as_uuid())
+    .bind(&outcome.plan_hash)
+    .bind(&outcome.reason_codes)
+    .bind(serde_json::to_value(&outcome).expect("outcome snapshot"))
+    .bind(outcome.occurred_at)
+    .bind(outcome.reconciled_at)
+    .execute(&repository.pool)
+    .await
+    .expect("simulate a committed outcome with a dropped pause event");
+
+    let reconciler = AutonomyPauseReconciler::new(repository.clone());
+    let first = reconciler.run_once().await.expect("first reconciliation");
+    assert_eq!(first.candidates, 1);
+    assert_eq!(first.repaired, 1);
+    let scope = repository
+        .autonomy_scope(
+            fixture.tenant_id,
+            fixture.cluster_id,
+            ExecutionAction::ObservabilityLoggerLevelTtl,
+            &outcome.action_version,
+        )
+        .await
+        .expect("reconciled scope");
+    assert_eq!(scope.lifecycle.mode, AutonomyMode::Paused);
+    assert_eq!(scope.lifecycle.previous_mode, Some(AutonomyMode::Autonomous));
+    let pause_events: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)
+         FROM autonomy_outbox
+         WHERE outcome_id = $1 AND event_kind = 'autonomy_paused'",
+    )
+    .bind(outcome.id.as_uuid())
+    .fetch_one(&repository.pool)
+    .await
+    .expect("pause outbox count");
+    assert_eq!(pause_events, 1);
+
+    let retry = reconciler.run_once().await.expect("idempotent reconciliation");
+    assert_eq!(retry.candidates, 0);
+    assert_eq!(retry.repaired, 0);
+    let pause_events_after_retry: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)
+         FROM autonomy_outbox
+         WHERE outcome_id = $1 AND event_kind = 'autonomy_paused'",
+    )
+    .bind(outcome.id.as_uuid())
+    .fetch_one(&repository.pool)
+    .await
+    .expect("pause outbox count after retry");
+    assert_eq!(pause_events_after_retry, 1);
 }
 
 struct Fixture {
