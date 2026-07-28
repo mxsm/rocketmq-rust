@@ -57,6 +57,7 @@ use crate::core::proxy::ProxyDrainOperationRequest;
 use crate::core::proxy::ProxyDrainPending;
 use crate::core::proxy::ProxyDrainState;
 use crate::core::proxy::ProxyMutationAdmin;
+use crate::core::security::AdminCredentials;
 use crate::core::topic::DeleteTopicAdminRequest;
 use crate::core::topic::ResetTopicConsumerOffsetRequest;
 use crate::core::topic::TopicMutationAdmin;
@@ -126,6 +127,12 @@ impl MutationAdminBuilder {
 
     pub fn clock(mut self, clock: Arc<dyn Clock>) -> Self {
         self.inner = self.inner.clock(clock);
+        self
+    }
+
+    /// Configures request signing for the isolated mutation identity.
+    pub fn credentials(mut self, credentials: AdminCredentials) -> Self {
+        self.inner = self.inner.credentials(credentials);
         self
     }
 

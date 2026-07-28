@@ -16,7 +16,9 @@
 
 use std::collections::BTreeMap;
 
+#[cfg(any(feature = "read-client-adapter", test))]
 use cheetah_string::CheetahString;
+#[cfg(any(feature = "read-client-adapter", test))]
 use rocketmq_protocol::protocol::body::kv_table::KVTable;
 use serde::Deserialize;
 use serde::Serialize;
@@ -375,6 +377,7 @@ pub trait BrokerMutationAdmin: Send {
     ) -> AdminFuture<'a, PatchBrokerConfigOutcome>;
 }
 
+#[cfg(any(feature = "read-client-adapter", test))]
 pub(crate) fn project_broker_diagnostics(broker_name: String, broker_id: u64, runtime: &KVTable) -> BrokerDiagnostics {
     let schema = runtime_value(runtime, "sreDiagnosticsSchemaVersion");
     if schema != Some("rocketmq.broker-diagnostics.v1") {
@@ -430,6 +433,7 @@ pub(crate) fn project_broker_diagnostics(broker_name: String, broker_id: u64, ru
     }
 }
 
+#[cfg(any(feature = "read-client-adapter", test))]
 fn unsupported_diagnostics(broker_name: String, broker_id: u64) -> BrokerDiagnostics {
     BrokerDiagnostics {
         broker_name,
@@ -467,6 +471,7 @@ fn unsupported_diagnostics(broker_name: String, broker_id: u64) -> BrokerDiagnos
     }
 }
 
+#[cfg(any(feature = "read-client-adapter", test))]
 fn parse_readiness(runtime: &KVTable) -> Option<BrokerReadinessDiagnostics> {
     Some(BrokerReadinessDiagnostics {
         ready: runtime_bool(runtime, "brokerReady")?,
@@ -477,6 +482,7 @@ fn parse_readiness(runtime: &KVTable) -> Option<BrokerReadinessDiagnostics> {
     })
 }
 
+#[cfg(any(feature = "read-client-adapter", test))]
 fn parse_config(runtime: &KVTable) -> Option<BrokerConfigSummary> {
     Some(BrokerConfigSummary {
         generation: runtime_u64(runtime, "brokerConfigGeneration")?,
@@ -488,6 +494,7 @@ fn parse_config(runtime: &KVTable) -> Option<BrokerConfigSummary> {
     })
 }
 
+#[cfg(any(feature = "read-client-adapter", test))]
 fn parse_store_health(runtime: &KVTable) -> Option<StoreHealthDiagnostics> {
     Some(StoreHealthDiagnostics {
         writeable: runtime_bool(runtime, "storeWriteable")?,
@@ -506,6 +513,7 @@ fn parse_store_health(runtime: &KVTable) -> Option<StoreHealthDiagnostics> {
     })
 }
 
+#[cfg(any(feature = "read-client-adapter", test))]
 fn parse_recovery(runtime: &KVTable) -> Option<RecoveryDiagnostics> {
     let available = runtime_bool(runtime, "recoveryReportAvailable")?;
     Some(RecoveryDiagnostics {
@@ -524,6 +532,7 @@ fn parse_recovery(runtime: &KVTable) -> Option<RecoveryDiagnostics> {
     })
 }
 
+#[cfg(any(feature = "read-client-adapter", test))]
 fn parse_background_index(runtime: &KVTable) -> Option<BackgroundIndexRebuildDiagnostics> {
     Some(BackgroundIndexRebuildDiagnostics {
         state: runtime_value(runtime, "backgroundIndexRebuildState")?.to_owned(),
@@ -539,10 +548,12 @@ fn parse_background_index(runtime: &KVTable) -> Option<BackgroundIndexRebuildDia
     })
 }
 
+#[cfg(any(feature = "read-client-adapter", test))]
 fn runtime_value<'a>(runtime: &'a KVTable, key: &str) -> Option<&'a str> {
     runtime.table.get(&CheetahString::from(key)).map(CheetahString::as_str)
 }
 
+#[cfg(any(feature = "read-client-adapter", test))]
 fn runtime_bool(runtime: &KVTable, key: &str) -> Option<bool> {
     match runtime_value(runtime, key)? {
         "true" => Some(true),
@@ -551,10 +562,12 @@ fn runtime_bool(runtime: &KVTable, key: &str) -> Option<bool> {
     }
 }
 
+#[cfg(any(feature = "read-client-adapter", test))]
 fn runtime_u64(runtime: &KVTable, key: &str) -> Option<u64> {
     runtime_value(runtime, key)?.parse().ok()
 }
 
+#[cfg(any(feature = "read-client-adapter", test))]
 fn runtime_i64(runtime: &KVTable, key: &str) -> Option<i64> {
     runtime_value(runtime, key)?.parse().ok()
 }
