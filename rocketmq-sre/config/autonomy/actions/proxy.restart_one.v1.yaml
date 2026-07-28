@@ -1,0 +1,37 @@
+schema_version: rocketmq-sre.autonomy-action-policy.v1
+action_id: proxy.restart_one.v1
+action_version: 1.0.0
+default_mode: disabled
+owner: messaging-platform
+diagnostic_pack:
+  id: proxy-drain-readiness
+  version: 1.0.0
+required_evidence_sources:
+  - proxy_authenticated_drain_state
+  - kubernetes_inventory
+  - prometheus
+  - synthetic_probe
+minimum_evidence_freshness_seconds: 30
+qualification:
+  min_shadow_samples: 30
+  min_supervised_successes: 10
+  observation_window_days: 14
+limits:
+  max_executions_per_hour: 1
+  cooldown_seconds: 3600
+  max_concurrent_executions: 1
+  stable_window_seconds: 900
+autonomous_preconditions:
+  - remaining_replicas_healthy
+  - stop_admission_confirmed
+  - readiness_and_routing_removed
+  - client_connection_count_zero
+  - session_count_zero
+  - receipt_handle_count_zero
+  - prepared_transaction_count_zero
+  - telemetry_command_count_zero
+  - rpc_inflight_zero
+  - error_budget_available
+rollback:
+  required: false
+  manual_takeover_on_failed_reentry: true
