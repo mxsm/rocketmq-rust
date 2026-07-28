@@ -23,6 +23,8 @@ use chrono::Utc;
 use rocketmq_sre_contracts::ActivateLeaseRequest;
 use rocketmq_sre_contracts::BeginLeaseTakeoverRequest;
 use rocketmq_sre_contracts::BeginLeaseTakeoverResponse;
+use rocketmq_sre_contracts::EXECUTION_AGENT_AUDIENCE;
+use rocketmq_sre_contracts::EXECUTION_AGENT_RECONCILE_AUDIENCE;
 use rocketmq_sre_contracts::ExecutorLease;
 use rocketmq_sre_contracts::GrantVerification;
 use rocketmq_sre_contracts::IssueFenceGrantRequest;
@@ -45,8 +47,6 @@ pub(crate) use repository::LeaseAuthorityRepository;
 
 const EXECUTOR_AUDIENCE: &str = "rocketmq-sre-executor";
 const CONTROL_PLANE_ISSUER: &str = "rocketmq-sre-control-plane";
-const AGENT_AUDIENCE: &str = "rocketmq-sre-execution-agent";
-const RECONCILE_AUDIENCE: &str = "rocketmq-sre-execution-agent-reconcile";
 const FENCE_GRANT_TTL_SECONDS: i64 = 20;
 
 #[derive(Clone)]
@@ -98,7 +98,7 @@ impl LeaseAuthorityService {
             owner: lease.owner.clone(),
             cluster_id: lease.cluster_id,
             pending_epoch: lease.epoch,
-            audience: RECONCILE_AUDIENCE.to_owned(),
+            audience: EXECUTION_AGENT_RECONCILE_AUDIENCE.to_owned(),
             issued_at: acquired_at,
             expires_at,
             nonce: pending_nonce,
@@ -190,7 +190,7 @@ impl LeaseAuthorityService {
             action,
             resource,
             compensation: request.compensation,
-            audience: AGENT_AUDIENCE.to_owned(),
+            audience: EXECUTION_AGENT_AUDIENCE.to_owned(),
             issued_at,
             expires_at,
             nonce: Uuid::new_v4().to_string(),
@@ -259,7 +259,7 @@ impl LeaseAuthorityService {
         require_schema(&request.schema_version)?;
         require_scope(auth, request.tenant_id, request.grant.cluster_id)?;
         let now = Utc::now();
-        if request.grant.audience != AGENT_AUDIENCE
+        if request.grant.audience != EXECUTION_AGENT_AUDIENCE
             || request.grant.owner.trim().is_empty()
             || request.grant.resource.trim().is_empty()
             || request.grant.nonce.trim().is_empty()
@@ -294,7 +294,7 @@ impl LeaseAuthorityService {
         require_schema(&request.schema_version)?;
         require_scope(auth, request.tenant_id, request.grant.cluster_id)?;
         let now = Utc::now();
-        if request.grant.audience != RECONCILE_AUDIENCE
+        if request.grant.audience != EXECUTION_AGENT_RECONCILE_AUDIENCE
             || request.grant.owner.trim().is_empty()
             || request.grant.nonce.trim().is_empty()
             || request.grant.issued_at > now
