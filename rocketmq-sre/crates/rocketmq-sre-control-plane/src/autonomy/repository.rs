@@ -12,8 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeSet;
+
 use chrono::DateTime;
+use chrono::TimeDelta;
 use chrono::Utc;
+use rocketmq_sre_contracts::ActionPlan;
+use rocketmq_sre_contracts::ActionPlanId;
 use rocketmq_sre_contracts::AutonomousExecutionFailure;
 use rocketmq_sre_contracts::AutonomyLifecycleState;
 use rocketmq_sre_contracts::AutonomyMode;
@@ -29,6 +34,7 @@ use rocketmq_sre_contracts::ClusterId;
 use rocketmq_sre_contracts::CriticReviewId;
 use rocketmq_sre_contracts::DiagnosisRevisionId;
 use rocketmq_sre_contracts::DynamicSafetyDecision;
+use rocketmq_sre_contracts::EvidenceId;
 use rocketmq_sre_contracts::ExecutionAction;
 use rocketmq_sre_contracts::ModelInvocationId;
 use rocketmq_sre_contracts::TenantId;
@@ -1026,6 +1032,125 @@ impl PostgresRepository {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    pub(super) async fn dynamic_safety_decision_is_persisted(
+        &self,
+        decision: &DynamicSafetyDecision,
+    ) -> Result<bool, ControlPlaneError> {
+        let snapshot: Option<Value> = sqlx::query_scalar(
+            "SELECT decision_snapshot
+             FROM autonomy_dynamic_safety_decisions
+             WHERE id = $1 AND tenant_id = $2 AND cluster_id = $3
+               AND action_id = $4 AND action_version = $5
+               AND plan_id = $6 AND plan_hash = $7
+               AND execution_id = $8 AND execution_step_id = $9",
+        )
+        .bind(decision.id.as_uuid())
+        .bind(decision.tenant_id.as_uuid())
+        .bind(decision.cluster_id.as_uuid())
+        .bind(decision.action.id())
+        .bind(&decision.action_version)
+        .bind(decision.plan_id.as_uuid())
+        .bind(&decision.plan_hash)
+        .bind(decision.execution_id.as_uuid())
+        .bind(decision.execution_step_id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await?;
+        snapshot
+            .map(from_json::<DynamicSafetyDecision>)
+            .transpose()
+            .map(|stored| stored.as_ref() == Some(decision))
+    }
+
+    pub(super) async fn plan_evidence_is_current(
+        &self,
+        tenant_id: TenantId,
+        cluster_id: ClusterId,
+        plan_id: ActionPlanId,
+        plan_hash: &str,
+        maximum_age_seconds: u64,
+        required_sources: &[String],
+        now: DateTime<Utc>,
+    ) -> Result<bool, ControlPlaneError> {
+        let snapshot: Option<Value> = sqlx::query_scalar(
+            "SELECT plan_snapshot
+             FROM action_plans
+             WHERE id = $1 AND tenant_id = $2 AND cluster_id = $3
+               AND plan_hash = $4",
+        )
+        .bind(plan_id.as_uuid())
+        .bind(tenant_id.as_uuid())
+        .bind(cluster_id.as_uuid())
+        .bind(plan_hash)
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some(snapshot) = snapshot else {
+            return Ok(false);
+        };
+        let plan: ActionPlan = from_json(snapshot)?;
+        if plan.id != plan_id
+            || plan.tenant_id != tenant_id
+            || plan.cluster_id != cluster_id
+            || plan.plan_hash != plan_hash
+            || plan.verify_plan_hash().is_err()
+        {
+            return Ok(false);
+        }
+        let mut evidence_ids = plan
+            .steps
+            .iter()
+            .flat_map(|step| step.evidence_ids.iter().copied())
+            .collect::<Vec<EvidenceId>>();
+        evidence_ids.sort_unstable();
+        evidence_ids.dedup();
+        if evidence_ids.is_empty() {
+            return Ok(false);
+        }
+        let ids = evidence_ids
+            .iter()
+            .map(|evidence_id| evidence_id.as_uuid())
+            .collect::<Vec<_>>();
+        let rows = sqlx::query(
+            "SELECT id, source, observed_at, freshness_seconds, coverage,
+                    partial, expires_at
+             FROM evidence_snapshots
+             WHERE tenant_id = $1 AND cluster_id = $2
+               AND id = ANY($3)",
+        )
+        .bind(tenant_id.as_uuid())
+        .bind(cluster_id.as_uuid())
+        .bind(&ids)
+        .fetch_all(&self.pool)
+        .await?;
+        if rows.len() != evidence_ids.len() {
+            return Ok(false);
+        }
+        let maximum_age_seconds =
+            i64::try_from(maximum_age_seconds).map_err(|_| invalid_request("evidence freshness bound is too large"))?;
+        let mut observed_sources = BTreeSet::new();
+        for row in rows {
+            let observed_at: DateTime<Utc> = row.try_get("observed_at")?;
+            let freshness_seconds: i64 = row.try_get("freshness_seconds")?;
+            let expires_at: Option<DateTime<Utc>> = row.try_get("expires_at")?;
+            let allowed_seconds = freshness_seconds.min(maximum_age_seconds);
+            let Some(allowed_age) = TimeDelta::try_seconds(allowed_seconds) else {
+                return Ok(false);
+            };
+            if observed_at > now
+                || allowed_seconds <= 0
+                || now > observed_at + allowed_age
+                || expires_at.is_some_and(|expires_at| expires_at <= now)
+                || row.try_get::<bool, _>("partial")?
+                || row.try_get::<String, _>("coverage")? != "available"
+            {
+                return Ok(false);
+            }
+            observed_sources.insert(row.try_get::<String, _>("source")?);
+        }
+        Ok(required_sources
+            .iter()
+            .all(|required| observed_sources.contains(required)))
     }
 
     pub(super) async fn record_autonomy_outcome(
