@@ -1008,6 +1008,94 @@
         }
       }
     },
+    "/v1/models/profiles/lifecycle": {
+      "get": {
+        "operationId": "listModelProfileLifecycles",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/models/profiles/{id}/lifecycle": {
+      "get": {
+        "operationId": "getModelProfileLifecycle",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      },
+      "post": {
+        "operationId": "transitionModelProfileLifecycle",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/models/profiles/{id}/rollback": {
+      "post": {
+        "operationId": "rollbackModelProfile",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/models/profiles/{id}/smoke": {
+      "post": {
+        "operationId": "runModelProfileSmoke",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
     "/v1/events/stream": {
       "get": {
         "operationId": "subscribeWorkflowEvents",
