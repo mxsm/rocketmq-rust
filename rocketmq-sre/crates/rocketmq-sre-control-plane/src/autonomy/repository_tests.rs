@@ -31,6 +31,7 @@ use rocketmq_sre_contracts::ClusterId;
 use rocketmq_sre_contracts::CriticReviewId;
 use rocketmq_sre_contracts::DiagnosisRevisionId;
 use rocketmq_sre_contracts::ExecutionAction;
+use rocketmq_sre_contracts::ExecutionId;
 use rocketmq_sre_contracts::IncidentId;
 use rocketmq_sre_contracts::ModelInvocationId;
 use rocketmq_sre_contracts::TenantId;
@@ -55,7 +56,9 @@ async fn postgres_autonomy_state_cohorts_and_controls_are_durable_and_idempotent
         .await
         .expect("repository with migrations");
     let fixture = seed_fixture(&repository).await;
-    let now = Utc::now().with_nanosecond(0).expect("whole-second timestamp");
+    let now = (Utc::now() - Duration::seconds(30))
+        .with_nanosecond(0)
+        .expect("whole-second timestamp");
     let policy = policy(&fixture, now);
 
     let (stored, initial) = repository
@@ -90,7 +93,7 @@ async fn postgres_autonomy_state_cohorts_and_controls_are_durable_and_idempotent
     let candidate = AutonomyPolicy::shadow_cohort(
         &stored,
         &ActualModelIdentity {
-            profile: "deepseek-primary".to_owned(),
+            profile: fixture.primary_profile.clone(),
             model_family: "deepseek".to_owned(),
             model_revision: "v3.2".to_owned(),
         },
@@ -104,7 +107,7 @@ async fn postgres_autonomy_state_cohorts_and_controls_are_durable_and_idempotent
     let duplicate_candidate = AutonomyPolicy::shadow_cohort(
         &stored,
         &ActualModelIdentity {
-            profile: "deepseek-primary".to_owned(),
+            profile: fixture.primary_profile.clone(),
             model_family: "deepseek".to_owned(),
             model_revision: "v3.2".to_owned(),
         },
@@ -180,15 +183,16 @@ async fn postgres_autonomy_state_cohorts_and_controls_are_durable_and_idempotent
         )
         .await
         .expect("persist Supervised");
+    let (critic_review_id, critic_invocation_id, critic_profile) = seed_critic_review(&repository, &fixture).await;
     let autonomous_candidate = AutonomyPolicy::autonomous_cohort(
         &stored,
         &ActualModelIdentity {
-            profile: "deepseek-primary".to_owned(),
+            profile: fixture.primary_profile.clone(),
             model_family: "deepseek".to_owned(),
             model_revision: "v3.2".to_owned(),
         },
         &ActualModelIdentity {
-            profile: "glm-critic".to_owned(),
+            profile: critic_profile,
             model_family: "glm".to_owned(),
             model_revision: "glm-5".to_owned(),
         },
@@ -199,25 +203,53 @@ async fn postgres_autonomy_state_cohorts_and_controls_are_durable_and_idempotent
         .store_autonomy_cohort(stored.id, &autonomous_candidate)
         .await
         .expect("store Autonomous cohort");
-    repository
-        .store_qualification_sample(&AutonomyQualificationSample {
-            id: AutonomySampleId::new(),
-            cohort_id: autonomous_cohort.id,
-            kind: AutonomySampleKind::SupervisedSuccess,
-            incident_id: fixture.incident_id,
-            plan_id: fixture.plan_id,
-            plan_hash: fixture.plan_hash.clone(),
-            execution_id: None,
-            qualified: true,
-            reason_codes: Vec::new(),
-            human_outcome_linked: true,
-            evidence_complete: true,
-            stable_window_passed: true,
-            observed_at: now + Duration::seconds(7),
-            reconciled_at: now + Duration::seconds(8),
-        })
+    let execution_id = seed_successful_supervised_execution(&repository, &fixture, 300).await;
+    let execution_facts = repository
+        .supervised_execution_qualification(
+            fixture.tenant_id,
+            fixture.cluster_id,
+            ExecutionAction::ObservabilityLoggerLevelTtl,
+            fixture.incident_id,
+            fixture.plan_id,
+            &fixture.plan_hash,
+            execution_id,
+            300,
+        )
+        .await
+        .expect("authoritative supervised facts");
+    assert!(execution_facts.succeeded);
+    assert!(execution_facts.human_approved);
+    assert!(execution_facts.timeline_safe);
+    assert!(execution_facts.evidence_complete);
+    assert!(execution_facts.stable_window_passed);
+    let supervised_sample = AutonomyQualificationSample {
+        id: AutonomySampleId::new(),
+        cohort_id: autonomous_cohort.id,
+        kind: AutonomySampleKind::SupervisedSuccess,
+        incident_id: fixture.incident_id,
+        plan_id: fixture.plan_id,
+        plan_hash: fixture.plan_hash.clone(),
+        execution_id: Some(execution_id),
+        qualified: true,
+        reason_codes: Vec::new(),
+        human_outcome_linked: true,
+        evidence_complete: true,
+        stable_window_passed: true,
+        observed_at: execution_facts.observed_at,
+        reconciled_at: execution_facts.observed_at + Duration::seconds(1),
+    };
+    let stored_supervised = repository
+        .store_qualification_sample(&supervised_sample)
         .await
         .expect("Supervised sample");
+    let mut supervised_retry = supervised_sample;
+    supervised_retry.id = AutonomySampleId::new();
+    supervised_retry.reconciled_at += Duration::seconds(1);
+    let stored_retry = repository
+        .store_qualification_sample(&supervised_retry)
+        .await
+        .expect("idempotent supervised execution retry");
+    assert_eq!(stored_retry.id, stored_supervised.id);
     let supervised_scope = repository
         .autonomy_scope(
             fixture.tenant_id,
@@ -227,6 +259,8 @@ async fn postgres_autonomy_state_cohorts_and_controls_are_durable_and_idempotent
         )
         .await
         .expect("qualified Supervised scope");
+    assert_eq!(supervised_scope.qualification.qualified_supervised_successes, 1);
+    assert!(!supervised_scope.qualification.autonomous_observation_window_met);
     let autonomous = AutonomyStateMachine::transition(
         &supervised_scope.lifecycle,
         AutonomyMode::Autonomous,
@@ -252,7 +286,6 @@ async fn postgres_autonomy_state_cohorts_and_controls_are_durable_and_idempotent
         )
         .await
         .expect("persist Autonomous");
-    let (critic_review_id, critic_invocation_id) = seed_critic_review(&repository, &fixture).await;
     let grant = AutonomyGrant {
         issuer: "rocketmq-sre-control-plane".to_owned(),
         audience: "rocketmq-sre-executor".to_owned(),
@@ -559,21 +592,23 @@ struct Fixture {
     incident_id: IncidentId,
     diagnosis_revision_id: DiagnosisRevisionId,
     primary_invocation_id: ModelInvocationId,
+    primary_profile: String,
     plan_id: ActionPlanId,
     plan_hash: String,
 }
 
 async fn seed_fixture(repository: &PostgresRepository) -> Fixture {
+    let profile_id = Uuid::new_v4();
     let fixture = Fixture {
         tenant_id: TenantId::new(),
         cluster_id: ClusterId::new(),
         incident_id: IncidentId::new(),
         diagnosis_revision_id: DiagnosisRevisionId::new(),
         primary_invocation_id: ModelInvocationId::new(),
+        primary_profile: format!("autonomy-repository-{profile_id}"),
         plan_id: ActionPlanId::new(),
         plan_hash: unique_digest(),
     };
-    let profile_id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO clusters (
             id, tenant_id, external_cluster_key, environment, region,
@@ -630,7 +665,7 @@ async fn seed_fixture(repository: &PostgresRepository) -> Fixture {
     )
     .bind(profile_id)
     .bind(fixture.tenant_id.as_uuid())
-    .bind(format!("autonomy-repository-{profile_id}"))
+    .bind(&fixture.primary_profile)
     .execute(&repository.pool)
     .await
     .expect("model profile");
@@ -689,7 +724,121 @@ async fn seed_fixture(repository: &PostgresRepository) -> Fixture {
     fixture
 }
 
-async fn seed_critic_review(repository: &PostgresRepository, fixture: &Fixture) -> (CriticReviewId, ModelInvocationId) {
+async fn seed_successful_supervised_execution(
+    repository: &PostgresRepository,
+    fixture: &Fixture,
+    stable_window_seconds: i64,
+) -> ExecutionId {
+    let execution_id = ExecutionId::new();
+    let lease_id = Uuid::new_v4();
+    let step_id = Uuid::new_v4();
+    let observed_at = Utc::now() - Duration::seconds(2);
+    let started_at = observed_at - Duration::seconds(stable_window_seconds + 1);
+    sqlx::query(
+        "INSERT INTO executor_leases (
+            id, tenant_id, cluster_id, epoch, owner, state, pending_nonce,
+            fence_ack_snapshot, acquired_at, activated_at, expires_at, updated_at
+         ) VALUES (
+            $1, $2, $3, 1, 'supervised-qualification-test', 'active',
+            $4, '{}'::JSONB, $5, $5, $6, $5
+         )",
+    )
+    .bind(lease_id)
+    .bind(fixture.tenant_id.as_uuid())
+    .bind(fixture.cluster_id.as_uuid())
+    .bind(format!("qualification-{lease_id}"))
+    .bind(started_at)
+    .bind(observed_at + Duration::hours(1))
+    .execute(&repository.pool)
+    .await
+    .expect("qualification lease");
+    sqlx::query(
+        "INSERT INTO executions (
+            id, tenant_id, cluster_id, correlation_id, plan_id, plan_hash,
+            resource_key, action_id, idempotency_key, state,
+            request_snapshot, requested_by, started_at, completed_at, updated_at
+         ) VALUES (
+            $1, $2, $3, $4, $5, $6,
+            'broker/test', $7, $8, 'succeeded',
+            $9, 'operator@example.com', $10, $11, $11
+         )",
+    )
+    .bind(execution_id.as_uuid())
+    .bind(fixture.tenant_id.as_uuid())
+    .bind(fixture.cluster_id.as_uuid())
+    .bind(Uuid::new_v4())
+    .bind(fixture.plan_id.as_uuid())
+    .bind(&fixture.plan_hash)
+    .bind(ExecutionAction::ObservabilityLoggerLevelTtl.id())
+    .bind(format!("supervised-qualification-{execution_id}"))
+    .bind(serde_json::json!({
+        "approvals": [{"approval_id": Uuid::new_v4()}],
+        "autonomy_grant": null
+    }))
+    .bind(started_at)
+    .bind(observed_at)
+    .execute(&repository.pool)
+    .await
+    .expect("successful supervised execution");
+    sqlx::query(
+        "INSERT INTO execution_steps (
+            execution_id, step_id, attempt, record_kind, lease_id,
+            lease_epoch, compensation, intent_snapshot, result_snapshot,
+            reason_code, occurred_at
+         ) VALUES (
+            $1, $2, 1, 'intent', $3,
+            1, FALSE, '{}'::JSONB, NULL,
+            'step_intent_persisted', $4
+         )",
+    )
+    .bind(execution_id.as_uuid())
+    .bind(step_id)
+    .bind(lease_id)
+    .bind(started_at)
+    .execute(&repository.pool)
+    .await
+    .expect("supervised forward intent");
+    for (phase, evidence_at) in [("pre", started_at), ("post", observed_at)] {
+        sqlx::query(
+            "INSERT INTO execution_verification_evidence (
+                execution_id, step_id, attempt, phase, evidence_id,
+                evidence_snapshot, observed_at
+             ) VALUES ($1, $2, 1, $3, $4, '{}'::JSONB, $5)",
+        )
+        .bind(execution_id.as_uuid())
+        .bind(step_id)
+        .bind(phase)
+        .bind(Uuid::new_v4())
+        .bind(evidence_at)
+        .execute(&repository.pool)
+        .await
+        .expect("supervised verification evidence");
+    }
+    sqlx::query(
+        "INSERT INTO execution_verifications (
+            execution_id, step_id, attempt, compensation, outcome,
+            result_snapshot, started_at, completed_at
+         ) VALUES (
+            $1, $2, 1, FALSE, 'succeeded', $3, $4, $5
+         )",
+    )
+    .bind(execution_id.as_uuid())
+    .bind(step_id)
+    .bind(serde_json::json!({
+        "stable_window_seconds": stable_window_seconds,
+    }))
+    .bind(started_at)
+    .bind(observed_at)
+    .execute(&repository.pool)
+    .await
+    .expect("supervised stable verification");
+    execution_id
+}
+
+async fn seed_critic_review(
+    repository: &PostgresRepository,
+    fixture: &Fixture,
+) -> (CriticReviewId, ModelInvocationId, String) {
     let profile_id = Uuid::new_v4();
     let profile_name = format!("autonomy-critic-{profile_id}");
     sqlx::query(
@@ -760,13 +909,13 @@ async fn seed_critic_review(repository: &PostgresRepository, fixture: &Fixture) 
     .bind(fixture.diagnosis_revision_id.as_uuid())
     .bind(fixture.primary_invocation_id.as_uuid())
     .bind(critic_invocation_id.as_uuid())
-    .bind(profile_name)
+    .bind(&profile_name)
     .bind(payload_hash)
     .bind(review_hash)
     .execute(&repository.pool)
     .await
     .expect("critic review");
-    (critic_review_id, critic_invocation_id)
+    (critic_review_id, critic_invocation_id, profile_name)
 }
 
 fn policy(fixture: &Fixture, created_at: chrono::DateTime<Utc>) -> AutonomyPolicyDefinition {
