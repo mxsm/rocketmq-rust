@@ -21,6 +21,7 @@ use rocketmq_sre_contracts::AutonomyMode;
 use rocketmq_sre_contracts::AutonomyOutcome;
 use rocketmq_sre_contracts::AutonomyPolicyDefinition;
 use rocketmq_sre_contracts::AutonomyQualificationCohort;
+use rocketmq_sre_contracts::AutonomySampleKind;
 use rocketmq_sre_contracts::ClusterId;
 use rocketmq_sre_contracts::CriticReviewId;
 use rocketmq_sre_contracts::DiagnosisRevisionId;
@@ -90,7 +91,7 @@ pub(crate) struct AutonomyListQuery {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SetAutonomyFreezeRequest {
-    pub(crate) cluster_id: ClusterId,
+    pub(crate) cluster_id: Option<ClusterId>,
     pub(crate) action: Option<ExecutionAction>,
     pub(crate) action_version: Option<String>,
     pub(crate) active: bool,
@@ -109,6 +110,69 @@ pub(crate) struct SetAutonomyKillSwitchRequest {
     pub(crate) action_version: String,
     pub(crate) active: bool,
     pub(crate) reason: String,
+}
+
+/// Actual primary-model identity used to create one Shadow cohort.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CreateShadowCohortRequest {
+    pub(crate) cluster_id: ClusterId,
+    pub(crate) action: ExecutionAction,
+    #[serde(default = "default_action_version")]
+    pub(crate) action_version: String,
+    pub(crate) primary_profile: String,
+    pub(crate) primary_model_family: String,
+    pub(crate) primary_model_revision: String,
+}
+
+/// Persisted Critic and actual model identities used for an Autonomous cohort.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PrepareAutonomousCohortRequest {
+    pub(crate) cluster_id: ClusterId,
+    pub(crate) action: ExecutionAction,
+    #[serde(default = "default_action_version")]
+    pub(crate) action_version: String,
+    pub(crate) diagnosis_revision_id: DiagnosisRevisionId,
+    pub(crate) plan_id: ActionPlanId,
+    pub(crate) plan_hash: String,
+    pub(crate) critic_review_id: CriticReviewId,
+    pub(crate) primary_model_invocation_id: ModelInvocationId,
+    pub(crate) critic_model_invocation_id: ModelInvocationId,
+    pub(crate) primary_profile: String,
+    pub(crate) primary_model_family: String,
+    pub(crate) primary_model_revision: String,
+    pub(crate) critic_profile: String,
+    pub(crate) critic_model_family: String,
+    pub(crate) critic_model_revision: String,
+}
+
+/// Reconciled qualification result. The server derives `qualified`; callers
+/// cannot directly increment counters.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RecordQualificationSampleRequest {
+    pub(crate) cluster_id: ClusterId,
+    pub(crate) action: ExecutionAction,
+    #[serde(default = "default_action_version")]
+    pub(crate) action_version: String,
+    pub(crate) cohort_id: AutonomyCohortId,
+    pub(crate) kind: AutonomySampleKind,
+    pub(crate) incident_id: IncidentId,
+    pub(crate) plan_id: ActionPlanId,
+    pub(crate) plan_hash: String,
+    pub(crate) execution_id: Option<ExecutionId>,
+    #[serde(default)]
+    pub(crate) reason_codes: Vec<String>,
+    pub(crate) human_outcome_linked: bool,
+    pub(crate) evidence_complete: bool,
+    pub(crate) stable_window_passed: bool,
+    #[serde(default)]
+    pub(crate) offline_replay: bool,
+    #[serde(default)]
+    pub(crate) debug_only: bool,
+    pub(crate) observed_at: DateTime<Utc>,
+    pub(crate) reconciled_at: DateTime<Utc>,
 }
 
 /// Internal request to evaluate and sign one positive StepIntent.
