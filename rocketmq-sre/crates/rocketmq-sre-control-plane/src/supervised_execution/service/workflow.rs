@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_sre_contracts::ExecutionState;
+
 use super::*;
 
 impl SupervisedExecutionService {
@@ -248,6 +250,16 @@ impl SupervisedExecutionService {
                     "idempotency key is bound to a different execution",
                 ));
             }
+            if matches!(
+                existing.state,
+                ExecutionState::Succeeded | ExecutionState::RolledBack | ExecutionState::Escalated
+            ) {
+                return Ok(ExecutionSubmissionView {
+                    execution: existing.request,
+                    state: existing.state,
+                    submitted_at: existing.submitted_at,
+                });
+            }
             let receipt = self.executor.submit(&existing.request).await?;
             return Ok(ExecutionSubmissionView {
                 execution: existing.request,
@@ -363,7 +375,34 @@ impl SupervisedExecutionService {
             )
             .await?;
         self.publish_audits(std::slice::from_ref(&audit));
-        let receipt = self.executor.submit(&stored.request).await?;
+        let receipt = match self.executor.submit(&stored.request).await {
+            Ok(receipt) => receipt,
+            Err(error) if definitive_executor_rejection(&error) => {
+                let rejected_at = self.now();
+                let rejection_audit = audit_event(
+                    auth,
+                    plan.cluster_id,
+                    correlation_id,
+                    AuditEventKind::StateChanged,
+                    "executor",
+                    "execution",
+                    id.to_string(),
+                    "ExecutorDispatchRejected",
+                    json!({
+                        "from": "pending",
+                        "to": "escalated",
+                        "reason_code": "executor_dispatch_rejected",
+                    }),
+                    rejected_at,
+                );
+                self.repository
+                    .persist_execution_dispatch_rejection(id, rejected_at, &rejection_audit)
+                    .await?;
+                self.publish_audits(std::slice::from_ref(&rejection_audit));
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        };
         Ok(ExecutionSubmissionView {
             execution: stored.request,
             state: receipt.state,
@@ -505,4 +544,14 @@ impl SupervisedExecutionService {
         self.publish_audits(&audits);
         Ok(updated)
     }
+}
+
+fn definitive_executor_rejection(error: &ControlPlaneError) -> bool {
+    matches!(
+        error,
+        ControlPlaneError::Forbidden {
+            code: "executor_rejected",
+            ..
+        }
+    )
 }
