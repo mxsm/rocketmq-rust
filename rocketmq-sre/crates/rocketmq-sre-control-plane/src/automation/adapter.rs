@@ -364,7 +364,12 @@ impl AutomationDispatcher {
         draft_auth.roles = BTreeSet::from(["diagnose".to_owned()]);
         let view = self
             .postmortems
-            .create(&draft_auth, incident_id, &CreatePostmortemRequest::default())
+            .create_bounded_draft(
+                &draft_auth,
+                incident_id,
+                &CreatePostmortemRequest::default(),
+                request.budget.max_model_calls,
+            )
             .await?;
         let invocation_id = view.revisions.last().and_then(|revision| revision.model_invocation_id);
         Ok(AutomationDispatchOutcome {
