@@ -191,6 +191,7 @@ namesrvAddr = "127.0.0.1:$NameServerPort"
 autoCreateTopicEnable = false
 authenticationEnabled = true
 authorizationEnabled = true
+signatureAlgorithm = "HmacSHA256"
 authConfigPath = "$authPathForToml"
 aclFile = "$aclPathForToml"
 aclFileWatchEnabled = false
