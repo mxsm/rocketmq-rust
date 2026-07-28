@@ -24,6 +24,7 @@ mod alerting;
 mod api;
 mod assets;
 mod auth;
+mod automation;
 mod autonomy;
 mod change_management;
 mod config;
