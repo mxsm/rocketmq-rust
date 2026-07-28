@@ -23,6 +23,8 @@ use crate::supervised_execution::SupervisedExecutionService;
 
 mod integration;
 mod release;
+mod release_execution;
+mod release_rollback;
 mod release_validation;
 mod support;
 
