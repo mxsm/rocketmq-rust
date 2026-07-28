@@ -45,6 +45,7 @@ mod phase1_api;
 mod phase2_repository;
 mod postmortem;
 mod read_audit;
+mod release_management;
 mod repository;
 mod slo;
 mod supervised_execution;
