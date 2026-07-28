@@ -48,7 +48,7 @@ const DEFAULT_PAGE_SIZE: u32 = 50;
 const MAX_PAGE_SIZE: u32 = 200;
 
 impl ReleaseManagementService {
-    pub(crate) fn integration_descriptors() -> Vec<IntegrationDescriptor> {
+    pub(in crate::release_management) fn integration_descriptors() -> Vec<IntegrationDescriptor> {
         [
             IntegrationAdapterKind::MockItsm,
             IntegrationAdapterKind::SignedWebhookItsm,
@@ -61,7 +61,7 @@ impl ReleaseManagementService {
         .collect()
     }
 
-    pub(crate) async fn register_integration_target(
+    pub(in crate::release_management) async fn register_integration_target(
         &self,
         auth: &AuthContext,
         request: &RegisterIntegrationTargetRequest,
@@ -134,7 +134,7 @@ impl ReleaseManagementService {
         Ok(view)
     }
 
-    pub(crate) async fn integration_target(
+    pub(in crate::release_management) async fn integration_target(
         &self,
         auth: &AuthContext,
         target_id: IntegrationTargetId,
@@ -150,7 +150,7 @@ impl ReleaseManagementService {
         Ok(target)
     }
 
-    pub(crate) async fn integration_targets(
+    pub(in crate::release_management) async fn integration_targets(
         &self,
         auth: &AuthContext,
         query: &IntegrationTargetListQuery,
@@ -176,7 +176,7 @@ impl ReleaseManagementService {
         })
     }
 
-    pub(crate) async fn set_integration_target_state(
+    pub(in crate::release_management) async fn set_integration_target_state(
         &self,
         auth: &AuthContext,
         target_id: IntegrationTargetId,
@@ -231,7 +231,7 @@ impl ReleaseManagementService {
             .await
     }
 
-    pub(crate) async fn integration_deliveries(
+    pub(in crate::release_management) async fn integration_deliveries(
         &self,
         auth: &AuthContext,
         query: &IntegrationDeliveryListQuery,
@@ -260,7 +260,7 @@ impl ReleaseManagementService {
         })
     }
 
-    pub(crate) async fn apply_external_approval(
+    pub(in crate::release_management) async fn apply_external_approval(
         &self,
         auth: &AuthContext,
         request: &ExternalApprovalRequest,
