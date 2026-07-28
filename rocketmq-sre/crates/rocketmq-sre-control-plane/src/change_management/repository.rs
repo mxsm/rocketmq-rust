@@ -94,7 +94,7 @@ impl PostgresRepository {
         Ok(true)
     }
 
-    pub(super) async fn runbook_definition(
+    pub(crate) async fn runbook_definition(
         &self,
         tenant_id: TenantId,
         cluster_id: ClusterId,
