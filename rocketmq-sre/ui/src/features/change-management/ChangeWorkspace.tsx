@@ -1,10 +1,12 @@
 import {
   AlertTriangle,
   CalendarRange,
+  Cable,
   CheckCircle2,
   GitCompareArrows,
   ListTree,
   LoaderCircle,
+  Rocket,
   Route,
 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -42,6 +44,8 @@ const workspaceLinks = [
   },
   { to: "/changes/calendar", label: "变更日历", icon: CalendarRange },
   { to: "/changes/schedules", label: "排程", icon: Route },
+  { to: "/changes/releases", label: "发布护航", icon: Rocket },
+  { to: "/changes/integrations", label: "外部集成", icon: Cable },
 ];
 
 export function ChangeWorkspaceNav() {
