@@ -16,6 +16,7 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use chrono::DateTime;
 use chrono::Duration;
 use chrono::Utc;
 use rocketmq_sre_contracts::AUTONOMY_SCHEMA_VERSION;
@@ -100,6 +101,7 @@ pub(crate) struct AutonomyService {
     slo: SloService,
     descriptors: Arc<BTreeMap<ExecutionAction, ActionDescriptor>>,
     signer: GrantSigner,
+    clock: Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>,
 }
 
 impl AutonomyService {
@@ -107,6 +109,15 @@ impl AutonomyService {
         repository: PostgresRepository,
         slo: SloService,
         signing_key: &[u8],
+    ) -> Result<Self, ControlPlaneError> {
+        Self::new_with_clock(repository, slo, signing_key, Arc::new(Utc::now))
+    }
+
+    pub(crate) fn new_with_clock(
+        repository: PostgresRepository,
+        slo: SloService,
+        signing_key: &[u8],
+        clock: Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>,
     ) -> Result<Self, ControlPlaneError> {
         let mut descriptors = BTreeMap::new();
         for yaml in EMBEDDED_ACTION_DESCRIPTOR_YAMLS {
@@ -127,6 +138,7 @@ impl AutonomyService {
             slo,
             descriptors: Arc::new(descriptors),
             signer: GrantSigner::new(signing_key)?,
+            clock,
         })
     }
 
@@ -168,17 +180,18 @@ impl AutonomyService {
             cooldown_seconds: request.cooldown_seconds,
             max_concurrent_executions: request.max_concurrent_executions,
             stable_window_seconds: request.stable_window_seconds,
-            created_at: Utc::now(),
+            created_at: (self.clock)(),
         };
         AutonomyPolicy::validate(&definition, descriptor)
             .map_err(|error| ControlPlaneError::validation("invalid_autonomy_policy", error.to_string()))?;
         let (definition, _) = self.repository.store_autonomy_policy(definition, &auth.subject).await?;
         self.repository
-            .autonomy_scope(
+            .autonomy_scope_at(
                 auth.tenant_id,
                 definition.cluster_id,
                 definition.action,
                 &definition.action_version,
+                (self.clock)(),
             )
             .await
     }
@@ -190,7 +203,13 @@ impl AutonomyService {
     ) -> Result<AutonomyScopeView, ControlPlaneError> {
         require_cluster(auth, query.cluster_id)?;
         self.repository
-            .autonomy_scope(auth.tenant_id, query.cluster_id, query.action, &query.action_version)
+            .autonomy_scope_at(
+                auth.tenant_id,
+                query.cluster_id,
+                query.action,
+                &query.action_version,
+                (self.clock)(),
+            )
             .await
     }
 
@@ -204,7 +223,7 @@ impl AutonomyService {
         let limit = limit.clamp(1, MAX_SCOPE_PAGE);
         let mut items = self
             .repository
-            .autonomy_scopes(auth.tenant_id, cluster_id, i64::from(limit) + 1)
+            .autonomy_scopes_at(auth.tenant_id, cluster_id, i64::from(limit) + 1, (self.clock)())
             .await?;
         let truncated = items.len() > usize::from(limit);
         items.truncate(usize::from(limit));
@@ -240,7 +259,7 @@ impl AutonomyService {
             &auth.subject,
             request.reason.as_deref(),
             qualification,
-            Utc::now(),
+            (self.clock)(),
         )
         .map_err(|error| ControlPlaneError::conflict_code("invalid_autonomy_transition", error.to_string()))?;
         self.repository
@@ -284,7 +303,7 @@ impl AutonomyService {
                 model_family: request.primary_model_family.clone(),
                 model_revision: request.primary_model_revision.clone(),
             },
-            Utc::now(),
+            (self.clock)(),
         )
         .map_err(|error| ControlPlaneError::validation("invalid_model_identity", error.to_string()))?;
         self.repository.store_autonomy_cohort(scope.policy.id, &cohort).await
@@ -344,7 +363,7 @@ impl AutonomyService {
                 model_family: request.critic_model_family.clone(),
                 model_revision: request.critic_model_revision.clone(),
             },
-            Utc::now(),
+            (self.clock)(),
         )
         .map_err(|error| ControlPlaneError::validation("invalid_model_identity", error.to_string()))?;
         self.repository.store_autonomy_cohort(scope.policy.id, &cohort).await
@@ -443,7 +462,7 @@ impl AutonomyService {
             }
             validate_reason_codes(&reason_codes)?;
             let qualified = reason_codes.is_empty();
-            let reconciled_at = Utc::now();
+            let reconciled_at = (self.clock)();
             let sample = AutonomyQualificationSample {
                 id: AutonomySampleId::new(),
                 cohort_id: request.cohort_id,
@@ -578,7 +597,7 @@ impl AutonomyService {
                 kill_switch_active: scope.kill_switch.as_ref().is_some_and(|state| state.active),
                 authoritative_safety_available: live.authoritative,
             },
-            Utc::now(),
+            (self.clock)(),
         );
         eligibility.cohort_id = Some(cohort.id);
         eligibility.cohort_hash = Some(cohort.cohort_hash.clone());
@@ -796,7 +815,7 @@ impl AutonomyService {
                 None,
                 true,
                 reason.trim(),
-                Utc::now(),
+                (self.clock)(),
                 None,
                 &auth.subject,
             )
@@ -855,7 +874,7 @@ impl AutonomyService {
                 },
             )
             .await?;
-        let issued_at = Utc::now();
+        let issued_at = (self.clock)();
         let current = self
             .current_dynamic_safety(auth, &scope, request.plan_id, &request.plan_hash, issued_at)
             .await?;
@@ -904,7 +923,7 @@ impl AutonomyService {
         request: &VerifyDynamicSafetyDecisionRequest,
     ) -> Result<DynamicSafetyVerification, ControlPlaneError> {
         require_role(auth, "execution_agent")?;
-        let now = Utc::now();
+        let now = (self.clock)();
         request
             .validate_at(now)
             .map_err(|error| ControlPlaneError::validation("invalid_dynamic_safety_decision", error.to_string()))?;
@@ -1024,7 +1043,7 @@ impl AutonomyService {
                 kill_switch_active: refreshed.kill_switch.as_ref().is_some_and(|state| state.active),
                 authoritative_safety_available: live.authoritative,
             },
-            Utc::now(),
+            (self.clock)(),
         );
         let final_decision = EligibilityEngine::evaluate_final(
             &refreshed.policy,
@@ -1042,7 +1061,7 @@ impl AutonomyService {
                 unresolved_unknown: refreshed.qualification.unresolved_unknown,
                 recent_rollbacks: refreshed.qualification.recent_rollbacks,
             },
-            Utc::now(),
+            (self.clock)(),
         );
         if !base.allowed || !final_decision.allowed {
             let reasons = base
@@ -1063,7 +1082,7 @@ impl AutonomyService {
                 "autonomy incident does not match the immutable plan",
             ));
         }
-        let issued_at = Utc::now();
+        let issued_at = (self.clock)();
         let mut grant = AutonomyGrant {
             issuer: "rocketmq-sre-control-plane".to_owned(),
             audience: "rocketmq-sre-executor".to_owned(),
@@ -1101,7 +1120,7 @@ impl AutonomyService {
         validate_idempotency_key(&request.idempotency_key)?;
         let grant = self.issue_grant(auth, &request.grant).await?;
         let plan = self.repository.action_plan(grant.plan_id).await?.plan;
-        let issued_at = Utc::now();
+        let issued_at = (self.clock)();
         let expires_at = (issued_at + AUTONOMY_GRANT_TTL)
             .min(grant.expires_at)
             .min(plan.expires_at);
@@ -1195,7 +1214,7 @@ impl AutonomyService {
         let Ok(report) = self.slo.cluster_report(auth, scope.policy.cluster_id).await else {
             return LiveSafety::default();
         };
-        let fresh = Utc::now()
+        let fresh = (self.clock)()
             .signed_duration_since(report.observed_at)
             .to_std()
             .is_ok_and(|age| age <= std::time::Duration::from_secs(120));

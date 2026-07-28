@@ -282,12 +282,25 @@ impl PostgresRepository {
         Ok((definition, next))
     }
 
+    #[cfg(test)]
     pub(super) async fn autonomy_scope(
         &self,
         tenant_id: TenantId,
         cluster_id: ClusterId,
         action: ExecutionAction,
         action_version: &str,
+    ) -> Result<AutonomyScopeView, ControlPlaneError> {
+        self.autonomy_scope_at(tenant_id, cluster_id, action, action_version, Utc::now())
+            .await
+    }
+
+    pub(super) async fn autonomy_scope_at(
+        &self,
+        tenant_id: TenantId,
+        cluster_id: ClusterId,
+        action: ExecutionAction,
+        action_version: &str,
+        evaluated_at: DateTime<Utc>,
     ) -> Result<AutonomyScopeView, ControlPlaneError> {
         let row = sqlx::query(
             "SELECT state.*, definition.definition_snapshot
@@ -307,9 +320,9 @@ impl PostgresRepository {
         .ok_or(ControlPlaneError::NotFound)?;
         let policy: AutonomyPolicyDefinition = from_json(row.try_get("definition_snapshot")?)?;
         let lifecycle = lifecycle_from_row(&row, tenant_id, cluster_id, action)?;
-        let qualification = self.autonomy_qualification(&policy).await?;
+        let qualification = self.autonomy_qualification(&policy, evaluated_at).await?;
         let active_freezes = self
-            .autonomy_active_freezes(tenant_id, cluster_id, action, action_version, Utc::now())
+            .autonomy_active_freezes(tenant_id, cluster_id, action, action_version, evaluated_at)
             .await?;
         let kill_switch = self
             .autonomy_kill_switch(tenant_id, cluster_id, action, action_version)
@@ -342,11 +355,12 @@ impl PostgresRepository {
         })
     }
 
-    pub(super) async fn autonomy_scopes(
+    pub(super) async fn autonomy_scopes_at(
         &self,
         tenant_id: TenantId,
         cluster_id: ClusterId,
         limit: i64,
+        evaluated_at: DateTime<Utc>,
     ) -> Result<Vec<AutonomyScopeView>, ControlPlaneError> {
         let rows = sqlx::query(
             "SELECT action_id, action_version
@@ -365,7 +379,7 @@ impl PostgresRepository {
             let action = parse_action(row.try_get("action_id")?)?;
             let action_version: String = row.try_get("action_version")?;
             scopes.push(
-                self.autonomy_scope(tenant_id, cluster_id, action, &action_version)
+                self.autonomy_scope_at(tenant_id, cluster_id, action, &action_version, evaluated_at)
                     .await?,
             );
         }
@@ -1548,8 +1562,8 @@ impl PostgresRepository {
     async fn autonomy_qualification(
         &self,
         policy: &AutonomyPolicyDefinition,
+        evaluated_at: DateTime<Utc>,
     ) -> Result<AutonomyQualificationView, ControlPlaneError> {
-        let evaluated_at = Utc::now();
         let rows = sqlx::query(
             "SELECT *
              FROM autonomy_qualification_cohorts
