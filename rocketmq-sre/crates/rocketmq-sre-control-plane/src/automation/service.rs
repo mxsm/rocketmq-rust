@@ -12,15 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::time::Duration;
+
 use chrono::Utc;
 use rocketmq_sre_contracts::AUTOMATION_SCHEMA_VERSION;
 use rocketmq_sre_contracts::AutomationFeedbackId;
 use rocketmq_sre_contracts::AutomationOperatorFeedback;
+#[cfg(test)]
 use rocketmq_sre_contracts::AutomationRunId;
 use rocketmq_sre_contracts::NoSideEffectAutomationKind;
 use rocketmq_sre_contracts::NoSideEffectAutomationRequest;
 use rocketmq_sre_contracts::NoSideEffectAutomationRun;
 
+use super::adapter::AutomationDispatchOutcome;
+use super::adapter::AutomationDispatcher;
 use super::model::AutomationRunListQuery;
 use super::model::AutomationRunPage;
 use super::model::CompleteAutomationRunRequest;
@@ -28,17 +33,38 @@ use super::model::RecordAutomationFeedbackRequest;
 use crate::ControlPlaneError;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
+use crate::connector_channel::PostgresConnectorChannelService;
+use crate::evidence::EvidenceService;
+use crate::postmortem::PostmortemService;
 
 const MAX_RUN_PAGE: u16 = 200;
 
 #[derive(Clone)]
 pub(crate) struct AutomationService {
     repository: PostgresRepository,
+    dispatcher: Option<AutomationDispatcher>,
 }
 
 impl AutomationService {
-    pub(crate) const fn new(repository: PostgresRepository) -> Self {
-        Self { repository }
+    pub(crate) fn new(
+        repository: PostgresRepository,
+        connector_channel: PostgresConnectorChannelService,
+        evidence: EvidenceService,
+        postmortems: PostmortemService,
+    ) -> Result<Self, ControlPlaneError> {
+        let dispatcher = AutomationDispatcher::new(repository.clone(), connector_channel, evidence, postmortems)?;
+        Ok(Self {
+            repository,
+            dispatcher: Some(dispatcher),
+        })
+    }
+
+    #[cfg(test)]
+    pub(super) const fn persistence_only(repository: PostgresRepository) -> Self {
+        Self {
+            repository,
+            dispatcher: None,
+        }
     }
 
     pub(crate) async fn submit(
@@ -69,6 +95,7 @@ impl AutomationService {
             NoSideEffectAutomationKind::AlertCorrelation
                 | NoSideEffectAutomationKind::SeverityOwnerSuggestion
                 | NoSideEffectAutomationKind::EvidenceCollection
+                | NoSideEffectAutomationKind::ShiftSummary
                 | NoSideEffectAutomationKind::Notification
         );
         if deterministic_only && request.budget.max_model_calls != 0 {
@@ -77,9 +104,58 @@ impl AutomationService {
                 "this automation kind is deterministic and cannot allocate model calls",
             ));
         }
-        self.repository.create_no_side_effect_run(request).await
+        if request.kind == NoSideEffectAutomationKind::PostmortemDraft && request.budget.max_model_calls == 0 {
+            return Err(ControlPlaneError::validation(
+                "model_budget_required",
+                "postmortem draft automation requires a bounded model call budget",
+            ));
+        }
+        let run = self.repository.create_no_side_effect_run(request).await?;
+        if run.status.is_terminal() {
+            return Ok(run);
+        }
+        let Some(dispatcher) = &self.dispatcher else {
+            return Ok(run);
+        };
+        let dispatch = tokio::time::timeout(
+            Duration::from_secs(u64::from(request.budget.timeout_seconds)),
+            dispatcher.dispatch(auth, request),
+        )
+        .await;
+        let outcome = match dispatch {
+            Ok(Ok(outcome)) => bounded_outcome(outcome, request.budget.max_output_bytes)?,
+            Ok(Err(error)) => AutomationDispatchOutcome {
+                status: rocketmq_sre_contracts::AutomationRunStatus::Failed,
+                result_code: automation_failure_code(&error).to_owned(),
+                sanitized_summary: "Bounded automation failed without changing RocketMQ resources".to_owned(),
+                artifacts: Vec::new(),
+                model_invocation_id: None,
+            },
+            Err(_) => AutomationDispatchOutcome {
+                status: rocketmq_sre_contracts::AutomationRunStatus::Failed,
+                result_code: "automation_timeout".to_owned(),
+                sanitized_summary: "Bounded automation exceeded its configured timeout without mutation".to_owned(),
+                artifacts: Vec::new(),
+                model_invocation_id: None,
+            },
+        };
+        self.repository
+            .complete_no_side_effect_run(
+                auth.tenant_id,
+                run.id,
+                &CompleteAutomationRunRequest {
+                    status: outcome.status,
+                    result_code: outcome.result_code,
+                    sanitized_summary: outcome.sanitized_summary,
+                    artifacts: outcome.artifacts,
+                    model_invocation_id: outcome.model_invocation_id,
+                    completed_at: Utc::now(),
+                },
+            )
+            .await
     }
 
+    #[cfg(test)]
     pub(super) async fn complete(
         &self,
         auth: &AuthContext,
@@ -180,6 +256,7 @@ fn require_automation_or_operator(auth: &AuthContext) -> Result<(), ControlPlane
     ))
 }
 
+#[cfg(test)]
 fn require_automation_service(auth: &AuthContext) -> Result<(), ControlPlaneError> {
     if auth.roles.contains("automation_service") {
         return Ok(());
@@ -188,6 +265,46 @@ fn require_automation_service(auth: &AuthContext) -> Result<(), ControlPlaneErro
         "automation_completion_forbidden",
         "only the automation service can complete a bounded run",
     ))
+}
+
+fn bounded_outcome(
+    outcome: AutomationDispatchOutcome,
+    maximum_bytes: u32,
+) -> Result<AutomationDispatchOutcome, ControlPlaneError> {
+    let encoded = serde_json::to_vec(&(
+        &outcome.result_code,
+        &outcome.sanitized_summary,
+        &outcome.artifacts,
+        outcome.model_invocation_id,
+    ))
+    .map_err(|_| ControlPlaneError::validation("invalid_automation_result", "automation outcome cannot be encoded"))?;
+    if encoded.len() <= maximum_bytes as usize {
+        return Ok(outcome);
+    }
+    Ok(AutomationDispatchOutcome {
+        status: rocketmq_sre_contracts::AutomationRunStatus::Failed,
+        result_code: "output_too_large".to_owned(),
+        sanitized_summary: "Automation output exceeded its configured byte budget and was discarded".to_owned(),
+        artifacts: Vec::new(),
+        model_invocation_id: None,
+    })
+}
+
+const fn automation_failure_code(error: &ControlPlaneError) -> &'static str {
+    match error {
+        ControlPlaneError::Validation { code, .. }
+        | ControlPlaneError::Forbidden { code, .. }
+        | ControlPlaneError::Conflict { code, .. } => code,
+        ControlPlaneError::Unauthorized => "unauthorized_scope",
+        ControlPlaneError::NotFound
+        | ControlPlaneError::Configuration { .. }
+        | ControlPlaneError::Database(_)
+        | ControlPlaneError::IdentityProvider(_)
+        | ControlPlaneError::Executor(_)
+        | ControlPlaneError::ObjectStore
+        | ControlPlaneError::CapabilityDocument { .. }
+        | ControlPlaneError::Io(_) => "source_unavailable",
+    }
 }
 
 fn require_human_operator(auth: &AuthContext) -> Result<(), ControlPlaneError> {
