@@ -325,6 +325,141 @@ pub struct DynamicSafetyDecision {
     pub signature: String,
 }
 
+impl DynamicSafetyDecision {
+    /// Validates a positive decision immediately before one Agent dispatch.
+    ///
+    /// # Errors
+    ///
+    /// Rejects incomplete bindings, deny decisions, invalid validity windows,
+    /// and decisions whose signed facts are not all safe.
+    pub fn validate_allow_at(&self, now: DateTime<Utc>) -> Result<(), ContractError> {
+        const MAX_REASON_CODES: usize = 32;
+        let validity_seconds = self.expires_at.signed_duration_since(self.issued_at).num_seconds();
+        if self.id.as_uuid().is_nil()
+            || self.tenant_id.as_uuid().is_nil()
+            || self.cluster_id.as_uuid().is_nil()
+            || self.action_version.trim().is_empty()
+            || self.plan_id.as_uuid().is_nil()
+            || !is_sha256_digest(&self.plan_hash)
+            || self.execution_id.as_uuid().is_nil()
+            || self.execution_step_id.as_uuid().is_nil()
+            || self.policy_definition_version == 0
+            || self.lifecycle_revision == 0
+            || !self.error_budget_available
+            || !self.evidence_fresh
+            || !self.allowed
+            || !self.reason_codes.is_empty()
+            || self.reason_codes.len() > MAX_REASON_CODES
+            || self.issued_at > now
+            || self.expires_at <= now
+            || !(1..=30).contains(&validity_seconds)
+            || self.nonce.trim().is_empty()
+            || self.signature.trim().is_empty()
+        {
+            return Err(ContractError::InvalidDescriptor {
+                reason: "dynamic safety allow decision is incomplete, stale, or unsafe".to_owned(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Authoritative request evaluated before every autonomous positive step.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DynamicSafetyEvaluationRequest {
+    pub schema_version: String,
+    pub tenant_id: TenantId,
+    pub cluster_id: ClusterId,
+    pub action: ExecutionAction,
+    pub action_version: String,
+    pub plan_id: ActionPlanId,
+    pub plan_hash: String,
+    pub execution_id: ExecutionId,
+    pub execution_step_id: crate::ExecutionStepId,
+    pub policy_definition_version: u64,
+    pub lifecycle_revision: u64,
+}
+
+impl DynamicSafetyEvaluationRequest {
+    /// Validates the exact step and autonomy-policy binding.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unknown schemas, nil identifiers, invalid hashes, and missing
+    /// policy or lifecycle versions.
+    pub fn validate(&self) -> Result<(), ContractError> {
+        if self.schema_version != AUTONOMY_SCHEMA_VERSION {
+            return Err(ContractError::UnsupportedSchemaFamily {
+                actual: self.schema_version.clone(),
+                supported: AUTONOMY_SCHEMA_VERSION.to_owned(),
+            });
+        }
+        if self.tenant_id.as_uuid().is_nil()
+            || self.cluster_id.as_uuid().is_nil()
+            || self.action_version.trim().is_empty()
+            || self.plan_id.as_uuid().is_nil()
+            || !is_sha256_digest(&self.plan_hash)
+            || self.execution_id.as_uuid().is_nil()
+            || self.execution_step_id.as_uuid().is_nil()
+            || self.policy_definition_version == 0
+            || self.lifecycle_revision == 0
+        {
+            return Err(ContractError::InvalidDescriptor {
+                reason: "dynamic safety evaluation scope is incomplete".to_owned(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Agent-side online introspection request for one signed safety decision.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VerifyDynamicSafetyDecisionRequest {
+    pub schema_version: String,
+    pub tenant_id: TenantId,
+    pub decision: DynamicSafetyDecision,
+}
+
+impl VerifyDynamicSafetyDecisionRequest {
+    /// Validates the request before signature and live-state verification.
+    ///
+    /// # Errors
+    ///
+    /// Rejects incompatible schemas, tenant drift, and stale or deny
+    /// decisions.
+    pub fn validate_at(&self, now: DateTime<Utc>) -> Result<(), ContractError> {
+        if self.schema_version != AUTONOMY_SCHEMA_VERSION {
+            return Err(ContractError::UnsupportedSchemaFamily {
+                actual: self.schema_version.clone(),
+                supported: AUTONOMY_SCHEMA_VERSION.to_owned(),
+            });
+        }
+        if self.tenant_id != self.decision.tenant_id {
+            return Err(ContractError::InvalidDescriptor {
+                reason: "dynamic safety verification tenant does not match the decision".to_owned(),
+            });
+        }
+        self.decision.validate_allow_at(now)
+    }
+}
+
+/// Positive introspection response bound to the exact signed decision.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DynamicSafetyVerification {
+    pub schema_version: String,
+    pub valid: bool,
+    pub decision_id: DynamicSafetyDecisionId,
+    pub tenant_id: TenantId,
+    pub cluster_id: ClusterId,
+    pub plan_id: ActionPlanId,
+    pub execution_id: ExecutionId,
+    pub execution_step_id: crate::ExecutionStepId,
+    pub expires_at: DateTime<Utc>,
+}
+
 /// Classification of a bounded autonomy outcome.
 #[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -440,5 +575,41 @@ mod tests {
         assert!(AutonomyMode::Shadow.is_safe_recovery_target());
         assert!(AutonomyMode::Supervised.is_safe_recovery_target());
         assert!(!AutonomyMode::Autonomous.is_safe_recovery_target());
+    }
+
+    #[test]
+    fn dynamic_safety_allow_is_short_lived_and_fully_bound() {
+        let now = Utc::now();
+        let mut decision = DynamicSafetyDecision {
+            id: DynamicSafetyDecisionId::new(),
+            tenant_id: TenantId::new(),
+            cluster_id: ClusterId::new(),
+            action: ExecutionAction::ObservabilityLoggerLevelTtl,
+            action_version: "1.0.0".to_owned(),
+            plan_id: ActionPlanId::new(),
+            plan_hash: digest('d'),
+            execution_id: ExecutionId::new(),
+            execution_step_id: crate::ExecutionStepId::new(),
+            policy_definition_version: 2,
+            lifecycle_revision: 4,
+            error_budget_available: true,
+            freeze_revision: 0,
+            kill_switch_revision: 3,
+            evidence_fresh: true,
+            allowed: true,
+            reason_codes: Vec::new(),
+            issued_at: now,
+            expires_at: now + chrono::Duration::seconds(30),
+            nonce: "dynamic-safety-test".to_owned(),
+            signature: "signed-dynamic-safety-test".to_owned(),
+        };
+        assert!(decision.validate_allow_at(now).is_ok());
+
+        decision.expires_at = now + chrono::Duration::seconds(31);
+        assert!(decision.validate_allow_at(now).is_err());
+        decision.expires_at = now + chrono::Duration::seconds(30);
+        decision.allowed = false;
+        decision.reason_codes = vec!["kill_switch_active".to_owned()];
+        assert!(decision.validate_allow_at(now).is_err());
     }
 }
