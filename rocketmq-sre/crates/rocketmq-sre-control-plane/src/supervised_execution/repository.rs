@@ -42,6 +42,7 @@ use sqlx::Transaction;
 use uuid::Uuid;
 
 use super::model::DiagnosisPlanContext;
+use super::model::ExternalApprovalSource;
 use super::model::NewExecutionProjection;
 use super::model::PersistedPlanProjection;
 use super::model::StoredExecutionProjection;
@@ -274,6 +275,7 @@ impl PostgresRepository {
         expected_statuses: &[PlanStatus],
         next_status: PlanStatus,
         audits: &[AuditEvent],
+        external_source: Option<&ExternalApprovalSource>,
     ) -> Result<ActionPlan, ControlPlaneError> {
         let expected = expected_statuses
             .iter()
@@ -329,6 +331,34 @@ impl PostgresRepository {
         .bind(grant.map(json_value).transpose()?)
         .execute(&mut *transaction)
         .await?;
+        if let Some(source) = external_source {
+            sqlx::query(
+                "INSERT INTO external_approval_events (
+                    target_id, external_event_id, external_ticket_key,
+                    plan_id, plan_hash, decision, subject, mfa_verified,
+                    step_up_verified, approval_id, input_snapshot, received_at
+                 ) VALUES (
+                    $1, $2, $3,
+                    $4, $5, $6, $7, $8,
+                    $9, $10, $11, $12
+                 )",
+            )
+            .bind(source.target_id.as_uuid())
+            .bind(&source.input.external_event_id)
+            .bind(&source.input.external_ticket_key)
+            .bind(source.input.plan_id.as_uuid())
+            .bind(&source.input.plan_hash)
+            .bind(approval_decision_name(source.input.decision))
+            .bind(&source.input.subject)
+            .bind(source.input.mfa_verified)
+            .bind(source.input.step_up_verified)
+            .bind(approval.id.as_uuid())
+            .bind(json_value(&source.input)?)
+            .bind(source.received_at)
+            .execute(&mut *transaction)
+            .await
+            .map_err(map_external_approval_error)?;
+        }
         for audit in audits {
             insert_audit(&mut transaction, audit).await?;
         }
@@ -643,4 +673,16 @@ impl PostgresRepository {
         transaction.commit().await?;
         quarantine_from_row(&row)
     }
+}
+
+fn map_external_approval_error(error: sqlx::Error) -> ControlPlaneError {
+    if let sqlx::Error::Database(database) = &error
+        && database.is_unique_violation()
+    {
+        return ControlPlaneError::conflict_code(
+            "external_approval_duplicate",
+            "external approval event was already applied",
+        );
+    }
+    ControlPlaneError::Database(error)
 }
