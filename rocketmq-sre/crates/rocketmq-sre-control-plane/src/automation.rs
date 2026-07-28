@@ -23,6 +23,8 @@ mod service;
 #[cfg(test)]
 mod adapter_tests;
 #[cfg(test)]
+mod preventive_tests;
+#[cfg(test)]
 mod repository_tests;
 
 pub(crate) use api::routes;
