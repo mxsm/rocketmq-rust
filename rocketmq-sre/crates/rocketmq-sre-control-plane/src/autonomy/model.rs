@@ -25,6 +25,7 @@ use rocketmq_sre_contracts::AutonomyPolicyDefinition;
 use rocketmq_sre_contracts::AutonomyQualificationCohort;
 use rocketmq_sre_contracts::AutonomySampleKind;
 use rocketmq_sre_contracts::ClusterId;
+use rocketmq_sre_contracts::CorrelationId;
 use rocketmq_sre_contracts::CriticReviewId;
 use rocketmq_sre_contracts::DiagnosisRevisionId;
 use rocketmq_sre_contracts::DynamicSafetyDecision;
@@ -276,6 +277,16 @@ pub(crate) struct IssueAutonomyGrantRequest {
     pub(crate) critic_profile: String,
     pub(crate) critic_model_family: String,
     pub(crate) critic_model_revision: String,
+}
+
+/// Internal request that issues a fresh grant and seals the exact autonomous
+/// execution envelope consumed by Change Executor.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PrepareAutonomousExecutionRequest {
+    pub(crate) grant: IssueAutonomyGrantRequest,
+    pub(crate) correlation_id: CorrelationId,
+    pub(crate) idempotency_key: String,
 }
 
 /// Current independent freeze state.
