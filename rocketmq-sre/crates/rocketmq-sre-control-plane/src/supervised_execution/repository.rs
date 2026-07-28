@@ -474,6 +474,34 @@ impl PostgresRepository {
         Ok(existing)
     }
 
+    pub(super) async fn persist_execution_dispatch_rejection(
+        &self,
+        execution_id: ExecutionId,
+        rejected_at: DateTime<Utc>,
+        audit: &AuditEvent,
+    ) -> Result<(), ControlPlaneError> {
+        let mut transaction = self.pool.begin().await?;
+        let updated = sqlx::query(
+            "UPDATE executions
+             SET state = 'escalated', completed_at = $2, updated_at = $2
+             WHERE id = $1 AND state = 'pending'",
+        )
+        .bind(execution_id.as_uuid())
+        .bind(rejected_at)
+        .execute(&mut *transaction)
+        .await?;
+        if updated.rows_affected() != 1 {
+            transaction.rollback().await?;
+            return Err(ControlPlaneError::conflict_code(
+                "execution_state_changed",
+                "execution is no longer pending dispatch",
+            ));
+        }
+        insert_audit(&mut transaction, audit).await?;
+        transaction.commit().await?;
+        Ok(())
+    }
+
     async fn execution_by_idempotency(
         &self,
         idempotency_key: &str,
