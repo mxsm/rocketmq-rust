@@ -554,21 +554,3 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 8px;
 }
-
-@media (max-width: 1360px) {
-  .autonomy-metric-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .autonomy-metric-card:nth-child(2n) {
-    border-right: 0;
-  }
-
-  .autonomy-metric-card:nth-child(-n + 4) {
-    border-bottom: 1px solid var(--border);
-  }
-
-  .autonomy-effectiveness-layout {
-    grid-template-columns: 320px minmax(0, 1fr);
-  }
-}
