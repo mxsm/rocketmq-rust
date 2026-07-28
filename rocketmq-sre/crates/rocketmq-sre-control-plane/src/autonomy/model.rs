@@ -179,6 +179,24 @@ pub(crate) struct RecordQualificationSampleRequest {
     pub(crate) reconciled_at: DateTime<Utc>,
 }
 
+/// Authoritative facts derived from the persisted supervised execution,
+/// verification journal, and immutable Critic record.
+#[derive(Clone, Debug)]
+pub(crate) struct SupervisedExecutionQualificationFacts {
+    pub(crate) succeeded: bool,
+    pub(crate) human_approved: bool,
+    pub(crate) timeline_safe: bool,
+    pub(crate) evidence_complete: bool,
+    pub(crate) stable_window_passed: bool,
+    pub(crate) observed_at: DateTime<Utc>,
+    pub(crate) primary_profile: Option<String>,
+    pub(crate) primary_model_family: Option<String>,
+    pub(crate) primary_model_revision: Option<String>,
+    pub(crate) critic_profile: Option<String>,
+    pub(crate) critic_model_family: Option<String>,
+    pub(crate) critic_model_revision: Option<String>,
+}
+
 /// Side-effect-free Shadow candidate. It can create a report and reconciled
 /// qualification sample, but never an ExecutionRequest.
 #[derive(Clone, Debug, Deserialize)]
