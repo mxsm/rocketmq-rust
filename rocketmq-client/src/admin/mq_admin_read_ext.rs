@@ -41,6 +41,7 @@ use super::default_mq_admin_ext::DefaultMQAdminExt;
 /// patching. Arbitrary Broker properties never cross this read boundary.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct BrokerConfigAllowlisted {
+    pub generation: u64,
     pub send_message_thread_pool_nums: Option<u32>,
     pub pull_message_thread_pool_nums: Option<u32>,
     pub flush_delay_offset_interval_ms: Option<u64>,
@@ -132,12 +133,20 @@ impl MQAdminReadExt for DefaultMQAdminExt {
         &self,
         broker_addr: CheetahString,
     ) -> rocketmq_error::RocketMQResult<BrokerConfigAllowlisted> {
-        let properties = self
+        let snapshot = self
             .inner()
             .mq_client_api()?
-            .get_broker_config(&broker_addr, self.inner().remoting_timeout_millis()?)
+            .get_broker_config_snapshot(&broker_addr, self.inner().remoting_timeout_millis()?)
             .await?;
+        let generation = snapshot.generation.filter(|value| *value > 0).ok_or_else(|| {
+            rocketmq_error::RocketMQError::ResponseProcessFailed {
+                operation: "get_broker_config_allowlisted",
+                reason: "Broker config response does not include a positive config generation".to_owned(),
+            }
+        })?;
+        let properties = snapshot.properties;
         Ok(BrokerConfigAllowlisted {
+            generation,
             send_message_thread_pool_nums: parse_allowlisted_value(&properties, "sendMessageThreadPoolNums")?,
             pull_message_thread_pool_nums: parse_allowlisted_value(&properties, "pullMessageThreadPoolNums")?,
             flush_delay_offset_interval_ms: parse_allowlisted_value(&properties, "flushDelayOffsetInterval")?,

@@ -17,6 +17,7 @@ use super::response_decoder::*;
 use super::*;
 #[cfg(feature = "admin-mutation")]
 use crate::admin::BrokerConfigPatchOutcome;
+use rocketmq_protocol::protocol::header::get_broker_config_response_header::GetBrokerConfigResponseHeader;
 #[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::update_broker_config_request_header::UpdateBrokerConfigRequestHeader;
 #[cfg(feature = "admin-mutation")]
@@ -26,10 +27,30 @@ pub struct AdminClient<'a> {
     api: &'a MQClientAPIImpl,
 }
 
+pub(crate) struct BrokerConfigSnapshot {
+    pub(crate) generation: Option<u64>,
+    pub(crate) properties: HashMap<CheetahString, CheetahString>,
+}
+
 impl AdminClient<'_> {
     pub async fn broker_cluster_info(&self, timeout_millis: u64) -> RocketMQResult<ClusterInfo> {
         self.api.get_broker_cluster_info(timeout_millis).await
     }
+}
+
+fn broker_config_snapshot_from_response(response: &RemotingCommand) -> RocketMQResult<BrokerConfigSnapshot> {
+    let body = response
+        .get_body()
+        .ok_or_else(|| mq_client_err!("Broker config response body is empty".to_string()))?;
+    let body_str = String::from_utf8_lossy(body.as_ref());
+    let properties = mix_all::string_to_properties(body_str.as_ref())
+        .ok_or_else(|| mq_client_err!("Failed to parse broker config response body".to_string()))?;
+    let generation = response
+        .decode_command_custom_header::<GetBrokerConfigResponseHeader>()
+        .ok()
+        .map(|header| header.config_generation)
+        .filter(|generation| *generation > 0);
+    Ok(BrokerConfigSnapshot { generation, properties })
 }
 
 impl MQClientAPIImpl {
@@ -2133,6 +2154,16 @@ impl MQClientAPIImpl {
         addr: &CheetahString,
         timeout_millis: u64,
     ) -> RocketMQResult<HashMap<CheetahString, CheetahString>> {
+        self.get_broker_config_snapshot(addr, timeout_millis)
+            .await
+            .map(|snapshot| snapshot.properties)
+    }
+
+    pub(crate) async fn get_broker_config_snapshot(
+        &self,
+        addr: &CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<BrokerConfigSnapshot> {
         let request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerConfig);
         let response = self
             .remoting_client
@@ -2140,14 +2171,7 @@ impl MQClientAPIImpl {
             .await?;
 
         match ResponseCode::from(response.code()) {
-            ResponseCode::Success => {
-                let body = response
-                    .get_body()
-                    .ok_or_else(|| mq_client_err!("Broker config response body is empty".to_string()))?;
-                let body_str = String::from_utf8_lossy(body.as_ref());
-                mix_all::string_to_properties(body_str.as_ref())
-                    .ok_or_else(|| mq_client_err!("Failed to parse broker config response body".to_string()))
-            }
+            ResponseCode::Success => broker_config_snapshot_from_response(&response),
             _ => Err(mq_client_err!(
                 response.code(),
                 response.remark().map_or_else(String::new, |remark| remark.to_string())
@@ -3712,5 +3736,39 @@ impl MqClientAdminInner for MQClientAPIImpl {
                 response.remark().map_or_else(String::new, |s| s.to_string())
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod broker_config_snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn generation_is_bound_to_the_same_allowlisted_response_body() {
+        let mut response = RemotingCommand::create_response_command()
+            .set_code(ResponseCode::Success)
+            .set_command_custom_header(GetBrokerConfigResponseHeader { config_generation: 7 })
+            .set_body("sendMessageThreadPoolNums=32\naccessKey=must-not-escape");
+        response.make_custom_header_to_net();
+
+        let snapshot = broker_config_snapshot_from_response(&response).expect("snapshot");
+        assert_eq!(snapshot.generation, Some(7));
+        assert_eq!(
+            snapshot
+                .properties
+                .get("sendMessageThreadPoolNums")
+                .map(CheetahString::as_str),
+            Some("32")
+        );
+    }
+
+    #[test]
+    fn legacy_response_remains_readable_without_claiming_a_generation() {
+        let response = RemotingCommand::create_response_command()
+            .set_code(ResponseCode::Success)
+            .set_body("sendMessageThreadPoolNums=32");
+
+        let snapshot = broker_config_snapshot_from_response(&response).expect("legacy snapshot");
+        assert_eq!(snapshot.generation, None);
     }
 }

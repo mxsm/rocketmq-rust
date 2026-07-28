@@ -1105,6 +1105,7 @@ fn backend_error(operation: &'static str, error: RocketMQError) -> AdminError {
 
 fn project_allowlisted_config(config: rocketmq_client_rust::BrokerConfigAllowlisted) -> BrokerAllowlistedConfig {
     BrokerAllowlistedConfig {
+        generation: config.generation,
         send_message_thread_pool_nums: config.send_message_thread_pool_nums,
         pull_message_thread_pool_nums: config.pull_message_thread_pool_nums,
         flush_delay_offset_interval_ms: config.flush_delay_offset_interval_ms,
@@ -1193,6 +1194,7 @@ mod tests {
     #[test]
     fn allowlisted_config_projection_has_no_arbitrary_property_surface() {
         let projected = project_allowlisted_config(rocketmq_client_rust::BrokerConfigAllowlisted {
+            generation: 7,
             send_message_thread_pool_nums: Some(32),
             pull_message_thread_pool_nums: Some(16),
             flush_delay_offset_interval_ms: Some(10_000),
@@ -1201,12 +1203,13 @@ mod tests {
         assert_eq!(
             projected,
             BrokerAllowlistedConfig {
+                generation: 7,
                 send_message_thread_pool_nums: Some(32),
                 pull_message_thread_pool_nums: Some(16),
                 flush_delay_offset_interval_ms: Some(10_000),
             }
         );
-        assert_eq!(serde_json::to_value(projected).unwrap().as_object().unwrap().len(), 3);
+        assert_eq!(serde_json::to_value(projected).unwrap().as_object().unwrap().len(), 4);
     }
 
     fn protocol_connection(client_id: &str, client_addr: &str, language: LanguageCode, version: i32) -> Connection {

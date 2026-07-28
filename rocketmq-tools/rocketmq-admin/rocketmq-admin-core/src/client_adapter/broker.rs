@@ -175,6 +175,7 @@ impl BrokerAdmin for AdminSession {
             .await
             .map_err(|error| AdminError::backend("get_broker_config_allowlisted", error.to_string()))?;
             Ok(BrokerAllowlistedConfig {
+                generation: config.generation,
                 send_message_thread_pool_nums: config.send_message_thread_pool_nums,
                 pull_message_thread_pool_nums: config.pull_message_thread_pool_nums,
                 flush_delay_offset_interval_ms: config.flush_delay_offset_interval_ms,

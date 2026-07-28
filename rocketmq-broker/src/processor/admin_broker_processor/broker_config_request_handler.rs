@@ -29,6 +29,7 @@ use rocketmq_protocol::protocol::body::kv_table::KVTable;
 use rocketmq_protocol::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigToJsonRequestHeader;
 #[cfg(feature = "rocksdb_store")]
 use rocketmq_protocol::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigType;
+use rocketmq_protocol::protocol::header::get_broker_config_response_header::GetBrokerConfigResponseHeader;
 use rocketmq_protocol::protocol::header::update_broker_config_request_header::UpdateBrokerConfigRequestHeader;
 use rocketmq_protocol::protocol::header::update_broker_config_response_header::UpdateBrokerConfigResponseHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
@@ -339,10 +340,9 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
         let mut response = RemotingCommand::create_response_command();
         // broker config => broker config
         // default message store config => message store config
-        let broker_config = self.broker_runtime_inner.broker_config();
-        let message_store_config = self.broker_runtime_inner.message_store_config();
-        let broker_config_properties = broker_config.get_properties();
-        let message_store_config_properties = message_store_config.get_properties();
+        let snapshot = self.broker_runtime_inner.runtime_config_snapshot();
+        let broker_config_properties = snapshot.broker().get_properties();
+        let message_store_config_properties = snapshot.store().get_properties();
         let combine_map = broker_config_properties
             .iter()
             .chain(message_store_config_properties.iter())
@@ -354,6 +354,9 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
         if !body.is_empty() {
             response.set_body_mut_ref(body);
         }
+        response.set_command_custom_header_ref(GetBrokerConfigResponseHeader {
+            config_generation: snapshot.id().value(),
+        });
         Ok(Some(response))
     }
 
@@ -973,6 +976,7 @@ mod tests {
     use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::code::response_code::ResponseCode;
     use rocketmq_protocol::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigToJsonRequestHeader;
+    use rocketmq_protocol::protocol::header::get_broker_config_response_header::GetBrokerConfigResponseHeader;
     use rocketmq_protocol::protocol::header::update_broker_config_request_header::UpdateBrokerConfigRequestHeader;
     use rocketmq_protocol::protocol::header::update_broker_config_response_header::UpdateBrokerConfigResponseHeader;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
@@ -1188,6 +1192,34 @@ mod tests {
             updated.get("brokerRole").map(|value| value.as_str()),
             Some(admin.message_store_config().broker_role.get_broker_role())
         );
+
+        let _ = fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn get_broker_config_binds_body_to_the_committed_generation() {
+        let runtime = new_test_runtime("get-broker-config-generation", false).await;
+        let admin = runtime.admin_runtime_for_test();
+        let mut handler = BrokerConfigRequestHandler::new(admin);
+        let channel = create_test_channel().await;
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let mut request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerConfig);
+
+        let response = handler
+            .get_broker_config(channel, ctx, RequestCode::GetBrokerConfig, &mut request)
+            .await
+            .expect("get broker config should return broker response")
+            .expect("get broker config should return a response");
+
+        assert_eq!(
+            response
+                .read_custom_header_ref::<GetBrokerConfigResponseHeader>()
+                .map(|header| header.config_generation),
+            Some(1)
+        );
+        assert!(response
+            .get_body()
+            .is_some_and(|body| String::from_utf8_lossy(body).contains("flushDelayOffsetInterval")));
 
         let _ = fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }

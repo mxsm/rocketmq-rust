@@ -44,6 +44,7 @@ pub mod get_all_producer_info_request_header;
 pub mod get_all_subscription_group_request_header;
 pub mod get_all_topic_config_request_header;
 pub mod get_all_topic_config_response_header;
+pub mod get_broker_config_response_header;
 pub mod get_consume_stats_in_broker_header;
 pub mod get_consume_stats_request_header;
 pub mod get_consumer_connection_list_request_header;

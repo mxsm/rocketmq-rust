@@ -260,6 +260,7 @@ impl QueryBrokerAllowlistedConfigRequest {
 /// Fixed, non-sensitive Broker properties supported by supervised SRE changes.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BrokerAllowlistedConfig {
+    pub generation: u64,
     pub send_message_thread_pool_nums: Option<u32>,
     pub pull_message_thread_pool_nums: Option<u32>,
     pub flush_delay_offset_interval_ms: Option<u64>,
