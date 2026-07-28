@@ -108,7 +108,7 @@ async fn postgres_preventive_automation_runs_all_risk_families_and_freezes_criti
     assert!(capacity.kill_switch_suggested);
 
     let freeze = sqlx::query(
-        "SELECT active, action, expires_at
+        "SELECT active, action_id, expires_at
          FROM autonomy_freezes
          WHERE id = $1 AND tenant_id = $2 AND cluster_id = $3",
     )
@@ -119,7 +119,12 @@ async fn postgres_preventive_automation_runs_all_risk_families_and_freezes_criti
     .await
     .expect("persisted preventive freeze");
     assert!(freeze.try_get::<bool, _>("active").expect("active"));
-    assert!(freeze.try_get::<Option<String>, _>("action").expect("action").is_none());
+    assert!(
+        freeze
+            .try_get::<Option<String>, _>("action_id")
+            .expect("action id")
+            .is_none()
+    );
     assert!(
         freeze
             .try_get::<Option<chrono::DateTime<Utc>>, _>("expires_at")
