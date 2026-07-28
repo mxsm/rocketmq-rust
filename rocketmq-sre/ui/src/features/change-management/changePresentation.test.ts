@@ -25,13 +25,17 @@ describe("change management presentation", () => {
 
   it("diffs typed runbook steps by stable sequence", () => {
     const before = runbook("1.0.0", [
-      actionStep(1, "扩容 Proxy", "proxy.scale_out_one"),
+      actionStep(1, "扩容 Proxy", "proxy.scale_out_one.v1"),
       gateStep(2),
     ]);
     const after = runbook("1.1.0", [
-      actionStep(1, "扩容 Proxy", "proxy.scale_out_one"),
+      actionStep(1, "扩容 Proxy", "proxy.scale_out_one.v1"),
       gateStep(2),
-      actionStep(3, "轮换凭据", "security.credential_rotate_overlap"),
+      actionStep(
+        3,
+        "轮换凭据",
+        "security.credential_rotate_overlap.v1",
+      ),
     ]);
 
     const rows = diffRunbooks(before, after);

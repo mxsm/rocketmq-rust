@@ -128,6 +128,26 @@ const QuarantinePageView = lazy(() =>
     default: module.QuarantinePageView,
   })),
 );
+const RunbooksPage = lazy(() =>
+  import("./pages/RunbookPages").then((module) => ({
+    default: module.RunbooksPage,
+  })),
+);
+const ChangeCalendarPage = lazy(() =>
+  import("./pages/ChangeCalendarPage").then((module) => ({
+    default: module.ChangeCalendarPage,
+  })),
+);
+const ChangeSchedulesPage = lazy(() =>
+  import("./pages/ChangeSchedulesPage").then((module) => ({
+    default: module.ChangeSchedulesPage,
+  })),
+);
+const ChangeScheduleDetailPage = lazy(() =>
+  import("./pages/ChangeScheduleDetailPage").then((module) => ({
+    default: module.ChangeScheduleDetailPage,
+  })),
+);
 
 function RouteLoading() {
   return (
@@ -175,6 +195,13 @@ const router = createBrowserRouter([
       { path: "action-items", element: <ActionItemsPage /> },
       { path: "operations", element: <OperationsPage /> },
       { path: "changes", element: <ChangeCenterPage /> },
+      { path: "changes/runbooks", element: <RunbooksPage /> },
+      { path: "changes/calendar", element: <ChangeCalendarPage /> },
+      { path: "changes/schedules", element: <ChangeSchedulesPage /> },
+      {
+        path: "changes/schedules/:scheduleId",
+        element: <ChangeScheduleDetailPage />,
+      },
       { path: "changes/plans/:planId", element: <PlanPage /> },
       {
         path: "changes/executions/:executionId",

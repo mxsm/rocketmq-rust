@@ -1,10 +1,13 @@
 import {
   Activity,
   ArchiveX,
+  BookOpenCheck,
+  CalendarRange,
   FileCheck2,
   Fingerprint,
   Play,
   RefreshCw,
+  Route,
   ShieldAlert,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -25,6 +28,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ApprovalPanel } from "@/features/approvals/ApprovalPanel";
 import { AuditTimeline } from "@/features/audit/AuditTimeline";
+import { ChangeWorkspaceNav } from "@/features/change-management/ChangeWorkspace";
 import { ExecutionTimeline } from "@/features/executions/ExecutionTimeline";
 import { PlanDetail } from "@/features/plans/PlanDetail";
 import {
@@ -65,6 +69,7 @@ export function ChangeCenterPage() {
         eyebrow="SUPERVISED CHANGE CONTROL"
         title="变更中心"
       />
+      <ChangeWorkspaceNav />
       <section className="change-guardrail">
         <ShieldAlert size={18} />
         <div>
@@ -74,6 +79,42 @@ export function ChangeCenterPage() {
         <code>R1/R2 · HUMAN APPROVAL</code>
       </section>
       <section className="change-entry-grid">
+        <article className="change-entry-card workspace-entry">
+          <header>
+            <BookOpenCheck size={18} />
+            <div>
+              <h2>Runbook 库</h2>
+              <p>检查不可变版本、结构化步骤以及版本之间的可读差异。</p>
+            </div>
+          </header>
+          <Button onClick={() => navigate("/changes/runbooks")}>
+            打开 Runbook
+          </Button>
+        </article>
+        <article className="change-entry-card workspace-entry">
+          <header>
+            <CalendarRange size={18} />
+            <div>
+              <h2>变更日历</h2>
+              <p>维护绝对时间窗口、冻结期、黑名单和资源并发约束。</p>
+            </div>
+          </header>
+          <Button onClick={() => navigate("/changes/calendar")}>
+            打开变更日历
+          </Button>
+        </article>
+        <article className="change-entry-card workspace-entry">
+          <header>
+            <Route size={18} />
+            <div>
+              <h2>Runbook 排程</h2>
+              <p>先预演窗口与资源冲突，再创建、暂停或人工接管排程。</p>
+            </div>
+          </header>
+          <Button onClick={() => navigate("/changes/schedules")}>
+            打开排程队列
+          </Button>
+        </article>
         <EntryCard
           description="查看步骤、脱敏 diff、Evidence、风险、Critic 和回滚方式。"
           icon={<FileCheck2 size={18} />}
