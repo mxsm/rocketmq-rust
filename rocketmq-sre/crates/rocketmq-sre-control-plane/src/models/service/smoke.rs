@@ -384,7 +384,45 @@ fn push_provider_failure(failure_codes: &mut Vec<String>, check: &str, error: &P
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+    use std::collections::VecDeque;
+    use std::sync::Arc;
+    use std::sync::Mutex;
+
+    use rocketmq_sre_model_gateway::AsyncModelTransport;
+    use rocketmq_sre_model_gateway::TransportFuture;
+    use rocketmq_sre_model_gateway::TransportRequest;
+    use rocketmq_sre_model_gateway::TransportResponse;
+    use uuid::Uuid;
+
     use super::*;
+    use crate::PostgresRepository;
+    use crate::models::lifecycle::ModelProfileLifecycleTransitionRequest;
+    use crate::models::lifecycle::ModelProfileRollbackRequest;
+
+    struct QueueTransport {
+        responses: Mutex<VecDeque<Result<TransportResponse, ProviderError>>>,
+    }
+
+    impl QueueTransport {
+        fn new(responses: impl IntoIterator<Item = Result<TransportResponse, ProviderError>>) -> Self {
+            Self {
+                responses: Mutex::new(responses.into_iter().collect()),
+            }
+        }
+    }
+
+    impl AsyncModelTransport for QueueTransport {
+        fn invoke(&self, _request: TransportRequest) -> TransportFuture<'_> {
+            let response = self
+                .responses
+                .lock()
+                .expect("provider smoke response queue")
+                .pop_front()
+                .expect("provider smoke scripted response");
+            Box::pin(async move { response })
+        }
+    }
 
     #[test]
     fn smoke_requests_are_bounded_and_read_only() {
@@ -412,5 +450,237 @@ mod tests {
             &ProviderError::new(ProviderErrorCode::Timeout, "redacted"),
         );
         assert_eq!(codes, vec!["connectivity.timeout"]);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires ROCKETMQ_SRE_TEST_DATABASE_URL pointing to an isolated PostgreSQL database"]
+    async fn postgres_provider_lifecycle_smoke_promote_rollback_retire_and_quarantine() {
+        let database_url = std::env::var("ROCKETMQ_SRE_TEST_DATABASE_URL").expect("test database URL must be explicit");
+        let repository = PostgresRepository::connect(&database_url, 2)
+            .await
+            .expect("database and migrations");
+        let tenant_id = TenantId::new();
+        let suffix = Uuid::new_v4();
+        let profile_a = test_profile(format!("provider-a-{suffix}"));
+        let profile_b = test_profile(format!("provider-b-{suffix}"));
+        let transport = Arc::new(QueueTransport::new(
+            passing_smoke_responses().into_iter().chain(passing_smoke_responses()),
+        ));
+        let service = ModelGatewayService::for_tests(
+            repository.clone(),
+            vec![profile_a.clone(), profile_b.clone()],
+            transport,
+        );
+        let auth = AuthContext {
+            tenant_id,
+            subject: "model-governance-test".to_owned(),
+            clusters: BTreeSet::new(),
+            roles: BTreeSet::from(["model-governance".to_owned()]),
+        };
+        let configured = service.configured_profiles(&auth).await.expect("configured profiles");
+        let profile_a_id = configured
+            .iter()
+            .find(|profile| profile.profile.id == profile_a.id)
+            .expect("profile A")
+            .id;
+        let profile_b_id = configured
+            .iter()
+            .find(|profile| profile.profile.id == profile_b.id)
+            .expect("profile B")
+            .id;
+
+        assert!(
+            service
+                .run_provider_smoke(&auth, profile_a_id)
+                .await
+                .expect("profile A smoke")
+                .overall_ok
+        );
+        assert!(
+            service
+                .run_provider_smoke(&auth, profile_b_id)
+                .await
+                .expect("profile B smoke")
+                .overall_ok
+        );
+        let profile_b_lifecycle = service
+            .transition_profile_lifecycle(
+                &auth,
+                profile_b_id,
+                &transition(ModelProfileLifecycleState::Certified, 1, None, "certify_b"),
+                CorrelationId::new(),
+            )
+            .await
+            .expect("certify profile B");
+        assert_eq!(profile_b_lifecycle.state, ModelProfileLifecycleState::Certified);
+        let profile_a_lifecycle = service
+            .transition_profile_lifecycle(
+                &auth,
+                profile_a_id,
+                &transition(ModelProfileLifecycleState::Certified, 1, None, "certify_a"),
+                CorrelationId::new(),
+            )
+            .await
+            .expect("certify profile A");
+        assert_eq!(profile_a_lifecycle.revision, 2);
+        let promoted = service
+            .transition_profile_lifecycle(
+                &auth,
+                profile_a_id,
+                &transition(ModelProfileLifecycleState::Promoted, 2, Some(profile_b_id), "promote_a"),
+                CorrelationId::new(),
+            )
+            .await
+            .expect("promote profile A");
+        assert_eq!(promoted.state, ModelProfileLifecycleState::Promoted);
+        assert_eq!(promoted.rollback_profile_id, Some(profile_b_id));
+
+        let rolled_back = service
+            .rollback_profile(
+                &auth,
+                profile_a_id,
+                &ModelProfileRollbackRequest {
+                    expected_revision: 3,
+                    reason_code: "rollback_a".to_owned(),
+                    operator_confirmed: true,
+                },
+                CorrelationId::new(),
+            )
+            .await
+            .expect("rollback profile A");
+        assert_eq!(rolled_back.profile_id, profile_b_id);
+        assert_eq!(rolled_back.state, ModelProfileLifecycleState::Promoted);
+        assert_eq!(rolled_back.rollback_profile_id, Some(profile_a_id));
+        let quarantined_a = service
+            .profile_lifecycle(&auth, profile_a_id)
+            .await
+            .expect("profile A lifecycle");
+        assert_eq!(quarantined_a.state, ModelProfileLifecycleState::Quarantined);
+
+        let retired_a = service
+            .transition_profile_lifecycle(
+                &auth,
+                profile_a_id,
+                &transition(ModelProfileLifecycleState::Retired, 4, None, "retire_a"),
+                CorrelationId::new(),
+            )
+            .await
+            .expect("retire profile A");
+        assert_eq!(retired_a.state, ModelProfileLifecycleState::Retired);
+        let retired_transition = service
+            .transition_profile_lifecycle(
+                &auth,
+                profile_a_id,
+                &transition(ModelProfileLifecycleState::Certified, 5, None, "revive_a"),
+                CorrelationId::new(),
+            )
+            .await
+            .expect_err("retired lifecycle must be terminal");
+        assert!(matches!(retired_transition, ControlPlaneError::Conflict { .. }));
+
+        let failing_service = ModelGatewayService::for_tests(
+            repository.clone(),
+            vec![profile_a, profile_b],
+            Arc::new(QueueTransport::new([
+                Err(ProviderError::new(ProviderErrorCode::ServiceUnavailable, "redacted")),
+                Err(ProviderError::new(ProviderErrorCode::ServiceUnavailable, "redacted")),
+                Err(ProviderError::new(ProviderErrorCode::ServiceUnavailable, "redacted")),
+            ])),
+        );
+        let failed_smoke = failing_service
+            .run_provider_smoke(&auth, profile_b_id)
+            .await
+            .expect("failed smoke must still persist");
+        assert!(!failed_smoke.overall_ok);
+        let quarantined_b = failing_service
+            .profile_lifecycle(&auth, profile_b_id)
+            .await
+            .expect("profile B lifecycle");
+        assert_eq!(quarantined_b.state, ModelProfileLifecycleState::Quarantined);
+        assert!(!quarantined_b.operator_confirmed);
+        assert_eq!(quarantined_b.reason_code, "provider_smoke_failed");
+
+        let events: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)
+             FROM model_profile_lifecycle_events
+             WHERE tenant_id = $1 AND profile_id = ANY($2)",
+        )
+        .bind(tenant_id.as_uuid())
+        .bind(vec![profile_a_id.as_uuid(), profile_b_id.as_uuid()])
+        .fetch_one(&repository.pool)
+        .await
+        .expect("lifecycle event count");
+        assert_eq!(events, 9);
+    }
+
+    fn transition(
+        target_state: ModelProfileLifecycleState,
+        expected_revision: u64,
+        rollback_profile_id: Option<ModelProfileId>,
+        reason_code: &str,
+    ) -> ModelProfileLifecycleTransitionRequest {
+        ModelProfileLifecycleTransitionRequest {
+            target_state,
+            expected_revision,
+            rollback_profile_id,
+            reason_code: reason_code.to_owned(),
+            operator_confirmed: true,
+        }
+    }
+
+    fn test_profile(id: String) -> rocketmq_sre_model_gateway::ProviderProfile {
+        let mut profile = rocketmq_sre_model_gateway::builtin_provider_profiles()
+            .into_iter()
+            .find(|profile| profile.id == "deepseek")
+            .expect("DeepSeek profile fixture");
+        profile.id = id;
+        profile.credential_ref = None;
+        profile
+    }
+
+    fn passing_smoke_responses() -> Vec<Result<TransportResponse, ProviderError>> {
+        vec![
+            Ok(openai_response("OK", Vec::new(), "stop")),
+            Ok(openai_response(
+                &json!({"status": "ok", "evidence_id": SMOKE_EVIDENCE_ID}).to_string(),
+                Vec::new(),
+                "stop",
+            )),
+            Ok(openai_response(
+                "",
+                vec![json!({
+                    "id": "smoke-tool-call",
+                    "type": "function",
+                    "function": {
+                        "name": "read_smoke_evidence",
+                        "arguments": json!({"resource": SMOKE_RESOURCE}).to_string()
+                    }
+                })],
+                "tool_calls",
+            )),
+        ]
+    }
+
+    fn openai_response(content: &str, tool_calls: Vec<Value>, finish_reason: &str) -> TransportResponse {
+        TransportResponse {
+            status: 200,
+            body: json!({
+                "id": "provider-smoke",
+                "model": "deepseek-chat",
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": content,
+                        "tool_calls": tool_calls,
+                    },
+                    "finish_reason": finish_reason,
+                }],
+                "usage": {
+                    "prompt_tokens": 4,
+                    "completion_tokens": 2,
+                    "total_tokens": 6,
+                }
+            }),
+        }
     }
 }
