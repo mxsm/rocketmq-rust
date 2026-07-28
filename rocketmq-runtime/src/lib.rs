@@ -50,6 +50,7 @@ pub mod shutdown_report;
 pub mod signal;
 pub mod task;
 pub mod task_group;
+mod task_spawner;
 pub mod tokio_lock;
 
 pub use actor::ActorRuntime;
@@ -154,3 +155,4 @@ pub use task_group::TaskGroupLifecycleState;
 pub use task_group::TaskId;
 pub use task_group::TaskKind;
 pub use task_group::TaskResult;
+pub use task_spawner::TaskSpawner;

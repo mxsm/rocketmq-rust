@@ -30,7 +30,7 @@ use rocketmq_runtime::ShutdownReport;
 fn runtime_config() -> RuntimeConfig {
     RuntimeConfig {
         worker_threads: 2,
-        max_blocking_threads: 2,
+        max_blocking_threads: 3,
         shutdown_timeout: Duration::from_secs(5),
         thread_name: "rocketmq-runtime-bench".to_string(),
         ..RuntimeConfig::default()

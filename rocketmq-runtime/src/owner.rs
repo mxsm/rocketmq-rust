@@ -60,6 +60,7 @@ impl RuntimeOwner {
             runtime_handle,
             root_group,
             config.blocking_lane_policies.clone(),
+            config.max_blocking_threads,
             diagnostics,
         )?;
         Ok(Self {

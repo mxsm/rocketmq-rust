@@ -92,6 +92,8 @@ use crate::consumer::pull_callback::PullCallback;
 use crate::consumer::pull_result::PullResult;
 use crate::consumer::pull_status::PullStatus;
 use crate::factory::client_tables::*;
+use crate::factory::route_update::RouteUpdateCoordinator;
+use crate::factory::route_update::TopicRouteApplyOutcome;
 use crate::implementation::client_remoting_processor::ClientRemotingProcessor;
 use crate::implementation::communication_mode::CommunicationMode;
 use crate::implementation::find_broker_result::FindBrokerResult;
@@ -265,6 +267,7 @@ pub struct MQClientInstance {
     pub(crate) topic_route_table: TopicRouteTable,
     topic_end_points_table: TopicEndPointsTable,
     lock_namesrv: Arc<RocketMQTokioMutex<()>>,
+    route_update_coordinator: RouteUpdateCoordinator,
     lock_heartbeat: Arc<RocketMQTokioMutex<()>>,
 
     lifecycle_transition: Mutex<()>,
@@ -280,7 +283,7 @@ pub struct MQClientInstance {
     broker_heartbeat_fingerprint_table: BrokerHeartbeatFingerprintTable,
     /// HeartbeatV2: Set of brokers that support V2 protocol
     broker_support_v2_heartbeat_set: BrokerSupportV2HeartbeatSet,
-    route_refresh_state: TopicRouteRefreshState,
+    route_refresh_state: Arc<TopicRouteRefreshState>,
     consumer_stats_manager: ConsumerStatsManager,
     connection_event_shutdown: CancellationToken,
     connection_event_task_handle: StdMutex<Option<ClientTrackedTaskHandle>>,
@@ -332,13 +335,6 @@ enum TopicRouteRefreshKind {
     RouteMiss,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TopicRouteApplyOutcome {
-    Applied,
-    Unchanged,
-    Stale,
-}
-
 impl MQClientInstance {
     pub fn new_arc(
         client_config: ClientConfig,
@@ -388,6 +384,17 @@ impl MQClientInstance {
         let broker_version_table = Arc::new(DashMap::default());
         let broker_heartbeat_fingerprint_table = Arc::new(DashMap::default());
         let broker_support_v2_heartbeat_set = Arc::new(DashMap::default());
+        let lock_namesrv: Arc<RocketMQTokioMutex<()>> = Arc::default();
+        let route_refresh_state = Arc::new(TopicRouteRefreshState::default());
+        let route_update_coordinator = RouteUpdateCoordinator::new(
+            producer_table.clone(),
+            consumer_table.clone(),
+            topic_route_table.clone(),
+            topic_end_points_table.clone(),
+            broker_addr_table.clone(),
+            route_refresh_state.clone(),
+            lock_namesrv.clone(),
+        );
 
         let mut default_producer = DefaultMQProducer::unbound();
         default_producer.set_client_config(client_config.clone());
@@ -420,7 +427,8 @@ impl MQClientInstance {
             mq_admin_impl: Arc::new(MQAdminImpl::new()),
             topic_route_table,
             topic_end_points_table,
-            lock_namesrv: Arc::default(),
+            lock_namesrv,
+            route_update_coordinator,
             lock_heartbeat: Arc::default(),
             lifecycle_transition: Mutex::new(()),
             service_state: StdRwLock::new(ServiceState::CreateJust),
@@ -436,7 +444,7 @@ impl MQClientInstance {
             scheduled_task_manager: ScheduledTaskManager::new_legacy_compatibility(),
             broker_heartbeat_fingerprint_table,
             broker_support_v2_heartbeat_set,
-            route_refresh_state: TopicRouteRefreshState::default(),
+            route_refresh_state,
             consumer_stats_manager: ConsumerStatsManager::new(service_context.child("consumer-stats")),
             connection_event_shutdown: CancellationToken::new(),
             connection_event_task_handle: StdMutex::new(None),
@@ -1246,12 +1254,6 @@ impl MQClientInstance {
             .unwrap_or_default()
     }
 
-    fn bump_topic_route_version(&self, topic: &CheetahString, current_version: u64) {
-        self.route_refresh_state
-            .versions
-            .insert(topic.clone(), current_version.saturating_add(1));
-    }
-
     fn record_topic_route_refresh_finish(
         &self,
         refresh_kind: TopicRouteRefreshKind,
@@ -1271,115 +1273,9 @@ impl MQClientInstance {
         topic_route_data: &mut TopicRouteData,
         request_version: u64,
     ) -> TopicRouteApplyOutcome {
-        let _lock = self.lock_namesrv.lock().await;
-        let current_version = self.topic_route_version(topic);
-        if current_version != request_version {
-            warn!(
-                "updateTopicRouteInfoFromNameServer skipped stale route snapshot, Topic: {}, requestVersion: {}, \
-                 currentVersion: {}",
-                topic, request_version, current_version
-            );
-            return TopicRouteApplyOutcome::Stale;
-        }
-
-        let old = self.topic_route_table.get(topic).map(|entry| entry.value().clone());
-        let mut changed = topic_route_data.topic_route_data_changed(old.as_ref());
-        if !changed {
-            changed = self.is_need_update_topic_route_info(topic).await;
-        } else {
-            info!(
-                "the topic[{}] route info changed, old[{:?}] ,new[{:?}]",
-                topic, old, topic_route_data
-            )
-        }
-        if !changed {
-            return TopicRouteApplyOutcome::Unchanged;
-        }
-
-        for bd in topic_route_data.broker_datas.iter() {
-            self.broker_addr_table
-                .insert(bd.broker_name().clone(), bd.broker_addrs().clone());
-        }
-        self.update_broker_route_index(old.as_ref(), topic_route_data);
-
-        if let Some(mq_end_points) =
-            ClientMetadata::topic_route_data2endpoints_for_static_topic(topic, topic_route_data)
-        {
-            if !mq_end_points.is_empty() {
-                self.topic_end_points_table.insert(topic.into(), mq_end_points);
-            }
-        }
-
-        let mut publish_info = topic_route_data2topic_publish_info(topic, topic_route_data);
-        publish_info.have_topic_router_info = true;
-        self.prune_dead_producers();
-        for entry in self.producer_table.iter() {
-            entry
-                .value()
-                .update_topic_publish_info(topic.to_string(), Some(publish_info.clone()));
-        }
-
-        if !self.consumer_table.is_empty() {
-            let subscribe_info = topic_route_data2topic_subscribe_info(topic, topic_route_data);
-            let consumers: Vec<_> = self.consumer_table.iter().map(|entry| entry.value().clone()).collect();
-
-            for consumer in consumers {
-                consumer
-                    .update_topic_subscribe_info(topic.clone(), &subscribe_info)
-                    .await;
-            }
-        }
-
-        let clone_topic_route_data = TopicRouteData::from_existing(topic_route_data);
-        self.topic_route_table.insert(topic.clone(), clone_topic_route_data);
-        self.bump_topic_route_version(topic, current_version);
-        TopicRouteApplyOutcome::Applied
-    }
-
-    fn route_broker_addr_set(route: &TopicRouteData) -> HashSet<CheetahString> {
-        route
-            .broker_datas
-            .iter()
-            .flat_map(|broker_data| broker_data.broker_addrs().values().cloned())
-            .filter(|addr| !addr.is_empty())
-            .collect()
-    }
-
-    fn update_broker_route_index(&self, old_route: Option<&TopicRouteData>, new_route: &TopicRouteData) {
-        let old_addrs = old_route.map(Self::route_broker_addr_set).unwrap_or_default();
-        let new_addrs = Self::route_broker_addr_set(new_route);
-
-        for addr in old_addrs.difference(&new_addrs) {
-            self.decrement_broker_route_index(addr);
-        }
-        for addr in new_addrs.difference(&old_addrs) {
-            self.increment_broker_route_index(addr);
-        }
-    }
-
-    fn increment_broker_route_index(&self, addr: &CheetahString) {
-        self.route_refresh_state
-            .broker_addr_route_index
-            .entry(addr.clone())
-            .and_modify(|count| *count = count.saturating_add(1))
-            .or_insert(1);
-    }
-
-    fn decrement_broker_route_index(&self, addr: &CheetahString) {
-        let should_remove = if let Some(mut count) = self.route_refresh_state.broker_addr_route_index.get_mut(addr) {
-            if *count > 1 {
-                *count -= 1;
-                false
-            } else {
-                true
-            }
-        } else {
-            false
-        };
-
-        if should_remove {
-            self.route_refresh_state.broker_addr_route_index.remove(addr);
-        }
+        self.route_update_coordinator
+            .apply_if_fresh(topic, topic_route_data, request_version)
+            .await
     }
 
     fn remove_broker_route_index(&self, addr: &CheetahString) {
@@ -1405,22 +1301,6 @@ impl MQClientInstance {
 
     pub fn route_refresh_metrics_snapshot(&self) -> TopicRouteRefreshMetricsSnapshot {
         self.route_refresh_state.metrics.snapshot()
-    }
-
-    async fn is_need_update_topic_route_info(&self, topic: &CheetahString) -> bool {
-        self.prune_dead_producers();
-        for entry in self.producer_table.iter() {
-            if entry.value().is_publish_topic_need_update(topic) {
-                return true;
-            }
-        }
-
-        for entry in self.consumer_table.iter() {
-            if entry.value().is_subscribe_topic_need_update(topic).await {
-                return true;
-            }
-        }
-        false
     }
 
     pub async fn persist_all_consumer_offset(&self) {
@@ -2896,7 +2776,9 @@ pub fn run_heartbeat_route_index_probe(
         };
 
         instance.topic_route_table.insert(topic, route.clone());
-        instance.update_broker_route_index(None, &route);
+        instance
+            .route_update_coordinator
+            .update_broker_route_index(None, &route);
     }
 
     let lookup_addrs = (0..lookup_count)
@@ -3356,7 +3238,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stale_route_snapshot_does_not_overwrite_current_route() {
+    async fn route_update_stale_snapshot_does_not_overwrite_current_route() {
         let probe = run_route_refresh_concurrent_stale_guard_probe(crate::runtime::test_client_runtime(
             "route-refresh-stale-probe-test",
         ))
@@ -3368,7 +3250,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn apply_route_refresh_updates_producer_and_consumer_views() {
+    async fn route_update_applies_producer_and_consumer_views_outside_commit_lock() {
         let client_config = ClientConfig {
             namesrv_addr: None,
             ..Default::default()

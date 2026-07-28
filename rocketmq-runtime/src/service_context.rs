@@ -18,6 +18,7 @@ use std::sync::Arc;
 use crate::blocking::BlockingExecutor;
 use crate::blocking::BlockingLane;
 use crate::blocking::BlockingLanePolicies;
+use crate::blocking::GlobalBlockingBudget;
 use crate::diagnostics::RuntimeDiagnostics;
 use crate::diagnostics::RuntimeDiagnosticsSnapshot;
 use crate::error::RuntimeError;
@@ -27,6 +28,7 @@ use crate::scheduled::ScheduledTaskGroup;
 use crate::task_group::TaskGroup;
 use crate::task_group::TaskId;
 use crate::task_group::TaskKind;
+use crate::task_spawner::TaskSpawner;
 
 /// A validated, named position in the service ownership tree.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -94,20 +96,12 @@ struct BlockingLanes {
 }
 
 impl BlockingLanes {
-    fn new(policies: BlockingLanePolicies, root_group: &TaskGroup) -> RuntimeResult<Self> {
+    fn new(policies: BlockingLanePolicies, global_capacity: usize) -> RuntimeResult<Self> {
+        let budget = GlobalBlockingBudget::managed(global_capacity, &policies)?;
         Ok(Self {
-            storage_io: BlockingExecutor::new(
-                policies.storage_io,
-                root_group.child("runtime.blocking.storage-io.reaper"),
-            )?,
-            metadata_io: BlockingExecutor::new(
-                policies.metadata_io,
-                root_group.child("runtime.blocking.metadata-io.reaper"),
-            )?,
-            cpu_crypto: BlockingExecutor::new(
-                policies.cpu_crypto,
-                root_group.child("runtime.blocking.cpu-crypto.reaper"),
-            )?,
+            storage_io: BlockingExecutor::new_managed(policies.storage_io, BlockingLane::StorageIo, budget.clone())?,
+            metadata_io: BlockingExecutor::new_managed(policies.metadata_io, BlockingLane::MetadataIo, budget.clone())?,
+            cpu_crypto: BlockingExecutor::new_managed(policies.cpu_crypto, BlockingLane::CpuCrypto, budget)?,
         })
     }
 
@@ -151,9 +145,10 @@ impl RootServiceContext {
         runtime: RuntimeHandle,
         task_group: TaskGroup,
         blocking_policies: BlockingLanePolicies,
+        global_blocking_capacity: usize,
         diagnostics: RuntimeDiagnostics,
     ) -> RuntimeResult<Self> {
-        let blocking_lanes = BlockingLanes::new(blocking_policies, &task_group)?;
+        let blocking_lanes = BlockingLanes::new(blocking_policies, global_blocking_capacity)?;
         Ok(Self {
             name,
             runtime,
@@ -245,8 +240,16 @@ impl ChildServiceContext {
         &self.name
     }
 
+    #[deprecated(
+        since = "1.1.0",
+        note = "business modules should use task_spawner, scheduled_tasks, or a blocking lane"
+    )]
     pub fn runtime(&self) -> &RuntimeHandle {
         &self.runtime
+    }
+
+    pub fn task_spawner(&self) -> TaskSpawner {
+        TaskSpawner::new(self.task_group.clone())
     }
 
     pub fn task_group(&self) -> &TaskGroup {

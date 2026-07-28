@@ -1451,9 +1451,9 @@ function Get-RuntimeCreationDisposition {
 
     if ($path -match "^rocketmq-dashboard/") {
         return [pscustomobject]@{
-            Disposition = "dashboard-standalone-follow-up"
-            ActionRequired = $true
-            Reason = "Standalone dashboard projects are outside root workspace validation and need separate runtime-model review."
+            Disposition = "dashboard-standalone-runtime-boundary"
+            ActionRequired = $false
+            Reason = "Standalone dashboard composition roots own their runtime/client lifecycle and are validated by their nearest AGENTS.md profile."
         }
     }
 
@@ -1542,6 +1542,14 @@ function Get-RuntimeCreationDisposition {
             Disposition = "proxy-runtime-boundary"
             ActionRequired = $false
             Reason = "Proxy entrypoint and gRPC services bind to the application runtime."
+        }
+    }
+
+    if ($path -match "^rocketmq-proxy-cluster/") {
+        return [pscustomobject]@{
+            Disposition = "proxy-cluster-managed-client-runtime"
+            ActionRequired = $false
+            Reason = "Proxy Cluster creates the managed RocketMQ ClientRuntime capability; its lifecycle is parented by the injected proxy service context."
         }
     }
 
@@ -1829,7 +1837,71 @@ function Get-BlockingDisposition {
 
     $path = $Match.Path.Replace("\", "/")
 
-    if ($path -eq "rocketmq-runtime/src/blocking.rs") {
+    if ($path -match "^rocketmq-store-(?:local|rocksdb)/src/") {
+        return [pscustomobject]@{
+            Disposition = "store-foundation-blocking-domain"
+            ActionRequired = $false
+            Reason = "Reviewed local/RocksDB storage implementation, metric vocabulary, or sync callback domain; runtime offload is owned by the store adapter."
+        }
+    }
+
+    if ($path -match "^rocketmq-store-api/src/") {
+        return [pscustomobject]@{
+            Disposition = "store-api-vocabulary-false-positive"
+            ActionRequired = $false
+            Reason = "Runtime-neutral store capability, error, or progress vocabulary containing RocksDB/blocking text, not a blocking runtime operation."
+        }
+    }
+
+    if ($path -match "^rocketmq-runtime/src/(common/file_utils\.rs|metadata_io\.rs|resource_budget/memory\.rs)$") {
+        return [pscustomobject]@{
+            Disposition = "runtime-owned-metadata-io"
+            ActionRequired = $false
+            Reason = "Runtime-owned metadata/config file implementation; async callers enter through BlockingExecutor-backed metadata I/O capability."
+        }
+    }
+
+    if ($path -match "^rocketmq-security-api/src/") {
+        return [pscustomobject]@{
+            Disposition = "security-bootstrap-file-validation"
+            ActionRequired = $false
+            Reason = "Synchronous credential file permission validation at a security bootstrap boundary, not an async hot-loop operation."
+        }
+    }
+
+    if ($path -match "^rocketmq-protocol/src/") {
+        return [pscustomobject]@{
+            Disposition = "protocol-vocabulary-or-diagnostic-file"
+            ActionRequired = $false
+            Reason = "Protocol type vocabulary or an explicit diagnostic/static-topic file helper; no runtime or background-work ownership is created."
+        }
+    }
+
+    if ($path -match "^rocketmq-model/src/") {
+        return [pscustomobject]@{
+            Disposition = "model-vocabulary-false-positive"
+            ActionRequired = $false
+            Reason = "Model enum or display vocabulary containing RocksDB/blocking text, not a blocking operation."
+        }
+    }
+
+    if ($path -match "^rocketmq-controller/src/config/" -or $path -eq "rocketmq-controller/src/controller/release_snapshot.rs") {
+        return [pscustomobject]@{
+            Disposition = "controller-config-or-release-artifact-io"
+            ActionRequired = $false
+            Reason = "Controller storage-backend vocabulary or explicit release-snapshot artifact I/O outside the request hot path."
+        }
+    }
+
+    if ($path -match "^rocketmq-broker/src/(broker_runtime/|broker/)") {
+        return [pscustomobject]@{
+            Disposition = "broker-runtime-control-plane"
+            ActionRequired = $false
+            Reason = "Broker composition/control-plane blocking capability wiring and diagnostics; actual work is delegated to owned BlockingExecutor lanes."
+        }
+    }
+
+    if ($path -match "^rocketmq-runtime/src/blocking(?:\.rs|/)") {
         return [pscustomobject]@{
             Disposition = "runtime-blocking-primitive"
             ActionRequired = $false
@@ -2080,6 +2152,38 @@ function Get-ShutdownDisposition {
             Disposition = "tieredstore-lifecycle-boundary"
             ActionRequired = $false
             Reason = "Allowed tiered-store dispatcher, cleanup, runtime, and storage lifecycle boundary covered by cleanup scheduler migration."
+        }
+    }
+
+    if ($path -match "^rocketmq-store-(?:local|rocksdb)/src/") {
+        return [pscustomobject]@{
+            Disposition = "store-foundation-lifecycle-boundary"
+            ActionRequired = $false
+            Reason = "Local/RocksDB storage workers expose explicit cancel, flush, and shutdown lifecycle operations owned by store composition."
+        }
+    }
+
+    if ($path -match "^rocketmq-store-api/src/") {
+        return [pscustomobject]@{
+            Disposition = "store-api-lifecycle-contract"
+            ActionRequired = $false
+            Reason = "Runtime-neutral store lifecycle capability contract, not an unowned background task."
+        }
+    }
+
+    if ($path -match "^rocketmq-transport/src/") {
+        return [pscustomobject]@{
+            Disposition = "transport-lifecycle-boundary"
+            ActionRequired = $false
+            Reason = "Transport connection, TLS, client, server, and writer cancellation/shutdown primitives are TaskGroup- or connection-owner-managed."
+        }
+    }
+
+    if ($path -match "^rocketmq-protocol/src/") {
+        return [pscustomobject]@{
+            Disposition = "protocol-notify-vocabulary-false-positive"
+            ActionRequired = $false
+            Reason = "Protocol request code, header, or field containing notify/shutdown-related vocabulary, not lifecycle control."
         }
     }
 

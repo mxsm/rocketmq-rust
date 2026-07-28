@@ -108,6 +108,8 @@ pub struct TopicRouteRefreshMetrics {
     last_periodic_skipped_topics: AtomicU64,
     last_periodic_elapsed_us: AtomicU64,
     last_route_miss_elapsed_us: AtomicU64,
+    route_version_conflicts_total: AtomicU64,
+    route_partial_notifications_total: AtomicU64,
 }
 
 impl TopicRouteRefreshMetrics {
@@ -156,6 +158,17 @@ impl TopicRouteRefreshMetrics {
         self.last_route_miss_elapsed_us.store(elapsed_us, Ordering::Relaxed);
     }
 
+    #[inline]
+    pub fn record_version_conflict(&self) {
+        self.route_version_conflicts_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_partial_notification(&self, timed_out: u64) {
+        self.route_partial_notifications_total
+            .fetch_add(timed_out, Ordering::Relaxed);
+    }
+
     pub fn snapshot(&self) -> TopicRouteRefreshMetricsSnapshot {
         TopicRouteRefreshMetricsSnapshot {
             refresh_attempts_total: self.refresh_attempts_total.load(Ordering::Relaxed),
@@ -170,6 +183,8 @@ impl TopicRouteRefreshMetrics {
             last_periodic_skipped_topics: self.last_periodic_skipped_topics.load(Ordering::Relaxed),
             last_periodic_elapsed_us: self.last_periodic_elapsed_us.load(Ordering::Relaxed),
             last_route_miss_elapsed_us: self.last_route_miss_elapsed_us.load(Ordering::Relaxed),
+            route_version_conflicts_total: self.route_version_conflicts_total.load(Ordering::Relaxed),
+            route_partial_notifications_total: self.route_partial_notifications_total.load(Ordering::Relaxed),
         }
     }
 }
@@ -188,4 +203,6 @@ pub struct TopicRouteRefreshMetricsSnapshot {
     pub last_periodic_skipped_topics: u64,
     pub last_periodic_elapsed_us: u64,
     pub last_route_miss_elapsed_us: u64,
+    pub route_version_conflicts_total: u64,
+    pub route_partial_notifications_total: u64,
 }

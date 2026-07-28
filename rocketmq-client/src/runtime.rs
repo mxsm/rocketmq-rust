@@ -311,7 +311,7 @@ where
     })
 }
 
-pub(crate) fn spawn_detached_client_task_with_context<F>(
+pub(crate) fn spawn_background_client_task_with_context<F>(
     context: &ChildServiceContext,
     task_name: &'static str,
     task: F,
@@ -523,7 +523,7 @@ pub(crate) fn spawn_delayed_client_action_with_context<F>(
         return;
     }
 
-    if let Err(error) = spawn_detached_client_task_with_context(context, task_name, async move {
+    if let Err(error) = spawn_background_client_task_with_context(context, task_name, async move {
         tokio::time::sleep(delay).await;
         action();
     }) {

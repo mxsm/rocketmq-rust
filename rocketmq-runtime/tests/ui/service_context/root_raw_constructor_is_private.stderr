@@ -10,12 +10,12 @@ error[E0624]: associated function `new` is private
   | |         name: Arc<str>,
   | |         runtime: RuntimeHandle,
   | |         task_group: TaskGroup,
-  | |         blocking_policies: BlockingLanePolicies,
+... |
   | |         diagnostics: RuntimeDiagnostics,
   | |     ) -> RuntimeResult<Self> {
   | |____________________________- private associated function defined here
 
-error[E0061]: this function takes 5 arguments but 0 arguments were supplied
+error[E0061]: this function takes 6 arguments but 0 arguments were supplied
  --> tests/ui/service_context/root_raw_constructor_is_private.rs:4:5
   |
 4 |     RootServiceContext::new()
@@ -28,8 +28,8 @@ note: associated function defined here
   |                   ^^^
 help: provide the arguments
   |
-4 |     RootServiceContext::new(/* Arc<str> */, /* RuntimeHandle */, /* TaskGroup */, /* BlockingLanePolicies */, /* RuntimeDiagnostics */)
-  |                             ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+4 |     RootServiceContext::new(/* Arc<str> */, /* RuntimeHandle */, /* TaskGroup */, /* BlockingLanePolicies */, /* usize */, /* RuntimeDiagnostics */)
+  |                             +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 error[E0308]: mismatched types
  --> tests/ui/service_context/root_raw_constructor_is_private.rs:4:5

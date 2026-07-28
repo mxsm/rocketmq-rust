@@ -14,7 +14,6 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Weak;
@@ -25,6 +24,12 @@ use crate::config::ControllerConfig;
 use crate::config::ControllerConfigHandle;
 use crate::controller::broker_heartbeat_manager::BrokerHeartbeatManager;
 use crate::controller::broker_housekeeping_service::BrokerHousekeepingService;
+use crate::controller::broker_role_notifier::BrokerRoleNotifier;
+use crate::controller::broker_role_notifier::NotifyKey;
+use crate::controller::broker_role_notifier::NotifySnapshot;
+use crate::controller::broker_role_notifier::NotifyState;
+use crate::controller::broker_role_notifier::NotifyTask;
+use crate::controller::broker_role_notifier::SubmitOutcome;
 use crate::controller::Controller;
 use crate::error::ControllerError;
 use crate::error::Result;
@@ -37,12 +42,10 @@ use crate::metrics::controller_metrics_manager::ControllerMetricsManager;
 use crate::processor::controller_request_processor::ControllerRequestProcessor;
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
-use parking_lot::RwLock;
 use rocketmq_auth::AuthRuntime;
 use rocketmq_auth::AuthRuntimeBuilder;
 use rocketmq_auth::MaintenanceAuthorizer;
 use rocketmq_observability::TelemetryHandle;
-use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::body::elect_master_response_body::ElectMasterResponseBody;
 use rocketmq_protocol::protocol::body::sync_state_set_body::SyncStateSet;
@@ -50,7 +53,6 @@ use rocketmq_protocol::protocol::header::controller::elect_master_request_header
 use rocketmq_protocol::protocol::header::controller::get_replica_info_request_header::GetReplicaInfoRequestHeader;
 use rocketmq_protocol::protocol::header::controller::get_replica_info_response_header::GetReplicaInfoResponseHeader;
 use rocketmq_protocol::protocol::header::elect_master_response_header::ElectMasterResponseHeader;
-use rocketmq_protocol::protocol::header::notify_broker_role_change_request_header::NotifyBrokerRoleChangedRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
@@ -64,78 +66,18 @@ use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
 use rocketmq_transport::ChannelEventListener;
 use rocketmq_transport::DefaultRemotingRequestProcessor;
-use rocketmq_transport::RemotingClient;
 use rocketmq_transport::RemotingService;
 use rocketmq_transport::RocketMQServer;
 use rocketmq_transport::RocketmqDefaultClient;
 use rocketmq_transport::ServerConfig;
 use rocketmq_transport::TokioClientConfig;
 use rocketmq_transport::TransportTelemetry;
-use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::sleep;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct NotifyCacheKey {
-    cluster_name: String,
-    broker_name: String,
-    broker_id: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct NotifyCacheState {
-    master_broker_id: u64,
-    master_epoch: i32,
-    sync_state_set_epoch: i32,
-    master_address: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct NotifyTask {
-    cache_key: NotifyCacheKey,
-    cache_state: NotifyCacheState,
-    broker_addr: CheetahString,
-    master_address: Option<CheetahString>,
-    sync_state_set: Vec<u8>,
-    attempt: u32,
-    generation: u64,
-}
-
-impl NotifyTask {
-    fn build_request(&self) -> RemotingCommand {
-        let request_header = NotifyBrokerRoleChangedRequestHeader {
-            master_address: self.master_address.clone(),
-            master_epoch: Some(self.cache_state.master_epoch),
-            sync_state_set_epoch: Some(self.cache_state.sync_state_set_epoch),
-            master_broker_id: Some(self.cache_state.master_broker_id),
-        };
-        RemotingCommand::create_request_command(RequestCode::NotifyBrokerRoleChanged, request_header)
-            .set_body(self.sync_state_set.clone())
-    }
-
-    fn retry(&self) -> Self {
-        let mut next = self.clone();
-        next.attempt += 1;
-        next
-    }
-
-    #[cfg(test)]
-    fn new_for_test(cache_key: NotifyCacheKey, cache_state: NotifyCacheState, generation: u64) -> Self {
-        Self {
-            broker_addr: CheetahString::from_static_str("127.0.0.1:10911"),
-            master_address: cache_state.master_address.clone().map(CheetahString::from_string),
-            sync_state_set: Vec::new(),
-            cache_key,
-            cache_state,
-            attempt: 0,
-            generation,
-        }
-    }
-}
 
 struct BrokerInactiveListener {
     controller_manager: Weak<ControllerManager>,
@@ -405,10 +347,7 @@ pub struct ControllerManager {
     lifecycle_lock: AsyncMutex<()>,
 
     broker_housekeeping_service: Mutex<Option<Arc<BrokerHousekeepingService>>>,
-    notify_dispatch_tx: Arc<Mutex<Option<mpsc::UnboundedSender<NotifyTask>>>>,
-    notify_cache: Arc<RwLock<HashMap<NotifyCacheKey, NotifyCacheState>>>,
-    pending_notify_state: Arc<RwLock<HashMap<NotifyCacheKey, NotifyCacheState>>>,
-    notify_generation: Arc<AtomicU64>,
+    broker_role_notifier: BrokerRoleNotifier,
     parent_task_group: TaskGroup,
 }
 
@@ -510,6 +449,8 @@ impl ControllerManager {
             service_context.child("controller.remoting-client"),
             transport_telemetry,
         ));
+        let notify_retry_base_delay = Duration::from_millis(config.snapshot().heartbeat_interval_ms.max(100));
+        let broker_role_notifier = BrokerRoleNotifier::new(remoting_client.clone(), notify_retry_base_delay);
         info!("Remoting client created");
 
         // Initialize metrics manager if feature is enabled
@@ -543,10 +484,7 @@ impl ControllerManager {
             initialized: Arc::new(AtomicBool::new(false)),
             lifecycle_lock: AsyncMutex::new(()),
             broker_housekeeping_service: Mutex::new(None),
-            notify_dispatch_tx: Arc::new(Mutex::new(None)),
-            notify_cache: Arc::new(RwLock::new(HashMap::new())),
-            pending_notify_state: Arc::new(RwLock::new(HashMap::new())),
-            notify_generation: Arc::new(AtomicU64::new(0)),
+            broker_role_notifier,
             parent_task_group,
         })
     }
@@ -815,7 +753,7 @@ impl ControllerManager {
             info!("Remoting client started");
         }
 
-        if let Err(error) = self.start_notify_worker_loop().await {
+        if let Err(error) = self.broker_role_notifier.start(&manager_task_group) {
             return Err(self.cleanup_after_start_failure(error).await);
         }
         if let Err(error) = self.start_leadership_watch_loop() {
@@ -899,9 +837,7 @@ impl ControllerManager {
         info!("Shutting down controller manager...");
         let mut failures = Vec::new();
 
-        if let Some(tx) = self.notify_dispatch_tx.lock().take() {
-            drop(tx);
-        }
+        self.broker_role_notifier.close();
         if let Some(shutdown_tx) = self.remoting_server_shutdown_tx.lock().take() {
             let _ = shutdown_tx.send(());
         }
@@ -1166,6 +1102,7 @@ impl ControllerManager {
             self.raft_controller.start_scheduling().await.map_err(|error| {
                 ControllerError::runtime_error(format!("Failed to start controller scheduling: {error}"))
             })?;
+            self.broker_role_notifier.enable();
             info!(
                 "Leader-only scheduling enabled on controller {}",
                 self.config.snapshot().node_id
@@ -1174,7 +1111,7 @@ impl ControllerManager {
             self.raft_controller.stop_scheduling().await.map_err(|error| {
                 ControllerError::runtime_error(format!("Failed to stop controller scheduling: {error}"))
             })?;
-            self.reset_notify_dispatch_state();
+            self.broker_role_notifier.reset();
             info!(
                 "Leader-only scheduling disabled and notify dispatch state cleared on controller {}",
                 self.config.snapshot().node_id
@@ -1183,185 +1120,8 @@ impl ControllerManager {
         Ok(())
     }
 
-    fn is_same_or_newer_notify_state(previous: &NotifyCacheState, current: &NotifyCacheState) -> bool {
-        previous.master_epoch > current.master_epoch
-            || (previous.master_epoch == current.master_epoch
-                && previous.sync_state_set_epoch >= current.sync_state_set_epoch
-                && previous.master_broker_id == current.master_broker_id
-                && previous.master_address == current.master_address)
-    }
-
-    fn can_notify_broker_role_change(&self, cache_key: &NotifyCacheKey, cache_state: &NotifyCacheState) -> bool {
-        let notify_cache = self.notify_cache.read();
-        !matches!(
-            notify_cache.get(cache_key),
-            Some(previous)
-                if Self::is_same_or_newer_notify_state(previous, cache_state)
-        )
-    }
-
-    fn record_notified_broker_role_change(&self, cache_key: NotifyCacheKey, cache_state: NotifyCacheState) {
-        self.notify_cache.write().insert(cache_key, cache_state);
-    }
-
-    fn notify_generation(&self) -> u64 {
-        self.notify_generation.load(Ordering::SeqCst)
-    }
-
-    fn stage_notify_task(&self, task: &NotifyTask) -> bool {
-        let mut pending_notify_state = self.pending_notify_state.write();
-        match pending_notify_state.get(&task.cache_key) {
-            Some(previous) if Self::is_same_or_newer_notify_state(previous, &task.cache_state) => false,
-            _ => {
-                pending_notify_state.insert(task.cache_key.clone(), task.cache_state.clone());
-                true
-            }
-        }
-    }
-
-    fn should_process_notify_task(&self, task: &NotifyTask) -> bool {
-        self.notify_generation() == task.generation
-            && self.pending_notify_state.read().get(&task.cache_key) == Some(&task.cache_state)
-            && self.can_notify_broker_role_change(&task.cache_key, &task.cache_state)
-    }
-
-    fn complete_notify_task(&self, task: &NotifyTask) {
-        if !self.should_process_notify_task(task) {
-            return;
-        }
-        self.record_notified_broker_role_change(task.cache_key.clone(), task.cache_state.clone());
-        let mut pending_notify_state = self.pending_notify_state.write();
-        if pending_notify_state.get(&task.cache_key) == Some(&task.cache_state) {
-            pending_notify_state.remove(&task.cache_key);
-        }
-    }
-
-    fn reset_notify_dispatch_state(&self) {
-        self.notify_generation.fetch_add(1, Ordering::SeqCst);
-        self.pending_notify_state.write().clear();
-        self.notify_cache.write().clear();
-    }
-
-    async fn enqueue_notify_task(&self, task: NotifyTask) -> Result<()> {
-        let sender = self
-            .notify_dispatch_tx
-            .lock()
-            .clone()
-            .ok_or_else(|| ControllerError::NotInitialized("Notify worker is not initialized".to_string()))?;
-        sender
-            .send(task)
-            .map_err(|error| ControllerError::runtime_error(format!("Failed to enqueue notify task: {error}")))
-    }
-
-    fn notify_retry_delay(&self, attempt: u32) -> Duration {
-        let base_delay = self.config.snapshot().heartbeat_interval_ms.max(100);
-        Duration::from_millis((base_delay * u64::from(attempt + 1)).min(2_000))
-    }
-
-    fn should_retry_notify_task(&self, task: &NotifyTask) -> bool {
-        const MAX_NOTIFY_ATTEMPTS: u32 = 3;
-        self.is_running()
-            && self.is_leader()
-            && task.attempt + 1 < MAX_NOTIFY_ATTEMPTS
-            && self.should_process_notify_task(task)
-    }
-
-    fn schedule_notify_retry(&self, task: NotifyTask) {
-        let notify_dispatch_tx = self.notify_dispatch_tx.clone();
-        let notify_generation = self.notify_generation.clone();
-        let delay = self.notify_retry_delay(task.attempt);
-        let Some(task_group) = self.manager_task_group() else {
-            warn!("Skip broker role notify retry because controller task group is not initialized");
-            return;
-        };
-        let shutdown_token = task_group.cancellation_token();
-        if let Err(error) = task_group.spawn("controller.notify-retry", TaskKind::Worker, async move {
-            tokio::select! {
-                _ = shutdown_token.cancelled() => {
-                    return;
-                }
-                _ = sleep(delay) => {}
-            }
-            if notify_generation.load(Ordering::SeqCst) != task.generation {
-                return;
-            }
-            if let Some(sender) = notify_dispatch_tx.lock().clone() {
-                let _ = sender.send(task.retry());
-            }
-        }) {
-            warn!(?error, "failed to spawn controller broker role notify retry task");
-        }
-    }
-
-    async fn process_notify_task(&self, task: NotifyTask) {
-        if !self.is_running() || !self.is_leader() || !self.should_process_notify_task(&task) {
-            return;
-        }
-
-        match self
-            .remoting_client
-            .invoke_request(Some(&task.broker_addr), task.build_request(), 3000)
-            .await
-        {
-            Ok(response) if response.code() == ResponseCode::Success as i32 => {
-                self.complete_notify_task(&task);
-                info!(
-                    "Notified broker role change, target={}, broker_id={}, broker={}",
-                    task.broker_addr, task.cache_key.broker_id, task.cache_key.broker_name
-                );
-            }
-            Ok(response) => {
-                warn!(
-                    "Broker role notify did not succeed, target={}, broker_id={}, broker={}, code={}, remark={:?}",
-                    task.broker_addr,
-                    task.cache_key.broker_id,
-                    task.cache_key.broker_name,
-                    response.code(),
-                    response.remark()
-                );
-                if self.should_retry_notify_task(&task) {
-                    self.schedule_notify_retry(task);
-                }
-            }
-            Err(error) => {
-                warn!(
-                    "Failed to notify broker role change, target={}, broker_id={}, broker={}, error={}",
-                    task.broker_addr, task.cache_key.broker_id, task.cache_key.broker_name, error
-                );
-                if self.should_retry_notify_task(&task) {
-                    self.schedule_notify_retry(task);
-                }
-            }
-        }
-    }
-
-    async fn start_notify_worker_loop(self: &Arc<Self>) -> Result<()> {
-        let (sender, mut receiver) = mpsc::unbounded_channel();
-        *self.notify_dispatch_tx.lock() = Some(sender);
-
-        let weak_manager = Arc::downgrade(self);
-        let task_group = self.ensure_manager_task_group()?;
-        let shutdown_token = task_group.cancellation_token();
-        task_group
-            .spawn_service("controller.notify-worker", async move {
-                loop {
-                    let task = tokio::select! {
-                        _ = shutdown_token.cancelled() => {
-                            break;
-                        }
-                        task = receiver.recv() => task,
-                    };
-                    let Some(task) = task else {
-                        break;
-                    };
-                    let Some(manager) = weak_manager.upgrade() else {
-                        break;
-                    };
-                    manager.process_notify_task(task).await;
-                }
-            })
-            .map_err(|error| ControllerError::runtime_error(format!("Failed to spawn notify worker task: {error}")))?;
-        Ok(())
+    pub(crate) fn broker_role_notifier_snapshot(&self) -> NotifySnapshot {
+        self.broker_role_notifier.snapshot()
     }
 
     pub async fn notify_broker_role_changed(&self, mut response: RemotingCommand) -> Result<()> {
@@ -1413,37 +1173,32 @@ impl ControllerManager {
                 continue;
             }
 
-            let cache_key = NotifyCacheKey {
+            let key = NotifyKey {
                 cluster_name: member_group.cluster.to_string(),
                 broker_name: member_group.broker_name.to_string(),
                 broker_id,
             };
-            let cache_state = NotifyCacheState {
+            let state = NotifyState {
                 master_broker_id,
                 master_epoch,
                 sync_state_set_epoch,
                 master_address: master_address.clone(),
             };
-            if !self.can_notify_broker_role_change(&cache_key, &cache_state) {
-                continue;
-            }
-            let task = NotifyTask {
-                cache_key,
-                cache_state,
-                broker_addr: broker_addr.clone(),
-                master_address: response_header.master_address.clone(),
-                sync_state_set: sync_state_set.clone(),
-                attempt: 0,
-                generation: self.notify_generation(),
-            };
-            if !self.stage_notify_task(&task) {
-                continue;
-            }
-            if let Err(error) = self.enqueue_notify_task(task.clone()).await {
-                self.pending_notify_state.write().remove(&task.cache_key);
+            let task = NotifyTask::new(
+                key,
+                state,
+                broker_addr.clone(),
+                response_header.master_address.clone(),
+                sync_state_set.clone(),
+            );
+            let outcome = self.broker_role_notifier.submit(task);
+            if matches!(outcome, SubmitOutcome::Full | SubmitOutcome::Closed) {
                 warn!(
-                    "Failed to enqueue broker role notify, target={}, broker_id={}, broker={}, error={}",
-                    broker_addr, broker_id, member_group.broker_name, error
+                    ?outcome,
+                    target = %broker_addr,
+                    broker_id,
+                    broker = %member_group.broker_name,
+                    "Broker role notify was not retained"
                 );
             }
         }
@@ -1466,12 +1221,7 @@ impl Drop for ControllerManager {
             if let Some(shutdown_tx) = self.remoting_server_shutdown_tx.lock().take() {
                 let _ = shutdown_tx.send(());
             }
-            if let Some(tx) = self.notify_dispatch_tx.lock().take() {
-                drop(tx);
-            }
-            self.notify_generation.fetch_add(1, Ordering::SeqCst);
-            self.pending_notify_state.write().clear();
-            self.notify_cache.write().clear();
+            self.broker_role_notifier.close();
             self.heartbeat_manager.shutdown_shared();
             self.remoting_client.shutdown();
             self.leadership_watch_tasks.lock().take();
@@ -1493,6 +1243,7 @@ mod tests {
 
     use super::*;
     use crate::typ::Node;
+    use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::protocol::body::sync_state_set_body::SyncStateSet;
     use rocketmq_protocol::protocol::header::controller::alter_sync_state_set_request_header::AlterSyncStateSetRequestHeader;
     use rocketmq_protocol::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
@@ -1728,117 +1479,6 @@ mod tests {
         assert!(!manager.is_running());
 
         // Prevent dropping runtime in async context
-        std::mem::forget(manager);
-    }
-
-    #[tokio::test]
-    async fn test_notify_cache_skips_duplicate_and_stale_role_changes() {
-        let config = ControllerConfig::default().with_node_info(1, "127.0.0.1:9882".parse::<SocketAddr>().unwrap());
-        let manager = ControllerManager::new(config, test_service_context(), test_telemetry_handle())
-            .await
-            .expect("Failed to create manager");
-
-        let key = NotifyCacheKey {
-            cluster_name: "test-cluster".to_string(),
-            broker_name: "broker-a".to_string(),
-            broker_id: 1,
-        };
-        let first_state = NotifyCacheState {
-            master_broker_id: 1,
-            master_epoch: 2,
-            sync_state_set_epoch: 3,
-            master_address: Some("127.0.0.1:10911".to_string()),
-        };
-
-        assert!(manager.can_notify_broker_role_change(&key, &first_state));
-        manager.record_notified_broker_role_change(key.clone(), first_state.clone());
-        assert!(!manager.can_notify_broker_role_change(&key, &first_state));
-        assert!(!manager.can_notify_broker_role_change(
-            &key,
-            &NotifyCacheState {
-                sync_state_set_epoch: 2,
-                ..first_state.clone()
-            }
-        ));
-        assert!(manager.can_notify_broker_role_change(
-            &key,
-            &NotifyCacheState {
-                master_epoch: 3,
-                ..first_state.clone()
-            }
-        ));
-
-        manager.apply_leadership_state(false).await.expect("stop scheduling");
-        assert!(manager.notify_cache.read().is_empty());
-
-        std::mem::forget(manager);
-    }
-
-    #[tokio::test]
-    async fn test_notify_dispatch_replaces_stale_pending_task() {
-        let config = ControllerConfig::default().with_node_info(1, "127.0.0.1:9884".parse::<SocketAddr>().unwrap());
-        let manager = ControllerManager::new(config, test_service_context(), test_telemetry_handle())
-            .await
-            .expect("Failed to create manager");
-
-        let key = NotifyCacheKey {
-            cluster_name: "test-cluster".to_string(),
-            broker_name: "broker-a".to_string(),
-            broker_id: 1,
-        };
-        let first_state = NotifyCacheState {
-            master_broker_id: 1,
-            master_epoch: 2,
-            sync_state_set_epoch: 3,
-            master_address: Some("127.0.0.1:10911".to_string()),
-        };
-        let second_state = NotifyCacheState {
-            master_broker_id: 2,
-            master_epoch: 3,
-            sync_state_set_epoch: 4,
-            master_address: Some("127.0.0.1:10912".to_string()),
-        };
-        let generation = manager.notify_generation();
-        let first_task = NotifyTask::new_for_test(key.clone(), first_state.clone(), generation);
-        let second_task = NotifyTask::new_for_test(key.clone(), second_state.clone(), generation);
-
-        manager.stage_notify_task(&first_task);
-        manager.stage_notify_task(&second_task);
-
-        assert!(!manager.should_process_notify_task(&first_task));
-        assert!(manager.should_process_notify_task(&second_task));
-
-        std::mem::forget(manager);
-    }
-
-    #[tokio::test]
-    async fn test_notify_dispatch_reset_invalidates_old_generation() {
-        let config = ControllerConfig::default().with_node_info(1, "127.0.0.1:9885".parse::<SocketAddr>().unwrap());
-        let manager = ControllerManager::new(config, test_service_context(), test_telemetry_handle())
-            .await
-            .expect("Failed to create manager");
-
-        let key = NotifyCacheKey {
-            cluster_name: "test-cluster".to_string(),
-            broker_name: "broker-a".to_string(),
-            broker_id: 1,
-        };
-        let state = NotifyCacheState {
-            master_broker_id: 1,
-            master_epoch: 2,
-            sync_state_set_epoch: 3,
-            master_address: Some("127.0.0.1:10911".to_string()),
-        };
-        let task = NotifyTask::new_for_test(key.clone(), state.clone(), manager.notify_generation());
-
-        manager.stage_notify_task(&task);
-        assert!(manager.should_process_notify_task(&task));
-
-        manager.reset_notify_dispatch_state();
-
-        assert!(!manager.should_process_notify_task(&task));
-        assert!(manager.notify_cache.read().is_empty());
-
         std::mem::forget(manager);
     }
 
@@ -2236,12 +1876,8 @@ mod tests {
         wait_until(
             Duration::from_secs(2),
             || {
-                let key = NotifyCacheKey {
-                    cluster_name: "test-cluster".to_string(),
-                    broker_name: "broker-a".to_string(),
-                    broker_id: 2,
-                };
-                manager.notify_cache.read().contains_key(&key) || manager.pending_notify_state.read().contains_key(&key)
+                let snapshot = manager.broker_role_notifier_snapshot();
+                snapshot.accepted > 0
             },
             "processor elect-master to record broker role notification",
         )
