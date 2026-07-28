@@ -50,6 +50,10 @@ use super::model::SetAutonomyKillSwitchRequest;
 use super::model::ShadowOutcomeListQuery;
 use super::model::ShadowOutcomePage;
 use super::model::ShadowOutcomeView;
+use super::operations::AutonomyOperationalReport;
+use super::operations::AutonomyOperationalReportQuery;
+use super::operations::AutonomyOutcomeListQuery;
+use super::operations::AutonomyOutcomePage;
 use crate::ControlPlaneError;
 use crate::api::AppState;
 
@@ -91,6 +95,8 @@ pub(crate) fn routes() -> Router<AppState> {
                 .post(record_shadow_outcome)
                 .layer(DefaultBodyLimit::max(128 * 1024)),
         )
+        .route("/v1/autonomy/outcomes", get(list_outcomes))
+        .route("/v1/autonomy/reports", get(operational_report))
         .route(
             "/internal/v1/autonomy/grants",
             post(issue_grant).layer(DefaultBodyLimit::max(64 * 1024)),
@@ -223,6 +229,24 @@ async fn list_shadow_outcomes(
 ) -> Result<Json<ShadowOutcomePage>, ControlPlaneError> {
     let auth = state.auth.authorize(&headers, Some(query.cluster_id)).await?;
     state.autonomy.shadow_outcomes(&auth, &query).await.map(Json)
+}
+
+async fn list_outcomes(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AutonomyOutcomeListQuery>,
+) -> Result<Json<AutonomyOutcomePage>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, query.cluster_id).await?;
+    state.autonomy_operations.outcomes(&auth, &query).await.map(Json)
+}
+
+async fn operational_report(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AutonomyOperationalReportQuery>,
+) -> Result<Json<AutonomyOperationalReport>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, query.cluster_id).await?;
+    state.autonomy_operations.report(&auth, &query).await.map(Json)
 }
 
 async fn issue_grant(
