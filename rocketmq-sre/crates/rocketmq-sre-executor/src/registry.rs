@@ -79,10 +79,21 @@ impl ExecutorActionRegistry {
     /// Fails closed for disabled/unknown versions, R3, descriptor drift, and
     /// parameters outside the local allowlist.
     pub fn validate_step(&self, step: &PlanStep) -> Result<(), ExecutorError> {
+        self.validate_step_authorization(step, false)
+    }
+
+    /// Rechecks a step for its exact human or autonomy authorization path.
+    ///
+    /// # Errors
+    ///
+    /// In addition to the normal descriptor checks, autonomous requests are
+    /// rejected unless the exact descriptor version is R1.
+    pub fn validate_step_authorization(&self, step: &PlanStep, autonomous: bool) -> Result<(), ExecutorError> {
         let descriptor = self
             .catalog
             .executable_descriptor(step.action, &step.descriptor_version)?;
         if !matches!(descriptor.risk, ActionRisk::R1 | ActionRisk::R2)
+            || (autonomous && descriptor.risk != ActionRisk::R1)
             || descriptor.max_impact != step.max_impact
             || descriptor.verification != step.verification
             || descriptor.compensation != step.compensation
