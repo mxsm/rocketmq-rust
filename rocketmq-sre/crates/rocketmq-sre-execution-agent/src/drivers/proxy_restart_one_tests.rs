@@ -55,6 +55,7 @@ impl FakeRestartClient {
                 drain_supported: true,
                 pod_uid: "uid-before".to_owned(),
                 pod_ready: true,
+                remaining_replicas_healthy: true,
                 replacement_ready: false,
                 synthetic_path_healthy: true,
                 slo_healthy: true,
@@ -127,6 +128,18 @@ async fn precheck_fails_closed_without_authenticated_drain_state() {
 }
 
 #[tokio::test]
+async fn precheck_fails_closed_without_a_healthy_remaining_replica() {
+    let client = Arc::new(FakeRestartClient::accepting());
+    client.state.lock().expect("fake state lock").remaining_replicas_healthy = false;
+    let handler = ProxyRestartOneHandler::new(client);
+
+    let result = handler.read_state(&read_request()).await.expect("precheck response");
+
+    assert!(!result.ready);
+    assert_eq!(result.reason_codes, ["proxy_remaining_replicas_unhealthy"]);
+}
+
+#[tokio::test]
 async fn apply_and_verify_one_expected_uid_then_require_manual_takeover() {
     let client = Arc::new(FakeRestartClient::accepting());
     let handler = ProxyRestartOneHandler::new(Arc::clone(&client));
@@ -152,6 +165,10 @@ async fn apply_and_verify_one_expected_uid_then_require_manual_takeover() {
         .await
         .expect("restart verification conditions");
     assert_eq!(conditions.resource_conditions.get("replacement_ready"), Some(&true));
+    assert_eq!(
+        conditions.resource_conditions.get("remaining_replicas_healthy"),
+        Some(&true)
+    );
     assert_eq!(conditions.resource_conditions.get("accepting_and_routed"), Some(&true));
 
     let compensation = handler
