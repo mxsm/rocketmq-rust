@@ -8,6 +8,7 @@ import { SreDataProvider } from "./data/SreDataContext";
 import "./styles/tokens.css";
 import "./styles/app.css";
 import "./styles/change-management.css";
+import "./styles/release-management.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
