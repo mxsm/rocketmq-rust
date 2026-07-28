@@ -746,27 +746,52 @@ pub(super) async fn seed_successful_supervised_execution_at(
     observed_at: chrono::DateTime<Utc>,
 ) -> ExecutionId {
     let execution_id = ExecutionId::new();
-    let lease_id = Uuid::new_v4();
     let step_id = Uuid::new_v4();
-    let started_at = observed_at - Duration::seconds(stable_window_seconds + 1);
-    sqlx::query(
-        "INSERT INTO executor_leases (
-            id, tenant_id, cluster_id, epoch, owner, state, pending_nonce,
-            fence_ack_snapshot, acquired_at, activated_at, expires_at, updated_at
-         ) VALUES (
-            $1, $2, $3, 1, 'supervised-qualification-test', 'active',
-            $4, '{}'::JSONB, $5, $5, $6, $5
-         )",
+    let existing_lease: Option<(Uuid, i64)> = sqlx::query_as(
+        "SELECT id, epoch
+         FROM executor_leases
+         WHERE cluster_id = $1 AND state = 'active'",
     )
-    .bind(lease_id)
-    .bind(fixture.tenant_id.as_uuid())
     .bind(fixture.cluster_id.as_uuid())
-    .bind(format!("qualification-{lease_id}"))
-    .bind(started_at)
-    .bind(observed_at + Duration::hours(1))
-    .execute(&repository.pool)
+    .fetch_optional(&repository.pool)
     .await
-    .expect("qualification lease");
+    .expect("active qualification lease");
+    let started_at = observed_at - Duration::seconds(stable_window_seconds + 1);
+    let (lease_id, lease_epoch) = match existing_lease {
+        Some(lease) => lease,
+        None => {
+            let lease_id = Uuid::new_v4();
+            let lease_epoch: i64 = sqlx::query_scalar(
+                "SELECT COALESCE(MAX(epoch), 0) + 1
+                 FROM executor_leases
+                 WHERE cluster_id = $1",
+            )
+            .bind(fixture.cluster_id.as_uuid())
+            .fetch_one(&repository.pool)
+            .await
+            .expect("next qualification lease epoch");
+            sqlx::query(
+                "INSERT INTO executor_leases (
+                    id, tenant_id, cluster_id, epoch, owner, state, pending_nonce,
+                    fence_ack_snapshot, acquired_at, activated_at, expires_at, updated_at
+                 ) VALUES (
+                    $1, $2, $3, $4, 'supervised-qualification-test', 'active',
+                    $5, '{}'::JSONB, $6, $6, $7, $6
+                 )",
+            )
+            .bind(lease_id)
+            .bind(fixture.tenant_id.as_uuid())
+            .bind(fixture.cluster_id.as_uuid())
+            .bind(lease_epoch)
+            .bind(format!("qualification-{lease_id}"))
+            .bind(started_at)
+            .bind(observed_at + Duration::hours(1))
+            .execute(&repository.pool)
+            .await
+            .expect("qualification lease");
+            (lease_id, lease_epoch)
+        }
+    };
     sqlx::query(
         "INSERT INTO executions (
             id, tenant_id, cluster_id, correlation_id, plan_id, plan_hash,
@@ -802,13 +827,14 @@ pub(super) async fn seed_successful_supervised_execution_at(
             reason_code, occurred_at
          ) VALUES (
             $1, $2, 1, 'intent', $3,
-            1, FALSE, '{}'::JSONB, NULL,
-            'step_intent_persisted', $4
+            $4, FALSE, '{}'::JSONB, NULL,
+            'step_intent_persisted', $5
          )",
     )
     .bind(execution_id.as_uuid())
     .bind(step_id)
     .bind(lease_id)
+    .bind(lease_epoch)
     .bind(started_at)
     .execute(&repository.pool)
     .await

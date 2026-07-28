@@ -22,6 +22,8 @@ mod repository;
 mod service;
 
 #[cfg(test)]
+mod logger_ttl_lifecycle_tests;
+#[cfg(test)]
 mod operations_repository_tests;
 #[cfg(test)]
 mod repository_tests;
