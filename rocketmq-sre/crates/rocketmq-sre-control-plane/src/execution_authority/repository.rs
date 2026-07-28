@@ -434,8 +434,8 @@ impl LeaseAuthorityRepository {
         &self,
         grant: &rocketmq_sre_contracts::LeaseFenceGrant,
     ) -> Result<(), ControlPlaneError> {
-        let request_snapshot: Option<Value> = sqlx::query_scalar(
-            "SELECT request_snapshot
+        let row = sqlx::query(
+            "SELECT request_snapshot, state
              FROM executions
              WHERE id = $1
                AND tenant_id = (
@@ -448,13 +448,15 @@ impl LeaseAuthorityRepository {
         .bind(grant.cluster_id.as_uuid())
         .fetch_optional(&self.pool)
         .await?;
-        let snapshot = request_snapshot.ok_or(ControlPlaneError::NotFound)?;
+        let row = row.ok_or(ControlPlaneError::NotFound)?;
+        let snapshot: Value = row.try_get("request_snapshot")?;
+        let state: String = row.try_get("state")?;
         let request: rocketmq_sre_contracts::ExecutionRequest = serde_json::from_value(snapshot).map_err(|_| {
             ControlPlaneError::conflict_code("execution_snapshot_invalid", "execution snapshot is invalid")
         })?;
         let matches = request.plan.steps.iter().any(|step| {
             step.id == grant.plan_step_id && step.action == grant.action && step.resource == grant.resource
-        });
+        }) && valid_effect_direction(&state, grant.compensation);
         if matches {
             Ok(())
         } else {
@@ -471,9 +473,10 @@ impl LeaseAuthorityRepository {
         cluster_id: ClusterId,
         execution_id: ExecutionId,
         plan_step_id: rocketmq_sre_contracts::PlanStepId,
+        compensation: bool,
     ) -> Result<(rocketmq_sre_contracts::ExecutionAction, String), ControlPlaneError> {
-        let request_snapshot: Value = sqlx::query_scalar(
-            "SELECT request_snapshot
+        let row = sqlx::query(
+            "SELECT request_snapshot, state
              FROM executions
              WHERE id = $1 AND tenant_id = $2 AND cluster_id = $3",
         )
@@ -484,9 +487,16 @@ impl LeaseAuthorityRepository {
         .await?
         .ok_or(ControlPlaneError::NotFound)?;
         let execution: rocketmq_sre_contracts::ExecutionRequest =
-            serde_json::from_value(request_snapshot).map_err(|_| {
+            serde_json::from_value(row.try_get("request_snapshot")?).map_err(|_| {
                 ControlPlaneError::conflict_code("execution_snapshot_invalid", "execution snapshot is invalid")
             })?;
+        let state: String = row.try_get("state")?;
+        if !valid_effect_direction(&state, compensation) {
+            return Err(ControlPlaneError::forbidden(
+                "effect_direction_mismatch",
+                "dispatch direction does not match the durable execution state",
+            ));
+        }
         execution
             .plan
             .steps
@@ -518,6 +528,14 @@ impl LeaseAuthorityRepository {
         .fetch_one(&self.pool)
         .await?;
         Ok(count)
+    }
+}
+
+fn valid_effect_direction(state: &str, compensation: bool) -> bool {
+    if compensation {
+        state == "compensating"
+    } else {
+        matches!(state, "prechecking" | "intent_persisted" | "applying")
     }
 }
 
