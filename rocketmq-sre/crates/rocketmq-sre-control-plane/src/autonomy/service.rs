@@ -538,16 +538,6 @@ impl AutonomyService {
         request: &IssueAutonomyGrantRequest,
     ) -> Result<AutonomyGrant, ControlPlaneError> {
         require_role(auth, "executor_service")?;
-        let scope = self
-            .scope(
-                auth,
-                &AutonomyScopeQuery {
-                    cluster_id: request.cluster_id,
-                    action: request.action,
-                    action_version: request.action_version.clone(),
-                },
-            )
-            .await?;
         let descriptor = self.descriptor(request.action, &request.action_version)?;
         let cohort_request = PrepareAutonomousCohortRequest {
             cluster_id: request.cluster_id,
