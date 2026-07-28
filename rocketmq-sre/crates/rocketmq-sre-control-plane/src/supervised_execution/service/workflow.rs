@@ -319,6 +319,7 @@ impl SupervisedExecutionService {
             correlation_id,
             plan: plan.clone(),
             approvals: vec![grant],
+            autonomy_grant: None,
             requested_by: auth.subject.clone(),
             idempotency_key: request.idempotency_key.clone(),
             issuer: CONTROL_PLANE_ISSUER.to_owned(),
