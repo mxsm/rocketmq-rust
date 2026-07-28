@@ -231,7 +231,7 @@ impl AutomationService {
     }
 }
 
-fn require_automation_reader(auth: &AuthContext) -> Result<(), ControlPlaneError> {
+pub(super) fn require_automation_reader(auth: &AuthContext) -> Result<(), ControlPlaneError> {
     if auth.roles.iter().any(|role| {
         matches!(
             role.as_str(),
@@ -246,7 +246,7 @@ fn require_automation_reader(auth: &AuthContext) -> Result<(), ControlPlaneError
     ))
 }
 
-fn require_automation_or_operator(auth: &AuthContext) -> Result<(), ControlPlaneError> {
+pub(super) fn require_automation_or_operator(auth: &AuthContext) -> Result<(), ControlPlaneError> {
     if auth
         .roles
         .iter()
@@ -294,7 +294,7 @@ fn bounded_outcome(
     })
 }
 
-const fn automation_failure_code(error: &ControlPlaneError) -> &'static str {
+pub(super) const fn automation_failure_code(error: &ControlPlaneError) -> &'static str {
     match error {
         ControlPlaneError::Validation { code, .. }
         | ControlPlaneError::Forbidden { code, .. }
