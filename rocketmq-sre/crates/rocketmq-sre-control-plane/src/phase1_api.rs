@@ -91,6 +91,7 @@ use crate::models::ModelProfileLifecyclePage;
 use crate::models::ModelProfileLifecycleTransitionRequest;
 use crate::models::ModelProfileLifecycleView;
 use crate::models::ModelProfileRollbackRequest;
+use crate::models::ProviderSmokeResultView;
 use crate::observability::CORRELATION_ID_HEADER;
 use crate::observability::CorrelationContext;
 use crate::orchestrator::DiagnosisResponse;
@@ -187,6 +188,7 @@ pub(crate) fn public_routes() -> Router<AppState> {
             "/v1/models/profiles/{id}/rollback",
             post(rollback_model_profile).layer(DefaultBodyLimit::max(8 * 1024)),
         )
+        .route("/v1/models/profiles/{id}/smoke", post(run_model_profile_smoke))
         .route("/v1/openapi.json", get(openapi))
 }
 
@@ -1037,6 +1039,19 @@ async fn rollback_model_profile(
     state
         .model_gateway
         .rollback_profile(&auth, parse_model_profile_id(&id)?, &request, correlation_id(&headers))
+        .await
+        .map(Json)
+}
+
+async fn run_model_profile_smoke(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<ProviderSmokeResultView>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, None).await?;
+    state
+        .model_gateway
+        .run_provider_smoke(&auth, parse_model_profile_id(&id)?)
         .await
         .map(Json)
 }
