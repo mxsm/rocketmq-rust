@@ -43,6 +43,11 @@ const ModelsPage = lazy(() =>
     default: module.ModelsPage,
   })),
 );
+const AutonomyOperationsPage = lazy(() =>
+  import("./pages/AutonomyOperationsPage").then((module) => ({
+    default: module.AutonomyOperationsPage,
+  })),
+);
 const AskSrePage = lazy(() =>
   import("./pages/WorkflowPages").then((module) => ({
     default: module.AskSrePage,
@@ -247,6 +252,7 @@ const router = createBrowserRouter([
       { path: "coverage", element: <CoverageMatrixPage /> },
       { path: "knowledge", element: <KnowledgePage /> },
       { path: "models", element: <ModelsPage /> },
+      { path: "autonomy", element: <AutonomyOperationsPage /> },
       { path: "system", element: <SystemStatusPage /> },
       { path: "*", element: <Navigate replace to="/" /> },
     ],
