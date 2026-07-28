@@ -88,4 +88,26 @@ describe("checked-in Phase 3 OpenAPI", () => {
       specification.paths["/v1/resource-quarantines/{id}/clear"]?.post,
     ).toBeDefined();
   });
+
+  it("publishes bounded model lifecycle and smoke operations", () => {
+    expect(
+      specification.paths["/v1/models/profiles/lifecycle"]?.get,
+    ).toBeDefined();
+    expect(
+      specification.paths["/v1/models/profiles/{id}/lifecycle"]?.get,
+    ).toBeDefined();
+    expect(
+      specification.paths["/v1/models/profiles/{id}/lifecycle"]?.post,
+    ).toBeDefined();
+    expect(
+      specification.paths["/v1/models/profiles/{id}/rollback"]?.post,
+    ).toBeDefined();
+    expect(
+      specification.paths["/v1/models/profiles/{id}/smoke"]?.post,
+    ).toBeDefined();
+    expect(
+      "delete" in
+        specification.paths["/v1/models/profiles/{id}/lifecycle"],
+    ).toBe(false);
+  });
 });
