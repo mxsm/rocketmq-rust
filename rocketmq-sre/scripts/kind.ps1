@@ -436,11 +436,32 @@ function New-SecretMaterial([switch]$ExistingCluster) {
         '    defaultGroupPerm: DENY'
         ''
     ) -join "`n"
+    $proxyAcl = @(
+        'globalWhiteRemoteAddresses: []'
+        'accounts:'
+        "  - accessKey: $bootstrapAccessKey"
+        "    secretKey: $bootstrapSecretKey"
+        '    admin: true'
+        '    defaultTopicPerm: DENY'
+        '    defaultGroupPerm: DENY'
+        "  - accessKey: $agentReadAccessKey"
+        "    secretKey: $agentReadSecretKey"
+        '    admin: false'
+        '    defaultTopicPerm: GET'
+        '    defaultGroupPerm: GET'
+        '    clusterPerm: GET'
+        "  - accessKey: $agentMutationAccessKey"
+        "    secretKey: $agentMutationSecretKey"
+        '    admin: true'
+        '    defaultTopicPerm: DENY'
+        '    defaultGroupPerm: DENY'
+        ''
+    ) -join "`n"
     $files = @{
         'admin.identity' = 'phase00-kind-admin'
         'request-policy.json' = '{"profile":"phase00-kind-read-only"}'
         'broker-acl.yml' = $brokerAcl
-        'proxy-acl.yml' = $bootstrapAcl
+        'proxy-acl.yml' = $proxyAcl
         'mcp-rmq-credentials.yml' = "access_key: $mcpAccessKey`nsecret_key: $mcpSecretKey`n"
         'admin-read-access-key' = $mcpAccessKey
         'admin-read-secret-key' = $mcpSecretKey
