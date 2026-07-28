@@ -250,6 +250,7 @@ pub(crate) fn execution_request(plan: &ActionPlan, key: &str) -> ExecutionReques
             nonce: format!("approval-{key}"),
             signature: "fixture-signature".to_owned(),
         }],
+        autonomy_grant: None,
         requested_by: "operator-a".to_owned(),
         idempotency_key: key.to_owned(),
         issuer: "control-plane".to_owned(),
