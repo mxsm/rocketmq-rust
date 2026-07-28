@@ -1,5 +1,18 @@
 {
   "$defs": {
+    "ActionPlanId": {
+      "description": "Stable identifier for an immutable action plan.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "AgentDispatchAuthorization": {
+      "description": "Exclusive authorization path used for one Agent dispatch.",
+      "enum": [
+        "human_approved",
+        "autonomous"
+      ],
+      "type": "string"
+    },
     "AgentStepRequest": {
       "additionalProperties": false,
       "description": "Narrow request accepted by the Execution Agent registry.",
@@ -66,6 +79,117 @@
         "timeout_seconds"
       ],
       "type": "object"
+    },
+    "DynamicSafetyDecision": {
+      "additionalProperties": false,
+      "description": "Result of authoritative per-step safety evaluation.",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/ExecutionAction"
+        },
+        "action_version": {
+          "type": "string"
+        },
+        "allowed": {
+          "type": "boolean"
+        },
+        "cluster_id": {
+          "$ref": "#/$defs/ClusterId"
+        },
+        "error_budget_available": {
+          "type": "boolean"
+        },
+        "evidence_fresh": {
+          "type": "boolean"
+        },
+        "execution_id": {
+          "$ref": "#/$defs/ExecutionId"
+        },
+        "execution_step_id": {
+          "$ref": "#/$defs/ExecutionStepId"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "freeze_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "id": {
+          "$ref": "#/$defs/DynamicSafetyDecisionId"
+        },
+        "issued_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "kill_switch_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "lifecycle_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "nonce": {
+          "type": "string"
+        },
+        "plan_hash": {
+          "type": "string"
+        },
+        "plan_id": {
+          "$ref": "#/$defs/ActionPlanId"
+        },
+        "policy_definition_version": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reason_codes": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "signature": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/TenantId"
+        }
+      },
+      "required": [
+        "id",
+        "tenant_id",
+        "cluster_id",
+        "action",
+        "action_version",
+        "plan_id",
+        "plan_hash",
+        "execution_id",
+        "execution_step_id",
+        "policy_definition_version",
+        "lifecycle_revision",
+        "error_budget_available",
+        "freeze_revision",
+        "kill_switch_revision",
+        "evidence_fresh",
+        "allowed",
+        "issued_at",
+        "expires_at",
+        "nonce",
+        "signature"
+      ],
+      "type": "object"
+    },
+    "DynamicSafetyDecisionId": {
+      "description": "Stable identifier for one short-lived dynamic safety decision.",
+      "format": "uuid",
+      "type": "string"
     },
     "EvidenceId": {
       "description": "Stable identifier for an evidence snapshot.",
@@ -141,6 +265,10 @@
         },
         "cluster_id": {
           "$ref": "#/$defs/ClusterId"
+        },
+        "compensation": {
+          "default": false,
+          "type": "boolean"
         },
         "epoch": {
           "$ref": "#/$defs/LeaseEpoch"
@@ -276,6 +404,16 @@
         "compensation": {
           "type": "boolean"
         },
+        "dynamic_safety": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DynamicSafetyDecision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "execution_id": {
           "$ref": "#/$defs/ExecutionId"
         },
@@ -357,6 +495,20 @@
   "additionalProperties": false,
   "description": "Exact typed dispatch request accepted only from Executor workload identity.",
   "properties": {
+    "authorization": {
+      "$ref": "#/$defs/AgentDispatchAuthorization",
+      "default": "human_approved"
+    },
+    "plan_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ActionPlanId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "request": {
       "$ref": "#/$defs/AgentStepRequest"
     },
