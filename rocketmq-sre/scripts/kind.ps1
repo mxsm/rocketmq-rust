@@ -705,6 +705,12 @@ switch ($Action) {
             '--force-conflicts',
             '--wait=hookOnly'
         ) | Out-Null
+        Invoke-Kubectl @(
+            '--namespace', $rocketmqNamespace,
+            'patch', 'deployment', 'rocketmq-proxy',
+            '--type', 'strategic',
+            '--patch-file', (Join-Path $kindDirectory 'proxy-restart-patch.yaml')
+        ) | Out-Null
         Invoke-Kubectl @('apply', '--filename', (Join-Path $kindDirectory 'mcp-config.yaml')) | Out-Null
         Invoke-Kubectl @(
             '--namespace', $rocketmqNamespace,
