@@ -652,6 +652,214 @@ export interface ModelProfileRollbackRequest {
   operator_confirmed: boolean;
 }
 
+export type AutonomyOutcomeClass =
+  | "expected_deny"
+  | "success"
+  | "autonomous_execution_failure";
+
+export type AutonomousExecutionFailure =
+  | "apply_failed"
+  | "verification_failed"
+  | "unknown_effect"
+  | "compensation_started"
+  | "rolled_back"
+  | "escalated"
+  | "safety_invalidated_during_execution"
+  | "operator_stopped"
+  | "critic_unavailable"
+  | "critic_invalid"
+  | "critic_conflict"
+  | "evidence_degraded";
+
+export interface AutonomyOutcome {
+  id: string;
+  tenant_id: string;
+  cluster_id: string;
+  action: string;
+  action_version: string;
+  incident_id: string;
+  plan_id: string;
+  plan_hash: string;
+  execution_id: string | null;
+  cohort_id: string | null;
+  class: AutonomyOutcomeClass;
+  failure: AutonomousExecutionFailure | null;
+  reason_codes: string[];
+  first_positive_intent_persisted: boolean;
+  occurred_at: string;
+  reconciled_at: string;
+}
+
+export interface AutonomyOutcomePage {
+  schema_version: string;
+  items: AutonomyOutcome[];
+  truncated: boolean;
+  observed_at: string;
+}
+
+export interface AutonomyOutcomeQuery {
+  clusterId?: string;
+  action?: string;
+  class?: AutonomyOutcomeClass;
+  from?: string;
+  until?: string;
+  limit?: number;
+}
+
+export type AutonomyReportPeriod = "weekly" | "monthly";
+
+export interface AutonomyOperationalReportQuery {
+  period: AutonomyReportPeriod;
+  anchor?: string;
+  clusterId?: string;
+}
+
+export interface AutonomyReportWindow {
+  period: AutonomyReportPeriod;
+  start: string;
+  end: string;
+  complete: boolean;
+}
+
+export interface AutonomyOutcomeMetrics {
+  candidates: number;
+  eligible: number;
+  denied: number;
+  successes: number;
+  execution_failures: number;
+  rollbacks: number;
+  unknown_effects: number;
+  human_handoffs: number;
+}
+
+export interface AutonomyDurationMetrics {
+  mean_time_to_acknowledge_seconds: number | null;
+  mean_time_to_resolve_seconds: number | null;
+  average_diagnosis_seconds: number | null;
+  average_execution_seconds: number | null;
+  average_recovery_seconds: number | null;
+  acknowledged_incidents: number;
+  resolved_incidents: number;
+  diagnosed_incidents: number;
+  completed_executions: number;
+}
+
+export interface AutonomyQualityMetrics {
+  raw_alert_occurrences: number;
+  correlated_alerts: number;
+  noise_reduction_basis_points: number | null;
+  routed_incidents: number;
+  owner_routing_hit_basis_points: number | null;
+  terminal_incidents: number;
+  recurrent_incidents: number;
+  recurrence_basis_points: number | null;
+  overdue_action_items: number;
+  post_close_recurrences: number;
+  health_score_delta: number | null;
+}
+
+export interface AutonomyFeedbackMetrics {
+  total: number;
+  adopted: number;
+  modified: number;
+  rejected: number;
+  adoption_basis_points: number | null;
+  modification_basis_points: number | null;
+  rejection_basis_points: number | null;
+}
+
+export interface AutomationSavingsMetrics {
+  successful_no_side_effect_runs: number;
+  successful_preventive_runs: number;
+  estimated_minutes_saved: number;
+  estimate_method: string;
+}
+
+export interface ModelUsageMetrics {
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cost_micros: number;
+  calls_missing_tokens: number;
+  calls_missing_cost: number;
+  failed_calls: number;
+  fallback_calls: number;
+  usage_coverage_basis_points: number | null;
+  cost_coverage_basis_points: number | null;
+}
+
+export interface ActionOutcomeBreakdown {
+  cluster_id: string;
+  action_id: string;
+  action_version: string;
+  outcomes: AutonomyOutcomeMetrics;
+  average_execution_seconds: number | null;
+}
+
+export interface ModelCostBreakdown {
+  provider_family: string;
+  model_family: string;
+  model_revision: string;
+  actual_profile_id: string;
+  usage: ModelUsageMetrics;
+}
+
+export interface IncidentModelCost {
+  incident_id: string;
+  usage: ModelUsageMetrics;
+}
+
+export interface VersionEffectComparison {
+  dimension: string;
+  version: string;
+  samples: number;
+  successes: number;
+  success_basis_points: number | null;
+  cost_micros: number;
+}
+
+export interface CostBudgetAlert {
+  scope_kind: string;
+  scope_id: string;
+  observed_cost_micros: number;
+  budget_micros: number;
+  reason_code: string;
+  recommended_degradation: string;
+  automatic_provider_mutation: boolean;
+}
+
+export interface OptimizationCandidate {
+  id: string;
+  category: string;
+  scope: string;
+  reason_code: string;
+  evidence_summary: string;
+  review_status: string;
+  requires_human_review: boolean;
+  publication_allowed: boolean;
+}
+
+export interface AutonomyOperationalReport {
+  schema_version: string;
+  tenant_id: string;
+  cluster_ids: string[];
+  window: AutonomyReportWindow;
+  outcomes: AutonomyOutcomeMetrics;
+  durations: AutonomyDurationMetrics;
+  quality: AutonomyQualityMetrics;
+  feedback: AutonomyFeedbackMetrics;
+  savings: AutomationSavingsMetrics;
+  model_usage: ModelUsageMetrics;
+  action_breakdown: ActionOutcomeBreakdown[];
+  model_breakdown: ModelCostBreakdown[];
+  incident_costs: IncidentModelCost[];
+  version_effects: VersionEffectComparison[];
+  budget_alerts: CostBudgetAlert[];
+  optimization_candidates: OptimizationCandidate[];
+  warnings: string[];
+  generated_at: string;
+}
+
 export type WorkflowStreamEvent = ApiSchemas["WorkflowStreamEvent"] & {
   event_id?: string;
 };
