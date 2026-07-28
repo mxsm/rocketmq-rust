@@ -709,6 +709,48 @@ fn build_routers_with_auth(
 /// Returns a configuration, database, bind, or serving error.
 pub async fn run(config: ControlPlaneConfig, service_context: ChildServiceContext) -> Result<(), ControlPlaneError> {
     let repository = PostgresRepository::connect(config.database_url(), config.database_max_connections()).await?;
+    let autonomy_reconciler = crate::autonomy::AutonomyPauseReconciler::new(repository.clone());
+    let startup_reconcile = autonomy_reconciler.run_once().await?;
+    if startup_reconcile.repaired > 0 {
+        tracing::warn!(
+            repaired = startup_reconcile.repaired,
+            candidates = startup_reconcile.candidates,
+            "repaired autonomy lifecycle pauses during startup"
+        );
+    }
+    let autonomy_reconcile_tasks = service_context.scheduled_tasks("autonomy-pause-reconciler");
+    let mut autonomy_reconcile_schedule = ScheduledTaskConfig::fixed_rate_no_overlap(
+        "phase4-autonomy-pause-reconciler",
+        std::time::Duration::from_secs(10),
+    );
+    autonomy_reconcile_schedule.initial_delay = std::time::Duration::from_secs(10);
+    autonomy_reconcile_schedule.max_run_time = Some(std::time::Duration::from_secs(20));
+    autonomy_reconcile_schedule.shutdown_timeout = config.shutdown_timeout();
+    autonomy_reconcile_tasks
+        .schedule_fixed_rate_no_overlap(autonomy_reconcile_schedule, move || {
+            let reconciler = autonomy_reconciler.clone();
+            async move {
+                match reconciler.run_once().await {
+                    Ok(summary) if summary.repaired > 0 => {
+                        tracing::warn!(
+                            repaired = summary.repaired,
+                            candidates = summary.candidates,
+                            "repaired autonomy lifecycle pauses"
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        tracing::warn!(
+                            error = %error,
+                            "autonomy pause reconciliation failed"
+                        );
+                    }
+                }
+            }
+        })
+        .map_err(|error| {
+            ControlPlaneError::configuration(format!("autonomy pause reconciler could not be started: {error}"))
+        })?;
     let documents = CapabilityDocuments::embedded()?;
     let auth = AuthService::from_config(&config).await?;
     let evidence_blobs = EvidenceBlobStore::from_env(config.dev_auth_enabled())?;
