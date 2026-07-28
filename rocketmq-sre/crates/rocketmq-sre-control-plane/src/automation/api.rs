@@ -15,20 +15,17 @@
 use axum::Json;
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
-use axum::extract::Path;
 use axum::extract::Query;
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::routing::get;
 use axum::routing::post;
 use rocketmq_sre_contracts::AutomationOperatorFeedback;
-use rocketmq_sre_contracts::AutomationRunId;
 use rocketmq_sre_contracts::NoSideEffectAutomationRequest;
 use rocketmq_sre_contracts::NoSideEffectAutomationRun;
 
 use super::model::AutomationRunListQuery;
 use super::model::AutomationRunPage;
-use super::model::CompleteAutomationRunRequest;
 use super::model::RecordAutomationFeedbackRequest;
 use crate::ControlPlaneError;
 use crate::api::AppState;
@@ -38,10 +35,6 @@ pub(crate) fn routes() -> Router<AppState> {
         .route(
             "/v1/automation/no-side-effect/runs",
             get(list_runs).post(submit_run).layer(DefaultBodyLimit::max(128 * 1024)),
-        )
-        .route(
-            "/internal/v1/automation/no-side-effect/runs/{id}/complete",
-            post(complete_run).layer(DefaultBodyLimit::max(128 * 1024)),
         )
         .route(
             "/v1/automation/feedback",
@@ -56,16 +49,6 @@ async fn submit_run(
 ) -> Result<Json<NoSideEffectAutomationRun>, ControlPlaneError> {
     let auth = state.auth.authorize(&headers, request.cluster_id).await?;
     state.automation.submit(&auth, &request).await.map(Json)
-}
-
-async fn complete_run(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(run_id): Path<AutomationRunId>,
-    Json(request): Json<CompleteAutomationRunRequest>,
-) -> Result<Json<NoSideEffectAutomationRun>, ControlPlaneError> {
-    let auth = state.auth.authorize(&headers, None).await?;
-    state.automation.complete(&auth, run_id, &request).await.map(Json)
 }
 
 async fn list_runs(
