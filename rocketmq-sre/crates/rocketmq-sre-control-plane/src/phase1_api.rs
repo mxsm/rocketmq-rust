@@ -41,6 +41,7 @@ use rocketmq_sre_contracts::InspectionRunId;
 use rocketmq_sre_contracts::InvestigationId;
 use rocketmq_sre_contracts::KnowledgeItem;
 use rocketmq_sre_contracts::KnowledgeItemId;
+use rocketmq_sre_contracts::ModelProfileId;
 use rocketmq_sre_contracts::RecommendationId;
 use rocketmq_sre_contracts::WhatIfSimulationRequest;
 use serde::Deserialize;
@@ -86,6 +87,10 @@ use crate::knowledge::KnowledgeSearchQuery;
 use crate::models::ModelCapabilitiesStatus;
 use crate::models::ModelInvocationListQuery;
 use crate::models::ModelInvocationPage;
+use crate::models::ModelProfileLifecyclePage;
+use crate::models::ModelProfileLifecycleTransitionRequest;
+use crate::models::ModelProfileLifecycleView;
+use crate::models::ModelProfileRollbackRequest;
 use crate::observability::CORRELATION_ID_HEADER;
 use crate::observability::CorrelationContext;
 use crate::orchestrator::DiagnosisResponse;
@@ -171,6 +176,17 @@ pub(crate) fn public_routes() -> Router<AppState> {
         .route("/v1/models/capabilities", get(model_capabilities))
         .route("/v1/models/status", get(model_status))
         .route("/v1/models/invocations", get(model_invocations))
+        .route("/v1/models/profiles/lifecycle", get(model_profile_lifecycles))
+        .route(
+            "/v1/models/profiles/{id}/lifecycle",
+            get(model_profile_lifecycle)
+                .post(transition_model_profile_lifecycle)
+                .layer(DefaultBodyLimit::max(8 * 1024)),
+        )
+        .route(
+            "/v1/models/profiles/{id}/rollback",
+            post(rollback_model_profile).layer(DefaultBodyLimit::max(8 * 1024)),
+        )
         .route("/v1/openapi.json", get(openapi))
 }
 
@@ -976,6 +992,55 @@ async fn model_invocations(
     state.model_gateway.invocations(&auth, &query).await.map(Json)
 }
 
+async fn model_profile_lifecycles(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<ModelProfileLifecyclePage>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, None).await?;
+    state.model_gateway.profile_lifecycles(&auth).await.map(Json)
+}
+
+async fn model_profile_lifecycle(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<ModelProfileLifecycleView>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, None).await?;
+    state
+        .model_gateway
+        .profile_lifecycle(&auth, parse_model_profile_id(&id)?)
+        .await
+        .map(Json)
+}
+
+async fn transition_model_profile_lifecycle(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(request): Json<ModelProfileLifecycleTransitionRequest>,
+) -> Result<Json<ModelProfileLifecycleView>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, None).await?;
+    state
+        .model_gateway
+        .transition_profile_lifecycle(&auth, parse_model_profile_id(&id)?, &request, correlation_id(&headers))
+        .await
+        .map(Json)
+}
+
+async fn rollback_model_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(request): Json<ModelProfileRollbackRequest>,
+) -> Result<Json<ModelProfileLifecycleView>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, None).await?;
+    state
+        .model_gateway
+        .rollback_profile(&auth, parse_model_profile_id(&id)?, &request, correlation_id(&headers))
+        .await
+        .map(Json)
+}
+
 async fn openapi(State(state): State<AppState>, headers: HeaderMap) -> Result<Json<Value>, ControlPlaneError> {
     let _auth = state.auth.authorize(&headers, None).await?;
     Ok(Json(crate::openapi::document()))
@@ -996,6 +1061,12 @@ fn parse_cluster_id(value: &str) -> Result<rocketmq_sre_contracts::ClusterId, Co
     value
         .parse()
         .map_err(|_| ControlPlaneError::validation("cluster_not_allowed", "cluster identifier must be a UUID"))
+}
+
+fn parse_model_profile_id(value: &str) -> Result<ModelProfileId, ControlPlaneError> {
+    value
+        .parse()
+        .map_err(|_| ControlPlaneError::validation("invalid_request", "model profile identifier must be a UUID"))
 }
 
 fn parse_uuid(value: &str, name: &str) -> Result<Uuid, ControlPlaneError> {
