@@ -80,6 +80,38 @@ pub trait MQAdminMutationExt: Send {
         properties: HashMap<CheetahString, CheetahString>,
     ) -> rocketmq_error::RocketMQResult<BrokerConfigPatchOutcome>;
 
+    /// Applies one bounded Broker logger override with an automatic TTL.
+    ///
+    /// Implementations must reject arbitrary filter expressions. `logger`
+    /// identifies one `rocketmq_broker::` target, `level` is limited to
+    /// `INFO` or `DEBUG`, and the TTL is limited to the server-supported
+    /// diagnostic window.
+    async fn set_broker_log_filter_ttl(
+        &self,
+        broker_addr: CheetahString,
+        logger: CheetahString,
+        level: CheetahString,
+        ttl_seconds: u32,
+        operation_id: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        let _ = (broker_addr, logger, level, ttl_seconds, operation_id);
+        Err(rocketmq_error::RocketMQError::illegal_argument(
+            "typed broker log-filter mutation is not implemented by this admin client",
+        ))
+    }
+
+    /// Restores the Broker logger baseline for one bounded operation.
+    async fn restore_broker_log_filter(
+        &self,
+        broker_addr: CheetahString,
+        operation_id: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        let _ = (broker_addr, operation_id);
+        Err(rocketmq_error::RocketMQError::illegal_argument(
+            "typed broker log-filter restoration is not implemented by this admin client",
+        ))
+    }
+
     async fn upsert_topic_config(
         &self,
         broker_addr: CheetahString,
@@ -234,6 +266,33 @@ impl MQAdminMutationExt for DefaultMQAdminExt {
             properties,
         )
         .await
+    }
+
+    async fn set_broker_log_filter_ttl(
+        &self,
+        broker_addr: CheetahString,
+        logger: CheetahString,
+        level: CheetahString,
+        ttl_seconds: u32,
+        operation_id: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        MQAdminMutationExt::set_broker_log_filter_ttl(
+            self.inner(),
+            broker_addr,
+            logger,
+            level,
+            ttl_seconds,
+            operation_id,
+        )
+        .await
+    }
+
+    async fn restore_broker_log_filter(
+        &self,
+        broker_addr: CheetahString,
+        operation_id: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        MQAdminMutationExt::restore_broker_log_filter(self.inner(), broker_addr, operation_id).await
     }
 
     async fn upsert_topic_config(
