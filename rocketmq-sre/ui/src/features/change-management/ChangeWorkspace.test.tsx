@@ -37,6 +37,14 @@ describe("change management workspace", () => {
       "href",
       "/changes/schedules",
     );
+    expect(screen.getByRole("link", { name: "发布护航" })).toHaveAttribute(
+      "href",
+      "/changes/releases",
+    );
+    expect(screen.getByRole("link", { name: "外部集成" })).toHaveAttribute(
+      "href",
+      "/changes/integrations",
+    );
   });
 
   it("renders typed runbook differences and blocking conflicts as text", () => {
