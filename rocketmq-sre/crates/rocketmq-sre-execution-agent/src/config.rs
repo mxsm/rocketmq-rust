@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::fmt::Debug;
 use std::fmt::Formatter;
@@ -19,6 +20,8 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use rocketmq_admin_core::core::security::AdminCredentials;
+use rocketmq_sre_contracts::ClusterId;
+use rocketmq_sre_contracts::TenantId;
 use url::Url;
 
 use crate::ExecutionAgentError;
@@ -55,6 +58,28 @@ impl Debug for BrokerAdminDriverConfig {
     }
 }
 
+#[derive(Clone)]
+pub(crate) struct ProxyRestartDriverConfig {
+    pub(crate) targets: BTreeMap<String, u16>,
+    pub(crate) verification_base_url: Url,
+    pub(crate) verification_token: String,
+    pub(crate) tenant_id: TenantId,
+    pub(crate) cluster_id: ClusterId,
+}
+
+impl Debug for ProxyRestartDriverConfig {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProxyRestartDriverConfig")
+            .field("target_count", &self.targets.len())
+            .field("verification_base_url", &self.verification_base_url)
+            .field("verification_token", &"[REDACTED]")
+            .field("tenant_id", &self.tenant_id)
+            .field("cluster_id", &self.cluster_id)
+            .finish()
+    }
+}
+
 /// Explicit process configuration with redacted workload credentials.
 #[derive(Clone)]
 pub struct ExecutionAgentConfig {
@@ -73,6 +98,7 @@ pub struct ExecutionAgentConfig {
     pub(crate) logger_ttl_enabled: bool,
     pub(crate) proxy_scale_out_enabled: bool,
     pub(crate) proxy_scale_targets: BTreeSet<String>,
+    pub(crate) proxy_restart: Option<ProxyRestartDriverConfig>,
     pub(crate) broker_admin: Option<BrokerAdminDriverConfig>,
 }
 
@@ -114,10 +140,30 @@ impl ExecutionAgentConfig {
         } else {
             BTreeSet::new()
         };
+        let proxy_restart_enabled = parse_env("ROCKETMQ_SRE_AGENT_ENABLE_PROXY_RESTART", false)?;
+        let proxy_restart = if proxy_restart_enabled {
+            let verification_base_url = required("ROCKETMQ_SRE_AGENT_VERIFICATION_URL")?
+                .parse()
+                .map_err(|_| ExecutionAgentError::Configuration)?;
+            validate_internal_service_url(&verification_base_url, dev_insecure_http)?;
+            Some(ProxyRestartDriverConfig {
+                targets: parse_proxy_restart_targets(&required("ROCKETMQ_SRE_AGENT_PROXY_RESTART_TARGETS")?)?,
+                verification_base_url,
+                verification_token: required("ROCKETMQ_SRE_AGENT_VERIFICATION_TOKEN")?,
+                tenant_id: required("ROCKETMQ_SRE_AGENT_TENANT_ID")?
+                    .parse()
+                    .map_err(|_| ExecutionAgentError::Configuration)?,
+                cluster_id: required("ROCKETMQ_SRE_AGENT_CLUSTER_ID")?
+                    .parse()
+                    .map_err(|_| ExecutionAgentError::Configuration)?,
+            })
+        } else {
+            None
+        };
         let broker_admin = broker_admin_from_env(
             dev_insecure_http,
             shutdown_timeout,
-            broker_config_patch_enabled || logger_ttl_enabled,
+            broker_config_patch_enabled || logger_ttl_enabled || proxy_restart_enabled,
         )?;
         Ok(Self {
             bind_addr,
@@ -135,6 +181,7 @@ impl ExecutionAgentConfig {
             logger_ttl_enabled,
             proxy_scale_out_enabled,
             proxy_scale_targets,
+            proxy_restart,
             broker_admin,
         })
     }
@@ -164,6 +211,7 @@ impl Debug for ExecutionAgentConfig {
             .field("logger_ttl_enabled", &self.logger_ttl_enabled)
             .field("proxy_scale_out_enabled", &self.proxy_scale_out_enabled)
             .field("proxy_scale_target_count", &self.proxy_scale_targets.len())
+            .field("proxy_restart", &self.proxy_restart)
             .field("broker_admin", &self.broker_admin)
             .finish()
     }
@@ -285,6 +333,32 @@ fn parse_kubernetes_targets(value: &str) -> Result<BTreeSet<String>, ExecutionAg
     }
 }
 
+fn parse_proxy_restart_targets(value: &str) -> Result<BTreeMap<String, u16>, ExecutionAgentError> {
+    let targets = value
+        .split(',')
+        .map(str::trim)
+        .filter(|target| !target.is_empty())
+        .map(|target| {
+            let Some((resource, port)) = target.split_once('=') else {
+                return Err(ExecutionAgentError::Configuration);
+            };
+            let exact = parse_kubernetes_targets(resource)?;
+            let resource = exact.into_iter().next().ok_or(ExecutionAgentError::Configuration)?;
+            let port = port
+                .parse::<u16>()
+                .ok()
+                .filter(|port| *port != 0)
+                .ok_or(ExecutionAgentError::Configuration)?;
+            Ok((resource, port))
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
+    if targets.is_empty() {
+        Err(ExecutionAgentError::Configuration)
+    } else {
+        Ok(targets)
+    }
+}
+
 fn dns_name(value: &str) -> bool {
     value.split('.').all(|label| {
         !label.is_empty()
@@ -363,6 +437,7 @@ mod tests {
             logger_ttl_enabled: false,
             proxy_scale_out_enabled: false,
             proxy_scale_targets: BTreeSet::new(),
+            proxy_restart: None,
             broker_admin: None,
         };
         let debug = format!("{config:?}");
@@ -427,6 +502,28 @@ mod tests {
             "rocketmq-system/proxy/extra",
         ] {
             assert!(parse_kubernetes_targets(invalid).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn proxy_restart_targets_bind_exact_workloads_to_remoting_ports() {
+        assert_eq!(
+            parse_proxy_restart_targets("rocketmq-system/rocketmq-proxy=8080,ops/proxy-canary=18080")
+                .expect("target allowlist"),
+            BTreeMap::from([
+                ("ops/proxy-canary".to_owned(), 18_080),
+                ("rocketmq-system/rocketmq-proxy".to_owned(), 8_080),
+            ])
+        );
+        for invalid in [
+            "",
+            "*/*=8080",
+            "rocketmq-system/rocketmq-proxy",
+            "rocketmq-system/rocketmq-proxy=0",
+            "rocketmq-system/rocketmq-proxy=70000",
+            "rocketmq-system/rocketmq-proxy=http://proxy:8080",
+        ] {
+            assert!(parse_proxy_restart_targets(invalid).is_err(), "{invalid}");
         }
     }
 }
