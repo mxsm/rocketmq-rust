@@ -65,6 +65,10 @@
         "cluster_id": {
           "$ref": "#/$defs/ClusterId"
         },
+        "compensation": {
+          "default": false,
+          "type": "boolean"
+        },
         "epoch": {
           "$ref": "#/$defs/LeaseEpoch"
         },
