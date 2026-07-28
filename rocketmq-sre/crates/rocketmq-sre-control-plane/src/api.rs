@@ -606,7 +606,12 @@ fn build_routers_with_auth(
     )?;
     let autonomy =
         crate::autonomy::AutonomyService::new(repository.clone(), slo.clone(), grant_signing_key.as_bytes())?;
-    let automation = crate::automation::AutomationService::new(repository.clone());
+    let automation = crate::automation::AutomationService::new(
+        repository.clone(),
+        connector_channel.clone(),
+        evidence.clone(),
+        postmortems.clone(),
+    )?;
     let forecast = ForecastService::new(
         repository.clone(),
         connector_channel.clone(),
