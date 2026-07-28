@@ -18,6 +18,7 @@ mod lifecycle_repository;
 mod model;
 mod repository;
 mod service;
+mod smoke_repository;
 
 pub(crate) use lifecycle::ModelProfileLifecyclePage;
 pub(crate) use lifecycle::ModelProfileLifecycleTransitionRequest;
