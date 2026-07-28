@@ -28,7 +28,6 @@ use rocketmq_sre_contracts::ClusterId;
 use rocketmq_sre_contracts::CorrelationId;
 use rocketmq_sre_contracts::CriticReviewId;
 use rocketmq_sre_contracts::DiagnosisRevisionId;
-use rocketmq_sre_contracts::DynamicSafetyDecision;
 use rocketmq_sre_contracts::EligibilityDecision;
 use rocketmq_sre_contracts::EvidenceId;
 use rocketmq_sre_contracts::ExecutionAction;
@@ -241,22 +240,6 @@ pub(crate) struct RecordAutonomyOutcomeRequest {
     pub(crate) reconciled_at: DateTime<Utc>,
 }
 
-/// Internal request to evaluate and sign one positive StepIntent.
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct EvaluateDynamicSafetyRequest {
-    pub(crate) cluster_id: ClusterId,
-    pub(crate) action: ExecutionAction,
-    pub(crate) action_version: String,
-    pub(crate) plan_id: ActionPlanId,
-    pub(crate) plan_hash: String,
-    pub(crate) execution_id: ExecutionId,
-    pub(crate) execution_step_id: rocketmq_sre_contracts::ExecutionStepId,
-    pub(crate) policy_definition_version: u64,
-    pub(crate) lifecycle_revision: u64,
-    pub(crate) evidence_fresh: bool,
-}
-
 /// Internal candidate request after a valid immutable Critic review.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -386,14 +369,6 @@ pub(crate) struct ShadowOutcomePage {
     pub(crate) schema_version: &'static str,
     pub(crate) items: Vec<ShadowOutcomeView>,
     pub(crate) truncated: bool,
-}
-
-/// Internal response proving safety was evaluated from current state.
-#[derive(Clone, Debug, Serialize)]
-pub(crate) struct DynamicSafetyView {
-    pub(crate) decision: DynamicSafetyDecision,
-    pub(crate) execution_id: ExecutionId,
-    pub(crate) execution_step_id: rocketmq_sre_contracts::ExecutionStepId,
 }
 
 pub(crate) fn default_action_version() -> String {
