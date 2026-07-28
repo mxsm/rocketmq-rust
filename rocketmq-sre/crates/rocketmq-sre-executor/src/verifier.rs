@@ -33,6 +33,7 @@ use rocketmq_sre_contracts::TenantId;
 use rocketmq_sre_contracts::VerificationOutcome;
 use rocketmq_sre_contracts::VerificationResult;
 use rocketmq_sre_contracts::VerificationSpec;
+use serde_json::Value;
 
 use crate::ExecutorError;
 
@@ -58,7 +59,9 @@ pub struct VerificationCaptureRequest {
     pub step_id: ExecutionStepId,
     pub plan_step_id: PlanStepId,
     pub action: ExecutionAction,
+    pub descriptor_version: String,
     pub target: String,
+    pub parameters: Value,
     pub phase: VerificationPhase,
     pub resource_conditions: Vec<String>,
     pub technical_slis: Vec<String>,
@@ -232,10 +235,18 @@ struct ConditionEvaluation {
 }
 
 fn validate_request(request: &VerificationCaptureRequest) -> Result<(), ExecutorError> {
-    if request.target.trim().is_empty()
+    let resource_conditions = request
+        .resource_conditions
+        .iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    let technical_slis = request.technical_slis.iter().collect::<std::collections::BTreeSet<_>>();
+    if request.descriptor_version.trim().is_empty()
+        || request.target.trim().is_empty()
         || request.resource_conditions.is_empty()
         || request.technical_slis.is_empty()
         || request.resource_conditions.len() + request.technical_slis.len() > MAX_CONDITIONS
+        || resource_conditions.len() != request.resource_conditions.len()
+        || technical_slis.len() != request.technical_slis.len()
         || request
             .resource_conditions
             .iter()

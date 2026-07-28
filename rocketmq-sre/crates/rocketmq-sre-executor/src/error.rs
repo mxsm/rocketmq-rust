@@ -33,6 +33,10 @@ pub enum ExecutorError {
     AgentRejected,
     #[error("Execution Agent is unavailable")]
     AgentUnavailable,
+    #[error("execution verification source rejected the request")]
+    VerificationRejected,
+    #[error("execution verification source is unavailable")]
+    VerificationUnavailable,
     #[error("approved preconditions changed before dispatch")]
     PreconditionChanged,
     #[error("active lease handoff is blocked by an unresolved effect")]

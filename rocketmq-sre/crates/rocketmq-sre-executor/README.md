@@ -21,6 +21,10 @@ typed Execution Agent API.
   epoch, and a fresh step-scoped fence grant.
 - An uncertain Agent result is journaled as `Unknown` and reconciled by a
   read-only live-state call; it is never blindly dispatched again.
+- Verification combines two independent read-only observations: typed resource
+  conditions from Execution Agent and technical SLI conditions from Control
+  Plane. Scope, schema, correlation ID, and the complete descriptor condition
+  surface must match before canonical Evidence is accepted.
 
 ## Durable execution sequence
 
@@ -36,12 +40,16 @@ verify signed request
   -> fresh LeaseFenceGrant
   -> typed Agent dispatch
   -> StepResult + audit
-  -> verification milestone
+  -> Agent resource observation + Control Plane SLI observation
+  -> canonical Evidence + bounded stability-window verification
+  -> success or verified compensation
 ```
 
 The service listens on `8094` by default. `/healthz` is liveness only;
 `/readyz` requires the PostgreSQL journal. Status and execution endpoints are
-internal workload routes.
+internal workload routes. `ROCKETMQ_SRE_EXECUTOR_VERIFICATION_POLL_SECONDS`
+controls the production verification interval and is restricted to 1–60
+seconds; the default is 5 seconds.
 
 ## Validation
 

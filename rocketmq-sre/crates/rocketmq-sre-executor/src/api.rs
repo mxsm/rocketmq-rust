@@ -33,11 +33,14 @@ use subtle::ConstantTimeEq;
 use crate::ChangeExecutor;
 use crate::ExecutionJournal;
 use crate::ExecutionPrechecker;
+use crate::ExecutionVerifier;
 use crate::ExecutorActionRegistry;
 use crate::ExecutorConfig;
 use crate::ExecutorError;
 use crate::HttpExecutionAgentClient;
+use crate::HttpExecutionSliClient;
 use crate::HttpExecutorAuthorityClient;
+use crate::ProductionVerificationSource;
 use crate::ResourceSafetyStore;
 
 #[derive(Clone)]
@@ -117,8 +120,17 @@ pub async fn run(config: ExecutorConfig, service_context: ChildServiceContext) -
         config.request_timeout,
         config.dev_insecure_http,
     )?);
+    let sli_client = Arc::new(HttpExecutionSliClient::new(
+        config.authority_url.clone(),
+        Arc::<str>::from(config.authority_token.as_str()),
+        Arc::<str>::from(config.executor_subject.as_str()),
+        config.request_timeout,
+        config.dev_insecure_http,
+    )?);
     let registry = Arc::new(ExecutorActionRegistry::embedded()?);
     let prechecker = ExecutionPrechecker::new(Arc::clone(&registry), agent.clone());
+    let verification_source = Arc::new(ProductionVerificationSource::new(agent.clone(), sli_client));
+    let verifier = ExecutionVerifier::new(verification_source, config.verification_poll_interval);
     let executor = ChangeExecutor::new(
         ExecutionJournal::new(pool.clone(), "rocketmq-sre-executor"),
         ResourceSafetyStore::new(pool),
@@ -128,7 +140,8 @@ pub async fn run(config: ExecutorConfig, service_context: ChildServiceContext) -
         Arc::<str>::from(config.executor_subject.as_str()),
         config.lease_ttl_seconds,
         config.resource_lock_ttl,
-    );
+    )
+    .with_verifier(verifier);
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
     let local_addr = listener.local_addr()?;
     tracing::info!(
@@ -247,12 +260,16 @@ impl IntoResponse for ExecutorError {
             Self::InvalidRequest | Self::Catalog(_) => (StatusCode::BAD_REQUEST, "invalid_execution_request", false),
             Self::AuthorityRejected => (StatusCode::FORBIDDEN, "execution_authority_rejected", false),
             Self::AgentRejected => (StatusCode::CONFLICT, "execution_agent_rejected", false),
+            Self::VerificationRejected => (StatusCode::CONFLICT, "execution_verification_rejected", false),
             Self::PreconditionChanged => (StatusCode::CONFLICT, "precondition_changed", false),
             Self::ReconcileBlocked => (StatusCode::CONFLICT, "unresolved_old_effects", false),
             Self::Configuration => (StatusCode::INTERNAL_SERVER_ERROR, "source_unavailable", false),
-            Self::AuthorityUnavailable | Self::AgentUnavailable | Self::Journal(_) | Self::Http(_) | Self::Io(_) => {
-                (StatusCode::SERVICE_UNAVAILABLE, "source_unavailable", true)
-            }
+            Self::AuthorityUnavailable
+            | Self::AgentUnavailable
+            | Self::VerificationUnavailable
+            | Self::Journal(_)
+            | Self::Http(_)
+            | Self::Io(_) => (StatusCode::SERVICE_UNAVAILABLE, "source_unavailable", true),
         };
         (
             status,

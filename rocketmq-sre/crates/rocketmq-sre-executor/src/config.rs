@@ -37,6 +37,7 @@ pub struct ExecutorConfig {
     pub(crate) request_timeout: Duration,
     pub(crate) lease_ttl_seconds: u32,
     pub(crate) resource_lock_ttl: Duration,
+    pub(crate) verification_poll_interval: Duration,
     pub(crate) shutdown_timeout: Duration,
     pub(crate) dev_insecure_http: bool,
 }
@@ -67,6 +68,10 @@ impl ExecutorConfig {
         validate_internal_service_url(&agent_url, dev_insecure_http)?;
         let request_timeout = duration_env("ROCKETMQ_SRE_EXECUTOR_REQUEST_TIMEOUT_SECONDS", 30)?;
         let resource_lock_ttl = duration_env("ROCKETMQ_SRE_EXECUTOR_LOCK_TTL_SECONDS", 300)?;
+        let verification_poll_interval = duration_env("ROCKETMQ_SRE_EXECUTOR_VERIFICATION_POLL_SECONDS", 5)?;
+        if verification_poll_interval > Duration::from_secs(60) {
+            return Err(ExecutorError::Configuration);
+        }
         let shutdown_timeout = duration_env("ROCKETMQ_SRE_EXECUTOR_SHUTDOWN_SECONDS", 30)?;
         let lease_ttl_seconds = parse_env("ROCKETMQ_SRE_EXECUTOR_LEASE_TTL_SECONDS", 120_u32)?;
         if !(5..=300).contains(&lease_ttl_seconds) {
@@ -84,6 +89,7 @@ impl ExecutorConfig {
             request_timeout,
             lease_ttl_seconds,
             resource_lock_ttl,
+            verification_poll_interval,
             shutdown_timeout,
             dev_insecure_http,
         })
@@ -110,6 +116,7 @@ impl Debug for ExecutorConfig {
             .field("request_timeout", &self.request_timeout)
             .field("lease_ttl_seconds", &self.lease_ttl_seconds)
             .field("resource_lock_ttl", &self.resource_lock_ttl)
+            .field("verification_poll_interval", &self.verification_poll_interval)
             .field("shutdown_timeout", &self.shutdown_timeout)
             .field("dev_insecure_http", &self.dev_insecure_http)
             .finish()
@@ -209,6 +216,7 @@ mod tests {
             request_timeout: Duration::from_secs(1),
             lease_ttl_seconds: 30,
             resource_lock_ttl: Duration::from_secs(30),
+            verification_poll_interval: Duration::from_secs(1),
             shutdown_timeout: Duration::from_secs(1),
             dev_insecure_http: false,
         };
