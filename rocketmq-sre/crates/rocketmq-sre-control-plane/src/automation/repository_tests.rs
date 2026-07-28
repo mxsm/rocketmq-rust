@@ -83,6 +83,19 @@ async fn postgres_automation_runs_are_idempotent_terminal_and_auditable() {
     conflict.evidence_ids.push(EvidenceId::new());
     assert!(service.submit(&auth, &conflict).await.is_err());
 
+    let (running, claimed) = repository
+        .claim_no_side_effect_run(tenant_id, pending.id)
+        .await
+        .expect("claim pending run");
+    assert!(claimed);
+    assert_eq!(running.status, AutomationRunStatus::Running);
+    let (same_running, duplicate_claim) = repository
+        .claim_no_side_effect_run(tenant_id, pending.id)
+        .await
+        .expect("idempotent running claim");
+    assert!(!duplicate_claim);
+    assert_eq!(same_running, running);
+
     let completion = CompleteAutomationRunRequest {
         status: AutomationRunStatus::Succeeded,
         result_code: "evidence_collection_completed".to_owned(),
