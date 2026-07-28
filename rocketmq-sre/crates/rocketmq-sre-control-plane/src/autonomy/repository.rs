@@ -68,12 +68,7 @@ impl PostgresRepository {
         .await?;
         let (policy_id, next_version, current) = match existing {
             Some(row) => {
-                let current = lifecycle_from_row(
-                    &row,
-                    definition.tenant_id,
-                    definition.cluster_id,
-                    definition.action,
-                )?;
+                let current = lifecycle_from_row(&row, definition.tenant_id, definition.cluster_id, definition.action)?;
                 (
                     AutonomyPolicyId::from_uuid(row.try_get("policy_id")?),
                     u64::try_from(row.try_get::<i64, _>("policy_definition_version")?)
@@ -126,7 +121,10 @@ impl PostgresRepository {
                 .map_err(|_| invalid_request("evidence freshness is too large"))?,
         )
         .bind(&definition.required_evidence_sources)
-        .bind(i32::try_from(definition.min_shadow_samples).map_err(|_| invalid_request("shadow sample bound is too large"))?)
+        .bind(
+            i32::try_from(definition.min_shadow_samples)
+                .map_err(|_| invalid_request("shadow sample bound is too large"))?,
+        )
         .bind(
             i32::try_from(definition.min_supervised_successes)
                 .map_err(|_| invalid_request("supervised success bound is too large"))?,
@@ -198,6 +196,7 @@ impl PostgresRepository {
                 insert_lifecycle_event(
                     &mut transaction,
                     &lifecycle,
+                    &definition.action_version,
                     Some(lifecycle.mode),
                     "policy_definition_changed",
                     actor,
@@ -248,6 +247,7 @@ impl PostgresRepository {
                 insert_lifecycle_event(
                     &mut transaction,
                     &lifecycle,
+                    &definition.action_version,
                     None,
                     "policy_definition_created",
                     actor,
@@ -354,6 +354,7 @@ impl PostgresRepository {
         &self,
         current: &AutonomyLifecycleState,
         next: &AutonomyLifecycleState,
+        action_version: &str,
         owner_confirmed: bool,
         reason_code: &str,
     ) -> Result<(), ControlPlaneError> {
@@ -374,7 +375,7 @@ impl PostgresRepository {
         .bind(current.tenant_id.as_uuid())
         .bind(current.cluster_id.as_uuid())
         .bind(current.action.id())
-        .bind("1.0.0")
+        .bind(action_version)
         .bind(
             i64::try_from(current.lifecycle_revision)
                 .map_err(|_| invalid_request("lifecycle revision is too large"))?,
@@ -384,10 +385,7 @@ impl PostgresRepository {
         .bind(owner_confirmed)
         .bind(next.updated_at)
         .bind(&next.pause_reason)
-        .bind(
-            i64::try_from(next.lifecycle_revision)
-                .map_err(|_| invalid_request("lifecycle revision is too large"))?,
-        )
+        .bind(i64::try_from(next.lifecycle_revision).map_err(|_| invalid_request("lifecycle revision is too large"))?)
         .bind(&next.updated_by)
         .execute(&mut *transaction)
         .await?;
@@ -400,6 +398,7 @@ impl PostgresRepository {
         insert_lifecycle_event(
             &mut transaction,
             next,
+            action_version,
             Some(current.mode),
             reason_code,
             &next.updated_by,
@@ -576,10 +575,7 @@ impl PostgresRepository {
         .bind(policy.cluster_id.as_uuid())
         .bind(policy.action.id())
         .bind(&policy.action_version)
-        .bind(
-            i64::try_from(policy.definition_version)
-                .map_err(|_| invalid_request("policy version is too large"))?,
-        )
+        .bind(i64::try_from(policy.definition_version).map_err(|_| invalid_request("policy version is too large"))?)
         .fetch_all(&self.pool)
         .await?;
         let mut shadow = None;
@@ -592,42 +588,17 @@ impl PostgresRepository {
                 AutonomyQualificationLevel::Shadow | AutonomyQualificationLevel::Autonomous => {}
             }
         }
-        let counts = match autonomous.as_ref().or(shadow.as_ref()) {
-            Some(cohort) => sqlx::query(
-                "SELECT
-                    COUNT(*) FILTER (
-                        WHERE sample_kind = 'shadow_outcome' AND qualified
-                    ) AS qualified_shadow,
-                    COUNT(*) FILTER (
-                        WHERE sample_kind = 'shadow_outcome' AND NOT qualified
-                    ) AS unqualified_shadow,
-                    COUNT(*) FILTER (
-                        WHERE sample_kind = 'supervised_success' AND qualified
-                    ) AS supervised_successes
-                 FROM autonomy_qualification_samples
-                 WHERE cohort_id = $1
-                   AND observed_at >= NOW() - ($2::int * INTERVAL '1 day')",
-            )
-            .bind(cohort.id.as_uuid())
-            .bind(i32::from(policy.observation_window_days))
-            .fetch_one(&self.pool)
-            .await?
-            .try_get::<i64, _>("qualified_shadow")
-            .and_then(|shadow_count| {
-                Ok((
-                    shadow_count,
-                    0_i64,
-                    0_i64,
-                ))
-            })?,
+        let (qualified_shadow, unqualified_shadow, _) = match shadow.as_ref() {
+            Some(cohort) => sample_counts(&self.pool, cohort.id, policy.observation_window_days).await?,
             None => (0, 0, 0),
         };
-        let (qualified_shadow, unqualified_shadow, supervised_successes) = if let Some(cohort) = autonomous.as_ref() {
-            sample_counts(&self.pool, cohort.id, policy.observation_window_days).await?
-        } else if let Some(cohort) = shadow.as_ref() {
-            sample_counts(&self.pool, cohort.id, policy.observation_window_days).await?
-        } else {
-            counts
+        let (_, _, supervised_successes) = match autonomous.as_ref() {
+            Some(cohort) => sample_counts(&self.pool, cohort.id, policy.observation_window_days).await?,
+            None => (0, 0, 0),
+        };
+        let (unresolved_unknown, recent_rollbacks) = match autonomous.as_ref() {
+            Some(cohort) => outcome_counts(&self.pool, cohort.id, policy.observation_window_days).await?,
+            None => (0, 0),
         };
         Ok(AutonomyQualificationView {
             shadow_cohort: shadow,
@@ -635,8 +606,8 @@ impl PostgresRepository {
             qualified_shadow_samples: count_u32(qualified_shadow)?,
             unqualified_shadow_samples: count_u32(unqualified_shadow)?,
             qualified_supervised_successes: count_u32(supervised_successes)?,
-            unresolved_unknown: 0,
-            recent_rollbacks: 0,
+            unresolved_unknown: count_u32(unresolved_unknown)?,
+            recent_rollbacks: count_u32(recent_rollbacks)?,
             shadow_observation_window_met: count_u32(qualified_shadow)? >= policy.min_shadow_samples,
             autonomous_observation_window_met: count_u32(supervised_successes)? >= policy.min_supervised_successes,
         })
@@ -742,6 +713,7 @@ async fn lock_scope(
 async fn insert_lifecycle_event(
     transaction: &mut Transaction<'_, Postgres>,
     state: &AutonomyLifecycleState,
+    action_version: &str,
     from_mode: Option<AutonomyMode>,
     reason_code: &str,
     actor: &str,
@@ -752,15 +724,16 @@ async fn insert_lifecycle_event(
             from_mode, to_mode, previous_mode, lifecycle_revision,
             reason_code, actor_subject, event_snapshot, occurred_at
          ) VALUES (
-            $1, $2, $3, $4, '1.0.0',
-            $5, $6, $7, $8,
-            $9, $10, $11, $12
+            $1, $2, $3, $4, $5,
+            $6, $7, $8, $9,
+            $10, $11, $12, $13
          )",
     )
     .bind(Uuid::new_v4())
     .bind(state.tenant_id.as_uuid())
     .bind(state.cluster_id.as_uuid())
     .bind(state.action.id())
+    .bind(action_version)
     .bind(from_mode.map(mode_name))
     .bind(mode_name(state.mode))
     .bind(state.previous_mode.map(mode_name))
@@ -772,6 +745,32 @@ async fn insert_lifecycle_event(
     .execute(&mut **transaction)
     .await?;
     Ok(())
+}
+
+async fn outcome_counts(
+    pool: &sqlx::PgPool,
+    cohort_id: rocketmq_sre_contracts::AutonomyCohortId,
+    observation_window_days: u16,
+) -> Result<(i64, i64), ControlPlaneError> {
+    let row = sqlx::query(
+        "SELECT
+            COUNT(*) FILTER (
+                WHERE outcome_class = 'autonomous_execution_failure'
+                  AND failure_code = 'unknown_effect'
+            ) AS unresolved_unknown,
+            COUNT(*) FILTER (
+                WHERE outcome_class = 'autonomous_execution_failure'
+                  AND failure_code = 'rolled_back'
+            ) AS recent_rollbacks
+         FROM autonomy_outcomes
+         WHERE cohort_id = $1
+           AND occurred_at >= NOW() - ($2::int * INTERVAL '1 day')",
+    )
+    .bind(cohort_id.as_uuid())
+    .bind(i32::from(observation_window_days))
+    .fetch_one(pool)
+    .await?;
+    Ok((row.try_get("unresolved_unknown")?, row.try_get("recent_rollbacks")?))
 }
 
 async fn sample_counts(
@@ -858,9 +857,7 @@ fn cohort_from_row(row: &sqlx::postgres::PgRow) -> Result<AutonomyQualificationC
 fn freeze_from_row(row: &sqlx::postgres::PgRow) -> Result<AutonomyFreezeView, ControlPlaneError> {
     Ok(AutonomyFreezeView {
         id: row.try_get("id")?,
-        cluster_id: row
-            .try_get::<Option<Uuid>, _>("cluster_id")?
-            .map(ClusterId::from_uuid),
+        cluster_id: row.try_get::<Option<Uuid>, _>("cluster_id")?.map(ClusterId::from_uuid),
         action: row
             .try_get::<Option<String>, _>("action_id")?
             .as_deref()
