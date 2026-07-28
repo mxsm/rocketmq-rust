@@ -23,8 +23,10 @@ use hmac::Mac;
 use rocketmq_sre_contracts::ActionPlan;
 use rocketmq_sre_contracts::ApprovalGrant;
 use rocketmq_sre_contracts::ApprovalId;
+use rocketmq_sre_contracts::AutonomyGrant;
 use rocketmq_sre_contracts::ClusterId;
 use rocketmq_sre_contracts::CorrelationId;
+use rocketmq_sre_contracts::DynamicSafetyDecision;
 use rocketmq_sre_contracts::ExecutionId;
 use rocketmq_sre_contracts::ExecutionRequest;
 use rocketmq_sre_contracts::FenceAck;
@@ -72,6 +74,51 @@ struct UnsignedExecutionRequest<'a> {
     idempotency_key: &'a str,
     issuer: &'a str,
     audience: &'a str,
+    issued_at: chrono::DateTime<chrono::Utc>,
+    expires_at: chrono::DateTime<chrono::Utc>,
+    nonce: &'a str,
+}
+
+#[derive(Serialize)]
+struct UnsignedAutonomyGrant<'a> {
+    issuer: &'a str,
+    audience: &'a str,
+    plan_id: rocketmq_sre_contracts::ActionPlanId,
+    plan_hash: &'a str,
+    diagnosis_revision_id: rocketmq_sre_contracts::DiagnosisRevisionId,
+    tenant_id: TenantId,
+    cluster_id: ClusterId,
+    action: rocketmq_sre_contracts::ExecutionAction,
+    action_version: &'a str,
+    policy_id: rocketmq_sre_contracts::AutonomyPolicyId,
+    policy_definition_version: u64,
+    lifecycle_revision: u64,
+    autonomous_cohort_id: rocketmq_sre_contracts::AutonomyCohortId,
+    autonomous_cohort_hash: &'a str,
+    critic_review_id: rocketmq_sre_contracts::CriticReviewId,
+    primary_model_invocation_id: rocketmq_sre_contracts::ModelInvocationId,
+    critic_model_invocation_id: rocketmq_sre_contracts::ModelInvocationId,
+    issued_at: chrono::DateTime<chrono::Utc>,
+    expires_at: chrono::DateTime<chrono::Utc>,
+    nonce: &'a str,
+}
+
+#[derive(Serialize)]
+struct UnsignedDynamicSafetyDecision<'a> {
+    id: rocketmq_sre_contracts::DynamicSafetyDecisionId,
+    tenant_id: TenantId,
+    cluster_id: ClusterId,
+    action: rocketmq_sre_contracts::ExecutionAction,
+    plan_id: rocketmq_sre_contracts::ActionPlanId,
+    plan_hash: &'a str,
+    policy_definition_version: u64,
+    lifecycle_revision: u64,
+    error_budget_available: bool,
+    freeze_revision: u64,
+    kill_switch_revision: u64,
+    evidence_fresh: bool,
+    allowed: bool,
+    reason_codes: &'a [String],
     issued_at: chrono::DateTime<chrono::Utc>,
     expires_at: chrono::DateTime<chrono::Utc>,
     nonce: &'a str,
@@ -142,6 +189,30 @@ impl GrantSigner {
 
     pub(crate) fn verify_execution(&self, request: &ExecutionRequest) -> Result<(), ControlPlaneError> {
         self.verify(&execution_payload(request)?, &request.signature)
+    }
+
+    pub(crate) fn sign_autonomy(&self, grant: &mut AutonomyGrant) -> Result<(), ControlPlaneError> {
+        grant.signature = self.sign(&autonomy_payload(grant)?)?;
+        Ok(())
+    }
+
+    pub(crate) fn verify_autonomy(&self, grant: &AutonomyGrant) -> Result<(), ControlPlaneError> {
+        self.verify(&autonomy_payload(grant)?, &grant.signature)
+    }
+
+    pub(crate) fn sign_dynamic_safety(
+        &self,
+        decision: &mut DynamicSafetyDecision,
+    ) -> Result<(), ControlPlaneError> {
+        decision.signature = self.sign(&dynamic_safety_payload(decision)?)?;
+        Ok(())
+    }
+
+    pub(crate) fn verify_dynamic_safety(
+        &self,
+        decision: &DynamicSafetyDecision,
+    ) -> Result<(), ControlPlaneError> {
+        self.verify(&dynamic_safety_payload(decision)?, &decision.signature)
     }
 
     pub(crate) fn sign_fence_grant(&self, grant: &mut LeaseFenceGrant) -> Result<(), ControlPlaneError> {
@@ -242,6 +313,57 @@ fn execution_payload(request: &ExecutionRequest) -> Result<Vec<u8>, ControlPlane
         nonce: &request.nonce,
     })
     .map_err(|error| ControlPlaneError::configuration(format!("execution request cannot be canonicalized: {error}")))
+}
+
+fn autonomy_payload(grant: &AutonomyGrant) -> Result<Vec<u8>, ControlPlaneError> {
+    serde_jcs::to_vec(&UnsignedAutonomyGrant {
+        issuer: &grant.issuer,
+        audience: &grant.audience,
+        plan_id: grant.plan_id,
+        plan_hash: &grant.plan_hash,
+        diagnosis_revision_id: grant.diagnosis_revision_id,
+        tenant_id: grant.tenant_id,
+        cluster_id: grant.cluster_id,
+        action: grant.action,
+        action_version: &grant.action_version,
+        policy_id: grant.policy_id,
+        policy_definition_version: grant.policy_definition_version,
+        lifecycle_revision: grant.lifecycle_revision,
+        autonomous_cohort_id: grant.autonomous_cohort_id,
+        autonomous_cohort_hash: &grant.autonomous_cohort_hash,
+        critic_review_id: grant.critic_review_id,
+        primary_model_invocation_id: grant.primary_model_invocation_id,
+        critic_model_invocation_id: grant.critic_model_invocation_id,
+        issued_at: grant.issued_at,
+        expires_at: grant.expires_at,
+        nonce: &grant.nonce,
+    })
+    .map_err(|error| ControlPlaneError::configuration(format!("autonomy grant cannot be canonicalized: {error}")))
+}
+
+fn dynamic_safety_payload(decision: &DynamicSafetyDecision) -> Result<Vec<u8>, ControlPlaneError> {
+    serde_jcs::to_vec(&UnsignedDynamicSafetyDecision {
+        id: decision.id,
+        tenant_id: decision.tenant_id,
+        cluster_id: decision.cluster_id,
+        action: decision.action,
+        plan_id: decision.plan_id,
+        plan_hash: &decision.plan_hash,
+        policy_definition_version: decision.policy_definition_version,
+        lifecycle_revision: decision.lifecycle_revision,
+        error_budget_available: decision.error_budget_available,
+        freeze_revision: decision.freeze_revision,
+        kill_switch_revision: decision.kill_switch_revision,
+        evidence_fresh: decision.evidence_fresh,
+        allowed: decision.allowed,
+        reason_codes: &decision.reason_codes,
+        issued_at: decision.issued_at,
+        expires_at: decision.expires_at,
+        nonce: &decision.nonce,
+    })
+    .map_err(|error| {
+        ControlPlaneError::configuration(format!("dynamic safety decision cannot be canonicalized: {error}"))
+    })
 }
 
 fn lease_fence_payload(grant: &LeaseFenceGrant) -> Result<Vec<u8>, ControlPlaneError> {
