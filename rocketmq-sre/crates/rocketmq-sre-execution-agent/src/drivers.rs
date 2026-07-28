@@ -16,6 +16,7 @@ mod admin_core;
 mod config;
 mod kubernetes;
 mod logger_level_ttl;
+mod proxy_scale_out_one;
 
 use std::future::Future;
 use std::pin::Pin;
@@ -30,8 +31,14 @@ pub use config::LoggerLevelState;
 pub use config::LoggerLevelTtlRestore;
 pub use config::LoggerLevelTtlWrite;
 pub use kubernetes::KubernetesDriver;
+pub use kubernetes::ProxyScaleClient;
+pub use kubernetes::ProxyScaleOutOneWrite;
+pub use kubernetes::ProxyScaleRestore;
+pub use kubernetes::ProxyScaleState;
 pub use logger_level_ttl::LoggerLevelTtlHandler;
 pub use logger_level_ttl::LoggerLevelTtlParameters;
+pub use proxy_scale_out_one::ProxyScaleOutOneHandler;
+pub use proxy_scale_out_one::ProxyScaleOutOneParameters;
 
 use crate::ExecutionAgentError;
 use rocketmq_sre_contracts::AgentReadRequest;
