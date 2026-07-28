@@ -176,18 +176,6 @@ impl PostgresRepository {
         self.integration_target(target.target.tenant_id, target.target.id).await
     }
 
-    pub(in crate::release_management) async fn enqueue_integration_delivery(
-        &self,
-        target: &IntegrationTargetView,
-        delivery: &IntegrationDelivery,
-        audit: &AuditEvent,
-    ) -> Result<bool, ControlPlaneError> {
-        let mut transaction = self.pool.begin().await?;
-        let queued = enqueue_delivery_in_transaction(&mut transaction, target, delivery, audit).await?;
-        transaction.commit().await?;
-        Ok(queued)
-    }
-
     pub(in crate::release_management) async fn integration_deliveries(
         &self,
         tenant_id: TenantId,
