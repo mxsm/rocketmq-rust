@@ -93,6 +93,7 @@ use uuid::Uuid;
 use support::cleanup_schema;
 use support::isolated_pool;
 use support::seed_fixture;
+use support::seed_logger_fixture;
 
 type TestFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ExecutorError>> + Send + 'a>>;
 
@@ -227,6 +228,7 @@ impl ExecutorAuthorityClient for TestAuthority {
 #[derive(Clone)]
 struct TestAgent {
     effects: AgentEffectStore,
+    action: ExecutionAction,
     precondition_hash: Arc<str>,
     dispatches: Arc<Mutex<Vec<bool>>>,
 }
@@ -236,7 +238,7 @@ impl ExecutionAgentClient for TestAgent {
         Box::pin(async {
             Ok(ExecutionAgentCapabilities {
                 schema_version: EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
-                registered_actions: vec![ExecutionAction::ProxyScaleOutOne],
+                registered_actions: vec![self.action],
                 raw_admin_request_supported: false,
                 arbitrary_json_patch_supported: false,
                 shell_supported: false,
@@ -502,6 +504,40 @@ async fn autonomous_rollback_reuses_journal_without_a_new_safety_gate() {
     cleanup_schema(&run.pool, &run.schema).await;
 }
 
+#[tokio::test]
+#[ignore = "requires ROCKETMQ_SRE_TEST_DATABASE_URL pointing to Docker PostgreSQL"]
+async fn logger_ttl_autonomous_execution_uses_dynamic_safety_and_succeeds() {
+    let signals = [signal(0, true), signal(1, true), signal(2, true), signal(32, true)];
+    let run = run_logger_execution_with_authorization(&signals).await;
+
+    assert_eq!(run.state, ExecutionState::Succeeded);
+    assert_eq!(run.dynamic_safety_calls, 1);
+    assert_eq!(run.dispatches, vec![false]);
+    assert_eq!(run.compensation_intents, 0);
+    cleanup_schema(&run.pool, &run.schema).await;
+}
+
+#[tokio::test]
+#[ignore = "requires ROCKETMQ_SRE_TEST_DATABASE_URL pointing to Docker PostgreSQL"]
+async fn logger_ttl_autonomous_failure_rolls_back_without_a_second_safety_gate() {
+    let signals = [
+        signal(0, true),
+        signal(1, true),
+        signal(2, false),
+        signal(122, false),
+        signal(3, true),
+        signal(4, true),
+        signal(34, true),
+    ];
+    let run = run_logger_execution_with_authorization(&signals).await;
+
+    assert_eq!(run.state, ExecutionState::RolledBack);
+    assert_eq!(run.dynamic_safety_calls, 1);
+    assert_eq!(run.dispatches, vec![false, true]);
+    assert_eq!(run.compensation_intents, 1);
+    cleanup_schema(&run.pool, &run.schema).await;
+}
+
 struct ExecutionRun {
     pool: PgPool,
     schema: String,
@@ -519,27 +555,46 @@ async fn run_execution(signals: &[Signal]) -> ExecutionRun {
 }
 
 async fn run_execution_with_authorization(signals: &[Signal], autonomous: bool) -> ExecutionRun {
+    run_execution_for_action(signals, autonomous, ExecutionAction::ProxyScaleOutOne).await
+}
+
+async fn run_logger_execution_with_authorization(signals: &[Signal]) -> ExecutionRun {
+    run_execution_for_action(signals, true, ExecutionAction::ObservabilityLoggerLevelTtl).await
+}
+
+async fn run_execution_for_action(signals: &[Signal], autonomous: bool, action: ExecutionAction) -> ExecutionRun {
     let database_url = std::env::var("ROCKETMQ_SRE_TEST_DATABASE_URL").expect("test database URL must be explicit");
-    let schema = format!("phase3_flow_{}", Uuid::new_v4().simple());
+    let schema = format!("phase4_flow_{}", Uuid::new_v4().simple());
     let pool = isolated_pool(&database_url, &schema).await;
     sqlx::migrate!("../../migrations")
         .run(&pool)
         .await
         .expect("empty-schema migrations");
-    let mut fixture = seed_fixture(&pool).await;
+    let mut fixture = match action {
+        ExecutionAction::ProxyScaleOutOne => seed_fixture(&pool).await,
+        ExecutionAction::ObservabilityLoggerLevelTtl => seed_logger_fixture(&pool).await,
+        _ => panic!("the executor integration flow supports only the two R1 scenarios under test"),
+    };
     if autonomous {
         fixture.request.approvals.clear();
         fixture.request.autonomy_grant = Some(autonomy_grant(&fixture));
         fixture.request.requested_by = "autonomy-orchestrator".to_owned();
     }
+    let descriptor_yaml = match action {
+        ExecutionAction::ProxyScaleOutOne => include_str!("../../../config/actions/proxy.scale_out_one.v1.yaml"),
+        ExecutionAction::ObservabilityLoggerLevelTtl => {
+            include_str!("../../../config/actions/observability.logger_level_ttl.v1.yaml")
+        }
+        _ => panic!("the executor integration flow supports only the two R1 descriptors under test"),
+    };
     let mut descriptor: rocketmq_sre_contracts::ActionDescriptor =
-        serde_yaml::from_str(include_str!("../../../config/actions/proxy.scale_out_one.v1.yaml"))
-            .expect("proxy scale descriptor");
+        serde_yaml::from_str(descriptor_yaml).expect("R1 action descriptor");
     descriptor.execution_supported = true;
     let registry = Arc::new(ExecutorActionRegistry::from_descriptors([descriptor]).expect("test registry"));
     let dispatches = Arc::new(Mutex::new(Vec::new()));
     let agent = Arc::new(TestAgent {
         effects: AgentEffectStore::new(pool.clone()),
+        action,
         precondition_hash: Arc::from(fixture.plan.steps[0].precondition_hash.as_str()),
         dispatches: Arc::clone(&dispatches),
     });
