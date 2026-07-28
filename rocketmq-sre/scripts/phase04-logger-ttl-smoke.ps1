@@ -121,7 +121,14 @@ foreach ($path in @(
     Assert-NonSystemBuildPath $path.Value $path.Description
 }
 
-foreach ($port in @($NameServerPort, $NameServerPort + 1000, $NameServerPort + 1001, $BrokerPort - 2, $BrokerPort, $BrokerPort + 1)) {
+foreach ($port in @(
+    $NameServerPort,
+    ($NameServerPort + 1000),
+    ($NameServerPort + 1001),
+    ($BrokerPort - 2),
+    $BrokerPort,
+    ($BrokerPort + 1)
+)) {
     Assert-PortAvailable $port
 }
 
