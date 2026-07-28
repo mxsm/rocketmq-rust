@@ -28,7 +28,9 @@ use rocketmq_sre_contracts::EvidenceId;
 use rocketmq_sre_contracts::ExecutionId;
 use rocketmq_sre_contracts::ExecutionRequest;
 use rocketmq_sre_contracts::ExecutionState;
+use rocketmq_sre_contracts::ExternalApprovalInput;
 use rocketmq_sre_contracts::IncidentId;
+use rocketmq_sre_contracts::IntegrationTargetId;
 use rocketmq_sre_contracts::ManualRunbookDraft;
 use rocketmq_sre_contracts::ModelInvocationId;
 use rocketmq_sre_contracts::PolicyDecision;
@@ -110,6 +112,13 @@ pub(crate) struct ApprovalDecisionResponse {
     pub(crate) approval: ApprovalRecord,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) grant: Option<ApprovalGrant>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ExternalApprovalSource {
+    pub(crate) target_id: IntegrationTargetId,
+    pub(crate) input: ExternalApprovalInput,
+    pub(crate) received_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
