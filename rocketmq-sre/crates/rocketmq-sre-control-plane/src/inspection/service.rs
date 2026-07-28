@@ -90,12 +90,21 @@ impl InspectionService {
         request: &InspectionCreateRequest,
         correlation_id: CorrelationId,
     ) -> Result<InspectionView, ControlPlaneError> {
-        let view = self.workflow.create_inspection(auth, request, correlation_id).await?;
+        let view = self.create_persisted(auth, request, correlation_id).await?;
         if request.schedule.is_none() {
             self.execute(auth, view.run.id, correlation_id).await
         } else {
             Ok(view)
         }
+    }
+
+    pub(crate) async fn create_persisted(
+        &self,
+        auth: &AuthContext,
+        request: &InspectionCreateRequest,
+        correlation_id: CorrelationId,
+    ) -> Result<InspectionView, ControlPlaneError> {
+        self.workflow.create_inspection(auth, request, correlation_id).await
     }
 
     #[tracing::instrument(
