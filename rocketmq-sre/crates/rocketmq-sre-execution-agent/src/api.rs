@@ -46,6 +46,7 @@ use crate::ExecutionAgentConfig;
 use crate::ExecutionAgentError;
 use crate::FenceAckSigner;
 use crate::HttpLeaseAuthorityClient;
+use crate::LoggerLevelTtlHandler;
 use crate::ReconcileEffectRequest;
 use crate::ReconcileEffectResponse;
 use crate::drivers::ProductionBrokerConfigPatchClient;
@@ -128,10 +129,18 @@ pub async fn run(
     };
     let mut registry = AgentDriverRegistry::empty();
     if let Some(driver) = &broker_driver {
-        registry.register_admin(
-            ExecutionAction::BrokerConfigPatchAllowlisted,
-            BrokerConfigPatchHandler::new(Arc::clone(driver)),
-        )?;
+        if config.broker_config_patch_enabled {
+            registry.register_admin(
+                ExecutionAction::BrokerConfigPatchAllowlisted,
+                BrokerConfigPatchHandler::new(Arc::clone(driver)),
+            )?;
+        }
+        if config.logger_ttl_enabled {
+            registry.register_config(
+                ExecutionAction::ObservabilityLoggerLevelTtl,
+                LoggerLevelTtlHandler::new(Arc::clone(driver)),
+            )?;
+        }
     }
     let authority = Arc::new(HttpLeaseAuthorityClient::new(
         config.authority_url.clone(),
