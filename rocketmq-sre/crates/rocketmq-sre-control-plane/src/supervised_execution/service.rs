@@ -307,7 +307,12 @@ impl SupervisedExecutionService {
                 resource: candidate.resource.clone(),
                 parameters: candidate.parameters.clone(),
                 evidence_ids: candidate.evidence_ids.clone(),
-                precondition_hash: step_precondition_hash(&candidate.evidence_ids, &evidence)?,
+                precondition_hash: action_precondition_hash(
+                    action,
+                    &candidate.resource,
+                    &candidate.evidence_ids,
+                    &evidence,
+                )?,
                 max_impact: descriptor.max_impact,
                 verification: descriptor.verification.clone(),
                 compensation: descriptor.compensation.clone(),
@@ -494,7 +499,9 @@ impl SupervisedExecutionService {
                 .repository
                 .resource_has_active_change(auth, plan.cluster_id, &step.resource)
                 .await?;
-            if step.precondition_hash != step_precondition_hash(&step.evidence_ids, &evidence)? {
+            if step.precondition_hash
+                != action_precondition_hash(step.action, &step.resource, &step.evidence_ids, &evidence)?
+            {
                 return Err(ControlPlaneError::conflict_code(
                     "precondition_changed",
                     "step precondition no longer matches its Evidence set",
