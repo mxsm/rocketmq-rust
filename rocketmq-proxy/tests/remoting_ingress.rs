@@ -19,7 +19,6 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use rocketmq_auth::cal_signature;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
@@ -36,7 +35,6 @@ use rocketmq_proxy::MetadataService;
 use rocketmq_proxy::ProxyAuthConfig;
 use rocketmq_proxy::ProxyAuthRuntime;
 use rocketmq_proxy::ProxyConfig;
-use rocketmq_proxy::ProxyResult;
 use rocketmq_proxy::ProxyRuntime;
 use rocketmq_proxy::ProxyTopicMessageType;
 use rocketmq_proxy::RemotingConfig;
@@ -45,6 +43,7 @@ use rocketmq_proxy::ResourceIdentity;
 use rocketmq_proxy::RouteService;
 use rocketmq_proxy::SubscriptionGroupMetadata;
 use rocketmq_proxy_core::ProxyContext;
+use rocketmq_proxy_core::ProxyServiceFuture;
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_transport::Connection;
 use std::collections::BTreeMap;
@@ -70,45 +69,45 @@ impl RecordingRouteService {
     }
 }
 
-#[async_trait]
 impl RouteService for RecordingRouteService {
-    async fn query_route(
-        &self,
-        context: &ProxyContext,
-        _topic: &ResourceIdentity,
-        _endpoints: &[ResolvedEndpoint],
-    ) -> ProxyResult<TopicRouteData> {
-        self.observed
-            .lock()
-            .expect("route service mutex poisoned")
-            .push(ObservedRouteContext {
-                local_addr: context.local_addr().map(str::to_owned),
-                remote_addr: context.remote_addr().map(str::to_owned),
-            });
-        Ok(TopicRouteData::default())
+    fn query_route<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        _topic: &'a ResourceIdentity,
+        _endpoints: &'a [ResolvedEndpoint],
+    ) -> ProxyServiceFuture<'a, TopicRouteData> {
+        Box::pin(async move {
+            self.observed
+                .lock()
+                .expect("route service mutex poisoned")
+                .push(ObservedRouteContext {
+                    local_addr: context.local_addr().map(str::to_owned),
+                    remote_addr: context.remote_addr().map(str::to_owned),
+                });
+            Ok(TopicRouteData::default())
+        })
     }
 }
 
 #[derive(Default)]
 struct StaticMetadataService;
 
-#[async_trait]
 impl MetadataService for StaticMetadataService {
-    async fn topic_message_type(
-        &self,
-        _context: &ProxyContext,
-        _topic: &ResourceIdentity,
-    ) -> ProxyResult<ProxyTopicMessageType> {
-        Ok(ProxyTopicMessageType::Normal)
+    fn topic_message_type<'a>(
+        &'a self,
+        _context: &'a ProxyContext,
+        _topic: &'a ResourceIdentity,
+    ) -> ProxyServiceFuture<'a, ProxyTopicMessageType> {
+        Box::pin(async { Ok(ProxyTopicMessageType::Normal) })
     }
 
-    async fn subscription_group(
-        &self,
-        _context: &ProxyContext,
-        _topic: &ResourceIdentity,
-        _group: &ResourceIdentity,
-    ) -> ProxyResult<Option<SubscriptionGroupMetadata>> {
-        Ok(None)
+    fn subscription_group<'a>(
+        &'a self,
+        _context: &'a ProxyContext,
+        _topic: &'a ResourceIdentity,
+        _group: &'a ResourceIdentity,
+    ) -> ProxyServiceFuture<'a, Option<SubscriptionGroupMetadata>> {
+        Box::pin(async { Ok(None) })
     }
 }
 

@@ -53,6 +53,7 @@ futures-util = "0.3"
 local-ip-address = "0.6.13"
 num_cpus.workspace = true
 parking_lot.workspace = true
+pin-project-lite = "0.2.16"
 rand.workspace = true
 reqwest = { version = "0.13", features = ["json"] }
 serde.workspace = true

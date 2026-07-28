@@ -17,7 +17,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
-use async_trait::async_trait;
 use cheetah_string::CheetahString;
 use rocketmq_broker::proxy_adapter_compat::current_millis;
 use rocketmq_broker::proxy_adapter_compat::mix_all;
@@ -98,6 +97,7 @@ use rocketmq_proxy_core::ProxyError;
 use rocketmq_proxy_core::ProxyMessage;
 use rocketmq_proxy_core::ProxyRemotingBackend;
 use rocketmq_proxy_core::ProxyResult;
+use rocketmq_proxy_core::ProxyServiceFuture;
 use rocketmq_proxy_core::ProxyTopicMessageType;
 use rocketmq_proxy_core::PullMessagePlan;
 use rocketmq_proxy_core::PullMessageRequest;
@@ -514,10 +514,9 @@ impl LocalRemotingBackend {
     }
 }
 
-#[async_trait]
 impl ProxyRemotingBackend for LocalRemotingBackend {
-    async fn process(&self, request: RemotingCommand) -> ProxyResult<RemotingCommand> {
-        self.client.process_remoting(request).await
+    fn process(&self, request: RemotingCommand) -> ProxyServiceFuture<'_, RemotingCommand> {
+        Box::pin(async move { self.client.process_remoting(request).await })
     }
 }
 
@@ -532,15 +531,14 @@ impl LocalRouteService {
     }
 }
 
-#[async_trait]
 impl RouteService for LocalRouteService {
-    async fn query_route(
-        &self,
-        _context: &ProxyContext,
-        topic: &ResourceIdentity,
-        _endpoints: &[ResolvedEndpoint],
-    ) -> ProxyResult<TopicRouteData> {
-        self.client.query_route(topic.clone()).await
+    fn query_route<'a>(
+        &'a self,
+        _context: &'a ProxyContext,
+        topic: &'a ResourceIdentity,
+        _endpoints: &'a [ResolvedEndpoint],
+    ) -> ProxyServiceFuture<'a, TopicRouteData> {
+        Box::pin(async move { self.client.query_route(topic.clone()).await })
     }
 }
 
@@ -555,23 +553,22 @@ impl LocalMetadataService {
     }
 }
 
-#[async_trait]
 impl MetadataService for LocalMetadataService {
-    async fn topic_message_type(
-        &self,
-        _context: &ProxyContext,
-        topic: &ResourceIdentity,
-    ) -> ProxyResult<ProxyTopicMessageType> {
-        self.client.query_topic_message_type(topic.clone()).await
+    fn topic_message_type<'a>(
+        &'a self,
+        _context: &'a ProxyContext,
+        topic: &'a ResourceIdentity,
+    ) -> ProxyServiceFuture<'a, ProxyTopicMessageType> {
+        Box::pin(async move { self.client.query_topic_message_type(topic.clone()).await })
     }
 
-    async fn subscription_group(
-        &self,
-        _context: &ProxyContext,
-        topic: &ResourceIdentity,
-        group: &ResourceIdentity,
-    ) -> ProxyResult<Option<SubscriptionGroupMetadata>> {
-        self.client.query_subscription_group(topic.clone(), group.clone()).await
+    fn subscription_group<'a>(
+        &'a self,
+        _context: &'a ProxyContext,
+        topic: &'a ResourceIdentity,
+        group: &'a ResourceIdentity,
+    ) -> ProxyServiceFuture<'a, Option<SubscriptionGroupMetadata>> {
+        Box::pin(async move { self.client.query_subscription_group(topic.clone(), group.clone()).await })
     }
 }
 
@@ -590,23 +587,24 @@ impl LocalAssignmentService {
     }
 }
 
-#[async_trait]
 impl AssignmentService for LocalAssignmentService {
-    async fn query_assignment(
-        &self,
-        context: &ProxyContext,
-        topic: &ResourceIdentity,
-        group: &ResourceIdentity,
-        _endpoints: &[ResolvedEndpoint],
-    ) -> ProxyResult<Option<Vec<MessageQueueAssignment>>> {
-        self.client
-            .query_assignment(
-                topic.clone(),
-                group.clone(),
-                context.require_client_id()?.to_owned(),
-                self.strategy_name.clone(),
-            )
-            .await
+    fn query_assignment<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        topic: &'a ResourceIdentity,
+        group: &'a ResourceIdentity,
+        _endpoints: &'a [ResolvedEndpoint],
+    ) -> ProxyServiceFuture<'a, Option<Vec<MessageQueueAssignment>>> {
+        Box::pin(async move {
+            self.client
+                .query_assignment(
+                    topic.clone(),
+                    group.clone(),
+                    context.require_client_id()?.to_owned(),
+                    self.strategy_name.clone(),
+                )
+                .await
+        })
     }
 }
 
@@ -621,34 +619,37 @@ impl LocalMessageService {
     }
 }
 
-#[async_trait]
 impl MessageService for LocalMessageService {
-    async fn send_message(
-        &self,
-        context: &ProxyContext,
-        request: &SendMessageRequest,
-    ) -> ProxyResult<Vec<SendMessageResultEntry>> {
-        self.client
-            .send_message(
-                request.clone(),
-                context.client_id().map(ToOwned::to_owned),
-                context.request_id().to_owned(),
-            )
-            .await
+    fn send_message<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: &'a SendMessageRequest,
+    ) -> ProxyServiceFuture<'a, Vec<SendMessageResultEntry>> {
+        Box::pin(async move {
+            self.client
+                .send_message(
+                    request.clone(),
+                    context.client_id().map(ToOwned::to_owned),
+                    context.request_id().to_owned(),
+                )
+                .await
+        })
     }
 
-    async fn recall_message(
-        &self,
-        context: &ProxyContext,
-        request: &RecallMessageRequest,
-    ) -> ProxyResult<RecallMessagePlan> {
-        self.client
-            .recall_message(
-                request.clone(),
-                context.client_id().map(ToOwned::to_owned),
-                context.request_id().to_owned(),
-            )
-            .await
+    fn recall_message<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: &'a RecallMessageRequest,
+    ) -> ProxyServiceFuture<'a, RecallMessagePlan> {
+        Box::pin(async move {
+            self.client
+                .recall_message(
+                    request.clone(),
+                    context.client_id().map(ToOwned::to_owned),
+                    context.request_id().to_owned(),
+                )
+                .await
+        })
     }
 }
 
@@ -663,24 +664,25 @@ impl LocalTransactionService {
     }
 }
 
-#[async_trait]
 impl TransactionService for LocalTransactionService {
     fn transaction_producer_group(&self, context: &ProxyContext) -> Option<String> {
         Some(self.client.transaction_producer_group(context))
     }
 
-    async fn end_transaction(
-        &self,
-        context: &ProxyContext,
-        request: &EndTransactionRequest,
-    ) -> ProxyResult<EndTransactionPlan> {
-        self.client
-            .end_transaction(
-                request.clone(),
-                context.client_id().map(ToOwned::to_owned),
-                context.request_id().to_owned(),
-            )
-            .await
+    fn end_transaction<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: &'a EndTransactionRequest,
+    ) -> ProxyServiceFuture<'a, EndTransactionPlan> {
+        Box::pin(async move {
+            self.client
+                .end_transaction(
+                    request.clone(),
+                    context.client_id().map(ToOwned::to_owned),
+                    context.request_id().to_owned(),
+                )
+                .await
+        })
     }
 }
 
@@ -695,66 +697,69 @@ impl LocalConsumerService {
     }
 }
 
-#[async_trait]
 impl ConsumerService for LocalConsumerService {
-    async fn receive_message(
-        &self,
-        _context: &ProxyContext,
-        request: &ReceiveMessageRequest,
-    ) -> ProxyResult<ReceiveMessagePlan> {
-        receive_message_via_broker(&self.client, request).await
+    fn receive_message<'a>(
+        &'a self,
+        _context: &'a ProxyContext,
+        request: &'a ReceiveMessageRequest,
+    ) -> ProxyServiceFuture<'a, ReceiveMessagePlan> {
+        Box::pin(async move { receive_message_via_broker(&self.client, request).await })
     }
 
-    async fn pull_message(
-        &self,
-        _context: &ProxyContext,
-        request: &PullMessageRequest,
-    ) -> ProxyResult<PullMessagePlan> {
-        pull_message_via_broker(&self.client, request).await
+    fn pull_message<'a>(
+        &'a self,
+        _context: &'a ProxyContext,
+        request: &'a PullMessageRequest,
+    ) -> ProxyServiceFuture<'a, PullMessagePlan> {
+        Box::pin(async move { pull_message_via_broker(&self.client, request).await })
     }
 
-    async fn ack_message(
-        &self,
-        _context: &ProxyContext,
-        request: &AckMessageRequest,
-    ) -> ProxyResult<Vec<AckMessageResultEntry>> {
-        ack_message_via_broker(&self.client, request).await
+    fn ack_message<'a>(
+        &'a self,
+        _context: &'a ProxyContext,
+        request: &'a AckMessageRequest,
+    ) -> ProxyServiceFuture<'a, Vec<AckMessageResultEntry>> {
+        Box::pin(async move { ack_message_via_broker(&self.client, request).await })
     }
 
-    async fn forward_message_to_dead_letter_queue(
-        &self,
-        _context: &ProxyContext,
-        request: &ForwardMessageToDeadLetterQueueRequest,
-    ) -> ProxyResult<ForwardMessageToDeadLetterQueuePlan> {
-        forward_message_to_dead_letter_queue_via_broker(&self.client, request).await
+    fn forward_message_to_dead_letter_queue<'a>(
+        &'a self,
+        _context: &'a ProxyContext,
+        request: &'a ForwardMessageToDeadLetterQueueRequest,
+    ) -> ProxyServiceFuture<'a, ForwardMessageToDeadLetterQueuePlan> {
+        Box::pin(async move { forward_message_to_dead_letter_queue_via_broker(&self.client, request).await })
     }
 
-    async fn change_invisible_duration(
-        &self,
-        _context: &ProxyContext,
-        request: &ChangeInvisibleDurationRequest,
-    ) -> ProxyResult<ChangeInvisibleDurationPlan> {
-        change_invisible_duration_via_broker(&self.client, request).await
+    fn change_invisible_duration<'a>(
+        &'a self,
+        _context: &'a ProxyContext,
+        request: &'a ChangeInvisibleDurationRequest,
+    ) -> ProxyServiceFuture<'a, ChangeInvisibleDurationPlan> {
+        Box::pin(async move { change_invisible_duration_via_broker(&self.client, request).await })
     }
 
-    async fn update_offset(
-        &self,
-        _context: &ProxyContext,
-        request: &UpdateOffsetRequest,
-    ) -> ProxyResult<UpdateOffsetPlan> {
-        update_offset_via_broker(&self.client, request).await
+    fn update_offset<'a>(
+        &'a self,
+        _context: &'a ProxyContext,
+        request: &'a UpdateOffsetRequest,
+    ) -> ProxyServiceFuture<'a, UpdateOffsetPlan> {
+        Box::pin(async move { update_offset_via_broker(&self.client, request).await })
     }
 
-    async fn get_offset(&self, _context: &ProxyContext, request: &GetOffsetRequest) -> ProxyResult<GetOffsetPlan> {
-        get_offset_via_broker(&self.client, request).await
+    fn get_offset<'a>(
+        &'a self,
+        _context: &'a ProxyContext,
+        request: &'a GetOffsetRequest,
+    ) -> ProxyServiceFuture<'a, GetOffsetPlan> {
+        Box::pin(async move { get_offset_via_broker(&self.client, request).await })
     }
 
-    async fn query_offset(
-        &self,
-        _context: &ProxyContext,
-        request: &QueryOffsetRequest,
-    ) -> ProxyResult<QueryOffsetPlan> {
-        query_offset_via_broker(&self.client, request).await
+    fn query_offset<'a>(
+        &'a self,
+        _context: &'a ProxyContext,
+        request: &'a QueryOffsetRequest,
+    ) -> ProxyServiceFuture<'a, QueryOffsetPlan> {
+        Box::pin(async move { query_offset_via_broker(&self.client, request).await })
     }
 }
 

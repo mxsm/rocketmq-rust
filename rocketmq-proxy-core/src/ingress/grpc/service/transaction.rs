@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::grpc::service::producer::is_transaction_message;
+use crate::ingress::grpc::service::producer::is_transaction_message;
 use crate::proto::v2;
+// Transaction gRPC ingress planning.
+
 use crate::ClientSessionRegistry;
 use crate::EndTransactionPlan;
 use crate::EndTransactionRequest;

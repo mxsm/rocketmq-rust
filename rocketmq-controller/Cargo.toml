@@ -27,7 +27,6 @@ keywords             = ["rocketmq", "controller", "raft", "distributed", "messag
 categories           = ["network-programming", "asynchronous"]
 
 [dependencies]
-rocketmq-auth     = { workspace = true }
 rocketmq-error    = { workspace = true }
 rocketmq-model    = { workspace = true }
 rocketmq-protocol = { workspace = true }

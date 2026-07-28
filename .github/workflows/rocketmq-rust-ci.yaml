@@ -124,7 +124,7 @@ jobs:
         run: python scripts/stable_surface_guard.py --mode baseline
 
   architecture-target:
-    name: Architecture Strict Target (visible debt)
+    name: Architecture Strict Target
     runs-on: ubuntu-latest
 
     steps:
@@ -141,7 +141,6 @@ jobs:
 
       - name: Run strict target and retain the debt report
         id: strict-target
-        continue-on-error: true
         run: python scripts/architecture_dependency_guard.py --mode target --output target/architecture-dependency-target.json
 
       - name: Publish strict target summary
@@ -150,7 +149,7 @@ jobs:
         run: |
           echo "### Strict architecture target" >> "$GITHUB_STEP_SUMMARY"
           echo "Result: ${{ steps.strict-target.outcome }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "This check becomes required when the P2.1/P2.2 target debt ledger is empty." >> "$GITHUB_STEP_SUMMARY"
+          echo "The P2 target debt ledger is empty; this job is enforced." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload strict target report
         if: always()

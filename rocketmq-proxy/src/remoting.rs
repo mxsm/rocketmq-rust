@@ -71,10 +71,10 @@ use rocketmq_protocol::protocol::heartbeat::heartbeat_data::HeartbeatData;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_proxy_core::identity::ResourceIdentity;
-pub use rocketmq_proxy_core::remoting::ProxyRemotingBackend;
-use rocketmq_proxy_core::remoting::RemotingIngressDispatcher;
-use rocketmq_proxy_core::remoting::RemotingIngressRoute;
-use rocketmq_proxy_core::remoting::RemotingStatusMapper;
+pub use rocketmq_proxy_core::ingress::remoting::ProxyRemotingBackend;
+use rocketmq_proxy_core::ingress::remoting::RemotingIngressDispatcher;
+use rocketmq_proxy_core::ingress::remoting::RemotingIngressRoute;
+use rocketmq_proxy_core::ingress::remoting::RemotingStatusMapper;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_transport::run_remoting_server_with_report_with_service_context_and_telemetry;
@@ -1391,7 +1391,6 @@ mod tests {
     use std::sync::Arc;
     use std::sync::Mutex;
 
-    use async_trait::async_trait;
     use bytes::Bytes;
     use cheetah_string::CheetahString;
     use rocketmq_auth::cal_signature;
@@ -1534,16 +1533,17 @@ mod tests {
         seen_codes: Mutex<Vec<i32>>,
     }
 
-    #[async_trait]
     impl ProxyRemotingBackend for TestRemotingBackend {
-        async fn process(&self, request: RemotingCommand) -> crate::error::ProxyResult<RemotingCommand> {
-            self.seen_codes
-                .lock()
-                .expect("backend mutex poisoned")
-                .push(request.code());
-            Ok(RemotingCommand::create_response_command_with_code(
-                ResponseCode::Success,
-            ))
+        fn process(&self, request: RemotingCommand) -> rocketmq_proxy_core::ProxyServiceFuture<'_, RemotingCommand> {
+            Box::pin(async move {
+                self.seen_codes
+                    .lock()
+                    .expect("backend mutex poisoned")
+                    .push(request.code());
+                Ok(RemotingCommand::create_response_command_with_code(
+                    ResponseCode::Success,
+                ))
+            })
         }
     }
 
@@ -2516,159 +2516,170 @@ mod tests {
 
     struct TestAssignmentService;
 
-    #[async_trait]
     impl AssignmentService for TestAssignmentService {
-        async fn query_assignment(
-            &self,
-            _context: &CoreProxyContext,
-            _topic: &ResourceIdentity,
-            _group: &ResourceIdentity,
-            _endpoints: &[crate::context::ResolvedEndpoint],
-        ) -> crate::error::ProxyResult<Option<Vec<MessageQueueAssignment>>> {
-            Ok(Some(vec![MessageQueueAssignment {
-                message_queue: Some(MessageQueue::from_parts("TopicA", CheetahString::from("broker-a"), 0)),
-                mode: MessageRequestMode::Pull,
-                attachments: None,
-            }]))
+        fn query_assignment<'a>(
+            &'a self,
+            _context: &'a CoreProxyContext,
+            _topic: &'a ResourceIdentity,
+            _group: &'a ResourceIdentity,
+            _endpoints: &'a [crate::context::ResolvedEndpoint],
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, Option<Vec<MessageQueueAssignment>>> {
+            Box::pin(async {
+                Ok(Some(vec![MessageQueueAssignment {
+                    message_queue: Some(MessageQueue::from_parts("TopicA", CheetahString::from("broker-a"), 0)),
+                    mode: MessageRequestMode::Pull,
+                    attachments: None,
+                }]))
+            })
         }
     }
 
     struct TestMessageService;
 
-    #[async_trait]
     impl MessageService for TestMessageService {
-        async fn send_message(
-            &self,
-            _context: &CoreProxyContext,
-            request: &SendMessageRequest,
-        ) -> crate::error::ProxyResult<Vec<SendMessageResultEntry>> {
-            Ok(request
-                .messages
-                .iter()
-                .map(|entry| {
-                    let queue_id = entry.queue_id.unwrap_or_default();
-                    let send_result = SendResult::new(
-                        SendStatus::SendOk,
-                        Some(CheetahString::from(entry.client_message_id.as_str())),
-                        None,
-                        Some(MessageQueue::from_parts(
-                            entry.topic.to_string(),
-                            CheetahString::from("broker-a"),
-                            queue_id,
-                        )),
-                        7,
-                    );
-                    SendMessageResultEntry {
-                        status: ProxyStatusMapper::ok_payload(),
-                        send_result: Some(send_result),
-                    }
-                })
-                .collect())
+        fn send_message<'a>(
+            &'a self,
+            _context: &'a CoreProxyContext,
+            request: &'a SendMessageRequest,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, Vec<SendMessageResultEntry>> {
+            Box::pin(async move {
+                Ok(request
+                    .messages
+                    .iter()
+                    .map(|entry| {
+                        let queue_id = entry.queue_id.unwrap_or_default();
+                        let send_result = SendResult::new(
+                            SendStatus::SendOk,
+                            Some(CheetahString::from(entry.client_message_id.as_str())),
+                            None,
+                            Some(MessageQueue::from_parts(
+                                entry.topic.to_string(),
+                                CheetahString::from("broker-a"),
+                                queue_id,
+                            )),
+                            7,
+                        );
+                        SendMessageResultEntry {
+                            status: ProxyStatusMapper::ok_payload(),
+                            send_result: Some(send_result),
+                        }
+                    })
+                    .collect())
+            })
         }
 
-        async fn recall_message(
-            &self,
-            _context: &CoreProxyContext,
-            request: &RecallMessageRequest,
-        ) -> crate::error::ProxyResult<RecallMessagePlan> {
-            Ok(RecallMessagePlan {
-                status: ProxyStatusMapper::ok_payload(),
-                message_id: request.recall_handle.clone(),
+        fn recall_message<'a>(
+            &'a self,
+            _context: &'a CoreProxyContext,
+            request: &'a RecallMessageRequest,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, RecallMessagePlan> {
+            Box::pin(async move {
+                Ok(RecallMessagePlan {
+                    status: ProxyStatusMapper::ok_payload(),
+                    message_id: request.recall_handle.clone(),
+                })
             })
         }
     }
 
     struct TestConsumerService;
 
-    #[async_trait]
     impl ConsumerService for TestConsumerService {
-        async fn receive_message(
-            &self,
-            _context: &CoreProxyContext,
-            _request: &ReceiveMessageRequest,
-        ) -> crate::error::ProxyResult<ReceiveMessagePlan> {
-            Err(crate::error::ProxyError::not_implemented("test receive"))
+        fn receive_message<'a>(
+            &'a self,
+            _context: &'a CoreProxyContext,
+            _request: &'a ReceiveMessageRequest,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, ReceiveMessagePlan> {
+            Box::pin(async { Err(crate::error::ProxyError::not_implemented("test receive")) })
         }
 
-        async fn pull_message(
-            &self,
-            _context: &CoreProxyContext,
-            request: &PullMessageRequest,
-        ) -> crate::error::ProxyResult<PullMessagePlan> {
-            let message = ProxyMessageExt {
-                message: ProxyMessage::new(request.target.topic.to_string(), b"hello".to_vec()),
-                msg_id: "pull-msg-id".to_owned(),
-                queue_id: request.target.queue_id,
-                queue_offset: request.offset,
-                ..ProxyMessageExt::default()
-            };
-            Ok(PullMessagePlan {
-                status: ProxyStatusMapper::ok_payload(),
-                next_offset: request.offset + 1,
-                min_offset: 0,
-                max_offset: 1024,
-                messages: vec![message],
+        fn pull_message<'a>(
+            &'a self,
+            _context: &'a CoreProxyContext,
+            request: &'a PullMessageRequest,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, PullMessagePlan> {
+            Box::pin(async move {
+                let message = ProxyMessageExt {
+                    message: ProxyMessage::new(request.target.topic.to_string(), b"hello".to_vec()),
+                    msg_id: "pull-msg-id".to_owned(),
+                    queue_id: request.target.queue_id,
+                    queue_offset: request.offset,
+                    ..ProxyMessageExt::default()
+                };
+                Ok(PullMessagePlan {
+                    status: ProxyStatusMapper::ok_payload(),
+                    next_offset: request.offset + 1,
+                    min_offset: 0,
+                    max_offset: 1024,
+                    messages: vec![message],
+                })
             })
         }
 
-        async fn ack_message(
-            &self,
-            _context: &CoreProxyContext,
-            _request: &AckMessageRequest,
-        ) -> crate::error::ProxyResult<Vec<AckMessageResultEntry>> {
-            Err(crate::error::ProxyError::not_implemented("test ack"))
+        fn ack_message<'a>(
+            &'a self,
+            _context: &'a CoreProxyContext,
+            _request: &'a AckMessageRequest,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, Vec<AckMessageResultEntry>> {
+            Box::pin(async { Err(crate::error::ProxyError::not_implemented("test ack")) })
         }
 
-        async fn forward_message_to_dead_letter_queue(
-            &self,
-            _context: &CoreProxyContext,
-            _request: &ForwardMessageToDeadLetterQueueRequest,
-        ) -> crate::error::ProxyResult<ForwardMessageToDeadLetterQueuePlan> {
-            Err(crate::error::ProxyError::not_implemented("test dlq"))
+        fn forward_message_to_dead_letter_queue<'a>(
+            &'a self,
+            _context: &'a CoreProxyContext,
+            _request: &'a ForwardMessageToDeadLetterQueueRequest,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, ForwardMessageToDeadLetterQueuePlan> {
+            Box::pin(async { Err(crate::error::ProxyError::not_implemented("test dlq")) })
         }
 
-        async fn change_invisible_duration(
-            &self,
-            _context: &CoreProxyContext,
-            _request: &ChangeInvisibleDurationRequest,
-        ) -> crate::error::ProxyResult<ChangeInvisibleDurationPlan> {
-            Err(crate::error::ProxyError::not_implemented("test change invisible"))
+        fn change_invisible_duration<'a>(
+            &'a self,
+            _context: &'a CoreProxyContext,
+            _request: &'a ChangeInvisibleDurationRequest,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, ChangeInvisibleDurationPlan> {
+            Box::pin(async { Err(crate::error::ProxyError::not_implemented("test change invisible")) })
         }
 
-        async fn update_offset(
-            &self,
-            _context: &CoreProxyContext,
-            _request: &UpdateOffsetRequest,
-        ) -> crate::error::ProxyResult<UpdateOffsetPlan> {
-            Ok(UpdateOffsetPlan {
-                status: ProxyStatusMapper::ok_payload(),
+        fn update_offset<'a>(
+            &'a self,
+            _context: &'a CoreProxyContext,
+            _request: &'a UpdateOffsetRequest,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, UpdateOffsetPlan> {
+            Box::pin(async {
+                Ok(UpdateOffsetPlan {
+                    status: ProxyStatusMapper::ok_payload(),
+                })
             })
         }
 
-        async fn get_offset(
-            &self,
-            _context: &CoreProxyContext,
-            _request: &GetOffsetRequest,
-        ) -> crate::error::ProxyResult<GetOffsetPlan> {
-            Ok(GetOffsetPlan {
-                status: ProxyStatusMapper::ok_payload(),
-                offset: 123,
+        fn get_offset<'a>(
+            &'a self,
+            _context: &'a CoreProxyContext,
+            _request: &'a GetOffsetRequest,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, GetOffsetPlan> {
+            Box::pin(async {
+                Ok(GetOffsetPlan {
+                    status: ProxyStatusMapper::ok_payload(),
+                    offset: 123,
+                })
             })
         }
 
-        async fn query_offset(
-            &self,
-            _context: &CoreProxyContext,
-            request: &QueryOffsetRequest,
-        ) -> crate::error::ProxyResult<QueryOffsetPlan> {
-            let offset = match request.policy {
-                QueryOffsetPolicy::Beginning => 0,
-                QueryOffsetPolicy::End => 2048,
-                QueryOffsetPolicy::Timestamp => request.timestamp_ms.unwrap_or_default(),
-            };
-            Ok(QueryOffsetPlan {
-                status: ProxyStatusMapper::ok_payload(),
-                offset,
+        fn query_offset<'a>(
+            &'a self,
+            _context: &'a CoreProxyContext,
+            request: &'a QueryOffsetRequest,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, QueryOffsetPlan> {
+            Box::pin(async move {
+                let offset = match request.policy {
+                    QueryOffsetPolicy::Beginning => 0,
+                    QueryOffsetPolicy::End => 2048,
+                    QueryOffsetPolicy::Timestamp => request.timestamp_ms.unwrap_or_default(),
+                };
+                Ok(QueryOffsetPlan {
+                    status: ProxyStatusMapper::ok_payload(),
+                    offset,
+                })
             })
         }
     }

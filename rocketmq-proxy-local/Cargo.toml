@@ -38,7 +38,6 @@ rocketmq-model = { workspace = true }
 rocketmq-proxy-core = { workspace = true }
 rocketmq-runtime = { workspace = true }
 
-async-trait = "0.1"
 bytes = { workspace = true }
 cheetah-string = { workspace = true }
 serde = { workspace = true }

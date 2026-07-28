@@ -4613,7 +4613,6 @@ dependencies = [
  "openraft",
  "parking_lot",
  "prost",
- "rocketmq-auth",
  "rocketmq-error",
  "rocketmq-model",
  "rocketmq-observability",
@@ -4929,7 +4928,6 @@ dependencies = [
 name = "rocketmq-proxy-local"
 version = "1.0.0"
 dependencies = [
- "async-trait",
  "bytes",
  "cheetah-string",
  "rocketmq-broker",
@@ -5004,12 +5002,12 @@ dependencies = [
  "parking_lot",
  "rand 0.10.2",
  "rayon",
- "rocketmq-auth",
  "rocketmq-error",
  "rocketmq-model",
  "rocketmq-observability",
  "rocketmq-protocol",
  "rocketmq-runtime",
+ "rocketmq-security-api",
  "rocketmq-store-api",
  "rocketmq-store-local",
  "rocketmq-store-rocksdb",
@@ -5034,10 +5032,11 @@ name = "rocketmq-store-api"
 version = "1.0.0"
 dependencies = [
  "bytes",
- "rocketmq-auth",
  "rocketmq-error",
  "rocketmq-model",
- "rocketmq-protocol",
+ "rocketmq-security-api",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -5067,11 +5066,10 @@ dependencies = [
  "page_size",
  "parking_lot",
  "rayon",
- "rocketmq-auth",
  "rocketmq-error",
  "rocketmq-observability",
- "rocketmq-protocol",
  "rocketmq-runtime",
+ "rocketmq-security-api",
  "rocketmq-store-api",
  "serde",
  "serde_json",
@@ -5090,17 +5088,14 @@ name = "rocketmq-store-rocksdb"
 version = "1.0.0"
 dependencies = [
  "bytes",
- "hex",
- "rocketmq-auth",
  "rocketmq-error",
  "rocketmq-observability",
- "rocketmq-protocol",
  "rocketmq-runtime",
+ "rocketmq-security-api",
  "rocketmq-store-api",
  "rocketmq-store-local",
  "rocksdb",
  "serde_json",
- "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -5151,6 +5146,7 @@ dependencies = [
  "local-ip-address",
  "num_cpus",
  "parking_lot",
+ "pin-project-lite",
  "rand 0.10.2",
  "rcgen",
  "reqwest",

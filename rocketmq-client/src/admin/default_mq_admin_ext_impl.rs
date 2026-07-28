@@ -21,7 +21,6 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use crate::admin::mq_admin_ext_async::MQAdminExt;
-use crate::admin::mq_admin_ext_async_inner::MQAdminExtInnerImpl;
 use crate::base::client_config::ClientConfig;
 use crate::base::validators::Validators;
 use crate::common::admin_tool_result::AdminToolResult;

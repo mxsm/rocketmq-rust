@@ -224,7 +224,7 @@
     "rocketmq-model": ["rocketmq-error"],
     "rocketmq-protocol": ["rocketmq-model", "rocketmq-error", "rocketmq-macros"],
     "rocketmq-security-api": ["rocketmq-model", "rocketmq-error"],
-    "rocketmq-store-api": ["rocketmq-model", "rocketmq-error"],
+    "rocketmq-store-api": ["rocketmq-model", "rocketmq-error", "rocketmq-security-api"],
     "rocketmq-transport": [
       "rocketmq-protocol",
       "rocketmq-security-api",
@@ -244,6 +244,7 @@
     ],
     "rocketmq-store-local": [
       "rocketmq-store-api",
+      "rocketmq-security-api",
       "rocketmq-model",
       "rocketmq-runtime",
       "rocketmq-error",
@@ -252,6 +253,7 @@
     "rocketmq-store-rocksdb": [
       "rocketmq-store-api",
       "rocketmq-store-local",
+      "rocketmq-security-api",
       "rocketmq-model",
       "rocketmq-runtime",
       "rocketmq-error",
@@ -269,6 +271,7 @@
       "rocketmq-store-local",
       "rocketmq-store-rocksdb",
       "rocketmq-tieredstore",
+      "rocketmq-security-api",
       "rocketmq-model",
       "rocketmq-protocol",
       "rocketmq-runtime",
@@ -513,96 +516,7 @@
   },
   "target_debt": {
     "as_of": "2026-07-28",
-    "entries": [
-      {
-        "caller": "rocketmq-controller",
-        "target": "rocketmq-auth",
-        "kind": "normal",
-        "path": "rocketmq-controller/Cargo.toml",
-        "alias": "rocketmq_auth",
-        "owner": "controller-security",
-        "reason": "Controller authentication and maintenance authorization still consume the implementation crate until the runtime-neutral security contract is injected.",
-        "remove_phase": "P2.1",
-        "remove_by": "2026-12-31"
-      },
-      {
-        "caller": "rocketmq-store",
-        "target": "rocketmq-auth",
-        "kind": "normal",
-        "path": "rocketmq-store/Cargo.toml",
-        "alias": "rocketmq_auth",
-        "owner": "store-security",
-        "reason": "The store checkpoint facade still accepts the implementation-owned maintenance grant.",
-        "remove_phase": "P2.1",
-        "remove_by": "2026-12-31"
-      },
-      {
-        "caller": "rocketmq-store-api",
-        "target": "rocketmq-auth",
-        "kind": "normal",
-        "path": "rocketmq-store-api/Cargo.toml",
-        "alias": "rocketmq_auth",
-        "owner": "store-api",
-        "reason": "The checkpoint capability exposes the implementation-owned maintenance grant until the security contract moves to rocketmq-security-api.",
-        "remove_phase": "P2.1",
-        "remove_by": "2026-12-31"
-      },
-      {
-        "caller": "rocketmq-store-api",
-        "target": "rocketmq-protocol",
-        "kind": "normal",
-        "path": "rocketmq-store-api/Cargo.toml",
-        "alias": "rocketmq_protocol",
-        "owner": "store-api",
-        "reason": "The checkpoint capability still exposes wire DTOs until the domain contract is owned by rocketmq-store-api.",
-        "remove_phase": "P2.2",
-        "remove_by": "2026-12-31"
-      },
-      {
-        "caller": "rocketmq-store-local",
-        "target": "rocketmq-auth",
-        "kind": "normal",
-        "path": "rocketmq-store-local/Cargo.toml",
-        "alias": "rocketmq_auth",
-        "owner": "store-local",
-        "reason": "The local checkpoint backend consumes the implementation-owned maintenance grant.",
-        "remove_phase": "P2.1",
-        "remove_by": "2026-12-31"
-      },
-      {
-        "caller": "rocketmq-store-local",
-        "target": "rocketmq-protocol",
-        "kind": "normal",
-        "path": "rocketmq-store-local/Cargo.toml",
-        "alias": "rocketmq_protocol",
-        "owner": "store-local",
-        "reason": "The local checkpoint backend consumes protocol wire DTOs until the store domain contract is extracted.",
-        "remove_phase": "P2.2",
-        "remove_by": "2026-12-31"
-      },
-      {
-        "caller": "rocketmq-store-rocksdb",
-        "target": "rocketmq-auth",
-        "kind": "normal",
-        "path": "rocketmq-store-rocksdb/Cargo.toml",
-        "alias": "rocketmq_auth",
-        "owner": "store-rocksdb",
-        "reason": "The RocksDB checkpoint backend consumes the implementation-owned maintenance grant.",
-        "remove_phase": "P2.1",
-        "remove_by": "2026-12-31"
-      },
-      {
-        "caller": "rocketmq-store-rocksdb",
-        "target": "rocketmq-protocol",
-        "kind": "normal",
-        "path": "rocketmq-store-rocksdb/Cargo.toml",
-        "alias": "rocketmq_protocol",
-        "owner": "store-rocksdb",
-        "reason": "The RocksDB checkpoint backend consumes protocol wire DTOs until the store domain contract is extracted.",
-        "remove_phase": "P2.2",
-        "remove_by": "2026-12-31"
-      }
-    ]
+    "entries": []
   },
   "facade_rules": [
     {

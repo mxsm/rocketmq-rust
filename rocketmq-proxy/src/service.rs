@@ -16,7 +16,7 @@
 
 #[cfg(feature = "cluster-mode")]
 pub use rocketmq_proxy_cluster::service::*;
-pub use rocketmq_proxy_core::service::*;
+pub use rocketmq_proxy_core::contracts::*;
 pub use rocketmq_proxy_core::ResourceIdentity;
 #[cfg(feature = "local-mode")]
 pub use rocketmq_proxy_local::LocalServiceManager;

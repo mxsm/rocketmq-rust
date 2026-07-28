@@ -31,7 +31,6 @@ use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use serde::Serialize;
 
-use crate::admin::mq_admin_ext_async_inner::MQAdminExtInnerImpl;
 use crate::consumer::mq_consumer_inner::MQConsumerInnerImpl;
 use crate::producer::producer_impl::mq_producer_inner::MQProducerInnerImpl;
 use crate::types::AdminGroupName;
@@ -50,7 +49,7 @@ pub type ProducerTable = Arc<DashMap<ProducerGroupName, MQProducerInnerImpl>>;
 pub type ConsumerTable = Arc<DashMap<ConsumerGroupName, MQConsumerInnerImpl>>;
 
 /// Container for registered admin extensions, indexed by admin group name.
-pub type AdminExtTable = Arc<DashMap<AdminGroupName, MQAdminExtInnerImpl>>;
+pub type AdminExtTable = Arc<DashMap<AdminGroupName, ()>>;
 
 /// Topic routing information table.
 /// Maps topic name to its routing data (broker addresses, queue configuration, etc.).

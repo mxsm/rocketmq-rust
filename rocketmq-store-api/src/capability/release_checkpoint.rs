@@ -14,10 +14,11 @@
 
 use std::error::Error as StdError;
 
-use rocketmq_auth::MaintenanceAuthorizationGrant;
-use rocketmq_protocol::protocol::body::release_checkpoint::ReleaseCheckpointRestoreVerification;
-use rocketmq_protocol::protocol::body::release_checkpoint::StoreReleaseCheckpointManifest;
-use rocketmq_protocol::protocol::body::release_checkpoint::StoreReleaseCheckpointRequest;
+use rocketmq_security_api::MaintenanceAuthorizationGrant;
+
+use crate::checkpoint::CheckpointManifest;
+use crate::checkpoint::CheckpointRequest;
+use crate::checkpoint::CheckpointRestoreVerification;
 
 /// Authorized, deadline-bounded Store checkpoint capability.
 ///
@@ -37,8 +38,8 @@ pub trait ReleaseCheckpointStore: Send + Sync {
     async fn create_release_checkpoint(
         &self,
         authorization: &MaintenanceAuthorizationGrant,
-        request: StoreReleaseCheckpointRequest,
-    ) -> Result<StoreReleaseCheckpointManifest, Self::Error>;
+        request: CheckpointRequest,
+    ) -> Result<CheckpointManifest, Self::Error>;
 
     /// Verifies that a checkpoint can be restored without replacing its WAL or
     /// persistent volume identity.
@@ -50,6 +51,6 @@ pub trait ReleaseCheckpointStore: Send + Sync {
     async fn restore_verify_release_checkpoint(
         &self,
         authorization: &MaintenanceAuthorizationGrant,
-        manifest: &StoreReleaseCheckpointManifest,
-    ) -> Result<ReleaseCheckpointRestoreVerification, Self::Error>;
+        manifest: &CheckpointManifest,
+    ) -> Result<CheckpointRestoreVerification, Self::Error>;
 }

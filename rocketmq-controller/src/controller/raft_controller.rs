@@ -19,7 +19,6 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_auth::MaintenanceAuthorizationGrant;
 use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::protocol::body::release_checkpoint::ControllerReleaseSnapshotManifest;
 use rocketmq_protocol::protocol::body::release_checkpoint::ControllerReleaseSnapshotRequest;
@@ -34,6 +33,7 @@ use rocketmq_protocol::protocol::header::controller::get_replica_info_request_he
 use rocketmq_protocol::protocol::header::controller::register_broker_to_controller_request_header::RegisterBrokerToControllerRequestHeader;
 use rocketmq_protocol::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_security_api::MaintenanceAuthorizationGrant;
 
 use crate::config::ControllerConfigReader;
 use crate::controller::open_raft_controller::OpenRaftController;

@@ -17,6 +17,7 @@ const COMPOSITION: &str = include_str!("../src/broker_runtime/composition.rs");
 const CONTROL_PLANE: &str = include_str!("../src/broker_runtime/control_plane.rs");
 const DATA_PLANE: &str = include_str!("../src/broker_runtime/data_plane.rs");
 const REQUEST_PIPELINE: &str = include_str!("../src/broker_runtime/request_pipeline.rs");
+const REQUEST_PIPELINE_STARTUP: &str = include_str!("../src/broker_runtime/request_pipeline/startup.rs");
 const LIFECYCLE: &str = include_str!("../src/broker_runtime/lifecycle.rs");
 const METADATA: &str = include_str!("../src/broker_runtime/metadata.rs");
 
@@ -75,6 +76,7 @@ fn broker_runtime_is_split_into_reviewable_production_modules() {
         "the BrokerRuntime facade should remain below the review threshold"
     );
     assert!(REQUEST_PIPELINE.lines().count() <= 800);
+    assert!(REQUEST_PIPELINE_STARTUP.lines().count() <= 800);
     assert!(CONTROL_PLANE.lines().count() <= 800);
     assert!(DATA_PLANE.lines().count() <= 800);
     assert!(METADATA.lines().count() <= 800);

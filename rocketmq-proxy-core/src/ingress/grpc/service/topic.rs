@@ -14,6 +14,8 @@
 
 use crate::proto::v2;
 use crate::ProxyContextWithPrincipal;
+// Topic gRPC ingress validation.
+
 use crate::ProxyError;
 use crate::ProxyResult;
 

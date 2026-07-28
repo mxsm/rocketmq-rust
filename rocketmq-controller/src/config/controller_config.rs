@@ -19,7 +19,6 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::path::PathBuf;
 
-use rocketmq_auth::AuthConfig;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use serde::de::DeserializeOwned;
@@ -583,22 +582,6 @@ impl ControllerConfig {
     pub fn with_maintenance_checkpoint_root(mut self, checkpoint_root: impl Into<String>) -> Self {
         self.maintenance_checkpoint_root = checkpoint_root.into();
         self
-    }
-
-    /// Builds the auth-owned configuration used by the composition root.
-    pub fn auth_config(&self) -> AuthConfig {
-        AuthConfig {
-            config_name: "controller".into(),
-            auth_config_path: self.auth_config_path.as_str().into(),
-            acl_file: self.acl_file.as_str().into(),
-            authentication_enabled: self.authentication_enabled,
-            authorization_enabled: self.authorization_enabled,
-            maintenance_enabled: self.maintenance_enabled,
-            maintenance_policy_path: self.maintenance_policy_path.as_str().into(),
-            maintenance_policy_version: self.maintenance_policy_version,
-            maintenance_policy_sha256: self.maintenance_policy_sha256.as_str().into(),
-            ..AuthConfig::default()
-        }
     }
 
     /// Convenience constructor for a node-specific config (node id + listen addr)

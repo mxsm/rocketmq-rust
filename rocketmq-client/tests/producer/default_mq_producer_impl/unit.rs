@@ -177,7 +177,7 @@ fn start_runtime_publish_reloads_config_under_update_lock() {
     let current = producer.runtime_snapshot();
     producer.runtime.store(Arc::new(ProducerRuntimeSnapshot::new(
         current.client_config.clone(),
-        configured.producer_config().clone(),
+        configured.producer_config_snapshot().as_ref().clone(),
     )));
     drop(update_guard);
 
@@ -612,7 +612,7 @@ fn send_timeout_for_attempt_caps_only_retryable_attempts_like_java() {
         .producer_group("retry-timeout-group")
         .send_msg_max_timeout_per_request(500)
         .build();
-    producer.replace_producer_config(configured.producer_config().clone());
+    producer.replace_producer_config(configured.producer_config_snapshot().as_ref().clone());
     let runtime = producer.runtime_snapshot();
 
     assert_eq!(
@@ -888,7 +888,7 @@ fn replace_producer_config_refreshes_send_config_snapshot() {
         .compressor(&COUNTING_COMPRESSOR)
         .build();
 
-    producer.replace_producer_config(configured.producer_config().clone());
+    producer.replace_producer_config(configured.producer_config_snapshot().as_ref().clone());
     let send_config = producer.runtime_snapshot().send_config.clone();
 
     assert_eq!(send_config.producer_group, "snapshot-group");
@@ -926,7 +926,7 @@ fn compression_below_threshold_does_not_access_compressor() {
     let producer = DefaultMQProducerImpl::new(
         test_runtime(),
         ClientConfig::default(),
-        configured.producer_config().clone(),
+        configured.producer_config_snapshot().as_ref().clone(),
         None,
     );
     let mut msg = Message::builder()

@@ -3210,11 +3210,11 @@ mod tests {
         );
 
         assert_eq!(
-            producer.client_config().build_mq_client_id(),
+            producer.client_config_snapshot().build_mq_client_id(),
             expected.build_mq_client_id()
         );
         assert_ne!(
-            producer.client_config().build_mq_client_id(),
+            producer.client_config_snapshot().build_mq_client_id(),
             other_domain.build_mq_client_id()
         );
     }

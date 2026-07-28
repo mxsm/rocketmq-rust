@@ -21,27 +21,24 @@ use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
-use rocketmq_auth::MaintenanceAuthorizationContext;
-use rocketmq_auth::MaintenanceAuthorizer;
-use rocketmq_auth::MaintenanceCapability;
-use rocketmq_auth::MaintenancePolicy;
-use rocketmq_auth::MaintenancePolicyReference;
-use rocketmq_auth::MaintenancePrincipalBinding;
-use rocketmq_auth::MaintenanceRequestClass;
-use rocketmq_auth::MaintenanceResourceBudget;
-use rocketmq_auth::MaintenanceRole;
-use rocketmq_auth::MaintenanceRoleGrant;
-use rocketmq_protocol::protocol::body::release_checkpoint::ReleaseCheckpointOffsets;
-use rocketmq_protocol::protocol::body::release_checkpoint::ReleaseCheckpointStorageIdentity;
-use rocketmq_protocol::protocol::body::release_checkpoint::StoreReleaseCheckpointManifest;
-use rocketmq_protocol::protocol::body::release_checkpoint::StoreReleaseCheckpointRequest;
 use rocketmq_runtime::ShutdownDeadline;
+use rocketmq_security_api::MaintenanceAuthorizationContext;
+use rocketmq_security_api::MaintenanceAuthorizer;
+use rocketmq_security_api::MaintenanceCapability;
+use rocketmq_security_api::MaintenancePolicy;
+use rocketmq_security_api::MaintenancePrincipalBinding;
+use rocketmq_security_api::MaintenanceRequestClass;
+use rocketmq_security_api::MaintenanceResourceBudget;
+use rocketmq_security_api::MaintenanceRole;
+use rocketmq_security_api::MaintenanceRoleGrant;
+use rocketmq_store_api::checkpoint::CheckpointManifest as StoreReleaseCheckpointManifest;
+use rocketmq_store_api::checkpoint::CheckpointOffsets as ReleaseCheckpointOffsets;
+use rocketmq_store_api::checkpoint::CheckpointRequest as StoreReleaseCheckpointRequest;
+use rocketmq_store_api::checkpoint::CheckpointStorageIdentity as ReleaseCheckpointStorageIdentity;
 use rocketmq_store_api::ReleaseCheckpointStore;
 use rocketmq_store_local::release_checkpoint::LocalReleaseCheckpointBarrier;
 use rocketmq_store_local::release_checkpoint::LocalReleaseCheckpointService;
 use rocketmq_store_local::release_checkpoint::LocalReleaseCheckpointSnapshot;
-use sha2::Digest;
-use sha2::Sha256;
 use tempfile::TempDir;
 
 #[derive(Clone)]
@@ -125,7 +122,7 @@ fn now_millis() -> u64 {
         .as_millis() as u64
 }
 
-fn authorizer(temp: &TempDir) -> MaintenanceAuthorizer {
+fn authorizer() -> MaintenanceAuthorizer {
     let policy = MaintenancePolicy {
         schema_version: 1,
         policy_id: "rocketmq.release-checkpoint-test".to_string(),
@@ -148,17 +145,7 @@ fn authorizer(temp: &TempDir) -> MaintenanceAuthorizer {
             capabilities: BTreeSet::from([MaintenanceCapability::ReleaseCheckpoint]),
         }],
     };
-    let path = temp.path().join("maintenance-policy.json");
-    let bytes = serde_json::to_vec_pretty(&policy).expect("serialize policy");
-    fs::write(&path, &bytes).expect("write policy");
-    let loaded = MaintenancePolicyReference {
-        path,
-        version: 1,
-        sha256: hex::encode(Sha256::digest(&bytes)),
-    }
-    .load_from(temp.path())
-    .expect("load policy");
-    MaintenanceAuthorizer::new(loaded)
+    MaintenanceAuthorizer::new(policy.into_validated().expect("validate policy"))
 }
 
 fn create_store_layout(root: &Path) {
@@ -205,7 +192,7 @@ async fn release_checkpoint_restore_flushes_copies_hashes_and_verifies_local_sto
         runtime.service_context("checkpoint").storage_io().clone(),
         1_048_576,
     );
-    let authorizer = authorizer(&temp);
+    let authorizer = authorizer();
     let now = now_millis();
     let context = MaintenanceAuthorizationContext {
         authentication_enabled: true,

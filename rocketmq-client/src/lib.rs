@@ -89,7 +89,9 @@ mod utils;
 pub use crate::admin::DefaultMQAdminExt;
 pub use crate::admin::DefaultMQAdminExtImpl;
 pub use crate::admin::MQAdminExt;
+#[allow(deprecated, reason = "compatibility exports remain available through the 1.x line")]
 pub use crate::admin::MQAdminExtInner;
+#[allow(deprecated, reason = "compatibility exports remain available through the 1.x line")]
 pub use crate::admin::MQAdminExtInnerImpl;
 pub use crate::base::client_config::ClientConfig;
 pub use crate::base::query_result::QueryResult;
@@ -1026,24 +1028,47 @@ pub use crate::producer::request_future_holder::RequestFutureHolderLifecycleProb
 pub use crate::producer::request_future_holder::RequestFutureHolderScanProbe;
 pub use crate::producer::send_callback::ArcSendCallback;
 pub use crate::producer::transaction_listener::ArcTransactionListener;
+pub use crate::producer::BatchSendCallbackRequest;
+pub use crate::producer::BatchSendRequest;
 pub use crate::producer::DefaultMQProducer;
 pub use crate::producer::JavaHashCode;
 pub use crate::producer::LocalTransactionState;
 pub use crate::producer::MQProducer;
+pub use crate::producer::MessageProducer;
 pub use crate::producer::MessageQueueSelector;
 pub use crate::producer::MessageQueueSelectorFn;
 pub use crate::producer::ProducerConfig;
+pub use crate::producer::ProducerLifecycle;
+pub use crate::producer::ProducerQuery;
+pub use crate::producer::ProducerQueryRequest;
+pub use crate::producer::ProducerQueryResponse;
+pub use crate::producer::RecallRequest;
 pub use crate::producer::RequestCallback;
+pub use crate::producer::RequestReplyCallbackRequest;
+pub use crate::producer::RequestReplyProducer;
+pub use crate::producer::RequestReplyRequest;
 pub use crate::producer::SelectMessageQueueByHash;
 pub use crate::producer::SelectMessageQueueByMachineRoom;
 pub use crate::producer::SelectMessageQueueByRandom;
+pub use crate::producer::SelectedRequestReplyCallbackRequest;
+pub use crate::producer::SelectedRequestReplyRequest;
+pub use crate::producer::SelectedSendCallbackRequest;
+pub use crate::producer::SelectedSendRequest;
 pub use crate::producer::SendCallback;
+pub use crate::producer::SendCallbackRequest;
+pub use crate::producer::SendDestination;
+pub use crate::producer::SendMode;
+pub use crate::producer::SendRequest;
 pub use crate::producer::SendResult;
 pub use crate::producer::SendStatus;
+pub use crate::producer::TopicAdmin;
+pub use crate::producer::TopicCreateRequest;
 pub use crate::producer::TransactionListener;
 pub use crate::producer::TransactionMQProducer;
 pub use crate::producer::TransactionMQProducerBuilder;
+pub use crate::producer::TransactionSendRequest;
 pub use crate::producer::TransactionSendResult;
+pub use crate::producer::TransactionalProducer;
 #[doc(hidden)]
 pub use crate::trace::async_trace_dispatcher::run_trace_queue_depth_accounting_probe;
 #[doc(hidden)]

@@ -33,6 +33,7 @@ use std::future::Future;
 use std::future::Ready;
 use std::pin::Pin;
 
+use pin_project_lite::pin_project;
 use rocketmq_error::RocketMQResult;
 
 use crate::net::channel::Channel;
@@ -130,7 +131,7 @@ where
     /// The future type is an enum of the constituent processor futures
     /// This avoids any boxing - the compiler generates a state machine enum
     type Fut<'a>
-        = CoreProcessorFuture<'a, SendProc, PullProc, AdminProc>
+        = CoreProcessorFuture<SendProc::Fut<'a>, PullProc::Fut<'a>, AdminProc::Fut<'a>>
     where
         Self: 'a;
 
@@ -141,9 +142,15 @@ where
         request: &'a mut RemotingCommand,
     ) -> Self::Fut<'a> {
         match self {
-            CoreProcessor::Send(p) => CoreProcessorFuture::Send(p.process_request(channel, ctx, request)),
-            CoreProcessor::Pull(p) => CoreProcessorFuture::Pull(p.process_request(channel, ctx, request)),
-            CoreProcessor::Admin(p) => CoreProcessorFuture::Admin(p.process_request(channel, ctx, request)),
+            CoreProcessor::Send(p) => CoreProcessorFuture::Send {
+                future: p.process_request(channel, ctx, request),
+            },
+            CoreProcessor::Pull(p) => CoreProcessorFuture::Pull {
+                future: p.process_request(channel, ctx, request),
+            },
+            CoreProcessor::Admin(p) => CoreProcessorFuture::Admin {
+                future: p.process_request(channel, ctx, request),
+            },
         }
     }
 
@@ -156,37 +163,41 @@ where
     }
 }
 
-/// Future enum for core processor dispatch
-///
-/// This is the concrete type returned by `CoreProcessor::process_request`.
-/// The Rust compiler automatically generates an optimal state machine for this enum.
-pub enum CoreProcessorFuture<'a, SendProc, PullProc, AdminProc>
-where
-    SendProc: RequestProcessorV2 + 'a,
-    PullProc: RequestProcessorV2 + 'a,
-    AdminProc: RequestProcessorV2 + 'a,
-{
-    Send(SendProc::Fut<'a>),
-    Pull(PullProc::Fut<'a>),
-    Admin(AdminProc::Fut<'a>),
+pin_project! {
+    #[project = CoreProcessorFutureProj]
+    /// Future enum for core processor dispatch.
+    ///
+    /// This is the concrete type returned by `CoreProcessor::process_request`.
+    /// The compiler generates a state machine without boxing.
+    pub enum CoreProcessorFuture<SendFuture, PullFuture, AdminFuture> {
+        Send {
+            #[pin]
+            future: SendFuture,
+        },
+        Pull {
+            #[pin]
+            future: PullFuture,
+        },
+        Admin {
+            #[pin]
+            future: AdminFuture,
+        },
+    }
 }
 
-impl<'a, SendProc, PullProc, AdminProc> Future for CoreProcessorFuture<'a, SendProc, PullProc, AdminProc>
+impl<SendFuture, PullFuture, AdminFuture> Future for CoreProcessorFuture<SendFuture, PullFuture, AdminFuture>
 where
-    SendProc: RequestProcessorV2 + 'a,
-    PullProc: RequestProcessorV2 + 'a,
-    AdminProc: RequestProcessorV2 + 'a,
+    SendFuture: Future<Output = RocketMQResult<Option<RemotingCommand>>>,
+    PullFuture: Future<Output = RocketMQResult<Option<RemotingCommand>>>,
+    AdminFuture: Future<Output = RocketMQResult<Option<RemotingCommand>>>,
 {
     type Output = RocketMQResult<Option<RemotingCommand>>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
-        // SAFETY: We never move out of the pinned data
-        unsafe {
-            match self.get_unchecked_mut() {
-                CoreProcessorFuture::Send(fut) => Pin::new_unchecked(fut).poll(cx),
-                CoreProcessorFuture::Pull(fut) => Pin::new_unchecked(fut).poll(cx),
-                CoreProcessorFuture::Admin(fut) => Pin::new_unchecked(fut).poll(cx),
-            }
+        match self.project() {
+            CoreProcessorFutureProj::Send { future } => future.poll(cx),
+            CoreProcessorFutureProj::Pull { future } => future.poll(cx),
+            CoreProcessorFutureProj::Admin { future } => future.poll(cx),
         }
     }
 }
@@ -528,6 +539,74 @@ impl RequestProcessorV2 for AdminProcessorExample {
         request: &'a mut RemotingCommand,
     ) -> Self::Fut<'a> {
         ready(self.process_internal(channel, ctx, request))
+    }
+}
+
+#[cfg(test)]
+mod projection_tests {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+    use std::task::Context;
+    use std::task::Poll;
+
+    use super::*;
+
+    struct DropProbeFuture {
+        dropped: Arc<AtomicBool>,
+    }
+
+    impl Future for DropProbeFuture {
+        type Output = RocketMQResult<Option<RemotingCommand>>;
+
+        fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+            Poll::Pending
+        }
+    }
+
+    impl Drop for DropProbeFuture {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::Release);
+        }
+    }
+
+    type ReadyProcessorFuture = Ready<RocketMQResult<Option<RemotingCommand>>>;
+    type PendingProcessorFuture = DropProbeFuture;
+
+    #[test]
+    fn safe_projection_polls_every_core_variant_to_completion() {
+        let futures: [CoreProcessorFuture<ReadyProcessorFuture, ReadyProcessorFuture, ReadyProcessorFuture>; 3] = [
+            CoreProcessorFuture::Send {
+                future: ready(Ok(None)),
+            },
+            CoreProcessorFuture::Pull {
+                future: ready(Ok(None)),
+            },
+            CoreProcessorFuture::Admin {
+                future: ready(Ok(None)),
+            },
+        ];
+
+        for future in futures {
+            assert!(futures::executor::block_on(future)
+                .expect("ready core future")
+                .is_none());
+        }
+    }
+
+    #[test]
+    fn cancelling_projected_future_drops_the_active_variant() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let future: CoreProcessorFuture<PendingProcessorFuture, PendingProcessorFuture, PendingProcessorFuture> =
+            CoreProcessorFuture::Pull {
+                future: DropProbeFuture {
+                    dropped: Arc::clone(&dropped),
+                },
+            };
+
+        drop(future);
+
+        assert!(dropped.load(Ordering::Acquire));
     }
 }
 

@@ -80,7 +80,7 @@ fn bench_concurrent_producer_access(c: &mut Criterion) {
                             thread::spawn(move || {
                                 for _ in 0..1000 {
                                     // Access producer group name (reads from internal structures)
-                                    black_box(producer_clone.producer_config().producer_group());
+                                    black_box(producer_clone.producer_config_snapshot().producer_group());
                                 }
                             })
                         })
@@ -189,7 +189,7 @@ fn bench_performance_baseline(c: &mut Criterion) {
                     let producer_clone = Arc::clone(&producer_arc);
                     thread::spawn(move || {
                         for _ in 0..ops_per_thread {
-                            black_box(producer_clone.producer_config().producer_group());
+                            black_box(producer_clone.producer_config_snapshot().producer_group());
                         }
                     })
                 })

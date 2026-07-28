@@ -13,6 +13,10 @@
 // limitations under the License.
 
 //! Canonical capability projections for the composed message store.
+//!
+//! The legacy `MessageStore` implementations below are compatibility
+//! projections. New request paths depend on the corresponding
+//! `rocketmq-store-api` capability and must not extend `MessageStoreInner`.
 
 use std::future::Future;
 

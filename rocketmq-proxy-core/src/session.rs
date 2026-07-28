@@ -26,7 +26,7 @@ use tokio_util::sync::CancellationToken;
 use crate::context::ProxyContextWithPrincipal;
 use crate::error::ProxyError;
 use crate::error::ProxyResult;
-use crate::grpc::service::admission::estimated_protobuf_retained_bytes;
+use crate::ingress::grpc::service::admission::estimated_protobuf_retained_bytes;
 use crate::proto::v2;
 use crate::ResourceIdentity;
 

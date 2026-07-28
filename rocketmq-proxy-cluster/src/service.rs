@@ -16,7 +16,6 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use rocketmq_model::common::message::message_queue_assignment::MessageQueueAssignment;
 use rocketmq_protocol::protocol::body::acl_info::AclInfo;
 use rocketmq_protocol::protocol::body::user_info::UserInfo;
@@ -41,7 +40,7 @@ use rocketmq_proxy_core::MessageService;
 use rocketmq_proxy_core::MetadataService;
 use rocketmq_proxy_core::ProxyContext;
 use rocketmq_proxy_core::ProxyMode;
-use rocketmq_proxy_core::ProxyResult;
+use rocketmq_proxy_core::ProxyServiceFuture;
 use rocketmq_proxy_core::ProxyTopicMessageType;
 use rocketmq_proxy_core::PullMessagePlan;
 use rocketmq_proxy_core::PullMessageRequest;
@@ -78,15 +77,14 @@ impl ClusterRouteService {
     }
 }
 
-#[async_trait]
 impl RouteService for ClusterRouteService {
-    async fn query_route(
-        &self,
-        _context: &ProxyContext,
-        topic: &ResourceIdentity,
-        _endpoints: &[ResolvedEndpoint],
-    ) -> ProxyResult<TopicRouteData> {
-        self.client.query_route(topic).await
+    fn query_route<'a>(
+        &'a self,
+        _context: &'a ProxyContext,
+        topic: &'a ResourceIdentity,
+        _endpoints: &'a [ResolvedEndpoint],
+    ) -> ProxyServiceFuture<'a, TopicRouteData> {
+        Box::pin(async move { self.client.query_route(topic).await })
     }
 }
 
@@ -100,35 +98,34 @@ impl ClusterMetadataService {
     }
 }
 
-#[async_trait]
 impl MetadataService for ClusterMetadataService {
-    async fn readiness_check(&self) -> ProxyResult<()> {
-        self.client.readiness_check().await
+    fn readiness_check(&self) -> ProxyServiceFuture<'_, ()> {
+        Box::pin(async move { self.client.readiness_check().await })
     }
 
-    async fn topic_message_type(
-        &self,
-        _context: &ProxyContext,
-        topic: &ResourceIdentity,
-    ) -> ProxyResult<ProxyTopicMessageType> {
-        self.client.query_topic_message_type(topic).await
+    fn topic_message_type<'a>(
+        &'a self,
+        _context: &'a ProxyContext,
+        topic: &'a ResourceIdentity,
+    ) -> ProxyServiceFuture<'a, ProxyTopicMessageType> {
+        Box::pin(async move { self.client.query_topic_message_type(topic).await })
     }
 
-    async fn subscription_group(
-        &self,
-        _context: &ProxyContext,
-        topic: &ResourceIdentity,
-        group: &ResourceIdentity,
-    ) -> ProxyResult<Option<SubscriptionGroupMetadata>> {
-        self.client.query_subscription_group(topic, group).await
+    fn subscription_group<'a>(
+        &'a self,
+        _context: &'a ProxyContext,
+        topic: &'a ResourceIdentity,
+        group: &'a ResourceIdentity,
+    ) -> ProxyServiceFuture<'a, Option<SubscriptionGroupMetadata>> {
+        Box::pin(async move { self.client.query_subscription_group(topic, group).await })
     }
 
-    async fn user(&self, _context: &ProxyContext, username: &str) -> ProxyResult<Option<UserInfo>> {
-        self.client.query_user(username).await
+    fn user<'a>(&'a self, _context: &'a ProxyContext, username: &'a str) -> ProxyServiceFuture<'a, Option<UserInfo>> {
+        Box::pin(async move { self.client.query_user(username).await })
     }
 
-    async fn acl(&self, _context: &ProxyContext, subject: &str) -> ProxyResult<Option<AclInfo>> {
-        self.client.query_acl(subject).await
+    fn acl<'a>(&'a self, _context: &'a ProxyContext, subject: &'a str) -> ProxyServiceFuture<'a, Option<AclInfo>> {
+        Box::pin(async move { self.client.query_acl(subject).await })
     }
 }
 
@@ -142,18 +139,19 @@ impl ClusterAssignmentService {
     }
 }
 
-#[async_trait]
 impl AssignmentService for ClusterAssignmentService {
-    async fn query_assignment(
-        &self,
-        context: &ProxyContext,
-        topic: &ResourceIdentity,
-        group: &ResourceIdentity,
-        _endpoints: &[ResolvedEndpoint],
-    ) -> ProxyResult<Option<Vec<MessageQueueAssignment>>> {
-        self.client
-            .query_assignment(topic, group, context.require_client_id()?)
-            .await
+    fn query_assignment<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        topic: &'a ResourceIdentity,
+        group: &'a ResourceIdentity,
+        _endpoints: &'a [ResolvedEndpoint],
+    ) -> ProxyServiceFuture<'a, Option<Vec<MessageQueueAssignment>>> {
+        Box::pin(async move {
+            self.client
+                .query_assignment(topic, group, context.require_client_id()?)
+                .await
+        })
     }
 }
 
@@ -167,22 +165,21 @@ impl ClusterMessageService {
     }
 }
 
-#[async_trait]
 impl MessageService for ClusterMessageService {
-    async fn send_message(
-        &self,
-        context: &ProxyContext,
-        request: &SendMessageRequest,
-    ) -> ProxyResult<Vec<SendMessageResultEntry>> {
-        self.client.send_message(context, request).await
+    fn send_message<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: &'a SendMessageRequest,
+    ) -> ProxyServiceFuture<'a, Vec<SendMessageResultEntry>> {
+        Box::pin(async move { self.client.send_message(context, request).await })
     }
 
-    async fn recall_message(
-        &self,
-        context: &ProxyContext,
-        request: &RecallMessageRequest,
-    ) -> ProxyResult<RecallMessagePlan> {
-        self.client.recall_message(context, request).await
+    fn recall_message<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: &'a RecallMessageRequest,
+    ) -> ProxyServiceFuture<'a, RecallMessagePlan> {
+        Box::pin(async move { self.client.recall_message(context, request).await })
     }
 }
 
@@ -196,58 +193,69 @@ impl ClusterConsumerService {
     }
 }
 
-#[async_trait]
 impl ConsumerService for ClusterConsumerService {
-    async fn receive_message(
-        &self,
-        context: &ProxyContext,
-        request: &ReceiveMessageRequest,
-    ) -> ProxyResult<ReceiveMessagePlan> {
-        self.client.receive_message(context, request).await
+    fn receive_message<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: &'a ReceiveMessageRequest,
+    ) -> ProxyServiceFuture<'a, ReceiveMessagePlan> {
+        Box::pin(async move { self.client.receive_message(context, request).await })
     }
 
-    async fn pull_message(&self, context: &ProxyContext, request: &PullMessageRequest) -> ProxyResult<PullMessagePlan> {
-        self.client.pull_message(context, request).await
+    fn pull_message<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: &'a PullMessageRequest,
+    ) -> ProxyServiceFuture<'a, PullMessagePlan> {
+        Box::pin(async move { self.client.pull_message(context, request).await })
     }
 
-    async fn ack_message(
-        &self,
-        context: &ProxyContext,
-        request: &AckMessageRequest,
-    ) -> ProxyResult<Vec<AckMessageResultEntry>> {
-        self.client.ack_message(context, request).await
+    fn ack_message<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: &'a AckMessageRequest,
+    ) -> ProxyServiceFuture<'a, Vec<AckMessageResultEntry>> {
+        Box::pin(async move { self.client.ack_message(context, request).await })
     }
 
-    async fn forward_message_to_dead_letter_queue(
-        &self,
-        context: &ProxyContext,
-        request: &ForwardMessageToDeadLetterQueueRequest,
-    ) -> ProxyResult<ForwardMessageToDeadLetterQueuePlan> {
-        self.client.forward_message_to_dead_letter_queue(context, request).await
+    fn forward_message_to_dead_letter_queue<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: &'a ForwardMessageToDeadLetterQueueRequest,
+    ) -> ProxyServiceFuture<'a, ForwardMessageToDeadLetterQueuePlan> {
+        Box::pin(async move { self.client.forward_message_to_dead_letter_queue(context, request).await })
     }
 
-    async fn change_invisible_duration(
-        &self,
-        context: &ProxyContext,
-        request: &ChangeInvisibleDurationRequest,
-    ) -> ProxyResult<ChangeInvisibleDurationPlan> {
-        self.client.change_invisible_duration(context, request).await
+    fn change_invisible_duration<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: &'a ChangeInvisibleDurationRequest,
+    ) -> ProxyServiceFuture<'a, ChangeInvisibleDurationPlan> {
+        Box::pin(async move { self.client.change_invisible_duration(context, request).await })
     }
 
-    async fn update_offset(
-        &self,
-        context: &ProxyContext,
-        request: &UpdateOffsetRequest,
-    ) -> ProxyResult<UpdateOffsetPlan> {
-        self.client.update_offset(context, request).await
+    fn update_offset<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: &'a UpdateOffsetRequest,
+    ) -> ProxyServiceFuture<'a, UpdateOffsetPlan> {
+        Box::pin(async move { self.client.update_offset(context, request).await })
     }
 
-    async fn get_offset(&self, context: &ProxyContext, request: &GetOffsetRequest) -> ProxyResult<GetOffsetPlan> {
-        self.client.get_offset(context, request).await
+    fn get_offset<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: &'a GetOffsetRequest,
+    ) -> ProxyServiceFuture<'a, GetOffsetPlan> {
+        Box::pin(async move { self.client.get_offset(context, request).await })
     }
 
-    async fn query_offset(&self, context: &ProxyContext, request: &QueryOffsetRequest) -> ProxyResult<QueryOffsetPlan> {
-        self.client.query_offset(context, request).await
+    fn query_offset<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: &'a QueryOffsetRequest,
+    ) -> ProxyServiceFuture<'a, QueryOffsetPlan> {
+        Box::pin(async move { self.client.query_offset(context, request).await })
     }
 }
 
@@ -261,18 +269,17 @@ impl ClusterTransactionService {
     }
 }
 
-#[async_trait]
 impl TransactionService for ClusterTransactionService {
     fn transaction_producer_group(&self, context: &ProxyContext) -> Option<String> {
         self.client.transaction_producer_group(context)
     }
 
-    async fn end_transaction(
-        &self,
-        context: &ProxyContext,
-        request: &EndTransactionRequest,
-    ) -> ProxyResult<EndTransactionPlan> {
-        self.client.end_transaction(context, request).await
+    fn end_transaction<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: &'a EndTransactionRequest,
+    ) -> ProxyServiceFuture<'a, EndTransactionPlan> {
+        Box::pin(async move { self.client.end_transaction(context, request).await })
     }
 }
 

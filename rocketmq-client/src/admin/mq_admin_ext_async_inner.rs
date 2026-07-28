@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::admin::mq_admin_ext_inner::MQAdminExtInner;
-
-#[derive(Clone, Copy, Default)]
-pub struct MQAdminExtInnerImpl;
-
-impl MQAdminExtInner for MQAdminExtInnerImpl {}
+/// Legacy concrete marker name retained as a zero-sized compatibility alias.
+///
+/// The client runtime no longer stores this value or constrains registration
+/// through an empty marker trait.
+#[deprecated(since = "1.1.0", note = "remove in 2.0.0; admin registration stores group presence")]
+pub type MQAdminExtInnerImpl = ();

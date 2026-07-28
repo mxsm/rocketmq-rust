@@ -22,12 +22,12 @@ use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 
 use crate::context::ProxyContext;
 use crate::context::ResolvedEndpoint;
+use crate::contracts::ProxyTopicMessageType;
+use crate::contracts::ServiceManager;
+use crate::contracts::SubscriptionGroupMetadata;
 use crate::error::ProxyResult;
 use crate::message::ProxyMessage;
 use crate::message::ProxyMessageExt;
-use crate::service::ProxyTopicMessageType;
-use crate::service::ServiceManager;
-use crate::service::SubscriptionGroupMetadata;
 use crate::status::ProxyPayloadStatus;
 use crate::ResourceIdentity;
 

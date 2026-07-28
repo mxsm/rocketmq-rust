@@ -14,7 +14,9 @@
 
 use std::time::Duration;
 
-use crate::grpc::service::consumer::clamp_duration;
+// Telemetry command gRPC ingress.
+
+use crate::ingress::grpc::service::consumer::clamp_duration;
 use crate::proto::v2;
 use crate::session::TelemetryCommandKind;
 use crate::status::ProxyStatusMapper;

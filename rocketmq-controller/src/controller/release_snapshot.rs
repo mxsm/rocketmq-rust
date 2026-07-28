@@ -23,8 +23,6 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use rocketmq_auth::MaintenanceAuthorizationGrant;
-use rocketmq_auth::MaintenanceCapability;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::protocol::body::release_checkpoint::ControllerReleaseSnapshotManifest;
@@ -34,6 +32,8 @@ use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::BlockingKind;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownDeadline;
+use rocketmq_security_api::MaintenanceAuthorizationGrant;
+use rocketmq_security_api::MaintenanceCapability;
 use sha2::Digest;
 use sha2::Sha256;
 

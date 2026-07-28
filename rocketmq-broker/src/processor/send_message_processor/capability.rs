@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::future::Future;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -233,12 +235,70 @@ impl SendMessagePolicyState {
     }
 }
 
-/// Non-owning access to the local Store operations used by send and reply paths.
-pub(crate) struct SendMessageStoreCapability<MS: MessageStore> {
-    provider: Weak<EscapeBridge<MS>>,
+trait SendMessageStorePort: Send + Sync {
+    fn health_snapshot(&self) -> Result<StoreHealthSnapshot, MessageStoreUnavailable>;
+    fn now(&self) -> Result<u64, MessageStoreUnavailable>;
+    fn append_progress(&self) -> Result<(i64, i64), MessageStoreUnavailable>;
+    fn look_message_by_offset(&self, offset: i64) -> Result<Option<MessageExt>, MessageStoreUnavailable>;
+    fn put_message(
+        &self,
+        message: MessageExtBrokerInner,
+    ) -> Pin<Box<dyn Future<Output = Result<PutMessageResult, MessageStoreUnavailable>> + Send + '_>>;
+    fn append_message(
+        &self,
+        message: MessageExtBrokerInner,
+    ) -> Pin<Box<dyn Future<Output = Result<StoreAppendReceipt, StoreError>> + Send + '_>>;
+    fn append_batch(
+        &self,
+        message: MessageExtBatch,
+    ) -> Pin<Box<dyn Future<Output = Result<StoreAppendReceipt, StoreError>> + Send + '_>>;
 }
 
-impl<MS: MessageStore> Clone for SendMessageStoreCapability<MS> {
+impl<MS: MessageStore> SendMessageStorePort for EscapeBridge<MS> {
+    fn health_snapshot(&self) -> Result<StoreHealthSnapshot, MessageStoreUnavailable> {
+        self.send_message_store_health_snapshot()
+    }
+
+    fn now(&self) -> Result<u64, MessageStoreUnavailable> {
+        self.local_store_now()
+    }
+
+    fn append_progress(&self) -> Result<(i64, i64), MessageStoreUnavailable> {
+        self.send_append_progress()
+    }
+
+    fn look_message_by_offset(&self, offset: i64) -> Result<Option<MessageExt>, MessageStoreUnavailable> {
+        self.look_message_by_offset_from_local_store(offset)
+    }
+
+    fn put_message(
+        &self,
+        message: MessageExtBrokerInner,
+    ) -> Pin<Box<dyn Future<Output = Result<PutMessageResult, MessageStoreUnavailable>> + Send + '_>> {
+        Box::pin(self.put_message_to_local_store(message))
+    }
+
+    fn append_message(
+        &self,
+        message: MessageExtBrokerInner,
+    ) -> Pin<Box<dyn Future<Output = Result<StoreAppendReceipt, StoreError>> + Send + '_>> {
+        Box::pin(self.send_append_message(message))
+    }
+
+    fn append_batch(
+        &self,
+        message: MessageExtBatch,
+    ) -> Pin<Box<dyn Future<Output = Result<StoreAppendReceipt, StoreError>> + Send + '_>> {
+        Box::pin(self.send_append_batch(message))
+    }
+}
+
+/// Non-owning access to the local Store operations used by send and reply paths.
+pub(crate) struct SendMessageStoreCapability {
+    provider: Weak<dyn SendMessageStorePort>,
+}
+
+impl Clone for SendMessageStoreCapability {
     fn clone(&self) -> Self {
         Self {
             provider: Weak::clone(&self.provider),
@@ -246,38 +306,39 @@ impl<MS: MessageStore> Clone for SendMessageStoreCapability<MS> {
     }
 }
 
-impl<MS: MessageStore> SendMessageStoreCapability<MS> {
-    pub(crate) fn new(provider: &Arc<EscapeBridge<MS>>) -> Self {
+impl SendMessageStoreCapability {
+    pub(crate) fn new<MS: MessageStore>(provider: &Arc<EscapeBridge<MS>>) -> Self {
+        let provider: Arc<dyn SendMessageStorePort> = provider.clone();
         Self {
-            provider: Arc::downgrade(provider),
+            provider: Arc::downgrade(&provider),
         }
     }
 
-    fn provider(&self) -> Result<Arc<EscapeBridge<MS>>, MessageStoreUnavailable> {
+    fn provider(&self) -> Result<Arc<dyn SendMessageStorePort>, MessageStoreUnavailable> {
         self.provider.upgrade().ok_or(MessageStoreUnavailable)
     }
 
     pub(crate) fn health_snapshot(&self) -> Result<StoreHealthSnapshot, MessageStoreUnavailable> {
-        self.provider()?.send_message_store_health_snapshot()
+        self.provider()?.health_snapshot()
     }
 
     pub(crate) fn now(&self) -> Result<u64, MessageStoreUnavailable> {
-        self.provider()?.local_store_now()
+        self.provider()?.now()
     }
 
     pub(crate) fn append_progress(&self) -> Result<(i64, i64), MessageStoreUnavailable> {
-        self.provider()?.send_append_progress()
+        self.provider()?.append_progress()
     }
 
     pub(crate) fn look_message_by_offset(&self, offset: i64) -> Result<Option<MessageExt>, MessageStoreUnavailable> {
-        self.provider()?.look_message_by_offset_from_local_store(offset)
+        self.provider()?.look_message_by_offset(offset)
     }
 
     pub(crate) async fn put_message(
         &self,
         message: MessageExtBrokerInner,
     ) -> Result<PutMessageResult, MessageStoreUnavailable> {
-        self.provider()?.put_message_to_local_store(message).await
+        self.provider()?.put_message(message).await
     }
 }
 
@@ -285,26 +346,26 @@ fn append_store_unavailable() -> StoreError {
     StoreError::new(StoreErrorKind::NotStarted, StoreOperation::Append)
 }
 
-impl<MS: MessageStore> MessageAppender<MessageExtBrokerInner> for SendMessageStoreCapability<MS> {
+impl MessageAppender<MessageExtBrokerInner> for SendMessageStoreCapability {
     type Receipt = StoreAppendReceipt;
     type Error = StoreError;
 
     async fn append_message(&mut self, message: MessageExtBrokerInner) -> Result<Self::Receipt, Self::Error> {
         self.provider()
             .map_err(|_| append_store_unavailable())?
-            .send_append_message(message)
+            .append_message(message)
             .await
     }
 }
 
-impl<MS: MessageStore> MessageAppender<MessageExtBatch> for SendMessageStoreCapability<MS> {
+impl MessageAppender<MessageExtBatch> for SendMessageStoreCapability {
     type Receipt = StoreAppendReceipt;
     type Error = StoreError;
 
     async fn append_message(&mut self, message: MessageExtBatch) -> Result<Self::Receipt, Self::Error> {
         self.provider()
             .map_err(|_| append_store_unavailable())?
-            .send_append_batch(message)
+            .append_batch(message)
             .await
     }
 }
@@ -580,7 +641,7 @@ where
 pub(crate) struct SendMessageProcessorContext<MS: MessageStore> {
     pub(crate) policy: SendMessagePolicyState,
     pub(crate) telemetry: TelemetryHandle,
-    pub(crate) store: SendMessageStoreCapability<MS>,
+    pub(crate) store: SendMessageStoreCapability,
     pub(crate) topics: Arc<SendMessageTopicCapability<MS>>,
     pub(crate) subscription_groups: SubscriptionGroupConfigLookup,
     pub(crate) rebalance_locks: RebalanceLockManager,
@@ -613,7 +674,7 @@ impl<MS: MessageStore> SendMessageProcessorContext<MS> {
     pub(crate) fn new(
         policy: SendMessagePolicyState,
         telemetry: TelemetryHandle,
-        store: SendMessageStoreCapability<MS>,
+        store: SendMessageStoreCapability,
         topics: Arc<SendMessageTopicCapability<MS>>,
         subscription_groups: SubscriptionGroupConfigLookup,
         rebalance_locks: RebalanceLockManager,

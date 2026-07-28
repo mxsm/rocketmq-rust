@@ -36,7 +36,9 @@ use rocketmq_client_rust::HashFunction;
 use rocketmq_client_rust::JavaHashCode;
 use rocketmq_client_rust::LitePullConsumer;
 use rocketmq_client_rust::MQAdminExt;
+#[allow(deprecated, reason = "compile-check the promised 2.0 compatibility export")]
 use rocketmq_client_rust::MQAdminExtInner;
+#[allow(deprecated, reason = "compile-check the promised 2.0 compatibility export")]
 use rocketmq_client_rust::MQAdminExtInnerImpl;
 use rocketmq_client_rust::MQConsumer;
 use rocketmq_client_rust::MQProducer;
@@ -408,15 +410,19 @@ async fn crate_root_exports_trace_dispatcher_api_for_custom_trace_wiring() {
 }
 
 #[test]
+#[allow(deprecated, reason = "verifies the announced one-cycle compatibility surface")]
 fn crate_root_exports_modern_admin_facades_and_results() {
     let client_runtime = support::client_runtime("public-api-admin");
     fn assert_mq_admin_ext<T: MQAdminExt>() {}
     fn assert_mq_admin_ext_inner<T: MQAdminExtInner>() {}
     fn assert_as_ref_admin_impl<T: AsRef<DefaultMQAdminExtImpl>>() {}
+    struct LegacyAdminMarker;
+    impl MQAdminExtInner for LegacyAdminMarker {}
 
     assert_mq_admin_ext::<DefaultMQAdminExt>();
     assert_mq_admin_ext::<DefaultMQAdminExtImpl>();
-    assert_mq_admin_ext_inner::<MQAdminExtInnerImpl>();
+    assert_mq_admin_ext_inner::<LegacyAdminMarker>();
+    assert_eq!(std::mem::size_of::<MQAdminExtInnerImpl>(), 0);
     assert_as_ref_admin_impl::<DefaultMQAdminExt>();
 
     let admin = DefaultMQAdminExt::new(client_runtime);
