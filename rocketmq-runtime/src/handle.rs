@@ -22,11 +22,31 @@ impl RuntimeHandle {
         Self { handle }
     }
 
+    #[deprecated(
+        since = "1.1.0",
+        note = "raw Tokio handles are a compatibility boundary; use an injected task capability"
+    )]
     pub fn inner(&self) -> &tokio::runtime::Handle {
         &self.handle
     }
 
+    #[deprecated(
+        since = "1.1.0",
+        note = "raw spawning bypasses TaskGroup ownership; use TaskSpawner or TaskGroup"
+    )]
     pub fn spawn<F>(&self, future: F) -> tokio::task::JoinHandle<F::Output>
+    where
+        F: std::future::Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        self.handle.spawn(future)
+    }
+
+    pub(crate) fn tokio_handle(&self) -> &tokio::runtime::Handle {
+        &self.handle
+    }
+
+    pub(crate) fn spawn_owned<F>(&self, future: F) -> tokio::task::JoinHandle<F::Output>
     where
         F: std::future::Future + Send + 'static,
         F::Output: Send + 'static,

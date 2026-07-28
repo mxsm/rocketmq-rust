@@ -134,7 +134,7 @@ impl TokioExecutorService {
     }
 
     pub fn get_handle(&self) -> &Handle {
-        self.inner.root_context().runtime().inner()
+        self.inner.root_context().runtime().tokio_handle()
     }
 
     pub fn block_on<F: Future>(&self, future: F) -> F::Output {

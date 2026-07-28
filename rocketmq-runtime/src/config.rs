@@ -74,7 +74,8 @@ impl RuntimeConfig {
                 "thread_stack_size must be greater than zero when set".to_string(),
             ));
         }
-        self.blocking_lane_policies.validate()?;
+        self.blocking_lane_policies
+            .validate_for_global_capacity(self.max_blocking_threads)?;
         Ok(())
     }
 }

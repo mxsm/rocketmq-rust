@@ -8,6 +8,7 @@ use std::time::Duration;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::BlockingKind;
 use rocketmq_runtime::BlockingLane;
+use rocketmq_runtime::BlockingLanePolicies;
 use rocketmq_runtime::BlockingPoolPolicy;
 use rocketmq_runtime::DetachedTaskPolicy;
 use rocketmq_runtime::RuntimeConfig;
@@ -256,6 +257,39 @@ async fn service_context_child_preserves_parent_runtime_and_blocking_executor() 
 }
 
 #[tokio::test]
+async fn task_capability_spawns_only_parent_owned_work() {
+    let context = RuntimeContext::from_current("task-capability-test");
+    let service = context.service_context("task-capability-service");
+    let spawner = service.task_spawner().child("worker");
+    let owner_cancellation = spawner.cancellation_token();
+    let (completed_tx, completed_rx) = oneshot::channel();
+
+    spawner
+        .spawn_service("owned-task", async move {
+            let _ = completed_tx.send(());
+        })
+        .expect("task capability should spawn while its owner is open");
+    completed_rx.await.expect("owned task should complete");
+
+    let report = context.shutdown_tasks(Duration::from_secs(1)).await;
+    assert!(report.is_healthy(), "{}", report.to_json());
+    assert!(owner_cancellation.is_cancelled());
+    assert!(
+        spawner.spawn_service("late-task", async {}).is_err(),
+        "a cloned capability must not outlive owner shutdown"
+    );
+}
+
+#[test]
+fn task_capability_source_does_not_expose_raw_runtime_or_detached_spawn() {
+    let source = include_str!("../src/task_spawner.rs");
+
+    assert!(!source.contains("RuntimeHandle"));
+    assert!(!source.contains("spawn_detached"));
+    assert!(!source.contains("tokio::runtime::Handle"));
+}
+
+#[tokio::test]
 async fn parent_context_shutdown_cancels_and_joins_descendant_tasks() {
     let context = RuntimeContext::from_current("service-context-cancellation-test");
     let parent = context.service_context("parent");
@@ -459,6 +493,7 @@ async fn task_group_shutdown_aborts_after_timeout_without_leak() {
     assert_eq!(report.timed_out, 1, "{}", report.to_json());
 }
 
+#[allow(deprecated)]
 #[tokio::test]
 async fn task_group_detached_track_only_reports_policy() {
     let context = RuntimeContext::from_current("task-group-detached-track-test");
@@ -484,6 +519,7 @@ async fn task_group_detached_track_only_reports_policy() {
     );
 }
 
+#[allow(deprecated)]
 #[tokio::test]
 async fn task_group_detached_abort_on_shutdown_is_aborted() {
     let context = RuntimeContext::from_current("task-group-detached-abort-test");
@@ -891,6 +927,142 @@ async fn blocking_executor_limits_concurrency() {
     assert_eq!(max_active.load(Ordering::Relaxed), 1);
 }
 
+#[test]
+fn blocking_lanes_share_one_global_budget_and_preserve_waiting_lane_reservations() {
+    let lane_policy = BlockingPoolPolicy {
+        max_concurrency: 3,
+        max_queue_depth: 4,
+        queue_timeout: Duration::from_secs(1),
+        task_timeout: Duration::from_secs(2),
+        ..BlockingPoolPolicy::default()
+    };
+    let config = RuntimeConfig {
+        worker_threads: 2,
+        max_blocking_threads: 3,
+        blocking_lane_policies: BlockingLanePolicies::uniform(lane_policy),
+        ..RuntimeConfig::default()
+    };
+    let owner = RuntimeOwner::new(config).expect("runtime owner should start");
+    let context = owner.root_context().child("global-blocking-budget-test");
+
+    owner.block_on(async {
+        let mut storage_tasks = Vec::new();
+        let mut storage_releases = Vec::new();
+        for task_number in 0..3 {
+            let executor = context.storage_io().clone();
+            let (started_tx, started_rx) = oneshot::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            storage_tasks.push(tokio::spawn(async move {
+                executor
+                    .spawn_io(format!("storage-borrower-{task_number}"), move || {
+                        let _ = started_tx.send(());
+                        let _ = release_rx.recv();
+                    })
+                    .await
+            }));
+            storage_releases.push(release_tx);
+            started_rx.await.expect("storage borrower should start");
+        }
+
+        let saturated = context.metadata_io().snapshot();
+        assert_eq!(saturated.global_capacity, 3, "{saturated:?}");
+        assert_eq!(saturated.global_running, 3, "{saturated:?}");
+        assert_eq!(context.storage_io().snapshot().lane_borrowed, 2);
+
+        let metadata_started = Arc::new(Notify::new());
+        let metadata_started_signal = Arc::clone(&metadata_started);
+        let (metadata_release_tx, metadata_release_rx) = std::sync::mpsc::channel();
+        let metadata_executor = context.metadata_io().clone();
+        let metadata_task = tokio::spawn(async move {
+            metadata_executor
+                .spawn_io("metadata-reservation-waiter", move || {
+                    metadata_started_signal.notify_one();
+                    let _ = metadata_release_rx.recv();
+                })
+                .await
+        });
+
+        let extra_storage_started = Arc::new(Notify::new());
+        let extra_storage_started_signal = Arc::clone(&extra_storage_started);
+        let (extra_storage_release_tx, extra_storage_release_rx) = std::sync::mpsc::channel();
+        let storage_executor = context.storage_io().clone();
+        let extra_storage_task = tokio::spawn(async move {
+            storage_executor
+                .spawn_io("extra-storage-borrower", move || {
+                    extra_storage_started_signal.notify_one();
+                    let _ = extra_storage_release_rx.recv();
+                })
+                .await
+        });
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while context.metadata_io().snapshot().queued != 1 || context.storage_io().snapshot().queued != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("both lane waiters should enter admission");
+
+        storage_releases
+            .pop()
+            .expect("one storage release should remain")
+            .send(())
+            .expect("storage borrower should accept release");
+        tokio::time::timeout(Duration::from_secs(1), metadata_started.notified())
+            .await
+            .expect("the waiting metadata lane should receive its reservation");
+        assert_eq!(
+            context.storage_io().snapshot().queued,
+            1,
+            "a new storage borrower must not steal the metadata reservation"
+        );
+
+        metadata_release_tx
+            .send(())
+            .expect("metadata waiter should accept release");
+        tokio::time::timeout(Duration::from_secs(1), extra_storage_started.notified())
+            .await
+            .expect("the storage borrower should start after metadata releases capacity");
+        extra_storage_release_tx
+            .send(())
+            .expect("extra storage borrower should accept release");
+        for release in storage_releases {
+            release.send(()).expect("storage borrower should accept release");
+        }
+
+        metadata_task
+            .await
+            .expect("metadata task should join")
+            .expect("metadata blocking work should succeed");
+        extra_storage_task
+            .await
+            .expect("extra storage task should join")
+            .expect("extra storage blocking work should succeed");
+        for task in storage_tasks {
+            task.await
+                .expect("storage task should join")
+                .expect("storage blocking work should succeed");
+        }
+    });
+}
+
+#[test]
+fn blocking_global_budget_rejects_capacity_without_one_reservation_per_lane() {
+    let config = RuntimeConfig {
+        max_blocking_threads: 2,
+        ..RuntimeConfig::default()
+    };
+
+    let error = match RuntimeOwner::new(config) {
+        Ok(_) => panic!("three lanes require three minimum reservations"),
+        Err(error) => error,
+    };
+    assert!(
+        matches!(error, RuntimeError::InvalidConfig(ref message) if message.contains("at least 3")),
+        "{error:?}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn blocking_executor_rejects_work_when_bounded_queue_is_full() {
     let context = RuntimeContext::from_current("blocking-queue-capacity-test");
@@ -1212,7 +1384,7 @@ async fn blocking_executor_reports_timeout_until_reaper_cleans_late_exit() {
 fn runtime_owner_uses_configured_blocking_policy_in_shutdown_report() {
     let mut config = RuntimeConfig {
         worker_threads: 2,
-        max_blocking_threads: 2,
+        max_blocking_threads: 3,
         shutdown_timeout: Duration::from_millis(50),
         ..RuntimeConfig::default()
     };
@@ -1272,7 +1444,7 @@ fn runtime_owner_uses_configured_blocking_policy_in_shutdown_report() {
 fn runtime_owner_drop_shutdowns_root_group_when_not_explicitly_closed() {
     let config = RuntimeConfig {
         worker_threads: 2,
-        max_blocking_threads: 2,
+        max_blocking_threads: 3,
         shutdown_timeout: Duration::from_millis(50),
         ..RuntimeConfig::default()
     };
@@ -1302,7 +1474,7 @@ fn runtime_owner_drop_shutdowns_root_group_when_not_explicitly_closed() {
 fn runtime_owner_shutdown_background_closes_root_group_without_drop_fallback() {
     let config = RuntimeConfig {
         worker_threads: 2,
-        max_blocking_threads: 2,
+        max_blocking_threads: 3,
         shutdown_timeout: Duration::from_millis(50),
         ..RuntimeConfig::default()
     };

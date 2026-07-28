@@ -262,6 +262,10 @@ impl TaskGroup {
         &self.inner.name
     }
 
+    #[deprecated(
+        since = "1.1.0",
+        note = "raw runtime access bypasses task ownership; use TaskSpawner or TaskGroup spawn methods"
+    )]
     pub fn runtime(&self) -> &RuntimeHandle {
         &self.inner.runtime
     }
@@ -413,13 +417,21 @@ impl TaskGroup {
         self.spawn_with_handle(name, TaskKind::Service, future)
     }
 
+    #[deprecated(
+        since = "1.1.0",
+        note = "detached spawn is a compatibility boundary; use spawn or spawn_service"
+    )]
     pub fn spawn_detached<F>(&self, name: impl Into<Arc<str>>, kind: TaskKind, future: F) -> RuntimeResult<TaskId>
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        self.spawn_detached_with_policy(name, kind, DetachedTaskPolicy::TrackOnly, future)
+        self.spawn_inner(name.into(), kind, Some(DetachedTaskPolicy::TrackOnly), future)
     }
 
+    #[deprecated(
+        since = "1.1.0",
+        note = "detached spawn is a compatibility boundary; use spawn or spawn_service"
+    )]
     pub fn spawn_detached_with_policy<F>(
         &self,
         name: impl Into<Arc<str>>,
@@ -589,9 +601,9 @@ impl TaskGroup {
         };
 
         let join_handle = if detached_policy.is_some() {
-            self.inner.runtime.spawn(wrapped)
+            self.inner.runtime.spawn_owned(wrapped)
         } else {
-            self.inner.tracker.spawn_on(wrapped, self.inner.runtime.inner())
+            self.inner.tracker.spawn_on(wrapped, self.inner.runtime.tokio_handle())
         };
         let abort_handle = join_handle.abort_handle();
 
