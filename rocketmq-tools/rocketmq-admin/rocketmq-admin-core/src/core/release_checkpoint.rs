@@ -16,7 +16,9 @@
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::fmt;
 
+use rocketmq_error::Sensitive;
 use rocketmq_protocol::protocol::body::release_checkpoint::ControllerReleaseSnapshotManifest;
 use rocketmq_protocol::protocol::body::release_checkpoint::MaintenanceCapabilitiesResponse;
 use rocketmq_protocol::protocol::body::release_checkpoint::ReleaseCheckpointRestoreVerification;
@@ -100,12 +102,24 @@ impl ValidatedMaintenanceCapabilities {
 
 /// Constructs a complete set from independently checksummed Controller and
 /// Store artifacts captured under one barrier.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct ReleaseCheckpointSetBuilder {
     release_id: String,
     policy_version: u64,
     fencing_token: u64,
     max_store_members: u32,
+}
+
+impl fmt::Debug for ReleaseCheckpointSetBuilder {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ReleaseCheckpointSetBuilder")
+            .field("release_id", &self.release_id)
+            .field("policy_version", &self.policy_version)
+            .field("fencing_token", &Sensitive::new(self.fencing_token))
+            .field("max_store_members", &self.max_store_members)
+            .finish()
+    }
 }
 
 impl ReleaseCheckpointSetBuilder {

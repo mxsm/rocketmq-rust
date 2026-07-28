@@ -84,6 +84,7 @@ assert_same_directory_agents() {
 ROOT_AGENTS_TEXT="$(read_repository_text "AGENTS.md")"
 
 REQUIRED_ROUTE_PATHS=(
+  "fuzz/"
   "rocketmq-example/"
   "rocketmq-dashboard/rocketmq-dashboard-gpui/"
   "rocketmq-dashboard/rocketmq-dashboard-tauri/"
@@ -148,6 +149,7 @@ for shared_path in "${REQUIRED_SHARED_PATHS[@]}"; do
 done
 
 EXPECTED_PROJECT_AGENTS=(
+  "fuzz/AGENTS.md"
   "rocketmq-example/AGENTS.md"
   "rocketmq-dashboard/rocketmq-dashboard-gpui/AGENTS.md"
   "rocketmq-dashboard/rocketmq-dashboard-tauri/AGENTS.md"
@@ -191,6 +193,7 @@ done < <(find_files_by_name "package.json")
 
 WORKFLOW_PATHS=(
   ".github/workflows/rocketmq-rust-ci.yaml|Root workspace validation"
+  ".github/workflows/fuzz-ci.yml|fuzz/"
   ".github/workflows/rocketmq-example-ci.yaml|rocketmq-example/"
   ".github/workflows/dashboard-web-ci.yml|rocketmq-dashboard/rocketmq-dashboard-web/"
   ".github/workflows/dashboard-tauri-ci.yml|rocketmq-dashboard/rocketmq-dashboard-tauri/"

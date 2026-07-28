@@ -9,12 +9,22 @@ on:
     paths:
       - '**/Cargo.toml'
       - '**/Cargo.lock'
+      - 'fuzz/**'
+      - 'rocketmq-broker/**'
+      - 'rocketmq-controller/**'
+      - 'rocketmq-protocol/**'
+      - 'rocketmq-store-local/**'
       - '.github/workflows/security-audit.yml'
   pull_request:
     branches: [ "main" ]
     paths:
       - '**/Cargo.toml'
       - '**/Cargo.lock'
+      - 'fuzz/**'
+      - 'rocketmq-broker/**'
+      - 'rocketmq-controller/**'
+      - 'rocketmq-protocol/**'
+      - 'rocketmq-store-local/**'
       - '.github/workflows/security-audit.yml'
   schedule:
     # Run security audit daily at 00:00 UTC
@@ -50,6 +60,8 @@ jobs:
             lockfile: rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/Cargo.lock
           - project: dashboard-web-backend
             lockfile: rocketmq-dashboard/rocketmq-dashboard-web/backend/Cargo.lock
+          - project: fuzz
+            lockfile: fuzz/Cargo.lock
 
     steps:
       - name: Checkout

@@ -1,0 +1,59 @@
+name: Fuzz Target Build
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'fuzz/**'
+      - 'rocketmq-broker/**'
+      - 'rocketmq-controller/**'
+      - 'rocketmq-protocol/**'
+      - 'rocketmq-store-local/**'
+      - '.github/workflows/fuzz-ci.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'fuzz/**'
+      - 'rocketmq-broker/**'
+      - 'rocketmq-controller/**'
+      - 'rocketmq-protocol/**'
+      - 'rocketmq-store-local/**'
+      - '.github/workflows/fuzz-ci.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - protocol_decode
+          - raw_broker_config
+          - controller_snapshot
+          - store_recovery_record
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up fixed nightly
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-05
+
+      - name: Build fuzz target
+        run: >-
+          cargo +nightly-2026-07-05 check
+          --locked
+          --manifest-path fuzz/Cargo.toml
+          --bin ${{ matrix.target }}
+          --features ${{ matrix.target }}

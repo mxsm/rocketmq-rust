@@ -31,6 +31,7 @@ use rocketmq_protocol::protocol::body::release_checkpoint::StoreReleaseCheckpoin
 use rocketmq_protocol::protocol::body::release_checkpoint::StoreReleaseCheckpointRequest;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::RuntimeError;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_store_api::ReleaseCheckpointStore;
 use rocketmq_store_local::release_checkpoint::LocalReleaseCheckpointBarrier;
@@ -107,7 +108,7 @@ impl StoreReleaseCheckpointService {
                         load_or_create_storage_identity(&source_root)
                     })
                     .await
-                    .map_err(|error| StoreReleaseCheckpointError::Runtime(error.to_string()))?
+                    .map_err(StoreReleaseCheckpointError::Runtime)?
             })
             .await
             .cloned()
@@ -284,7 +285,7 @@ impl LocalReleaseCheckpointBarrier for OwnedLocalCheckpointBarrier {
                 verify_local_checkpoint_layout(&checkpoint_root, &expected_identity, offsets)
             })
             .await
-            .map_err(|error| StoreReleaseCheckpointError::Runtime(error.to_string()))??;
+            .map_err(StoreReleaseCheckpointError::Runtime)??;
         Ok(offsets)
     }
 }
@@ -312,8 +313,7 @@ fn load_or_create_storage_identity(
     })?;
     let partial_path = source_root.join(format!(".{STORAGE_IDENTITY_FILE}.partial-{}", Uuid::new_v4()));
     let result = (|| {
-        let bytes = serde_json::to_vec_pretty(&identity)
-            .map_err(|error| StoreReleaseCheckpointError::IdentityDecode(error.to_string()))?;
+        let bytes = serde_json::to_vec_pretty(&identity).map_err(StoreReleaseCheckpointError::IdentityDecode)?;
         let mut file = OpenOptions::new()
             .create_new(true)
             .write(true)
@@ -349,12 +349,10 @@ fn read_storage_identity(path: &Path) -> Result<ReleaseCheckpointStorageIdentity
         path: path.to_path_buf(),
         source,
     })?;
-    let identity: ReleaseCheckpointStorageIdentity = serde_json::from_slice(&bytes)
-        .map_err(|error| StoreReleaseCheckpointError::IdentityDecode(error.to_string()))?;
+    let identity: ReleaseCheckpointStorageIdentity =
+        serde_json::from_slice(&bytes).map_err(StoreReleaseCheckpointError::IdentityDecode)?;
     if identity.volume_id.trim().is_empty() || identity.wal_generation == 0 {
-        return Err(StoreReleaseCheckpointError::IdentityDecode(
-            "volume ID and WAL generation must be present".to_string(),
-        ));
+        return Err(StoreReleaseCheckpointError::InvalidStorageIdentity);
     }
     Ok(identity)
 }
@@ -421,12 +419,14 @@ pub enum StoreReleaseCheckpointError {
     StorageIdentityMismatch,
     #[error("checkpoint request does not match the selected Store backend")]
     WrongBackend,
-    #[error("invalid storage identity: {0}")]
-    IdentityDecode(String),
+    #[error("invalid storage identity encoding")]
+    IdentityDecode(#[source] serde_json::Error),
+    #[error("storage identity requires a volume ID and non-zero WAL generation")]
+    InvalidStorageIdentity,
     #[error("local restore verification failed: {0}")]
     RestoreLayout(String),
-    #[error("checkpoint runtime failed: {0}")]
-    Runtime(String),
+    #[error("checkpoint runtime failed")]
+    Runtime(#[source] RuntimeError),
     #[error("Store checkpoint barrier failed: {0}")]
     Store(#[from] crate::store_error::StoreError),
     #[error("Local Store checkpoint failed: {0}")]

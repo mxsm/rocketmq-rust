@@ -16,6 +16,7 @@
 |---|---|---|
 | `rocketmq-dashboard/rocketmq-dashboard-common/` | Root workspace member and shared dashboard crate | This file |
 | `rocketmq-example/` | Standalone Cargo project | `rocketmq-example/AGENTS.md` |
+| `fuzz/` | Standalone Cargo fuzz project | `fuzz/AGENTS.md` |
 | `rocketmq-dashboard/rocketmq-dashboard-gpui/` | Standalone Cargo project | Its local `AGENTS.md` |
 | `rocketmq-dashboard/rocketmq-dashboard-tauri/` | Standalone Node/Vite/Tauri frontend | Its local `AGENTS.md` |
 | `rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/` | Standalone Rust backend | Its local `AGENTS.md` |
@@ -47,8 +48,8 @@
 - Treat `rust-version` as the MSRV and `rust-toolchain.toml` as the repository toolchain selection. Changes
   to either must keep root and standalone manifests, `.clippy.toml`, and CI aligned.
 - Do not normalize editions across projects. The root workspace defaults to Rust 2021;
-  `rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/` explicitly uses Rust 2024, and all four standalone
-  Cargo projects use Rust 2024.
+  `rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/` explicitly uses Rust 2024. Follow each of the five
+  standalone Cargo projects' local edition and toolchain rules; `fuzz/` intentionally remains Rust 2021.
 - Keep Cargo features additive and explicit. Preserve documented default behavior, gate optional dependencies
   with their owning feature, and validate the exact changed feature combinations.
 - Treat public crate APIs, request/response codes and headers, Serde field names/defaults, and persisted record
@@ -134,6 +135,7 @@ cargo clippy --all-targets --all-features -- -D warnings
 |---|---|---|---|
 | Root workspace Rust crates and `rocketmq-dashboard/rocketmq-dashboard-common/` | Repository root | Root workspace Rust profile plus applicable focused tests for behavior changes | Apply every matching specialized gate below |
 | `rocketmq-example/` | `rocketmq-example/` | Follow `rocketmq-example/AGENTS.md` | Revalidate when any repository path dependency in its `Cargo.toml` changes, especially client, model, protocol, transport, runtime, error, observability, or admin-core |
+| `fuzz/` | `fuzz/` | Follow `fuzz/AGENTS.md`; CI builds all four targets with the fixed nightly | Revalidate when broker, controller, protocol, or store-local path dependencies change |
 | `rocketmq-dashboard/rocketmq-dashboard-gpui/` | Its project root | Follow its `AGENTS.md` | Revalidate for `rocketmq-dashboard-common/` or shared dashboard behavior changes |
 | `rocketmq-dashboard/rocketmq-dashboard-tauri/` frontend | Its project root | Follow its `AGENTS.md`; CI uses `npm ci` and `npm run build` | Include shared frontend config, shell behavior, and package metadata changes |
 | `rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/` | Its Cargo root | Follow its `AGENTS.md` | Revalidate when a root path dependency used by the backend changes |
@@ -241,6 +243,9 @@ If a shared crate changes, inspect standalone `Cargo.toml` path dependencies and
 - `rocketmq-observability`
 - `rocketmq-dashboard/rocketmq-dashboard-common`
 - `rocketmq-tools/rocketmq-admin/rocketmq-admin-core`
+
+Changes to `rocketmq-broker`, `rocketmq-controller`, `rocketmq-protocol`, or `rocketmq-store-local` must also
+revalidate the standalone `fuzz/` project because those crates are direct path dependencies.
 
 Do not infer consumer scope from directory names alone; use the current manifests.
 

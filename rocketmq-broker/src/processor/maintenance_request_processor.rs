@@ -35,6 +35,7 @@ use rocketmq_protocol::protocol::header::maintenance_request_header::Maintenance
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_store::StoreReleaseCheckpointService;
 use rocketmq_store_api::ReleaseCheckpointStore;
+use rocketmq_transport::request_code_not_supported_with_remark;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
 use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
@@ -77,8 +78,8 @@ impl MaintenanceRequestProcessor {
             RequestCode::MaintenanceVerifyCheckpoint => self.verify_store_checkpoint(request)?,
             RequestCode::MaintenanceRestoreVerify => self.restore_verify(&grant, request).await?,
             _ => {
-                return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::RequestCodeNotSupported,
+                return Ok(Some(request_code_not_supported_with_remark(
+                    request.code(),
                     format!("request type {} is not a Broker maintenance operation", request.code()),
                 )));
             }
@@ -102,12 +103,8 @@ impl MaintenanceRequestProcessor {
             .await?;
         let header = request
             .decode_command_custom_header::<MaintenanceRequestHeader>()
-            .map_err(|error| {
-                RocketMQError::request_header_error(format!("failed to decode privileged maintenance header: {error}"))
-            })?;
-        header
-            .validate()
-            .map_err(|reason| RocketMQError::request_header_error(reason.to_string()))?;
+            .map_err(|source| RocketMQError::request_header_source("decode privileged maintenance header", source))?;
+        header.validate().map_err(RocketMQError::request_header_error)?;
         if header.policy_version != self.authorizer.policy().policy_version {
             return Err(RocketMQError::authentication_failed(format!(
                 "maintenance policy version {} does not match loaded version {}",
@@ -128,7 +125,7 @@ impl MaintenanceRequestProcessor {
                 }),
                 rocketmq_runtime::common::time_utils::current_millis(),
             )
-            .map_err(|error| RocketMQError::authentication_failed(error.to_string()))
+            .map_err(|source| RocketMQError::authentication_source("authorize privileged maintenance request", source))
     }
 
     async fn capabilities(&self, grant: &MaintenanceAuthorizationGrant) -> RocketMQResult<RemotingCommand> {
@@ -166,9 +163,8 @@ impl MaintenanceRequestProcessor {
         request: &RemotingCommand,
     ) -> RocketMQResult<RemotingCommand> {
         let body = required_body(request, "MAINTENANCE_CREATE_STORE_CHECKPOINT")?;
-        let checkpoint_request: StoreReleaseCheckpointRequest = serde_json::from_slice(body).map_err(|error| {
-            RocketMQError::request_body_invalid("MAINTENANCE_CREATE_STORE_CHECKPOINT", error.to_string())
-        })?;
+        let checkpoint_request: StoreReleaseCheckpointRequest = serde_json::from_slice(body)
+            .map_err(|source| RocketMQError::request_body_source("MAINTENANCE_CREATE_STORE_CHECKPOINT", source))?;
         let manifest = self
             .checkpoint_service
             .create_release_checkpoint(grant, checkpoint_request)
@@ -180,10 +176,10 @@ impl MaintenanceRequestProcessor {
     fn verify_store_checkpoint(&self, request: &RemotingCommand) -> RocketMQResult<RemotingCommand> {
         let body = required_body(request, "MAINTENANCE_VERIFY_CHECKPOINT")?;
         let manifest: StoreReleaseCheckpointManifest = serde_json::from_slice(body)
-            .map_err(|error| RocketMQError::request_body_invalid("MAINTENANCE_VERIFY_CHECKPOINT", error.to_string()))?;
+            .map_err(|source| RocketMQError::request_body_source("MAINTENANCE_VERIFY_CHECKPOINT", source))?;
         manifest
             .validate()
-            .map_err(|error| RocketMQError::request_body_invalid("MAINTENANCE_VERIFY_CHECKPOINT", error.to_string()))?;
+            .map_err(|source| RocketMQError::request_body_source("MAINTENANCE_VERIFY_CHECKPOINT", source))?;
         encode_success(&manifest, "encode verified Store release-checkpoint manifest")
     }
 
@@ -194,7 +190,7 @@ impl MaintenanceRequestProcessor {
     ) -> RocketMQResult<RemotingCommand> {
         let body = required_body(request, "MAINTENANCE_RESTORE_VERIFY")?;
         let manifest: StoreReleaseCheckpointManifest = serde_json::from_slice(body)
-            .map_err(|error| RocketMQError::request_body_invalid("MAINTENANCE_RESTORE_VERIFY", error.to_string()))?;
+            .map_err(|source| RocketMQError::request_body_source("MAINTENANCE_RESTORE_VERIFY", source))?;
         let verification = self
             .checkpoint_service
             .restore_verify_release_checkpoint(grant, &manifest)
@@ -229,6 +225,6 @@ fn encode_success<T: serde::Serialize>(value: &T, operation: &'static str) -> Ro
         .set_body(body))
 }
 
-fn checkpoint_error(error: impl std::error::Error) -> RocketMQError {
-    RocketMQError::storage_write_failed("release-checkpoint", error.to_string())
+fn checkpoint_error(error: impl std::error::Error + Send + Sync + 'static) -> RocketMQError {
+    RocketMQError::internal("release-checkpoint", error)
 }

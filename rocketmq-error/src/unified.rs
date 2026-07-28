@@ -222,9 +222,33 @@ pub enum RocketMQError {
     #[error("Request body {operation} failed: {reason}")]
     RequestBodyInvalid { operation: &'static str, reason: String },
 
+    /// Request body decoding or validation failed with a typed source.
+    #[error("Request body {operation} failed")]
+    RequestBodySource {
+        operation: &'static str,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
     /// Request header missing or invalid
     #[error("Request header error: {0}")]
     RequestHeaderError(String),
+
+    /// Request header decoding or validation failed with a typed source.
+    #[error("Request header {operation} failed")]
+    RequestHeaderSource {
+        operation: &'static str,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
+    /// Authentication or authorization failed with a typed source.
+    #[error("Authentication operation {operation} failed")]
+    AuthenticationSource {
+        operation: &'static str,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
 
     /// Response encoding/decoding failed
     #[error("Response {operation} failed: {reason}")]
@@ -448,8 +472,9 @@ impl RocketMQError {
             Self::QueryNotFound { .. } => ErrorKind::QueryNotFound,
             Self::TopicSendingForbidden { .. } => ErrorKind::TopicSendingForbidden,
             Self::BrokerAsyncTaskFailed { .. } => ErrorKind::BrokerAsyncTaskFailed,
-            Self::RequestBodyInvalid { .. } => ErrorKind::RequestBodyInvalid,
-            Self::RequestHeaderError(_) => ErrorKind::RequestHeaderError,
+            Self::RequestBodyInvalid { .. } | Self::RequestBodySource { .. } => ErrorKind::RequestBodyInvalid,
+            Self::RequestHeaderError(_) | Self::RequestHeaderSource { .. } => ErrorKind::RequestHeaderError,
+            Self::AuthenticationSource { .. } => ErrorKind::Authentication,
             Self::ResponseProcessFailed { .. } => ErrorKind::ResponseProcessFailed,
             Self::RouteNotFound { .. } => ErrorKind::RouteNotFound,
             Self::RouteInconsistent { .. } => ErrorKind::RouteInconsistent,
@@ -574,7 +599,16 @@ impl RocketMQError {
             Self::RequestBodyInvalid { operation, reason } => ErrorContext::new()
                 .with_field("operation", *operation)
                 .with_field("reason", reason.as_str()),
+            Self::RequestBodySource { operation, source } => ErrorContext::new()
+                .with_field("operation", *operation)
+                .with_sensitive("source", Sensitive::new(source.to_string())),
             Self::RequestHeaderError(reason) => ErrorContext::new().with_field("reason", reason.as_str()),
+            Self::RequestHeaderSource { operation, source } => ErrorContext::new()
+                .with_field("operation", *operation)
+                .with_sensitive("source", Sensitive::new(source.to_string())),
+            Self::AuthenticationSource { operation, source } => ErrorContext::new()
+                .with_field("operation", *operation)
+                .with_sensitive("source", Sensitive::new(source.to_string())),
             Self::ResponseProcessFailed { operation, reason } => ErrorContext::new()
                 .with_field("operation", *operation)
                 .with_field("reason", reason.as_str()),
@@ -816,10 +850,46 @@ impl RocketMQError {
         }
     }
 
+    /// Creates a request-body error while preserving its typed cause.
+    #[inline]
+    pub fn request_body_source(
+        operation: &'static str,
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        Self::RequestBodySource {
+            operation,
+            source: Box::new(source),
+        }
+    }
+
     /// Create a request header error
     #[inline]
     pub fn request_header_error(message: impl Into<String>) -> Self {
         Self::RequestHeaderError(message.into())
+    }
+
+    /// Creates a request-header error while preserving its typed cause.
+    #[inline]
+    pub fn request_header_source(
+        operation: &'static str,
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        Self::RequestHeaderSource {
+            operation,
+            source: Box::new(source),
+        }
+    }
+
+    /// Creates an authentication error while preserving its typed cause.
+    #[inline]
+    pub fn authentication_source(
+        operation: &'static str,
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        Self::AuthenticationSource {
+            operation,
+            source: Box::new(source),
+        }
     }
 
     /// Create a response process failed error

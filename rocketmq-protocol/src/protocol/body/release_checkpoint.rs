@@ -18,6 +18,7 @@ use std::collections::BTreeSet;
 use std::error::Error as StdError;
 use std::fmt;
 
+use rocketmq_error::Sensitive;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -341,7 +342,7 @@ impl StoreReleaseCheckpointManifest {
 }
 
 /// Complete checkpoint set that binds Controller and all Store members.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ReleaseCheckpointSetManifest {
     pub schema_version: u16,
@@ -354,6 +355,24 @@ pub struct ReleaseCheckpointSetManifest {
     pub created_at_unix_millis: u64,
     pub controller: ControllerReleaseSnapshotManifest,
     pub stores: Vec<StoreReleaseCheckpointManifest>,
+}
+
+impl fmt::Debug for ReleaseCheckpointSetManifest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ReleaseCheckpointSetManifest")
+            .field("schema_version", &self.schema_version)
+            .field("checkpoint_set_id", &self.checkpoint_set_id)
+            .field("release_id", &self.release_id)
+            .field("generation", &self.generation)
+            .field("barrier_id", &self.barrier_id)
+            .field("policy_version", &self.policy_version)
+            .field("fencing_token", &Sensitive::new(self.fencing_token))
+            .field("created_at_unix_millis", &self.created_at_unix_millis)
+            .field("controller", &self.controller)
+            .field("stores", &self.stores)
+            .finish()
+    }
 }
 
 impl ReleaseCheckpointSetManifest {
@@ -617,5 +636,32 @@ mod tests {
         };
 
         assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn release_checkpoint_set_debug_redacts_fencing_token() {
+        let manifest = ReleaseCheckpointSetManifest {
+            schema_version: 1,
+            checkpoint_set_id: "set-7".to_string(),
+            release_id: "release-7".to_string(),
+            generation: 7,
+            barrier_id: "barrier-42".to_string(),
+            policy_version: 3,
+            fencing_token: 987_654_321,
+            created_at_unix_millis: 1_800_000_000_000,
+            controller: ControllerReleaseSnapshotManifest {
+                artifact: artifact("controller"),
+                snapshot_id: "snapshot-99".to_string(),
+                last_applied_index: 99,
+                last_applied_term: 3,
+                voter_ids: vec![1],
+            },
+            stores: vec![store("broker-a")],
+        };
+
+        let debug = format!("{manifest:?}");
+
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("987654321"));
     }
 }

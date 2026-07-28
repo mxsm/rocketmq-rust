@@ -19,7 +19,7 @@ use std::cmp::Ordering;
 pub const CURRENT_VERSION: RocketMqVersion = RocketMqVersion::V5_3_1_SNAPSHOT;
 
 #[repr(u32)]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, strum::FromRepr)]
 pub enum RocketMqVersion {
     V3_0_0_SNAPSHOT,
     V3_0_0_ALPHA1,
@@ -638,12 +638,9 @@ pub enum RocketMqVersion {
 
 impl RocketMqVersion {
     #[inline]
-    pub fn from_ordinal(mut value: u32) -> RocketMqVersion {
+    pub fn from_ordinal(value: u32) -> RocketMqVersion {
         let max = RocketMqVersion::HIGHER_VERSION as u32;
-        if value > max {
-            value = max;
-        }
-        unsafe { std::mem::transmute::<u32, RocketMqVersion>(value) }
+        RocketMqVersion::from_repr(value.min(max)).unwrap_or(RocketMqVersion::HIGHER_VERSION)
     }
 
     #[inline]
@@ -1274,12 +1271,7 @@ impl TryFrom<u32> for RocketMqVersion {
     type Error = rocketmq_error::RocketMQError;
 
     fn try_from(value: u32) -> Result<Self, Self::Error> {
-        let max = RocketMqVersion::HIGHER_VERSION as u32;
-        if value > max {
-            Err(rocketmq_error::RocketMQError::InvalidVersionOrdinal(value))
-        } else {
-            Ok(RocketMqVersion::from_ordinal(value))
-        }
+        RocketMqVersion::from_repr(value).ok_or(rocketmq_error::RocketMQError::InvalidVersionOrdinal(value))
     }
 }
 

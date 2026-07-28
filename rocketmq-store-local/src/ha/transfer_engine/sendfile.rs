@@ -85,6 +85,8 @@ impl SendfileOperation for LinuxSendfileOperation {
                 format!("sendfile offset exceeds libc::off_t: {offset}"),
             )
         })?;
+        // SAFETY: raw_offset is writable for the duration of the call and is
+        // not retained. Invalid descriptors are reported by sendfile as errors.
         let written = unsafe { libc::sendfile(out_fd, in_fd, &mut raw_offset, len) };
         if written < 0 {
             Err(io::Error::last_os_error())

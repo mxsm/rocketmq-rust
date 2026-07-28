@@ -2464,12 +2464,13 @@ impl MQClientAPIImpl {
     }
 
     pub fn init_remoting_version() {
-        INIT_REMOTING_VERSION.get_or_init(|| {
-            EnvUtils::put_property(
-                remoting_command::REMOTING_VERSION_KEY,
-                (CURRENT_VERSION as u32).to_string(),
+        if let Err(error) = remoting_command_facade::initialize_remoting_version(CURRENT_VERSION as i32) {
+            warn!(
+                initialized = error.initialized(),
+                requested = error.requested(),
+                "client retained the remoting version selected earlier in process bootstrap"
             );
-        });
+        }
     }
 
     pub(crate) async fn get_all_topic_config(

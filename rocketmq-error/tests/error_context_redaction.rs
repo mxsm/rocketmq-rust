@@ -106,3 +106,32 @@ fn observability_error_context_redacts_sensitive_details() {
     assert!(!context.to_string().contains("rocketmq_store=trace"));
     assert!(!context.to_string().contains("invalid directive"));
 }
+
+#[test]
+fn request_boundary_errors_preserve_typed_source_chains() {
+    let body = RocketMQError::request_body_source(
+        "decode checkpoint",
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "body-secret"),
+    );
+    let header = RocketMQError::request_header_source(
+        "decode maintenance header",
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "header-secret"),
+    );
+    let authentication = RocketMQError::authentication_source(
+        "authorize checkpoint",
+        std::io::Error::new(std::io::ErrorKind::PermissionDenied, "auth-secret"),
+    );
+
+    for (error, expected_kind, secret) in [
+        (body, ErrorKind::RequestBodyInvalid, "body-secret"),
+        (header, ErrorKind::RequestHeaderError, "header-secret"),
+        (authentication, ErrorKind::Authentication, "auth-secret"),
+    ] {
+        assert_eq!(error.kind(), expected_kind);
+        let source = error.source().expect("typed source must be retained");
+        assert!(source.downcast_ref::<std::io::Error>().is_some());
+        assert!(source.to_string().contains(secret));
+        assert!(!error.boundary_view().context().to_string().contains(secret));
+    }
+}
+use std::error::Error;

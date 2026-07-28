@@ -191,11 +191,6 @@ where
     }
 }
 
-// Implement Send + Sync for thread-safe usage
-// Safety: AuthorizationStrategy is Send + Sync, so evaluator is too
-unsafe impl<S> Send for AuthorizationEvaluator<S> where S: AuthorizationStrategy {}
-unsafe impl<S> Sync for AuthorizationEvaluator<S> where S: AuthorizationStrategy {}
-
 #[cfg(test)]
 mod tests {
     use super::*;

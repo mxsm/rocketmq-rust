@@ -1,0 +1,75 @@
+# Copyright 2026 The RocketMQ Rust Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from __future__ import annotations
+
+import subprocess
+import sys
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+SCRIPTS = ROOT / "scripts"
+sys.path.insert(0, str(SCRIPTS))
+
+import trait_policy_guard as guard  # noqa: E402
+
+
+class TraitPolicyGuardTests(unittest.TestCase):
+    def test_inventory_classifies_macros_native_async_and_marker(self) -> None:
+        entries = guard.inventory_source(
+            "rocketmq-fixture/src/lib.rs",
+            """
+#[async_trait]
+pub trait Legacy { async fn run(&self); }
+#[trait_variant::make(Service: Send)]
+pub trait LocalService { async fn serve(&self); }
+pub trait Native { async fn load(&self); }
+pub trait Empty: Send {}
+#[cfg(test)]
+mod tests {
+    #[async_trait]
+    impl Legacy for Fixture { async fn run(&self) {} }
+}
+""",
+        )
+        kinds = [entry["kind"] for entry in entries]
+        self.assertEqual(1, kinds.count("async_trait"))
+        self.assertEqual(1, kinds.count("trait_variant"))
+        self.assertEqual(3, kinds.count("native_async"))
+        self.assertEqual(1, kinds.count("empty_marker"))
+
+    def test_mq_admin_marker_has_p2_4_owner_decision(self) -> None:
+        entries = guard.inventory_source(
+            "rocketmq-client/src/admin.rs",
+            "pub trait MQAdminExtInner: Send + Sync + 'static {}\n",
+        )
+        self.assertEqual("remove-in-P2.4", entries[0]["decision"])
+        self.assertEqual("client", entries[0]["owner"])
+
+    def test_live_inventory_does_not_grow(self) -> None:
+        result = subprocess.run(
+            [sys.executable, str(SCRIPTS / "trait_policy_guard.py")],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("TRAIT_POLICY_GUARD_OK", result.stdout)
+
+
+if __name__ == "__main__":
+    unittest.main()

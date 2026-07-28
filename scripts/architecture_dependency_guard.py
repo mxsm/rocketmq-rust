@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 import dataclasses
+from datetime import date
 import hashlib
 import json
 import re
@@ -97,6 +98,7 @@ def validate_policy(policy: dict[str, Any]) -> None:
             "closure_rules",
             "client_policy",
             "test_dependency_policy",
+            "target_debt",
             "facade_rules",
             "compatibility_manifest_policy",
             "milestone_order",
@@ -176,26 +178,29 @@ def validate_policy(policy: dict[str, Any]) -> None:
             raise InputError(f"duplicate policy client manifest allowlist identity: {identity}")
         manifest_identities.add(identity)
 
-    source_identities: set[tuple[str, str, str]] = set()
+    source_identities: set[tuple[str, str, str, str]] = set()
     for index, entry in enumerate(client_policy["target_source_allowlist"]):
         if not isinstance(entry, dict):
             raise InputError(f"policy client source allowlist[{index}] must be an object")
-        require_keys(
-            entry,
-            ("caller", "path_prefix", "aliases"),
-            f"policy client source allowlist[{index}]",
-        )
-        if set(entry) != {"caller", "path_prefix", "aliases"}:
+        selector_keys = {"path", "path_prefix"} & set(entry)
+        if (
+            set(entry) - {"caller", "path", "path_prefix", "aliases"}
+            or selector_keys not in ({"path"}, {"path_prefix"})
+            or not {"caller", "aliases"}.issubset(entry)
+        ):
             raise InputError(f"policy client source allowlist[{index}] contains unsupported keys")
-        prefix = entry["path_prefix"]
+        selector_key = selector_keys.pop()
+        selector = entry[selector_key]
         aliases = entry["aliases"]
         if (
             not isinstance(entry["caller"], str)
             or not entry["caller"]
-            or not isinstance(prefix, str)
-            or not prefix.endswith("/")
-            or "\\" in prefix
-            or Path(prefix).is_absolute()
+            or not isinstance(selector, str)
+            or not selector
+            or (selector_key == "path_prefix" and not selector.endswith("/"))
+            or (selector_key == "path" and selector.endswith("/"))
+            or "\\" in selector
+            or Path(selector).is_absolute()
             or not isinstance(aliases, list)
             or not aliases
             or any(not isinstance(alias, str) or not alias for alias in aliases)
@@ -204,7 +209,7 @@ def validate_policy(policy: dict[str, Any]) -> None:
         ):
             raise InputError(f"policy client source allowlist[{index}] is invalid")
         for alias in aliases:
-            identity = (entry["caller"], prefix, alias)
+            identity = (entry["caller"], selector_key, selector, alias)
             if identity in source_identities:
                 raise InputError(f"duplicate policy client source allowlist identity: {identity}")
             source_identities.add(identity)
@@ -242,6 +247,50 @@ def validate_policy(policy: dict[str, Any]) -> None:
         if identity in test_identities:
             raise InputError(f"duplicate policy test dependency identity: {identity}")
         test_identities.add(identity)
+
+    debt = policy["target_debt"]
+    require_keys(debt, ("as_of", "entries"), "policy target_debt")
+    if set(debt) != {"as_of", "entries"}:
+        raise InputError("policy target_debt contains unsupported keys")
+    try:
+        date.fromisoformat(debt["as_of"])
+    except (TypeError, ValueError) as error:
+        raise InputError("policy target_debt as_of must be an ISO date") from error
+    required_debt_keys = {
+        "caller",
+        "target",
+        "kind",
+        "path",
+        "alias",
+        "owner",
+        "reason",
+        "remove_phase",
+        "remove_by",
+    }
+    debt_identities: set[tuple[str, str, str, str, str]] = set()
+    for index, entry in enumerate(debt["entries"]):
+        if not isinstance(entry, dict) or set(entry) != required_debt_keys:
+            raise InputError(f"policy target_debt entries[{index}] has an invalid schema")
+        if (
+            any(not isinstance(entry[key], str) for key in required_debt_keys)
+            or not all(entry[key] for key in required_debt_keys)
+            or entry["kind"] not in {"normal", "dev", "build"}
+            or entry["remove_phase"] not in {"P2.1", "P2.2"}
+            or not entry["path"].endswith("Cargo.toml")
+            or "\\" in entry["path"]
+            or Path(entry["path"]).is_absolute()
+        ):
+            raise InputError(f"policy target_debt entries[{index}] is invalid")
+        try:
+            date.fromisoformat(entry["remove_by"])
+        except (TypeError, ValueError) as error:
+            raise InputError(
+                f"policy target_debt entries[{index}] remove_by must be an ISO date"
+            ) from error
+        identity = tuple(entry[key] for key in ("caller", "target", "kind", "path", "alias"))
+        if identity in debt_identities:
+            raise InputError(f"duplicate policy target_debt identity: {identity}")
+        debt_identities.add(identity)
 
 
 def validate_baseline(baseline: dict[str, Any], policy: dict[str, Any]) -> None:
@@ -588,7 +637,12 @@ def target_dag_findings(
         (item["caller"], item["target"], item["kind"], item["path"], item["alias"])
         for item in policy["test_dependency_policy"]["allowed_edges"]
     )
+    target_debt = {
+        (item["caller"], item["target"], item["kind"], item["path"], item["alias"]): item
+        for item in policy["target_debt"]["entries"]
+    }
     used_allowances: Counter[tuple[str, str, str, str, str | None]] = Counter()
+    used_debt: set[tuple[str, str, str, str, str | None]] = set()
     findings: list[Finding] = []
     for edge in edges:
         allowed = policy["target_dag"].get(edge.caller)
@@ -597,8 +651,24 @@ def target_dag_findings(
         if edge.target not in set(allowed):
             identity = (edge.caller, edge.target, edge.kind, edge.path, edge.alias)
             permitted = compatibility_allowances[identity] + test_allowances[identity]
-            if mode == "target" and used_allowances[identity] < permitted:
+            if mode != "baseline" and used_allowances[identity] < permitted:
                 used_allowances[identity] += 1
+                continue
+            debt = target_debt.get(identity)
+            if mode == "transition" and debt is not None:
+                used_debt.add(identity)
+                if date.fromisoformat(debt["remove_by"]) < date.today():
+                    findings.append(
+                        Finding(
+                            "target-debt-expired",
+                            edge.caller,
+                            edge.target,
+                            edge.path,
+                            edge.kind,
+                            f"owner={debt['owner']} remove_phase={debt['remove_phase']} "
+                            f"remove_by={debt['remove_by']}",
+                        )
+                    )
                 continue
             findings.append(
                 Finding(
@@ -607,6 +677,22 @@ def target_dag_findings(
                     edge.target,
                     edge.path,
                     edge.kind,
+                )
+            )
+    if mode == "transition":
+        for identity, debt in sorted(target_debt.items()):
+            if identity in used_debt:
+                continue
+            caller, target, kind, path, _alias = identity
+            findings.append(
+                Finding(
+                    "target-debt-stale",
+                    caller,
+                    target,
+                    path,
+                    kind,
+                    f"owner={debt['owner']} remove_phase={debt['remove_phase']} "
+                    f"remove_by={debt['remove_by']}",
                 )
             )
     return findings
@@ -875,7 +961,13 @@ def source_client_occurrence_allowed(
 ) -> bool:
     return any(
         caller == entry["caller"]
-        and relative.startswith(entry["path_prefix"])
+        and (
+            relative == entry.get("path")
+            or (
+                "path_prefix" in entry
+                and relative.startswith(entry["path_prefix"])
+            )
+        )
         and alias in entry["aliases"]
         for entry in policy["client_policy"]["target_source_allowlist"]
     )
@@ -1126,7 +1218,7 @@ def evaluate(
     findings.extend(manifest_client_findings(edges, mode, policy, baseline))
     findings.extend(compatibility_manifest_findings(edges, mode, policy, baseline))
     findings.extend(source_client_findings(source_root, packages, edges, mode, policy, baseline))
-    if mode == "target":
+    if mode in {"transition", "target"}:
         actual = Counter((edge.caller, edge.target, edge.kind, edge.path, edge.alias) for edge in edges)
         compatibility = Counter(
             (
@@ -1143,10 +1235,16 @@ def evaluate(
             (item["caller"], item["target"], item["kind"], item["path"], item["alias"])
             for item in policy["test_dependency_policy"]["allowed_edges"]
         )
+        debt = Counter(
+            (item["caller"], item["target"], item["kind"], item["path"], item["alias"])
+            for item in policy["target_debt"]["entries"]
+        )
+        active_debt = sum(min(actual[item], count) for item, count in debt.items())
         active_compatibility = sum(min(actual[item], count) for item, count in compatibility.items())
         active_tests = sum(min(actual[item], count) for item, count in tests.items())
         messages.extend(
             (
+                f"TARGET_DEBT_LEDGER active_edges={active_debt} entries={sum(debt.values())}",
                 "TARGET_COMPATIBILITY_LEDGER "
                 f"active_edges={active_compatibility} entries={sum(compatibility.values())}",
                 f"TARGET_TEST_DEPENDENCIES active_edges={active_tests} entries={sum(tests.values())}",
@@ -1255,7 +1353,11 @@ def write_output(path: Path, mode: str, findings: list[Finding], messages: list[
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=("baseline", "target"), default="baseline")
+    parser.add_argument(
+        "--mode",
+        choices=("baseline", "transition", "target"),
+        default="baseline",
+    )
     parser.add_argument("--policy", type=Path, default=DEFAULT_POLICY)
     parser.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE)
     parser.add_argument("--metadata-file", type=Path)

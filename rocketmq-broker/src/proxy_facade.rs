@@ -62,6 +62,7 @@ pub mod proxy_adapter_compat {
     pub use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
     pub use rocketmq_model::common::sys_flag::pull_sys_flag::PullSysFlag;
     pub use rocketmq_model::common::topic::TopicValidator;
+    pub use rocketmq_observability::TelemetryHandle;
     pub use rocketmq_protocol::code::request_code::RequestCode;
     pub use rocketmq_protocol::code::response_code::ResponseCode;
     pub use rocketmq_protocol::common::message::message_decoder as MessageDecoder;

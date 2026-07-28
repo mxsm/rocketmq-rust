@@ -17,7 +17,6 @@ use std::collections::HashSet;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::LazyLock;
-use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -70,7 +69,6 @@ use rocketmq_model::common::mix_all;
 use rocketmq_model::common::mq_version::CURRENT_VERSION;
 use rocketmq_model::common::sys_flag::pull_sys_flag::PullSysFlag;
 use rocketmq_model::common::topic::TopicValidator;
-use rocketmq_model::utils::env_utils::EnvUtils;
 use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
@@ -232,8 +230,8 @@ use rocketmq_protocol::protocol::heartbeat::heartbeat_data::HeartbeatData;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
-use rocketmq_protocol::protocol::remoting_command;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_facade;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::static_topic::topic_config_and_queue_mapping::TopicConfigAndQueueMapping;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
@@ -254,8 +252,6 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::error;
 use tracing::warn;
-
-static INIT_REMOTING_VERSION: OnceLock<()> = OnceLock::new();
 
 static SEND_SMART_MSG: LazyLock<bool> = LazyLock::new(|| {
     std::env::var("org.apache.rocketmq.client.sendSmartMsg")

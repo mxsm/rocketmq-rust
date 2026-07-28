@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
 use std::env;
 use std::fmt;
 use std::net::SocketAddr;
@@ -250,28 +249,6 @@ impl Args {
         }
 
         None
-    }
-
-    /// Set system properties from configuration
-    ///
-    /// Matches Java's `properties2SystemEnv` behavior:
-    /// - `rmqAddressServerDomain` → `rocketmq.namesrv.domain`
-    /// - `rmqAddressServerSubGroup` → `rocketmq.namesrv.domain.subgroup`
-    pub fn apply_system_properties(properties: &HashMap<String, String>) {
-        const DEFAULT_DOMAIN: &str = "jmenv.tbsite.net";
-        const DEFAULT_SUBGROUP: &str = "nsaddr";
-
-        if let Some(domain) = properties.get("rmqAddressServerDomain") {
-            env::set_var("rocketmq.namesrv.domain", domain);
-        } else {
-            env::set_var("rocketmq.namesrv.domain", DEFAULT_DOMAIN);
-        }
-
-        if let Some(subgroup) = properties.get("rmqAddressServerSubGroup") {
-            env::set_var("rocketmq.namesrv.domain.subgroup", subgroup);
-        } else {
-            env::set_var("rocketmq.namesrv.domain.subgroup", DEFAULT_SUBGROUP);
-        }
     }
 }
 

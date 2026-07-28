@@ -98,6 +98,8 @@ fn memory_lock_limit_bytes() -> Option<u64> {
         rlim_cur: 0,
         rlim_max: 0,
     };
+    // SAFETY: limit is valid writable storage for libc::rlimit and getrlimit
+    // does not retain the pointer after returning.
     let result = unsafe { libc::getrlimit(libc::RLIMIT_MEMLOCK, &mut limit) };
     if result != 0 {
         return None;

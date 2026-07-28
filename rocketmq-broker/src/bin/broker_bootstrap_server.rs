@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
 use std::env;
 use std::net::IpAddr;
 use std::net::SocketAddr;
@@ -29,7 +28,7 @@ use rocketmq_broker::config::validated::ValidatedBrokerConfig;
 use rocketmq_broker::Builder;
 use rocketmq_model::common::mq_version::CURRENT_VERSION;
 use rocketmq_model::utils::env_utils::EnvUtils;
-use rocketmq_protocol::protocol::remoting_command;
+use rocketmq_protocol::protocol::remoting_command_facade::initialize_remoting_version;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
@@ -96,11 +95,8 @@ fn broker_runtime_config() -> RuntimeConfig {
 }
 
 async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) -> Result<()> {
-    // Set remoting version
-    EnvUtils::put_property(
-        remoting_command::REMOTING_VERSION_KEY,
-        (CURRENT_VERSION as u32).to_string(),
-    );
+    initialize_remoting_version(CURRENT_VERSION as i32)
+        .context("failed to initialize the immutable broker remoting version")?;
 
     // Parse and validate command line arguments
     let args = Args::parse();
@@ -108,10 +104,6 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
 
     // Parse configuration from file and command line
     let mut raw_config = parse_config_file(&args).context("failed to parse broker configuration")?;
-
-    // Apply system properties (should be done before command line override)
-    let properties = extract_properties_from_config(raw_config.broker());
-    Args::apply_system_properties(&properties);
 
     // Override config with command line arguments
     apply_command_line_args(&mut raw_config, &args);
@@ -367,15 +359,6 @@ fn resolve_startup_log_filter(
         config: overrides.logging.filter.as_deref(),
         legacy_config: overrides.log_filter.as_deref(),
     })
-}
-
-/// Extract properties from BrokerConfig for system property mapping
-fn extract_properties_from_config(_broker_config: &BrokerConfig) -> HashMap<String, String> {
-    // Extract relevant properties for system env mapping
-    // This is where Java's properties file entries would be mapped
-    // Currently returning empty map as Rust config uses typed structs
-
-    HashMap::new()
 }
 
 /// Apply command line arguments to broker configuration

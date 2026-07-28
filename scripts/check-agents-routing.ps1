@@ -110,6 +110,7 @@ function Assert-SameDirectoryAgents {
 $rootAgentsText = Read-RepositoryText -RelativePath "AGENTS.md"
 
 $requiredRoutePaths = @(
+    "fuzz/",
     "rocketmq-example/",
     "rocketmq-dashboard/rocketmq-dashboard-gpui/",
     "rocketmq-dashboard/rocketmq-dashboard-tauri/",
@@ -174,6 +175,7 @@ foreach ($sharedPath in $requiredSharedPaths) {
 }
 
 $expectedProjectAgents = @(
+    "fuzz/AGENTS.md",
     "rocketmq-example/AGENTS.md",
     "rocketmq-dashboard/rocketmq-dashboard-gpui/AGENTS.md",
     "rocketmq-dashboard/rocketmq-dashboard-tauri/AGENTS.md",
@@ -219,6 +221,7 @@ foreach ($packageJson in Get-FilesByName -FileName "package.json") {
 
 $workflowRoutes = [ordered]@{
     ".github/workflows/rocketmq-rust-ci.yaml" = "Root workspace validation"
+    ".github/workflows/fuzz-ci.yml" = "fuzz/"
     ".github/workflows/rocketmq-example-ci.yaml" = "rocketmq-example/"
     ".github/workflows/dashboard-web-ci.yml" = "rocketmq-dashboard/rocketmq-dashboard-web/"
     ".github/workflows/dashboard-tauri-ci.yml" = "rocketmq-dashboard/rocketmq-dashboard-tauri/"
