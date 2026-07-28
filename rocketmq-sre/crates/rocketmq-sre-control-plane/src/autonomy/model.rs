@@ -15,10 +15,12 @@
 use chrono::DateTime;
 use chrono::Utc;
 use rocketmq_sre_contracts::ActionPlanId;
+use rocketmq_sre_contracts::AutonomousExecutionFailure;
 use rocketmq_sre_contracts::AutonomyCohortId;
 use rocketmq_sre_contracts::AutonomyLifecycleState;
 use rocketmq_sre_contracts::AutonomyMode;
 use rocketmq_sre_contracts::AutonomyOutcome;
+use rocketmq_sre_contracts::AutonomyOutcomeClass;
 use rocketmq_sre_contracts::AutonomyPolicyDefinition;
 use rocketmq_sre_contracts::AutonomyQualificationCohort;
 use rocketmq_sre_contracts::AutonomySampleKind;
@@ -213,6 +215,29 @@ pub(crate) struct ShadowOutcomeListQuery {
     pub(crate) action_version: String,
     #[serde(default = "default_limit")]
     pub(crate) limit: u16,
+}
+
+/// Reconciled Executor result. Classification is a closed enum and is
+/// revalidated before the transactional outcome/pause write.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RecordAutonomyOutcomeRequest {
+    pub(crate) cluster_id: ClusterId,
+    pub(crate) action: ExecutionAction,
+    #[serde(default = "default_action_version")]
+    pub(crate) action_version: String,
+    pub(crate) incident_id: IncidentId,
+    pub(crate) plan_id: ActionPlanId,
+    pub(crate) plan_hash: String,
+    pub(crate) execution_id: Option<ExecutionId>,
+    pub(crate) cohort_id: Option<AutonomyCohortId>,
+    pub(crate) class: AutonomyOutcomeClass,
+    pub(crate) failure: Option<AutonomousExecutionFailure>,
+    #[serde(default)]
+    pub(crate) reason_codes: Vec<String>,
+    pub(crate) first_positive_intent_persisted: bool,
+    pub(crate) occurred_at: DateTime<Utc>,
+    pub(crate) reconciled_at: DateTime<Utc>,
 }
 
 /// Internal request to evaluate and sign one positive StepIntent.
