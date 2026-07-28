@@ -20,20 +20,29 @@ use chrono::Utc;
 use rocketmq_sre_contracts::AgentStepRequest;
 use rocketmq_sre_contracts::AuditEventKind;
 use rocketmq_sre_contracts::EffectState;
+use rocketmq_sre_contracts::EvidenceContent;
 use rocketmq_sre_contracts::EvidenceId;
+use rocketmq_sre_contracts::EvidenceQuery;
 use rocketmq_sre_contracts::ExecutionAction;
 use rocketmq_sre_contracts::ExecutionState;
 use rocketmq_sre_contracts::FenceAck;
+use rocketmq_sre_contracts::QueryId;
 use rocketmq_sre_contracts::ResourceLockId;
 use rocketmq_sre_contracts::ResourceQuarantine;
 use rocketmq_sre_contracts::ResourceQuarantineId;
 use rocketmq_sre_contracts::StepResult;
+use rocketmq_sre_contracts::TimeRange;
+use rocketmq_sre_contracts::VerificationOutcome;
+use rocketmq_sre_contracts::VerificationResult;
+use rocketmq_sre_contracts::current_evidence_schema;
 use rocketmq_sre_execution_agent::AgentEffectStore;
 use rocketmq_sre_executor::ExecutionJournal;
 use rocketmq_sre_executor::JournalError;
 use rocketmq_sre_executor::LeaseCoordinator;
 use rocketmq_sre_executor::ResourceLockRequest;
 use rocketmq_sre_executor::ResourceSafetyStore;
+use rocketmq_sre_executor::VerificationPhase;
+use serde_json::json;
 use uuid::Uuid;
 
 use support::assert_critic_review_is_immutable;
@@ -111,6 +120,92 @@ async fn migrations_journal_locks_fences_and_restart_recovery_are_durable() {
         )
         .await
         .expect("second execution");
+
+    let verification_observed_at = now + TimeDelta::seconds(1);
+    let verification_evidence = rocketmq_sre_contracts::EvidenceSnapshot::capture(
+        EvidenceQuery {
+            query_id: QueryId::new(),
+            correlation_id: fixture.request.correlation_id,
+            tenant_id: fixture.tenant_id,
+            cluster_id: fixture.cluster_id,
+            source: "executor-verification-test".to_owned(),
+            resource: "deployment/default/proxy".to_owned(),
+            time_range: TimeRange::new(verification_observed_at, verification_observed_at).expect("time range"),
+        },
+        current_evidence_schema(),
+        verification_observed_at,
+        EvidenceContent::Inline(json!({"ready": true, "error_ratio_healthy": true})),
+    )
+    .expect("verification Evidence");
+    let verification_step_id = rocketmq_sre_contracts::ExecutionStepId::new();
+    assert!(
+        journal
+            .append_verification_evidence(
+                fixture.request.id,
+                verification_step_id,
+                1,
+                VerificationPhase::Pre,
+                &verification_evidence,
+            )
+            .await
+            .expect("append verification Evidence")
+    );
+    assert!(
+        !journal
+            .append_verification_evidence(
+                fixture.request.id,
+                verification_step_id,
+                1,
+                VerificationPhase::Pre,
+                &verification_evidence,
+            )
+            .await
+            .expect("idempotent verification Evidence")
+    );
+    let verification_result = VerificationResult {
+        step_id: verification_step_id,
+        outcome: VerificationOutcome::Succeeded,
+        started_at: verification_observed_at,
+        completed_at: verification_observed_at + TimeDelta::seconds(30),
+        pre_evidence_ids: vec![verification_evidence.evidence_id],
+        during_evidence_ids: Vec::new(),
+        post_evidence_ids: vec![EvidenceId::new()],
+        satisfied_conditions: vec!["resource:ready".to_owned(), "sli:error_ratio".to_owned()],
+        failed_conditions: Vec::new(),
+        stable_window_seconds: 30,
+    };
+    assert!(
+        journal
+            .append_verification_result_with_audit(
+                fixture.request.id,
+                1,
+                false,
+                &verification_result,
+                &audit(
+                    &fixture,
+                    AuditEventKind::VerificationCompleted,
+                    "verification_completed",
+                    verification_result.completed_at,
+                ),
+            )
+            .await
+            .expect("append verification result")
+    );
+    let evidence_records = journal
+        .verification_evidence(fixture.request.id)
+        .await
+        .expect("load verification Evidence");
+    assert_eq!(evidence_records.len(), 1);
+    assert_eq!(evidence_records[0].phase, VerificationPhase::Pre);
+    assert_eq!(evidence_records[0].evidence, verification_evidence);
+    assert!(
+        sqlx::query("UPDATE execution_verifications SET outcome = 'failed' WHERE execution_id = $1")
+            .bind(fixture.request.id.as_uuid())
+            .execute(&pool)
+            .await
+            .is_err(),
+        "verification journal must be append-only"
+    );
 
     let safety = ResourceSafetyStore::new(pool.clone());
     let first_lock = ResourceLockRequest {

@@ -3665,7 +3665,7 @@ export interface components {
          * @description Append-only audit event kind for the supervised change timeline.
          * @enum {string}
          */
-        AuditEventKind: "plan_created" | "plan_submitted" | "policy_evaluated" | "critic_reviewed" | "approved" | "rejected" | "execution_submitted" | "state_changed" | "step_intent_persisted" | "step_result_persisted" | "quarantine_created" | "quarantine_clear_requested" | "quarantine_cleared" | "cancelled";
+        AuditEventKind: "plan_created" | "plan_submitted" | "policy_evaluated" | "critic_reviewed" | "approved" | "rejected" | "execution_submitted" | "state_changed" | "step_intent_persisted" | "step_result_persisted" | "verification_captured" | "verification_completed" | "rollback_started" | "manual_takeover_required" | "quarantine_created" | "quarantine_clear_requested" | "quarantine_cleared" | "cancelled";
         /**
          * Format: uuid
          * @description Identifier propagated across one logical SRE operation.

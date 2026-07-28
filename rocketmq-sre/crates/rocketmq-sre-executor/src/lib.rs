@@ -49,6 +49,7 @@ pub use error::JournalError;
 pub use journal::ExecutionCreation;
 pub use journal::ExecutionJournal;
 pub use journal::PendingIntent;
+pub use journal::VerificationEvidenceRecord;
 pub use lease::ExecutorLeaseRecord;
 pub use lease::LeaseCoordinator;
 pub use lock::ResourceLock;

@@ -16,6 +16,7 @@ use chrono::DateTime;
 use chrono::Utc;
 use rocketmq_sre_contracts::AuditEvent;
 use rocketmq_sre_contracts::AuditEventKind;
+use rocketmq_sre_contracts::EvidenceSnapshot;
 use rocketmq_sre_contracts::ExecutionAction;
 use rocketmq_sre_contracts::ExecutionId;
 use rocketmq_sre_contracts::ExecutionRequest;
@@ -23,6 +24,7 @@ use rocketmq_sre_contracts::ExecutionState;
 use rocketmq_sre_contracts::ExecutionTransition;
 use rocketmq_sre_contracts::StepIntent;
 use rocketmq_sre_contracts::StepResult;
+use rocketmq_sre_contracts::VerificationResult;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -33,6 +35,7 @@ use sqlx::Transaction;
 use uuid::Uuid;
 
 use crate::JournalError;
+use crate::VerificationPhase;
 use crate::error::database_message;
 
 /// Idempotent execution creation result.
@@ -50,6 +53,16 @@ pub struct PendingIntent {
     pub tenant_id: rocketmq_sre_contracts::TenantId,
     pub cluster_id: rocketmq_sre_contracts::ClusterId,
     pub correlation_id: rocketmq_sre_contracts::CorrelationId,
+}
+
+/// Immutable verification Evidence projection loaded from the journal.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VerificationEvidenceRecord {
+    pub execution_id: ExecutionId,
+    pub step_id: rocketmq_sre_contracts::ExecutionStepId,
+    pub attempt: u16,
+    pub phase: VerificationPhase,
+    pub evidence: EvidenceSnapshot,
 }
 
 /// PostgreSQL journal used before and after every external side effect.
@@ -377,6 +390,187 @@ impl ExecutionJournal {
         Ok(insert.rows_affected() == 1)
     }
 
+    /// Persists one immutable pre/during/post verification snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed Evidence, execution scope drift, invalid attempts,
+    /// and non-identical duplicate IDs.
+    pub async fn append_verification_evidence(
+        &self,
+        execution_id: ExecutionId,
+        step_id: rocketmq_sre_contracts::ExecutionStepId,
+        attempt: u16,
+        phase: VerificationPhase,
+        evidence: &EvidenceSnapshot,
+    ) -> Result<bool, JournalError> {
+        if attempt == 0 {
+            return Err(JournalError::InvalidInput(
+                "verification Evidence attempt must be positive".to_owned(),
+            ));
+        }
+        evidence
+            .verify_content_hash()
+            .map_err(|error| JournalError::InvalidInput(error.to_string()))?;
+        let mut transaction = self.pool.begin().await?;
+        let scope = sqlx::query(
+            "SELECT tenant_id, cluster_id, correlation_id
+             FROM executions
+             WHERE id = $1",
+        )
+        .bind(execution_id.as_uuid())
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or(JournalError::NotFound)?;
+        if scope.try_get::<Uuid, _>("tenant_id")? != evidence.tenant_id.as_uuid()
+            || scope.try_get::<Uuid, _>("cluster_id")? != evidence.cluster_id.as_uuid()
+            || scope.try_get::<Uuid, _>("correlation_id")? != evidence.correlation_id.as_uuid()
+        {
+            return Err(JournalError::InvalidInput(
+                "verification Evidence scope does not match execution".to_owned(),
+            ));
+        }
+        let snapshot = json_value(evidence)?;
+        let insert = sqlx::query(
+            "INSERT INTO execution_verification_evidence (
+                execution_id, step_id, attempt, phase,
+                evidence_id, evidence_snapshot, observed_at
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+             ON CONFLICT (execution_id, step_id, attempt, phase, evidence_id)
+             DO NOTHING",
+        )
+        .bind(execution_id.as_uuid())
+        .bind(step_id.as_uuid())
+        .bind(i32::from(attempt))
+        .bind(verification_phase_name(phase))
+        .bind(evidence.evidence_id.as_uuid())
+        .bind(&snapshot)
+        .bind(evidence.observed_at)
+        .execute(&mut *transaction)
+        .await?;
+        if insert.rows_affected() == 0 {
+            let existing: Value = sqlx::query_scalar(
+                "SELECT evidence_snapshot
+                 FROM execution_verification_evidence
+                 WHERE execution_id = $1
+                   AND step_id = $2
+                   AND attempt = $3
+                   AND phase = $4
+                   AND evidence_id = $5",
+            )
+            .bind(execution_id.as_uuid())
+            .bind(step_id.as_uuid())
+            .bind(i32::from(attempt))
+            .bind(verification_phase_name(phase))
+            .bind(evidence.evidence_id.as_uuid())
+            .fetch_one(&mut *transaction)
+            .await?;
+            if existing != snapshot {
+                return Err(JournalError::IdempotencyConflict);
+            }
+        }
+        transaction.commit().await?;
+        Ok(insert.rows_affected() == 1)
+    }
+
+    /// Persists one deterministic verification decision and timeline audit.
+    ///
+    /// # Errors
+    ///
+    /// Rejects scope drift, wrong audit kind, invalid attempts, and
+    /// non-identical duplicate results.
+    pub async fn append_verification_result_with_audit(
+        &self,
+        execution_id: ExecutionId,
+        attempt: u16,
+        compensation: bool,
+        result: &VerificationResult,
+        audit: &AuditEvent,
+    ) -> Result<bool, JournalError> {
+        if attempt == 0 || audit.event_kind != AuditEventKind::VerificationCompleted {
+            return Err(JournalError::InvalidInput(
+                "verification result requires a positive attempt and verification_completed audit".to_owned(),
+            ));
+        }
+        let mut transaction = self.pool.begin().await?;
+        ensure_execution_scope(&mut transaction, execution_id, audit).await?;
+        let snapshot = json_value(result)?;
+        let outcome = enum_name(&result.outcome)?;
+        let insert = sqlx::query(
+            "INSERT INTO execution_verifications (
+                execution_id, step_id, attempt, compensation,
+                outcome, result_snapshot, started_at, completed_at
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+             ON CONFLICT (execution_id, step_id, attempt, compensation)
+             DO NOTHING",
+        )
+        .bind(execution_id.as_uuid())
+        .bind(result.step_id.as_uuid())
+        .bind(i32::from(attempt))
+        .bind(compensation)
+        .bind(&outcome)
+        .bind(&snapshot)
+        .bind(result.started_at)
+        .bind(result.completed_at)
+        .execute(&mut *transaction)
+        .await?;
+        if insert.rows_affected() == 0 {
+            let existing: Value = sqlx::query_scalar(
+                "SELECT result_snapshot
+                 FROM execution_verifications
+                 WHERE execution_id = $1
+                   AND step_id = $2
+                   AND attempt = $3
+                   AND compensation = $4",
+            )
+            .bind(execution_id.as_uuid())
+            .bind(result.step_id.as_uuid())
+            .bind(i32::from(attempt))
+            .bind(compensation)
+            .fetch_one(&mut *transaction)
+            .await?;
+            if existing != snapshot {
+                return Err(JournalError::IdempotencyConflict);
+            }
+        }
+        append_audit(&mut transaction, audit).await?;
+        transaction.commit().await?;
+        Ok(insert.rows_affected() == 1)
+    }
+
+    /// Loads verification Evidence in durable timeline order.
+    ///
+    /// # Errors
+    ///
+    /// Returns database or snapshot decoding failures.
+    pub async fn verification_evidence(
+        &self,
+        execution_id: ExecutionId,
+    ) -> Result<Vec<VerificationEvidenceRecord>, JournalError> {
+        let rows = sqlx::query(
+            "SELECT execution_id, step_id, attempt, phase, evidence_snapshot
+             FROM execution_verification_evidence
+             WHERE execution_id = $1
+             ORDER BY sequence_id",
+        )
+        .bind(execution_id.as_uuid())
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                let attempt = row.try_get::<i32, _>("attempt")?;
+                Ok(VerificationEvidenceRecord {
+                    execution_id: ExecutionId::from_uuid(row.try_get("execution_id")?),
+                    step_id: rocketmq_sre_contracts::ExecutionStepId::from_uuid(row.try_get("step_id")?),
+                    attempt: u16::try_from(attempt)
+                        .map_err(|_| JournalError::InvalidInput("stored verification attempt is invalid".to_owned()))?,
+                    phase: parse_verification_phase(row.try_get::<String, _>("phase")?.as_str())?,
+                    evidence: from_json(row.try_get("evidence_snapshot")?)?,
+                })
+            })
+            .collect()
+    }
+
     /// Returns durable intents that have no matching result after a restart.
     ///
     /// # Errors
@@ -585,6 +779,27 @@ fn enum_name(value: &impl Serialize) -> Result<String, JournalError> {
 
 fn epoch_i64(epoch: u64) -> Result<i64, JournalError> {
     i64::try_from(epoch).map_err(|_| JournalError::InvalidInput("lease epoch exceeds BIGINT".to_owned()))
+}
+
+const fn verification_phase_name(phase: VerificationPhase) -> &'static str {
+    match phase {
+        VerificationPhase::Pre => "pre",
+        VerificationPhase::During => "during",
+        VerificationPhase::Post => "post",
+        VerificationPhase::RollbackPost => "rollback_post",
+    }
+}
+
+fn parse_verification_phase(value: &str) -> Result<VerificationPhase, JournalError> {
+    match value {
+        "pre" => Ok(VerificationPhase::Pre),
+        "during" => Ok(VerificationPhase::During),
+        "post" => Ok(VerificationPhase::Post),
+        "rollback_post" => Ok(VerificationPhase::RollbackPost),
+        _ => Err(JournalError::InvalidInput(
+            "stored verification phase is unsupported".to_owned(),
+        )),
+    }
 }
 
 const fn execution_state_name(state: ExecutionState) -> &'static str {
