@@ -15,6 +15,8 @@
 mod adapter;
 mod api;
 mod model;
+mod preventive;
+mod preventive_repository;
 mod repository;
 mod service;
 
@@ -24,4 +26,5 @@ mod adapter_tests;
 mod repository_tests;
 
 pub(crate) use api::routes;
+pub(crate) use preventive::PreventiveAutomationService;
 pub(crate) use service::AutomationService;
