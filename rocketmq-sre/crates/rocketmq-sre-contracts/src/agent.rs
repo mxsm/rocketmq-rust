@@ -33,6 +33,8 @@ use crate::ReconcileGrant;
 use crate::TenantId;
 
 pub const EXECUTION_AGENT_SCHEMA_VERSION: &str = "rocketmq-sre.execution-agent.v1";
+pub const EXECUTION_AGENT_AUDIENCE: &str = "rocketmq-sre-execution-agent";
+pub const EXECUTION_AGENT_RECONCILE_AUDIENCE: &str = "rocketmq-sre-execution-agent-reconcile";
 
 /// Narrow read-side request used for precheck and live-state reconciliation.
 #[derive(Clone, Debug, JsonSchema, PartialEq, Serialize, Deserialize)]
