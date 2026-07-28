@@ -13,11 +13,15 @@
 // limitations under the License.
 
 use k8s_openapi::api::apps::v1::DeploymentSpec;
+use k8s_openapi::api::core::v1::Capabilities;
 use k8s_openapi::api::core::v1::Container;
 use k8s_openapi::api::core::v1::PodCondition;
+use k8s_openapi::api::core::v1::PodSecurityContext;
 use k8s_openapi::api::core::v1::PodSpec;
 use k8s_openapi::api::core::v1::PodStatus;
 use k8s_openapi::api::core::v1::PodTemplateSpec;
+use k8s_openapi::api::core::v1::SeccompProfile;
+use k8s_openapi::api::core::v1::SecurityContext;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelectorRequirement;
 use kube::api::ObjectMeta;
 use rocketmq_admin_core::core::proxy::ProxyDrainPending;
@@ -252,8 +256,26 @@ fn fixture_deployment(name: &str) -> Deployment {
                     containers: vec![Container {
                         name: "pause".to_owned(),
                         image: Some("registry.k8s.io/pause:3.10".to_owned()),
+                        security_context: Some(SecurityContext {
+                            allow_privilege_escalation: Some(false),
+                            capabilities: Some(Capabilities {
+                                drop: Some(vec!["ALL".to_owned()]),
+                                ..Capabilities::default()
+                            }),
+                            ..SecurityContext::default()
+                        }),
                         ..Container::default()
                     }],
+                    security_context: Some(PodSecurityContext {
+                        run_as_non_root: Some(true),
+                        run_as_user: Some(65_534),
+                        run_as_group: Some(65_534),
+                        seccomp_profile: Some(SeccompProfile {
+                            type_: "RuntimeDefault".to_owned(),
+                            ..SeccompProfile::default()
+                        }),
+                        ..PodSecurityContext::default()
+                    }),
                     ..PodSpec::default()
                 }),
             },
