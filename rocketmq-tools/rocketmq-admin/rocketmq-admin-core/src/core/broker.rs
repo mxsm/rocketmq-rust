@@ -244,6 +244,27 @@ pub struct QueryBrokerDiagnosticsResult {
     pub partial: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueryBrokerAllowlistedConfigRequest {
+    pub broker_addr: String,
+}
+
+impl QueryBrokerAllowlistedConfigRequest {
+    pub fn try_new(broker_addr: impl Into<String>) -> AdminResult<Self> {
+        Ok(Self {
+            broker_addr: required("broker_addr", broker_addr)?,
+        })
+    }
+}
+
+/// Fixed, non-sensitive Broker properties supported by supervised SRE changes.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrokerAllowlistedConfig {
+    pub send_message_thread_pool_nums: Option<u32>,
+    pub pull_message_thread_pool_nums: Option<u32>,
+    pub flush_delay_offset_interval_ms: Option<u64>,
+}
+
 pub trait BrokerAdmin: Send {
     fn list_brokers<'a>(&'a mut self, request: &'a ListBrokersRequest) -> AdminFuture<'a, ListBrokersResult>;
 
@@ -256,6 +277,11 @@ pub trait BrokerAdmin: Send {
         &'a mut self,
         request: &'a QueryBrokerDiagnosticsRequest,
     ) -> AdminFuture<'a, QueryBrokerDiagnosticsResult>;
+
+    fn query_allowlisted_config<'a>(
+        &'a mut self,
+        request: &'a QueryBrokerAllowlistedConfigRequest,
+    ) -> AdminFuture<'a, BrokerAllowlistedConfig>;
 }
 
 /// Read-only broker administration capability.
@@ -271,6 +297,11 @@ pub trait BrokerQueryAdmin: Send {
         &'a mut self,
         request: &'a QueryBrokerDiagnosticsRequest,
     ) -> AdminFuture<'a, QueryBrokerDiagnosticsResult>;
+
+    fn query_allowlisted_config<'a>(
+        &'a mut self,
+        request: &'a QueryBrokerAllowlistedConfigRequest,
+    ) -> AdminFuture<'a, BrokerAllowlistedConfig>;
 }
 
 impl<T: BrokerAdmin + ?Sized> BrokerQueryAdmin for T {
@@ -290,6 +321,13 @@ impl<T: BrokerAdmin + ?Sized> BrokerQueryAdmin for T {
         request: &'a QueryBrokerDiagnosticsRequest,
     ) -> AdminFuture<'a, QueryBrokerDiagnosticsResult> {
         BrokerAdmin::query_broker_diagnostics(self, request)
+    }
+
+    fn query_allowlisted_config<'a>(
+        &'a mut self,
+        request: &'a QueryBrokerAllowlistedConfigRequest,
+    ) -> AdminFuture<'a, BrokerAllowlistedConfig> {
+        BrokerAdmin::query_allowlisted_config(self, request)
     }
 }
 

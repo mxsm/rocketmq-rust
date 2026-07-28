@@ -38,12 +38,14 @@ use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 
 use crate::core::broker::project_broker_diagnostics;
+use crate::core::broker::BrokerAllowlistedConfig;
 use crate::core::broker::BrokerQueryAdmin;
 use crate::core::broker::BrokerSummary;
 use crate::core::broker::ListBrokersRequest;
 use crate::core::broker::ListBrokersResult;
 use crate::core::broker::ProbeBrokerRuntimeRequest;
 use crate::core::broker::ProbeBrokerRuntimeResult;
+use crate::core::broker::QueryBrokerAllowlistedConfigRequest;
 use crate::core::broker::QueryBrokerDiagnosticsRequest;
 use crate::core::broker::QueryBrokerDiagnosticsResult;
 use crate::core::client_connection::ClientConnectionObservation;
@@ -454,6 +456,20 @@ impl BrokerQueryAdmin for ReadAdminSession {
                 brokers,
                 unavailable_brokers,
             })
+        })
+    }
+
+    fn query_allowlisted_config<'a>(
+        &'a mut self,
+        request: &'a QueryBrokerAllowlistedConfigRequest,
+    ) -> AdminFuture<'a, BrokerAllowlistedConfig> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            self.inner
+                .get_broker_config_allowlisted(CheetahString::from(request.broker_addr.as_str()))
+                .await
+                .map(project_allowlisted_config)
+                .map_err(|error| backend_error("get_broker_config_allowlisted", error))
         })
     }
 }
@@ -1087,6 +1103,14 @@ fn backend_error(operation: &'static str, error: RocketMQError) -> AdminError {
     )
 }
 
+fn project_allowlisted_config(config: rocketmq_client_rust::BrokerConfigAllowlisted) -> BrokerAllowlistedConfig {
+    BrokerAllowlistedConfig {
+        send_message_thread_pool_nums: config.send_message_thread_pool_nums,
+        pull_message_thread_pool_nums: config.pull_message_thread_pool_nums,
+        flush_delay_offset_interval_ms: config.flush_delay_offset_interval_ms,
+    }
+}
+
 fn map_proxy_drain_state(
     state: rocketmq_protocol::protocol::body::proxy_drain::ProxyDrainStateResponseBody,
 ) -> AdminResult<ProxyDrainState> {
@@ -1164,6 +1188,25 @@ mod tests {
         assert_eq!(rows[0].client_id, "client-a");
         assert_eq!(rows[1].client_id, "client-z");
         assert!(rows.iter().all(|row| row.last_update_timestamp.is_none()));
+    }
+
+    #[test]
+    fn allowlisted_config_projection_has_no_arbitrary_property_surface() {
+        let projected = project_allowlisted_config(rocketmq_client_rust::BrokerConfigAllowlisted {
+            send_message_thread_pool_nums: Some(32),
+            pull_message_thread_pool_nums: Some(16),
+            flush_delay_offset_interval_ms: Some(10_000),
+        });
+
+        assert_eq!(
+            projected,
+            BrokerAllowlistedConfig {
+                send_message_thread_pool_nums: Some(32),
+                pull_message_thread_pool_nums: Some(16),
+                flush_delay_offset_interval_ms: Some(10_000),
+            }
+        );
+        assert_eq!(serde_json::to_value(projected).unwrap().as_object().unwrap().len(), 3);
     }
 
     fn protocol_connection(client_id: &str, client_addr: &str, language: LanguageCode, version: i32) -> Connection {

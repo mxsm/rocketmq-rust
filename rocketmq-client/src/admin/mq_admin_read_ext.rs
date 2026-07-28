@@ -37,6 +37,15 @@ use rocketmq_protocol::protocol::route_facade::BrokerDataExt;
 
 use super::default_mq_admin_ext::DefaultMQAdminExt;
 
+/// Sanitized allowlisted Broker fields required by supervised configuration
+/// patching. Arbitrary Broker properties never cross this read boundary.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct BrokerConfigAllowlisted {
+    pub send_message_thread_pool_nums: Option<u32>,
+    pub pull_message_thread_pool_nums: Option<u32>,
+    pub flush_delay_offset_interval_ms: Option<u64>,
+}
+
 #[allow(async_fn_in_trait)]
 pub trait MQAdminReadExt: Send {
     async fn start(&mut self) -> rocketmq_error::RocketMQResult<()>;
@@ -46,6 +55,13 @@ pub trait MQAdminReadExt: Send {
     async fn fetch_all_topic_list(&self) -> rocketmq_error::RocketMQResult<TopicList>;
 
     async fn fetch_broker_runtime_stats(&self, broker_addr: CheetahString) -> rocketmq_error::RocketMQResult<KVTable>;
+
+    /// Reads only the three non-sensitive Broker fields supported by the SRE
+    /// generation-CAS action.
+    async fn get_broker_config_allowlisted(
+        &self,
+        broker_addr: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<BrokerConfigAllowlisted>;
 
     /// Returns the authenticated, bounded drain state for one Proxy endpoint.
     async fn proxy_drain_state(
@@ -110,6 +126,22 @@ impl MQAdminReadExt for DefaultMQAdminExt {
             .mq_client_api()?
             .get_broker_runtime_info(&broker_addr, self.inner().remoting_timeout_millis()?)
             .await
+    }
+
+    async fn get_broker_config_allowlisted(
+        &self,
+        broker_addr: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<BrokerConfigAllowlisted> {
+        let properties = self
+            .inner()
+            .mq_client_api()?
+            .get_broker_config(&broker_addr, self.inner().remoting_timeout_millis()?)
+            .await?;
+        Ok(BrokerConfigAllowlisted {
+            send_message_thread_pool_nums: parse_allowlisted_value(&properties, "sendMessageThreadPoolNums")?,
+            pull_message_thread_pool_nums: parse_allowlisted_value(&properties, "pullMessageThreadPoolNums")?,
+            flush_delay_offset_interval_ms: parse_allowlisted_value(&properties, "flushDelayOffsetInterval")?,
+        })
     }
 
     async fn proxy_drain_state(
@@ -301,5 +333,66 @@ impl MQAdminReadExt for DefaultMQAdminExt {
             }
         }
         Ok(GroupList::default())
+    }
+}
+
+fn parse_allowlisted_value<T>(
+    properties: &std::collections::HashMap<CheetahString, CheetahString>,
+    key: &str,
+) -> rocketmq_error::RocketMQResult<Option<T>>
+where
+    T: std::str::FromStr,
+{
+    properties
+        .iter()
+        .find_map(|(name, value)| (name.as_str() == key).then_some(value.as_str()))
+        .map(|value| {
+            value.parse().map_err(|_| {
+                rocketmq_error::RocketMQError::IllegalArgument(format!(
+                    "Broker allowlisted configuration `{key}` is malformed"
+                ))
+            })
+        })
+        .transpose()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use cheetah_string::CheetahString;
+
+    use super::parse_allowlisted_value;
+
+    #[test]
+    fn parses_only_the_requested_allowlisted_value() {
+        let properties = HashMap::from([
+            (
+                CheetahString::from_static_str("sendMessageThreadPoolNums"),
+                CheetahString::from_static_str("32"),
+            ),
+            (
+                CheetahString::from_static_str("accessKey"),
+                CheetahString::from_static_str("must-not-cross-boundary"),
+            ),
+        ]);
+
+        let value = parse_allowlisted_value::<u32>(&properties, "sendMessageThreadPoolNums");
+        assert_eq!(value.unwrap(), Some(32));
+        assert_eq!(
+            parse_allowlisted_value::<u32>(&properties, "pullMessageThreadPoolNums").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_allowlisted_values() {
+        let properties = HashMap::from([(
+            CheetahString::from_static_str("flushDelayOffsetInterval"),
+            CheetahString::from_static_str("not-a-number"),
+        )]);
+
+        let error = parse_allowlisted_value::<u64>(&properties, "flushDelayOffsetInterval").unwrap_err();
+        assert!(error.to_string().contains("flushDelayOffsetInterval"));
     }
 }

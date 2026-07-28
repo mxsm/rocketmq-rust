@@ -93,6 +93,8 @@ mod trace;
 mod types;
 mod utils;
 
+#[cfg(feature = "admin-read")]
+pub use crate::admin::BrokerConfigAllowlisted;
 #[cfg(feature = "admin-mutation")]
 pub use crate::admin::BrokerConfigPatchOutcome;
 pub use crate::admin::DefaultMQAdminExt;

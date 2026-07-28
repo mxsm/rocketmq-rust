@@ -19,11 +19,13 @@ use rocketmq_protocol::protocol::body::kv_table::KVTable;
 use crate::client_adapter::lifecycle::AdminSession;
 use crate::core::broker::project_broker_diagnostics;
 use crate::core::broker::BrokerAdmin;
+use crate::core::broker::BrokerAllowlistedConfig;
 use crate::core::broker::BrokerSummary;
 use crate::core::broker::ListBrokersRequest;
 use crate::core::broker::ListBrokersResult;
 use crate::core::broker::ProbeBrokerRuntimeRequest;
 use crate::core::broker::ProbeBrokerRuntimeResult;
+use crate::core::broker::QueryBrokerAllowlistedConfigRequest;
 use crate::core::broker::QueryBrokerDiagnosticsRequest;
 use crate::core::broker::QueryBrokerDiagnosticsResult;
 use crate::core::AdminError;
@@ -156,6 +158,26 @@ impl BrokerAdmin for AdminSession {
                         .any(|broker| broker.coverage != crate::core::broker::BrokerDiagnosticsCoverage::Available),
                 brokers,
                 unavailable_brokers,
+            })
+        })
+    }
+
+    fn query_allowlisted_config<'a>(
+        &'a mut self,
+        request: &'a QueryBrokerAllowlistedConfigRequest,
+    ) -> AdminFuture<'a, BrokerAllowlistedConfig> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            let config = rocketmq_client_rust::MQAdminReadExt::get_broker_config_allowlisted(
+                &self.inner,
+                CheetahString::from(request.broker_addr.as_str()),
+            )
+            .await
+            .map_err(|error| AdminError::backend("get_broker_config_allowlisted", error.to_string()))?;
+            Ok(BrokerAllowlistedConfig {
+                send_message_thread_pool_nums: config.send_message_thread_pool_nums,
+                pull_message_thread_pool_nums: config.pull_message_thread_pool_nums,
+                flush_delay_offset_interval_ms: config.flush_delay_offset_interval_ms,
             })
         })
     }
