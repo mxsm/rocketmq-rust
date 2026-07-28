@@ -21,7 +21,7 @@ Apache RocketMQ-Rust adopts a distributed architecture. Its core components incl
 
 - **Functional Positioning**: Encapsulate business data into messages and push them to the RocketMQ cluster.
 - Technical Implementation:
-  - Connect to the Name Server based on the Netty client to obtain Broker routing metadata (Topic queue mapping, Broker address).
+  - Use the Tokio-based remoting transport to query Name Server routing metadata (Topic queue mapping and Broker addresses).
   - Support multiple load - balancing strategies (such as `RandomQueue` for random queue selection and `RoundRobin` for round - robin), ensuring uniform message distribution.
   - Provide synchronous, asynchronous, and one - way sending modes to adapt to different reliability and performance requirements.
 
@@ -36,7 +36,7 @@ Apache RocketMQ-Rust adopts a distributed architecture. Its core components incl
 ### 3. Broker Cluster (Message Storage and Forwarding)
 
 - Architectural Design:
-  - Master - slave replication architecture. The Master supports read and write operations, while the Slave is responsible for backup and read services. Data synchronization is achieved through the Dledger protocol or synchronous/asynchronous replication.
+  - Master - slave replication architecture. The Master supports writes and reads while replicas provide backup and eligible reads. The implemented HA paths support synchronous/asynchronous replication, and controller mode uses the pinned OpenRaft stack for leadership decisions.
   - Multi - cluster deployment (such as `Broker - Cluster - A`) supports horizontal scaling and regional disaster recovery.
 - Core Functions:
   - **Message Storage**: Based on memory - mapped files (MappedFile), unified storage in CommitLog, and ConsumeQueue index queues to improve read and write performance.
@@ -58,25 +58,25 @@ Apache RocketMQ-Rust adopts a distributed architecture. Its core components incl
    - The Broker registers with regular heartbeats. If the Name Server does not receive a heartbeat for more than 120 seconds, it determines that the Broker has failed.
    - Producers and Consumers periodically pull the routing table to update local Broker addresses and Topic routing.
 2. Message Sending Link:
-   - The Producer selects a Broker queue according to the routing table and sends messages through Netty. The Broker writes to the CommitLog, triggers master - slave synchronization, and returns the result.
+   - The Producer selects a Broker queue from the routing table and sends through the Tokio transport. The Broker writes to the CommitLog, applies the configured replication policy, and returns the result.
 3. Message Consumption Link:
    - The Consumer long - polls messages from the Broker, updates the consumption Offset after processing, and ensures processing reliability.
 
 ## 4. Technical Advantages of the Architecture
 
-- **High - Performance Storage**: Memory - mapped files and zero - copy technology achieve a message throughput of millions.
+- **High - Performance Storage**: Memory-mapped files, bounded transfer strategies, and batched indexing reduce unnecessary copies. Measured results belong to the versioned architecture performance evidence rather than this overview.
 - **High - Availability Guarantee**: The Broker master - slave architecture combined with the Name Server cluster supports automatic failover.
 - **Flexible Scalability**: Multi - Broker cluster deployment horizontally scales message processing capabilities.
 - **Rich Functions**: Based on the architecture, features such as transactional messages (two - phase commit), message filtering (SQL/Tag filtering), and message backtracking are implemented to adapt to scenarios such as finance and e - commerce.
 
 ## 5. Summary of Rust Architecture Advantages
 
-| Dimension                    | Traditional Implementation (Java)                        | Rust - Enhanced Implementation                          | Advantage Improvement                     |
-| ---------------------------- | -------------------------------------------------------- | ------------------------------------------------------- | ----------------------------------------- |
-| **Memory Safety**            | Relies on JVM garbage collection, may cause OOM          | Ownership system + zero - copy, eliminates memory leaks | Zero crash rate in production environment |
-| **Asynchronous Performance** | Based on thread pools, high context - switching overhead | `async/await` non - blocking I/O                        | Throughput increased by over 30%          |
-| **Concurrency Control**      | Based on `synchronized`/`Lock`                           | Lock - free data structures + channels (Channel)        | Thread utilization increased by 50%       |
-| **Memory Efficiency**        | Complex off - heap memory management                     | `bytes::Bytes` zero - copy + stack allocation           | Memory usage reduced by 40%               |
-| **Error Handling**           | Complex exception chains, high debugging costs           | `Result`/`Option` mode, clear backtracking              | Fault location time reduced by 70%        |
+| Dimension | Rust implementation |
+|---|---|
+| **Memory Safety** | Ownership and borrowing constrain aliasing; audited unsafe regions document their invariants. |
+| **Asynchronous I/O** | Tokio tasks are owned by lifecycle-aware task groups and shut down with explicit deadlines. |
+| **Concurrency Control** | Channels, sharded concurrent maps, atomics, and locks are selected according to the data contract. |
+| **Memory Efficiency** | `bytes::Bytes`, bounded queues, and transfer capabilities make ownership and copying decisions explicit. |
+| **Error Handling** | Typed errors preserve category, retry, severity, redaction, and source information across boundaries. |
 
 Through the above architecture, RocketMQ - Rust achieves high performance, high reliability, and easy scalability in the field of distributed messaging, becoming the preferred solution for message middleware in distributed systems.

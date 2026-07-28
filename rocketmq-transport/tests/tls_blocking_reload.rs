@@ -18,7 +18,6 @@ use std::time::Duration;
 
 use rocketmq_runtime::BlockingPoolPolicy;
 use rocketmq_runtime::RuntimeContext;
-use rocketmq_runtime::RuntimeHandle;
 use rocketmq_transport::TlsConfig;
 use rocketmq_transport::TlsServerRuntime;
 
@@ -30,12 +29,7 @@ async fn reload_filesystem_work_queues_through_the_injected_blocking_executor() 
         task_timeout: Duration::from_secs(1),
         ..BlockingPoolPolicy::default()
     };
-    let context = RuntimeContext::new_with_blocking_policy(
-        RuntimeHandle::new(tokio::runtime::Handle::current()),
-        "tls-blocking-test",
-        policy,
-    )
-    .unwrap();
+    let context = RuntimeContext::try_from_current_with_blocking_policy("tls-blocking-test", policy).unwrap();
     let service = context.service_context("tls-service");
     let tls = TlsServerRuntime::initialize_with_service_context(
         TlsConfig {
@@ -87,12 +81,7 @@ async fn initial_acceptor_build_queues_through_the_injected_blocking_executor() 
         task_timeout: Duration::from_secs(1),
         ..BlockingPoolPolicy::default()
     };
-    let context = RuntimeContext::new_with_blocking_policy(
-        RuntimeHandle::new(tokio::runtime::Handle::current()),
-        "tls-initial-blocking-test",
-        policy,
-    )
-    .unwrap();
+    let context = RuntimeContext::try_from_current_with_blocking_policy("tls-initial-blocking-test", policy).unwrap();
     let service = context.service_context("tls-service");
     let (started_tx, started_rx) = std::sync::mpsc::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();

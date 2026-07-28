@@ -44,16 +44,17 @@ pub struct RuntimeContext {
 
 impl RuntimeContext {
     #[doc(hidden)]
-    pub fn new(runtime: RuntimeHandle, name: impl Into<Arc<str>>) -> RuntimeResult<Self> {
+    pub(crate) fn new(runtime: RuntimeHandle, name: impl Into<Arc<str>>) -> RuntimeResult<Self> {
         Self::new_with_blocking_lanes(runtime, name, BlockingLanePolicies::default())
     }
 
     #[doc(hidden)]
-    pub fn new_with_blocking_policy(
-        runtime: RuntimeHandle,
+    pub fn try_from_current_with_blocking_policy(
         name: impl Into<Arc<str>>,
         blocking_policy: BlockingPoolPolicy,
     ) -> RuntimeResult<Self> {
+        let handle = tokio::runtime::Handle::try_current().map_err(|_error| RuntimeError::NoCurrentRuntime)?;
+        let runtime = RuntimeHandle::new(handle);
         Self::new_with_blocking_lanes(runtime, name, BlockingLanePolicies::uniform(blocking_policy))
     }
 
@@ -65,7 +66,7 @@ impl RuntimeContext {
         let name = name.into();
         let global_blocking_capacity = blocking_policies.total_max_concurrency();
         let root_group = TaskGroup::root(name.clone(), runtime.clone());
-        let diagnostics = RuntimeDiagnostics::new(runtime.clone());
+        let diagnostics = RuntimeDiagnostics::new();
         let root = RootServiceContext::new(
             name,
             runtime,
@@ -86,10 +87,6 @@ impl RuntimeContext {
     #[doc(hidden)]
     pub fn from_current(name: impl Into<Arc<str>>) -> Self {
         Self::try_from_current(name).expect("current Tokio runtime must be available for test harness")
-    }
-
-    pub fn runtime(&self) -> &RuntimeHandle {
-        self.root.runtime()
     }
 
     pub fn root_group(&self) -> &TaskGroup {

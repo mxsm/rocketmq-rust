@@ -8,11 +8,31 @@ on:
     branches: [ "main" ]
     paths:
       - 'rocketmq-example/**'
+      - 'rocketmq-client/**'
+      - 'rocketmq-error/**'
+      - 'rocketmq-model/**'
+      - 'rocketmq-observability/**'
+      - 'rocketmq-protocol/**'
+      - 'rocketmq-runtime/**'
+      - 'rocketmq-tools/rocketmq-admin/rocketmq-admin-core/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
       - '.github/workflows/rocketmq-example-ci.yaml'
   pull_request:
     branches: [ "main" ]
     paths:
       - 'rocketmq-example/**'
+      - 'rocketmq-client/**'
+      - 'rocketmq-error/**'
+      - 'rocketmq-model/**'
+      - 'rocketmq-observability/**'
+      - 'rocketmq-protocol/**'
+      - 'rocketmq-runtime/**'
+      - 'rocketmq-tools/rocketmq-admin/rocketmq-admin-core/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
       - '.github/workflows/rocketmq-example-ci.yaml'
 
 env:
@@ -52,10 +72,10 @@ jobs:
           LIBCLANG_DIR=$(ls -d /usr/lib/llvm-*/lib | head -n 1)
           echo "LIBCLANG_PATH=$LIBCLANG_DIR" >> $GITHUB_ENV
 
-      - name: Set up Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: rustfmt, clippy
+      - name: Use repository Rust 1.95 toolchain
+        run: |
+          rustup show active-toolchain
+          rustup component add rustfmt clippy
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -72,6 +92,9 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test
 
   # =========================
   # Build Examples
@@ -122,8 +145,8 @@ jobs:
         run: |
           choco install cmake ninja protoc -y
 
-      - name: Set up Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
+      - name: Use repository Rust 1.95 toolchain
+        run: rustup show active-toolchain
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2

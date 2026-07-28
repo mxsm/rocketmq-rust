@@ -1,0 +1,78 @@
+name: RocketMQ Dashboard GPUI CI
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "rocketmq-dashboard/rocketmq-dashboard-gpui/**"
+      - "rocketmq-dashboard/rocketmq-dashboard-common/**"
+      - "rocketmq-client/**"
+      - "rocketmq-error/**"
+      - "rocketmq-model/**"
+      - "rocketmq-protocol/**"
+      - "rocketmq-runtime/**"
+      - "rocketmq-transport/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/dashboard-gpui-ci.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "rocketmq-dashboard/rocketmq-dashboard-gpui/**"
+      - "rocketmq-dashboard/rocketmq-dashboard-common/**"
+      - "rocketmq-client/**"
+      - "rocketmq-error/**"
+      - "rocketmq-model/**"
+      - "rocketmq-protocol/**"
+      - "rocketmq-runtime/**"
+      - "rocketmq-transport/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/dashboard-gpui-ci.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_DEV_DEBUG: "false"
+  CARGO_PROFILE_TEST_DEBUG: "false"
+
+jobs:
+  validate:
+    name: GPUI fmt, Clippy, check, and test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rocketmq-dashboard/rocketmq-dashboard-gpui
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Linux UI and native build dependencies
+        run: >-
+          sudo apt-get update &&
+          sudo apt-get install -y
+          clang cmake make ninja-build pkg-config protobuf-compiler
+          libfontconfig1-dev libfreetype6-dev libx11-dev libxcb1-dev
+          libxkbcommon-dev libxkbcommon-x11-dev
+
+      - name: Use repository Rust 1.95 toolchain
+        run: |
+          rustup show active-toolchain
+          rustup component add rustfmt clippy
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Check all targets
+        run: cargo check --all-targets --all-features
+
+      - name: Test
+        run: cargo test

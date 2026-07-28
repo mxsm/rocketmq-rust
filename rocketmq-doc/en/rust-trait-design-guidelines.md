@@ -45,10 +45,10 @@ native-async, and empty-marker sites with the generated baseline. Run
 every changed identity and decision.
 
 The inventory assigns existing macro sites to their owning crate with a
-migrate-on-touch decision. `MQAdminExtInner` is owned by the client team and
-must pass the P2.4 deletion test: internal tables use the concrete type,
-the public marker is deprecated for one compatibility window, and the next
-major release removes it without replacement by another empty trait.
+migrate-on-touch decision. `MQAdminExtInner` passed the P2.4 deletion test and
+was removed at the approved major-version boundary without replacement by
+another empty trait. A new marker with no behavior is treated as fresh policy
+debt, not as a compatible substitute.
 
 P1 async ownership work and P2 interface work use this policy directly.
 Their touched-domain inventory may decrease; any addition requires an

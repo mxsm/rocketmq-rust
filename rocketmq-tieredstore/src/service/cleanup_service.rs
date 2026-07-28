@@ -118,8 +118,8 @@ where
         self.flat_file_store.cleanup_expired(current_time_millis()).await
     }
 
-    pub async fn run(self) -> Result<(), RocketMQError> {
-        let task_group = crate::runtime::task_group("rocketmq-tieredstore.cleanup.run")?;
+    pub async fn run(self, parent_task_group: TaskGroup) -> Result<(), RocketMQError> {
+        let task_group = crate::runtime::task_group_with_parent("rocketmq-tieredstore.cleanup.run", &parent_task_group);
         let cleanup_error = Arc::new(Mutex::new(None));
         self.schedule(&task_group, cleanup_error.clone())?;
 
@@ -231,12 +231,14 @@ mod tests {
 
         let shutdown = CancellationToken::new();
         let service = CleanupService::new(config, flat_file_store, shutdown.clone());
-        let task_group = crate::runtime::task_group("rocketmq-tieredstore.cleanup-test")?;
+        let context = rocketmq_runtime::RuntimeContext::from_current("rocketmq-tieredstore.cleanup-test");
+        let task_group = context.root_group().child("cleanup-worker");
         let task_error = Arc::new(tokio::sync::Mutex::new(None));
         let task_error_clone = task_error.clone();
+        let service_parent = task_group.clone();
         task_group
             .spawn_service("cleanup-service-test", async move {
-                if let Err(error) = service.run().await {
+                if let Err(error) = service.run(service_parent).await {
                     *task_error_clone.lock().await = Some(error);
                 }
             })

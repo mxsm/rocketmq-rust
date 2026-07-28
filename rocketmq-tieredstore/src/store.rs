@@ -15,6 +15,7 @@
 use std::sync::Arc;
 
 use rocketmq_error::RocketMQError;
+use rocketmq_runtime::TaskGroup;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::TieredStoreConfig;
@@ -47,16 +48,17 @@ where
 }
 
 impl TieredStore<ProviderKind> {
-    pub fn new(config: TieredStoreConfig) -> Result<Self, RocketMQError> {
-        Self::new_with_metrics(config, TieredStoreMetricsRecorder::noop())
+    pub fn new(config: TieredStoreConfig, parent_task_group: TaskGroup) -> Result<Self, RocketMQError> {
+        Self::new_with_metrics(config, TieredStoreMetricsRecorder::noop(), parent_task_group)
     }
 
     pub fn new_with_metrics(
         config: TieredStoreConfig,
         metrics: TieredStoreMetricsRecorder,
+        parent_task_group: TaskGroup,
     ) -> Result<Self, RocketMQError> {
         let provider = ProviderKind::from_config(&config)?;
-        Self::with_provider_and_metrics(config, provider, metrics)
+        Self::with_provider_and_metrics(config, provider, metrics, parent_task_group)
     }
 }
 
@@ -64,14 +66,19 @@ impl<P> TieredStore<P>
 where
     P: TieredStoreProvider,
 {
-    pub fn with_provider(config: TieredStoreConfig, provider: P) -> Result<Self, RocketMQError> {
-        Self::with_provider_and_metrics(config, provider, TieredStoreMetricsRecorder::noop())
+    pub fn with_provider(
+        config: TieredStoreConfig,
+        provider: P,
+        parent_task_group: TaskGroup,
+    ) -> Result<Self, RocketMQError> {
+        Self::with_provider_and_metrics(config, provider, TieredStoreMetricsRecorder::noop(), parent_task_group)
     }
 
     pub fn with_provider_and_metrics(
         config: TieredStoreConfig,
         provider: P,
         metrics: TieredStoreMetricsRecorder,
+        parent_task_group: TaskGroup,
     ) -> Result<Self, RocketMQError> {
         let config = Arc::new(config);
         let shutdown = CancellationToken::new();
@@ -88,6 +95,7 @@ where
             flat_file_store.clone(),
             shutdown.child_token(),
             metrics.clone(),
+            parent_task_group.clone(),
         ));
         let fetcher = Arc::new(DefaultTieredMessageFetcher::new_with_metrics(
             config.clone(),
@@ -102,7 +110,7 @@ where
             dispatcher,
             fetcher,
             metrics,
-            services: TieredServiceSet::new(),
+            services: TieredServiceSet::new(parent_task_group),
             shutdown,
         })
     }
@@ -181,6 +189,7 @@ where
 
 #[cfg(test)]
 mod store_api_tests {
+    use rocketmq_runtime::RuntimeContext;
     use rocketmq_store_api::StoreLifecycle;
 
     use super::*;
@@ -188,11 +197,15 @@ mod store_api_tests {
     #[tokio::test]
     async fn tiered_store_implements_backend_neutral_lifecycle() {
         let temp_dir = tempfile::tempdir().expect("create tiered lifecycle temp dir");
-        let mut store = TieredStore::new(TieredStoreConfig {
-            backend_provider: "memory".to_owned(),
-            store_path_root_dir: temp_dir.path().join("tiered-lifecycle"),
-            ..TieredStoreConfig::default()
-        })
+        let context = RuntimeContext::from_current("tiered-store-api-test");
+        let mut store = TieredStore::new(
+            TieredStoreConfig {
+                backend_provider: "memory".to_owned(),
+                store_path_root_dir: temp_dir.path().join("tiered-lifecycle"),
+                ..TieredStoreConfig::default()
+            },
+            context.root_group().clone(),
+        )
         .expect("create tiered store");
 
         assert!(StoreLifecycle::load(&mut store).await.expect("load tiered store"));

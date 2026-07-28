@@ -1,0 +1,108 @@
+name: Architecture performance evidence
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "29 20 * * 0"
+
+permissions:
+  contents: read
+
+jobs:
+  profile-contract:
+    name: Validate performance profile contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Validate reproducible profiles and sidecar
+        run: |
+          python scripts/architecture_performance_guard.py --validate-profiles
+          python scripts/architecture_performance_sidecar.py --help
+
+      - name: Record contract evidence
+        run: |
+          mkdir -p target/architecture-refactor/M10/contract
+          cp scripts/architecture-performance-profiles.json target/architecture-refactor/M10/contract/
+          cp scripts/architecture-performance-exceptions.json target/architecture-refactor/M10/contract/
+          git rev-parse HEAD > target/architecture-refactor/M10/contract/commit.txt
+
+      - name: Upload profile contract
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: architecture-performance-contract-${{ github.sha }}
+          path: target/architecture-refactor/M10/contract
+          if-no-files-found: error
+          retention-days: 30
+
+  measure:
+    name: Measure on approved benchmark host
+    needs: profile-contract
+    runs-on: [self-hosted, linux, x64, rocketmq-benchmark]
+    timeout-minutes: 480
+    env:
+      BENCHMARK_HARDWARE_ID: ${{ vars.ARCHITECTURE_BENCHMARK_HARDWARE_ID }}
+      BENCHMARK_FILESYSTEM: ${{ vars.ARCHITECTURE_BENCHMARK_FILESYSTEM }}
+      BENCHMARK_FEATURES: ${{ vars.ARCHITECTURE_BENCHMARK_FEATURES }}
+      BENCHMARK_METHOD: ${{ vars.ARCHITECTURE_BENCHMARK_METHOD }}
+      APPROVED_BASELINE_REPORT: ${{ vars.ARCHITECTURE_PERFORMANCE_BASELINE_REPORT }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Use repository Rust 1.95 toolchain
+        run: rustup show active-toolchain
+
+      - name: Materialize the reviewed runner manifest
+        run: |
+          set -euo pipefail
+          test -n "$BENCHMARK_HARDWARE_ID"
+          test -n "$BENCHMARK_FILESYSTEM"
+          test -n "$BENCHMARK_FEATURES"
+          test -n "$BENCHMARK_METHOD"
+          python scripts/architecture_performance_sidecar.py \
+            --generate-manifest target/architecture-refactor/M10/runner-manifest.json
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path("target/architecture-refactor/M10/runner-manifest.json")
+          manifest = json.loads(path.read_text(encoding="utf-8"))
+          manifest["environment"].update(
+              hardware_id=os.environ["BENCHMARK_HARDWARE_ID"],
+              filesystem=os.environ["BENCHMARK_FILESYSTEM"],
+              features=sorted(filter(None, os.environ["BENCHMARK_FEATURES"].split(","))),
+              measurement_method=os.environ["BENCHMARK_METHOD"],
+          )
+          path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: Collect correctness and measurement evidence
+        run: >-
+          python scripts/architecture_performance_sidecar.py
+          --manifest target/architecture-refactor/M10/runner-manifest.json
+          --output-dir target/architecture-refactor/M10/performance
+          --run-id ${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Compare with the approved baseline when configured
+        if: env.APPROVED_BASELINE_REPORT != ''
+        run: |
+          set -euo pipefail
+          CANDIDATE=$(find target/architecture-refactor/M10/performance -name report.json -print -quit)
+          test -n "$CANDIDATE"
+          python scripts/architecture_performance_guard.py \
+            --baseline "$APPROVED_BASELINE_REPORT" \
+            --candidate "$CANDIDATE" \
+            --output target/architecture-refactor/M10/comparison.json
+
+      - name: Upload immutable performance evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: architecture-performance-${{ github.sha }}
+          path: target/architecture-refactor/M10
+          if-no-files-found: error
+          retention-days: 90

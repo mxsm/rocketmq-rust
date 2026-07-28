@@ -14,6 +14,7 @@
 
 use bytes::Bytes;
 use rocketmq_error::RocketMQError;
+use rocketmq_runtime::RuntimeContext;
 use rocketmq_tieredstore::TieredDispatchRequest;
 use rocketmq_tieredstore::TieredDispatcher;
 use rocketmq_tieredstore::TieredLifecycle;
@@ -26,13 +27,17 @@ use rocketmq_tieredstore::TieredStoreConfig;
 async fn main() -> Result<(), RocketMQError> {
     let temp_dir =
         tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
-    let store = TieredStore::new(TieredStoreConfig {
-        storage_level: TieredStorageLevel::Force,
-        backend_provider: "memory".to_owned(),
-        store_path_root_dir: temp_dir.path().join("tieredstore"),
-        max_pending_tasks: 16,
-        ..TieredStoreConfig::default()
-    })?;
+    let runtime = RuntimeContext::from_current("tieredstore-example");
+    let store = TieredStore::new(
+        TieredStoreConfig {
+            storage_level: TieredStorageLevel::Force,
+            backend_provider: "memory".to_owned(),
+            store_path_root_dir: temp_dir.path().join("tieredstore"),
+            max_pending_tasks: 16,
+            ..TieredStoreConfig::default()
+        },
+        runtime.root_group().clone(),
+    )?;
 
     store.load().await?;
     store.start().await?;

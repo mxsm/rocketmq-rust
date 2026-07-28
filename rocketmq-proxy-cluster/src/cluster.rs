@@ -665,7 +665,7 @@ trait ClusterProducerIo: Send {
 
     fn set_send_timeout(&mut self, timeout_millis: u32);
 
-    fn producer_group(&self) -> &str;
+    fn producer_group(&self) -> CheetahString;
 
     async fn start(&mut self) -> Result<(), RocketMQError>;
 
@@ -696,14 +696,14 @@ impl ClusterProducerIo for DefaultMQProducer {
     }
 
     fn topics(&self) -> Vec<CheetahString> {
-        self.topics().clone()
+        self.topics()
     }
 
     fn set_send_timeout(&mut self, timeout_millis: u32) {
         self.set_send_msg_timeout(timeout_millis);
     }
 
-    fn producer_group(&self) -> &str {
+    fn producer_group(&self) -> CheetahString {
         self.producer_group()
     }
 
@@ -2977,7 +2977,8 @@ async fn send_message_entry_inner(
     timeout: u64,
 ) -> ProxyResult<SendResult> {
     let mut message = message_from_core(&entry.message);
-    attach_transaction_producer_group(&mut message, producer.producer_group());
+    let producer_group = producer.producer_group();
+    attach_transaction_producer_group(&mut message, producer_group.as_str());
     let queue = resolve_target_queue(producer, &entry).await?;
     let result = if let Some(queue) = queue {
         producer.send_to_queue(message, queue, timeout).await?

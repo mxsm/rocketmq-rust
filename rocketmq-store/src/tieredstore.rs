@@ -20,6 +20,7 @@ use rocketmq_error::RocketMQError;
 use rocketmq_model::common::boundary_type::BoundaryType;
 use rocketmq_observability::metrics::tiered_store::TieredStoreMetrics;
 use rocketmq_observability::metrics::tiered_store::TieredStoreMetricsRecorder;
+use rocketmq_runtime::TaskGroup;
 use rocketmq_store_api::DerivedRecordId;
 use rocketmq_tieredstore::dispatcher::DefaultTieredDispatcher;
 use rocketmq_tieredstore::dispatcher::TieredDispatchRequest;
@@ -58,15 +59,16 @@ pub struct TieredStoreDecorator {
 }
 
 impl TieredStoreDecorator {
-    pub fn new(config: TieredStoreConfig) -> Result<Self, StoreError> {
-        Self::new_with_metrics(config, TieredStoreMetricsRecorder::noop())
+    pub fn new(config: TieredStoreConfig, parent_task_group: TaskGroup) -> Result<Self, StoreError> {
+        Self::new_with_metrics(config, TieredStoreMetricsRecorder::noop(), parent_task_group)
     }
 
     pub fn new_with_metrics(
         config: TieredStoreConfig,
         metrics: TieredStoreMetricsRecorder,
+        parent_task_group: TaskGroup,
     ) -> Result<Self, StoreError> {
-        let store = TieredStore::new_with_metrics(config, metrics)
+        let store = TieredStore::new_with_metrics(config, metrics, parent_task_group)
             .map_err(|error| StoreError::tiered_store(StoreOperation::Load, error))?;
         Ok(Self { store: Arc::new(store) })
     }
@@ -558,13 +560,17 @@ mod tests {
     async fn dispatcher_adapter_writes_commitlog_and_consumequeue_to_tieredstore() -> Result<(), RocketMQError> {
         let temp_dir =
             tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
-        let tiered_store = TieredStore::new(TieredStoreConfig {
-            storage_level: TieredStorageLevel::Force,
-            backend_provider: "memory".to_owned(),
-            store_path_root_dir: temp_dir.path().join("tieredstore"),
-            max_pending_tasks: 8,
-            ..TieredStoreConfig::default()
-        })?;
+        let runtime = rocketmq_runtime::RuntimeContext::from_current("tieredstore-adapter-test");
+        let tiered_store = TieredStore::new(
+            TieredStoreConfig {
+                storage_level: TieredStorageLevel::Force,
+                backend_provider: "memory".to_owned(),
+                store_path_root_dir: temp_dir.path().join("tieredstore"),
+                max_pending_tasks: 8,
+                ..TieredStoreConfig::default()
+            },
+            runtime.root_group().clone(),
+        )?;
         tiered_store.load().await?;
         tiered_store.start().await?;
 

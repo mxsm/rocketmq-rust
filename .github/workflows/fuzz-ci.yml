@@ -23,6 +23,9 @@ on:
       - 'rocketmq-store-local/**'
       - '.github/workflows/fuzz-ci.yml'
   workflow_dispatch:
+  schedule:
+    - cron: "17 18 * * 1-6"
+    - cron: "17 18 * * 0"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -30,7 +33,27 @@ concurrency:
 
 jobs:
   build:
-    name: Build ${{ matrix.target }}
+    name: Build all owned fuzz targets
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Set up fixed nightly
+        run: rustup toolchain install nightly-2026-07-05 --profile minimal
+
+      - name: Build fuzz target
+        run: >-
+          cargo +nightly-2026-07-05 check
+          --locked
+          --manifest-path fuzz/Cargo.toml
+          --all-targets
+          --all-features
+
+  exercise:
+    name: Exercise ${{ matrix.target }}
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -40,20 +63,35 @@ jobs:
           - raw_broker_config
           - controller_snapshot
           - store_recovery_record
+    env:
+      FUZZ_SECONDS: ${{ github.event.schedule == '17 18 * * 0' && '900' || '60' }}
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
 
       - name: Set up fixed nightly
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: nightly-2026-07-05
+        run: rustup toolchain install nightly-2026-07-05 --profile minimal
 
-      - name: Build fuzz target
+      - name: Install pinned cargo-fuzz
+        run: cargo +nightly-2026-07-05 install cargo-fuzz --locked --version 0.13.2
+
+      - name: Exercise curated corpus
+        working-directory: fuzz
         run: >-
-          cargo +nightly-2026-07-05 check
-          --locked
-          --manifest-path fuzz/Cargo.toml
-          --bin ${{ matrix.target }}
+          cargo +nightly-2026-07-05 fuzz run ${{ matrix.target }}
           --features ${{ matrix.target }}
+          --
+          -max_total_time=${FUZZ_SECONDS}
+          -print_final_stats=1
+
+      - name: Retain corpus and crash reproducer
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: architecture-fuzz-${{ matrix.target }}-${{ github.sha }}
+          path: |
+            fuzz/corpus/${{ matrix.target }}
+            fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: warn
+          retention-days: 30

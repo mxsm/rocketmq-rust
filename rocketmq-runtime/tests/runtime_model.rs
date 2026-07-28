@@ -10,7 +10,6 @@ use rocketmq_runtime::BlockingKind;
 use rocketmq_runtime::BlockingLane;
 use rocketmq_runtime::BlockingLanePolicies;
 use rocketmq_runtime::BlockingPoolPolicy;
-use rocketmq_runtime::DetachedTaskPolicy;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_runtime::RuntimeError;
@@ -219,7 +218,7 @@ async fn diagnostics_snapshot_reports_runtime_state() {
     assert_eq!(context_snapshot.parent_group_id, None);
     assert_eq!(context_snapshot.lifecycle_state, TaskGroupLifecycleState::Open);
     assert_eq!(context_snapshot.task_count, 0);
-    assert!(context_snapshot.child_count >= 2, "{context_snapshot:?}");
+    assert_eq!(context_snapshot.child_count, 1, "{context_snapshot:?}");
     assert_eq!(service_snapshot.group_id, service.task_group().id());
     assert_eq!(service_snapshot.parent_group_id, Some(context.root_group().id()));
     assert_eq!(service_snapshot.lifecycle_state, TaskGroupLifecycleState::Open);
@@ -491,56 +490,6 @@ async fn task_group_shutdown_aborts_after_timeout_without_leak() {
     assert_eq!(report.aborted, 1, "{}", report.to_json());
     assert_eq!(report.leaked, 0, "{}", report.to_json());
     assert_eq!(report.timed_out, 1, "{}", report.to_json());
-}
-
-#[allow(deprecated)]
-#[tokio::test]
-async fn task_group_detached_track_only_reports_policy() {
-    let context = RuntimeContext::from_current("task-group-detached-track-test");
-    let group = context.root_group().child("service");
-
-    group
-        .spawn_detached("detached-task", TaskKind::Worker, async move {
-            std::future::pending::<()>().await;
-        })
-        .unwrap();
-
-    let report = group.shutdown(Duration::from_millis(20)).await;
-
-    assert_eq!(report.aborted, 0, "{}", report.to_json());
-    assert_eq!(report.detached_still_running, 1, "{}", report.to_json());
-    assert!(!report.is_healthy(), "{}", report.to_json());
-    assert_eq!(report.remaining_tasks.len(), 1, "{}", report.to_json());
-    assert_eq!(
-        report.remaining_tasks[0].detached_policy,
-        Some(DetachedTaskPolicy::TrackOnly),
-        "{}",
-        report.to_json()
-    );
-}
-
-#[allow(deprecated)]
-#[tokio::test]
-async fn task_group_detached_abort_on_shutdown_is_aborted() {
-    let context = RuntimeContext::from_current("task-group-detached-abort-test");
-    let group = context.root_group().child("service");
-
-    group
-        .spawn_detached_with_policy(
-            "detached-abort-task",
-            TaskKind::Worker,
-            DetachedTaskPolicy::AbortOnShutdown,
-            async move {
-                std::future::pending::<()>().await;
-            },
-        )
-        .unwrap();
-
-    let report = group.shutdown(Duration::from_secs(1)).await;
-
-    assert_eq!(report.aborted, 1, "{}", report.to_json());
-    assert_eq!(report.detached_still_running, 0, "{}", report.to_json());
-    assert!(report.remaining_tasks.is_empty(), "{}", report.to_json());
 }
 
 #[tokio::test]

@@ -160,17 +160,22 @@ fn batch_cursor_preserves_cumulative_descriptor_and_state_order() {
     assert_eq!(cursor.msg_num(), 2);
 }
 
-#[cfg(debug_assertions)]
 #[test]
-#[should_panic]
-fn first_batch_frame_keeps_left_associated_physical_offset_overflow() {
+fn first_batch_frame_keeps_profile_specific_left_associated_overflow() {
     let mut frames = vec![0; 8];
     frames[0..4].copy_from_slice(&8_i32.to_be_bytes());
     let mut cursor = AppendBatchFrameCursor::new();
 
     let first = cursor.next(&frames).expect("first frame");
     assert_eq!(first.cumulative_len(), first.declared_len());
-    let _ = first.physical_offset(i64::MAX);
+    let overflow_panics =
+        std::panic::catch_unwind(|| std::hint::black_box(i64::MAX) + std::hint::black_box(1)).is_err();
+    let physical_offset = std::panic::catch_unwind(|| first.physical_offset(i64::MAX));
+
+    assert_eq!(physical_offset.is_err(), overflow_panics);
+    if let Ok(physical_offset) = physical_offset {
+        assert_eq!(physical_offset, i64::MAX);
+    }
 }
 
 #[test]

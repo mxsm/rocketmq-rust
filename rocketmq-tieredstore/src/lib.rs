@@ -73,6 +73,7 @@ pub mod bench_support {
 
     use bytes::Bytes;
     use rocketmq_error::RocketMQError;
+    use rocketmq_runtime::RuntimeContext;
     use rocketmq_runtime::ShutdownReport;
     use serde::Serialize;
     use tokio_util::sync::CancellationToken;
@@ -135,7 +136,13 @@ pub mod bench_support {
             Arc::new(JsonMetadataStore::new(config.clone())),
             MemoryProvider::default(),
         ));
-        let dispatcher = crate::DefaultTieredDispatcher::new(config, flat_file_store.clone(), CancellationToken::new());
+        let runtime = RuntimeContext::from_current("tiered-dispatcher-lifecycle-probe");
+        let dispatcher = crate::DefaultTieredDispatcher::new(
+            config,
+            flat_file_store.clone(),
+            CancellationToken::new(),
+            runtime.root_group().clone(),
+        );
 
         dispatcher.start().await?;
         for queue_offset in 0..request_count {
@@ -248,7 +255,8 @@ pub mod bench_support {
         flat_file.commit().await?;
 
         let first_commit_log_path = "CleanupBenchTopic/0/commitlog/00000000000000000000".to_owned();
-        let services = TieredServiceSet::<MemoryProvider>::new();
+        let runtime = RuntimeContext::from_current("tiered-cleanup-lifecycle-probe");
+        let services = TieredServiceSet::<MemoryProvider>::new(runtime.root_group().clone());
         let shutdown = CancellationToken::new();
         services
             .start_cleanup(config, flat_file_store, shutdown.child_token())

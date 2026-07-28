@@ -19,7 +19,6 @@ use std::sync::Arc;
 use serde::Serialize;
 
 use crate::blocking::BlockingExecutorSnapshot;
-use crate::handle::RuntimeHandle;
 use crate::task_group::TaskGroup;
 use crate::task_group::TaskGroupId;
 use crate::task_group::TaskGroupLifecycleState;
@@ -28,7 +27,6 @@ static NEXT_RUNTIME_DIAGNOSTICS_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone)]
 pub struct RuntimeDiagnostics {
-    runtime: RuntimeHandle,
     runtime_id: Arc<str>,
 }
 
@@ -45,16 +43,11 @@ pub struct RuntimeDiagnosticsSnapshot {
 }
 
 impl RuntimeDiagnostics {
-    pub fn new(runtime: RuntimeHandle) -> Self {
+    pub(crate) fn new() -> Self {
         let runtime_id = NEXT_RUNTIME_DIAGNOSTICS_ID.fetch_add(1, Ordering::Relaxed);
         Self {
-            runtime,
             runtime_id: Arc::from(format!("rocketmq-runtime-{runtime_id}")),
         }
-    }
-
-    pub fn runtime(&self) -> &RuntimeHandle {
-        &self.runtime
     }
 
     pub fn runtime_id(&self) -> &str {

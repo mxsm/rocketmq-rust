@@ -166,7 +166,6 @@ impl RootServiceContext {
     pub fn child(&self, scope: impl Into<ScopeId>) -> ChildServiceContext {
         ChildServiceContext::new(
             scope.into(),
-            self.runtime.clone(),
             &self.task_group,
             self.blocking_lanes.clone(),
             self.diagnostics.clone(),
@@ -207,7 +206,6 @@ impl RootServiceContext {
 #[derive(Debug, Clone)]
 pub struct ChildServiceContext {
     name: Arc<str>,
-    runtime: RuntimeHandle,
     task_group: TaskGroup,
     blocking_lanes: BlockingLanes,
     diagnostics: RuntimeDiagnostics,
@@ -220,7 +218,6 @@ struct ChildContextSeal;
 impl ChildServiceContext {
     fn new(
         scope: ScopeId,
-        runtime: RuntimeHandle,
         parent_group: &TaskGroup,
         blocking_lanes: BlockingLanes,
         diagnostics: RuntimeDiagnostics,
@@ -228,7 +225,6 @@ impl ChildServiceContext {
         let name = scope.into_inner();
         Self {
             name: name.clone(),
-            runtime,
             task_group: parent_group.child(name),
             blocking_lanes,
             diagnostics,
@@ -238,14 +234,6 @@ impl ChildServiceContext {
 
     pub fn name(&self) -> &str {
         &self.name
-    }
-
-    #[deprecated(
-        since = "1.1.0",
-        note = "business modules should use task_spawner, scheduled_tasks, or a blocking lane"
-    )]
-    pub fn runtime(&self) -> &RuntimeHandle {
-        &self.runtime
     }
 
     pub fn task_spawner(&self) -> TaskSpawner {
@@ -284,7 +272,6 @@ impl ChildServiceContext {
     pub fn child(&self, scope: impl Into<ScopeId>) -> Self {
         Self::new(
             scope.into(),
-            self.runtime.clone(),
             &self.task_group,
             self.blocking_lanes.clone(),
             self.diagnostics.clone(),

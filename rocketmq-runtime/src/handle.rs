@@ -13,33 +13,13 @@
 // limitations under the License.
 
 #[derive(Debug, Clone)]
-pub struct RuntimeHandle {
+pub(crate) struct RuntimeHandle {
     handle: tokio::runtime::Handle,
 }
 
 impl RuntimeHandle {
-    pub fn new(handle: tokio::runtime::Handle) -> Self {
+    pub(crate) fn new(handle: tokio::runtime::Handle) -> Self {
         Self { handle }
-    }
-
-    #[deprecated(
-        since = "1.1.0",
-        note = "raw Tokio handles are a compatibility boundary; use an injected task capability"
-    )]
-    pub fn inner(&self) -> &tokio::runtime::Handle {
-        &self.handle
-    }
-
-    #[deprecated(
-        since = "1.1.0",
-        note = "raw spawning bypasses TaskGroup ownership; use TaskSpawner or TaskGroup"
-    )]
-    pub fn spawn<F>(&self, future: F) -> tokio::task::JoinHandle<F::Output>
-    where
-        F: std::future::Future + Send + 'static,
-        F::Output: Send + 'static,
-    {
-        self.handle.spawn(future)
     }
 
     pub(crate) fn tokio_handle(&self) -> &tokio::runtime::Handle {

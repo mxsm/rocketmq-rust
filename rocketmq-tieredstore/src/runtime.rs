@@ -14,18 +14,8 @@
 
 use rocketmq_error::RocketMQError;
 use rocketmq_error::UnifiedServiceError;
-use rocketmq_runtime::RuntimeHandle;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
-
-pub(crate) fn task_group(name: &'static str) -> Result<TaskGroup, RocketMQError> {
-    let handle = tokio::runtime::Handle::try_current().map_err(|error| {
-        RocketMQError::Service(UnifiedServiceError::StartupFailed(format!(
-            "{name} requires a Tokio runtime: {error}"
-        )))
-    })?;
-    Ok(TaskGroup::root(name, RuntimeHandle::new(handle)))
-}
 
 pub(crate) fn task_group_with_parent(name: &'static str, parent_task_group: &TaskGroup) -> TaskGroup {
     parent_task_group.child(name)
@@ -45,20 +35,6 @@ mod tests {
     use rocketmq_runtime::RuntimeContext;
 
     use super::*;
-
-    #[test]
-    fn task_group_without_tokio_runtime_returns_service_error() {
-        let error = match task_group("rocketmq-tieredstore.test") {
-            Ok(_) => panic!("task group should require an ambient Tokio runtime"),
-            Err(error) => error,
-        };
-
-        assert_eq!(error.kind(), ErrorKind::Service);
-        assert!(matches!(
-            error,
-            RocketMQError::Service(UnifiedServiceError::StartupFailed(_))
-        ));
-    }
 
     #[tokio::test]
     async fn task_group_with_parent_creates_child_group() {

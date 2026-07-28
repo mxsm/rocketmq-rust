@@ -9,9 +9,9 @@ on:
     paths:
       - 'rocketmq-dashboard/rocketmq-dashboard-web/**'
       - 'rocketmq-dashboard/rocketmq-dashboard-common/**'
-      - 'rocketmq-client/**'
-      - 'rocketmq-common/**'
-      - 'rocketmq-remoting/**'
+      - 'rocketmq-error/**'
+      - 'rocketmq-observability/**'
+      - 'rocketmq-runtime/**'
       - 'rocketmq-tools/rocketmq-admin/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -24,9 +24,9 @@ on:
     paths:
       - 'rocketmq-dashboard/rocketmq-dashboard-web/**'
       - 'rocketmq-dashboard/rocketmq-dashboard-common/**'
-      - 'rocketmq-client/**'
-      - 'rocketmq-common/**'
-      - 'rocketmq-remoting/**'
+      - 'rocketmq-error/**'
+      - 'rocketmq-observability/**'
+      - 'rocketmq-runtime/**'
       - 'rocketmq-tools/rocketmq-admin/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -101,10 +101,10 @@ jobs:
             echo "Found libclang using llvm-config at: $LIBCLANG_PATH"
           fi
 
-      - name: Set up Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: rustfmt, clippy
+      - name: Use repository Rust 1.95 toolchain
+        run: |
+          rustup show active-toolchain
+          rustup component add rustfmt clippy
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -125,3 +125,6 @@ jobs:
 
       - name: Clippy check
         run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Test backend
+        run: cargo test

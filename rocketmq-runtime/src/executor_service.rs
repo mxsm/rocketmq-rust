@@ -409,7 +409,7 @@ mod tests {
     #[test]
     fn tokio_executor_uses_runtime_owner_and_runs_tasks() {
         let executor =
-            TokioExecutorService::try_new_with_config(2, Some("tokio-executor-test"), Duration::from_secs(1), 2)
+            TokioExecutorService::try_new_with_config(2, Some("tokio-executor-test"), Duration::from_secs(1), 3)
                 .expect("tokio executor should be created");
         let (tx, rx) = mpsc::channel();
 
@@ -426,7 +426,7 @@ mod tests {
     #[test]
     fn scheduled_executor_fixed_rate_does_not_overlap() {
         let executor =
-            ScheduledExecutorService::try_new_with_config(2, Some("schedule-test-"), Duration::from_secs(1), 2)
+            ScheduledExecutorService::try_new_with_config(2, Some("schedule-test-"), Duration::from_secs(1), 3)
                 .expect("scheduled executor should be created");
         let active = Arc::new(AtomicUsize::new(0));
         let max_active = Arc::new(AtomicUsize::new(0));

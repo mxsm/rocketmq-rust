@@ -15,13 +15,7 @@
 pub mod default_mq_admin_ext;
 pub mod default_mq_admin_ext_impl;
 pub mod mq_admin_ext_async;
-pub mod mq_admin_ext_async_inner;
-pub mod mq_admin_ext_inner;
 
 pub use default_mq_admin_ext::DefaultMQAdminExt;
 pub use default_mq_admin_ext_impl::DefaultMQAdminExtImpl;
 pub use mq_admin_ext_async::MQAdminExt;
-#[allow(deprecated, reason = "compatibility exports remain available through the 1.x line")]
-pub use mq_admin_ext_async_inner::MQAdminExtInnerImpl;
-#[allow(deprecated, reason = "compatibility exports remain available through the 1.x line")]
-pub use mq_admin_ext_inner::MQAdminExtInner;

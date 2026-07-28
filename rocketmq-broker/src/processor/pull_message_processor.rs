@@ -1113,7 +1113,6 @@ mod tests {
     use rocketmq_protocol::protocol::request_source::RequestSource;
     use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
     use rocketmq_protocol::protocol::LanguageCode;
-    use rocketmq_runtime::TaskGroup;
     use rocketmq_store::MessageStore;
     use rocketmq_store::MessageStoreConfig;
     use rocketmq_store::MAX_PULL_MSG_SIZE;
@@ -1169,10 +1168,8 @@ mod tests {
             }
         }
 
-        let task_group = TaskGroup::root(
-            "broker.pull-wakeup-test",
-            rocketmq_runtime::RuntimeHandle::new(tokio::runtime::Handle::current()),
-        );
+        let runtime = rocketmq_runtime::RuntimeContext::from_current("broker.pull-wakeup-test");
+        let task_group = runtime.root_group().clone();
         let started = Arc::new(AtomicBool::new(false));
         let dropped = Arc::new(AtomicBool::new(false));
         let started_in_task = started.clone();

@@ -28,8 +28,8 @@ note: associated function defined here
   |                   ^^^
 help: provide the arguments
   |
-4 |     RootServiceContext::new(/* Arc<str> */, /* RuntimeHandle */, /* TaskGroup */, /* BlockingLanePolicies */, /* usize */, /* RuntimeDiagnostics */)
-  |                             +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+4 |     RootServiceContext::new(/* Arc<str> */, /* rocketmq_runtime::handle::RuntimeHandle */, /* TaskGroup */, /* BlockingLanePolicies */, /* usize */, /* RuntimeDiagnostics */)
+  |                             +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 error[E0308]: mismatched types
  --> tests/ui/service_context/root_raw_constructor_is_private.rs:4:5

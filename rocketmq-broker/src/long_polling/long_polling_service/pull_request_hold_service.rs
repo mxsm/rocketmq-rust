@@ -402,7 +402,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use rocketmq_runtime::RuntimeHandle;
+    use rocketmq_runtime::RuntimeContext;
     use rocketmq_store::OwnedMessageStore;
 
     use super::*;
@@ -428,7 +428,7 @@ mod tests {
     }
 
     fn task_group(name: &'static str) -> TaskGroup {
-        TaskGroup::root(name, RuntimeHandle::new(tokio::runtime::Handle::current()))
+        RuntimeContext::from_current(name).root_group().clone()
     }
 
     #[tokio::test]

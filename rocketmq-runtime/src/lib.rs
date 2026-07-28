@@ -35,7 +35,7 @@ pub mod context;
 pub mod diagnostics;
 pub mod error;
 pub mod executor_service;
-pub mod handle;
+mod handle;
 pub mod legacy;
 pub mod metadata_io;
 pub mod owner;
@@ -71,7 +71,7 @@ pub use executor_service::FuturesExecutorService;
 pub use executor_service::FuturesExecutorServiceBuilder;
 pub use executor_service::ScheduledExecutorService;
 pub use executor_service::TokioExecutorService;
-pub use handle::RuntimeHandle;
+pub(crate) use handle::RuntimeHandle;
 #[allow(deprecated)]
 pub use legacy::RocketMQRuntime;
 pub use metadata_io::LocalMetadataFileSystem;
