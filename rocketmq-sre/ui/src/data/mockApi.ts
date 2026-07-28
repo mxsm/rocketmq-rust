@@ -34,7 +34,6 @@ import {
   phase1Investigations,
   phase1Knowledge,
   phase1MessageJourney,
-  phase1Models,
   phase1Recommendations,
   phase1Topology,
   phase1WorkflowEvents,
@@ -50,6 +49,7 @@ import {
   demoUpgradeReadiness,
 } from "./phase2ForecastDemo";
 import { createModelLifecycleMock } from "./modelLifecycleMock";
+import { phase4ModelCapabilities } from "./phase4ModelDemo";
 import {
   demoIncidentOperations,
   demoOperationsReport,
@@ -1058,7 +1058,7 @@ export function createMockSreApi(auth?: ApiRequestContext): SreApi {
     },
     getModelCapabilities: async (signal) => {
       await wait(signal);
-      return clone(phase1Models);
+      return clone(phase4ModelCapabilities);
     },
     listModelProfileLifecycles: async (signal) => {
       await wait(signal);
