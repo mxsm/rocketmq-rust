@@ -535,7 +535,7 @@ services:
         VITE_SRE_DEV_DISPLAY_NAME: RocketMQ SRE Dev Operator
         VITE_SRE_DEV_TENANT: 00000000-0000-4000-8000-000000000002
         VITE_SRE_DEV_CLUSTERS: 00000000-0000-4000-8000-000000000001
-        VITE_SRE_DEV_ROLES: "rocketmq:read rocketmq:diagnose"
+        VITE_SRE_DEV_ROLES: "rocketmq:read rocketmq:diagnose operator approver"
         VITE_SRE_DEV_TOKEN: phase00-internal-token
     depends_on:
       sre-control-plane:
