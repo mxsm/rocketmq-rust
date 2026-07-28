@@ -20,11 +20,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use reqwest::StatusCode;
+use rocketmq_sre_contracts::AUTONOMY_SCHEMA_VERSION;
+use rocketmq_sre_contracts::DynamicSafetyDecision;
+use rocketmq_sre_contracts::DynamicSafetyVerification;
 use rocketmq_sre_contracts::GrantVerification;
 use rocketmq_sre_contracts::LEASE_AUTHORITY_SCHEMA_VERSION;
 use rocketmq_sre_contracts::LeaseFenceGrant;
 use rocketmq_sre_contracts::ReconcileGrant;
 use rocketmq_sre_contracts::TenantId;
+use rocketmq_sre_contracts::VerifyDynamicSafetyDecisionRequest;
 use rocketmq_sre_contracts::VerifyFenceGrantRequest;
 use rocketmq_sre_contracts::VerifyReconcileGrantRequest;
 use serde::Serialize;
@@ -43,10 +47,17 @@ pub trait LeaseAuthorityClient: Send + Sync {
 
     /// Verifies a read-only pending-epoch reconciliation grant.
     fn verify_reconcile_grant<'a>(&'a self, tenant_id: TenantId, grant: &'a ReconcileGrant) -> AuthorityFuture<'a>;
+
+    /// Rechecks a signed positive-step decision against authoritative live state.
+    fn verify_dynamic_safety<'a>(
+        &'a self,
+        tenant_id: TenantId,
+        decision: &'a DynamicSafetyDecision,
+    ) -> AuthorityFuture<'a, DynamicSafetyVerification>;
 }
 
-pub type AuthorityFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<GrantVerification, ExecutionAgentError>> + Send + 'a>>;
+pub type AuthorityFuture<'a, T = GrantVerification> =
+    Pin<Box<dyn Future<Output = Result<T, ExecutionAgentError>> + Send + 'a>>;
 
 /// Authenticated HTTP client that never receives the Authority signing key.
 #[derive(Clone)]
@@ -174,6 +185,41 @@ impl LeaseAuthorityClient for HttpLeaseAuthorityClient {
                 )
                 .await?;
             validate_verification(&verification, grant.cluster_id, grant.pending_epoch)?;
+            Ok(verification)
+        })
+    }
+
+    fn verify_dynamic_safety<'a>(
+        &'a self,
+        tenant_id: TenantId,
+        decision: &'a DynamicSafetyDecision,
+    ) -> AuthorityFuture<'a, DynamicSafetyVerification> {
+        Box::pin(async move {
+            let verification: DynamicSafetyVerification = self
+                .post(
+                    "/internal/v1/autonomy/dynamic-safety/verify",
+                    tenant_id,
+                    decision.cluster_id,
+                    &VerifyDynamicSafetyDecisionRequest {
+                        schema_version: AUTONOMY_SCHEMA_VERSION.to_owned(),
+                        tenant_id,
+                        decision: decision.clone(),
+                    },
+                )
+                .await?;
+            if verification.schema_version != AUTONOMY_SCHEMA_VERSION
+                || !verification.valid
+                || verification.decision_id != decision.id
+                || verification.tenant_id != tenant_id
+                || verification.cluster_id != decision.cluster_id
+                || verification.plan_id != decision.plan_id
+                || verification.execution_id != decision.execution_id
+                || verification.execution_step_id != decision.execution_step_id
+                || verification.expires_at != decision.expires_at
+                || verification.expires_at <= chrono::Utc::now()
+            {
+                return Err(ExecutionAgentError::AuthorityRejected);
+            }
             Ok(verification)
         })
     }
