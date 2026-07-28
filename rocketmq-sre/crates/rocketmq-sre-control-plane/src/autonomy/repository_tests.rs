@@ -361,7 +361,7 @@ async fn postgres_autonomy_state_cohorts_and_controls_are_durable_and_idempotent
     assert_eq!(pause_events, 1);
 
     let mut revised_policy = stored;
-    revised_policy.created_at = now + Duration::seconds(5);
+    revised_policy.created_at = now + Duration::seconds(12);
     let (revised, revised_lifecycle) = repository
         .store_autonomy_policy(revised_policy, "autonomy-owner")
         .await
