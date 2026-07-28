@@ -524,6 +524,7 @@ impl AutonomyService {
             signature: String::new(),
         };
         self.signer.sign_dynamic_safety(&mut decision)?;
+        self.signer.verify_dynamic_safety(&decision)?;
         self.repository.store_dynamic_safety_decision(&decision).await?;
         Ok(DynamicSafetyView {
             decision,
@@ -652,6 +653,7 @@ impl AutonomyService {
             signature: String::new(),
         };
         self.signer.sign_autonomy(&mut grant)?;
+        self.signer.verify_autonomy(&grant)?;
         Ok(grant)
     }
 
