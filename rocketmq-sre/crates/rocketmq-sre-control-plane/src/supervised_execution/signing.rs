@@ -186,7 +186,7 @@ impl GrantSigner {
         self.verify(&approval_payload(grant)?, &grant.signature)
     }
 
-    pub(super) fn sign_execution(&self, request: &mut ExecutionRequest) -> Result<(), ControlPlaneError> {
+    pub(crate) fn sign_execution(&self, request: &mut ExecutionRequest) -> Result<(), ControlPlaneError> {
         let payload = execution_payload(request)?;
         request.signature = self.sign(&payload)?;
         Ok(())
