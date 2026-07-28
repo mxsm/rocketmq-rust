@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::TimeDelta;
+use chrono::Timelike;
 use rocketmq_admin_core::core::security::AdminCredentials;
 use rocketmq_runtime::RuntimeContext;
 use sqlx::PgPool;
@@ -224,7 +225,7 @@ fn before_state() -> LoggerBeforeState {
         before_level: "INFO".to_owned(),
         requested_level: "DEBUG".to_owned(),
         forward_operation_id: "forward-1".to_owned(),
-        expires_at: Utc::now() + TimeDelta::seconds(60),
+        expires_at: Utc::now().with_nanosecond(0).expect("zero nanoseconds are valid") + TimeDelta::seconds(60),
     }
 }
 
