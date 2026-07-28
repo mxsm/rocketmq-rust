@@ -38,7 +38,9 @@ use super::LoggerLevelTtlWrite;
 use crate::ExecutionAgentError;
 
 const MAX_TTL_SECONDS: i64 = 15 * 60;
-const MIN_TTL_SECONDS: i64 = 30;
+const MIN_TTL_SECONDS: i64 = 60;
+const BROKER_TARGET_PREFIX: &str = "broker/";
+const MAX_BROKER_ADDR_BYTES: usize = 512;
 
 /// Exact parameters accepted by `observability.logger_level_ttl.v1`.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -84,9 +86,10 @@ where
             require_action(request.action)?;
             let parameters = parameters(&request.parameters)?;
             let mut reason_codes = validate_parameters(&parameters);
+            let broker_addr = broker_addr(&request.target)?;
             let live_state = self
                 .client
-                .logger_level_state(&parameters.component, &parameters.logger)
+                .logger_level_state(&parameters.component, broker_addr, &parameters.logger)
                 .await?;
             if live_state.active_operation_id.is_some() {
                 reason_codes.push("logger_override_already_active".to_owned());
@@ -132,12 +135,14 @@ where
             if !validate_parameters(&parameters).is_empty() {
                 return Err(ExecutionAgentError::InvalidRequest);
             }
+            let broker_addr = broker_addr(&request.target)?.to_owned();
             let expires_at = Utc::now()
                 .checked_add_signed(TimeDelta::seconds(parameters.ttl_seconds))
                 .ok_or(ExecutionAgentError::InvalidRequest)?;
             self.client
                 .set_logger_level_ttl(&LoggerLevelTtlWrite {
                     component: parameters.component,
+                    broker_addr,
                     logger: parameters.logger,
                     level: parameters.level,
                     expires_at,
@@ -166,9 +171,10 @@ where
             if !validate_parameters(&parameters).is_empty() {
                 return Err(ExecutionAgentError::InvalidRequest);
             }
+            let broker_addr = broker_addr(&request.target)?;
             let state = self
                 .client
-                .logger_level_state(&parameters.component, &parameters.logger)
+                .logger_level_state(&parameters.component, broker_addr, &parameters.logger)
                 .await?;
             let reconciliation_state = match operation_id.as_deref() {
                 Some(expected)
@@ -210,9 +216,11 @@ where
             if !validate_parameters(&parameters).is_empty() {
                 return Err(ExecutionAgentError::InvalidRequest);
             }
+            let broker_addr = broker_addr(&request.target)?.to_owned();
             self.client
                 .restore_logger_level(&LoggerLevelTtlRestore {
                     component: parameters.component,
+                    broker_addr,
                     logger: parameters.logger,
                     execution_id: request.intent.execution_id,
                     plan_step_id: request.intent.step.id,
@@ -250,14 +258,10 @@ fn validate_parameters(parameters: &LoggerLevelTtlParameters) -> Vec<String> {
     if !(MIN_TTL_SECONDS..=MAX_TTL_SECONDS).contains(&parameters.ttl_seconds) {
         reasons.push("logger_ttl_out_of_range".to_owned());
     }
-    let allowed_prefix = match parameters.component.as_str() {
-        "broker" => Some("rocketmq_broker::"),
-        "nameserver" => Some("rocketmq_namesrv::"),
-        "controller" => Some("rocketmq_controller::"),
-        "proxy" => Some("rocketmq_proxy::"),
-        _ => None,
-    };
-    if allowed_prefix.is_none_or(|prefix| !parameters.logger.starts_with(prefix)) {
+    if parameters.component != "broker" {
+        reasons.push("logger_component_not_executable".to_owned());
+    }
+    if !parameters.logger.starts_with("rocketmq_broker::") {
         reasons.push("logger_prefix_not_allowlisted".to_owned());
     }
     let logger = parameters.logger.to_ascii_lowercase();
@@ -270,6 +274,21 @@ fn validate_parameters(parameters: &LoggerLevelTtlParameters) -> Vec<String> {
         reasons.push("payload_or_security_logger_forbidden".to_owned());
     }
     reasons
+}
+
+fn broker_addr(target: &str) -> Result<&str, ExecutionAgentError> {
+    let broker_addr = target
+        .strip_prefix(BROKER_TARGET_PREFIX)
+        .ok_or(ExecutionAgentError::InvalidRequest)?;
+    if broker_addr.is_empty()
+        || broker_addr.len() > MAX_BROKER_ADDR_BYTES
+        || broker_addr
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+    {
+        return Err(ExecutionAgentError::InvalidRequest);
+    }
+    Ok(broker_addr)
 }
 
 #[cfg(test)]
