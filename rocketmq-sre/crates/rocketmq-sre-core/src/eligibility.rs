@@ -270,11 +270,7 @@ mod tests {
         format!("sha256:{}", value.to_string().repeat(64))
     }
 
-    fn fixture() -> (
-        AutonomyPolicyDefinition,
-        AutonomyLifecycleState,
-        ActionDescriptor,
-    ) {
+    fn fixture() -> (AutonomyPolicyDefinition, AutonomyLifecycleState, ActionDescriptor) {
         let tenant_id = TenantId::new();
         let cluster_id = ClusterId::new();
         let action = ExecutionAction::ObservabilityLoggerLevelTtl;
@@ -368,7 +364,11 @@ mod tests {
             chrono::Utc::now(),
         );
         assert!(!decision.allowed);
-        assert!(decision.reason_codes.contains(&"lifecycle_mode_not_eligible".to_owned()));
+        assert!(
+            decision
+                .reason_codes
+                .contains(&"lifecycle_mode_not_eligible".to_owned())
+        );
     }
 
     #[test]
