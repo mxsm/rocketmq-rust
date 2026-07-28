@@ -250,10 +250,7 @@ impl ProductionBrokerConfigPatchClient {
 }
 
 impl ConfigWriteClient for ProductionBrokerConfigPatchClient {
-    fn set_logger_level_ttl<'a>(
-        &'a self,
-        request: &'a LoggerLevelTtlWrite,
-    ) -> DriverFuture<'a, ()> {
+    fn set_logger_level_ttl<'a>(&'a self, request: &'a LoggerLevelTtlWrite) -> DriverFuture<'a, ()> {
         Box::pin(async move {
             require_scope(&request.component, &request.broker_addr, &request.logger)?;
             let ttl_seconds = ttl_seconds(request.expires_at, Utc::now())?;
@@ -261,10 +258,7 @@ impl ConfigWriteClient for ProductionBrokerConfigPatchClient {
             let live = self
                 .live_logger_state(&request.component, &request.broker_addr, &request.logger)
                 .await?;
-            if let Some(persisted) = journal
-                .load_before(request.execution_id, request.plan_step_id)
-                .await?
-            {
+            if let Some(persisted) = journal.load_before(request.execution_id, request.plan_step_id).await? {
                 if !persisted.matches_request(request) {
                     return Err(ExecutionAgentError::InvalidRequest);
                 }
@@ -338,10 +332,7 @@ impl LoggerLevelControlClient for ProductionBrokerConfigPatchClient {
         Box::pin(async move { self.live_logger_state(component, broker_addr, logger).await })
     }
 
-    fn restore_logger_level<'a>(
-        &'a self,
-        request: &'a LoggerLevelTtlRestore,
-    ) -> DriverFuture<'a, ()> {
+    fn restore_logger_level<'a>(&'a self, request: &'a LoggerLevelTtlRestore) -> DriverFuture<'a, ()> {
         Box::pin(async move {
             require_scope(&request.component, &request.broker_addr, &request.logger)?;
             let journal = self.logger_journal();
@@ -389,12 +380,7 @@ impl LoggerLevelControlClient for ProductionBrokerConfigPatchClient {
                 return Err(ExecutionAgentError::DriverUnknown);
             }
             journal
-                .append_result(
-                    &before,
-                    &request.operation_id,
-                    Direction::Compensation,
-                    &observed,
-                )
+                .append_result(&before, &request.operation_id, Direction::Compensation, &observed)
                 .await
                 .map_err(|_| ExecutionAgentError::DriverUnknown)
         })
