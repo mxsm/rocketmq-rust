@@ -182,7 +182,7 @@ impl GrantSigner {
         Ok(())
     }
 
-    pub(super) fn verify_approval(&self, grant: &ApprovalGrant) -> Result<(), ControlPlaneError> {
+    pub(crate) fn verify_approval(&self, grant: &ApprovalGrant) -> Result<(), ControlPlaneError> {
         self.verify(&approval_payload(grant)?, &grant.signature)
     }
 
