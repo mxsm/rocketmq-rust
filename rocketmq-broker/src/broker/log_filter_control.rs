@@ -218,6 +218,14 @@ struct ActiveOverride {
     audit: AuditContext,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BrokerLogFilterStatus {
+    pub(crate) effective_filter: String,
+    pub(crate) active_operation_id: Option<String>,
+    pub(crate) last_completed_operation_id: Option<String>,
+    pub(crate) expires_at_millis: Option<u64>,
+}
+
 #[derive(Debug, Clone)]
 struct AuditContext {
     request_id: String,
@@ -254,6 +262,7 @@ pub(crate) struct BrokerLogFilterControl {
     ttl_sender: mpsc::Sender<TtlCommand>,
     operation: Arc<Mutex<()>>,
     active: Arc<std::sync::Mutex<Option<ActiveOverride>>>,
+    last_completed_operation_id: Arc<std::sync::Mutex<Option<String>>>,
     next_generation: AtomicU64,
 }
 
@@ -270,6 +279,7 @@ impl BrokerLogFilterControl {
         let (ttl_sender, ttl_receiver) = mpsc::channel(16);
         let operation = Arc::new(Mutex::new(()));
         let active = Arc::new(std::sync::Mutex::new(None));
+        let last_completed_operation_id = Arc::new(std::sync::Mutex::new(None));
         let cancellation = service_context.task_group().cancellation_token();
         service_context
             .spawn_service(
@@ -281,6 +291,7 @@ impl BrokerLogFilterControl {
                     audit_path: audit_path.clone(),
                     operation: Arc::clone(&operation),
                     active: Arc::clone(&active),
+                    last_completed_operation_id: Arc::clone(&last_completed_operation_id),
                     receiver: ttl_receiver,
                     cancellation,
                 }),
@@ -295,12 +306,32 @@ impl BrokerLogFilterControl {
             ttl_sender,
             operation,
             active,
+            last_completed_operation_id,
             next_generation: AtomicU64::new(1),
         }))
     }
 
     pub(crate) fn baseline(&self) -> &ResolvedLogFilter {
         &self.baseline
+    }
+
+    pub(crate) fn status(&self) -> BrokerLogFilterStatus {
+        let active = self.active.lock().unwrap_or_else(|error| error.into_inner());
+        BrokerLogFilterStatus {
+            effective_filter: self.handle.current().filter().to_owned(),
+            active_operation_id: active
+                .as_ref()
+                .map(|override_state| override_state.audit.request_id.clone()),
+            last_completed_operation_id: self
+                .last_completed_operation_id
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clone(),
+            expires_at_millis: active.as_ref().map(|override_state| {
+                let remaining = override_state.deadline.saturating_duration_since(Instant::now());
+                current_millis().saturating_add(remaining.as_millis().min(u128::from(u64::MAX)) as u64)
+            }),
+        }
     }
 
     pub(crate) async fn apply(
@@ -388,6 +419,14 @@ impl BrokerLogFilterControl {
             }
         };
         *self.active.lock().unwrap_or_else(|error| error.into_inner()) = scheduled;
+        if request.restore {
+            if let Some(previous) = previous {
+                *self
+                    .last_completed_operation_id
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner()) = Some(previous.audit.request_id);
+            }
+        }
 
         if let Err(error) = self
             .append_audit(
@@ -486,6 +525,7 @@ struct TtlControllerContext {
     audit_path: PathBuf,
     operation: Arc<Mutex<()>>,
     active: Arc<std::sync::Mutex<Option<ActiveOverride>>>,
+    last_completed_operation_id: Arc<std::sync::Mutex<Option<String>>>,
     receiver: mpsc::Receiver<TtlCommand>,
     cancellation: tokio_util::sync::CancellationToken,
 }
@@ -555,6 +595,10 @@ async fn restore_expired_override(context: &TtlControllerContext, expired: &Acti
     } else {
         context.handle.set_expiry_timestamp(0);
         *context.active.lock().unwrap_or_else(|error| error.into_inner()) = None;
+        *context
+            .last_completed_operation_id
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(expired.audit.request_id.clone());
     }
 }
 
@@ -800,6 +844,10 @@ mod tests {
         let ttl_request = test_request("ttl", Some("info,rocketmq_broker=debug"), 1, false);
         let applied = control.apply(ttl_request).await.expect("target DEBUG should apply");
         assert_eq!(applied.filter(), "info,rocketmq_broker=debug");
+        let active = control.status();
+        assert_eq!(active.active_operation_id.as_deref(), Some("ttl"));
+        assert_eq!(active.last_completed_operation_id, None);
+        assert!(active.expires_at_millis.is_some());
         tokio::time::timeout(Duration::from_secs(5), async {
             while handle.current() != baseline {
                 tokio::time::sleep(Duration::from_millis(20)).await;
@@ -807,6 +855,11 @@ mod tests {
         })
         .await
         .expect("TTL should restore the startup baseline");
+        let restored = control.status();
+        assert_eq!(restored.effective_filter, baseline.filter());
+        assert_eq!(restored.active_operation_id, None);
+        assert_eq!(restored.last_completed_operation_id.as_deref(), Some("ttl"));
+        assert_eq!(restored.expires_at_millis, None);
 
         let first = control.apply(test_request(
             "replace-debug",
