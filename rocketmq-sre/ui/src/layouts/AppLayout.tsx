@@ -4,6 +4,7 @@ import {
   Bot,
   Boxes,
   CalendarCheck2,
+  ChartNoAxesCombined,
   CircleHelp,
   ClipboardList,
   Clock3,
@@ -90,6 +91,11 @@ const groups = [
     label: "平台",
     items: [
       { to: "/models", label: "模型能力", icon: Bot },
+      {
+        to: "/autonomy",
+        label: "自治运营",
+        icon: ChartNoAxesCombined,
+      },
       { to: "/system", label: "系统状态", icon: Activity },
     ],
   },
@@ -187,8 +193,8 @@ export function AppLayout() {
             </div>
           </div>
           <div className="sidebar-meta">
-            <span>v0.3.0 · Phase 03</span>
-            <span>R1/R2 supervised only</span>
+            <span>v0.4.0 · Phase 04 in progress</span>
+            <span>Bounded operations only</span>
           </div>
         </aside>
 
