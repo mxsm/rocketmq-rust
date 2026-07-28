@@ -299,6 +299,7 @@ pub(crate) fn step_intent(
             nonce: format!("grant-{idempotency_key}"),
             signature: "fixture-signature".to_owned(),
         },
+        dynamic_safety: None,
         intended_at,
         compensation: false,
     }
