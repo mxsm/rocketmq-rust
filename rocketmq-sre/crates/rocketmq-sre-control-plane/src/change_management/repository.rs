@@ -702,6 +702,15 @@ fn audit_event_kind_name(kind: rocketmq_sre_contracts::AuditEventKind) -> &'stat
         rocketmq_sre_contracts::AuditEventKind::ChangeScheduleCreated => "change_schedule_created",
         rocketmq_sre_contracts::AuditEventKind::ChangeScheduleStateChanged => "change_schedule_state_changed",
         rocketmq_sre_contracts::AuditEventKind::ManualGateDecided => "manual_gate_decided",
+        rocketmq_sre_contracts::AuditEventKind::IntegrationTargetRegistered => "integration_target_registered",
+        rocketmq_sre_contracts::AuditEventKind::IntegrationDeliveryQueued => "integration_delivery_queued",
+        rocketmq_sre_contracts::AuditEventKind::IntegrationDeliveryCompleted => "integration_delivery_completed",
+        rocketmq_sre_contracts::AuditEventKind::ExternalApprovalReceived => "external_approval_received",
+        rocketmq_sre_contracts::AuditEventKind::ReleaseCreated => "release_created",
+        rocketmq_sre_contracts::AuditEventKind::ReleaseReadinessEvaluated => "release_readiness_evaluated",
+        rocketmq_sre_contracts::AuditEventKind::ReleaseStateChanged => "release_state_changed",
+        rocketmq_sre_contracts::AuditEventKind::ReleaseObservationCaptured => "release_observation_captured",
+        rocketmq_sre_contracts::AuditEventKind::ReleaseReportGenerated => "release_report_generated",
     }
 }
 
