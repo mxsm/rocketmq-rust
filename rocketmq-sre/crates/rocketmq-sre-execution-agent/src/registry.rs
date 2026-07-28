@@ -134,6 +134,7 @@ impl AgentDriverRegistry {
             || request.intent.fence_grant.execution_id != request.intent.execution_id
             || request.intent.fence_grant.step_id != request.intent.step_id
             || request.intent.fence_grant.plan_step_id != request.intent.step.id
+            || request.intent.fence_grant.compensation != request.intent.compensation
             || request.intent.fence_grant.action != request.action
             || request.intent.fence_grant.resource != request.target
             || request.action != request.intent.step.action
