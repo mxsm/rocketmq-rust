@@ -1,16 +1,13 @@
 import {
   ArrowRight,
   BookOpenCheck,
-  Bot,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
   DatabaseZap,
   FileJson,
   Fingerprint,
-  KeyRound,
   Search,
-  ShieldCheck,
   TriangleAlert,
 } from "lucide-react";
 import {
@@ -584,164 +581,6 @@ export function KnowledgePage() {
   );
 }
 
-export function ModelsPage() {
-  const { api } = useSreData();
-  const load = useCallback(
-    (signal: AbortSignal) => api.getModelCapabilities(signal),
-    [api],
-  );
-  const resource = useAsyncResource(load);
-
-  return (
-    <div className="page">
-      <PageHeader
-        eyebrow="MODEL GATEWAY"
-        title="模型能力"
-        description="展示协议适配与实际 profile 健康，不显示 credential ref、token 或完整 endpoint。"
-      />
-      <ReadOnlyBoundary compact />
-      <DataState
-        loading={resource.loading}
-        error={resource.error}
-        empty={!resource.loading && !resource.data}
-        onRetry={resource.reload}
-      />
-      {resource.data && (
-        <>
-          <section className="summary-strip phase1-summary">
-            <ModelSummary
-              label="Provider"
-              value={String(resource.data.providers.length)}
-            />
-            <ModelSummary
-              label="Profile"
-              value={String(resource.data.profiles?.length ?? 0)}
-            />
-            <ModelSummary
-              label="Rules-only"
-              value={resource.data.rules_only_available ? "可用" : "不可用"}
-              safe={resource.data.rules_only_available}
-            />
-            <ModelSummary
-              label="网络调用"
-              value={
-                resource.data.network_calls_enabled ? "已启用" : "已禁用"
-              }
-              safe={!resource.data.network_calls_enabled}
-            />
-          </section>
-          <DataSurface
-            title="协议适配矩阵"
-            description="包含 DeepSeek、智谱 GLM 与 Kimi/Moonshot；Descriptor 不代表外部调用已启用。"
-            meta={<span>{resource.data.providers.length} providers</span>}
-          >
-            <div className="table-scroll">
-              <table className="phase1-table">
-                <thead>
-                  <tr>
-                    <th>Provider</th>
-                    <th>协议</th>
-                    <th>Streaming</th>
-                    <th>Tools</th>
-                    <th>Structured</th>
-                    <th>Embedding</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {resource.data.providers.map((provider) => (
-                    <tr key={provider.id}>
-                      <td>
-                        <strong>{provider.id}</strong>
-                      </td>
-                      <td>{provider.protocols.join(", ")}</td>
-                      <td>{yes(provider.supports_streaming)}</td>
-                      <td>{yes(provider.supports_tools)}</td>
-                      <td>{yes(provider.supports_structured_output)}</td>
-                      <td>{yes(provider.supports_embeddings)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </DataSurface>
-          <DataSurface
-            title="路由 Profile"
-            description="credential_present 只表示 secret 是否配置，不返回引用和值。"
-            meta={<span>{resource.data.profiles?.length ?? 0} profiles</span>}
-          >
-            {!resource.data.profiles ||
-            resource.data.profiles.length === 0 ? (
-              <div className="state-message">
-                后端未返回 profile；仅显示 ProviderDescriptor。
-              </div>
-            ) : (
-              <div className="model-profile-grid">
-                {resource.data.profiles.map((profile) => (
-                  <article key={profile.id}>
-                    <header>
-                      <Bot size={17} />
-                      <strong>{profile.profile_name}</strong>
-                      <Badge
-                        variant={
-                          profile.health === "healthy"
-                            ? "success"
-                            : profile.health === "degraded"
-                              ? "warning"
-                              : "secondary"
-                        }
-                      >
-                        {profile.health}
-                      </Badge>
-                    </header>
-                    <DefinitionGrid
-                      items={[
-                        {
-                          label: "Provider",
-                          value: profile.provider_family,
-                        },
-                        {
-                          label: "Model family",
-                          value: profile.model_family,
-                        },
-                        {
-                          label: "Model",
-                          value: profile.model_name,
-                        },
-                        {
-                          label: "Revision",
-                          value: profile.model_revision,
-                        },
-                        {
-                          label: "Region",
-                          value: profile.region,
-                        },
-                        {
-                          label: "Residency",
-                          value: profile.data_residency,
-                        },
-                      ]}
-                    />
-                    <footer>
-                      <span>
-                        {profile.capabilities.join(" · ") || "no capability"}
-                      </span>
-                      <span>
-                        <KeyRound size={12} />
-                        credential{" "}
-                        {profile.credential_present ? "present" : "absent"}
-                      </span>
-                    </footer>
-                  </article>
-                ))}
-              </div>
-            )}
-          </DataSurface>
-        </>
-      )}
-    </div>
-  );
-}
-
 function JourneySummary({
   label,
   value,
@@ -756,32 +595,5 @@ function JourneySummary({
       <span>{label}</span>
       <strong className={safe ? "success" : undefined}>{value}</strong>
     </div>
-  );
-}
-
-function ModelSummary({
-  label,
-  value,
-  safe = false,
-}: {
-  label: string;
-  value: string;
-  safe?: boolean;
-}) {
-  return (
-    <div className="summary-item">
-      <span>{label}</span>
-      <strong className={safe ? "success" : undefined}>{value}</strong>
-    </div>
-  );
-}
-
-function yes(value: boolean) {
-  return value ? (
-    <span className="boolean yes">
-      <ShieldCheck size={13} /> yes
-    </span>
-  ) : (
-    <span className="boolean no">no</span>
   );
 }
