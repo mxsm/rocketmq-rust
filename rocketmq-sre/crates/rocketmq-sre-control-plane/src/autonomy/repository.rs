@@ -427,8 +427,9 @@ impl PostgresRepository {
         actor: &str,
     ) -> Result<AutonomyFreezeView, ControlPlaneError> {
         let mut transaction = self.pool.begin().await?;
+        let cluster_scope = cluster_id.map_or_else(|| "*".to_owned(), |id| id.to_string());
         let lock_key = format!(
-            "autonomy-freeze:{tenant_id}:{cluster_id}:{}:{}",
+            "autonomy-freeze:{tenant_id}:{cluster_scope}:{}:{}",
             action.map_or("*", ExecutionAction::id),
             action_version.unwrap_or("*")
         );
@@ -773,17 +774,17 @@ impl PostgresRepository {
         let Some(row) = row else {
             return Ok(false);
         };
-        Ok(row.try_get::<Uuid, _>("plan_id")? == *plan_id.as_uuid()
+        Ok(row.try_get::<Uuid, _>("plan_id")? == plan_id.as_uuid()
             && row.try_get::<String, _>("plan_hash")? == plan_hash
-            && row.try_get::<Uuid, _>("primary_invocation_id")? == *primary_invocation_id.as_uuid()
-            && row.try_get::<Uuid, _>("critic_invocation_id")? == *critic_invocation_id.as_uuid()
+            && row.try_get::<Uuid, _>("primary_invocation_id")? == primary_invocation_id.as_uuid()
+            && row.try_get::<Uuid, _>("critic_invocation_id")? == critic_invocation_id.as_uuid()
             && row.try_get::<String, _>("status")? == "valid"
             && row.try_get::<String, _>("conclusion")? == "accept"
             && TenantId::from_uuid(row.try_get("primary_tenant_id")?) == tenant_id
             && ClusterId::from_uuid(row.try_get("primary_cluster_id")?) == cluster_id
             && row
                 .try_get::<Option<Uuid>, _>("primary_diagnosis_revision_id")?
-                .is_some_and(|id| id == *diagnosis_revision_id.as_uuid())
+                .is_some_and(|id| id == diagnosis_revision_id.as_uuid())
             && TenantId::from_uuid(row.try_get("critic_tenant_id")?) == tenant_id
             && ClusterId::from_uuid(row.try_get("critic_cluster_id")?) == cluster_id
             && row
