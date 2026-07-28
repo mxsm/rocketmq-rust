@@ -39,7 +39,7 @@ use crate::release_management::model::ReleaseTransitionRequest;
 use crate::supervised_execution::SubmitExecutionRequest;
 
 impl ReleaseManagementService {
-    pub(crate) async fn start_release_rollback(
+    pub(in crate::release_management) async fn start_release_rollback(
         &self,
         auth: &AuthContext,
         release_id: ReleaseId,
@@ -146,7 +146,7 @@ impl ReleaseManagementService {
         })
     }
 
-    pub(crate) async fn complete_release_rollback(
+    pub(in crate::release_management) async fn complete_release_rollback(
         &self,
         auth: &AuthContext,
         release_id: ReleaseId,
@@ -242,7 +242,7 @@ impl ReleaseManagementService {
         self.release(auth, release_id).await
     }
 
-    pub(crate) async fn manual_release_takeover(
+    pub(in crate::release_management) async fn manual_release_takeover(
         &self,
         auth: &AuthContext,
         release_id: ReleaseId,
