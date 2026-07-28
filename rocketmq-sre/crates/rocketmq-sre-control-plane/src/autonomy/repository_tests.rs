@@ -17,6 +17,7 @@ use chrono::Timelike;
 use chrono::Utc;
 use rocketmq_sre_contracts::ActionPlanId;
 use rocketmq_sre_contracts::AutonomousExecutionFailure;
+use rocketmq_sre_contracts::AutonomyGrant;
 use rocketmq_sre_contracts::AutonomyMode;
 use rocketmq_sre_contracts::AutonomyOutcome;
 use rocketmq_sre_contracts::AutonomyOutcomeClass;
@@ -27,8 +28,11 @@ use rocketmq_sre_contracts::AutonomyQualificationSample;
 use rocketmq_sre_contracts::AutonomySampleId;
 use rocketmq_sre_contracts::AutonomySampleKind;
 use rocketmq_sre_contracts::ClusterId;
+use rocketmq_sre_contracts::CriticReviewId;
+use rocketmq_sre_contracts::DiagnosisRevisionId;
 use rocketmq_sre_contracts::ExecutionAction;
 use rocketmq_sre_contracts::IncidentId;
+use rocketmq_sre_contracts::ModelInvocationId;
 use rocketmq_sre_contracts::TenantId;
 use rocketmq_sre_core::ActualModelIdentity;
 use rocketmq_sre_core::AutonomyActor;
@@ -39,6 +43,7 @@ use uuid::Uuid;
 
 use super::AutonomyPauseReconciler;
 use crate::PostgresRepository;
+use crate::execution_authority::LeaseAuthorityRepository;
 
 #[tokio::test]
 #[ignore = "requires ROCKETMQ_SRE_TEST_DATABASE_URL pointing to Docker PostgreSQL"]
@@ -247,6 +252,35 @@ async fn postgres_autonomy_state_cohorts_and_controls_are_durable_and_idempotent
         )
         .await
         .expect("persist Autonomous");
+    let (critic_review_id, critic_invocation_id) = seed_critic_review(&repository, &fixture).await;
+    let grant = AutonomyGrant {
+        issuer: "rocketmq-sre-control-plane".to_owned(),
+        audience: "rocketmq-sre-executor".to_owned(),
+        plan_id: fixture.plan_id,
+        plan_hash: fixture.plan_hash.clone(),
+        diagnosis_revision_id: fixture.diagnosis_revision_id,
+        tenant_id: fixture.tenant_id,
+        cluster_id: fixture.cluster_id,
+        action: ExecutionAction::ObservabilityLoggerLevelTtl,
+        action_version: stored.action_version.clone(),
+        policy_id: stored.id,
+        policy_definition_version: stored.definition_version,
+        lifecycle_revision: autonomous.lifecycle_revision,
+        autonomous_cohort_id: autonomous_cohort.id,
+        autonomous_cohort_hash: autonomous_cohort.cohort_hash.clone(),
+        critic_review_id,
+        primary_model_invocation_id: fixture.primary_invocation_id,
+        critic_model_invocation_id: critic_invocation_id,
+        issued_at: now + Duration::seconds(9),
+        expires_at: now + Duration::minutes(2),
+        nonce: "authority-repository-grant".to_owned(),
+        signature: "verified-separately".to_owned(),
+    };
+    let authority_repository = LeaseAuthorityRepository::new(repository.pool.clone());
+    authority_repository
+        .autonomy_grant_is_current(&grant)
+        .await
+        .expect("current R1 autonomy grant");
     let outcome = AutonomyOutcome {
         id: AutonomyOutcomeId::new(),
         tenant_id: fixture.tenant_id,
@@ -275,6 +309,7 @@ async fn postgres_autonomy_state_cohorts_and_controls_are_durable_and_idempotent
         .record_autonomy_outcome(&outcome_retry, "autonomy-pause-reconciler")
         .await
         .expect("idempotent failure outcome");
+    assert!(authority_repository.autonomy_grant_is_current(&grant).await.is_err());
 
     let tenant_freeze = repository
         .set_autonomy_freeze(
@@ -522,6 +557,8 @@ struct Fixture {
     tenant_id: TenantId,
     cluster_id: ClusterId,
     incident_id: IncidentId,
+    diagnosis_revision_id: DiagnosisRevisionId,
+    primary_invocation_id: ModelInvocationId,
     plan_id: ActionPlanId,
     plan_hash: String,
 }
@@ -531,12 +568,12 @@ async fn seed_fixture(repository: &PostgresRepository) -> Fixture {
         tenant_id: TenantId::new(),
         cluster_id: ClusterId::new(),
         incident_id: IncidentId::new(),
+        diagnosis_revision_id: DiagnosisRevisionId::new(),
+        primary_invocation_id: ModelInvocationId::new(),
         plan_id: ActionPlanId::new(),
         plan_hash: unique_digest(),
     };
-    let diagnosis_id = Uuid::new_v4();
     let profile_id = Uuid::new_v4();
-    let invocation_id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO clusters (
             id, tenant_id, external_cluster_key, environment, region,
@@ -575,7 +612,7 @@ async fn seed_fixture(repository: &PostgresRepository) -> Fixture {
          ) VALUES ($1, $2, 1, 'confirmed', '{}'::JSONB, '[]'::JSONB,
                    '{}', NULL, FALSE, FALSE, NOW())",
     )
-    .bind(diagnosis_id)
+    .bind(fixture.diagnosis_revision_id.as_uuid())
     .bind(fixture.incident_id.as_uuid())
     .execute(&repository.pool)
     .await
@@ -609,11 +646,11 @@ async fn seed_fixture(repository: &PostgresRepository) -> Fixture {
                    '{}', 'autonomy-repository-test', 'rocketmq-sre.model.v1',
                    'autonomy repository fixture', NOW(), NOW())",
     )
-    .bind(invocation_id)
+    .bind(fixture.primary_invocation_id.as_uuid())
     .bind(fixture.tenant_id.as_uuid())
     .bind(fixture.cluster_id.as_uuid())
     .bind(fixture.incident_id.as_uuid())
-    .bind(diagnosis_id)
+    .bind(fixture.diagnosis_revision_id.as_uuid())
     .bind(profile_id)
     .execute(&repository.pool)
     .await
@@ -623,8 +660,8 @@ async fn seed_fixture(repository: &PostgresRepository) -> Fixture {
          SET primary_model_invocation_id = $2, execution_eligible = TRUE
          WHERE id = $1",
     )
-    .bind(diagnosis_id)
-    .bind(invocation_id)
+    .bind(fixture.diagnosis_revision_id.as_uuid())
+    .bind(fixture.primary_invocation_id.as_uuid())
     .execute(&repository.pool)
     .await
     .expect("executable diagnosis");
@@ -642,14 +679,94 @@ async fn seed_fixture(repository: &PostgresRepository) -> Fixture {
     .bind(fixture.tenant_id.as_uuid())
     .bind(fixture.cluster_id.as_uuid())
     .bind(fixture.incident_id.as_uuid())
-    .bind(diagnosis_id)
-    .bind(invocation_id)
+    .bind(fixture.diagnosis_revision_id.as_uuid())
+    .bind(fixture.primary_invocation_id.as_uuid())
     .bind(&fixture.plan_hash)
     .bind(unique_digest())
     .execute(&repository.pool)
     .await
     .expect("action plan");
     fixture
+}
+
+async fn seed_critic_review(repository: &PostgresRepository, fixture: &Fixture) -> (CriticReviewId, ModelInvocationId) {
+    let profile_id = Uuid::new_v4();
+    let profile_name = format!("autonomy-critic-{profile_id}");
+    sqlx::query(
+        "INSERT INTO model_profiles (
+            id, tenant_id, profile_name, provider_family, protocol_family,
+            model_family, model_name, model_revision, endpoint_instance,
+            region, data_residency, data_classes, capabilities, priority,
+            credential_ref, credential_owner, enabled, health, created_at, updated_at
+         ) VALUES ($1, $2, $3, 'openai-compatible', 'openai-compatible',
+                   'glm', 'glm-5', 'glm-5', 'local',
+                   'local', 'local', '[]'::JSONB, '{}'::JSONB, 90,
+                   'test-reference', 'gateway', TRUE, 'healthy', NOW(), NOW())",
+    )
+    .bind(profile_id)
+    .bind(fixture.tenant_id.as_uuid())
+    .bind(&profile_name)
+    .execute(&repository.pool)
+    .await
+    .expect("critic model profile");
+    let critic_invocation_id = ModelInvocationId::new();
+    sqlx::query(
+        "INSERT INTO model_invocations (
+            id, tenant_id, cluster_id, incident_id, diagnosis_revision_id,
+            parent_invocation_id, purpose, requested_profile_id,
+            actual_profile_id, provider_family, model_family, model_revision,
+            endpoint_instance, fallback_chain, prompt_version, schema_version,
+            rationale, started_at, completed_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, 'critic', $7, $7,
+                   'openai-compatible', 'glm', 'glm-5', 'local',
+                   '{}', 'autonomy-critic-test', 'rocketmq-sre.critic.v1',
+                   'autonomy authority fixture', NOW(), NOW())",
+    )
+    .bind(critic_invocation_id.as_uuid())
+    .bind(fixture.tenant_id.as_uuid())
+    .bind(fixture.cluster_id.as_uuid())
+    .bind(fixture.incident_id.as_uuid())
+    .bind(fixture.diagnosis_revision_id.as_uuid())
+    .bind(fixture.primary_invocation_id.as_uuid())
+    .bind(profile_id)
+    .execute(&repository.pool)
+    .await
+    .expect("critic model invocation");
+    let critic_review_id = CriticReviewId::new();
+    let review_hash = unique_digest();
+    let payload_hash = unique_digest();
+    sqlx::query(
+        "INSERT INTO critic_reviews (
+            id, plan_id, plan_hash, diagnosis_revision_id,
+            primary_invocation_id, critic_invocation_id,
+            primary_model_family, critic_model_family,
+            critic_provider, critic_profile, critic_model_revision,
+            endpoint_instance, fallback_chain, prompt_version,
+            schema_version, payload_hash, conclusion, status,
+            review_hash, review_snapshot, created_at
+         ) VALUES (
+            $1, $2, $3, $4,
+            $5, $6,
+            'deepseek', 'glm',
+            'openai-compatible', $7, 'glm-5',
+            'local', '{}', 'autonomy-critic-test',
+            'rocketmq-sre.critic.v1', $8, 'accept', 'valid',
+            $9, '{}'::JSONB, NOW()
+         )",
+    )
+    .bind(critic_review_id.as_uuid())
+    .bind(fixture.plan_id.as_uuid())
+    .bind(&fixture.plan_hash)
+    .bind(fixture.diagnosis_revision_id.as_uuid())
+    .bind(fixture.primary_invocation_id.as_uuid())
+    .bind(critic_invocation_id.as_uuid())
+    .bind(profile_name)
+    .bind(payload_hash)
+    .bind(review_hash)
+    .execute(&repository.pool)
+    .await
+    .expect("critic review");
+    (critic_review_id, critic_invocation_id)
 }
 
 fn policy(fixture: &Fixture, created_at: chrono::DateTime<Utc>) -> AutonomyPolicyDefinition {
