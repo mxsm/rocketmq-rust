@@ -16,6 +16,7 @@ use chrono::DateTime;
 use chrono::Utc;
 use rocketmq_sre_contracts::AgentStepRequest;
 use rocketmq_sre_contracts::ClusterId;
+use rocketmq_sre_contracts::EXECUTION_AGENT_AUDIENCE;
 use rocketmq_sre_contracts::EffectState;
 use rocketmq_sre_contracts::ExecutionId;
 use rocketmq_sre_contracts::ExecutionStepId;
@@ -189,7 +190,7 @@ impl AgentEffectStore {
             || request.target != request.intent.step.resource
             || request.intent.fence_grant.cluster_id.as_uuid().is_nil()
             || request.intent.fence_grant.owner.trim().is_empty()
-            || request.intent.fence_grant.audience != "execution-agent"
+            || request.intent.fence_grant.audience != EXECUTION_AGENT_AUDIENCE
             || request.intent.fence_grant.nonce.trim().is_empty()
             || request.intent.fence_grant.signature.trim().is_empty()
             || request.intent.fence_grant.expires_at <= prepared_at
