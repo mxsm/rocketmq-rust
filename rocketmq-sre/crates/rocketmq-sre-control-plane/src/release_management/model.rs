@@ -49,7 +49,7 @@ use uuid::Uuid;
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct RegisterIntegrationTargetRequest {
-    pub(super) cluster_id: Option<ClusterId>,
+    pub(super) cluster_id: ClusterId,
     pub(super) descriptor_id: String,
     pub(super) descriptor_version: String,
     pub(super) name: String,
@@ -77,7 +77,7 @@ pub(super) struct SetIntegrationTargetStateRequest {
 
 #[derive(Clone, Debug, Deserialize)]
 pub(super) struct IntegrationTargetListQuery {
-    pub(super) cluster_id: Option<ClusterId>,
+    pub(super) cluster_id: ClusterId,
     pub(super) adapter_kind: Option<IntegrationAdapterKind>,
     pub(super) enabled: Option<bool>,
     pub(super) limit: Option<u32>,
