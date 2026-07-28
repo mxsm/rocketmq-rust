@@ -71,7 +71,7 @@ impl PreventiveAutomationService {
         }
     }
 
-    pub(crate) async fn submit(
+    pub(super) async fn submit(
         &self,
         auth: &AuthContext,
         request: &PreventiveAutomationRequest,
@@ -80,7 +80,7 @@ impl PreventiveAutomationService {
         self.submit_with_inspection(auth, request, None).await
     }
 
-    pub(crate) async fn list(
+    pub(super) async fn list(
         &self,
         auth: &AuthContext,
         query: &PreventiveRunListQuery,
@@ -108,7 +108,7 @@ impl PreventiveAutomationService {
         })
     }
 
-    pub(crate) async fn schedule(
+    pub(super) async fn schedule(
         &self,
         auth: &AuthContext,
         request: &PreventiveScheduleRequest,
