@@ -47,10 +47,12 @@ use crate::ExecutionAgentError;
 use crate::FenceAckSigner;
 use crate::HttpLeaseAuthorityClient;
 use crate::LoggerLevelTtlHandler;
+use crate::ProxyRestartOneHandler;
 use crate::ProxyScaleOutOneHandler;
 use crate::ReconcileEffectRequest;
 use crate::ReconcileEffectResponse;
 use crate::drivers::ProductionBrokerConfigPatchClient;
+use crate::drivers::ProductionProxyRestartClient;
 use crate::drivers::ProductionProxyScaleClient;
 
 #[derive(Clone)]
@@ -136,6 +138,20 @@ pub async fn run(
     } else {
         None
     };
+    let proxy_restart_driver = match (&config.proxy_restart, &config.broker_admin) {
+        (Some(restart_config), Some(admin_config)) => Some(Arc::new(
+            ProductionProxyRestartClient::start(
+                admin_config,
+                restart_config,
+                config.request_timeout,
+                config.dev_insecure_http,
+                service_context.child("proxy-restart-driver"),
+            )
+            .await?,
+        )),
+        (None, _) => None,
+        (Some(_), None) => return Err(ExecutionAgentError::Configuration),
+    };
     let mut registry = AgentDriverRegistry::empty();
     if let Some(driver) = &broker_driver {
         if config.broker_config_patch_enabled {
@@ -153,6 +169,12 @@ pub async fn run(
     }
     if let Some(driver) = proxy_scale_driver {
         registry.register_kubernetes(ExecutionAction::ProxyScaleOutOne, ProxyScaleOutOneHandler::new(driver))?;
+    }
+    if let Some(driver) = &proxy_restart_driver {
+        registry.register_kubernetes(
+            ExecutionAction::ProxyRestartOne,
+            ProxyRestartOneHandler::new(Arc::clone(driver)),
+        )?;
     }
     let authority = Arc::new(HttpLeaseAuthorityClient::new(
         config.authority_url.clone(),
@@ -192,6 +214,9 @@ pub async fn run(
     })
     .await;
     if let Some(driver) = broker_driver {
+        driver.shutdown().await;
+    }
+    if let Some(driver) = proxy_restart_driver {
         driver.shutdown().await;
     }
     service_context.task_group().cancel();
