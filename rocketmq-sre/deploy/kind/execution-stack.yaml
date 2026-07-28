@@ -165,7 +165,7 @@ spec:
             - {name: ROCKETMQ_SRE_AGENT_VERIFICATION_URL, value: "http://sre-control-plane:8090"}
             - {name: ROCKETMQ_SRE_AGENT_TENANT_ID, value: "00000000-0000-4000-8000-000000000002"}
             - {name: ROCKETMQ_SRE_AGENT_CLUSTER_ID, value: "00000000-0000-4000-8000-000000000001"}
-            - {name: ROCKETMQ_SRE_AGENT_NAMESRV_ADDR, value: "rocketmq-namesrv:9876"}
+            - {name: ROCKETMQ_SRE_AGENT_NAMESRV_ADDR, value: "rocketmq-namesrv.rocketmq-system.svc.cluster.local:9876"}
             - {name: ROCKETMQ_SRE_AGENT_BROKER_ADMIN_USE_TLS, value: "false"}
             - name: ROCKETMQ_SRE_AGENT_BROKER_READ_ACCESS_KEY
               valueFrom:
