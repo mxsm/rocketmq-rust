@@ -14,9 +14,11 @@
 
 use chrono::DateTime;
 use chrono::Utc;
+use rocketmq_sre_contracts::AutonomousExecutionFailure;
 use rocketmq_sre_contracts::AutonomyLifecycleState;
 use rocketmq_sre_contracts::AutonomyMode;
 use rocketmq_sre_contracts::AutonomyOutcome;
+use rocketmq_sre_contracts::AutonomyOutcomeClass;
 use rocketmq_sre_contracts::AutonomyPolicyDefinition;
 use rocketmq_sre_contracts::AutonomyPolicyId;
 use rocketmq_sre_contracts::AutonomyQualificationCohort;
@@ -30,6 +32,9 @@ use rocketmq_sre_contracts::DynamicSafetyDecision;
 use rocketmq_sre_contracts::ExecutionAction;
 use rocketmq_sre_contracts::ModelInvocationId;
 use rocketmq_sre_contracts::TenantId;
+use rocketmq_sre_core::AutonomyActor;
+use rocketmq_sre_core::AutonomyStateMachine;
+use rocketmq_sre_core::PromotionQualification;
 use serde_json::Value;
 use sqlx::Postgres;
 use sqlx::Row;
@@ -1023,6 +1028,163 @@ impl PostgresRepository {
         Ok(())
     }
 
+    pub(super) async fn record_autonomy_outcome(
+        &self,
+        outcome: &AutonomyOutcome,
+        actor: &str,
+    ) -> Result<(), ControlPlaneError> {
+        let mut transaction = self.pool.begin().await?;
+        lock_scope(
+            &mut transaction,
+            outcome.tenant_id,
+            outcome.cluster_id,
+            outcome.action,
+            &outcome.action_version,
+        )
+        .await?;
+        let inserted = sqlx::query(
+            "INSERT INTO autonomy_outcomes (
+                id, tenant_id, cluster_id, action_id, action_version,
+                incident_id, plan_id, plan_hash, execution_id, cohort_id,
+                outcome_class, failure_code, reason_codes,
+                first_positive_intent_persisted, outcome_snapshot,
+                occurred_at, reconciled_at
+             ) VALUES (
+                $1, $2, $3, $4, $5,
+                $6, $7, $8, $9, $10,
+                $11, $12, $13,
+                $14, $15,
+                $16, $17
+             )
+             ON CONFLICT (
+                tenant_id, cluster_id, action_id, action_version, plan_id
+             ) DO NOTHING",
+        )
+        .bind(outcome.id.as_uuid())
+        .bind(outcome.tenant_id.as_uuid())
+        .bind(outcome.cluster_id.as_uuid())
+        .bind(outcome.action.id())
+        .bind(&outcome.action_version)
+        .bind(outcome.incident_id.as_uuid())
+        .bind(outcome.plan_id.as_uuid())
+        .bind(&outcome.plan_hash)
+        .bind(outcome.execution_id.map(rocketmq_sre_contracts::ExecutionId::as_uuid))
+        .bind(outcome.cohort_id.map(rocketmq_sre_contracts::AutonomyCohortId::as_uuid))
+        .bind(outcome_class_name(outcome.class))
+        .bind(outcome.failure.map(autonomy_failure_name))
+        .bind(&outcome.reason_codes)
+        .bind(outcome.first_positive_intent_persisted)
+        .bind(json_value(outcome)?)
+        .bind(outcome.occurred_at)
+        .bind(outcome.reconciled_at)
+        .execute(&mut *transaction)
+        .await?;
+        let effective = if inserted.rows_affected() == 1 {
+            outcome.clone()
+        } else {
+            let snapshot: Value = sqlx::query_scalar(
+                "SELECT outcome_snapshot
+                 FROM autonomy_outcomes
+                 WHERE tenant_id = $1 AND cluster_id = $2
+                   AND action_id = $3 AND action_version = $4
+                   AND plan_id = $5",
+            )
+            .bind(outcome.tenant_id.as_uuid())
+            .bind(outcome.cluster_id.as_uuid())
+            .bind(outcome.action.id())
+            .bind(&outcome.action_version)
+            .bind(outcome.plan_id.as_uuid())
+            .fetch_one(&mut *transaction)
+            .await?;
+            let stored: AutonomyOutcome = from_json(snapshot)?;
+            if stored != *outcome {
+                return Err(ControlPlaneError::conflict_code(
+                    "autonomy_outcome_conflict",
+                    "autonomy outcome idempotency key already has different content",
+                ));
+            }
+            stored
+        };
+
+        if effective.class == AutonomyOutcomeClass::AutonomousExecutionFailure {
+            let row = sqlx::query(
+                "SELECT *
+                 FROM autonomy_lifecycle_states
+                 WHERE tenant_id = $1 AND cluster_id = $2
+                   AND action_id = $3 AND action_version = $4
+                 FOR UPDATE",
+            )
+            .bind(effective.tenant_id.as_uuid())
+            .bind(effective.cluster_id.as_uuid())
+            .bind(effective.action.id())
+            .bind(&effective.action_version)
+            .fetch_optional(&mut *transaction)
+            .await?
+            .ok_or(ControlPlaneError::NotFound)?;
+            let current = lifecycle_from_row(&row, effective.tenant_id, effective.cluster_id, effective.action)?;
+            if current.mode != AutonomyMode::Paused {
+                let reason = effective
+                    .failure
+                    .map(autonomy_failure_name)
+                    .unwrap_or("autonomous_execution_failure");
+                let next = AutonomyStateMachine::transition(
+                    &current,
+                    AutonomyMode::Paused,
+                    AutonomyActor::SafetyReconciler,
+                    actor,
+                    Some(reason),
+                    PromotionQualification::default(),
+                    effective.reconciled_at,
+                )
+                .map_err(|error| ControlPlaneError::conflict_code("autonomy_pause_failed", error.to_string()))?;
+                sqlx::query(
+                    "UPDATE autonomy_lifecycle_states
+                     SET mode = 'paused',
+                         previous_mode = $6,
+                         pause_reason = $7,
+                         lifecycle_revision = $8,
+                         updated_by = $9,
+                         updated_at = $10
+                     WHERE tenant_id = $1 AND cluster_id = $2
+                       AND action_id = $3 AND action_version = $4
+                       AND lifecycle_revision = $5",
+                )
+                .bind(effective.tenant_id.as_uuid())
+                .bind(effective.cluster_id.as_uuid())
+                .bind(effective.action.id())
+                .bind(&effective.action_version)
+                .bind(
+                    i64::try_from(current.lifecycle_revision)
+                        .map_err(|_| invalid_request("lifecycle revision is too large"))?,
+                )
+                .bind(mode_name(current.mode))
+                .bind(&next.pause_reason)
+                .bind(
+                    i64::try_from(next.lifecycle_revision)
+                        .map_err(|_| invalid_request("lifecycle revision is too large"))?,
+                )
+                .bind(actor)
+                .bind(effective.reconciled_at)
+                .execute(&mut *transaction)
+                .await?;
+                insert_lifecycle_event(
+                    &mut transaction,
+                    &next,
+                    &effective.action_version,
+                    Some(current.mode),
+                    reason,
+                    actor,
+                )
+                .await?;
+            }
+            insert_autonomy_outbox(&mut transaction, &effective, "autonomy_paused", actor).await?;
+        } else if effective.class == AutonomyOutcomeClass::Success {
+            insert_autonomy_outbox(&mut transaction, &effective, "autonomy_succeeded", actor).await?;
+        }
+        transaction.commit().await?;
+        Ok(())
+    }
+
     async fn autonomy_qualification(
         &self,
         policy: &AutonomyPolicyDefinition,
@@ -1206,6 +1368,46 @@ async fn insert_lifecycle_event(
     .bind(actor)
     .bind(json_value(state)?)
     .bind(state.updated_at)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
+async fn insert_autonomy_outbox(
+    transaction: &mut Transaction<'_, Postgres>,
+    outcome: &AutonomyOutcome,
+    event_kind: &'static str,
+    actor: &str,
+) -> Result<(), ControlPlaneError> {
+    sqlx::query(
+        "INSERT INTO autonomy_outbox (
+            id, tenant_id, cluster_id, action_id, action_version,
+            outcome_id, event_kind, idempotency_key, status,
+            event_snapshot, attempt_count, next_attempt_at,
+            created_at
+         ) VALUES (
+            $1, $2, $3, $4, $5,
+            $6, $7, $8, 'pending',
+            $9, 0, $10,
+            $10
+         )
+         ON CONFLICT (tenant_id, idempotency_key) DO NOTHING",
+    )
+    .bind(Uuid::new_v4())
+    .bind(outcome.tenant_id.as_uuid())
+    .bind(outcome.cluster_id.as_uuid())
+    .bind(outcome.action.id())
+    .bind(&outcome.action_version)
+    .bind(outcome.id.as_uuid())
+    .bind(event_kind)
+    .bind(format!("autonomy-outcome:{}:{event_kind}", outcome.id))
+    .bind(serde_json::json!({
+        "schema_version": rocketmq_sre_contracts::AUTONOMY_SCHEMA_VERSION,
+        "outcome_id": outcome.id,
+        "event_kind": event_kind,
+        "actor": actor,
+    }))
+    .bind(outcome.reconciled_at)
     .execute(&mut **transaction)
     .await?;
     Ok(())
@@ -1417,6 +1619,31 @@ const fn sample_kind_name(kind: AutonomySampleKind) -> &'static str {
     match kind {
         AutonomySampleKind::ShadowOutcome => "shadow_outcome",
         AutonomySampleKind::SupervisedSuccess => "supervised_success",
+    }
+}
+
+const fn outcome_class_name(class: AutonomyOutcomeClass) -> &'static str {
+    match class {
+        AutonomyOutcomeClass::ExpectedDeny => "expected_deny",
+        AutonomyOutcomeClass::Success => "success",
+        AutonomyOutcomeClass::AutonomousExecutionFailure => "autonomous_execution_failure",
+    }
+}
+
+const fn autonomy_failure_name(failure: AutonomousExecutionFailure) -> &'static str {
+    match failure {
+        AutonomousExecutionFailure::ApplyFailed => "apply_failed",
+        AutonomousExecutionFailure::VerificationFailed => "verification_failed",
+        AutonomousExecutionFailure::UnknownEffect => "unknown_effect",
+        AutonomousExecutionFailure::CompensationStarted => "compensation_started",
+        AutonomousExecutionFailure::RolledBack => "rolled_back",
+        AutonomousExecutionFailure::Escalated => "escalated",
+        AutonomousExecutionFailure::SafetyInvalidatedDuringExecution => "safety_invalidated_during_execution",
+        AutonomousExecutionFailure::OperatorStopped => "operator_stopped",
+        AutonomousExecutionFailure::CriticUnavailable => "critic_unavailable",
+        AutonomousExecutionFailure::CriticInvalid => "critic_invalid",
+        AutonomousExecutionFailure::CriticConflict => "critic_conflict",
+        AutonomousExecutionFailure::EvidenceDegraded => "evidence_degraded",
     }
 }
 
