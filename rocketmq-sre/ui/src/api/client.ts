@@ -5,6 +5,10 @@ import type {
   ActionItem,
   ActionItemPage,
   ActionItemPatchRequest,
+  AutonomyOperationalReport,
+  AutonomyOperationalReportQuery,
+  AutonomyOutcomePage,
+  AutonomyOutcomeQuery,
   CapabilityCatalogResponse,
   CapabilitySnapshot,
   ClusterSummary,
@@ -395,6 +399,14 @@ export interface SreApi {
     id: string,
     signal?: AbortSignal,
   ) => Promise<ProviderSmokeResult>;
+  listAutonomyOutcomes: (
+    query: AutonomyOutcomeQuery,
+    signal?: AbortSignal,
+  ) => Promise<AutonomyOutcomePage>;
+  getAutonomyOperationalReport: (
+    query: AutonomyOperationalReportQuery,
+    signal?: AbortSignal,
+  ) => Promise<AutonomyOperationalReport>;
   subscribeWorkflowEvents: (
     onEvent: (event: WorkflowStreamEvent) => void,
     signal: AbortSignal,
@@ -702,6 +714,28 @@ export function createHttpSreApi(auth?: ApiRequestContext): SreApi {
       post<ProviderSmokeResult>(
         `/v1/models/profiles/${encodeURIComponent(id)}/smoke`,
         undefined,
+        signal,
+      ),
+    listAutonomyOutcomes: (query, signal) =>
+      get<AutonomyOutcomePage>(
+        apiQuery("/v1/autonomy/outcomes", {
+          cluster_id: query.clusterId,
+          action: query.action,
+          class: query.class,
+          from: query.from,
+          until: query.until,
+          limit:
+            query.limit === undefined ? undefined : String(query.limit),
+        }),
+        signal,
+      ),
+    getAutonomyOperationalReport: (query, signal) =>
+      get<AutonomyOperationalReport>(
+        apiQuery("/v1/autonomy/reports", {
+          period: query.period,
+          anchor: query.anchor,
+          cluster_id: query.clusterId,
+        }),
         signal,
       ),
     subscribeWorkflowEvents: (onEvent, signal) =>
