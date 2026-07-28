@@ -370,6 +370,98 @@ impl AutonomyService {
         validate_current_cohort(&scope, &cohort, request.kind)?;
         let plan = self.repository.action_plan(request.plan_id).await?.plan;
         validate_plan_scope(&plan, &scope, request.plan_hash.as_str())?;
+        if request.kind == AutonomySampleKind::SupervisedSuccess {
+            let execution_id = request.execution_id.ok_or_else(|| {
+                ControlPlaneError::validation(
+                    "execution_missing",
+                    "Supervised qualification requires one exact persisted execution",
+                )
+            })?;
+            let facts = self
+                .repository
+                .supervised_execution_qualification(
+                    auth.tenant_id,
+                    request.cluster_id,
+                    request.action,
+                    request.incident_id,
+                    request.plan_id,
+                    &request.plan_hash,
+                    execution_id,
+                    scope.policy.stable_window_seconds,
+                )
+                .await?;
+            let mut reason_codes = request.reason_codes.clone();
+            add_reason(&mut reason_codes, !facts.succeeded, "execution_not_succeeded");
+            add_reason(&mut reason_codes, !facts.human_approved, "human_approval_missing");
+            add_reason(&mut reason_codes, !facts.timeline_safe, "unsafe_execution_timeline");
+            add_reason(&mut reason_codes, !facts.evidence_complete, "evidence_incomplete");
+            add_reason(
+                &mut reason_codes,
+                !facts.stable_window_passed,
+                "stable_window_incomplete",
+            );
+            add_reason(&mut reason_codes, request.offline_replay, "offline_replay");
+            add_reason(&mut reason_codes, request.debug_only, "debug_only");
+
+            let primary_identity = actual_identity(
+                facts.primary_profile,
+                facts.primary_model_family,
+                facts.primary_model_revision,
+            );
+            let critic_identity = actual_identity(
+                facts.critic_profile,
+                facts.critic_model_family,
+                facts.critic_model_revision,
+            );
+            add_reason(
+                &mut reason_codes,
+                primary_identity.is_none() || critic_identity.is_none(),
+                "critic_not_ready",
+            );
+            if let (Some(primary), Some(critic)) = (&primary_identity, &critic_identity) {
+                let primary_hash = primary
+                    .identity_hash()
+                    .map_err(|error| ControlPlaneError::validation("invalid_model_identity", error.to_string()))?;
+                let critic_hash = critic
+                    .identity_hash()
+                    .map_err(|error| ControlPlaneError::validation("invalid_model_identity", error.to_string()))?;
+                add_reason(
+                    &mut reason_codes,
+                    primary.model_family.eq_ignore_ascii_case(&critic.model_family),
+                    "critic_family_not_heterogeneous",
+                );
+                add_reason(
+                    &mut reason_codes,
+                    primary_hash != cohort.primary_actual_model_identity_hash,
+                    "primary_identity_mismatch",
+                );
+                add_reason(
+                    &mut reason_codes,
+                    cohort.critic_actual_model_identity_hash.as_deref() != Some(critic_hash.as_str()),
+                    "critic_identity_mismatch",
+                );
+            }
+            validate_reason_codes(&reason_codes)?;
+            let qualified = reason_codes.is_empty();
+            let reconciled_at = Utc::now();
+            let sample = AutonomyQualificationSample {
+                id: AutonomySampleId::new(),
+                cohort_id: request.cohort_id,
+                kind: request.kind,
+                incident_id: request.incident_id,
+                plan_id: request.plan_id,
+                plan_hash: request.plan_hash.clone(),
+                execution_id: Some(execution_id),
+                qualified,
+                reason_codes,
+                human_outcome_linked: facts.human_approved,
+                evidence_complete: facts.evidence_complete,
+                stable_window_passed: facts.stable_window_passed,
+                observed_at: facts.observed_at,
+                reconciled_at,
+            };
+            return self.repository.store_qualification_sample(&sample).await;
+        }
         let mut reason_codes = request.reason_codes.clone();
         let reconciled_window_valid = request.reconciled_at >= request.observed_at;
         add_reason(
@@ -1229,6 +1321,18 @@ fn add_reason(reasons: &mut Vec<String>, condition: bool, reason: &'static str) 
     if condition && !reasons.iter().any(|existing| existing == reason) {
         reasons.push(reason.to_owned());
     }
+}
+
+fn actual_identity(
+    profile: Option<String>,
+    model_family: Option<String>,
+    model_revision: Option<String>,
+) -> Option<ActualModelIdentity> {
+    Some(ActualModelIdentity {
+        profile: profile?,
+        model_family: model_family?,
+        model_revision: model_revision?,
+    })
 }
 
 fn validate_idempotency_key(value: &str) -> Result<(), ControlPlaneError> {
