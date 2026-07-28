@@ -251,7 +251,7 @@ pub(super) fn ensure_live_ready(facts: PolicyFacts) -> Result<(), ControlPlaneEr
 }
 
 #[cfg(test)]
-mod tests {
+mod agent_precondition_tests {
     use chrono::Utc;
     use rocketmq_sre_contracts::ClusterId;
     use rocketmq_sre_contracts::CorrelationId;
