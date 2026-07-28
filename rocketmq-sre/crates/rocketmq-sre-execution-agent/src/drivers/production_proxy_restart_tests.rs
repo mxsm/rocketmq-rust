@@ -25,6 +25,8 @@ use k8s_openapi::api::core::v1::SecurityContext;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelectorRequirement;
 use kube::api::ObjectMeta;
 use rocketmq_admin_core::core::proxy::ProxyDrainPending;
+use rocketmq_admin_core::core::security::AdminCredentials;
+use rocketmq_runtime::RuntimeContext;
 use rocketmq_sre_contracts::ClusterId;
 use rocketmq_sre_contracts::TenantId;
 
@@ -152,6 +154,78 @@ async fn real_kind_restart_replaces_exactly_one_uid_and_preserves_a_healthy_peer
         .await
         .expect("delete dedicated restart fixture");
     result.expect("exact one-Pod restart fixture");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires an authenticated disposable Proxy endpoint"]
+async fn real_proxy_drain_reaches_exact_zero_and_restores_ingress() {
+    if std::env::var("ROCKETMQ_SRE_TEST_PROXY_DRAIN").as_deref() != Ok("1") {
+        panic!("set ROCKETMQ_SRE_TEST_PROXY_DRAIN=1 to authorize the real drain round trip");
+    }
+    let namesrv_addr =
+        std::env::var("ROCKETMQ_SRE_TEST_NAMESRV_ADDR").expect("test NameServer address must be explicit");
+    let proxy_addr = std::env::var("ROCKETMQ_SRE_TEST_PROXY_ADDR").expect("test Proxy address must be explicit");
+    let access_key = std::env::var("ROCKETMQ_SRE_TEST_PROXY_ACCESS_KEY").expect("test access key must be explicit");
+    let secret_key = std::env::var("ROCKETMQ_SRE_TEST_PROXY_SECRET_KEY").expect("test secret key must be explicit");
+    let credentials = AdminCredentials::try_new(access_key, secret_key, None).expect("test credentials");
+    let runtime = RuntimeContext::from_current("phase3-proxy-drain-smoke");
+    let client_runtime = ClientRuntime::new(
+        runtime.service_context("proxy-drain-client"),
+        ClientRuntimeConfig {
+            shutdown_timeout: Duration::from_secs(10),
+        },
+    );
+    let mut read = ReadAdminBuilder::new(Arc::clone(&client_runtime))
+        .namesrv_addr(namesrv_addr.clone())
+        .admin_group("rocketmq-sre-proxy-drain-smoke-read")
+        .instance_name(format!("proxy-drain-read-{}", uuid::Uuid::new_v4()))
+        .timeout_millis(10_000)
+        .use_tls(false)
+        .credentials(credentials.clone())
+        .build_and_start()
+        .await
+        .expect("start authenticated read session");
+    let mut mutation = MutationAdminBuilder::new(Arc::clone(&client_runtime))
+        .namesrv_addr(namesrv_addr)
+        .admin_group("rocketmq-sre-proxy-drain-smoke-mutation")
+        .instance_name(format!("proxy-drain-mutation-{}", uuid::Uuid::new_v4()))
+        .timeout_millis(10_000)
+        .use_tls(false)
+        .credentials(credentials)
+        .build_and_start()
+        .await
+        .expect("start authenticated mutation session");
+    let query = QueryProxyDrainStateRequest {
+        proxy_addr: proxy_addr.clone(),
+    };
+    let before = read.query_drain_state(&query).await.expect("query accepting state");
+    assert!(accepting(&before));
+    let operation_id = format!("proxy-drain-smoke-{}", uuid::Uuid::new_v4());
+    let operation = ProxyDrainOperationRequest {
+        proxy_addr,
+        operation_id: operation_id.clone(),
+    };
+    mutation
+        .begin_drain(&operation)
+        .await
+        .expect("begin authenticated drain");
+    let mut drained = None;
+    for _ in 0..30 {
+        let state = read.query_drain_state(&query).await.expect("query draining state");
+        if state.phase == ProxyDrainPhase::Drained && state.zero_pending && state.pending.is_zero() {
+            drained = Some(state);
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    let cancelled = mutation.cancel_drain(&operation).await.expect("restore Proxy ingress");
+    assert!(accepting(&cancelled));
+    let drained = drained.expect("all Proxy pending dimensions must reach exact zero");
+    assert_eq!(drained.operation_id.as_deref(), Some(operation_id.as_str()));
+    read.shutdown().await;
+    mutation.shutdown().await;
+    let shutdown = runtime.shutdown_tasks(Duration::from_secs(10)).await;
+    assert!(shutdown.is_healthy(), "runtime shutdown report: {shutdown:?}");
 }
 
 async fn run_real_restart_fixture(
