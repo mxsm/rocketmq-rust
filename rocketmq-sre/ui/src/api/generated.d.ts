@@ -1262,6 +1262,213 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/runbooks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List immutable runbook versions in one cluster scope */
+        get: operations["listRunbooksV1"];
+        put?: never;
+        /** Create one immutable typed runbook version */
+        post: operations["createRunbookV1"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/runbooks/{id}/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one immutable runbook version */
+        get: operations["getRunbookVersionV1"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/change-windows": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List maintenance, freeze, and blackout windows */
+        get: operations["listChangeWindowsV1"];
+        put?: never;
+        /** Create an immutable maintenance, freeze, or blackout window */
+        post: operations["createChangeWindowV1"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/change-schedules/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Validate plan bindings and return every blocking conflict */
+        post: operations["previewChangeScheduleV1"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/change-schedules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List scoped runbook schedules */
+        get: operations["listChangeSchedulesV1"];
+        put?: never;
+        /** Schedule a runbook whose action steps bind approved plans */
+        post: operations["createChangeScheduleV1"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/change-schedules/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one durable runbook schedule projection */
+        get: operations["getChangeScheduleV1"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/change-schedules/{id}/pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** pause a durable runbook schedule */
+        post: operations["pauseChangeScheduleV1"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/change-schedules/{id}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** resume a durable runbook schedule */
+        post: operations["resumeChangeScheduleV1"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/change-schedules/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** cancel a durable runbook schedule */
+        post: operations["cancelChangeScheduleV1"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/change-schedules/{id}/reconcile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** reconcile a durable runbook schedule */
+        post: operations["reconcileChangeScheduleV1"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/change-schedules/{id}/manual-gates/{step_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** approve the active manual runbook gate */
+        post: operations["approveRunbookManualGateV1"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/change-schedules/{id}/manual-gates/{step_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** reject the active manual runbook gate */
+        post: operations["rejectRunbookManualGateV1"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3521,12 +3728,14 @@ export interface components {
          */
         EvidenceId: string;
         /**
-         * @description Closed set of Phase 3 actions that may enter supervised execution.
+         * @description Closed set of Phase 3 actions that may enter supervised planning.
          *
-         *     R3 and unknown actions are intentionally not representable.
+         *     Execution remains gated by the exact descriptor's `plan_only` and
+         *     `execution_supported` flags. Permanently destructive R3 and unknown actions
+         *     are intentionally not representable.
          * @enum {string}
          */
-        ExecutionAction: "observability.logger_level_ttl.v1" | "proxy.scale_out_one.v1" | "proxy.restart_one.v1" | "broker.config.patch_allowlisted.v1" | "topic.config.patch_allowlisted.v1";
+        ExecutionAction: "observability.logger_level_ttl.v1" | "proxy.scale_out_one.v1" | "proxy.restart_one.v1" | "broker.config.patch_allowlisted.v1" | "topic.config.patch_allowlisted.v1" | "subscription_group.patch_allowlisted.v1" | "consumer.request_mode.patch_allowlisted.v1" | "consumer.offset.reset_bounded.v1" | "topic.queue.expand_only.v1" | "namesrv.config.patch_allowlisted.v1" | "controller.config.patch_allowlisted.v1" | "proxy.rollout_image_canary.v1" | "broker.restart_one.v1" | "static_topic.patch_non_remap.v1" | "tiered.cold_data_flow.patch_allowlisted.v1" | "store.readahead.patch_allowlisted.v1" | "security.credential_rotate_overlap.v1" | "telemetry.collector.restart_one.v1" | "consumer.offset.clone_or_reset_broad.v1" | "message.direct_consume.v1" | "message.dlq.resend.v1" | "timer.switch.v1" | "controller.elect.v1" | "static_topic.remap.v1" | "broker.container.add_remove.v1";
         /**
          * @description Maximum descriptor-authorized blast radius.
          * @enum {string}
@@ -3665,7 +3874,7 @@ export interface components {
          * @description Append-only audit event kind for the supervised change timeline.
          * @enum {string}
          */
-        AuditEventKind: "plan_created" | "plan_submitted" | "policy_evaluated" | "critic_reviewed" | "approved" | "rejected" | "execution_submitted" | "state_changed" | "step_intent_persisted" | "step_result_persisted" | "verification_captured" | "verification_completed" | "rollback_started" | "manual_takeover_required" | "quarantine_created" | "quarantine_clear_requested" | "quarantine_cleared" | "cancelled";
+        AuditEventKind: "plan_created" | "plan_submitted" | "policy_evaluated" | "critic_reviewed" | "approved" | "rejected" | "execution_submitted" | "state_changed" | "step_intent_persisted" | "step_result_persisted" | "verification_captured" | "verification_completed" | "rollback_started" | "manual_takeover_required" | "quarantine_created" | "quarantine_clear_requested" | "quarantine_cleared" | "cancelled" | "runbook_created" | "change_window_created" | "change_schedule_created" | "change_schedule_state_changed" | "manual_gate_decided";
         /**
          * Format: uuid
          * @description Identifier propagated across one logical SRE operation.
@@ -3689,6 +3898,134 @@ export interface components {
             resource_id: string;
             resource_kind: string;
             tenant_id: components["schemas"]["TenantId"];
+        };
+        /**
+         * @description Stable conflict classification returned by the scheduler.
+         * @enum {string}
+         */
+        ChangeConflictCode: "outside_maintenance_window" | "freeze_window" | "blackout_window" | "resource_overlap" | "parallelism_exceeded";
+        /**
+         * Format: uuid
+         * @description Stable identifier for a scheduled runbook execution.
+         */
+        ChangeScheduleId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for a maintenance or freeze window.
+         */
+        ChangeWindowId: string;
+        /**
+         * ChangeConflict
+         * @description One blocking calendar or schedule conflict.
+         */
+        ChangeConflict: {
+            blocking: boolean;
+            code: components["schemas"]["ChangeConflictCode"];
+            conflicting_schedule_id?: components["schemas"]["ChangeScheduleId"] | null;
+            /** Format: date-time */
+            ends_at: string;
+            message: string;
+            resource_key?: string | null;
+            /** Format: date-time */
+            starts_at: string;
+            window_id?: components["schemas"]["ChangeWindowId"] | null;
+        };
+        /**
+         * @description Durable scheduler lifecycle.
+         * @enum {string}
+         */
+        ChangeScheduleStatus: "scheduled" | "running" | "awaiting_manual_gate" | "paused" | "safe_stopping" | "reconciling" | "completed" | "cancelled" | "rejected";
+        /**
+         * Format: uuid
+         * @description Stable identifier for a supervised execution.
+         */
+        ExecutionId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for a versioned change runbook.
+         */
+        RunbookId: string;
+        /**
+         * Format: uuid
+         * @description Stable identifier for a typed runbook step.
+         */
+        RunbookStepId: string;
+        /**
+         * RunbookStepPlanBinding
+         * @description Immutable binding from one typed runbook action to one approved plan.
+         */
+        RunbookStepPlanBinding: {
+            plan_hash: string;
+            plan_id: components["schemas"]["ActionPlanId"];
+            precondition_hash: string;
+            step_id: components["schemas"]["RunbookStepId"];
+        };
+        /**
+         * ChangeSchedule
+         * @description Scheduled runbook execution.
+         */
+        ChangeSchedule: {
+            active_execution_id?: components["schemas"]["ExecutionId"] | null;
+            /** Format: date-time */
+            cancel_requested_at?: string | null;
+            cluster_id: components["schemas"]["ClusterId"];
+            /** @default [] */
+            completed_steps: components["schemas"]["RunbookStepId"][];
+            correlation_id: components["schemas"]["CorrelationId"];
+            /** Format: date-time */
+            created_at: string;
+            created_by: string;
+            id: components["schemas"]["ChangeScheduleId"];
+            intent_persisted: boolean;
+            /** Format: uint16 */
+            next_step_sequence: number;
+            /** Format: date-time */
+            pause_requested_at?: string | null;
+            plan_bindings: components["schemas"]["RunbookStepPlanBinding"][];
+            /** @default [] */
+            resource_keys: string[];
+            runbook_id: components["schemas"]["RunbookId"];
+            runbook_version: string;
+            /** Format: date-time */
+            scheduled_end: string;
+            /** Format: date-time */
+            scheduled_start: string;
+            schema_version: string;
+            status: components["schemas"]["ChangeScheduleStatus"];
+            tenant_id: components["schemas"]["TenantId"];
+            /** Format: date-time */
+            updated_at: string;
+            waiting_manual_gate?: components["schemas"]["RunbookStepId"] | null;
+        };
+        /**
+         * @description Calendar window semantics.
+         * @enum {string}
+         */
+        ChangeWindowKind: "maintenance" | "freeze" | "blackout";
+        /**
+         * ChangeWindow
+         * @description One absolute maintenance, freeze, or blackout interval.
+         */
+        ChangeWindow: {
+            cluster_id: components["schemas"]["ClusterId"];
+            /** Format: date-time */
+            created_at: string;
+            created_by: string;
+            /** Format: date-time */
+            ends_at: string;
+            id: components["schemas"]["ChangeWindowId"];
+            kind: components["schemas"]["ChangeWindowKind"];
+            /** Format: uint16 */
+            max_parallelism: number;
+            name: string;
+            reason: string;
+            /** @default [] */
+            resource_keys: string[];
+            schema_version: string;
+            /** Format: date-time */
+            starts_at: string;
+            tenant_id: components["schemas"]["TenantId"];
+            timezone: string;
         };
         /**
          * @description Bounded deterministic Critic conclusion.
@@ -3774,11 +4111,6 @@ export interface components {
             schema_version: string;
             status: components["schemas"]["CriticReviewStatus"];
         };
-        /**
-         * Format: uuid
-         * @description Stable identifier for a supervised execution.
-         */
-        ExecutionId: string;
         /**
          * ExecutionRequest
          * @description Short-lived immutable request submitted to Change Executor.
@@ -3878,6 +4210,82 @@ export interface components {
         };
         /** @enum {string} */
         ActionRisk: "read" | "plan" | "r1" | "r2" | "r3";
+        /** @description Directed compensation relationship inside one runbook. */
+        CompensationEdge: {
+            compensation_step: components["schemas"]["RunbookStepId"];
+            from_step: components["schemas"]["RunbookStepId"];
+            trigger: components["schemas"]["CompensationTrigger"];
+        };
+        /**
+         * @description Trigger for a compensation edge.
+         * @enum {string}
+         */
+        CompensationTrigger: "verification_failed" | "step_failed" | "cancel_after_intent";
+        /** @description Explicit human gate inside a composite runbook. */
+        ManualGate: {
+            gate_id: string;
+            instructions: string;
+            required_role: string;
+            /** Format: uint64 */
+            timeout_seconds: number;
+            title: string;
+        };
+        /** @description Evidence or schedule fact required before a step may start. */
+        RunbookCondition: {
+            expected?: unknown;
+            fact: string;
+            operator: components["schemas"]["RunbookConditionOperator"];
+        };
+        /**
+         * @description Deterministic condition operator available to a runbook step.
+         * @enum {string}
+         */
+        RunbookConditionOperator: "equals" | "not_equals" | "greater_than" | "less_than" | "exists";
+        /** @description One dependency-aware runbook step. */
+        RunbookStep: {
+            body: components["schemas"]["RunbookStepBody"];
+            condition?: components["schemas"]["RunbookCondition"] | null;
+            /** @default [] */
+            depends_on: components["schemas"]["RunbookStepId"][];
+            id: components["schemas"]["RunbookStepId"];
+            name: string;
+            parallel_group?: string | null;
+            /** Format: uint16 */
+            sequence: number;
+        };
+        /** @description Closed body of one runbook step. */
+        RunbookStepBody: {
+            action: components["schemas"]["ExecutionAction"];
+            descriptor_version: string;
+            /** @constant */
+            kind: "action";
+            parameters: unknown;
+            resource: string;
+        } | {
+            gate: components["schemas"]["ManualGate"];
+            /** @constant */
+            kind: "manual_gate";
+        };
+        /**
+         * RunbookDefinition
+         * @description Versioned composite change definition.
+         */
+        RunbookDefinition: {
+            /** @default [] */
+            compensation_edges: components["schemas"]["CompensationEdge"][];
+            /** Format: date-time */
+            created_at: string;
+            description: string;
+            id: components["schemas"]["RunbookId"];
+            /** Format: uint16 */
+            max_parallelism: number;
+            name: string;
+            owner: string;
+            risk: components["schemas"]["ActionRisk"];
+            schema_version: string;
+            steps: components["schemas"]["RunbookStep"][];
+            version: string;
+        };
         /** @enum {string} */
         ExecutionState: "pending" | "prechecking" | "intent_persisted" | "applying" | "unknown" | "reconciling" | "verifying" | "compensating" | "succeeded" | "rolled_back" | "escalated";
         ErrorEnvelope: {
@@ -3976,6 +4384,68 @@ export interface components {
         ClearQuarantineRequest: {
             reason: string;
             evidence_ids: string[];
+        };
+        CreateRunbookRequest: {
+            /** Format: uuid */
+            cluster_id: string;
+            definition: components["schemas"]["RunbookDefinition"];
+        };
+        RunbookPage: {
+            /** @constant */
+            schema_version: "rocketmq-sre.runbook-page.v1";
+            items: components["schemas"]["RunbookDefinition"][];
+            partial: boolean;
+        };
+        CreateChangeWindowRequest: {
+            /** Format: uuid */
+            cluster_id: string;
+            name: string;
+            kind: components["schemas"]["ChangeWindowKind"];
+            timezone: string;
+            /** Format: date-time */
+            starts_at: string;
+            /** Format: date-time */
+            ends_at: string;
+            resource_keys?: string[];
+            max_parallelism: number;
+            reason: string;
+        };
+        ChangeWindowPage: {
+            /** @constant */
+            schema_version: "rocketmq-sre.change-window-page.v1";
+            items: components["schemas"]["ChangeWindow"][];
+            partial: boolean;
+        };
+        CreateChangeScheduleRequest: {
+            /** Format: uuid */
+            cluster_id: string;
+            /** Format: uuid */
+            runbook_id: string;
+            runbook_version: string;
+            /** Format: date-time */
+            scheduled_start: string;
+            /** Format: date-time */
+            scheduled_end: string;
+            plan_bindings: components["schemas"]["RunbookStepPlanBinding"][];
+        };
+        ChangeSchedulePage: {
+            /** @constant */
+            schema_version: "rocketmq-sre.change-schedule-page.v1";
+            items: components["schemas"]["ChangeSchedule"][];
+            partial: boolean;
+        };
+        ChangeSchedulePreview: {
+            /** @constant */
+            schema_version: "rocketmq-sre.change-schedule-preview.v1";
+            schedule: components["schemas"]["ChangeSchedule"];
+            conflicts: components["schemas"]["ChangeConflict"][];
+            schedulable: boolean;
+        };
+        ScheduleTransitionRequest: {
+            reason: string;
+        };
+        ManualGateDecisionRequest: {
+            reason: string;
         };
     };
     responses: {
@@ -6154,6 +6624,1189 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResourceQuarantine"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listRunbooksV1: {
+        parameters: {
+            query: {
+                cluster_id: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunbookPage"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    createRunbookV1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateRunbookRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunbookDefinition"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getRunbookVersionV1: {
+        parameters: {
+            query: {
+                cluster_id: string;
+            };
+            header?: never;
+            path: {
+                id: string;
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunbookDefinition"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listChangeWindowsV1: {
+        parameters: {
+            query: {
+                cluster_id: string;
+                from: string;
+                to: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeWindowPage"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    createChangeWindowV1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateChangeWindowRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeWindow"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    previewChangeScheduleV1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateChangeScheduleRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeSchedulePreview"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listChangeSchedulesV1: {
+        parameters: {
+            query: {
+                cluster_id: string;
+                status?: components["schemas"]["ChangeScheduleStatus"];
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeSchedulePage"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    createChangeScheduleV1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateChangeScheduleRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeSchedule"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getChangeScheduleV1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeSchedule"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    pauseChangeScheduleV1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScheduleTransitionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeSchedule"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    resumeChangeScheduleV1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScheduleTransitionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeSchedule"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    cancelChangeScheduleV1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScheduleTransitionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeSchedule"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    reconcileChangeScheduleV1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScheduleTransitionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeSchedule"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    approveRunbookManualGateV1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                step_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManualGateDecisionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeSchedule"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    rejectRunbookManualGateV1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                step_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManualGateDecisionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeSchedule"];
                 };
             };
             /** @description Sanitized stable error envelope */

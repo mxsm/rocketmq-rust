@@ -62,7 +62,7 @@ export class ApiError extends Error {
   }
 }
 
-interface RequestOptions {
+export interface RequestOptions {
   signal?: AbortSignal;
   auth?: ApiRequestContext;
   method?: "GET" | "POST" | "PATCH";
@@ -83,7 +83,7 @@ function requestHeaders(options: RequestOptions): Headers {
   return headers;
 }
 
-async function request<T>(
+export async function apiRequest<T>(
   path: string,
   options: RequestOptions = {},
 ): Promise<T> {
@@ -138,7 +138,7 @@ async function download(
   return response.blob();
 }
 
-function query(
+export function apiQuery(
   path: string,
   values: Record<string, string | undefined>,
 ): string {
@@ -381,11 +381,11 @@ export interface SreApi {
 
 export function createHttpSreApi(auth?: ApiRequestContext): SreApi {
   const get = <T>(path: string, signal?: AbortSignal) =>
-    request<T>(path, { auth, signal });
+    apiRequest<T>(path, { auth, signal });
   const post = <T>(path: string, body: unknown, signal?: AbortSignal) =>
-    request<T>(path, { auth, body, method: "POST", signal });
+    apiRequest<T>(path, { auth, body, method: "POST", signal });
   const patch = <T>(path: string, body: unknown, signal?: AbortSignal) =>
-    request<T>(path, { auth, body, method: "PATCH", signal });
+    apiRequest<T>(path, { auth, body, method: "PATCH", signal });
 
   return {
     listClusters: (signal) => get<ClusterSummary[]>("/v1/clusters", signal),
@@ -422,7 +422,7 @@ export function createHttpSreApi(auth?: ApiRequestContext): SreApi {
       ),
     getFleetHealth: (region, signal) =>
       get<FleetHealthReport>(
-        query("/v1/fleet/health", { region }),
+        apiQuery("/v1/fleet/health", { region }),
         signal,
       ),
     getClusterForecasts: (clusterId, signal) =>
@@ -434,7 +434,7 @@ export function createHttpSreApi(auth?: ApiRequestContext): SreApi {
       post<WhatIfSimulation>("/v1/simulations", input, signal),
     getUpgradeReadiness: (clusterId, targetVersion, signal) =>
       get<UpgradeReadinessReport>(
-        query(
+        apiQuery(
           `/v1/clusters/${encodeURIComponent(clusterId)}/readiness/upgrade`,
           { target_version: targetVersion },
         ),
@@ -442,7 +442,7 @@ export function createHttpSreApi(auth?: ApiRequestContext): SreApi {
       ),
     getDrReadiness: (clusterId, targetRegion, signal) =>
       get<DrReadinessReport>(
-        query(
+        apiQuery(
           `/v1/clusters/${encodeURIComponent(clusterId)}/readiness/dr`,
           { target_region: targetRegion },
         ),
@@ -453,19 +453,19 @@ export function createHttpSreApi(auth?: ApiRequestContext): SreApi {
     listAssets: async (clusterId, signal) =>
       collection(
         await get<CollectionEnvelope<AssetSnapshot> | AssetSnapshot[]>(
-          query("/v1/assets", { cluster_id: clusterId }),
+          apiQuery("/v1/assets", { cluster_id: clusterId }),
           signal,
         ),
       ),
     getTopology: (clusterId, signal) =>
       get<TopologySnapshot>(
-        query("/v1/topology", { cluster_id: clusterId }),
+        apiQuery("/v1/topology", { cluster_id: clusterId }),
         signal,
       ),
     listConversations: async (clusterId, signal) =>
       collection(
         await get<CollectionEnvelope<ConversationView> | ConversationView[]>(
-          query("/v1/conversations", { cluster_id: clusterId }),
+          apiQuery("/v1/conversations", { cluster_id: clusterId }),
           signal,
         ),
       ),
@@ -479,7 +479,7 @@ export function createHttpSreApi(auth?: ApiRequestContext): SreApi {
     listInvestigations: async (clusterId, signal) =>
       collection(
         await get<CollectionEnvelope<InvestigationView> | InvestigationView[]>(
-          query("/v1/investigations", { cluster_id: clusterId }),
+          apiQuery("/v1/investigations", { cluster_id: clusterId }),
           signal,
         ),
       ),
@@ -497,7 +497,7 @@ export function createHttpSreApi(auth?: ApiRequestContext): SreApi {
     listIncidents: async (clusterId, signal) =>
       collection(
         await get<CollectionEnvelope<IncidentView> | IncidentView[]>(
-          query("/v1/incidents", { cluster_id: clusterId }),
+          apiQuery("/v1/incidents", { cluster_id: clusterId }),
           signal,
         ),
       ),
@@ -521,14 +521,14 @@ export function createHttpSreApi(auth?: ApiRequestContext): SreApi {
       ),
     getShiftHandoff: (clusterId, signal) =>
       get<ShiftHandoffSummary>(
-        query("/v1/operations/shift-handoff", {
+        apiQuery("/v1/operations/shift-handoff", {
           cluster_id: clusterId,
         }),
         signal,
       ),
     getOperationsReport: (window, clusterId, signal) =>
       get<OperationsReport>(
-        query("/v1/operations/reports", {
+        apiQuery("/v1/operations/reports", {
           cluster_id: clusterId,
           window,
           format: "json",
@@ -537,7 +537,7 @@ export function createHttpSreApi(auth?: ApiRequestContext): SreApi {
       ),
     downloadOperationsReport: (window, format, clusterId, signal) =>
       download(
-        query("/v1/operations/reports", {
+        apiQuery("/v1/operations/reports", {
           cluster_id: clusterId,
           window,
           format,
@@ -570,7 +570,7 @@ export function createHttpSreApi(auth?: ApiRequestContext): SreApi {
       ),
     listActionItems: (clusterId, signal) =>
       get<ActionItemPage>(
-        query("/v1/action-items", { cluster_id: clusterId }),
+        apiQuery("/v1/action-items", { cluster_id: clusterId }),
         signal,
       ),
     patchActionItem: (id, input, signal) =>
@@ -588,7 +588,7 @@ export function createHttpSreApi(auth?: ApiRequestContext): SreApi {
     listInspections: async (clusterId, signal) =>
       collection(
         await get<CollectionEnvelope<InspectionView> | InspectionView[]>(
-          query("/v1/inspections", { cluster_id: clusterId }),
+          apiQuery("/v1/inspections", { cluster_id: clusterId }),
           signal,
         ),
       ),
@@ -607,7 +607,7 @@ export function createHttpSreApi(auth?: ApiRequestContext): SreApi {
       ),
     getInspectionReport: (id, format, signal) =>
       get<InspectionReport>(
-        query(`/v1/inspections/${encodeURIComponent(id)}/report`, {
+        apiQuery(`/v1/inspections/${encodeURIComponent(id)}/report`, {
           format,
         }),
         signal,
@@ -615,7 +615,7 @@ export function createHttpSreApi(auth?: ApiRequestContext): SreApi {
     listRecommendations: async (clusterId, signal) =>
       collection(
         await get<CollectionEnvelope<Recommendation> | Recommendation[]>(
-          query("/v1/recommendations", { cluster_id: clusterId }),
+          apiQuery("/v1/recommendations", { cluster_id: clusterId }),
           signal,
         ),
       ),
@@ -628,7 +628,7 @@ export function createHttpSreApi(auth?: ApiRequestContext): SreApi {
     listEvidence: async (clusterId, signal) =>
       evidenceCollection(
         await get<EvidencePage | EvidenceRecord[]>(
-          query("/v1/evidence", { cluster_id: clusterId }),
+          apiQuery("/v1/evidence", { cluster_id: clusterId }),
           signal,
         ),
       ),
@@ -644,7 +644,7 @@ export function createHttpSreApi(auth?: ApiRequestContext): SreApi {
       ),
     getMessageJourney: (clusterId, traceOrMessageId, signal) =>
       get<MessageJourney>(
-        query("/v1/message-journeys", {
+        apiQuery("/v1/message-journeys", {
           cluster_id: clusterId,
           query: traceOrMessageId,
         }),
@@ -653,7 +653,7 @@ export function createHttpSreApi(auth?: ApiRequestContext): SreApi {
     listKnowledge: async (clusterId, signal) =>
       collection(
         await get<CollectionEnvelope<KnowledgeItem> | KnowledgeItem[]>(
-          query("/v1/knowledge", { cluster_id: clusterId }),
+          apiQuery("/v1/knowledge", { cluster_id: clusterId }),
           signal,
         ),
       ),

@@ -65,6 +65,28 @@ export type QuarantinePage = ApiSchemas["QuarantinePage"];
 export type ClearQuarantineRequest =
   ApiSchemas["ClearQuarantineRequest"];
 export type ResourceQuarantine = ApiSchemas["ResourceQuarantine"];
+export type RunbookDefinition = ApiSchemas["RunbookDefinition"];
+export type RunbookPage = ApiSchemas["RunbookPage"];
+export type CreateRunbookRequest = ApiSchemas["CreateRunbookRequest"];
+export type ChangeWindow = ApiSchemas["ChangeWindow"];
+export type ChangeWindowKind = ApiSchemas["ChangeWindowKind"];
+export type ChangeWindowPage = ApiSchemas["ChangeWindowPage"];
+export type CreateChangeWindowRequest =
+  ApiSchemas["CreateChangeWindowRequest"];
+export type ChangeSchedule = ApiSchemas["ChangeSchedule"];
+export type ChangeScheduleStatus = ApiSchemas["ChangeScheduleStatus"];
+export type ChangeSchedulePage = ApiSchemas["ChangeSchedulePage"];
+export type ChangeSchedulePreview =
+  ApiSchemas["ChangeSchedulePreview"];
+export type CreateChangeScheduleRequest =
+  ApiSchemas["CreateChangeScheduleRequest"];
+export type ScheduleTransitionRequest =
+  ApiSchemas["ScheduleTransitionRequest"];
+export type ManualGateDecisionRequest =
+  ApiSchemas["ManualGateDecisionRequest"];
+export type RunbookStepPlanBinding =
+  ApiSchemas["RunbookStepPlanBinding"];
+export type ChangeConflict = ApiSchemas["ChangeConflict"];
 
 export type OnboardingState =
   | "pending"
