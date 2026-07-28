@@ -40,6 +40,8 @@ use super::model::AutonomyFreezeView;
 use super::model::AutonomyKillSwitchView;
 use super::model::AutonomyQualificationView;
 use super::model::AutonomyScopeView;
+use super::model::ShadowOutcomeRecord;
+use super::model::ShadowOutcomeView;
 use crate::ControlPlaneError;
 use crate::PostgresRepository;
 
@@ -715,6 +717,165 @@ impl PostgresRepository {
         Ok(stored)
     }
 
+    pub(super) async fn store_shadow_outcome(
+        &self,
+        record: &ShadowOutcomeRecord,
+        sample: &AutonomyQualificationSample,
+    ) -> Result<ShadowOutcomeView, ControlPlaneError> {
+        let mut transaction = self.pool.begin().await?;
+        let inserted = sqlx::query(
+            "INSERT INTO autonomy_shadow_outcomes (
+                id, tenant_id, cluster_id, action_id, action_version,
+                incident_id, diagnosis_revision_id, plan_id, plan_hash,
+                cohort_id, eligibility_snapshot, expected_effect_snapshot,
+                evidence_ids, qualified, reason_codes, human_outcome_snapshot,
+                stable_window_snapshot, observed_at
+             ) VALUES (
+                $1, $2, $3, $4, $5,
+                $6, $7, $8, $9,
+                $10, $11, $12,
+                $13, $14, $15, $16,
+                $17, $18
+             )
+             ON CONFLICT (
+                tenant_id, cluster_id, action_id, action_version, incident_id, plan_hash
+             ) DO NOTHING",
+        )
+        .bind(record.view.id)
+        .bind(record.tenant_id.as_uuid())
+        .bind(record.cluster_id.as_uuid())
+        .bind(record.action.id())
+        .bind(&record.action_version)
+        .bind(record.view.incident_id.as_uuid())
+        .bind(record.diagnosis_revision_id.as_uuid())
+        .bind(record.view.plan_id.as_uuid())
+        .bind(&record.view.plan_hash)
+        .bind(record.view.cohort_id.as_uuid())
+        .bind(json_value(&record.eligibility)?)
+        .bind(&record.expected_effect)
+        .bind(
+            record
+                .evidence_ids
+                .iter()
+                .map(rocketmq_sre_contracts::EvidenceId::as_uuid)
+                .collect::<Vec<_>>(),
+        )
+        .bind(record.view.qualified)
+        .bind(&record.view.reason_codes)
+        .bind(&record.human_outcome)
+        .bind(&record.stable_window)
+        .bind(record.view.observed_at)
+        .execute(&mut *transaction)
+        .await?;
+        let stored_view = if inserted.rows_affected() == 1 {
+            record.view.clone()
+        } else {
+            let row = sqlx::query(
+                "SELECT id, cohort_id, incident_id, plan_id, plan_hash,
+                        qualified, reason_codes, observed_at
+                 FROM autonomy_shadow_outcomes
+                 WHERE tenant_id = $1 AND cluster_id = $2
+                   AND action_id = $3 AND action_version = $4
+                   AND incident_id = $5 AND plan_hash = $6",
+            )
+            .bind(record.tenant_id.as_uuid())
+            .bind(record.cluster_id.as_uuid())
+            .bind(record.action.id())
+            .bind(&record.action_version)
+            .bind(record.view.incident_id.as_uuid())
+            .bind(&record.view.plan_hash)
+            .fetch_one(&mut *transaction)
+            .await?;
+            shadow_outcome_from_row(&row)?
+        };
+        if !same_shadow_outcome(&stored_view, &record.view) {
+            return Err(ControlPlaneError::conflict_code(
+                "shadow_outcome_conflict",
+                "Shadow outcome idempotency key already has different content",
+            ));
+        }
+
+        let sample_inserted = sqlx::query(
+            "INSERT INTO autonomy_qualification_samples (
+                id, cohort_id, sample_kind, incident_id, plan_id, plan_hash,
+                execution_id, qualified, reason_codes, human_outcome_linked,
+                evidence_complete, stable_window_passed, sample_snapshot,
+                observed_at, reconciled_at
+             ) VALUES (
+                $1, $2, 'shadow_outcome', $3, $4, $5,
+                NULL, $6, $7, $8,
+                $9, $10, $11,
+                $12, $13
+             )
+             ON CONFLICT (cohort_id, sample_kind, incident_id, plan_hash)
+             DO NOTHING",
+        )
+        .bind(sample.id.as_uuid())
+        .bind(sample.cohort_id.as_uuid())
+        .bind(sample.incident_id.as_uuid())
+        .bind(sample.plan_id.as_uuid())
+        .bind(&sample.plan_hash)
+        .bind(sample.qualified)
+        .bind(&sample.reason_codes)
+        .bind(sample.human_outcome_linked)
+        .bind(sample.evidence_complete)
+        .bind(sample.stable_window_passed)
+        .bind(json_value(sample)?)
+        .bind(sample.observed_at)
+        .bind(sample.reconciled_at)
+        .execute(&mut *transaction)
+        .await?;
+        if sample_inserted.rows_affected() == 0 {
+            let row = sqlx::query(
+                "SELECT sample_snapshot
+                 FROM autonomy_qualification_samples
+                 WHERE cohort_id = $1 AND sample_kind = 'shadow_outcome'
+                   AND incident_id = $2 AND plan_hash = $3",
+            )
+            .bind(sample.cohort_id.as_uuid())
+            .bind(sample.incident_id.as_uuid())
+            .bind(&sample.plan_hash)
+            .fetch_one(&mut *transaction)
+            .await?;
+            let stored: AutonomyQualificationSample = from_json(row.try_get("sample_snapshot")?)?;
+            if !same_qualification_sample(&stored, sample) {
+                return Err(ControlPlaneError::conflict_code(
+                    "qualification_sample_conflict",
+                    "Shadow qualification sample already has different content",
+                ));
+            }
+        }
+        transaction.commit().await?;
+        Ok(stored_view)
+    }
+
+    pub(super) async fn shadow_outcomes(
+        &self,
+        tenant_id: TenantId,
+        cluster_id: ClusterId,
+        action: ExecutionAction,
+        action_version: &str,
+        limit: i64,
+    ) -> Result<Vec<ShadowOutcomeView>, ControlPlaneError> {
+        let rows = sqlx::query(
+            "SELECT id, cohort_id, incident_id, plan_id, plan_hash,
+                    qualified, reason_codes, observed_at
+             FROM autonomy_shadow_outcomes
+             WHERE tenant_id = $1 AND cluster_id = $2
+               AND action_id = $3 AND action_version = $4
+             ORDER BY observed_at DESC, sequence_id DESC
+             LIMIT $5",
+        )
+        .bind(tenant_id.as_uuid())
+        .bind(cluster_id.as_uuid())
+        .bind(action.id())
+        .bind(action_version)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(shadow_outcome_from_row).collect()
+    }
+
     #[allow(
         clippy::too_many_arguments,
         reason = "exact persisted Critic binding is intentionally explicit"
@@ -1120,6 +1281,29 @@ fn same_qualification_sample(stored: &AutonomyQualificationSample, candidate: &A
         && stored.stable_window_passed == candidate.stable_window_passed
         && stored.observed_at == candidate.observed_at
         && stored.reconciled_at == candidate.reconciled_at
+}
+
+fn shadow_outcome_from_row(row: &sqlx::postgres::PgRow) -> Result<ShadowOutcomeView, ControlPlaneError> {
+    Ok(ShadowOutcomeView {
+        id: row.try_get("id")?,
+        cohort_id: rocketmq_sre_contracts::AutonomyCohortId::from_uuid(row.try_get("cohort_id")?),
+        incident_id: rocketmq_sre_contracts::IncidentId::from_uuid(row.try_get("incident_id")?),
+        plan_id: rocketmq_sre_contracts::ActionPlanId::from_uuid(row.try_get("plan_id")?),
+        plan_hash: row.try_get("plan_hash")?,
+        qualified: row.try_get("qualified")?,
+        reason_codes: row.try_get("reason_codes")?,
+        observed_at: row.try_get("observed_at")?,
+    })
+}
+
+fn same_shadow_outcome(stored: &ShadowOutcomeView, candidate: &ShadowOutcomeView) -> bool {
+    stored.cohort_id == candidate.cohort_id
+        && stored.incident_id == candidate.incident_id
+        && stored.plan_id == candidate.plan_id
+        && stored.plan_hash == candidate.plan_hash
+        && stored.qualified == candidate.qualified
+        && stored.reason_codes == candidate.reason_codes
+        && stored.observed_at == candidate.observed_at
 }
 
 fn lifecycle_from_row(
