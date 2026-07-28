@@ -54,21 +54,6 @@ impl ReleaseManagementService {
         }
     }
 
-    #[cfg(test)]
-    pub(super) fn with_clock(
-        repository: PostgresRepository,
-        supervised: SupervisedExecutionService,
-        forecast: ForecastService,
-        clock: Clock,
-    ) -> Self {
-        Self {
-            repository,
-            supervised,
-            forecast,
-            clock,
-        }
-    }
-
     pub(super) fn now(&self) -> DateTime<Utc> {
         (self.clock)()
     }
