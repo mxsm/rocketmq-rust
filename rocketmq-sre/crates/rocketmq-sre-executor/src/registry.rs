@@ -230,11 +230,74 @@ fn validate_integer(value: &Value, schema: &Value) -> Result<(), ExecutorError> 
 
 #[cfg(test)]
 mod tests {
+    use rocketmq_sre_contracts::PlanStepId;
+    use serde_json::json;
+
     use super::*;
 
     #[test]
     fn phase_five_descriptors_remain_disabled_until_handlers_ship() {
         let registry = ExecutorActionRegistry::embedded().expect("embedded catalog");
         assert!(registry.executable_actions().is_empty());
+    }
+
+    #[test]
+    fn autonomous_authorization_accepts_r1_and_rejects_r2() {
+        let mut r1 = descriptor(ExecutionAction::ObservabilityLoggerLevelTtl);
+        r1.execution_supported = true;
+        let r1_step = step(
+            &r1,
+            ExecutionAction::ObservabilityLoggerLevelTtl,
+            json!({
+                "component": "broker",
+                "logger": "rocketmq",
+                "level": "DEBUG",
+                "ttl_seconds": 60
+            }),
+        );
+        let r1_registry = ExecutorActionRegistry::from_descriptors([r1]).expect("R1 registry");
+        assert!(r1_registry.validate_step_authorization(&r1_step, true).is_ok());
+
+        let mut r2 = descriptor(ExecutionAction::BrokerRestartOne);
+        r2.execution_supported = true;
+        let r2_step = step(
+            &r2,
+            ExecutionAction::BrokerRestartOne,
+            json!({
+                "namespace": "rocketmq",
+                "pod": "broker-0",
+                "expected_uid": "pod-uid",
+                "broker_name": "broker-a"
+            }),
+        );
+        let r2_registry = ExecutorActionRegistry::from_descriptors([r2]).expect("R2 registry");
+        assert!(r2_registry.validate_step_authorization(&r2_step, false).is_ok());
+        assert!(r2_registry.validate_step_authorization(&r2_step, true).is_err());
+    }
+
+    fn descriptor(action: ExecutionAction) -> ActionDescriptor {
+        EMBEDDED_ACTION_DESCRIPTOR_YAMLS
+            .iter()
+            .find_map(|yaml| {
+                let descriptor = serde_yaml::from_str::<ActionDescriptor>(yaml).ok()?;
+                (descriptor.id == action.id()).then_some(descriptor)
+            })
+            .expect("embedded action descriptor")
+    }
+
+    fn step(descriptor: &ActionDescriptor, action: ExecutionAction, parameters: Value) -> PlanStep {
+        PlanStep {
+            id: PlanStepId::new(),
+            sequence: 1,
+            action,
+            descriptor_version: descriptor.version.clone(),
+            resource: format!("test/{}", action.id()),
+            parameters,
+            evidence_ids: Vec::new(),
+            precondition_hash: format!("sha256:{}", "a".repeat(64)),
+            max_impact: descriptor.max_impact,
+            verification: descriptor.verification.clone(),
+            compensation: descriptor.compensation.clone(),
+        }
     }
 }
