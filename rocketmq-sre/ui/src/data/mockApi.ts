@@ -49,6 +49,7 @@ import {
   demoSimulation,
   demoUpgradeReadiness,
 } from "./phase2ForecastDemo";
+import { createModelLifecycleMock } from "./modelLifecycleMock";
 import {
   demoIncidentOperations,
   demoOperationsReport,
@@ -96,6 +97,7 @@ export function createMockSreApi(auth?: ApiRequestContext): SreApi {
   const postmortems = mockPostmortems;
   const actionItems = mockActionItems;
   const incidentOperations = clone(demoIncidentOperations);
+  const modelLifecycle = createModelLifecycleMock();
 
   const scope = (clusterId: string) => {
     if (auth && !auth.clusterIds.includes(clusterId)) {
@@ -1057,6 +1059,30 @@ export function createMockSreApi(auth?: ApiRequestContext): SreApi {
     getModelCapabilities: async (signal) => {
       await wait(signal);
       return clone(phase1Models);
+    },
+    listModelProfileLifecycles: async (signal) => {
+      await wait(signal);
+      return modelLifecycle.list();
+    },
+    transitionModelProfileLifecycle: async (id, input, signal) => {
+      await wait(signal);
+      return modelLifecycle.transition(
+        id,
+        input,
+        auth?.subject ?? "demo-model-governance",
+      );
+    },
+    rollbackModelProfile: async (id, input, signal) => {
+      await wait(signal);
+      return modelLifecycle.rollback(
+        id,
+        input,
+        auth?.subject ?? "demo-model-governance",
+      );
+    },
+    runModelProfileSmoke: async (id, signal) => {
+      await wait(signal);
+      return modelLifecycle.smoke(id);
     },
     subscribeWorkflowEvents: async (onEvent, signal) => {
       await new Promise<void>((resolve) => {
