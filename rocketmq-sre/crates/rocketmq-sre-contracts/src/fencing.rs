@@ -58,6 +58,8 @@ pub struct LeaseFenceGrant {
     pub plan_step_id: PlanStepId,
     pub action: ExecutionAction,
     pub resource: String,
+    #[serde(default)]
+    pub compensation: bool,
     pub audience: String,
     pub issued_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
@@ -160,6 +162,8 @@ pub struct IssueFenceGrantRequest {
     pub execution_id: ExecutionId,
     pub step_id: ExecutionStepId,
     pub plan_step_id: PlanStepId,
+    #[serde(default)]
+    pub compensation: bool,
 }
 
 impl IssueFenceGrantRequest {
