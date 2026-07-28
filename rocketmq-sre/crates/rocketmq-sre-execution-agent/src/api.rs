@@ -26,6 +26,7 @@ use axum::routing::post;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::wait_for_signal_result;
 use rocketmq_sre_contracts::CorrelationId;
+use rocketmq_sre_contracts::ExecutionAction;
 use serde::Serialize;
 use subtle::ConstantTimeEq;
 
@@ -37,6 +38,7 @@ use crate::AgentDriverRegistry;
 use crate::AgentEffectStore;
 use crate::AgentReadRequest;
 use crate::AgentReadResult;
+use crate::BrokerConfigPatchHandler;
 use crate::DispatchBarrier;
 use crate::ExecutionAgent;
 use crate::ExecutionAgentCapabilities;
@@ -46,6 +48,7 @@ use crate::FenceAckSigner;
 use crate::HttpLeaseAuthorityClient;
 use crate::ReconcileEffectRequest;
 use crate::ReconcileEffectResponse;
+use crate::drivers::ProductionBrokerConfigPatchClient;
 
 #[derive(Clone)]
 struct AppState {
@@ -97,10 +100,8 @@ pub fn build_router(agent: ExecutionAgent, executor_token: impl Into<Arc<str>>, 
         .with_state(state)
 }
 
-/// Runs the production Agent with PostgreSQL fencing and no default handlers.
-///
-/// Wave action milestones explicitly register typed handlers. Until then,
-/// every mutation fails closed as `action_not_registered`.
+/// Runs the production Agent with PostgreSQL fencing and explicitly enabled
+/// typed handlers. Disabled actions fail closed as `action_not_registered`.
 ///
 /// # Errors
 ///
@@ -114,6 +115,24 @@ pub async fn run(
         .connect(&config.database_url)
         .await
         .map_err(crate::AgentStoreError::Database)?;
+    let broker_driver = match &config.broker_admin {
+        Some(driver_config) => Some(Arc::new(
+            ProductionBrokerConfigPatchClient::start(
+                driver_config,
+                pool.clone(),
+                service_context.child("broker-config-driver"),
+            )
+            .await?,
+        )),
+        None => None,
+    };
+    let mut registry = AgentDriverRegistry::empty();
+    if let Some(driver) = &broker_driver {
+        registry.register_admin(
+            ExecutionAction::BrokerConfigPatchAllowlisted,
+            BrokerConfigPatchHandler::new(Arc::clone(driver)),
+        )?;
+    }
     let authority = Arc::new(HttpLeaseAuthorityClient::new(
         config.authority_url.clone(),
         Arc::<str>::from(config.authority_token.as_str()),
@@ -125,7 +144,7 @@ pub async fn run(
         AgentEffectStore::new(pool.clone()),
         DispatchBarrier::new(pool),
         authority,
-        AgentDriverRegistry::empty(),
+        registry,
         FenceAckSigner::new(config.ack_signing_key.as_bytes(), config.agent_subject.clone())?,
         config.driver_timeout,
     );
@@ -151,6 +170,9 @@ pub async fn run(
         }
     })
     .await;
+    if let Some(driver) = broker_driver {
+        driver.shutdown().await;
+    }
     service_context.task_group().cancel();
     server_result.map_err(|_| ExecutionAgentError::Io(std::io::Error::other("Execution Agent server failed")))
 }

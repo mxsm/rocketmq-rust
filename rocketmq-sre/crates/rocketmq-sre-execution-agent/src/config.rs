@@ -17,11 +17,42 @@ use std::fmt::Formatter;
 use std::net::SocketAddr;
 use std::time::Duration;
 
+use rocketmq_admin_core::core::security::AdminCredentials;
 use url::Url;
 
 use crate::ExecutionAgentError;
 
 pub const DEFAULT_EXECUTION_AGENT_PORT: u16 = 8095;
+
+#[derive(Clone)]
+pub(crate) struct BrokerAdminDriverConfig {
+    pub(crate) namesrv_addr: String,
+    pub(crate) use_tls: bool,
+    pub(crate) request_timeout: Duration,
+    pub(crate) shutdown_timeout: Duration,
+    pub(crate) read_credentials: Option<AdminCredentials>,
+    pub(crate) mutation_credentials: Option<AdminCredentials>,
+}
+
+impl Debug for BrokerAdminDriverConfig {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BrokerAdminDriverConfig")
+            .field("namesrv_addr", &self.namesrv_addr)
+            .field("use_tls", &self.use_tls)
+            .field("request_timeout", &self.request_timeout)
+            .field("shutdown_timeout", &self.shutdown_timeout)
+            .field(
+                "read_credentials",
+                &self.read_credentials.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "mutation_credentials",
+                &self.mutation_credentials.as_ref().map(|_| "[REDACTED]"),
+            )
+            .finish()
+    }
+}
 
 /// Explicit process configuration with redacted workload credentials.
 #[derive(Clone)]
@@ -37,6 +68,7 @@ pub struct ExecutionAgentConfig {
     pub(crate) driver_timeout: Duration,
     pub(crate) shutdown_timeout: Duration,
     pub(crate) dev_insecure_http: bool,
+    pub(crate) broker_admin: Option<BrokerAdminDriverConfig>,
 }
 
 impl ExecutionAgentConfig {
@@ -69,6 +101,7 @@ impl ExecutionAgentConfig {
         let request_timeout = duration_env("ROCKETMQ_SRE_AGENT_REQUEST_TIMEOUT_SECONDS", 10)?;
         let driver_timeout = duration_env("ROCKETMQ_SRE_AGENT_DRIVER_TIMEOUT_SECONDS", 30)?;
         let shutdown_timeout = duration_env("ROCKETMQ_SRE_AGENT_SHUTDOWN_SECONDS", 30)?;
+        let broker_admin = broker_admin_from_env(dev_insecure_http, shutdown_timeout)?;
         Ok(Self {
             bind_addr,
             database_url,
@@ -81,6 +114,7 @@ impl ExecutionAgentConfig {
             driver_timeout,
             shutdown_timeout,
             dev_insecure_http,
+            broker_admin,
         })
     }
 
@@ -105,6 +139,7 @@ impl Debug for ExecutionAgentConfig {
             .field("driver_timeout", &self.driver_timeout)
             .field("shutdown_timeout", &self.shutdown_timeout)
             .field("dev_insecure_http", &self.dev_insecure_http)
+            .field("broker_admin", &self.broker_admin)
             .finish()
     }
 }
@@ -137,6 +172,62 @@ fn duration_env(name: &str, default: u64) -> Result<Duration, ExecutionAgentErro
         return Err(ExecutionAgentError::Configuration);
     }
     Ok(Duration::from_secs(seconds))
+}
+
+fn broker_admin_from_env(
+    dev_insecure: bool,
+    shutdown_timeout: Duration,
+) -> Result<Option<BrokerAdminDriverConfig>, ExecutionAgentError> {
+    if !parse_env("ROCKETMQ_SRE_AGENT_ENABLE_BROKER_CONFIG", false)? {
+        return Ok(None);
+    }
+    let read_credentials = admin_credentials_from_env("READ")?;
+    let mutation_credentials = admin_credentials_from_env("MUTATION")?;
+    if !dev_insecure && (read_credentials.is_none() || mutation_credentials.is_none()) {
+        return Err(ExecutionAgentError::Configuration);
+    }
+    if read_credentials
+        .as_ref()
+        .zip(mutation_credentials.as_ref())
+        .is_some_and(|(read, mutation)| read.0 == mutation.0)
+    {
+        return Err(ExecutionAgentError::Configuration);
+    }
+    Ok(Some(BrokerAdminDriverConfig {
+        namesrv_addr: required("ROCKETMQ_SRE_AGENT_NAMESRV_ADDR")?,
+        use_tls: parse_env("ROCKETMQ_SRE_AGENT_BROKER_ADMIN_USE_TLS", true)?,
+        request_timeout: duration_env("ROCKETMQ_SRE_AGENT_BROKER_ADMIN_TIMEOUT_SECONDS", 10)?,
+        shutdown_timeout,
+        read_credentials: read_credentials.map(|(_, credentials)| credentials),
+        mutation_credentials: mutation_credentials.map(|(_, credentials)| credentials),
+    }))
+}
+
+fn admin_credentials_from_env(identity: &str) -> Result<Option<(String, AdminCredentials)>, ExecutionAgentError> {
+    let access_name = format!("ROCKETMQ_SRE_AGENT_BROKER_{identity}_ACCESS_KEY");
+    let secret_name = format!("ROCKETMQ_SRE_AGENT_BROKER_{identity}_SECRET_KEY");
+    let token_name = format!("ROCKETMQ_SRE_AGENT_BROKER_{identity}_SECURITY_TOKEN");
+    let access_key = optional(&access_name)?;
+    let secret_key = optional(&secret_name)?;
+    let security_token = optional(&token_name)?;
+    match (access_key, secret_key) {
+        (None, None) if security_token.is_none() => Ok(None),
+        (Some(access_key), Some(secret_key)) => {
+            let identity = access_key.clone();
+            AdminCredentials::try_new(access_key, secret_key, security_token)
+                .map(|credentials| Some((identity, credentials)))
+                .map_err(|_| ExecutionAgentError::Configuration)
+        }
+        _ => Err(ExecutionAgentError::Configuration),
+    }
+}
+
+fn optional(name: &str) -> Result<Option<String>, ExecutionAgentError> {
+    match std::env::var(name) {
+        Ok(value) => Ok((!value.trim().is_empty()).then(|| value.trim().to_owned())),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(_) => Err(ExecutionAgentError::Configuration),
+    }
 }
 
 pub(crate) fn validate_internal_service_url(url: &Url, dev_insecure: bool) -> Result<(), ExecutionAgentError> {
@@ -198,6 +289,7 @@ mod tests {
             driver_timeout: Duration::from_secs(1),
             shutdown_timeout: Duration::from_secs(1),
             dev_insecure_http: false,
+            broker_admin: None,
         };
         let debug = format!("{config:?}");
         assert!(debug.contains("[REDACTED]"));
@@ -206,6 +298,37 @@ mod tests {
             "authority-workload-secret",
             "executor-workload-secret",
             "agent-ack-signing-secret-at-least-32-bytes",
+        ] {
+            assert!(!debug.contains(secret));
+        }
+    }
+
+    #[test]
+    fn broker_admin_debug_redacts_both_isolated_identities() {
+        let config = BrokerAdminDriverConfig {
+            namesrv_addr: "namesrv:9876".to_owned(),
+            use_tls: true,
+            request_timeout: Duration::from_secs(1),
+            shutdown_timeout: Duration::from_secs(1),
+            read_credentials: Some(
+                AdminCredentials::try_new("reader-access", "reader-secret", Some("reader-token".to_owned()))
+                    .expect("reader identity"),
+            ),
+            mutation_credentials: Some(
+                AdminCredentials::try_new("writer-access", "writer-secret", Some("writer-token".to_owned()))
+                    .expect("mutation identity"),
+            ),
+        };
+
+        let debug = format!("{config:?}");
+        assert!(debug.contains("[REDACTED]"));
+        for secret in [
+            "reader-access",
+            "reader-secret",
+            "reader-token",
+            "writer-access",
+            "writer-secret",
+            "writer-token",
         ] {
             assert!(!debug.contains(secret));
         }
