@@ -16,11 +16,15 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use chrono::Utc;
+use rocketmq_sre_contracts::AUTONOMY_SCHEMA_VERSION;
+use rocketmq_sre_contracts::AgentDispatchAuthorization;
 use rocketmq_sre_contracts::AgentDispatchRequest;
 use rocketmq_sre_contracts::AgentDispatchResponse;
 use rocketmq_sre_contracts::AgentStepRequest;
 use rocketmq_sre_contracts::AuditEventKind;
 use rocketmq_sre_contracts::CompensationMode;
+use rocketmq_sre_contracts::DynamicSafetyDecision;
+use rocketmq_sre_contracts::DynamicSafetyEvaluationRequest;
 use rocketmq_sre_contracts::EXECUTION_AGENT_SCHEMA_VERSION;
 use rocketmq_sre_contracts::EvidenceId;
 use rocketmq_sre_contracts::ExecutionRequest;
@@ -58,6 +62,7 @@ struct AppliedStep {
 enum ForwardDispatch {
     Applied(Vec<AppliedStep>),
     Replan(Vec<AppliedStep>),
+    SafetyInvalidated(Vec<AppliedStep>),
     VerificationUnavailable(Vec<AppliedStep>),
 }
 
@@ -102,6 +107,18 @@ impl ChangeExecutor {
                 .await?;
                 return self
                     .rollback_applied(request, locks, verifier, applied, "during_verification_unavailable")
+                    .await;
+            }
+            ForwardDispatch::SafetyInvalidated(applied) => {
+                self.transition(
+                    request,
+                    ExecutionState::Applying,
+                    ExecutionState::Compensating,
+                    "dynamic_safety_invalidated",
+                )
+                .await?;
+                return self
+                    .rollback_applied(request, locks, verifier, applied, "dynamic_safety_invalidated")
                     .await;
             }
         };
@@ -156,7 +173,23 @@ impl ChangeExecutor {
             let pre = self
                 .capture_and_persist(request, step, step_id, VerificationPhase::Pre, verifier)
                 .await?;
-            let intent = self.persist_intent(request, step, step_id, false, "forward").await?;
+            let dynamic_safety = match self.evaluate_step_safety(request, step, step_id).await {
+                Ok(decision) => decision,
+                Err(error) if applied.is_empty() => {
+                    self.transition(
+                        request,
+                        ExecutionState::Prechecking,
+                        ExecutionState::Escalated,
+                        "dynamic_safety_expected_deny",
+                    )
+                    .await?;
+                    return Err(error);
+                }
+                Err(_) => return Ok(ForwardDispatch::SafetyInvalidated(applied)),
+            };
+            let intent = self
+                .persist_intent(request, step, step_id, dynamic_safety, false, "forward")
+                .await?;
             if index == 0 {
                 self.transition(
                     request,
@@ -314,7 +347,14 @@ impl ChangeExecutor {
             }
             let compensation_step_id = ExecutionStepId::new();
             let intent = self
-                .persist_intent(request, &applied_step.step, compensation_step_id, true, "compensation")
+                .persist_intent(
+                    request,
+                    &applied_step.step,
+                    compensation_step_id,
+                    None,
+                    true,
+                    "compensation",
+                )
                 .await?;
             let timeout_seconds = applied_step.step.compensation.timeout_seconds;
             let response = tokio::time::timeout(
@@ -488,6 +528,7 @@ impl ChangeExecutor {
         request: &ExecutionRequest,
         step: &PlanStep,
         step_id: ExecutionStepId,
+        dynamic_safety: Option<DynamicSafetyDecision>,
         compensation: bool,
         direction: &str,
     ) -> Result<StepIntent, ExecutorError> {
@@ -517,6 +558,7 @@ impl ChangeExecutor {
             attempt: ATTEMPT,
             idempotency_key: format!("{}:{}:{direction}:{ATTEMPT}", request.idempotency_key, step.id),
             fence_grant: grant,
+            dynamic_safety,
             intended_at,
             compensation,
         };
@@ -538,6 +580,7 @@ impl ChangeExecutor {
                         "sequence": step.sequence,
                         "action": step.action,
                         "lease_epoch": intent.fence_grant.epoch,
+                        "dynamic_safety_decision_id": intent.dynamic_safety.as_ref().map(|decision| decision.id),
                         "compensation": compensation,
                     }),
                     intended_at,
@@ -557,6 +600,12 @@ impl ChangeExecutor {
             .dispatch(&AgentDispatchRequest {
                 schema_version: EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
                 tenant_id: request.tenant_id,
+                plan_id: Some(request.plan.id),
+                authorization: if request.is_autonomous() {
+                    AgentDispatchAuthorization::Autonomous
+                } else {
+                    AgentDispatchAuthorization::HumanApproved
+                },
                 request: AgentStepRequest {
                     intent,
                     action: step.action,
@@ -566,6 +615,34 @@ impl ChangeExecutor {
                 },
             })
             .await
+    }
+
+    async fn evaluate_step_safety(
+        &self,
+        request: &ExecutionRequest,
+        step: &PlanStep,
+        step_id: ExecutionStepId,
+    ) -> Result<Option<DynamicSafetyDecision>, ExecutorError> {
+        let Some(grant) = request.autonomy_grant.as_ref() else {
+            return Ok(None);
+        };
+        let decision = self
+            .authority
+            .evaluate_dynamic_safety(&DynamicSafetyEvaluationRequest {
+                schema_version: AUTONOMY_SCHEMA_VERSION.to_owned(),
+                tenant_id: request.tenant_id,
+                cluster_id: request.cluster_id,
+                action: step.action,
+                action_version: step.descriptor_version.clone(),
+                plan_id: request.plan.id,
+                plan_hash: request.plan.plan_hash.clone(),
+                execution_id: request.id,
+                execution_step_id: step_id,
+                policy_definition_version: grant.policy_definition_version,
+                lifecycle_revision: grant.lifecycle_revision,
+            })
+            .await?;
+        Ok(Some(decision))
     }
 
     async fn persist_agent_result(
