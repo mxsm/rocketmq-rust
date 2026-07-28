@@ -54,6 +54,7 @@ use super::service::SupervisedExecutionService;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
 use crate::models::ModelGatewayService;
+use crate::repository::ClusterRepository;
 use crate::workflow::WorkflowEventBus;
 use crate::workflow::WorkflowService;
 
