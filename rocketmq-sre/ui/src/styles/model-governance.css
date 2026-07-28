@@ -467,3 +467,13 @@
 .model-terminal-state span {
   font-size: 9px;
 }
+
+@media (max-width: 1360px) {
+  .model-governance-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .model-governance-panel {
+    position: static;
+  }
+}
