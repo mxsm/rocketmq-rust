@@ -18,8 +18,10 @@ use rocketmq_protocol::protocol::body::kv_table::KVTable;
 
 use crate::client_adapter::lifecycle::AdminSession;
 use crate::core::broker::project_broker_diagnostics;
+use crate::core::broker::project_broker_log_filter_state;
 use crate::core::broker::BrokerAdmin;
 use crate::core::broker::BrokerAllowlistedConfig;
+use crate::core::broker::BrokerLogFilterState;
 use crate::core::broker::BrokerSummary;
 use crate::core::broker::ListBrokersRequest;
 use crate::core::broker::ListBrokersResult;
@@ -28,6 +30,7 @@ use crate::core::broker::ProbeBrokerRuntimeResult;
 use crate::core::broker::QueryBrokerAllowlistedConfigRequest;
 use crate::core::broker::QueryBrokerDiagnosticsRequest;
 use crate::core::broker::QueryBrokerDiagnosticsResult;
+use crate::core::broker::QueryBrokerLogFilterStateRequest;
 use crate::core::AdminError;
 use crate::core::AdminFuture;
 
@@ -181,6 +184,21 @@ impl BrokerAdmin for AdminSession {
                 flush_delay_offset_interval_ms: config.flush_delay_offset_interval_ms,
                 max_client_event_count: config.max_client_event_count,
             })
+        })
+    }
+
+    fn query_log_filter_state<'a>(
+        &'a mut self,
+        request: &'a QueryBrokerLogFilterStateRequest,
+    ) -> AdminFuture<'a, BrokerLogFilterState> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            let runtime = self
+                .inner
+                .fetch_broker_runtime_stats(CheetahString::from(request.broker_addr.as_str()))
+                .await
+                .map_err(|error| AdminError::backend("fetch_broker_runtime_stats", error.to_string()))?;
+            Ok(project_broker_log_filter_state(request.logger.clone(), &runtime))
         })
     }
 }
