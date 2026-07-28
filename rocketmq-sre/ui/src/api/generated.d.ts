@@ -1124,6 +1124,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/autonomy/outcomes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listAutonomyOutcomes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/autonomy/reports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getAutonomyOperationalReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/operations/shift-handoff": {
         parameters: {
             query?: never;
@@ -6668,6 +6700,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IncidentOperationResult"];
+                };
+            };
+        };
+    };
+    listAutonomyOutcomes: {
+        parameters: {
+            query?: {
+                cluster_id?: string;
+                action?: string;
+                class?: "expected_deny" | "success" | "autonomous_execution_failure";
+                from?: string;
+                until?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded append-only autonomy outcome dataset */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonObject"];
+                };
+            };
+        };
+    };
+    getAutonomyOperationalReport: {
+        parameters: {
+            query?: {
+                cluster_id?: string;
+                period?: "weekly" | "monthly";
+                anchor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Outcome, latency, quality, cost, savings and human-review optimization report */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonObject"];
                 };
             };
         };
