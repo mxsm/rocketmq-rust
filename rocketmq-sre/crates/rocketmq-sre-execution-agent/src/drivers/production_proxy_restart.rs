@@ -306,6 +306,28 @@ impl ProductionProxyRestartClient {
         Ok(candidates.pop())
     }
 
+    async fn remaining_replicas_healthy(
+        &self,
+        deployment: &Deployment,
+        excluded_uid: &str,
+    ) -> Result<bool, ExecutionAgentError> {
+        let namespace = deployment.namespace().ok_or(ExecutionAgentError::DriverFailed)?;
+        let selector = deployment
+            .spec
+            .as_ref()
+            .map(|spec| &spec.selector)
+            .ok_or(ExecutionAgentError::DriverFailed)?;
+        let pods = Api::<Pod>::namespaced(self.kube.clone(), &namespace)
+            .list(&ListParams::default())
+            .await
+            .map_err(|_| ExecutionAgentError::DriverFailed)?;
+        Ok(pods.items.iter().any(|pod| {
+            selector_matches(selector, pod.metadata.labels.as_ref())
+                && pod.metadata.uid.as_deref() != Some(excluded_uid)
+                && pod_ready(pod)
+        }))
+    }
+
     async fn query_drain(&self, proxy_addr: &str) -> Result<ProxyDrainState, ExecutionAgentError> {
         self.read_admin
             .lock()
@@ -533,6 +555,7 @@ impl ProxyRestartClient for ProductionProxyRestartClient {
                 .clone()
                 .ok_or(ExecutionAgentError::DriverFailed)?;
             let pod_is_ready = pod_ready(&current_pod);
+            let remaining_replicas_healthy = self.remaining_replicas_healthy(&resolved.deployment, &pod_uid).await?;
             let replacement_ready =
                 operation_id.is_some() && original_uid.is_some_and(|uid| uid != pod_uid) && pod_is_ready;
             let addr = proxy_addr(&current_pod, resolved.allowed.remoting_port)?;
@@ -546,6 +569,7 @@ impl ProxyRestartClient for ProductionProxyRestartClient {
                 drain_supported: drain.is_some(),
                 pod_uid,
                 pod_ready: pod_is_ready,
+                remaining_replicas_healthy,
                 replacement_ready,
                 synthetic_path_healthy: verification.synthetic_path_healthy,
                 slo_healthy: verification.slo_healthy,
@@ -561,6 +585,9 @@ impl ProxyRestartClient for ProductionProxyRestartClient {
             let pod = resolved.pod.ok_or(ExecutionAgentError::DriverFailed)?;
             if pod.metadata.uid.as_deref() != Some(request.expected_uid.as_str())
                 || !pod_ready(&pod)
+                || !self
+                    .remaining_replicas_healthy(&resolved.deployment, &request.expected_uid)
+                    .await?
                 || annotation(&resolved.deployment, OPERATION_ANNOTATION).is_some()
             {
                 return Err(ExecutionAgentError::DriverFailed);
@@ -597,6 +624,9 @@ impl ProxyRestartClient for ProductionProxyRestartClient {
                 || final_drain.phase != ProxyDrainPhase::Drained
                 || !final_drain.zero_pending
                 || !final_drain.pending.is_zero()
+                || !self
+                    .remaining_replicas_healthy(&resolved.deployment, &request.expected_uid)
+                    .await?
             {
                 self.cancel_drain(&original_proxy_addr, &request.operation_id).await?;
                 self.clear_restart(&resolved.allowed, &request.operation_id).await?;
