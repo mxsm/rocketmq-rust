@@ -69,11 +69,7 @@ const STARTED_AT_ANNOTATION: &str = "rocketmq.apache.org/sre-restart-started-at"
 const MAX_VERIFICATION_RESPONSE_BYTES: usize = 128 * 1024;
 const REPLACEMENT_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const GRACE_PERIOD_SECONDS: u32 = 30;
-const VERIFICATION_CONDITIONS: [&str; 3] = [
-    "synthetic_message_path",
-    "proxy_error_ratio",
-    "proxy_p99_latency",
-];
+const VERIFICATION_CONDITIONS: [&str; 3] = ["synthetic_message_path", "proxy_error_ratio", "proxy_p99_latency"];
 
 #[derive(Clone)]
 struct VerificationClient {
@@ -126,9 +122,7 @@ impl ProductionProxyRestartClient {
             return Err(ExecutionAgentError::Configuration);
         }
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let mut kube_config = Config::infer()
-            .await
-            .map_err(|_| ExecutionAgentError::Configuration)?;
+        let mut kube_config = Config::infer().await.map_err(|_| ExecutionAgentError::Configuration)?;
         kube_config.proxy_url = None;
         let kube = Client::try_from(kube_config).map_err(|_| ExecutionAgentError::Configuration)?;
 
@@ -219,7 +213,11 @@ impl ProductionProxyRestartClient {
         }
 
         let mut matches = Vec::new();
-        for key in self.targets.keys().filter(|key| key.starts_with(&format!("{namespace}/"))) {
+        for key in self
+            .targets
+            .keys()
+            .filter(|key| key.starts_with(&format!("{namespace}/")))
+        {
             let deployment_name = key
                 .split_once('/')
                 .map(|(_, deployment)| deployment)
@@ -525,11 +523,7 @@ impl VerificationClient {
 }
 
 impl ProxyRestartClient for ProductionProxyRestartClient {
-    fn proxy_restart_state<'a>(
-        &'a self,
-        namespace: &'a str,
-        pod: &'a str,
-    ) -> DriverFuture<'a, ProxyRestartState> {
+    fn proxy_restart_state<'a>(&'a self, namespace: &'a str, pod: &'a str) -> DriverFuture<'a, ProxyRestartState> {
         Box::pin(async move {
             let resolved = self.resolve_target(namespace, pod).await?;
             let operation_id = annotation(&resolved.deployment, OPERATION_ANNOTATION).map(str::to_owned);
@@ -587,8 +581,7 @@ impl ProxyRestartClient for ProductionProxyRestartClient {
                 return Err(ExecutionAgentError::DriverFailed);
             }
 
-            let deadline =
-                tokio::time::Instant::now() + Duration::from_secs(u64::from(request.drain_timeout_seconds));
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(u64::from(request.drain_timeout_seconds));
             if self
                 .wait_for_zero_drain(&proxy_addr, &request.operation_id, deadline)
                 .await
@@ -622,20 +615,12 @@ impl ProxyRestartClient for ProductionProxyRestartClient {
             }
 
             let replacement = self
-                .wait_for_replacement(
-                    &request.namespace,
-                    &request.pod,
-                    &request.expected_uid,
-                    deadline,
-                )
+                .wait_for_replacement(&request.namespace, &request.pod, &request.expected_uid, deadline)
                 .await?;
             let replacement_addr = proxy_addr(&replacement, resolved.allowed.remoting_port)?;
             let replacement_drain = self.query_drain(&replacement_addr).await?;
             let verification = self.verification.observe().await?;
-            if !accepting(&replacement_drain)
-                || !verification.synthetic_path_healthy
-                || !verification.slo_healthy
-            {
+            if !accepting(&replacement_drain) || !verification.synthetic_path_healthy || !verification.slo_healthy {
                 return Err(ExecutionAgentError::DriverFailed);
             }
             Ok(())
@@ -677,11 +662,7 @@ async fn decode_observation(mut response: reqwest::Response) -> Result<Execution
         return Err(ExecutionAgentError::DriverFailed);
     }
     let mut bytes = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|_| ExecutionAgentError::DriverFailed)?
-    {
+    while let Some(chunk) = response.chunk().await.map_err(|_| ExecutionAgentError::DriverFailed)? {
         if bytes.len().saturating_add(chunk.len()) > MAX_VERIFICATION_RESPONSE_BYTES {
             return Err(ExecutionAgentError::DriverFailed);
         }
@@ -695,10 +676,7 @@ fn validate_observation(
     observation: &ExecutionSliObservation,
 ) -> Result<(), ExecutionAgentError> {
     let expected = query.conditions.iter().collect::<std::collections::BTreeSet<_>>();
-    let actual = observation
-        .conditions
-        .keys()
-        .collect::<std::collections::BTreeSet<_>>();
+    let actual = observation.conditions.keys().collect::<std::collections::BTreeSet<_>>();
     if observation.schema_version != EXECUTION_VERIFICATION_SCHEMA_VERSION
         || observation.tenant_id != query.tenant_id
         || observation.cluster_id != query.cluster_id
@@ -777,31 +755,22 @@ fn selector_matches(selector: &LabelSelector, labels: Option<&BTreeMap<String, S
     {
         return false;
     }
-    selector
-        .match_expressions
-        .as_ref()
-        .is_none_or(|requirements| {
-            requirements.iter().all(|requirement| {
-                let value = labels.get(&requirement.key);
-                match requirement.operator.as_str() {
-                    "In" => value.is_some_and(|value| {
-                        requirement
-                            .values
-                            .as_ref()
-                            .is_some_and(|values| values.contains(value))
-                    }),
-                    "NotIn" => value.is_none_or(|value| {
-                        requirement
-                            .values
-                            .as_ref()
-                            .is_none_or(|values| !values.contains(value))
-                    }),
-                    "Exists" => value.is_some(),
-                    "DoesNotExist" => value.is_none(),
-                    _ => false,
+    selector.match_expressions.as_ref().is_none_or(|requirements| {
+        requirements.iter().all(|requirement| {
+            let value = labels.get(&requirement.key);
+            match requirement.operator.as_str() {
+                "In" => {
+                    value.is_some_and(|value| requirement.values.as_ref().is_some_and(|values| values.contains(value)))
                 }
-            })
+                "NotIn" => {
+                    value.is_none_or(|value| requirement.values.as_ref().is_none_or(|values| !values.contains(value)))
+                }
+                "Exists" => value.is_some(),
+                "DoesNotExist" => value.is_none(),
+                _ => false,
+            }
         })
+    })
 }
 
 fn duration_millis(duration: Duration) -> Result<u64, ExecutionAgentError> {
