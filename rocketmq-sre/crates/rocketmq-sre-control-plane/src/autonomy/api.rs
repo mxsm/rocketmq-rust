@@ -21,6 +21,7 @@ use axum::http::HeaderMap;
 use axum::routing::get;
 use axum::routing::post;
 use rocketmq_sre_contracts::AutonomyGrant;
+use rocketmq_sre_contracts::AutonomyOutcome;
 use rocketmq_sre_contracts::AutonomyQualificationCohort;
 use rocketmq_sre_contracts::AutonomyQualificationSample;
 
@@ -37,6 +38,7 @@ use super::model::DynamicSafetyView;
 use super::model::EvaluateDynamicSafetyRequest;
 use super::model::IssueAutonomyGrantRequest;
 use super::model::PrepareAutonomousCohortRequest;
+use super::model::RecordAutonomyOutcomeRequest;
 use super::model::RecordQualificationSampleRequest;
 use super::model::RecordShadowOutcomeRequest;
 use super::model::SetAutonomyFreezeRequest;
@@ -88,6 +90,10 @@ pub(crate) fn routes() -> Router<AppState> {
         .route(
             "/internal/v1/autonomy/grants",
             post(issue_grant).layer(DefaultBodyLimit::max(64 * 1024)),
+        )
+        .route(
+            "/internal/v1/autonomy/outcomes",
+            post(record_outcome).layer(DefaultBodyLimit::max(64 * 1024)),
         )
         .route(
             "/internal/v1/autonomy/dynamic-safety",
@@ -214,6 +220,15 @@ async fn issue_grant(
 ) -> Result<Json<AutonomyGrant>, ControlPlaneError> {
     let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
     state.autonomy.issue_grant(&auth, &request).await.map(Json)
+}
+
+async fn record_outcome(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<RecordAutonomyOutcomeRequest>,
+) -> Result<Json<AutonomyOutcome>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
+    state.autonomy.record_outcome(&auth, &request).await.map(Json)
 }
 
 async fn evaluate_dynamic_safety(
