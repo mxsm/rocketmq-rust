@@ -21,6 +21,9 @@ brokerName = "sre-dev-broker"
 brokerClusterName = "SreDev"
 brokerId = 0
 
+[logging.reload]
+enabled = true
+
 [store]
 storePathRootDir = "/var/lib/rocketmq/broker"
 haListenPort = 10912
