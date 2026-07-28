@@ -53,7 +53,9 @@ impl fmt::Display for AutonomyTransitionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ModelAuthorityForbidden => formatter.write_str("models cannot change autonomy lifecycle state"),
-            Self::HumanAuthorityRequired => formatter.write_str("autonomy lifecycle transition requires a human operator"),
+            Self::HumanAuthorityRequired => {
+                formatter.write_str("autonomy lifecycle transition requires a human operator")
+            }
             Self::InvalidTransition => formatter.write_str("autonomy lifecycle transition is not allowed"),
             Self::QualificationMissing => formatter.write_str("autonomy promotion qualification is incomplete"),
             Self::CriticNotReady => formatter.write_str("autonomous promotion requires a valid heterogeneous critic"),
@@ -121,14 +123,13 @@ impl AutonomyStateMachine {
                     return Err(AutonomyTransitionError::OwnerConfirmationRequired);
                 }
             }
-            (
-                AutonomyMode::Shadow | AutonomyMode::Supervised | AutonomyMode::Autonomous,
-                AutonomyMode::Paused,
-            ) if reason.is_some() => {}
+            (AutonomyMode::Shadow | AutonomyMode::Supervised | AutonomyMode::Autonomous, AutonomyMode::Paused)
+                if reason.is_some() => {}
             (AutonomyMode::Paused, AutonomyMode::Shadow | AutonomyMode::Supervised) if human => {}
-            (_, AutonomyMode::Disabled | AutonomyMode::Shadow | AutonomyMode::Supervised | AutonomyMode::Autonomous)
-                if !human =>
-            {
+            (
+                _,
+                AutonomyMode::Disabled | AutonomyMode::Shadow | AutonomyMode::Supervised | AutonomyMode::Autonomous,
+            ) if !human => {
                 return Err(AutonomyTransitionError::HumanAuthorityRequired);
             }
             _ => return Err(AutonomyTransitionError::InvalidTransition),
