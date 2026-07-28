@@ -183,81 +183,7 @@ impl PostgresRepository {
         audit: &AuditEvent,
     ) -> Result<bool, ControlPlaneError> {
         let mut transaction = self.pool.begin().await?;
-        let queued = match target.target.adapter_kind {
-            IntegrationAdapterKind::MockItsm | IntegrationAdapterKind::SignedWebhookItsm => {
-                sqlx::query(
-                    "INSERT INTO integration_outbox (
-                        id, target_id, descriptor_id, descriptor_version,
-                        tenant_id, cluster_id, incident_id, plan_id, release_id,
-                        event_kind, idempotency_key, status, sanitized_summary,
-                        deep_link, delivery_snapshot, attempt_count,
-                        next_attempt_at, created_at
-                     ) VALUES (
-                        $1, $2, $3, $4,
-                        $5, $6, $7, $8, $9,
-                        $10, $11, 'pending', $12,
-                        $13, $14, 0,
-                        NOW(), $15
-                     )
-                     ON CONFLICT (target_id, idempotency_key) DO NOTHING",
-                )
-                .bind(delivery.id.as_uuid())
-                .bind(delivery.target_id.as_uuid())
-                .bind(&delivery.descriptor_id)
-                .bind(&delivery.descriptor_version)
-                .bind(delivery.tenant_id.as_uuid())
-                .bind(delivery.cluster_id.as_uuid())
-                .bind(delivery.incident_id.as_uuid())
-                .bind(delivery.plan_id.map(|id| id.as_uuid()))
-                .bind(delivery.release_id.map(|id| id.as_uuid()))
-                .bind(integration_event_name(delivery.event_kind))
-                .bind(&delivery.idempotency_key)
-                .bind(&delivery.sanitized_summary)
-                .bind(&delivery.deep_link)
-                .bind(json_value(delivery)?)
-                .bind(delivery.created_at)
-                .execute(&mut *transaction)
-                .await?
-                .rows_affected()
-                    == 1
-            }
-            IntegrationAdapterKind::ChatOpsWebhook | IntegrationAdapterKind::Pager | IntegrationAdapterKind::Email => {
-                let notification_target_id = target.notification_target_id.ok_or_else(|| {
-                    ControlPlaneError::configuration(
-                        "notification-backed integration does not reference a notification target",
-                    )
-                })?;
-                let delivery_key = format!("integration:{}:{}", delivery.target_id, delivery.idempotency_key);
-                sqlx::query(
-                    "INSERT INTO notification_outbox (
-                        id, target_id, tenant_id, cluster_id, incident_id,
-                        delivery_key, status, sanitized_summary, deep_link,
-                        attempt_count, next_attempt_at, created_at
-                     ) VALUES (
-                        $1, $2, $3, $4, $5,
-                        $6, 'pending', $7, $8,
-                        0, NOW(), $9
-                     )
-                     ON CONFLICT (tenant_id, delivery_key) DO NOTHING",
-                )
-                .bind(NotificationDeliveryId::from_uuid(delivery.id.as_uuid()).as_uuid())
-                .bind(notification_target_id.as_uuid())
-                .bind(delivery.tenant_id.as_uuid())
-                .bind(delivery.cluster_id.as_uuid())
-                .bind(delivery.incident_id.as_uuid())
-                .bind(delivery_key)
-                .bind(&delivery.sanitized_summary)
-                .bind(&delivery.deep_link)
-                .bind(delivery.created_at)
-                .execute(&mut *transaction)
-                .await?
-                .rows_affected()
-                    == 1
-            }
-        };
-        if queued {
-            insert_audit(&mut transaction, audit).await?;
-        }
+        let queued = enqueue_delivery_in_transaction(&mut transaction, target, delivery, audit).await?;
         transaction.commit().await?;
         Ok(queued)
     }
@@ -461,6 +387,90 @@ impl PostgresRepository {
         })
         .transpose()
     }
+}
+
+pub(super) async fn enqueue_delivery_in_transaction(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    target: &IntegrationTargetView,
+    delivery: &IntegrationDelivery,
+    audit: &AuditEvent,
+) -> Result<bool, ControlPlaneError> {
+    let queued = match target.target.adapter_kind {
+        IntegrationAdapterKind::MockItsm | IntegrationAdapterKind::SignedWebhookItsm => {
+            sqlx::query(
+                "INSERT INTO integration_outbox (
+                    id, target_id, descriptor_id, descriptor_version,
+                    tenant_id, cluster_id, incident_id, plan_id, release_id,
+                    event_kind, idempotency_key, status, sanitized_summary,
+                    deep_link, delivery_snapshot, attempt_count,
+                    next_attempt_at, created_at
+                 ) VALUES (
+                    $1, $2, $3, $4,
+                    $5, $6, $7, $8, $9,
+                    $10, $11, 'pending', $12,
+                    $13, $14, 0,
+                    NOW(), $15
+                 )
+                 ON CONFLICT (target_id, idempotency_key) DO NOTHING",
+            )
+            .bind(delivery.id.as_uuid())
+            .bind(delivery.target_id.as_uuid())
+            .bind(&delivery.descriptor_id)
+            .bind(&delivery.descriptor_version)
+            .bind(delivery.tenant_id.as_uuid())
+            .bind(delivery.cluster_id.as_uuid())
+            .bind(delivery.incident_id.as_uuid())
+            .bind(delivery.plan_id.map(|id| id.as_uuid()))
+            .bind(delivery.release_id.map(|id| id.as_uuid()))
+            .bind(integration_event_name(delivery.event_kind))
+            .bind(&delivery.idempotency_key)
+            .bind(&delivery.sanitized_summary)
+            .bind(&delivery.deep_link)
+            .bind(json_value(delivery)?)
+            .bind(delivery.created_at)
+            .execute(&mut **transaction)
+            .await?
+            .rows_affected()
+                == 1
+        }
+        IntegrationAdapterKind::ChatOpsWebhook | IntegrationAdapterKind::Pager | IntegrationAdapterKind::Email => {
+            let notification_target_id = target.notification_target_id.ok_or_else(|| {
+                ControlPlaneError::configuration(
+                    "notification-backed integration does not reference a notification target",
+                )
+            })?;
+            let delivery_key = format!("integration:{}:{}", delivery.target_id, delivery.idempotency_key);
+            sqlx::query(
+                "INSERT INTO notification_outbox (
+                    id, target_id, tenant_id, cluster_id, incident_id,
+                    delivery_key, status, sanitized_summary, deep_link,
+                    attempt_count, next_attempt_at, created_at
+                 ) VALUES (
+                    $1, $2, $3, $4, $5,
+                    $6, 'pending', $7, $8,
+                    0, NOW(), $9
+                 )
+                 ON CONFLICT (tenant_id, delivery_key) DO NOTHING",
+            )
+            .bind(NotificationDeliveryId::from_uuid(delivery.id.as_uuid()).as_uuid())
+            .bind(notification_target_id.as_uuid())
+            .bind(delivery.tenant_id.as_uuid())
+            .bind(delivery.cluster_id.as_uuid())
+            .bind(delivery.incident_id.as_uuid())
+            .bind(delivery_key)
+            .bind(&delivery.sanitized_summary)
+            .bind(&delivery.deep_link)
+            .bind(delivery.created_at)
+            .execute(&mut **transaction)
+            .await?
+            .rows_affected()
+                == 1
+        }
+    };
+    if queued {
+        insert_audit(transaction, audit).await?;
+    }
+    Ok(queued)
 }
 
 async fn validate_notification_target(
