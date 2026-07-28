@@ -13,10 +13,12 @@
 // limitations under the License.
 
 mod adapters;
+mod api;
 mod descriptors;
 mod model;
 mod repository;
 mod service;
 
 pub(crate) use adapters::IntegrationOutboxWorker;
+pub(crate) use api::routes;
 pub(crate) use service::ReleaseManagementService;
