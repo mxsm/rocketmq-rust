@@ -8,11 +8,11 @@ metadata:
   namespace: rocketmq-system
 rules:
   - apiGroups: ["apps"]
-    resources: ["deployments", "deployments/scale", "statefulsets"]
+    resources: ["deployments", "deployments/scale", "statefulsets", "replicasets"]
     verbs: ["get", "list", "watch", "patch", "update"]
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "watch", "delete"]
   - apiGroups: [""]
     resources: ["resourcequotas"]
     verbs: ["get", "list"]
