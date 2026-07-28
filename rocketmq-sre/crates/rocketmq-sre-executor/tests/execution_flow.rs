@@ -39,6 +39,9 @@ use rocketmq_sre_contracts::AgentStepResult;
 use rocketmq_sre_contracts::BeginLeaseTakeoverRequest;
 use rocketmq_sre_contracts::BeginLeaseTakeoverResponse;
 use rocketmq_sre_contracts::CoverageStatus;
+use rocketmq_sre_contracts::DynamicSafetyDecision;
+use rocketmq_sre_contracts::DynamicSafetyDecisionId;
+use rocketmq_sre_contracts::DynamicSafetyEvaluationRequest;
 use rocketmq_sre_contracts::EXECUTION_AGENT_SCHEMA_VERSION;
 use rocketmq_sre_contracts::EffectState;
 use rocketmq_sre_contracts::EvidenceContent;
@@ -175,6 +178,38 @@ impl ExecutorAuthorityClient for TestAuthority {
                 expires_at: issued_at + TimeDelta::minutes(2),
                 nonce: format!("test-grant-{}", request.step_id),
                 signature: "test-fence-signature".to_owned(),
+            })
+        })
+    }
+
+    fn evaluate_dynamic_safety<'a>(
+        &'a self,
+        request: &'a DynamicSafetyEvaluationRequest,
+    ) -> TestFuture<'a, DynamicSafetyDecision> {
+        Box::pin(async move {
+            let issued_at = Utc::now();
+            Ok(DynamicSafetyDecision {
+                id: DynamicSafetyDecisionId::new(),
+                tenant_id: request.tenant_id,
+                cluster_id: request.cluster_id,
+                action: request.action,
+                action_version: request.action_version.clone(),
+                plan_id: request.plan_id,
+                plan_hash: request.plan_hash.clone(),
+                execution_id: request.execution_id,
+                execution_step_id: request.execution_step_id,
+                policy_definition_version: request.policy_definition_version,
+                lifecycle_revision: request.lifecycle_revision,
+                error_budget_available: true,
+                freeze_revision: 0,
+                kill_switch_revision: 0,
+                evidence_fresh: true,
+                allowed: true,
+                reason_codes: Vec::new(),
+                issued_at,
+                expires_at: issued_at + TimeDelta::seconds(30),
+                nonce: format!("dynamic-safety-{}", request.execution_step_id),
+                signature: "test-dynamic-safety-signature".to_owned(),
             })
         })
     }
