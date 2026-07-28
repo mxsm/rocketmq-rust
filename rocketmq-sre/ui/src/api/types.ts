@@ -594,6 +594,64 @@ export interface ModelCapabilitiesResponse {
   profiles?: ModelProfile[];
 }
 
+export type ModelProfileLifecycleState =
+  | "draft"
+  | "certified"
+  | "promoted"
+  | "quarantined"
+  | "retired";
+
+export interface ProviderSmokeResult {
+  id: string;
+  profile_id: string;
+  connectivity_ok: boolean;
+  structured_output_ok: boolean;
+  tool_arguments_ok: boolean;
+  evidence_citation_ok: boolean;
+  overall_ok: boolean;
+  latency_ms?: number;
+  failure_codes: string[];
+  result_snapshot: Record<string, unknown>;
+  observed_at: string;
+}
+
+export interface ModelProfileLifecycleView {
+  profile_id: string;
+  profile_name: string;
+  provider_family: string;
+  model_family: string;
+  model_revision: string;
+  state: ModelProfileLifecycleState;
+  revision: number;
+  rollback_profile_id?: string;
+  reason_code: string;
+  operator_confirmed: boolean;
+  updated_by: string;
+  updated_at: string;
+  latest_smoke?: ProviderSmokeResult;
+  automation_eligible: boolean;
+}
+
+export interface ModelProfileLifecyclePage {
+  schema_version: string;
+  items: ModelProfileLifecycleView[];
+  observed_at: string;
+}
+
+export interface ModelProfileLifecycleTransitionRequest {
+  target_state: ModelProfileLifecycleState;
+  expected_revision: number;
+  rollback_profile_id?: string;
+  reason_code: string;
+  operator_confirmed: boolean;
+}
+
+export interface ModelProfileRollbackRequest {
+  expected_revision: number;
+  reason_code: string;
+  operator_confirmed: boolean;
+}
+
 export type WorkflowStreamEvent = ApiSchemas["WorkflowStreamEvent"] & {
   event_id?: string;
 };
