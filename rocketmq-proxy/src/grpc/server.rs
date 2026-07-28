@@ -31,7 +31,7 @@ use crate::processor::MessagingProcessor;
 use crate::proto::v2::messaging_service_server::MessagingServiceServer;
 
 #[doc(hidden)]
-pub type ProxyGrpcServerShutdownReport = rocketmq_proxy_core::grpc::server::GrpcServerShutdownReport;
+pub type ProxyGrpcServerShutdownReport = rocketmq_proxy_core::ingress::grpc::server::GrpcServerShutdownReport;
 
 pub async fn serve<P, F>(
     config: Arc<ProxyConfig>,
@@ -125,7 +125,7 @@ where
     let max_decoding_message_size = grpc_config.max_decoding_message_size;
     let max_encoding_message_size = grpc_config.max_encoding_message_size;
     let concurrency_limit_per_connection = grpc_config.concurrency_limit_per_connection;
-    let shutdown_report = rocketmq_proxy_core::grpc::server::serve_with_lifecycle_and_ready(
+    let shutdown_report = rocketmq_proxy_core::ingress::grpc::server::serve_with_lifecycle_and_ready(
         &grpc_config,
         shutdown,
         task_group,
@@ -184,7 +184,6 @@ mod tests {
     use std::sync::Mutex;
     use std::time::Duration;
 
-    use async_trait::async_trait;
     use hmac::digest::KeyInit;
     use hmac::Hmac;
     use hmac::Mac;
@@ -212,7 +211,6 @@ mod tests {
     use crate::config::ProxyAuthConfig;
     use crate::config::ProxyConfig;
     use crate::context::ResolvedEndpoint;
-    use crate::error::ProxyResult;
     use crate::grpc::service::ProxyGrpcService;
     use crate::processor::DefaultMessagingProcessor;
     use crate::proto::v2;
@@ -250,46 +248,46 @@ mod tests {
         }
     }
 
-    #[async_trait]
     impl RouteService for RecordingRouteService {
-        async fn query_route(
-            &self,
-            context: &CoreProxyContext,
-            _topic: &ResourceIdentity,
-            _endpoints: &[ResolvedEndpoint],
-        ) -> ProxyResult<TopicRouteData> {
-            self.observed
-                .lock()
-                .expect("route service mutex poisoned")
-                .push(ObservedRouteContext {
-                    local_addr: context.local_addr().map(str::to_owned),
-                    remote_addr: context.remote_addr().map(str::to_owned),
-                    principal: None,
-                });
-            Ok(TopicRouteData::default())
+        fn query_route<'a>(
+            &'a self,
+            context: &'a CoreProxyContext,
+            _topic: &'a ResourceIdentity,
+            _endpoints: &'a [ResolvedEndpoint],
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, TopicRouteData> {
+            Box::pin(async move {
+                self.observed
+                    .lock()
+                    .expect("route service mutex poisoned")
+                    .push(ObservedRouteContext {
+                        local_addr: context.local_addr().map(str::to_owned),
+                        remote_addr: context.remote_addr().map(str::to_owned),
+                        principal: None,
+                    });
+                Ok(TopicRouteData::default())
+            })
         }
     }
 
     #[derive(Default)]
     struct StaticMetadataService;
 
-    #[async_trait]
     impl MetadataService for StaticMetadataService {
-        async fn topic_message_type(
-            &self,
-            _context: &CoreProxyContext,
-            _topic: &ResourceIdentity,
-        ) -> ProxyResult<ProxyTopicMessageType> {
-            Ok(ProxyTopicMessageType::Normal)
+        fn topic_message_type<'a>(
+            &'a self,
+            _context: &'a CoreProxyContext,
+            _topic: &'a ResourceIdentity,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, ProxyTopicMessageType> {
+            Box::pin(async { Ok(ProxyTopicMessageType::Normal) })
         }
 
-        async fn subscription_group(
-            &self,
-            _context: &CoreProxyContext,
-            _topic: &ResourceIdentity,
-            _group: &ResourceIdentity,
-        ) -> ProxyResult<Option<SubscriptionGroupMetadata>> {
-            Ok(None)
+        fn subscription_group<'a>(
+            &'a self,
+            _context: &'a CoreProxyContext,
+            _topic: &'a ResourceIdentity,
+            _group: &'a ResourceIdentity,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, Option<SubscriptionGroupMetadata>> {
+            Box::pin(async { Ok(None) })
         }
     }
 

@@ -40,11 +40,9 @@ use crate::metrics::controller_metrics_manager::active_broker_count_from_snapsho
 #[cfg(feature = "metrics")]
 use crate::metrics::controller_metrics_manager::ControllerMetricsManager;
 use crate::processor::controller_request_processor::ControllerRequestProcessor;
+use crate::security::ControllerSecurity;
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
-use rocketmq_auth::AuthRuntime;
-use rocketmq_auth::AuthRuntimeBuilder;
-use rocketmq_auth::MaintenanceAuthorizer;
 use rocketmq_observability::TelemetryHandle;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::body::elect_master_response_body::ElectMasterResponseBody;
@@ -324,11 +322,8 @@ pub struct ControllerManager {
     manager_task_group: Arc<Mutex<Option<TaskGroup>>>,
     leadership_watch_tasks: Arc<Mutex<Option<ScheduledTaskGroup>>>,
 
-    /// Credential verifier loaded before the remoting listener can bind.
-    auth_runtime: Option<Arc<AuthRuntime>>,
-
-    /// Independent, pinned maintenance authorization policy.
-    maintenance_authorizer: Option<Arc<MaintenanceAuthorizer>>,
+    /// Runtime-neutral security capabilities supplied by the composition root.
+    security: Option<ControllerSecurity>,
 
     /// Remoting client for outbound RPC calls
     remoting_client: Arc<RocketmqDefaultClient>,
@@ -372,34 +367,43 @@ impl ControllerManager {
         service_context: ChildServiceContext,
         telemetry_handle: TelemetryHandle,
     ) -> Result<Self> {
+        Self::new_with_security(config, service_context, telemetry_handle, None).await
+    }
+
+    /// Creates a Controller manager with an explicitly injected security boundary.
+    ///
+    /// Callers enabling authentication, authorization, or privileged maintenance
+    /// must supply the concrete adapter here. The Controller crate does not choose
+    /// or initialize a credential provider.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ControllerError`] when configuration is invalid, a required
+    /// security capability is absent, or component initialization fails.
+    pub async fn new_with_security(
+        config: ControllerConfig,
+        service_context: ChildServiceContext,
+        telemetry_handle: TelemetryHandle,
+        security: Option<ControllerSecurity>,
+    ) -> Result<Self> {
         config.validate().map_err(ControllerError::ConfigError)?;
-        let auth_config = config.auth_config();
-        let maintenance_authorizer = auth_config
-            .maintenance_policy_reference()
-            .map_err(|error| {
-                ControllerError::runtime_source("validate Controller maintenance policy reference", error)
-            })?
-            .map(|reference| {
-                reference
-                    .load_from(&config.auth_config_path)
-                    .map(MaintenanceAuthorizer::new)
-                    .map(Arc::new)
-            })
-            .transpose()
-            .map_err(|error| ControllerError::runtime_source("load Controller maintenance policy", error))?;
-        let auth_runtime = if auth_config.authentication_enabled
-            || auth_config.authorization_enabled
-            || auth_config.maintenance_enabled
+        let security_enabled =
+            config.authentication_enabled || config.authorization_enabled || config.maintenance_enabled;
+        if security_enabled && security.is_none() {
+            return Err(ControllerError::ConfigError(
+                "Controller security is enabled but no ControllerSecurity adapter was injected".to_string(),
+            ));
+        }
+        if config.maintenance_enabled
+            && security
+                .as_ref()
+                .and_then(ControllerSecurity::maintenance_authorizer)
+                .is_none()
         {
-            Some(Arc::new(
-                AuthRuntimeBuilder::new(auth_config, service_context.child("controller.auth"))
-                    .build()
-                    .await
-                    .map_err(|error| ControllerError::runtime_source("initialize Controller auth runtime", error))?,
-            ))
-        } else {
-            None
-        };
+            return Err(ControllerError::ConfigError(
+                "Controller maintenance is enabled but no validated maintenance authorizer was injected".to_string(),
+            ));
+        }
         let config = ControllerConfigHandle::new(config);
         let parent_task_group = service_context.task_group().clone();
 
@@ -475,8 +479,7 @@ impl ControllerManager {
             remoting_server_shutdown_tx: Arc::new(Mutex::new(None)),
             manager_task_group: Arc::new(Mutex::new(None)),
             leadership_watch_tasks: Arc::new(Mutex::new(None)),
-            auth_runtime,
-            maintenance_authorizer,
+            security,
             remoting_client,
             #[cfg(feature = "metrics")]
             metrics_manager,
@@ -855,16 +858,16 @@ impl ControllerManager {
             info!("Heartbeat manager shut down");
         }
 
-        if let Some(auth_runtime) = &self.auth_runtime {
-            match tokio::time::timeout(deadline.remaining(), auth_runtime.shutdown()).await {
-                Ok(Ok(())) => info!("Controller auth runtime shut down"),
+        if let Some(security) = &self.security {
+            match tokio::time::timeout(deadline.remaining(), security.authenticator().shutdown()).await {
+                Ok(Ok(())) => info!("Controller security adapter shut down"),
                 Ok(Err(error)) => {
-                    warn!(%error, "Controller auth runtime shutdown failed");
-                    failures.push(format!("auth runtime: {error}"));
+                    warn!(%error, "Controller security adapter shutdown failed");
+                    failures.push(format!("security adapter: {error}"));
                 }
                 Err(_) => {
-                    warn!("Timed out waiting for Controller auth runtime shutdown");
-                    failures.push("auth runtime shutdown timed out".to_string());
+                    warn!("Timed out waiting for Controller security adapter shutdown");
+                    failures.push("security adapter shutdown timed out".to_string());
                 }
             }
         }
@@ -964,14 +967,9 @@ impl ControllerManager {
         self.config.snapshot()
     }
 
-    /// Returns the credential verifier for authenticated Controller requests.
-    pub fn auth_runtime(&self) -> Option<&Arc<AuthRuntime>> {
-        self.auth_runtime.as_ref()
-    }
-
-    /// Returns the pinned independent maintenance authorizer.
-    pub fn maintenance_authorizer(&self) -> Option<&Arc<MaintenanceAuthorizer>> {
-        self.maintenance_authorizer.as_ref()
+    /// Returns the security boundary injected by the composition root.
+    pub fn security(&self) -> Option<&ControllerSecurity> {
+        self.security.as_ref()
     }
 
     pub(crate) async fn update_config(
@@ -1336,6 +1334,19 @@ mod tests {
 
         // Prevent dropping runtime in async context
         std::mem::forget(manager_arc);
+    }
+
+    #[tokio::test]
+    async fn enabled_security_requires_an_injected_adapter() {
+        let mut config = ControllerConfig::default().with_node_info(1, reserve_controller_addresses().0);
+        config.authentication_enabled = true;
+
+        let error = match ControllerManager::new(config, test_service_context(), test_telemetry_handle()).await {
+            Ok(_) => panic!("security-enabled Controller must fail closed without an adapter"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("no ControllerSecurity adapter was injected"));
     }
 
     #[tokio::test]

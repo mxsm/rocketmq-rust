@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::ProxyMessage;
+//! Backend-neutral gRPC ingress components owned by the ingress boundary.
 
-const TRANSACTION_PREPARED_PROPERTY: &str = "TRAN_MSG";
-
-pub fn is_transaction_message(message: &ProxyMessage) -> bool {
-    message.property(TRANSACTION_PREPARED_PROPERTY).is_some()
-}
+pub mod adapter;
+pub mod middleware;
+pub mod server;
+pub mod service;

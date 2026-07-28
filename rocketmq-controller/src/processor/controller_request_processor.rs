@@ -65,10 +65,6 @@ use crate::metrics::RequestHandleStatus;
 use crate::metrics::RequestType as MetricsRequestType;
 use crate::Controller;
 use cheetah_string::CheetahString;
-use rocketmq_auth::MaintenanceAuthorizationContext;
-use rocketmq_auth::MaintenanceAuthorizationGrant;
-use rocketmq_auth::MaintenanceCapability;
-use rocketmq_auth::MaintenanceRequestClass;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::code::request_code::RequestCode;
@@ -85,6 +81,10 @@ use rocketmq_protocol::protocol::header::maintenance_request_header::Maintenance
 use rocketmq_protocol::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingDeserializable;
+use rocketmq_security_api::MaintenanceAuthorizationContext;
+use rocketmq_security_api::MaintenanceAuthorizationGrant;
+use rocketmq_security_api::MaintenanceCapability;
+use rocketmq_security_api::MaintenanceRequestClass;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
 use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
@@ -240,10 +240,11 @@ impl ControllerRequestProcessor {
                 "Controller maintenance API is disabled",
             ));
         }
-        let auth_runtime = controller_manager
-            .auth_runtime()
-            .ok_or_else(|| RocketMQError::authentication_failed("Controller auth runtime is unavailable"))?;
-        let principal = auth_runtime
+        let security = controller_manager
+            .security()
+            .ok_or_else(|| RocketMQError::authentication_failed("Controller security adapter is unavailable"))?;
+        let principal = security
+            .authenticator()
             .authenticate_maintenance_principal(request, Some(channel.channel_id()))
             .await?;
         let header = request
@@ -254,7 +255,7 @@ impl ControllerRequestProcessor {
         header
             .validate()
             .map_err(|reason| RocketMQError::request_header_error(reason.to_string()))?;
-        let authorizer = controller_manager
+        let authorizer = security
             .maintenance_authorizer()
             .ok_or_else(|| RocketMQError::authentication_failed("Controller maintenance policy is unavailable"))?;
         if header.policy_version != authorizer.policy().policy_version {
@@ -269,7 +270,7 @@ impl ControllerRequestProcessor {
                 Some(&MaintenanceAuthorizationContext {
                     authentication_enabled: config.authentication_enabled,
                     authorization_enabled: config.authorization_enabled,
-                    principal: Some(principal.to_string()),
+                    principal: Some(principal),
                     request_class: MaintenanceRequestClass::PrivilegedMaintenance,
                     capability: MaintenanceCapability::ReleaseCheckpoint,
                     deadline_unix_millis: header.deadline_unix_millis,
@@ -290,7 +291,8 @@ impl ControllerRequestProcessor {
         let (_header, grant) = self.authorize_maintenance_request(&channel, request).await?;
         let controller_manager = self.controller_manager()?;
         let policy = controller_manager
-            .maintenance_authorizer()
+            .security()
+            .and_then(|security| security.maintenance_authorizer())
             .ok_or_else(|| RocketMQError::authentication_failed("Controller maintenance policy is unavailable"))?
             .policy();
         let response = MaintenanceCapabilitiesResponse {

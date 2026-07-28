@@ -21,7 +21,6 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use bytes::Bytes;
 use futures::StreamExt;
 use hmac::digest::KeyInit;
@@ -52,7 +51,6 @@ use rocketmq_proxy::ProxyAuthRuntime;
 use rocketmq_proxy::ProxyConfig;
 use rocketmq_proxy::ProxyError;
 use rocketmq_proxy::ProxyPayloadStatus;
-use rocketmq_proxy::ProxyResult;
 use rocketmq_proxy::ProxyRuntime;
 use rocketmq_proxy::ProxyTopicMessageType;
 use rocketmq_proxy::PullMessagePlan;
@@ -74,6 +72,7 @@ use rocketmq_proxy::UpdateOffsetRequest;
 use rocketmq_proxy_core::ProxyContext;
 use rocketmq_proxy_core::ProxyMessage;
 use rocketmq_proxy_core::ProxyMessageExt;
+use rocketmq_proxy_core::ProxyServiceFuture;
 use rocketmq_runtime::RuntimeContext;
 use sha1::Sha1;
 use tokio::sync::oneshot;
@@ -100,128 +99,133 @@ impl RecordingRouteService {
     }
 }
 
-#[async_trait]
 impl RouteService for RecordingRouteService {
-    async fn query_route(
-        &self,
-        context: &ProxyContext,
-        _topic: &ResourceIdentity,
-        _endpoints: &[ResolvedEndpoint],
-    ) -> ProxyResult<TopicRouteData> {
-        self.observed
-            .lock()
-            .expect("route service mutex poisoned")
-            .push(ObservedRouteContext {
-                local_addr: context.local_addr().map(str::to_owned),
-                remote_addr: context.remote_addr().map(str::to_owned),
-            });
-        Ok(TopicRouteData::default())
+    fn query_route<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        _topic: &'a ResourceIdentity,
+        _endpoints: &'a [ResolvedEndpoint],
+    ) -> ProxyServiceFuture<'a, TopicRouteData> {
+        Box::pin(async move {
+            self.observed
+                .lock()
+                .expect("route service mutex poisoned")
+                .push(ObservedRouteContext {
+                    local_addr: context.local_addr().map(str::to_owned),
+                    remote_addr: context.remote_addr().map(str::to_owned),
+                });
+            Ok(TopicRouteData::default())
+        })
     }
 }
 
 #[derive(Default)]
 struct NormalMetadataService;
 
-#[async_trait]
 impl MetadataService for NormalMetadataService {
-    async fn topic_message_type(
-        &self,
-        _context: &ProxyContext,
-        _topic: &ResourceIdentity,
-    ) -> ProxyResult<ProxyTopicMessageType> {
-        Ok(ProxyTopicMessageType::Normal)
+    fn topic_message_type<'a>(
+        &'a self,
+        _context: &'a ProxyContext,
+        _topic: &'a ResourceIdentity,
+    ) -> ProxyServiceFuture<'a, ProxyTopicMessageType> {
+        Box::pin(async { Ok(ProxyTopicMessageType::Normal) })
     }
 
-    async fn subscription_group(
-        &self,
-        _context: &ProxyContext,
-        _topic: &ResourceIdentity,
-        _group: &ResourceIdentity,
-    ) -> ProxyResult<Option<SubscriptionGroupMetadata>> {
-        Ok(None)
+    fn subscription_group<'a>(
+        &'a self,
+        _context: &'a ProxyContext,
+        _topic: &'a ResourceIdentity,
+        _group: &'a ResourceIdentity,
+    ) -> ProxyServiceFuture<'a, Option<SubscriptionGroupMetadata>> {
+        Box::pin(async { Ok(None) })
     }
 }
 
 #[derive(Default)]
 struct StreamingConsumerService;
 
-#[async_trait]
 impl ConsumerService for StreamingConsumerService {
-    async fn receive_message(
-        &self,
-        _context: &ProxyContext,
-        request: &ReceiveMessageRequest,
-    ) -> ProxyResult<ReceiveMessagePlan> {
-        let mut payload = ProxyMessage::new(request.target.topic.to_string(), b"integration-body".to_vec());
-        payload.put_property("POP_CK", "integration-receipt-handle");
-        let message = ProxyMessageExt {
-            message: payload,
-            queue_id: request.target.queue_id,
-            queue_offset: 7,
-            msg_id: "integration-msg-id".to_owned(),
-            ..ProxyMessageExt::default()
-        };
+    fn receive_message<'a>(
+        &'a self,
+        _context: &'a ProxyContext,
+        request: &'a ReceiveMessageRequest,
+    ) -> ProxyServiceFuture<'a, ReceiveMessagePlan> {
+        Box::pin(async move {
+            let mut payload = ProxyMessage::new(request.target.topic.to_string(), b"integration-body".to_vec());
+            payload.put_property("POP_CK", "integration-receipt-handle");
+            let message = ProxyMessageExt {
+                message: payload,
+                queue_id: request.target.queue_id,
+                queue_offset: 7,
+                msg_id: "integration-msg-id".to_owned(),
+                ..ProxyMessageExt::default()
+            };
 
-        Ok(ReceiveMessagePlan {
-            status: ProxyPayloadStatus::new(v2::Code::Ok as i32, "OK"),
-            delivery_timestamp_ms: Some(1_710_000_000_000),
-            messages: vec![ReceivedMessage {
-                message,
-                invisible_duration: Duration::from_secs(30),
-            }],
+            Ok(ReceiveMessagePlan {
+                status: ProxyPayloadStatus::new(v2::Code::Ok as i32, "OK"),
+                delivery_timestamp_ms: Some(1_710_000_000_000),
+                messages: vec![ReceivedMessage {
+                    message,
+                    invisible_duration: Duration::from_secs(30),
+                }],
+            })
         })
     }
 
-    async fn pull_message(
-        &self,
-        _context: &ProxyContext,
-        _request: &PullMessageRequest,
-    ) -> ProxyResult<PullMessagePlan> {
-        Err(ProxyError::not_implemented("integration pull"))
+    fn pull_message<'a>(
+        &'a self,
+        _context: &'a ProxyContext,
+        _request: &'a PullMessageRequest,
+    ) -> ProxyServiceFuture<'a, PullMessagePlan> {
+        Box::pin(async { Err(ProxyError::not_implemented("integration pull")) })
     }
 
-    async fn ack_message(
-        &self,
-        _context: &ProxyContext,
-        _request: &AckMessageRequest,
-    ) -> ProxyResult<Vec<AckMessageResultEntry>> {
-        Err(ProxyError::not_implemented("integration ack"))
+    fn ack_message<'a>(
+        &'a self,
+        _context: &'a ProxyContext,
+        _request: &'a AckMessageRequest,
+    ) -> ProxyServiceFuture<'a, Vec<AckMessageResultEntry>> {
+        Box::pin(async { Err(ProxyError::not_implemented("integration ack")) })
     }
 
-    async fn forward_message_to_dead_letter_queue(
-        &self,
-        _context: &ProxyContext,
-        _request: &ForwardMessageToDeadLetterQueueRequest,
-    ) -> ProxyResult<ForwardMessageToDeadLetterQueuePlan> {
-        Err(ProxyError::not_implemented("integration dlq"))
+    fn forward_message_to_dead_letter_queue<'a>(
+        &'a self,
+        _context: &'a ProxyContext,
+        _request: &'a ForwardMessageToDeadLetterQueueRequest,
+    ) -> ProxyServiceFuture<'a, ForwardMessageToDeadLetterQueuePlan> {
+        Box::pin(async { Err(ProxyError::not_implemented("integration dlq")) })
     }
 
-    async fn change_invisible_duration(
-        &self,
-        _context: &ProxyContext,
-        _request: &ChangeInvisibleDurationRequest,
-    ) -> ProxyResult<ChangeInvisibleDurationPlan> {
-        Err(ProxyError::not_implemented("integration change invisible"))
+    fn change_invisible_duration<'a>(
+        &'a self,
+        _context: &'a ProxyContext,
+        _request: &'a ChangeInvisibleDurationRequest,
+    ) -> ProxyServiceFuture<'a, ChangeInvisibleDurationPlan> {
+        Box::pin(async { Err(ProxyError::not_implemented("integration change invisible")) })
     }
 
-    async fn update_offset(
-        &self,
-        _context: &ProxyContext,
-        _request: &UpdateOffsetRequest,
-    ) -> ProxyResult<UpdateOffsetPlan> {
-        Err(ProxyError::not_implemented("integration update offset"))
+    fn update_offset<'a>(
+        &'a self,
+        _context: &'a ProxyContext,
+        _request: &'a UpdateOffsetRequest,
+    ) -> ProxyServiceFuture<'a, UpdateOffsetPlan> {
+        Box::pin(async { Err(ProxyError::not_implemented("integration update offset")) })
     }
 
-    async fn get_offset(&self, _context: &ProxyContext, _request: &GetOffsetRequest) -> ProxyResult<GetOffsetPlan> {
-        Err(ProxyError::not_implemented("integration get offset"))
+    fn get_offset<'a>(
+        &'a self,
+        _context: &'a ProxyContext,
+        _request: &'a GetOffsetRequest,
+    ) -> ProxyServiceFuture<'a, GetOffsetPlan> {
+        Box::pin(async { Err(ProxyError::not_implemented("integration get offset")) })
     }
 
-    async fn query_offset(
-        &self,
-        _context: &ProxyContext,
-        _request: &QueryOffsetRequest,
-    ) -> ProxyResult<QueryOffsetPlan> {
-        Err(ProxyError::not_implemented("integration query offset"))
+    fn query_offset<'a>(
+        &'a self,
+        _context: &'a ProxyContext,
+        _request: &'a QueryOffsetRequest,
+    ) -> ProxyServiceFuture<'a, QueryOffsetPlan> {
+        Box::pin(async { Err(ProxyError::not_implemented("integration query offset")) })
     }
 }
 

@@ -12,19 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Provider-neutral gRPC handler state and policies.
+//! Protocol ingress adapters.
 //!
-//! Authentication, authorization, backend selection, and provider-specific
-//! observability remain composition concerns of the `rocketmq-proxy` facade.
+//! Ingress may depend on [`crate::contracts`]; the contracts module must remain
+//! independent from this module.
 
-pub mod admission;
-pub mod consumer;
-pub mod housekeeping;
-pub mod producer;
-pub mod telemetry;
-pub mod topic;
-pub mod transaction;
-
-pub use admission::ExecutionGuards;
-pub use housekeeping::GrpcHousekeepingRunReport;
-pub use housekeeping::ReapSchedule;
+pub mod grpc;
+pub mod remoting;

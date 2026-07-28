@@ -40,7 +40,7 @@ fn test_producer_creation() {
     let producer = DefaultMQProducer::new(support::client_runtime("integration-producer-creation"));
 
     // Producer should be created successfully with empty group (can be set later)
-    assert_eq!(producer.producer_config().producer_group().as_str(), "");
+    assert_eq!(producer.producer_config_snapshot().producer_group().as_str(), "");
 }
 
 #[test]
@@ -57,8 +57,8 @@ fn test_concurrent_producer_access() {
         let producer_clone = producer.clone();
         let handle = thread::spawn(move || {
             // Access producer configuration concurrently
-            let _ = producer_clone.producer_config().producer_group();
-            let _ = producer_clone.client_config();
+            let _ = producer_clone.producer_config_snapshot().producer_group();
+            let _ = producer_clone.client_config_snapshot();
         });
         handles.push(handle);
     }
@@ -87,8 +87,8 @@ fn test_performance_baseline_concurrent_reads() {
         let handle = thread::spawn(move || {
             for _ in 0..1000 {
                 // Simulate typical read operations
-                let _ = producer_clone.producer_config().producer_group();
-                let _ = producer_clone.client_config();
+                let _ = producer_clone.producer_config_snapshot().producer_group();
+                let _ = producer_clone.client_config_snapshot();
             }
         });
         handles.push(handle);
@@ -127,7 +127,8 @@ async fn test_producer_async_context() {
     let producer = DefaultMQProducer::new(support::client_runtime("integration-producer-async"));
 
     // Should be accessible in async context
-    let group = producer.producer_config().producer_group();
+    let config = producer.producer_config_snapshot();
+    let group = config.producer_group();
     assert_eq!(group.as_str(), ""); // Default is empty, can be configured
 }
 

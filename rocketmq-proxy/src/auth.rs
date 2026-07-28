@@ -960,39 +960,38 @@ mod tests {
         acls: HashMap<String, AclInfo>,
     }
 
-    #[async_trait::async_trait]
     impl MetadataService for TestAuthMetadataService {
-        async fn topic_message_type(
-            &self,
-            _context: &rocketmq_proxy_core::ProxyContext,
-            _topic: &ResourceIdentity,
-        ) -> ProxyResult<ProxyTopicMessageType> {
-            Ok(ProxyTopicMessageType::Unspecified)
+        fn topic_message_type<'a>(
+            &'a self,
+            _context: &'a rocketmq_proxy_core::ProxyContext,
+            _topic: &'a ResourceIdentity,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, ProxyTopicMessageType> {
+            Box::pin(async { Ok(ProxyTopicMessageType::Unspecified) })
         }
 
-        async fn subscription_group(
-            &self,
-            _context: &rocketmq_proxy_core::ProxyContext,
-            _topic: &ResourceIdentity,
-            _group: &ResourceIdentity,
-        ) -> ProxyResult<Option<SubscriptionGroupMetadata>> {
-            Ok(None)
+        fn subscription_group<'a>(
+            &'a self,
+            _context: &'a rocketmq_proxy_core::ProxyContext,
+            _topic: &'a ResourceIdentity,
+            _group: &'a ResourceIdentity,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, Option<SubscriptionGroupMetadata>> {
+            Box::pin(async { Ok(None) })
         }
 
-        async fn user(
-            &self,
-            _context: &rocketmq_proxy_core::ProxyContext,
-            username: &str,
-        ) -> ProxyResult<Option<UserInfo>> {
-            Ok(self.users.get(username).cloned())
+        fn user<'a>(
+            &'a self,
+            _context: &'a rocketmq_proxy_core::ProxyContext,
+            username: &'a str,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, Option<UserInfo>> {
+            Box::pin(async move { Ok(self.users.get(username).cloned()) })
         }
 
-        async fn acl(
-            &self,
-            _context: &rocketmq_proxy_core::ProxyContext,
-            subject: &str,
-        ) -> ProxyResult<Option<AclInfo>> {
-            Ok(self.acls.get(subject).cloned())
+        fn acl<'a>(
+            &'a self,
+            _context: &'a rocketmq_proxy_core::ProxyContext,
+            subject: &'a str,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, Option<AclInfo>> {
+            Box::pin(async move { Ok(self.acls.get(subject).cloned()) })
         }
     }
 

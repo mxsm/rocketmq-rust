@@ -14,6 +14,8 @@
 
 use std::net::SocketAddr;
 
+// gRPC ingress middleware.
+
 use tonic::Request;
 use tonic::Status;
 

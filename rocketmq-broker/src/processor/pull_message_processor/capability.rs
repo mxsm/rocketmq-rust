@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::Weak;
@@ -152,32 +154,103 @@ impl PullMessagePolicyState {
     }
 }
 
-/// Non-owning access to the local Store operations used by pull paths.
-pub(crate) struct PullMessageStoreCapability<MS: MessageStore> {
-    provider: Weak<EscapeBridge<MS>>,
+trait PullMessageStorePort: Send + Sync {
+    fn min_offset(&self, topic: &CheetahString, queue_id: i32) -> Result<i64, MessageStoreUnavailable>;
+    fn max_offset(&self, topic: &CheetahString, queue_id: i32) -> Result<i64, MessageStoreUnavailable>;
+    fn now(&self) -> Result<u64, MessageStoreUnavailable>;
+    fn get_message<'a>(
+        &'a self,
+        group: &'a CheetahString,
+        topic: &'a CheetahString,
+        queue_id: i32,
+        offset: i64,
+        max_msg_nums: i32,
+        max_msg_bytes: i32,
+        message_filter: ArcMessageFilter,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<GetMessageResult>, MessageStoreUnavailable>> + Send + 'a>>;
+    #[cfg(feature = "local_file_store")]
+    fn is_message_in_cold_area(
+        &self,
+        group: &CheetahString,
+        topic: &CheetahString,
+        queue_id: i32,
+        queue_offset: i64,
+    ) -> Result<bool, MessageStoreUnavailable>;
 }
 
-impl<MS: MessageStore> PullMessageStoreCapability<MS> {
-    pub(crate) fn new(provider: &Arc<EscapeBridge<MS>>) -> Self {
+impl<MS: MessageStore> PullMessageStorePort for EscapeBridge<MS> {
+    fn min_offset(&self, topic: &CheetahString, queue_id: i32) -> Result<i64, MessageStoreUnavailable> {
+        self.get_min_offset_from_local_store(topic, queue_id)
+    }
+
+    fn max_offset(&self, topic: &CheetahString, queue_id: i32) -> Result<i64, MessageStoreUnavailable> {
+        self.get_max_offset_from_local_store(topic, queue_id)
+    }
+
+    fn now(&self) -> Result<u64, MessageStoreUnavailable> {
+        self.local_store_now()
+    }
+
+    fn get_message<'a>(
+        &'a self,
+        group: &'a CheetahString,
+        topic: &'a CheetahString,
+        queue_id: i32,
+        offset: i64,
+        max_msg_nums: i32,
+        max_msg_bytes: i32,
+        message_filter: ArcMessageFilter,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<GetMessageResult>, MessageStoreUnavailable>> + Send + 'a>> {
+        Box::pin(self.get_message_with_size_limit_from_local_store(
+            group,
+            topic,
+            queue_id,
+            offset,
+            max_msg_nums,
+            max_msg_bytes,
+            message_filter,
+        ))
+    }
+
+    #[cfg(feature = "local_file_store")]
+    fn is_message_in_cold_area(
+        &self,
+        group: &CheetahString,
+        topic: &CheetahString,
+        queue_id: i32,
+        queue_offset: i64,
+    ) -> Result<bool, MessageStoreUnavailable> {
+        EscapeBridge::is_message_in_cold_area(self, group, topic, queue_id, queue_offset)
+    }
+}
+
+/// Non-owning access to the local Store operations used by pull paths.
+pub(crate) struct PullMessageStoreCapability {
+    provider: Weak<dyn PullMessageStorePort>,
+}
+
+impl PullMessageStoreCapability {
+    pub(crate) fn new<MS: MessageStore>(provider: &Arc<EscapeBridge<MS>>) -> Self {
+        let provider: Arc<dyn PullMessageStorePort> = provider.clone();
         Self {
-            provider: Arc::downgrade(provider),
+            provider: Arc::downgrade(&provider),
         }
     }
 
-    fn provider(&self) -> Result<Arc<EscapeBridge<MS>>, MessageStoreUnavailable> {
+    fn provider(&self) -> Result<Arc<dyn PullMessageStorePort>, MessageStoreUnavailable> {
         self.provider.upgrade().ok_or(MessageStoreUnavailable)
     }
 
     pub(crate) fn min_offset(&self, topic: &CheetahString, queue_id: i32) -> Result<i64, MessageStoreUnavailable> {
-        self.provider()?.get_min_offset_from_local_store(topic, queue_id)
+        self.provider()?.min_offset(topic, queue_id)
     }
 
     pub(crate) fn max_offset(&self, topic: &CheetahString, queue_id: i32) -> Result<i64, MessageStoreUnavailable> {
-        self.provider()?.get_max_offset_from_local_store(topic, queue_id)
+        self.provider()?.max_offset(topic, queue_id)
     }
 
     pub(crate) fn now(&self) -> Result<u64, MessageStoreUnavailable> {
-        self.provider()?.local_store_now()
+        self.provider()?.now()
     }
 
     pub(crate) async fn get_message(
@@ -191,7 +264,7 @@ impl<MS: MessageStore> PullMessageStoreCapability<MS> {
         message_filter: ArcMessageFilter,
     ) -> Result<Option<GetMessageResult>, MessageStoreUnavailable> {
         self.provider()?
-            .get_message_with_size_limit_from_local_store(
+            .get_message(
                 group,
                 topic,
                 queue_id,
@@ -229,7 +302,7 @@ pub(crate) struct PullMessageProcessorContext<MS: MessageStore> {
     broadcast_offsets: BroadcastOffsetCapability,
     broker_stats: Arc<BrokerStatsManager>,
     online_role_state: Arc<BrokerOnlineRoleState>,
-    store: PullMessageStoreCapability<MS>,
+    store: PullMessageStoreCapability,
     cold_data_flow: Option<Arc<ColdDataCgCtrService>>,
     pull_request_hold: Arc<OnceLock<Arc<PullRequestHoldService<MS>>>>,
 }
@@ -251,7 +324,7 @@ impl<MS: MessageStore> PullMessageProcessorContext<MS> {
         broadcast_offsets: BroadcastOffsetCapability,
         broker_stats: Arc<BrokerStatsManager>,
         online_role_state: Arc<BrokerOnlineRoleState>,
-        store: PullMessageStoreCapability<MS>,
+        store: PullMessageStoreCapability,
         cold_data_flow: Option<Arc<ColdDataCgCtrService>>,
     ) -> Self {
         Self {
@@ -308,7 +381,7 @@ impl<MS: MessageStore> PullMessageProcessorContext<MS> {
         self.online_role_state.min_broker_id()
     }
 
-    pub(crate) fn store(&self) -> &PullMessageStoreCapability<MS> {
+    pub(crate) fn store(&self) -> &PullMessageStoreCapability {
         &self.store
     }
 
@@ -400,8 +473,10 @@ mod tests {
     use rocketmq_store::MessageStoreConfig;
     use rocketmq_store::OwnedMessageStore;
 
+    use super::EscapeBridge;
     use super::PullMessagePolicyState;
     use super::PullMessageStoreCapability;
+    use super::PullMessageStorePort;
 
     #[test]
     fn pull_policy_state_publishes_complete_updated_generations() {
@@ -434,7 +509,8 @@ mod tests {
 
     #[test]
     fn pull_store_capability_fails_closed_without_provider() {
-        let capability = PullMessageStoreCapability::<OwnedMessageStore> { provider: Weak::new() };
+        let provider: Weak<dyn PullMessageStorePort> = Weak::<EscapeBridge<OwnedMessageStore>>::new();
+        let capability = PullMessageStoreCapability { provider };
 
         assert!(capability
             .max_offset(&CheetahString::from_static_str("topic"), 0)

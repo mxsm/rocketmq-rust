@@ -12,4 +12,4 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub(crate) use rocketmq_proxy_core::grpc::middleware::ingress_context_interceptor;
+pub(crate) use rocketmq_proxy_core::ingress::grpc::middleware::ingress_context_interceptor;

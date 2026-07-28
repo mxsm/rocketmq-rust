@@ -3720,7 +3720,7 @@
       "path": "rocketmq-client/src/factory/mq_client_instance.rs",
       "kind": "panic_surface",
       "item": "new_arc",
-      "line": 353,
+      "line": 348,
       "fingerprint": "0d804ab8d8196ceda7a9",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -3730,7 +3730,7 @@
       "path": "rocketmq-client/src/factory/mq_client_instance.rs",
       "kind": "panic_surface",
       "item": "new_arc_with_resource_budget",
-      "line": 453,
+      "line": 460,
       "fingerprint": "d5dd8083bca8e219c206",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -3780,7 +3780,7 @@
       "path": "rocketmq-client/src/producer/default_mq_producer.rs",
       "kind": "panic_surface",
       "item": "prepare_trace_dispatcher",
-      "line": 1695,
+      "line": 1725,
       "fingerprint": "ab58902704cb8f641f63",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -3790,7 +3790,7 @@
       "path": "rocketmq-client/src/producer/default_mq_producer.rs",
       "kind": "panic_surface",
       "item": "set_default_mqproducer_impl",
-      "line": 1212,
+      "line": 1216,
       "fingerprint": "32f2328b29129231a572",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -3930,7 +3930,7 @@
       "path": "rocketmq-controller/src/lib.rs",
       "kind": "panic_surface",
       "item": "free_loopback_addr",
-      "line": 448,
+      "line": 453,
       "fingerprint": "d458ab15d15b461e2026",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -3940,7 +3940,7 @@
       "path": "rocketmq-controller/src/lib.rs",
       "kind": "panic_surface",
       "item": "free_loopback_addr",
-      "line": 445,
+      "line": 450,
       "fingerprint": "ef8ad96c6fc7f56fd437",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -3950,7 +3950,7 @@
       "path": "rocketmq-controller/src/lib.rs",
       "kind": "panic_surface",
       "item": "run_controller_leadership_watch_lifecycle_probe",
-      "line": 292,
+      "line": 297,
       "fingerprint": "364febdcd704a2581bb3",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -3960,7 +3960,7 @@
       "path": "rocketmq-controller/src/lib.rs",
       "kind": "panic_surface",
       "item": "run_controller_leadership_watch_lifecycle_probe",
-      "line": 296,
+      "line": 301,
       "fingerprint": "364febdcd704a2581bb3",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -3970,7 +3970,7 @@
       "path": "rocketmq-controller/src/lib.rs",
       "kind": "panic_surface",
       "item": "run_controller_leadership_watch_lifecycle_probe",
-      "line": 310,
+      "line": 315,
       "fingerprint": "364febdcd704a2581bb3",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -3980,7 +3980,7 @@
       "path": "rocketmq-controller/src/lib.rs",
       "kind": "panic_surface",
       "item": "run_controller_leadership_watch_lifecycle_probe",
-      "line": 338,
+      "line": 343,
       "fingerprint": "364febdcd704a2581bb3",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -3990,7 +3990,7 @@
       "path": "rocketmq-controller/src/lib.rs",
       "kind": "panic_surface",
       "item": "run_controller_leadership_watch_lifecycle_probe",
-      "line": 287,
+      "line": 292,
       "fingerprint": "e522eb3c092ee025dbf0",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -4000,7 +4000,7 @@
       "path": "rocketmq-controller/src/lib.rs",
       "kind": "panic_surface",
       "item": "run_controller_openraft_scan_lifecycle_probe",
-      "line": 379,
+      "line": 384,
       "fingerprint": "b71ea4b888fd13f6c064",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -4010,7 +4010,7 @@
       "path": "rocketmq-controller/src/lib.rs",
       "kind": "panic_surface",
       "item": "run_controller_openraft_scan_lifecycle_probe",
-      "line": 392,
+      "line": 397,
       "fingerprint": "b71ea4b888fd13f6c064",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -4020,7 +4020,7 @@
       "path": "rocketmq-controller/src/lib.rs",
       "kind": "panic_surface",
       "item": "run_controller_openraft_scan_lifecycle_probe",
-      "line": 397,
+      "line": 402,
       "fingerprint": "b71ea4b888fd13f6c064",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -4030,7 +4030,7 @@
       "path": "rocketmq-controller/src/lib.rs",
       "kind": "panic_surface",
       "item": "run_controller_openraft_scan_lifecycle_probe",
-      "line": 420,
+      "line": 425,
       "fingerprint": "b71ea4b888fd13f6c064",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -6216,24 +6216,14 @@
       "owner": "architecture maintainers"
     },
     {
-      "identity": "rocketmq-proxy-core/src/grpc/service/admission.rs:panic_surface:from_config:5308455b889ca9e25748:0",
-      "path": "rocketmq-proxy-core/src/grpc/service/admission.rs",
+      "identity": "rocketmq-proxy-core/src/ingress/grpc/service/admission.rs:panic_surface:from_config:3a922d71ea404fd96ea0:0",
+      "path": "rocketmq-proxy-core/src/ingress/grpc/service/admission.rs",
       "kind": "panic_surface",
       "item": "from_config",
-      "line": 63,
-      "fingerprint": "5308455b889ca9e25748",
+      "line": 65,
+      "fingerprint": "3a922d71ea404fd96ea0",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
-    },
-    {
-      "identity": "rocketmq-proxy-core/src/grpc/service/mod.rs:legacy_mod_rs:b494fc8bdf457af5c12a:0",
-      "path": "rocketmq-proxy-core/src/grpc/service/mod.rs",
-      "kind": "legacy_mod_rs",
-      "item": "<module>",
-      "line": 1,
-      "fingerprint": "b494fc8bdf457af5c12a",
-      "classification": "legacy module layout; additions are forbidden",
-      "owner": "owning crate maintainers"
     },
     {
       "identity": "rocketmq-proxy-core/src/status.rs:panic_surface:from_error_payload:304242f01c0bdebb4f88:0",
@@ -6260,7 +6250,7 @@
       "path": "rocketmq-proxy-local/src/local.rs",
       "kind": "panic_surface",
       "item": "attach_pop_receipt_handles",
-      "line": 1914,
+      "line": 1920,
       "fingerprint": "be7d1e89cdc960327182",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -6270,7 +6260,7 @@
       "path": "rocketmq-proxy-local/src/local.rs",
       "kind": "panic_surface",
       "item": "build_queue_offset_sorted_map",
-      "line": 2016,
+      "line": 2022,
       "fingerprint": "14cfd10c979dc0b3f711",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -6280,7 +6270,7 @@
       "path": "rocketmq-proxy-local/src/local.rs",
       "kind": "panic_surface",
       "item": "query_offset_via_broker",
-      "line": 1556,
+      "line": 1562,
       "fingerprint": "4228fdf6289c57500e52",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -6330,7 +6320,7 @@
       "path": "rocketmq-runtime/src/context.rs",
       "kind": "panic_surface",
       "item": "from_current",
-      "line": 80,
+      "line": 88,
       "fingerprint": "684e74a28bafa2c9bcc0",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -6400,7 +6390,7 @@
       "path": "rocketmq-runtime/src/owner.rs",
       "kind": "panic_surface",
       "item": "block_on",
-      "line": 86,
+      "line": 87,
       "fingerprint": "428088a77eec5aa36c04",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -6410,7 +6400,7 @@
       "path": "rocketmq-runtime/src/owner.rs",
       "kind": "panic_surface",
       "item": "shutdown_runtime_blocking_until",
-      "line": 127,
+      "line": 128,
       "fingerprint": "859b14522317da7be0de",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -6430,7 +6420,7 @@
       "path": "rocketmq-runtime/src/service_context.rs",
       "kind": "panic_surface",
       "item": "from",
-      "line": 85,
+      "line": 87,
       "fingerprint": "7eb18e0eb5374cc20b99",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -6440,7 +6430,7 @@
       "path": "rocketmq-runtime/src/service_context.rs",
       "kind": "panic_surface",
       "item": "from",
-      "line": 79,
+      "line": 81,
       "fingerprint": "c54130138cc7ed715382",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -6450,7 +6440,7 @@
       "path": "rocketmq-runtime/src/service_context.rs",
       "kind": "panic_surface",
       "item": "from_static",
-      "line": 59,
+      "line": 61,
       "fingerprint": "cfdca522b2673bd03657",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -7080,7 +7070,7 @@
       "path": "rocketmq-store/src/ha/default_ha_connection.rs",
       "kind": "panic_surface",
       "item": "encode_transfer_header",
-      "line": 119,
+      "line": 118,
       "fingerprint": "336803dea7c25c7b83be",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -7090,7 +7080,7 @@
       "path": "rocketmq-store/src/ha/default_ha_connection.rs",
       "kind": "panic_surface",
       "item": "get_socket",
-      "line": 344,
+      "line": 368,
       "fingerprint": "1371f39ca887a3d7c5f7",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -7240,7 +7230,7 @@
       "path": "rocketmq-store/src/lib.rs",
       "kind": "panic_surface",
       "item": "decode_ha_ack_offset",
-      "line": 573,
+      "line": 574,
       "fingerprint": "103d3b685f5c691a6953",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -7250,7 +7240,7 @@
       "path": "rocketmq-store/src/lib.rs",
       "kind": "panic_surface",
       "item": "decode_ha_ack_offset",
-      "line": 572,
+      "line": 573,
       "fingerprint": "8f7ee2c0d3e6353467b5",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -7260,7 +7250,7 @@
       "path": "rocketmq-store/src/lib.rs",
       "kind": "panic_surface",
       "item": "decode_repeated_ha_ack_offset",
-      "line": 591,
+      "line": 592,
       "fingerprint": "831bff11f9821f925c2e",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -7270,7 +7260,7 @@
       "path": "rocketmq-store/src/lib.rs",
       "kind": "panic_surface",
       "item": "decode_repeated_ha_ack_offset",
-      "line": 596,
+      "line": 597,
       "fingerprint": "831bff11f9821f925c2e",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -7280,7 +7270,7 @@
       "path": "rocketmq-store/src/lib.rs",
       "kind": "panic_surface",
       "item": "ha_transfer_benchmark_header",
-      "line": 566,
+      "line": 567,
       "fingerprint": "0270ad201feb53983394",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -7290,7 +7280,7 @@
       "path": "rocketmq-store/src/lib.rs",
       "kind": "panic_surface",
       "item": "run_ha_bytes_benchmark",
-      "line": 348,
+      "line": 349,
       "fingerprint": "fbcc9206395292430d76",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -7300,7 +7290,7 @@
       "path": "rocketmq-store/src/lib.rs",
       "kind": "panic_surface",
       "item": "run_ha_vectored_benchmark",
-      "line": 367,
+      "line": 368,
       "fingerprint": "e51b89b81b17913631a5",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -7310,7 +7300,7 @@
       "path": "rocketmq-store/src/lib.rs",
       "kind": "panic_surface",
       "item": "run_store_blocking_io_probe",
-      "line": 968,
+      "line": 969,
       "fingerprint": "4e66aac9f5ada2e319d4",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -7320,7 +7310,7 @@
       "path": "rocketmq-store/src/lib.rs",
       "kind": "panic_surface",
       "item": "run_store_local_file_scheduled_lifecycle_probe",
-      "line": 1225,
+      "line": 1226,
       "fingerprint": "8a3434d58c18e5f860ee",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -7330,7 +7320,7 @@
       "path": "rocketmq-store/src/lib.rs",
       "kind": "panic_surface",
       "item": "run_store_local_file_scheduled_lifecycle_probe",
-      "line": 1223,
+      "line": 1224,
       "fingerprint": "96bc85827d345abd7dca",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -7340,7 +7330,7 @@
       "path": "rocketmq-store/src/lib.rs",
       "kind": "panic_surface",
       "item": "run_store_local_file_scheduled_lifecycle_probe",
-      "line": 1224,
+      "line": 1225,
       "fingerprint": "c1103a16ff6915f5a90f",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -7350,7 +7340,7 @@
       "path": "rocketmq-store/src/lib.rs",
       "kind": "panic_surface",
       "item": "run_store_local_file_scheduled_lifecycle_probe",
-      "line": 1202,
+      "line": 1203,
       "fingerprint": "e3f98806c80f4fcc4b43",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -7360,7 +7350,7 @@
       "path": "rocketmq-store/src/lib.rs",
       "kind": "panic_surface",
       "item": "run_store_rocksdb_maintenance_lifecycle_probe",
-      "line": 1279,
+      "line": 1280,
       "fingerprint": "153a5590b2f0e24dffdd",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -7370,7 +7360,7 @@
       "path": "rocketmq-store/src/lib.rs",
       "kind": "panic_surface",
       "item": "run_store_rocksdb_maintenance_lifecycle_probe",
-      "line": 1305,
+      "line": 1306,
       "fingerprint": "b53d071d4b8f56e2d89b",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -7380,7 +7370,7 @@
       "path": "rocketmq-store/src/lib.rs",
       "kind": "panic_surface",
       "item": "run_store_rocksdb_maintenance_lifecycle_probe",
-      "line": 1271,
+      "line": 1272,
       "fingerprint": "d84575d2163f722e4ed2",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -7390,7 +7380,7 @@
       "path": "rocketmq-store/src/lib.rs",
       "kind": "panic_surface",
       "item": "run_store_timer_scheduler_lifecycle_probe",
-      "line": 1140,
+      "line": 1141,
       "fingerprint": "e2bee531ebcc2621da07",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
@@ -9482,46 +9472,6 @@
       "item": "invoke_with_callback",
       "line": 552,
       "fingerprint": "b8b3b21d6a783eeae2d1",
-      "classification": "reviewed legacy occurrence; additions are forbidden",
-      "owner": "architecture maintainers"
-    },
-    {
-      "identity": "rocketmq-transport/src/runtime/processor_v2.rs:manual_pin:poll:2e39813954c69a586edf:0",
-      "path": "rocketmq-transport/src/runtime/processor_v2.rs",
-      "kind": "manual_pin",
-      "item": "poll",
-      "line": 186,
-      "fingerprint": "2e39813954c69a586edf",
-      "classification": "reviewed legacy occurrence; additions are forbidden",
-      "owner": "architecture maintainers"
-    },
-    {
-      "identity": "rocketmq-transport/src/runtime/processor_v2.rs:manual_pin:poll:4904dd327a54df8a4f82:0",
-      "path": "rocketmq-transport/src/runtime/processor_v2.rs",
-      "kind": "manual_pin",
-      "item": "poll",
-      "line": 188,
-      "fingerprint": "4904dd327a54df8a4f82",
-      "classification": "reviewed legacy occurrence; additions are forbidden",
-      "owner": "architecture maintainers"
-    },
-    {
-      "identity": "rocketmq-transport/src/runtime/processor_v2.rs:manual_pin:poll:a4a43e0f75600874fbd7:0",
-      "path": "rocketmq-transport/src/runtime/processor_v2.rs",
-      "kind": "manual_pin",
-      "item": "poll",
-      "line": 185,
-      "fingerprint": "a4a43e0f75600874fbd7",
-      "classification": "reviewed legacy occurrence; additions are forbidden",
-      "owner": "architecture maintainers"
-    },
-    {
-      "identity": "rocketmq-transport/src/runtime/processor_v2.rs:manual_pin:poll:cd6127104dfa90a65be2:0",
-      "path": "rocketmq-transport/src/runtime/processor_v2.rs",
-      "kind": "manual_pin",
-      "item": "poll",
-      "line": 187,
-      "fingerprint": "cd6127104dfa90a65be2",
       "classification": "reviewed legacy occurrence; additions are forbidden",
       "owner": "architecture maintainers"
     }

@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Shared capability conformance exercised by Local and RocksDB backends.
+
 use rocketmq_store::get_status_to_api;
 use rocketmq_store::put_status_to_append_status;
 use rocketmq_store::store_append_receipt;

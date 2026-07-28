@@ -15,6 +15,7 @@
 //! Storage capability contracts.
 
 mod capability;
+pub mod checkpoint;
 mod error;
 mod progress;
 
@@ -27,6 +28,15 @@ pub use capability::ReleaseCheckpointStore;
 pub use capability::ReplicationControl;
 pub use capability::StoreHealth;
 pub use capability::StoreLifecycle;
+pub use checkpoint::CheckpointArtifact;
+pub use checkpoint::CheckpointBackend;
+pub use checkpoint::CheckpointManifest;
+pub use checkpoint::CheckpointOffsets;
+pub use checkpoint::CheckpointRequest;
+pub use checkpoint::CheckpointRestoreVerification;
+pub use checkpoint::CheckpointStorageIdentity;
+pub use checkpoint::CheckpointValidationError;
+pub use checkpoint::CHECKPOINT_SCHEMA_VERSION;
 pub use error::StoreComponent;
 pub use error::StoreError;
 pub use error::StoreErrorKind;

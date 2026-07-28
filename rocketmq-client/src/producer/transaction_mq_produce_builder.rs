@@ -336,8 +336,8 @@ impl TransactionMQProducerBuilder {
         } else {
             let producer_impl = DefaultMQProducerImpl::new(
                 self.client_runtime,
-                mq_producer.client_config().clone(),
-                mq_producer.producer_config().clone(),
+                mq_producer.client_config_snapshot().as_ref().clone(),
+                mq_producer.producer_config_snapshot().as_ref().clone(),
                 mq_producer.rpc_hook().clone(),
             );
             mq_producer.set_default_mqproducer_impl(producer_impl);

@@ -14,6 +14,8 @@
 
 use std::collections::HashMap;
 use std::net::IpAddr;
+// gRPC wire/domain adapters.
+
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::time::Duration;
@@ -29,6 +31,7 @@ use crate::config::GrpcConfig;
 use crate::context::ProxyContext;
 use crate::context::ResolvedAddressScheme;
 use crate::context::ResolvedEndpoint;
+use crate::contracts::ProxyTopicMessageType;
 use crate::error::ProxyError;
 use crate::error::ProxyResult;
 use crate::identity::ResourceIdentity;
@@ -71,7 +74,6 @@ use crate::processor::TransactionSource;
 use crate::processor::UpdateOffsetPlan;
 use crate::processor::UpdateOffsetRequest;
 use crate::proto::v2;
-use crate::service::ProxyTopicMessageType;
 use crate::status::ProxyPayloadStatus;
 use crate::status::ProxyStatusMapper;
 

@@ -81,7 +81,6 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-use crate::admin::mq_admin_ext_async_inner::MQAdminExtInnerImpl;
 use crate::base::client_config::ClientConfig;
 use crate::consumer::consumer_impl::pull_message_service::PullMessageService;
 use crate::consumer::consumer_impl::pull_request_ext::PullResultExt;
@@ -402,8 +401,8 @@ impl MQClientInstance {
         default_producer.set_default_mqproducer_impl(
             crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl::new_internal(
                 service_context.child("default-producer"),
-                default_producer.client_config().clone(),
-                default_producer.producer_config().clone(),
+                default_producer.client_config_snapshot().as_ref().clone(),
+                default_producer.producer_config_snapshot().as_ref().clone(),
                 None,
             ),
         );
@@ -925,7 +924,7 @@ impl MQClientInstance {
         self.producer_table.retain(|_, producer| producer.is_alive());
     }
 
-    pub async fn register_admin_ext(&self, group: &str, admin: MQAdminExtInnerImpl) -> bool {
+    pub async fn register_admin_ext(&self, group: &str) -> bool {
         if group.is_empty() {
             return false;
         }
@@ -933,7 +932,7 @@ impl MQClientInstance {
             warn!("the admin group[{}] exist already.", group);
             return false;
         }
-        self.admin_ext_table.insert(group.into(), admin);
+        self.admin_ext_table.insert(group.into(), ());
         true
     }
 
@@ -2894,6 +2893,20 @@ mod tests {
         assert!(weak.upgrade().is_some());
         drop(instance);
         assert!(weak.upgrade().is_none());
+    }
+
+    #[tokio::test]
+    async fn admin_registration_tracks_group_presence_without_a_marker_object() {
+        let instance = test_instance(ClientConfig::default(), "admin-registration");
+
+        assert!(!instance.register_admin_ext("").await);
+        assert!(instance.register_admin_ext("admin-group").await);
+        assert!(!instance.register_admin_ext("admin-group").await);
+        assert!(instance.admin_ext_table.contains_key("admin-group"));
+
+        instance.unregister_admin_ext("admin-group").await;
+
+        assert!(!instance.admin_ext_table.contains_key("admin-group"));
     }
 
     #[tokio::test]

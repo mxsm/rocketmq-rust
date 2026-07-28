@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod capability;
 pub mod default_mq_produce_builder;
 pub mod default_mq_producer;
 pub mod local_transaction_state;
@@ -32,6 +33,29 @@ pub mod transaction_mq_produce_builder;
 pub mod transaction_mq_producer;
 pub mod transaction_send_result;
 
+pub use capability::BatchSendCallbackRequest;
+pub use capability::BatchSendRequest;
+pub use capability::MessageProducer;
+pub use capability::ProducerLifecycle;
+pub use capability::ProducerQuery;
+pub use capability::ProducerQueryRequest;
+pub use capability::ProducerQueryResponse;
+pub use capability::RecallRequest;
+pub use capability::RequestReplyCallbackRequest;
+pub use capability::RequestReplyProducer;
+pub use capability::RequestReplyRequest;
+pub use capability::SelectedRequestReplyCallbackRequest;
+pub use capability::SelectedRequestReplyRequest;
+pub use capability::SelectedSendCallbackRequest;
+pub use capability::SelectedSendRequest;
+pub use capability::SendCallbackRequest;
+pub use capability::SendDestination;
+pub use capability::SendMode;
+pub use capability::SendRequest;
+pub use capability::TopicAdmin;
+pub use capability::TopicCreateRequest;
+pub use capability::TransactionSendRequest;
+pub use capability::TransactionalProducer;
 pub use default_mq_producer::DefaultMQProducer;
 pub use default_mq_producer::ProducerConfig;
 pub use local_transaction_state::LocalTransactionState;

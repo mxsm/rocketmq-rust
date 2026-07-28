@@ -43,10 +43,9 @@ page_size = "0.6.0"
 parking_lot.workspace = true
 rayon = "1.12"
 rocketmq-error.workspace = true
-rocketmq-auth.workspace = true
 rocketmq-observability = { workspace = true, optional = true }
-rocketmq-protocol.workspace = true
 rocketmq-runtime.workspace = true
+rocketmq-security-api.workspace = true
 rocketmq-store-api.workspace = true
 serde.workspace = true
 serde_json.workspace = true

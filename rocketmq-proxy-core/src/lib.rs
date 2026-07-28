@@ -19,13 +19,27 @@
 
 pub mod config;
 pub mod context;
+pub mod contracts;
 pub mod error;
+#[deprecated(
+    since = "1.1.0",
+    note = "use rocketmq_proxy_core::ingress::grpc; this compatibility path will be removed in 2.0.0"
+)]
 pub mod grpc;
 pub mod identity;
+pub mod ingress;
 pub mod message;
 pub mod processor;
 pub mod proto;
+#[deprecated(
+    since = "1.1.0",
+    note = "use rocketmq_proxy_core::ingress::remoting; this compatibility path will be removed in 2.0.0"
+)]
 pub mod remoting;
+#[deprecated(
+    since = "1.1.0",
+    note = "use rocketmq_proxy_core::contracts; this compatibility path will be removed in 2.0.0"
+)]
 pub mod service;
 pub mod session;
 pub mod status;
@@ -40,18 +54,18 @@ pub use context::ProxyContext;
 pub use context::ProxyContextWithPrincipal;
 pub use context::ResolvedAddressScheme;
 pub use context::ResolvedEndpoint;
+pub use contracts::*;
 pub use error::ProxyError;
 pub use error::ProxyResult;
 pub use identity::ResourceIdentity;
+pub use ingress::remoting::classify_remoting_request;
+pub use ingress::remoting::ProxyRemotingBackend;
+pub use ingress::remoting::RemotingIngressDispatcher;
+pub use ingress::remoting::RemotingIngressRoute;
+pub use ingress::remoting::RemotingStatusMapper;
 pub use message::ProxyMessage;
 pub use message::ProxyMessageExt;
 pub use processor::*;
-pub use remoting::classify_remoting_request;
-pub use remoting::ProxyRemotingBackend;
-pub use remoting::RemotingIngressDispatcher;
-pub use remoting::RemotingIngressRoute;
-pub use remoting::RemotingStatusMapper;
-pub use service::*;
 pub use session::build_lite_subscription_sync_request;
 pub use session::ClientSession;
 pub use session::ClientSessionRegistry;

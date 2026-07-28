@@ -29,7 +29,6 @@ use tokio::net::tcp::OwnedReadHalf;
 use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::TcpStream;
 use tokio::select;
-use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
@@ -132,17 +131,40 @@ pub struct DefaultHAConnection {
     connection_context: DefaultHAConnectionContext,
     socket_stream: Option<TcpStream>,
     client_address: String,
-    task_group: Arc<Mutex<Option<rocketmq_runtime::TaskGroup>>>,
+    lifecycle: Mutex<HAConnectionLifecycle>,
     current_state: Arc<RwLock<HAConnectionState>>,
     slave_request_offset: Arc<AtomicI64>,
     slave_ack_offset: Arc<AtomicI64>,
     flow_monitor: Arc<FlowMonitor>,
-    shutdown_tx: Arc<Mutex<Option<tokio::sync::broadcast::Sender<()>>>>,
     message_store_config: Arc<MessageStoreConfig>,
     next_transfer_from_where: Arc<AtomicI64>,
     runtime_slave_broker_id: Option<Arc<AtomicI64>>,
     id: HAConnectionId,
     remote_addr: SocketAddr,
+}
+
+enum HAConnectionLifecycle {
+    Idle,
+    Running {
+        shutdown_tx: tokio::sync::broadcast::Sender<()>,
+        task_group: rocketmq_runtime::TaskGroup,
+    },
+}
+
+impl HAConnectionLifecycle {
+    fn is_running(&self) -> bool {
+        matches!(self, Self::Running { .. })
+    }
+
+    fn take_running(&mut self) -> Option<(tokio::sync::broadcast::Sender<()>, rocketmq_runtime::TaskGroup)> {
+        match std::mem::replace(self, Self::Idle) {
+            Self::Idle => None,
+            Self::Running {
+                shutdown_tx,
+                task_group,
+            } => Some((shutdown_tx, task_group)),
+        }
+    }
 }
 
 impl DefaultHAConnection {
@@ -177,19 +199,16 @@ impl DefaultHAConnection {
         // Increment connection count
         connection_context.get_connection_count().fetch_add(1, Ordering::SeqCst);
 
-        let (shutdown_sender, shutdown_receiver) = mpsc::channel::<()>(1);
-
         Ok(Self {
             runtime_scope,
             connection_context,
             socket_stream,
             client_address,
-            task_group: Arc::new(Mutex::new(None)),
+            lifecycle: Mutex::new(HAConnectionLifecycle::Idle),
             current_state: Arc::new(RwLock::new(HAConnectionState::Transfer)),
             slave_request_offset: Arc::new(AtomicI64::new(-1)),
             slave_ack_offset: Arc::new(AtomicI64::new(-1)),
             flow_monitor,
-            shutdown_tx: Arc::new(Mutex::new(None)),
             message_store_config,
             next_transfer_from_where: Arc::new(AtomicI64::new(-1)),
             runtime_slave_broker_id: None,
@@ -221,6 +240,11 @@ impl DefaultHAConnection {
 
 impl HAConnection for DefaultHAConnection {
     async fn start(&mut self) -> Result<(), HAConnectionError> {
+        if self.lifecycle.lock().await.is_running() {
+            return Err(HAConnectionError::InvalidState(
+                "HA connection is already running".to_string(),
+            ));
+        }
         let connection_runtime = self.runtime_handle();
         self.change_current_state(HAConnectionState::Transfer).await;
 
@@ -243,7 +267,6 @@ impl HAConnection for DefaultHAConnection {
         let (shutdown_tx, _) = tokio::sync::broadcast::channel(16);
         let read_shutdown_rx = shutdown_tx.subscribe();
         let write_shutdown_rx = shutdown_tx.subscribe();
-        *self.shutdown_tx.lock().await = Some(shutdown_tx);
 
         let read_service = ReadSocketService::new(
             FramedRead::new(
@@ -287,9 +310,7 @@ impl HAConnection for DefaultHAConnection {
         if let Err(error) = task_group.spawn_service("ha-write-socket-service", async move {
             write_service.run(write_shutdown_rx).await;
         }) {
-            if let Some(tx) = self.shutdown_tx.lock().await.take() {
-                let _ = tx.send(());
-            }
+            let _ = shutdown_tx.send(());
             let report = task_group.shutdown(Duration::from_secs(3)).await;
             if let Err(shutdown_error) =
                 crate::runtime::shutdown_report_result("DefaultHAConnection partial start", report)
@@ -299,7 +320,10 @@ impl HAConnection for DefaultHAConnection {
             return Err(HAConnectionError::Service(error.to_string()));
         }
 
-        *self.task_group.lock().await = Some(task_group);
+        *self.lifecycle.lock().await = HAConnectionLifecycle::Running {
+            shutdown_tx,
+            task_group,
+        };
 
         info!("HAConnection started for {}", self.client_address);
         Ok(())
@@ -308,13 +332,13 @@ impl HAConnection for DefaultHAConnection {
     async fn shutdown(&mut self) {
         self.change_current_state(HAConnectionState::Shutdown).await;
 
-        // Send shutdown signal
-        if let Some(tx) = self.shutdown_tx.lock().await.take() {
-            let _ = tx.send(());
-        }
+        let running = {
+            let mut lifecycle = self.lifecycle.lock().await;
+            lifecycle.take_running()
+        };
 
-        // Wait for services to stop
-        if let Some(task_group) = self.task_group.lock().await.take() {
+        if let Some((shutdown_tx, task_group)) = running {
+            let _ = shutdown_tx.send(());
             let report = task_group.shutdown(Duration::from_secs(3)).await;
             if let Err(error) = crate::runtime::shutdown_report_result("DefaultHAConnection", report) {
                 warn!("DefaultHAConnection task shutdown reported an error: {error}");
@@ -405,8 +429,6 @@ impl ReadSocketService {
         message_store_config: Arc<MessageStoreConfig>,
         connection_runtime: HAConnectionRuntimeHandle,
     ) -> Result<Self, HAConnectionError> {
-        let (shutdown_sender, _) = mpsc::channel::<()>(1);
-
         Ok(Self {
             reader,
             client_address,
@@ -974,5 +996,26 @@ mod tests {
 
         assert!(source.matches("HAConnectionResult<()>").count() >= 5);
         assert!(!source.contains(concat!("Box<dyn std::error::", "Error")));
+    }
+
+    #[tokio::test]
+    async fn lifecycle_take_is_idempotent_and_keeps_shutdown_resources_atomic() {
+        let context = rocketmq_runtime::RuntimeContext::from_current("ha-connection-lifecycle-test")
+            .service_context("ha-connection");
+        let task_group = context.task_group().child("connection-workers");
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::broadcast::channel(1);
+        let mut lifecycle = HAConnectionLifecycle::Running {
+            shutdown_tx,
+            task_group,
+        };
+
+        let (shutdown_tx, task_group) = lifecycle.take_running().expect("running resources");
+        shutdown_tx.send(()).expect("deliver shutdown");
+        shutdown_rx.recv().await.expect("observe shutdown");
+        assert!(lifecycle.take_running().is_none());
+        assert!(!lifecycle.is_running());
+
+        let report = task_group.shutdown(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
     }
 }

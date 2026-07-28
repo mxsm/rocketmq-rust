@@ -14,11 +14,26 @@
 
 //! Runtime-neutral security contracts.
 
+pub mod maintenance;
 pub mod resource_pattern;
 pub mod resource_type;
 pub mod secret_provider;
 pub mod secure_deployment;
 
+pub use maintenance::MaintenanceAuthorizationContext;
+pub use maintenance::MaintenanceAuthorizationError;
+pub use maintenance::MaintenanceAuthorizationGrant;
+pub use maintenance::MaintenanceAuthorizer;
+pub use maintenance::MaintenanceCapability;
+pub use maintenance::MaintenancePolicy;
+pub use maintenance::MaintenancePolicyError;
+pub use maintenance::MaintenancePrincipalBinding;
+pub use maintenance::MaintenanceRequestClass;
+pub use maintenance::MaintenanceResourceBudget;
+pub use maintenance::MaintenanceRole;
+pub use maintenance::MaintenanceRoleGrant;
+pub use maintenance::ValidatedMaintenancePolicy;
+pub use maintenance::MAINTENANCE_POLICY_SCHEMA_VERSION;
 pub use resource_pattern::ResourcePattern;
 pub use resource_type::ResourceType;
 

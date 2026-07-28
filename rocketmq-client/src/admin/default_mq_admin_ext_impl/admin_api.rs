@@ -42,7 +42,7 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
                     .client_instance
                     .as_mut()
                     .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?
-                    .register_admin_ext(group, MQAdminExtInnerImpl)
+                    .register_admin_ext(group)
                     .await;
                 if !register_ok {
                     if let Some(token) = self.client_pool_token.take() {

@@ -12,4 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+/// Legacy marker retained only for downstream source compatibility.
+///
+/// Internal client registration no longer uses or implements this marker.
+#[deprecated(since = "1.1.0", note = "remove in 2.0.0; admin registration is capability-free")]
 pub trait MQAdminExtInner: Send + Sync + 'static {}

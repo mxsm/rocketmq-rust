@@ -94,6 +94,10 @@ impl TransactionMQProducer {
         }
     }
 
+    pub(crate) fn default_producer_mut(&mut self) -> &mut DefaultMQProducer {
+        &mut self.default_producer
+    }
+
     pub async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
         <Self as MQProducer>::start(self).await
     }

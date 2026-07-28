@@ -14,6 +14,8 @@
 
 use std::future::Future;
 use std::sync::atomic::AtomicU64;
+// Session housekeeping owned by gRPC ingress.
+
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;

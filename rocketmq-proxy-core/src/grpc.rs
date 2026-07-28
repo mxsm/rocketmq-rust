@@ -12,9 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Backend-neutral gRPC ingress components.
+//! Compatibility path for gRPC ingress.
 
-pub mod adapter;
-pub mod middleware;
-pub mod server;
-pub mod service;
+pub use crate::ingress::grpc::*;

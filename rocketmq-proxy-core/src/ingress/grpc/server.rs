@@ -15,13 +15,15 @@
 use std::future::Future;
 use std::net::SocketAddr;
 
+// gRPC listener lifecycle owned by the Proxy composition root.
+
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 
-use crate::grpc::service::GrpcHousekeepingRunReport;
+use crate::ingress::grpc::service::GrpcHousekeepingRunReport;
 use crate::GrpcConfig;
 use crate::ProxyError;
 use crate::ProxyResult;

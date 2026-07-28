@@ -48,14 +48,14 @@ use crate::proto::v2;
 use crate::session::ClientSessionRegistry;
 use crate::status::ProxyStatusMapper;
 
-use rocketmq_proxy_core::grpc::service::admission::estimated_protobuf_retained_bytes;
-use rocketmq_proxy_core::grpc::service::consumer;
-use rocketmq_proxy_core::grpc::service::housekeeping;
-use rocketmq_proxy_core::grpc::service::telemetry;
-use rocketmq_proxy_core::grpc::service::topic;
-use rocketmq_proxy_core::grpc::service::transaction;
-use rocketmq_proxy_core::grpc::service::ExecutionGuards;
-use rocketmq_proxy_core::grpc::service::ReapSchedule;
+use rocketmq_proxy_core::ingress::grpc::service::admission::estimated_protobuf_retained_bytes;
+use rocketmq_proxy_core::ingress::grpc::service::consumer;
+use rocketmq_proxy_core::ingress::grpc::service::housekeeping;
+use rocketmq_proxy_core::ingress::grpc::service::telemetry;
+use rocketmq_proxy_core::ingress::grpc::service::topic;
+use rocketmq_proxy_core::ingress::grpc::service::transaction;
+use rocketmq_proxy_core::ingress::grpc::service::ExecutionGuards;
+use rocketmq_proxy_core::ingress::grpc::service::ReapSchedule;
 
 type ResponseStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send + 'static>>;
 
@@ -1823,189 +1823,206 @@ mod tests {
         }
     }
 
-    #[async_trait]
     impl MessageService for PartialMessageService {
-        async fn send_message(
-            &self,
-            _context: &CoreProxyContext,
-            request: &SendMessageRequest,
-        ) -> crate::error::ProxyResult<Vec<SendMessageResultEntry>> {
-            Ok(request
-                .messages
-                .iter()
-                .enumerate()
-                .map(|(index, message)| {
-                    if index == 0 {
-                        let send_result = SendResult::new(
-                            SendStatus::SendOk,
-                            Some(CheetahString::from(message.client_message_id.as_str())),
-                            None,
-                            None,
-                            0,
-                        );
-                        SendMessageResultEntry {
-                            status: ProxyStatusMapper::from_send_result_payload(&send_result),
-                            send_result: Some(send_result),
+        fn send_message<'a>(
+            &'a self,
+            _context: &'a CoreProxyContext,
+            request: &'a SendMessageRequest,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, Vec<SendMessageResultEntry>> {
+            Box::pin(async move {
+                Ok(request
+                    .messages
+                    .iter()
+                    .enumerate()
+                    .map(|(index, message)| {
+                        if index == 0 {
+                            let send_result = SendResult::new(
+                                SendStatus::SendOk,
+                                Some(CheetahString::from(message.client_message_id.as_str())),
+                                None,
+                                None,
+                                0,
+                            );
+                            SendMessageResultEntry {
+                                status: ProxyStatusMapper::from_send_result_payload(&send_result),
+                                send_result: Some(send_result),
+                            }
+                        } else {
+                            SendMessageResultEntry {
+                                status: ProxyPayloadStatus::new(
+                                    v2::Code::TopicNotFound as i32,
+                                    "Topic 'TopicA' does not exist",
+                                ),
+                                send_result: None,
+                            }
                         }
-                    } else {
-                        SendMessageResultEntry {
-                            status: ProxyPayloadStatus::new(
-                                v2::Code::TopicNotFound as i32,
-                                "Topic 'TopicA' does not exist",
-                            ),
-                            send_result: None,
-                        }
-                    }
-                })
-                .collect())
+                    })
+                    .collect())
+            })
         }
 
-        async fn recall_message(
-            &self,
-            _context: &CoreProxyContext,
-            request: &crate::processor::RecallMessageRequest,
-        ) -> crate::error::ProxyResult<crate::processor::RecallMessagePlan> {
-            Ok(crate::processor::RecallMessagePlan {
-                status: ProxyStatusMapper::ok_payload(),
-                message_id: request.recall_handle.clone(),
+        fn recall_message<'a>(
+            &'a self,
+            _context: &'a CoreProxyContext,
+            request: &'a crate::processor::RecallMessageRequest,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, crate::processor::RecallMessagePlan> {
+            Box::pin(async move {
+                Ok(crate::processor::RecallMessagePlan {
+                    status: ProxyStatusMapper::ok_payload(),
+                    message_id: request.recall_handle.clone(),
+                })
             })
         }
     }
 
-    #[async_trait]
     impl ConsumerService for TestConsumerService {
-        async fn receive_message(
-            &self,
-            _context: &CoreProxyContext,
-            _request: &ReceiveMessageRequest,
-        ) -> crate::error::ProxyResult<ReceiveMessagePlan> {
-            let mut payload = ProxyMessage::new("TopicA", b"hello".to_vec());
-            payload.put_property("POP_CK", "receipt-handle");
-            let message = ProxyMessageExt {
-                message: payload,
-                msg_id: "server-msg-id".to_owned(),
-                queue_id: 3,
-                queue_offset: 42,
-                reconsume_times: 1,
-                ..ProxyMessageExt::default()
-            };
+        fn receive_message<'a>(
+            &'a self,
+            _context: &'a CoreProxyContext,
+            _request: &'a ReceiveMessageRequest,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, ReceiveMessagePlan> {
+            Box::pin(async {
+                let mut payload = ProxyMessage::new("TopicA", b"hello".to_vec());
+                payload.put_property("POP_CK", "receipt-handle");
+                let message = ProxyMessageExt {
+                    message: payload,
+                    msg_id: "server-msg-id".to_owned(),
+                    queue_id: 3,
+                    queue_offset: 42,
+                    reconsume_times: 1,
+                    ..ProxyMessageExt::default()
+                };
 
-            Ok(ReceiveMessagePlan {
-                status: ProxyStatusMapper::ok_payload(),
-                delivery_timestamp_ms: Some(1_710_000_000_000),
-                messages: vec![ReceivedMessage {
-                    message,
-                    invisible_duration: std::time::Duration::from_secs(30),
-                }],
+                Ok(ReceiveMessagePlan {
+                    status: ProxyStatusMapper::ok_payload(),
+                    delivery_timestamp_ms: Some(1_710_000_000_000),
+                    messages: vec![ReceivedMessage {
+                        message,
+                        invisible_duration: std::time::Duration::from_secs(30),
+                    }],
+                })
             })
         }
 
-        async fn pull_message(
-            &self,
-            _context: &CoreProxyContext,
-            request: &PullMessageRequest,
-        ) -> crate::error::ProxyResult<PullMessagePlan> {
-            let message = ProxyMessageExt {
-                message: ProxyMessage::new(request.target.topic.to_string(), b"pull".to_vec()),
-                msg_id: "pull-msg-id".to_owned(),
-                queue_id: request.target.queue_id,
-                queue_offset: request.offset,
-                ..ProxyMessageExt::default()
-            };
+        fn pull_message<'a>(
+            &'a self,
+            _context: &'a CoreProxyContext,
+            request: &'a PullMessageRequest,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, PullMessagePlan> {
+            Box::pin(async move {
+                let message = ProxyMessageExt {
+                    message: ProxyMessage::new(request.target.topic.to_string(), b"pull".to_vec()),
+                    msg_id: "pull-msg-id".to_owned(),
+                    queue_id: request.target.queue_id,
+                    queue_offset: request.offset,
+                    ..ProxyMessageExt::default()
+                };
 
-            Ok(PullMessagePlan {
-                status: ProxyStatusMapper::ok_payload(),
-                next_offset: request.offset + 1,
-                min_offset: 0,
-                max_offset: request.offset + 1024,
-                messages: vec![message],
+                Ok(PullMessagePlan {
+                    status: ProxyStatusMapper::ok_payload(),
+                    next_offset: request.offset + 1,
+                    min_offset: 0,
+                    max_offset: request.offset + 1024,
+                    messages: vec![message],
+                })
             })
         }
 
-        async fn ack_message(
-            &self,
-            _context: &CoreProxyContext,
-            request: &AckMessageRequest,
-        ) -> crate::error::ProxyResult<Vec<AckMessageResultEntry>> {
-            Ok(request
-                .entries
-                .iter()
-                .map(|entry| AckMessageResultEntry {
-                    message_id: entry.message_id.clone(),
-                    receipt_handle: entry.receipt_handle.clone(),
+        fn ack_message<'a>(
+            &'a self,
+            _context: &'a CoreProxyContext,
+            request: &'a AckMessageRequest,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, Vec<AckMessageResultEntry>> {
+            Box::pin(async move {
+                Ok(request
+                    .entries
+                    .iter()
+                    .map(|entry| AckMessageResultEntry {
+                        message_id: entry.message_id.clone(),
+                        receipt_handle: entry.receipt_handle.clone(),
+                        status: ProxyStatusMapper::ok_payload(),
+                    })
+                    .collect())
+            })
+        }
+
+        fn forward_message_to_dead_letter_queue<'a>(
+            &'a self,
+            _context: &'a CoreProxyContext,
+            request: &'a ForwardMessageToDeadLetterQueueRequest,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, ForwardMessageToDeadLetterQueuePlan> {
+            Box::pin(async move {
+                self.dlq_requests
+                    .lock()
+                    .expect("dlq requests mutex poisoned")
+                    .push(request.clone());
+                Ok(ForwardMessageToDeadLetterQueuePlan {
                     status: ProxyStatusMapper::ok_payload(),
                 })
-                .collect())
-        }
-
-        async fn forward_message_to_dead_letter_queue(
-            &self,
-            _context: &CoreProxyContext,
-            request: &ForwardMessageToDeadLetterQueueRequest,
-        ) -> crate::error::ProxyResult<ForwardMessageToDeadLetterQueuePlan> {
-            self.dlq_requests
-                .lock()
-                .expect("dlq requests mutex poisoned")
-                .push(request.clone());
-            Ok(ForwardMessageToDeadLetterQueuePlan {
-                status: ProxyStatusMapper::ok_payload(),
             })
         }
 
-        async fn change_invisible_duration(
-            &self,
-            _context: &CoreProxyContext,
-            request: &ChangeInvisibleDurationRequest,
-        ) -> crate::error::ProxyResult<ChangeInvisibleDurationPlan> {
-            Ok(ChangeInvisibleDurationPlan {
-                status: ProxyStatusMapper::ok_payload(),
-                receipt_handle: format!("{}-renewed", request.receipt_handle),
+        fn change_invisible_duration<'a>(
+            &'a self,
+            _context: &'a CoreProxyContext,
+            request: &'a ChangeInvisibleDurationRequest,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, ChangeInvisibleDurationPlan> {
+            Box::pin(async move {
+                Ok(ChangeInvisibleDurationPlan {
+                    status: ProxyStatusMapper::ok_payload(),
+                    receipt_handle: format!("{}-renewed", request.receipt_handle),
+                })
             })
         }
 
-        async fn update_offset(
-            &self,
-            _context: &CoreProxyContext,
-            request: &UpdateOffsetRequest,
-        ) -> crate::error::ProxyResult<UpdateOffsetPlan> {
-            self.updated_offsets
-                .lock()
-                .expect("updated offsets mutex poisoned")
-                .push(request.clone());
-            Ok(UpdateOffsetPlan {
-                status: ProxyStatusMapper::ok_payload(),
+        fn update_offset<'a>(
+            &'a self,
+            _context: &'a CoreProxyContext,
+            request: &'a UpdateOffsetRequest,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, UpdateOffsetPlan> {
+            Box::pin(async move {
+                self.updated_offsets
+                    .lock()
+                    .expect("updated offsets mutex poisoned")
+                    .push(request.clone());
+                Ok(UpdateOffsetPlan {
+                    status: ProxyStatusMapper::ok_payload(),
+                })
             })
         }
 
-        async fn get_offset(
-            &self,
-            _context: &CoreProxyContext,
-            _request: &GetOffsetRequest,
-        ) -> crate::error::ProxyResult<GetOffsetPlan> {
-            Ok(GetOffsetPlan {
-                status: ProxyStatusMapper::ok_payload(),
-                offset: 42,
+        fn get_offset<'a>(
+            &'a self,
+            _context: &'a CoreProxyContext,
+            _request: &'a GetOffsetRequest,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, GetOffsetPlan> {
+            Box::pin(async {
+                Ok(GetOffsetPlan {
+                    status: ProxyStatusMapper::ok_payload(),
+                    offset: 42,
+                })
             })
         }
 
-        async fn query_offset(
-            &self,
-            _context: &CoreProxyContext,
-            request: &QueryOffsetRequest,
-        ) -> crate::error::ProxyResult<QueryOffsetPlan> {
-            let offset = match request.policy {
-                QueryOffsetPolicy::Beginning => 0,
-                QueryOffsetPolicy::End => 128,
-                QueryOffsetPolicy::Timestamp => request.timestamp_ms.unwrap_or_default(),
-            };
-            Ok(QueryOffsetPlan {
-                status: ProxyStatusMapper::ok_payload(),
-                offset,
+        fn query_offset<'a>(
+            &'a self,
+            _context: &'a CoreProxyContext,
+            request: &'a QueryOffsetRequest,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, QueryOffsetPlan> {
+            Box::pin(async move {
+                let offset = match request.policy {
+                    QueryOffsetPolicy::Beginning => 0,
+                    QueryOffsetPolicy::End => 128,
+                    QueryOffsetPolicy::Timestamp => request.timestamp_ms.unwrap_or_default(),
+                };
+                Ok(QueryOffsetPlan {
+                    status: ProxyStatusMapper::ok_payload(),
+                    offset,
+                })
             })
         }
     }
 
-    #[async_trait]
     impl TransactionService for TestTransactionService {
         fn transaction_producer_group(&self, context: &CoreProxyContext) -> Option<String> {
             Some(format!(
@@ -2014,17 +2031,19 @@ mod tests {
             ))
         }
 
-        async fn end_transaction(
-            &self,
-            _context: &CoreProxyContext,
-            request: &EndTransactionRequest,
-        ) -> crate::error::ProxyResult<EndTransactionPlan> {
-            self.requests
-                .lock()
-                .expect("transaction service mutex poisoned")
-                .push(request.clone());
-            Ok(EndTransactionPlan {
-                status: ProxyStatusMapper::ok_payload(),
+        fn end_transaction<'a>(
+            &'a self,
+            _context: &'a CoreProxyContext,
+            request: &'a EndTransactionRequest,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, EndTransactionPlan> {
+            Box::pin(async move {
+                self.requests
+                    .lock()
+                    .expect("transaction service mutex poisoned")
+                    .push(request.clone());
+                Ok(EndTransactionPlan {
+                    status: ProxyStatusMapper::ok_payload(),
+                })
             })
         }
     }

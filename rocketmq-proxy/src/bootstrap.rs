@@ -364,7 +364,7 @@ where
         hooks: ProxyHookChain,
         metrics: ProxyMetrics,
         transport_telemetry: rocketmq_transport::TransportTelemetry,
-        grpc_guards: rocketmq_proxy_core::grpc::service::ExecutionGuards,
+        grpc_guards: rocketmq_proxy_core::ingress::grpc::service::ExecutionGuards,
         remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
         backend_context: Option<ChildServiceContext>,
         service_context: ChildServiceContext,

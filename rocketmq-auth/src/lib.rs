@@ -124,19 +124,67 @@ pub use credential_rotation::CredentialVerificationSource;
 pub use credential_rotation::RetiringCredentialSnapshot;
 pub use credential_rotation::ValidatedCredential;
 pub use maintenance::LoadedMaintenancePolicy;
+#[deprecated(
+    since = "1.1.0",
+    note = "use rocketmq_security_api::MaintenanceAuthorizationContext; this compatibility path will be removed in 2.0.0"
+)]
 pub use maintenance::MaintenanceAuthorizationContext;
+#[deprecated(
+    since = "1.1.0",
+    note = "use rocketmq_security_api::MaintenanceAuthorizationError; this compatibility path will be removed in 2.0.0"
+)]
 pub use maintenance::MaintenanceAuthorizationError;
+#[deprecated(
+    since = "1.1.0",
+    note = "use rocketmq_security_api::MaintenanceAuthorizationGrant; this compatibility path will be removed in 2.0.0"
+)]
 pub use maintenance::MaintenanceAuthorizationGrant;
+#[deprecated(
+    since = "1.1.0",
+    note = "use rocketmq_security_api::MaintenanceAuthorizer; this compatibility path will be removed in 2.0.0"
+)]
 pub use maintenance::MaintenanceAuthorizer;
+#[deprecated(
+    since = "1.1.0",
+    note = "use rocketmq_security_api::MaintenanceCapability; this compatibility path will be removed in 2.0.0"
+)]
 pub use maintenance::MaintenanceCapability;
+#[deprecated(
+    since = "1.1.0",
+    note = "use rocketmq_security_api::MaintenancePolicy; this compatibility path will be removed in 2.0.0"
+)]
 pub use maintenance::MaintenancePolicy;
 pub use maintenance::MaintenancePolicyError;
 pub use maintenance::MaintenancePolicyReference;
+#[deprecated(
+    since = "1.1.0",
+    note = "use rocketmq_security_api::MaintenancePrincipalBinding; this compatibility path will be removed in 2.0.0"
+)]
 pub use maintenance::MaintenancePrincipalBinding;
+#[deprecated(
+    since = "1.1.0",
+    note = "use rocketmq_security_api::MaintenanceRequestClass; this compatibility path will be removed in 2.0.0"
+)]
 pub use maintenance::MaintenanceRequestClass;
+#[deprecated(
+    since = "1.1.0",
+    note = "use rocketmq_security_api::MaintenanceResourceBudget; this compatibility path will be removed in 2.0.0"
+)]
 pub use maintenance::MaintenanceResourceBudget;
+#[deprecated(
+    since = "1.1.0",
+    note = "use rocketmq_security_api::MaintenanceRole; this compatibility path will be removed in 2.0.0"
+)]
 pub use maintenance::MaintenanceRole;
+#[deprecated(
+    since = "1.1.0",
+    note = "use rocketmq_security_api::MaintenanceRoleGrant; this compatibility path will be removed in 2.0.0"
+)]
 pub use maintenance::MaintenanceRoleGrant;
+#[deprecated(
+    since = "1.1.0",
+    note = "use rocketmq_security_api::MAINTENANCE_POLICY_SCHEMA_VERSION; this compatibility path will be removed in 2.0.0"
+)]
 pub use maintenance::MAINTENANCE_POLICY_SCHEMA_VERSION;
 pub use permission::Permission;
 pub use rocketmq_observability::metrics::auth::AuthMetricSample;

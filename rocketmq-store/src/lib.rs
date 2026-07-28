@@ -28,6 +28,7 @@
 
 mod base;
 mod capability;
+mod compat;
 mod config;
 mod consume_queue;
 mod factory;

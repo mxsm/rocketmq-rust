@@ -30,6 +30,9 @@ default = []
 [dependencies]
 rocketmq-model.workspace = true
 rocketmq-error.workspace = true
-rocketmq-auth.workspace = true
-rocketmq-protocol.workspace = true
+rocketmq-security-api.workspace = true
 bytes.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

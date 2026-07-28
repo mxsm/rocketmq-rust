@@ -18,16 +18,6 @@ use std::fs;
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use rocketmq_auth::MaintenanceAuthorizationContext;
-use rocketmq_auth::MaintenanceAuthorizer;
-use rocketmq_auth::MaintenanceCapability;
-use rocketmq_auth::MaintenancePolicy;
-use rocketmq_auth::MaintenancePolicyReference;
-use rocketmq_auth::MaintenancePrincipalBinding;
-use rocketmq_auth::MaintenanceRequestClass;
-use rocketmq_auth::MaintenanceResourceBudget;
-use rocketmq_auth::MaintenanceRole;
-use rocketmq_auth::MaintenanceRoleGrant;
 use rocketmq_controller::verify_controller_release_snapshot;
 use rocketmq_controller::Controller;
 use rocketmq_controller::ControllerConfig;
@@ -37,8 +27,16 @@ use rocketmq_controller::RaftController;
 use rocketmq_controller::StorageBackendType;
 use rocketmq_protocol::protocol::body::release_checkpoint::ControllerReleaseSnapshotRequest;
 use rocketmq_runtime::common::time_utils::current_millis;
-use sha2::Digest;
-use sha2::Sha256;
+use rocketmq_security_api::MaintenanceAuthorizationContext;
+use rocketmq_security_api::MaintenanceAuthorizationGrant;
+use rocketmq_security_api::MaintenanceAuthorizer;
+use rocketmq_security_api::MaintenanceCapability;
+use rocketmq_security_api::MaintenancePolicy;
+use rocketmq_security_api::MaintenancePrincipalBinding;
+use rocketmq_security_api::MaintenanceRequestClass;
+use rocketmq_security_api::MaintenanceResourceBudget;
+use rocketmq_security_api::MaintenanceRole;
+use rocketmq_security_api::MaintenanceRoleGrant;
 use tempfile::TempDir;
 
 fn reserve_address() -> SocketAddr {
@@ -48,7 +46,7 @@ fn reserve_address() -> SocketAddr {
     address
 }
 
-fn authorized_release_operator() -> (TempDir, rocketmq_auth::MaintenanceAuthorizationGrant) {
+fn authorized_release_operator() -> MaintenanceAuthorizationGrant {
     let policy = MaintenancePolicy {
         schema_version: 1,
         policy_id: "rocketmq.production-maintenance".to_string(),
@@ -71,21 +69,9 @@ fn authorized_release_operator() -> (TempDir, rocketmq_auth::MaintenanceAuthoriz
             capabilities: BTreeSet::from([MaintenanceCapability::ReleaseCheckpoint]),
         }],
     };
-    let directory = TempDir::new().expect("create policy directory");
-    let path = directory.path().join("maintenance-policy.json");
-    let bytes = serde_json::to_vec_pretty(&policy).expect("serialize maintenance policy");
-    fs::write(&path, &bytes).expect("write maintenance policy");
-    let authorizer = MaintenanceAuthorizer::new(
-        MaintenancePolicyReference {
-            path,
-            version: 7,
-            sha256: hex::encode(Sha256::digest(&bytes)),
-        }
-        .load_from(directory.path())
-        .expect("load pinned maintenance policy"),
-    );
+    let authorizer = MaintenanceAuthorizer::new(policy.into_validated().expect("validate maintenance policy contract"));
     let now = current_millis();
-    let grant = authorizer
+    authorizer
         .authorize(
             Some(&MaintenanceAuthorizationContext {
                 authentication_enabled: true,
@@ -98,8 +84,7 @@ fn authorized_release_operator() -> (TempDir, rocketmq_auth::MaintenanceAuthoriz
             }),
             now,
         )
-        .expect("authorize release operator");
-    (directory, grant)
+        .expect("authorize release operator")
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -136,7 +121,7 @@ async fn authorized_release_snapshot_is_read_index_bound_and_restore_verified() 
     .await
     .expect("Controller should become leader");
 
-    let (_policy_directory, authorization) = authorized_release_operator();
+    let authorization = authorized_release_operator();
     let snapshot = controller
         .create_release_snapshot(
             &authorization,
