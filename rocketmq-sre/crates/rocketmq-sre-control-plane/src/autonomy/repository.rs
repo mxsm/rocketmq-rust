@@ -1069,6 +1069,8 @@ impl PostgresRepository {
         cluster_id: ClusterId,
         plan_id: ActionPlanId,
         plan_hash: &str,
+        action: ExecutionAction,
+        action_version: &str,
         maximum_age_seconds: u64,
         required_sources: &[String],
         now: DateTime<Utc>,
@@ -1094,6 +1096,11 @@ impl PostgresRepository {
             || plan.cluster_id != cluster_id
             || plan.plan_hash != plan_hash
             || plan.verify_plan_hash().is_err()
+            || plan.steps.is_empty()
+            || plan
+                .steps
+                .iter()
+                .any(|step| step.action != action || step.descriptor_version != action_version)
         {
             return Ok(false);
         }
