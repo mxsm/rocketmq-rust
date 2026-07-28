@@ -75,6 +75,8 @@ use crate::observability::ProviderHealthSample;
 use crate::observability::SreHealthViewV1;
 use crate::observability::SreMetrics;
 use crate::observability::SreObservability;
+use crate::release_management::IntegrationOutboxWorker;
+use crate::release_management::ReleaseManagementService;
 use crate::repository::ClusterRepository;
 use crate::slo::SloService;
 use crate::workflow::WorkflowEventBus;
@@ -527,6 +529,7 @@ pub(crate) struct AppState {
     pub(crate) observability_status: ObservabilityStatusHandle,
     pub(crate) operations: crate::operator_workbench::OperatorWorkbenchService,
     pub(crate) postmortems: crate::postmortem::PostmortemService,
+    pub(crate) release_management: ReleaseManagementService,
     pub(crate) sre_metrics: Arc<SreMetrics>,
     pub(crate) slo: SloService,
     pub(crate) supervised_execution: crate::supervised_execution::SupervisedExecutionService,
@@ -615,6 +618,8 @@ fn build_routers_with_auth(
     )?;
     let change_management =
         crate::change_management::ChangeManagementService::new(repository.clone(), supervised_execution.clone())?;
+    let release_management =
+        ReleaseManagementService::new(repository.clone(), supervised_execution.clone(), forecast.clone());
     let lease_authority = crate::execution_authority::LeaseAuthorityService::new(
         repository.pool.clone(),
         grant_signing_key.as_bytes(),
@@ -646,6 +651,7 @@ fn build_routers_with_auth(
         observability_status: ObservabilityStatusHandle::default(),
         operations,
         postmortems,
+        release_management,
         sre_metrics,
         slo: slo.clone(),
         supervised_execution,
@@ -669,6 +675,7 @@ fn build_routers_with_auth(
         .merge(crate::postmortem::routes())
         .merge(crate::supervised_execution::routes())
         .merge(crate::change_management::routes())
+        .merge(crate::release_management::routes())
         .merge(crate::execution_authority::routes())
         .merge(crate::execution_verification::routes())
         .with_state(state.clone())
@@ -708,6 +715,7 @@ pub async fn run(config: ControlPlaneConfig, service_context: ChildServiceContex
     )?;
     let workflow = WorkflowService::new(repository.clone(), WorkflowEventBus::new(1_024));
     let notification_worker = NotificationOutboxWorker::new(repository.clone())?;
+    let integration_worker = IntegrationOutboxWorker::new(repository.clone())?;
     let notification_tasks = service_context.scheduled_tasks("notification-outbox");
     let mut notification_schedule =
         ScheduledTaskConfig::fixed_rate_no_overlap("phase2-notification-outbox", std::time::Duration::from_secs(5));
@@ -723,6 +731,22 @@ pub async fn run(config: ControlPlaneConfig, service_context: ChildServiceContex
         })
         .map_err(|error| {
             ControlPlaneError::configuration(format!("notification outbox worker could not be started: {error}"))
+        })?;
+    let integration_tasks = service_context.scheduled_tasks("integration-outbox");
+    let mut integration_schedule =
+        ScheduledTaskConfig::fixed_rate_no_overlap("phase3-integration-outbox", std::time::Duration::from_secs(5));
+    integration_schedule.initial_delay = std::time::Duration::from_secs(3);
+    integration_schedule.max_run_time = Some(std::time::Duration::from_secs(20));
+    integration_schedule.shutdown_timeout = config.shutdown_timeout();
+    integration_tasks
+        .schedule_fixed_rate_no_overlap(integration_schedule, move || {
+            let worker = integration_worker.clone();
+            async move {
+                worker.run_due().await;
+            }
+        })
+        .map_err(|error| {
+            ControlPlaneError::configuration(format!("integration outbox worker could not be started: {error}"))
         })?;
     let todo_repository = repository.clone();
     let todo_tasks = service_context.scheduled_tasks("postmortem-operator-todos");
