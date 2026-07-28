@@ -18,6 +18,7 @@ use chrono::DateTime;
 use chrono::Utc;
 use rocketmq_sre_contracts::ActionPlanId;
 use rocketmq_sre_contracts::ApprovalRecord;
+use rocketmq_sre_contracts::AuditEvent;
 use rocketmq_sre_contracts::ClusterId;
 use rocketmq_sre_contracts::CorrelationId;
 use rocketmq_sre_contracts::EvidenceId;
@@ -249,6 +250,13 @@ pub(super) struct IntegrationDeliveryClaim {
 #[derive(Clone, Debug)]
 pub(super) struct AdapterDeliveryReceipt {
     pub(super) external_ticket_key: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct QueuedIntegrationDelivery {
+    pub(super) target: IntegrationTargetView,
+    pub(super) delivery: IntegrationDelivery,
+    pub(super) audit: AuditEvent,
 }
 
 #[derive(Clone, Debug)]
