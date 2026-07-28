@@ -756,6 +756,22 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
             runtime_info.insert("authDiagnosticsSupported".to_string(), "false".to_string());
         }
         runtime_info.insert("authCredentialRotationSupported".to_string(), "false".to_string());
+        if let Some(control) = self.broker_runtime_inner.log_filter_control() {
+            let status = control.status();
+            runtime_info.insert("sreLogFilterControlSupported".to_string(), "true".to_string());
+            runtime_info.insert("sreLogFilterEffective".to_string(), status.effective_filter);
+            if let Some(operation_id) = status.active_operation_id {
+                runtime_info.insert("sreLogFilterActiveOperationId".to_string(), operation_id);
+            }
+            if let Some(operation_id) = status.last_completed_operation_id {
+                runtime_info.insert("sreLogFilterLastCompletedOperationId".to_string(), operation_id);
+            }
+            if let Some(expires_at_millis) = status.expires_at_millis {
+                runtime_info.insert("sreLogFilterExpiresAtMillis".to_string(), expires_at_millis.to_string());
+            }
+        } else {
+            runtime_info.insert("sreLogFilterControlSupported".to_string(), "false".to_string());
+        }
         self.broker_runtime_inner
             .schedule_message_service()
             .build_running_stats(&mut runtime_info);
@@ -1175,6 +1191,10 @@ mod tests {
             Some("1")
         );
         assert_eq!(initial.get("storeWriteable").map(|value| value.as_str()), Some("true"));
+        assert_eq!(
+            initial.get("sreLogFilterControlSupported").map(|value| value.as_str()),
+            Some("false")
+        );
 
         let mut next = admin.broker_config().as_ref().clone();
         next.max_client_event_count = next.max_client_event_count.saturating_add(1);
