@@ -39,6 +39,8 @@ use crate::core::broker::PatchBrokerConfigOutcome;
 use crate::core::broker::PatchBrokerConfigRequest;
 use crate::core::broker::QueryBrokerConfigGenerationRequest;
 use crate::core::broker::QueryBrokerConfigGenerationResult;
+use crate::core::broker::RestoreBrokerLogFilterRequest;
+use crate::core::broker::SetBrokerLogFilterTtlRequest;
 use crate::core::clock::Clock;
 use crate::core::consumer;
 use crate::core::consumer::ConsumerMutationAdmin;
@@ -678,6 +680,46 @@ impl BrokerMutationAdmin for MutationAdminSession {
                     actual_generation,
                 },
             })
+        })
+    }
+
+    fn set_log_filter_ttl<'a>(&'a mut self, request: &'a SetBrokerLogFilterTtlRequest) -> AdminFuture<'a, ()> {
+        Box::pin(async move {
+            self.inner.ensure_open()?;
+            let request = SetBrokerLogFilterTtlRequest::try_new(
+                request.broker_addr.clone(),
+                request.logger.clone(),
+                request.level,
+                request.ttl_seconds,
+                request.operation_id.clone(),
+            )?;
+            self.inner
+                .inner
+                .set_broker_log_filter_ttl(
+                    CheetahString::from(request.broker_addr.as_str()),
+                    CheetahString::from(request.logger.as_str()),
+                    CheetahString::from(request.level.as_uppercase()),
+                    request.ttl_seconds,
+                    CheetahString::from(request.operation_id.as_str()),
+                )
+                .await
+                .map_err(|error| backend_error("set_log_filter_ttl", error))
+        })
+    }
+
+    fn restore_log_filter<'a>(&'a mut self, request: &'a RestoreBrokerLogFilterRequest) -> AdminFuture<'a, ()> {
+        Box::pin(async move {
+            self.inner.ensure_open()?;
+            let request =
+                RestoreBrokerLogFilterRequest::try_new(request.broker_addr.clone(), request.operation_id.clone())?;
+            self.inner
+                .inner
+                .restore_broker_log_filter(
+                    CheetahString::from(request.broker_addr.as_str()),
+                    CheetahString::from(request.operation_id.as_str()),
+                )
+                .await
+                .map_err(|error| backend_error("restore_log_filter", error))
         })
     }
 }
