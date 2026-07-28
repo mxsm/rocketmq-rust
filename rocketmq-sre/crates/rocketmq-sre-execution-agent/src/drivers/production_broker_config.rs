@@ -52,6 +52,8 @@ use crate::AgentStoreError;
 use crate::ExecutionAgentError;
 use crate::config::BrokerAdminDriverConfig;
 
+mod logger_level;
+
 const SEND_THREADS: &str = "send_message_thread_pool_nums";
 const PULL_THREADS: &str = "pull_message_thread_pool_nums";
 const FLUSH_DELAY: &str = "flush_delay_offset_interval_ms";
