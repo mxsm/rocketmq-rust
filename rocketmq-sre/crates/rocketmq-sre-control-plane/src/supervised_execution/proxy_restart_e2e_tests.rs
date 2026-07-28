@@ -25,6 +25,7 @@ use rocketmq_sre_contracts::ClusterId;
 use rocketmq_sre_contracts::CorrelationId;
 use rocketmq_sre_contracts::CoverageStatus;
 use rocketmq_sre_contracts::DiagnosisRevisionId;
+use rocketmq_sre_contracts::EXECUTION_AGENT_SCHEMA_VERSION;
 use rocketmq_sre_contracts::EvidenceContent;
 use rocketmq_sre_contracts::EvidenceExposure;
 use rocketmq_sre_contracts::EvidenceId;
@@ -39,7 +40,6 @@ use rocketmq_sre_contracts::SchemaVersion;
 use rocketmq_sre_contracts::Sensitivity;
 use rocketmq_sre_contracts::TenantId;
 use rocketmq_sre_contracts::TimeRange;
-use rocketmq_sre_contracts::EXECUTION_AGENT_SCHEMA_VERSION;
 use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -106,14 +106,7 @@ async fn real_kind_supervised_proxy_restart_reaches_verified_success() {
     let repository = PostgresRepository::connect(&database_url, 5)
         .await
         .expect("Kind PostgreSQL repository");
-    let fixture = seed_execution_fixture(
-        &repository,
-        tenant_id,
-        cluster_id,
-        &target,
-        &agent_state,
-    )
-    .await;
+    let fixture = seed_execution_fixture(&repository, tenant_id, cluster_id, &target, &agent_state).await;
     seed_complete_slo_evidence(&repository, &fixture).await;
 
     let workflow = WorkflowService::new(repository.clone(), WorkflowEventBus::new(64));
@@ -125,14 +118,9 @@ async fn real_kind_supervised_proxy_restart_reaches_verified_success() {
         true,
     )
     .expect("Executor client");
-    let service = SupervisedExecutionService::new_with_executor(
-        repository,
-        workflow,
-        signing_key,
-        model_gateway,
-        executor,
-    )
-    .expect("supervised execution service");
+    let service =
+        SupervisedExecutionService::new_with_executor(repository, workflow, signing_key, model_gateway, executor)
+            .expect("supervised execution service");
     let operator = auth(tenant_id, cluster_id, "phase3-kind-operator", &["operator"]);
     let approver = auth(tenant_id, cluster_id, "phase3-kind-approver", &["approver"]);
     let created = service
@@ -329,8 +317,7 @@ async fn insert_diagnosis_records(
     model_invocation_id: Uuid,
     target: &str,
 ) {
-    let fingerprint =
-        rocketmq_sre_contracts::canonical_sha256(&incident_id).expect("canonical incident fingerprint");
+    let fingerprint = rocketmq_sre_contracts::canonical_sha256(&incident_id).expect("canonical incident fingerprint");
     sqlx::query(
         "INSERT INTO sre_incidents (
             id, tenant_id, cluster_id, title, resource, symptom_family,
@@ -407,10 +394,7 @@ async fn seed_complete_slo_evidence(repository: &PostgresRepository, fixture: &E
     let observed_at = Utc::now().with_nanosecond(0).expect("whole-second SLO timestamp");
     let sample_at = observed_at + Duration::seconds(55);
     let mut series = Vec::new();
-    for (sli, dimension) in [
-        ("delivery_ratio", "traffic"),
-        ("proxy_connection", "routing_proxy"),
-    ] {
+    for (sli, dimension) in [("delivery_ratio", "traffic"), ("proxy_connection", "routing_proxy")] {
         for window in ["fast", "medium", "slow"] {
             for role in ["short", "long"] {
                 series.push(json!({
@@ -457,23 +441,12 @@ async fn seed_complete_slo_evidence(repository: &PostgresRepository, fixture: &E
     );
     let content_hash = evidence.content_hash.clone();
     repository
-        .persist_evidence(
-            &auth,
-            &evidence,
-            None,
-            Some(fixture.incident_id),
-            &content_hash,
-        )
+        .persist_evidence(&auth, &evidence, None, Some(fixture.incident_id), &content_hash)
         .await
         .expect("persist complete SLO Evidence");
 }
 
-fn auth(
-    tenant_id: TenantId,
-    cluster_id: ClusterId,
-    subject: &str,
-    roles: &[&str],
-) -> AuthContext {
+fn auth(tenant_id: TenantId, cluster_id: ClusterId, subject: &str, roles: &[&str]) -> AuthContext {
     AuthContext {
         tenant_id,
         subject: subject.to_owned(),
