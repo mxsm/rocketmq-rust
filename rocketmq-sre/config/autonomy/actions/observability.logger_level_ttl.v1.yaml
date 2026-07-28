@@ -1,0 +1,29 @@
+schema_version: rocketmq-sre.autonomy-action-policy.v1
+action_id: observability.logger_level_ttl.v1
+action_version: 1.0.0
+default_mode: disabled
+owner: messaging-observability
+diagnostic_pack:
+  id: runtime-diagnostics
+  version: 1.0.0
+required_evidence_sources:
+  - runtime_diagnostics
+  - prometheus
+minimum_evidence_freshness_seconds: 60
+qualification:
+  min_shadow_samples: 20
+  min_supervised_successes: 5
+  observation_window_days: 7
+limits:
+  max_executions_per_hour: 2
+  cooldown_seconds: 900
+  max_concurrent_executions: 1
+  stable_window_seconds: 300
+autonomous_preconditions:
+  - logger_prefix_allowlisted
+  - payload_logger_forbidden
+  - ttl_restore_scheduled
+  - runtime_error_budget_available
+rollback:
+  required: true
+  verification: previous_logger_level_restored
