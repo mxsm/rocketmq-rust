@@ -123,7 +123,13 @@ async fn postgres_release_and_integration_records_are_durable_idempotent_and_app
         .integration_deliveries(fixture.tenant_id, fixture.cluster_id, Some(target.target.id), 10)
         .await
         .expect("outbox");
-    assert_eq!(deliveries, vec![delivery.clone()]);
+    assert_eq!(deliveries.len(), 1);
+    assert_delivery_projection(&deliveries[0], &delivery);
+    assert!(
+        deliveries[0]
+            .next_attempt_at
+            .is_some_and(|next_attempt| next_attempt >= delivery.created_at)
+    );
     let claims = repository.claim_integration_deliveries(4).await.expect("claim outbox");
     let claim = claims
         .into_iter()
@@ -279,12 +285,13 @@ async fn postgres_release_and_integration_records_are_durable_idempotent_and_app
     );
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Fixture {
     tenant_id: TenantId,
     cluster_id: ClusterId,
     incident_id: IncidentId,
     plan_id: ActionPlanId,
+    plan_hash: String,
     runbook_id: RunbookId,
 }
 
@@ -294,6 +301,7 @@ async fn seed_fixture(repository: &PostgresRepository) -> Fixture {
         cluster_id: ClusterId::new(),
         incident_id: IncidentId::new(),
         plan_id: ActionPlanId::new(),
+        plan_hash: unique_digest(),
         runbook_id: RunbookId::new(),
     };
     let diagnosis_id = Uuid::new_v4();
@@ -406,7 +414,7 @@ async fn seed_fixture(repository: &PostgresRepository) -> Fixture {
     .bind(fixture.incident_id.as_uuid())
     .bind(diagnosis_id)
     .bind(invocation_id)
-    .bind(digest('a'))
+    .bind(&fixture.plan_hash)
     .bind(digest('e'))
     .execute(&repository.pool)
     .await
@@ -463,7 +471,7 @@ fn release_workflow(fixture: &Fixture, correlation_id: CorrelationId, now: chron
         runbook_id: fixture.runbook_id,
         runbook_version: "1.0.0".to_owned(),
         plan_id: fixture.plan_id,
-        plan_hash: digest('a'),
+        plan_hash: fixture.plan_hash.clone(),
         rollback_plan_id: None,
         rollback_plan_hash: None,
         readiness: None,
@@ -552,4 +560,17 @@ fn audit(
 
 fn digest(value: char) -> String {
     format!("sha256:{}", value.to_string().repeat(64))
+}
+
+fn unique_digest() -> String {
+    let value = Uuid::new_v4().simple().to_string();
+    format!("sha256:{value}{value}")
+}
+
+fn assert_delivery_projection(actual: &IntegrationDelivery, expected: &IntegrationDelivery) {
+    let mut actual = actual.clone();
+    let mut expected = expected.clone();
+    actual.next_attempt_at = None;
+    expected.next_attempt_at = None;
+    assert_eq!(actual, expected);
 }
