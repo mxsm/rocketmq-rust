@@ -36,6 +36,8 @@ use rocketmq_sre_contracts::DiagnosisRevisionId;
 use rocketmq_sre_contracts::DynamicSafetyDecision;
 use rocketmq_sre_contracts::EvidenceId;
 use rocketmq_sre_contracts::ExecutionAction;
+use rocketmq_sre_contracts::ExecutionId;
+use rocketmq_sre_contracts::IncidentId;
 use rocketmq_sre_contracts::ModelInvocationId;
 use rocketmq_sre_contracts::TenantId;
 use rocketmq_sre_core::AutonomyActor;
@@ -53,6 +55,7 @@ use super::model::AutonomyQualificationView;
 use super::model::AutonomyScopeView;
 use super::model::ShadowOutcomeRecord;
 use super::model::ShadowOutcomeView;
+use super::model::SupervisedExecutionQualificationFacts;
 use crate::ControlPlaneError;
 use crate::PostgresRepository;
 
@@ -666,10 +669,217 @@ impl PostgresRepository {
         cohort_from_row(&row)
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the qualification lookup deliberately binds the complete execution scope"
+    )]
+    pub(super) async fn supervised_execution_qualification(
+        &self,
+        tenant_id: TenantId,
+        cluster_id: ClusterId,
+        action: ExecutionAction,
+        incident_id: IncidentId,
+        plan_id: ActionPlanId,
+        plan_hash: &str,
+        execution_id: ExecutionId,
+        minimum_stable_window_seconds: u64,
+    ) -> Result<SupervisedExecutionQualificationFacts, ControlPlaneError> {
+        let minimum_stable_window_seconds =
+            i64::try_from(minimum_stable_window_seconds).map_err(|_| invalid_request("stable window is too large"))?;
+        let row = sqlx::query(
+            "SELECT
+                execution.state = 'succeeded' AS succeeded,
+                (
+                    jsonb_typeof(execution.request_snapshot->'approvals') = 'array'
+                    AND jsonb_array_length(execution.request_snapshot->'approvals') > 0
+                    AND (
+                        execution.request_snapshot->'autonomy_grant' IS NULL
+                        OR execution.request_snapshot->'autonomy_grant' = 'null'::JSONB
+                    )
+                ) AS human_approved,
+                (
+                    NOT EXISTS (
+                        SELECT 1
+                        FROM execution_steps step
+                        WHERE step.execution_id = execution.id
+                          AND step.record_kind = 'intent'
+                          AND step.compensation
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM execution_agent_effects effect
+                        WHERE effect.execution_id = execution.id
+                          AND effect.state = 'unknown'
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM audit_events event
+                        WHERE event.resource_kind = 'execution'
+                          AND event.resource_id = execution.id::TEXT
+                          AND event.event_kind = 'state_changed'
+                          AND event.details->>'to' IN (
+                              'unknown', 'compensating', 'rolled_back', 'escalated'
+                          )
+                    )
+                ) AS timeline_safe,
+                (
+                    EXISTS (
+                        SELECT 1
+                        FROM execution_steps step
+                        WHERE step.execution_id = execution.id
+                          AND step.record_kind = 'intent'
+                          AND NOT step.compensation
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM execution_steps step
+                        WHERE step.execution_id = execution.id
+                          AND step.record_kind = 'intent'
+                          AND NOT step.compensation
+                          AND (
+                              NOT EXISTS (
+                                  SELECT 1
+                                  FROM execution_verification_evidence evidence
+                                  WHERE evidence.execution_id = execution.id
+                                    AND evidence.step_id = step.step_id
+                                    AND evidence.attempt = step.attempt
+                                    AND evidence.phase = 'pre'
+                              )
+                              OR NOT EXISTS (
+                                  SELECT 1
+                                  FROM execution_verification_evidence evidence
+                                  WHERE evidence.execution_id = execution.id
+                                    AND evidence.step_id = step.step_id
+                                    AND evidence.attempt = step.attempt
+                                    AND evidence.phase = 'post'
+                              )
+                          )
+                    )
+                ) AS evidence_complete,
+                (
+                    EXISTS (
+                        SELECT 1
+                        FROM execution_steps step
+                        WHERE step.execution_id = execution.id
+                          AND step.record_kind = 'intent'
+                          AND NOT step.compensation
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM execution_steps step
+                        WHERE step.execution_id = execution.id
+                          AND step.record_kind = 'intent'
+                          AND NOT step.compensation
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM execution_verifications verification
+                              WHERE verification.execution_id = execution.id
+                                AND verification.step_id = step.step_id
+                                AND verification.attempt = step.attempt
+                                AND NOT verification.compensation
+                                AND verification.outcome = 'succeeded'
+                                AND (
+                                    verification.result_snapshot->>'stable_window_seconds'
+                                )::BIGINT >= $8
+                                AND verification.completed_at >=
+                                    verification.started_at + ($8 * INTERVAL '1 second')
+                          )
+                    )
+                ) AS stable_window_passed,
+                COALESCE(execution.completed_at, execution.updated_at) AS observed_at
+             FROM executions execution
+             JOIN action_plans plan ON plan.id = execution.plan_id
+             WHERE execution.id = $1
+               AND execution.tenant_id = $2
+               AND execution.cluster_id = $3
+               AND execution.action_id = $4
+               AND execution.plan_id = $5
+               AND execution.plan_hash = $6
+               AND plan.incident_id = $7",
+        )
+        .bind(execution_id.as_uuid())
+        .bind(tenant_id.as_uuid())
+        .bind(cluster_id.as_uuid())
+        .bind(action.id())
+        .bind(plan_id.as_uuid())
+        .bind(plan_hash)
+        .bind(incident_id.as_uuid())
+        .bind(minimum_stable_window_seconds)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| {
+            ControlPlaneError::conflict_code(
+                "supervised_execution_scope_mismatch",
+                "supervised execution does not match the exact qualification scope",
+            )
+        })?;
+
+        let critic = sqlx::query(
+            "SELECT
+                primary_profile.profile_name AS primary_profile,
+                primary_invocation.model_family AS primary_model_family,
+                primary_invocation.model_revision AS primary_model_revision,
+                critic_profile.profile_name AS critic_profile,
+                critic_invocation.model_family AS critic_model_family,
+                critic_invocation.model_revision AS critic_model_revision
+             FROM critic_reviews review
+             JOIN action_plans plan ON plan.id = review.plan_id
+             JOIN model_invocations primary_invocation
+               ON primary_invocation.id = review.primary_invocation_id
+             JOIN model_profiles primary_profile
+               ON primary_profile.id = primary_invocation.actual_profile_id
+             JOIN model_invocations critic_invocation
+               ON critic_invocation.id = review.critic_invocation_id
+             JOIN model_profiles critic_profile
+               ON critic_profile.id = critic_invocation.actual_profile_id
+             WHERE review.plan_id = $1
+               AND review.plan_hash = $2
+               AND review.status = 'valid'
+               AND review.conclusion = 'accept'
+               AND review.primary_invocation_id = plan.primary_model_invocation_id
+             ORDER BY review.created_at DESC, review.id DESC
+             LIMIT 1",
+        )
+        .bind(plan_id.as_uuid())
+        .bind(plan_hash)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(SupervisedExecutionQualificationFacts {
+            succeeded: row.try_get("succeeded")?,
+            human_approved: row.try_get("human_approved")?,
+            timeline_safe: row.try_get("timeline_safe")?,
+            evidence_complete: row.try_get("evidence_complete")?,
+            stable_window_passed: row.try_get("stable_window_passed")?,
+            observed_at: row.try_get("observed_at")?,
+            primary_profile: critic.as_ref().map(|row| row.try_get("primary_profile")).transpose()?,
+            primary_model_family: critic
+                .as_ref()
+                .map(|row| row.try_get("primary_model_family"))
+                .transpose()?,
+            primary_model_revision: critic
+                .as_ref()
+                .map(|row| row.try_get("primary_model_revision"))
+                .transpose()?,
+            critic_profile: critic.as_ref().map(|row| row.try_get("critic_profile")).transpose()?,
+            critic_model_family: critic
+                .as_ref()
+                .map(|row| row.try_get("critic_model_family"))
+                .transpose()?,
+            critic_model_revision: critic
+                .as_ref()
+                .map(|row| row.try_get("critic_model_revision"))
+                .transpose()?,
+        })
+    }
+
     pub(super) async fn store_qualification_sample(
         &self,
         sample: &AutonomyQualificationSample,
     ) -> Result<AutonomyQualificationSample, ControlPlaneError> {
+        sample
+            .validate()
+            .map_err(|error| ControlPlaneError::validation("invalid_qualification_sample", error.to_string()))?;
         let inserted = sqlx::query(
             "INSERT INTO autonomy_qualification_samples (
                 id, cohort_id, sample_kind, incident_id, plan_id, plan_hash,
@@ -682,8 +892,7 @@ impl PostgresRepository {
                 $11, $12, $13,
                 $14, $15
              )
-             ON CONFLICT (cohort_id, sample_kind, incident_id, plan_hash)
-             DO NOTHING",
+             ON CONFLICT DO NOTHING",
         )
         .bind(sample.id.as_uuid())
         .bind(sample.cohort_id.as_uuid())
@@ -706,18 +915,33 @@ impl PostgresRepository {
             return Ok(sample.clone());
         }
 
-        let row = sqlx::query(
-            "SELECT sample_snapshot
-             FROM autonomy_qualification_samples
-             WHERE cohort_id = $1 AND sample_kind = $2
-               AND incident_id = $3 AND plan_hash = $4",
-        )
-        .bind(sample.cohort_id.as_uuid())
-        .bind(sample_kind_name(sample.kind))
-        .bind(sample.incident_id.as_uuid())
-        .bind(&sample.plan_hash)
-        .fetch_one(&self.pool)
-        .await?;
+        let row = match sample.kind {
+            AutonomySampleKind::ShadowOutcome => {
+                sqlx::query(
+                    "SELECT sample_snapshot
+                     FROM autonomy_qualification_samples
+                     WHERE cohort_id = $1 AND sample_kind = 'shadow_outcome'
+                       AND incident_id = $2 AND plan_hash = $3",
+                )
+                .bind(sample.cohort_id.as_uuid())
+                .bind(sample.incident_id.as_uuid())
+                .bind(&sample.plan_hash)
+                .fetch_one(&self.pool)
+                .await?
+            }
+            AutonomySampleKind::SupervisedSuccess => {
+                sqlx::query(
+                    "SELECT sample_snapshot
+                     FROM autonomy_qualification_samples
+                     WHERE cohort_id = $1 AND sample_kind = 'supervised_success'
+                       AND execution_id = $2",
+                )
+                .bind(sample.cohort_id.as_uuid())
+                .bind(sample.execution_id.map(ExecutionId::as_uuid))
+                .fetch_one(&self.pool)
+                .await?
+            }
+        };
         let stored: AutonomyQualificationSample = from_json(row.try_get("sample_snapshot")?)?;
         if !same_qualification_sample(&stored, sample) {
             return Err(ControlPlaneError::conflict_code(
@@ -733,6 +957,9 @@ impl PostgresRepository {
         record: &ShadowOutcomeRecord,
         sample: &AutonomyQualificationSample,
     ) -> Result<ShadowOutcomeView, ControlPlaneError> {
+        sample
+            .validate()
+            .map_err(|error| ControlPlaneError::validation("invalid_qualification_sample", error.to_string()))?;
         let mut transaction = self.pool.begin().await?;
         let inserted = sqlx::query(
             "INSERT INTO autonomy_shadow_outcomes (
@@ -1322,6 +1549,7 @@ impl PostgresRepository {
         &self,
         policy: &AutonomyPolicyDefinition,
     ) -> Result<AutonomyQualificationView, ControlPlaneError> {
+        let evaluated_at = Utc::now();
         let rows = sqlx::query(
             "SELECT *
              FROM autonomy_qualification_cohorts
@@ -1348,17 +1576,23 @@ impl PostgresRepository {
             }
         }
         let (qualified_shadow, unqualified_shadow, _) = match shadow.as_ref() {
-            Some(cohort) => sample_counts(&self.pool, cohort.id, policy.observation_window_days).await?,
+            Some(cohort) => sample_counts(&self.pool, cohort.id, policy.observation_window_days, evaluated_at).await?,
             None => (0, 0, 0),
         };
         let (_, _, supervised_successes) = match autonomous.as_ref() {
-            Some(cohort) => sample_counts(&self.pool, cohort.id, policy.observation_window_days).await?,
+            Some(cohort) => sample_counts(&self.pool, cohort.id, policy.observation_window_days, evaluated_at).await?,
             None => (0, 0, 0),
         };
         let (unresolved_unknown, recent_rollbacks) = match autonomous.as_ref() {
-            Some(cohort) => outcome_counts(&self.pool, cohort.id, policy.observation_window_days).await?,
+            Some(cohort) => outcome_counts(&self.pool, cohort.id, policy.observation_window_days, evaluated_at).await?,
             None => (0, 0),
         };
+        let shadow_observation_window_met = shadow.as_ref().is_some_and(|cohort| {
+            observation_window_elapsed(cohort.created_at, policy.observation_window_days, evaluated_at)
+        });
+        let autonomous_observation_window_met = autonomous.as_ref().is_some_and(|cohort| {
+            observation_window_elapsed(cohort.created_at, policy.observation_window_days, evaluated_at)
+        });
         Ok(AutonomyQualificationView {
             shadow_cohort: shadow,
             autonomous_cohort: autonomous,
@@ -1367,8 +1601,8 @@ impl PostgresRepository {
             qualified_supervised_successes: count_u32(supervised_successes)?,
             unresolved_unknown: count_u32(unresolved_unknown)?,
             recent_rollbacks: count_u32(recent_rollbacks)?,
-            shadow_observation_window_met: count_u32(qualified_shadow)? >= policy.min_shadow_samples,
-            autonomous_observation_window_met: count_u32(supervised_successes)? >= policy.min_supervised_successes,
+            shadow_observation_window_met,
+            autonomous_observation_window_met,
         })
     }
 
@@ -1586,23 +1820,37 @@ async fn outcome_counts(
     pool: &sqlx::PgPool,
     cohort_id: rocketmq_sre_contracts::AutonomyCohortId,
     observation_window_days: u16,
+    evaluated_at: DateTime<Utc>,
 ) -> Result<(i64, i64), ControlPlaneError> {
     let row = sqlx::query(
         "SELECT
             COUNT(*) FILTER (
-                WHERE outcome_class = 'autonomous_execution_failure'
-                  AND failure_code = 'unknown_effect'
+                WHERE outcome.outcome_class = 'autonomous_execution_failure'
+                  AND outcome.failure_code = 'unknown_effect'
+                  AND (
+                      outcome.execution_id IS NULL
+                      OR execution.state IN ('unknown', 'reconciling')
+                  )
             ) AS unresolved_unknown,
             COUNT(*) FILTER (
-                WHERE outcome_class = 'autonomous_execution_failure'
-                  AND failure_code = 'rolled_back'
+                WHERE outcome.outcome_class = 'autonomous_execution_failure'
+                  AND (
+                      execution.state = 'rolled_back'
+                      OR (
+                          outcome.execution_id IS NULL
+                          AND outcome.failure_code = 'rolled_back'
+                      )
+                  )
             ) AS recent_rollbacks
-         FROM autonomy_outcomes
-         WHERE cohort_id = $1
-           AND occurred_at >= NOW() - ($2::int * INTERVAL '1 day')",
+         FROM autonomy_outcomes outcome
+         LEFT JOIN executions execution ON execution.id = outcome.execution_id
+         WHERE outcome.cohort_id = $1
+           AND outcome.occurred_at >= $3 - ($2::int * INTERVAL '1 day')
+           AND outcome.occurred_at <= $3",
     )
     .bind(cohort_id.as_uuid())
     .bind(i32::from(observation_window_days))
+    .bind(evaluated_at)
     .fetch_one(pool)
     .await?;
     Ok((row.try_get("unresolved_unknown")?, row.try_get("recent_rollbacks")?))
@@ -1612,6 +1860,7 @@ async fn sample_counts(
     pool: &sqlx::PgPool,
     cohort_id: rocketmq_sre_contracts::AutonomyCohortId,
     observation_window_days: u16,
+    evaluated_at: DateTime<Utc>,
 ) -> Result<(i64, i64, i64), ControlPlaneError> {
     let row = sqlx::query(
         "SELECT
@@ -1626,10 +1875,13 @@ async fn sample_counts(
             ) AS supervised_successes
          FROM autonomy_qualification_samples
          WHERE cohort_id = $1
-           AND observed_at >= NOW() - ($2::int * INTERVAL '1 day')",
+           AND observed_at >= $3 - ($2::int * INTERVAL '1 day')
+           AND observed_at <= $3
+           AND reconciled_at <= $3",
     )
     .bind(cohort_id.as_uuid())
     .bind(i32::from(observation_window_days))
+    .bind(evaluated_at)
     .fetch_one(pool)
     .await?;
     Ok((
@@ -1637,6 +1889,16 @@ async fn sample_counts(
         row.try_get("unqualified_shadow")?,
         row.try_get("supervised_successes")?,
     ))
+}
+
+fn observation_window_elapsed(
+    cohort_created_at: DateTime<Utc>,
+    observation_window_days: u16,
+    evaluated_at: DateTime<Utc>,
+) -> bool {
+    cohort_created_at
+        .checked_add_signed(TimeDelta::days(i64::from(observation_window_days)))
+        .is_some_and(|window_end| window_end <= evaluated_at)
 }
 
 fn same_qualification_sample(stored: &AutonomyQualificationSample, candidate: &AutonomyQualificationSample) -> bool {
@@ -1652,7 +1914,7 @@ fn same_qualification_sample(stored: &AutonomyQualificationSample, candidate: &A
         && stored.evidence_complete == candidate.evidence_complete
         && stored.stable_window_passed == candidate.stable_window_passed
         && stored.observed_at == candidate.observed_at
-        && stored.reconciled_at == candidate.reconciled_at
+        && stored.reconciled_at <= candidate.reconciled_at
 }
 
 fn same_autonomy_outcome(stored: &AutonomyOutcome, candidate: &AutonomyOutcome) -> bool {
@@ -1865,4 +2127,30 @@ fn invalid_request(detail: &'static str) -> ControlPlaneError {
 
 fn invalid_persisted(detail: &'static str) -> ControlPlaneError {
     ControlPlaneError::validation("invalid_persisted_autonomy", detail)
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::TimeZone;
+
+    use super::observation_window_elapsed;
+
+    #[test]
+    fn observation_window_is_independent_from_sample_count() {
+        let created_at = chrono::Utc
+            .with_ymd_and_hms(2026, 7, 1, 0, 0, 0)
+            .single()
+            .expect("valid timestamp");
+
+        assert!(!observation_window_elapsed(
+            created_at,
+            7,
+            created_at + chrono::Duration::days(6),
+        ));
+        assert!(observation_window_elapsed(
+            created_at,
+            7,
+            created_at + chrono::Duration::days(7),
+        ));
+    }
 }
