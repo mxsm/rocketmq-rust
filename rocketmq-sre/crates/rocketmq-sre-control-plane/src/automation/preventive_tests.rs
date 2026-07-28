@@ -26,6 +26,7 @@ use rocketmq_sre_contracts::EvidenceContent;
 use rocketmq_sre_contracts::EvidenceQuery;
 use rocketmq_sre_contracts::EvidenceSnapshot;
 use rocketmq_sre_contracts::PreventiveAutomationRequest;
+use rocketmq_sre_contracts::PreventiveAutomationRun;
 use rocketmq_sre_contracts::PreventiveRiskFamily;
 use rocketmq_sre_contracts::QueryId;
 use rocketmq_sre_contracts::TenantId;
@@ -166,6 +167,45 @@ async fn postgres_preventive_automation_runs_all_risk_families_and_freezes_criti
     .await
     .expect("scheduled inspection");
     assert_eq!(stored_schedule, ("scheduled".to_owned(), "@hourly".to_owned()));
+    sqlx::query(
+        "UPDATE inspection_runs
+         SET next_run_at = TIMESTAMPTZ '2000-01-01 00:00:00+00'
+         WHERE id = $1 AND tenant_id = $2",
+    )
+    .bind(schedule.inspection_run_id.as_uuid())
+    .bind(tenant_id.as_uuid())
+    .execute(&repository.pool)
+    .await
+    .expect("make preventive schedule due");
+    service.run_due().await;
+    let scheduled_snapshot: serde_json::Value = sqlx::query_scalar(
+        "SELECT result_snapshot
+         FROM preventive_automation_runs
+         WHERE tenant_id = $1 AND inspection_run_id = $2",
+    )
+    .bind(tenant_id.as_uuid())
+    .bind(schedule.inspection_run_id.as_uuid())
+    .fetch_one(&repository.pool)
+    .await
+    .expect("scheduled preventive run");
+    let scheduled_run: PreventiveAutomationRun =
+        serde_json::from_value(scheduled_snapshot).expect("scheduled preventive result");
+    assert_eq!(scheduled_run.status, AutomationRunStatus::Succeeded);
+    assert_eq!(scheduled_run.risk_family, PreventiveRiskFamily::Route);
+    let successor_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)
+         FROM inspection_runs
+         WHERE tenant_id = $1 AND cluster_id = $2
+           AND template = 'routing_proxy' AND schedule = '@hourly'
+           AND status = 'scheduled' AND id <> $3",
+    )
+    .bind(tenant_id.as_uuid())
+    .bind(cluster_id.as_uuid())
+    .bind(schedule.inspection_run_id.as_uuid())
+    .fetch_one(&repository.pool)
+    .await
+    .expect("recurring preventive successor");
+    assert_eq!(successor_count, 1);
 
     let delete = sqlx::query("DELETE FROM preventive_automation_runs WHERE id = $1")
         .bind(capacity.id.as_uuid())
