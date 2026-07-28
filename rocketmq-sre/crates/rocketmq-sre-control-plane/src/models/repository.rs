@@ -85,7 +85,12 @@ impl PostgresRepository {
                     priority = EXCLUDED.priority,
                     credential_ref = EXCLUDED.credential_ref,
                     credential_owner = EXCLUDED.credential_owner,
-                    enabled = TRUE,
+                    enabled = NOT EXISTS (
+                        SELECT 1
+                        FROM model_profile_lifecycle lifecycle
+                        WHERE lifecycle.profile_id = model_profiles.id
+                          AND lifecycle.state = 'retired'
+                    ),
                     endpoint_url = EXCLUDED.endpoint_url,
                     dialect = EXCLUDED.dialect,
                     allowed_data_classes = EXCLUDED.allowed_data_classes,
@@ -94,6 +99,18 @@ impl PostgresRepository {
                     preserve_reasoning_content = EXCLUDED.preserve_reasoning_content,
                     kimi_mfjs_enabled = EXCLUDED.kimi_mfjs_enabled,
                     health = CASE
+                        WHEN EXISTS (
+                            SELECT 1
+                            FROM model_profile_lifecycle lifecycle
+                            WHERE lifecycle.profile_id = model_profiles.id
+                              AND lifecycle.state = 'retired'
+                        ) THEN 'disabled'
+                        WHEN EXISTS (
+                            SELECT 1
+                            FROM model_profile_lifecycle lifecycle
+                            WHERE lifecycle.profile_id = model_profiles.id
+                              AND lifecycle.state = 'quarantined'
+                        ) THEN 'quarantined'
                         WHEN model_profiles.credential_ref IS DISTINCT FROM EXCLUDED.credential_ref
                           OR model_profiles.endpoint_url IS DISTINCT FROM EXCLUDED.endpoint_url
                           OR model_profiles.model_revision IS DISTINCT FROM EXCLUDED.model_revision
