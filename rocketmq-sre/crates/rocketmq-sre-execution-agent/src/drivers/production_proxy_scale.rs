@@ -23,6 +23,7 @@ use k8s_openapi::api::policy::v1::PodDisruptionBudget;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
 use kube::Api;
 use kube::Client;
+use kube::Config;
 use kube::api::ListParams;
 use kube::api::PostParams;
 
@@ -49,9 +50,13 @@ impl ProductionProxyScaleClient {
         if allowed_targets.is_empty() {
             return Err(ExecutionAgentError::Configuration);
         }
-        let client = Client::try_default()
-            .await
-            .map_err(|_| ExecutionAgentError::Configuration)?;
+        let mut config = Config::infer().await.map_err(|_| ExecutionAgentError::Configuration)?;
+        // The cluster write path must never inherit an ambient workstation or
+        // pod proxy. Kubeconfig or the in-cluster CA authenticates the direct
+        // API server connection.
+        config.proxy_url = None;
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let client = Client::try_from(config).map_err(|_| ExecutionAgentError::Configuration)?;
         Ok(Self {
             client,
             allowed_targets: Arc::new(allowed_targets),
@@ -252,9 +257,10 @@ fn desired_replicas(deployment: &Deployment) -> Result<u32, ExecutionAgentError>
 }
 
 fn non_negative(value: Option<i32>) -> Result<u32, ExecutionAgentError> {
-    value
-        .and_then(|value| u32::try_from(value).ok())
-        .ok_or(ExecutionAgentError::DriverFailed)
+    match value {
+        None => Ok(0),
+        Some(value) => u32::try_from(value).map_err(|_| ExecutionAgentError::DriverFailed),
+    }
 }
 
 fn annotation<'a>(deployment: &'a Deployment, key: &str) -> Option<&'a str> {
@@ -361,10 +367,14 @@ fn pdb_status_healthy(budget: &PodDisruptionBudget) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use k8s_openapi::api::core::v1::NodeCondition;
     use k8s_openapi::api::core::v1::NodeSpec;
     use k8s_openapi::api::core::v1::NodeStatus;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelectorRequirement;
+    use rocketmq_sre_contracts::ExecutionId;
+    use rocketmq_sre_contracts::PlanStepId;
 
     use super::*;
 
@@ -432,5 +442,106 @@ mod tests {
         assert_eq!(parse_integer_quantity("12"), Some(12));
         assert_eq!(parse_integer_quantity("1200m"), None);
         assert_eq!(parse_integer_quantity("-1"), None);
+        assert_eq!(non_negative(None).expect("absent Kubernetes counter is zero"), 0);
+        assert!(non_negative(Some(-1)).is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an explicitly authorized Kubernetes test cluster"]
+    async fn real_kind_proxy_scale_round_trip_is_bounded_and_reversible() {
+        if std::env::var("ROCKETMQ_SRE_TEST_PROXY_SCALE").as_deref() != Ok("1") {
+            panic!("set ROCKETMQ_SRE_TEST_PROXY_SCALE=1 to authorize the real scale round trip");
+        }
+        let namespace =
+            std::env::var("ROCKETMQ_SRE_TEST_PROXY_NAMESPACE").unwrap_or_else(|_| "rocketmq-system".to_owned());
+        let workload =
+            std::env::var("ROCKETMQ_SRE_TEST_PROXY_WORKLOAD").unwrap_or_else(|_| "rocketmq-proxy".to_owned());
+        let kubeconfig = std::env::var("KUBECONFIG").expect("KUBECONFIG must name the authorized test cluster");
+        assert!(!kubeconfig.is_empty());
+        let client = ProductionProxyScaleClient::start(BTreeSet::from([format!("{namespace}/{workload}")]))
+            .await
+            .expect("authorized Kubernetes client");
+        let before = client
+            .proxy_scale_state(&namespace, &workload)
+            .await
+            .expect("initial Proxy Deployment state");
+        assert_eq!(before.ready_replicas, before.desired_replicas);
+        assert_eq!(before.unavailable_replicas, 0);
+        assert!(before.quota_available);
+        assert!(before.capacity_available);
+        assert!(before.pdb_healthy);
+
+        let execution_id = ExecutionId::new();
+        let plan_step_id = PlanStepId::new();
+        let operation_id = format!("proxy-scale-{}", uuid::Uuid::new_v4());
+        client
+            .scale_out_one(&ProxyScaleOutOneWrite {
+                namespace: namespace.clone(),
+                workload: workload.clone(),
+                expected_replicas: before.desired_replicas,
+                target_replicas: before.desired_replicas + 1,
+                operation_id: operation_id.clone(),
+                execution_id,
+                plan_step_id,
+            })
+            .await
+            .expect("one-replica scale out");
+
+        let scaled_result = wait_for_ready_replicas(
+            &client,
+            &namespace,
+            &workload,
+            before.desired_replicas + 1,
+            Some(&operation_id),
+        )
+        .await;
+        let rollback_operation_id = format!("proxy-scale-rollback-{}", uuid::Uuid::new_v4());
+        let restore_result = client
+            .restore_proxy_replicas(&ProxyScaleRestore {
+                namespace: namespace.clone(),
+                workload: workload.clone(),
+                original_replicas: before.desired_replicas,
+                operation_id: rollback_operation_id.clone(),
+                execution_id,
+                plan_step_id,
+            })
+            .await;
+        let restored_result = wait_for_ready_replicas(
+            &client,
+            &namespace,
+            &workload,
+            before.desired_replicas,
+            Some(&rollback_operation_id),
+        )
+        .await;
+
+        scaled_result.expect("scaled Proxy became ready");
+        restore_result.expect("Proxy scale compensation");
+        restored_result.expect("restored Proxy became ready");
+        assert!(
+            client.deployment(&namespace, "not-allowlisted").await.is_err(),
+            "an unlisted workload must remain inaccessible"
+        );
+    }
+
+    async fn wait_for_ready_replicas(
+        client: &ProductionProxyScaleClient,
+        namespace: &str,
+        workload: &str,
+        desired_replicas: u32,
+        operation_id: Option<&str>,
+    ) -> Result<ProxyScaleState, ExecutionAgentError> {
+        for _ in 0..120 {
+            let state = client.proxy_scale_state(namespace, workload).await?;
+            if state.desired_replicas == desired_replicas
+                && state.ready_replicas == desired_replicas
+                && state.unavailable_replicas == 0
+                && state.last_operation_id.as_deref() == operation_id
+            {
+                return Ok(state);
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        Err(ExecutionAgentError::DriverFailed)
     }
 }
