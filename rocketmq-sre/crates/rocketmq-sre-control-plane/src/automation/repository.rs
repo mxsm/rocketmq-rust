@@ -194,6 +194,45 @@ impl PostgresRepository {
         Ok(completed)
     }
 
+    pub(super) async fn claim_no_side_effect_run(
+        &self,
+        tenant_id: TenantId,
+        run_id: AutomationRunId,
+    ) -> Result<(NoSideEffectAutomationRun, bool), ControlPlaneError> {
+        let mut transaction = self.pool.begin().await?;
+        let row = sqlx::query(
+            "SELECT result_snapshot
+             FROM no_side_effect_automation_runs
+             WHERE id = $1 AND tenant_id = $2
+             FOR UPDATE",
+        )
+        .bind(run_id.as_uuid())
+        .bind(tenant_id.as_uuid())
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or(ControlPlaneError::NotFound)?;
+        let current: NoSideEffectAutomationRun = from_json(row.try_get("result_snapshot")?)?;
+        if current.status != AutomationRunStatus::Pending {
+            transaction.commit().await?;
+            return Ok((current, false));
+        }
+        let mut running = current.clone();
+        running.status = AutomationRunStatus::Running;
+        running.result_code = "automation_running".to_owned();
+        running.sanitized_summary = "Bounded automation run is in progress".to_owned();
+        update_run(&mut transaction, &current, &running).await?;
+        insert_run_event(
+            &mut transaction,
+            &running,
+            Some(AutomationRunStatus::Pending),
+            AutomationRunStatus::Running,
+            "automation_started",
+        )
+        .await?;
+        transaction.commit().await?;
+        Ok((running, true))
+    }
+
     pub(super) async fn no_side_effect_runs(
         &self,
         tenant_id: TenantId,
@@ -338,7 +377,13 @@ async fn insert_run_event(
         "status": to,
         "result_code": run.result_code,
     }))
-    .bind(run.completed_at.unwrap_or(run.started_at))
+    .bind(match to {
+        AutomationRunStatus::Pending => run.started_at,
+        AutomationRunStatus::Running => Utc::now(),
+        AutomationRunStatus::Succeeded | AutomationRunStatus::Failed | AutomationRunStatus::Denied => {
+            run.completed_at.unwrap_or_else(Utc::now)
+        }
+    })
     .execute(&mut **transaction)
     .await?;
     Ok(())
