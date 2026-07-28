@@ -360,10 +360,12 @@ pub struct AutonomyOutcome {
     pub tenant_id: TenantId,
     pub cluster_id: ClusterId,
     pub action: ExecutionAction,
+    pub action_version: String,
     pub incident_id: IncidentId,
     pub plan_id: ActionPlanId,
     pub plan_hash: String,
     pub execution_id: Option<ExecutionId>,
+    pub cohort_id: Option<AutonomyCohortId>,
     pub class: AutonomyOutcomeClass,
     pub failure: Option<AutonomousExecutionFailure>,
     #[serde(default)]
