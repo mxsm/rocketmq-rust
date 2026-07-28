@@ -45,6 +45,27 @@ pub enum ExecutionAgentError {
     Io(#[source] std::io::Error),
 }
 
+impl ExecutionAgentError {
+    #[must_use]
+    pub(crate) const fn stable_code(&self) -> &'static str {
+        match self {
+            Self::Unauthorized => "unauthorized_workload_identity",
+            Self::InvalidRequest => "invalid_agent_request",
+            Self::ActionNotRegistered => "action_not_registered",
+            Self::AuthorityRejected => "stale_lease_epoch",
+            Self::UnresolvedEffect => "unresolved_old_effects",
+            Self::DriverFailed => "driver_failed",
+            Self::DriverUnknown => "effect_unknown",
+            Self::Configuration => "source_unavailable",
+            Self::AuthorityUnavailable => "authority_unavailable",
+            Self::DispatchBarrierUnavailable => "dispatch_barrier_unavailable",
+            Self::Store(_) => "effect_store_unavailable",
+            Self::Http(_) => "authority_transport_unavailable",
+            Self::Io(_) => "service_io_unavailable",
+        }
+    }
+}
+
 impl From<reqwest::Error> for ExecutionAgentError {
     fn from(error: reqwest::Error) -> Self {
         Self::Http(error)
