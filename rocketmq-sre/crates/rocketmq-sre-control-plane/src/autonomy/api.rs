@@ -24,7 +24,11 @@ use rocketmq_sre_contracts::AutonomyGrant;
 use rocketmq_sre_contracts::AutonomyOutcome;
 use rocketmq_sre_contracts::AutonomyQualificationCohort;
 use rocketmq_sre_contracts::AutonomyQualificationSample;
+use rocketmq_sre_contracts::DynamicSafetyDecision;
+use rocketmq_sre_contracts::DynamicSafetyEvaluationRequest;
+use rocketmq_sre_contracts::DynamicSafetyVerification;
 use rocketmq_sre_contracts::ExecutionRequest;
+use rocketmq_sre_contracts::VerifyDynamicSafetyDecisionRequest;
 
 use super::model::AutonomyFreezeView;
 use super::model::AutonomyKillSwitchView;
@@ -35,8 +39,6 @@ use super::model::AutonomyScopeView;
 use super::model::AutonomyTransitionRequest;
 use super::model::CreateAutonomyPolicyRequest;
 use super::model::CreateShadowCohortRequest;
-use super::model::DynamicSafetyView;
-use super::model::EvaluateDynamicSafetyRequest;
 use super::model::IssueAutonomyGrantRequest;
 use super::model::PrepareAutonomousCohortRequest;
 use super::model::PrepareAutonomousExecutionRequest;
@@ -104,6 +106,10 @@ pub(crate) fn routes() -> Router<AppState> {
         .route(
             "/internal/v1/autonomy/dynamic-safety",
             post(evaluate_dynamic_safety).layer(DefaultBodyLimit::max(32 * 1024)),
+        )
+        .route(
+            "/internal/v1/autonomy/dynamic-safety/verify",
+            post(verify_dynamic_safety).layer(DefaultBodyLimit::max(32 * 1024)),
         )
 }
 
@@ -249,8 +255,20 @@ async fn record_outcome(
 async fn evaluate_dynamic_safety(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(request): Json<EvaluateDynamicSafetyRequest>,
-) -> Result<Json<DynamicSafetyView>, ControlPlaneError> {
+    Json(request): Json<DynamicSafetyEvaluationRequest>,
+) -> Result<Json<DynamicSafetyDecision>, ControlPlaneError> {
     let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
     state.autonomy.evaluate_dynamic_safety(&auth, &request).await.map(Json)
+}
+
+async fn verify_dynamic_safety(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<VerifyDynamicSafetyDecisionRequest>,
+) -> Result<Json<DynamicSafetyVerification>, ControlPlaneError> {
+    let auth = state
+        .auth
+        .authorize(&headers, Some(request.decision.cluster_id))
+        .await?;
+    state.autonomy.verify_dynamic_safety(&auth, &request).await.map(Json)
 }
