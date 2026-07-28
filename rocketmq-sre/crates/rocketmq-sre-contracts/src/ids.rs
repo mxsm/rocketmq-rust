@@ -153,6 +153,26 @@ uuid_id!(
 );
 uuid_id!(ReleaseId, "Stable identifier for one supervised release workflow.");
 uuid_id!(ReleaseReportId, "Stable identifier for one immutable release report.");
+uuid_id!(
+    AutonomyPolicyId,
+    "Stable identifier for a versioned autonomy policy definition."
+);
+uuid_id!(
+    AutonomyCohortId,
+    "Stable identifier for an action and cluster qualification cohort."
+);
+uuid_id!(
+    AutonomySampleId,
+    "Stable identifier for one immutable autonomy qualification sample."
+);
+uuid_id!(
+    AutonomyOutcomeId,
+    "Stable identifier for one reconciled autonomy outcome."
+);
+uuid_id!(
+    DynamicSafetyDecisionId,
+    "Stable identifier for one short-lived dynamic safety decision."
+);
 
 #[cfg(test)]
 mod tests {
