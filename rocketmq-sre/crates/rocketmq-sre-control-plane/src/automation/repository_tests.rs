@@ -50,7 +50,7 @@ async fn postgres_automation_runs_are_idempotent_terminal_and_auditable() {
         .expect("repository with migrations");
     let (tenant_id, cluster_id, incident_id) = seed_fixture(&repository).await;
     let auth = operator_auth(tenant_id, cluster_id);
-    let service = AutomationService::new(repository.clone());
+    let service = AutomationService::persistence_only(repository.clone());
     let started_at = Utc::now();
     let request = NoSideEffectAutomationRequest {
         schema_version: AUTOMATION_SCHEMA_VERSION.to_owned(),
