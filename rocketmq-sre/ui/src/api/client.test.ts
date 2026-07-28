@@ -86,6 +86,19 @@ describe("stateLabel", () => {
       operator_confirmed: true,
     });
     await api.runModelProfileSmoke("profile/id");
+    await api.listAutonomyOutcomes({
+      clusterId: "cluster/id",
+      action: "proxy.restart_one.v1",
+      class: "success",
+      from: "2026-07-01T00:00:00Z",
+      until: "2026-08-01T00:00:00Z",
+      limit: 25,
+    });
+    await api.getAutonomyOperationalReport({
+      period: "monthly",
+      anchor: "2026-07-15T08:30:00Z",
+      clusterId: "cluster/id",
+    });
 
     expect(
       fetchMock.mock.calls.map(([input]) => String(input)),
@@ -111,6 +124,8 @@ describe("stateLabel", () => {
       "/v1/models/profiles/profile%2Fid/lifecycle",
       "/v1/models/profiles/profile%2Fid/rollback",
       "/v1/models/profiles/profile%2Fid/smoke",
+      "/v1/autonomy/outcomes?cluster_id=cluster%2Fid&action=proxy.restart_one.v1&class=success&from=2026-07-01T00%3A00%3A00Z&until=2026-08-01T00%3A00%3A00Z&limit=25",
+      "/v1/autonomy/reports?period=monthly&anchor=2026-07-15T08%3A30%3A00Z&cluster_id=cluster%2Fid",
     ]);
     const healthHeaders = new Headers(
       fetchMock.mock.calls[9]?.[1]?.headers,
