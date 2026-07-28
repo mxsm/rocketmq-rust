@@ -238,6 +238,7 @@ impl ExecutorAuthorityClient for HttpExecutorAuthorityClient {
                 || grant.execution_id != request.execution_id
                 || grant.step_id != request.step_id
                 || grant.plan_step_id != request.plan_step_id
+                || grant.compensation != request.compensation
                 || grant.owner != self.subject.as_ref()
                 || grant.expires_at <= chrono::Utc::now()
             {
