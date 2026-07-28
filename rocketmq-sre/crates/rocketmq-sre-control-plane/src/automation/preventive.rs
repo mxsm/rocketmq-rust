@@ -339,8 +339,8 @@ impl PreventiveAutomationService {
                 kill_switch_suggested: true,
                 result_code: "critical_risk_frozen".to_owned(),
                 sanitized_summary: format!(
-                    "{:?} inspection found {} critical recommendations; cluster autonomy was frozen and a kill \
-                     switch review is suggested",
+                    "{:?} inspection found {} critical recommendations; cluster autonomy was frozen and a kill switch \
+                     review is suggested",
                     request.risk_family, critical_count
                 ),
             },
