@@ -519,6 +519,7 @@ pub(crate) struct AppState {
     pub(crate) alerting: AlertingService,
     pub(crate) assets: AssetTopologyService,
     pub(crate) autonomy: crate::autonomy::AutonomyService,
+    pub(crate) autonomy_operations: crate::autonomy::AutonomyOperationsService,
     pub(crate) automation: crate::automation::AutomationService,
     pub(crate) change_management: crate::change_management::ChangeManagementService,
     pub(crate) connector_channel: PostgresConnectorChannelService,
@@ -569,6 +570,7 @@ pub fn build_router(
 struct ControlPlaneRouters {
     public: Router,
     connector: Router,
+    autonomy_operations: crate::autonomy::AutonomyOperationsService,
     change_management: crate::change_management::ChangeManagementService,
     forecast: ForecastService,
     preventive_automation: crate::automation::PreventiveAutomationService,
@@ -608,6 +610,7 @@ fn build_routers_with_auth(
     )?;
     let autonomy =
         crate::autonomy::AutonomyService::new(repository.clone(), slo.clone(), grant_signing_key.as_bytes())?;
+    let autonomy_operations = crate::autonomy::AutonomyOperationsService::new(repository.clone())?;
     let inspections = InspectionService::new(repository.clone(), workflow.clone(), evidence.clone())?;
     let preventive_automation =
         crate::automation::PreventiveAutomationService::new(repository.clone(), inspections, autonomy.clone());
@@ -656,6 +659,7 @@ fn build_routers_with_auth(
         alerting,
         assets,
         autonomy,
+        autonomy_operations: autonomy_operations.clone(),
         automation,
         change_management: change_management.clone(),
         connector_channel,
@@ -710,6 +714,7 @@ fn build_routers_with_auth(
     Ok(ControlPlaneRouters {
         public,
         connector,
+        autonomy_operations,
         change_management,
         forecast,
         preventive_automation,
@@ -915,6 +920,34 @@ pub async fn run(config: ControlPlaneConfig, service_context: ChildServiceContex
         model_gateway,
         workflow,
     )?;
+    let autonomy_report_worker = routers.autonomy_operations.clone();
+    let autonomy_report_tasks = service_context.scheduled_tasks("autonomy-operations-reports");
+    let mut autonomy_report_schedule = ScheduledTaskConfig::fixed_rate_no_overlap(
+        "phase4-autonomy-operations-reports",
+        std::time::Duration::from_secs(60 * 60),
+    );
+    autonomy_report_schedule.initial_delay = std::time::Duration::from_secs(20);
+    autonomy_report_schedule.max_run_time = Some(std::time::Duration::from_secs(10 * 60));
+    autonomy_report_schedule.shutdown_timeout = config.shutdown_timeout();
+    autonomy_report_tasks
+        .schedule_fixed_rate_no_overlap(autonomy_report_schedule, move || {
+            let worker = autonomy_report_worker.clone();
+            async move {
+                let summary = worker.run_due_reports().await;
+                if summary.inserted > 0 || summary.failures > 0 {
+                    tracing::info!(
+                        tenants = summary.tenants,
+                        attempted = summary.attempted,
+                        inserted = summary.inserted,
+                        failures = summary.failures,
+                        "completed autonomy operations report scan"
+                    );
+                }
+            }
+        })
+        .map_err(|error| {
+            ControlPlaneError::configuration(format!("autonomy report scheduler could not be started: {error}"))
+        })?;
     let preventive_worker = routers.preventive_automation.clone();
     let preventive_tasks = service_context.scheduled_tasks("preventive-inspection-scheduler");
     let mut preventive_schedule = ScheduledTaskConfig::fixed_rate_no_overlap(
@@ -984,6 +1017,7 @@ pub async fn run(config: ControlPlaneConfig, service_context: ChildServiceContex
     let ControlPlaneRouters {
         public,
         connector,
+        autonomy_operations: _,
         change_management: _,
         forecast: _,
         preventive_automation: _,
