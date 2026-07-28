@@ -173,6 +173,11 @@ uuid_id!(
     DynamicSafetyDecisionId,
     "Stable identifier for one short-lived dynamic safety decision."
 );
+uuid_id!(AutomationRunId, "Stable identifier for one bounded automation run.");
+uuid_id!(
+    AutomationFeedbackId,
+    "Stable identifier for immutable operator feedback on automation output."
+);
 
 #[cfg(test)]
 mod tests {
