@@ -250,6 +250,63 @@ pub(super) fn ensure_live_ready(facts: PolicyFacts) -> Result<(), ControlPlaneEr
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+    use rocketmq_sre_contracts::ClusterId;
+    use rocketmq_sre_contracts::CorrelationId;
+    use rocketmq_sre_contracts::EvidenceContent;
+    use rocketmq_sre_contracts::EvidenceQuery;
+    use rocketmq_sre_contracts::ExecutionAction;
+    use rocketmq_sre_contracts::QueryId;
+    use rocketmq_sre_contracts::SchemaVersion;
+    use rocketmq_sre_contracts::TenantId;
+    use rocketmq_sre_contracts::TimeRange;
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn exact_ready_agent_evidence_supplies_the_execution_precondition() {
+        let observed_at = Utc::now();
+        let resource = "pod/rocketmq-system/rocketmq-proxy-fixture";
+        let expected = format!("sha256:{}", "a".repeat(64));
+        let query = EvidenceQuery {
+            query_id: QueryId::new(),
+            correlation_id: CorrelationId::new(),
+            tenant_id: TenantId::new(),
+            cluster_id: ClusterId::new(),
+            source: "execution-agent".to_owned(),
+            resource: resource.to_owned(),
+            time_range: TimeRange::new(observed_at, observed_at).expect("time range"),
+        };
+        let evidence = EvidenceSnapshot::capture(
+            query,
+            SchemaVersion::new("rocketmq-sre.evidence", 1, 0),
+            observed_at,
+            EvidenceContent::Inline(json!({
+                "schema_version": rocketmq_sre_contracts::EXECUTION_AGENT_SCHEMA_VERSION,
+                "action": ExecutionAction::ProxyRestartOne.id(),
+                "target": resource,
+                "precondition_hash": expected,
+                "ready": true,
+                "reason_codes": [],
+                "resource_conditions": {},
+                "observed_at": observed_at,
+            })),
+        )
+        .expect("agent Evidence");
+        let id = evidence.evidence_id;
+        let evidence = BTreeMap::from([(id, evidence)]);
+
+        assert_eq!(
+            action_precondition_hash(ExecutionAction::ProxyRestartOne, resource, &[id], &evidence)
+                .expect("live precondition"),
+            expected
+        );
+    }
+}
+
 pub(super) fn validate_reason(reason: &str) -> Result<(), ControlPlaneError> {
     let length = reason.trim().chars().count();
     if !(1..=2_048).contains(&length) || reason.chars().any(char::is_control) {
