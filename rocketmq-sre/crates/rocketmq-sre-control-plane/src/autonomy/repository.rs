@@ -1127,6 +1127,7 @@ impl PostgresRepository {
                     .failure
                     .map(autonomy_failure_name)
                     .unwrap_or("autonomous_execution_failure");
+                let pause_at = effective.reconciled_at.max(current.updated_at);
                 let next = AutonomyStateMachine::transition(
                     &current,
                     AutonomyMode::Paused,
@@ -1134,7 +1135,7 @@ impl PostgresRepository {
                     actor,
                     Some(reason),
                     PromotionQualification::default(),
-                    effective.reconciled_at,
+                    pause_at,
                 )
                 .map_err(|error| ControlPlaneError::conflict_code("autonomy_pause_failed", error.to_string()))?;
                 sqlx::query(
