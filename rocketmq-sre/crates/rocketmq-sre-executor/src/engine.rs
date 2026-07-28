@@ -268,6 +268,19 @@ impl ChangeExecutor {
         };
         let execution_result = self.execute_supervised_flow(request, &locks, verifier).await;
         if execution_result.is_err() && !self.journal.has_intent(request.id).await.unwrap_or(true) {
+            if matches!(
+                self.journal.execution_state(request.id).await,
+                Ok(ExecutionState::Prechecking)
+            ) {
+                let _ = self
+                    .transition(
+                        request,
+                        ExecutionState::Prechecking,
+                        ExecutionState::Escalated,
+                        "execution_rejected_before_dispatch",
+                    )
+                    .await;
+            }
             self.release_locks(&locks, request.id, "execution_rejected_before_dispatch")
                 .await;
         }
