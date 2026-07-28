@@ -236,9 +236,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn phase_five_descriptors_remain_disabled_until_handlers_ship() {
+    fn embedded_registry_only_enables_actions_with_shipped_handlers() {
         let registry = ExecutorActionRegistry::embedded().expect("embedded catalog");
-        assert!(registry.executable_actions().is_empty());
+        assert_eq!(
+            registry.executable_actions(),
+            vec![
+                ExecutionAction::ObservabilityLoggerLevelTtl,
+                ExecutionAction::ProxyScaleOutOne,
+                ExecutionAction::ProxyRestartOne,
+            ]
+        );
     }
 
     #[test]
