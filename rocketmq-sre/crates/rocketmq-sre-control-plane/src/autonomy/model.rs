@@ -26,6 +26,8 @@ use rocketmq_sre_contracts::ClusterId;
 use rocketmq_sre_contracts::CriticReviewId;
 use rocketmq_sre_contracts::DiagnosisRevisionId;
 use rocketmq_sre_contracts::DynamicSafetyDecision;
+use rocketmq_sre_contracts::EligibilityDecision;
+use rocketmq_sre_contracts::EvidenceId;
 use rocketmq_sre_contracts::ExecutionAction;
 use rocketmq_sre_contracts::ExecutionId;
 use rocketmq_sre_contracts::IncidentId;
@@ -175,6 +177,41 @@ pub(crate) struct RecordQualificationSampleRequest {
     pub(crate) reconciled_at: DateTime<Utc>,
 }
 
+/// Side-effect-free Shadow candidate. It can create a report and reconciled
+/// qualification sample, but never an ExecutionRequest.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RecordShadowOutcomeRequest {
+    pub(crate) cluster_id: ClusterId,
+    pub(crate) action: ExecutionAction,
+    #[serde(default = "default_action_version")]
+    pub(crate) action_version: String,
+    pub(crate) incident_id: IncidentId,
+    pub(crate) diagnosis_revision_id: DiagnosisRevisionId,
+    pub(crate) plan_id: ActionPlanId,
+    pub(crate) plan_hash: String,
+    pub(crate) cohort_id: AutonomyCohortId,
+    pub(crate) eligibility: EligibilityDecision,
+    pub(crate) expected_effect: serde_json::Value,
+    #[serde(default)]
+    pub(crate) evidence_ids: Vec<EvidenceId>,
+    pub(crate) human_outcome: Option<serde_json::Value>,
+    pub(crate) stable_window: Option<serde_json::Value>,
+    pub(crate) observed_at: DateTime<Utc>,
+    pub(crate) reconciled_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ShadowOutcomeListQuery {
+    pub(crate) cluster_id: ClusterId,
+    pub(crate) action: ExecutionAction,
+    #[serde(default = "default_action_version")]
+    pub(crate) action_version: String,
+    #[serde(default = "default_limit")]
+    pub(crate) limit: u16,
+}
+
 /// Internal request to evaluate and sign one positive StepIntent.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -288,6 +325,28 @@ pub(crate) struct ShadowOutcomeView {
     pub(crate) qualified: bool,
     pub(crate) reason_codes: Vec<String>,
     pub(crate) observed_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(super) struct ShadowOutcomeRecord {
+    pub(super) view: ShadowOutcomeView,
+    pub(super) tenant_id: rocketmq_sre_contracts::TenantId,
+    pub(super) cluster_id: ClusterId,
+    pub(super) action: ExecutionAction,
+    pub(super) action_version: String,
+    pub(super) diagnosis_revision_id: DiagnosisRevisionId,
+    pub(super) eligibility: EligibilityDecision,
+    pub(super) expected_effect: serde_json::Value,
+    pub(super) evidence_ids: Vec<EvidenceId>,
+    pub(super) human_outcome: Option<serde_json::Value>,
+    pub(super) stable_window: Option<serde_json::Value>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct ShadowOutcomePage {
+    pub(crate) schema_version: &'static str,
+    pub(crate) items: Vec<ShadowOutcomeView>,
+    pub(crate) truncated: bool,
 }
 
 /// Internal response proving safety was evaluated from current state.
