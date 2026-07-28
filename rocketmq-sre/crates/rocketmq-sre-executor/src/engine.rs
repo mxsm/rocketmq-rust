@@ -200,7 +200,9 @@ impl ChangeExecutor {
             return Err(ExecutorError::InvalidRequest);
         }
         for step in &request.plan.steps {
-            self.prechecker.registry().validate_step(step)?;
+            self.prechecker
+                .registry()
+                .validate_step_authorization(step, request.is_autonomous())?;
         }
         let verifier = self.verifier.as_ref().ok_or(ExecutorError::Configuration)?;
         let (resource_key, action) = execution_projection(request)?;
