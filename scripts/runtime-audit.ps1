@@ -1807,6 +1807,14 @@ function Get-SchedulerDisposition {
         }
     }
 
+    if ($path -eq "rocketmq-sre/crates/rocketmq-sre-executor/src/verifier.rs") {
+        return [pscustomobject]@{
+            Disposition = "sre-bounded-verification-poll"
+            ActionRequired = $false
+            Reason = "Allowed request-local verification polling; the descriptor maximum wait and hard observation limit bound the loop, and no background task, thread, or scheduler is created."
+        }
+    }
+
     return [pscustomobject]@{
         Disposition = "unclassified-follow-up"
         ActionRequired = $true
