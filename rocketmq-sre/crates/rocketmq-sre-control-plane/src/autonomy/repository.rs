@@ -1097,7 +1097,7 @@ impl PostgresRepository {
             .fetch_one(&mut *transaction)
             .await?;
             let stored: AutonomyOutcome = from_json(snapshot)?;
-            if stored != *outcome {
+            if !same_autonomy_outcome(&stored, outcome) {
                 return Err(ControlPlaneError::conflict_code(
                     "autonomy_outcome_conflict",
                     "autonomy outcome idempotency key already has different content",
@@ -1483,6 +1483,24 @@ fn same_qualification_sample(stored: &AutonomyQualificationSample, candidate: &A
         && stored.evidence_complete == candidate.evidence_complete
         && stored.stable_window_passed == candidate.stable_window_passed
         && stored.observed_at == candidate.observed_at
+        && stored.reconciled_at == candidate.reconciled_at
+}
+
+fn same_autonomy_outcome(stored: &AutonomyOutcome, candidate: &AutonomyOutcome) -> bool {
+    stored.tenant_id == candidate.tenant_id
+        && stored.cluster_id == candidate.cluster_id
+        && stored.action == candidate.action
+        && stored.action_version == candidate.action_version
+        && stored.incident_id == candidate.incident_id
+        && stored.plan_id == candidate.plan_id
+        && stored.plan_hash == candidate.plan_hash
+        && stored.execution_id == candidate.execution_id
+        && stored.cohort_id == candidate.cohort_id
+        && stored.class == candidate.class
+        && stored.failure == candidate.failure
+        && stored.reason_codes == candidate.reason_codes
+        && stored.first_positive_intent_persisted == candidate.first_positive_intent_persisted
+        && stored.occurred_at == candidate.occurred_at
         && stored.reconciled_at == candidate.reconciled_at
 }
 
