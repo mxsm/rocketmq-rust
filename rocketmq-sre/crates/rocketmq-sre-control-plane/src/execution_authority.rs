@@ -189,6 +189,7 @@ impl LeaseAuthorityService {
             plan_step_id: request.plan_step_id,
             action,
             resource,
+            compensation: request.compensation,
             audience: AGENT_AUDIENCE.to_owned(),
             issued_at,
             expires_at,
@@ -327,6 +328,7 @@ impl LeaseAuthorityService {
                 request.cluster_id,
                 request.execution_id,
                 request.plan_step_id,
+                request.compensation,
             )
             .await
     }
