@@ -17,15 +17,40 @@ use chrono::Utc;
 use std::future::Future;
 use std::pin::Pin;
 
+use rocketmq_sre_contracts::ExecutionId;
+use rocketmq_sre_contracts::PlanStepId;
+
 use super::AgentActionHandler;
+use super::DriverFuture;
 use crate::ExecutionAgentError;
+
+/// Sanitized logger state used by precheck and effect reconciliation.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+pub struct LoggerLevelState {
+    pub level: String,
+    pub active_operation_id: Option<String>,
+    pub last_completed_operation_id: Option<String>,
+}
 
 /// Closed logger-level mutation accepted by the configuration client.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LoggerLevelTtlWrite {
     pub component: String,
+    pub logger: String,
     pub level: String,
     pub expires_at: DateTime<Utc>,
+    pub operation_id: String,
+    pub execution_id: ExecutionId,
+    pub plan_step_id: PlanStepId,
+}
+
+/// Closed restoration request bound to the original execution step.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LoggerLevelTtlRestore {
+    pub component: String,
+    pub logger: String,
+    pub execution_id: ExecutionId,
+    pub plan_step_id: PlanStepId,
     pub operation_id: String,
 }
 
@@ -34,6 +59,21 @@ pub trait ConfigWriteClient: Send + Sync {
     fn set_logger_level_ttl<'a>(
         &'a self,
         request: &'a LoggerLevelTtlWrite,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ExecutionAgentError>> + Send + 'a>>;
+}
+
+/// Read/restore companion for the bounded logger-level writer.
+///
+/// Implementations must durably retain the original logger level when
+/// [`ConfigWriteClient::set_logger_level_ttl`] succeeds. The original value is
+/// addressed by `(execution_id, plan_step_id)` and is never supplied by an
+/// untrusted action parameter.
+pub trait LoggerLevelControlClient: ConfigWriteClient {
+    fn logger_level_state<'a>(&'a self, component: &'a str, logger: &'a str) -> DriverFuture<'a, LoggerLevelState>;
+
+    fn restore_logger_level<'a>(
+        &'a self,
+        request: &'a LoggerLevelTtlRestore,
     ) -> Pin<Box<dyn Future<Output = Result<(), ExecutionAgentError>> + Send + 'a>>;
 }
 
