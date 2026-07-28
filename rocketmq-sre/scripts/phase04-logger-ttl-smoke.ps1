@@ -109,8 +109,14 @@ function Restore-Environment([hashtable]$SavedEnvironment) {
 
 function New-TestSecret {
     $bytes = [byte[]]::new(32)
-    [Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
-    return [Convert]::ToHexString($bytes).ToLowerInvariant()
+    $generator = [Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $generator.GetBytes($bytes)
+    }
+    finally {
+        $generator.Dispose()
+    }
+    return ([BitConverter]::ToString($bytes) -replace '-', '').ToLowerInvariant()
 }
 
 foreach ($path in @(
