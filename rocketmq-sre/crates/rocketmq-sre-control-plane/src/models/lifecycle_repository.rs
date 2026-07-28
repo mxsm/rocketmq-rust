@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use chrono::Utc;
 use rocketmq_sre_contracts::CorrelationId;
 use rocketmq_sre_contracts::ModelProfileId;
 use rocketmq_sre_contracts::TenantId;
@@ -444,7 +443,7 @@ async fn update_lifecycle(
     )
     .bind(state.as_str())
     .bind(revision_i64(revision)?)
-    .bind(rollback_profile_id.map(|id| *id.as_uuid()))
+    .bind(rollback_profile_id.map(|id| id.as_uuid()))
     .bind(reason_code)
     .bind(operator_confirmed)
     .bind(changed_by)
@@ -512,7 +511,7 @@ async fn append_lifecycle_event(
     .bind(from_state.map(ModelProfileLifecycleState::as_str))
     .bind(to_state.as_str())
     .bind(revision_i64(revision)?)
-    .bind(rollback_profile_id.map(|id| *id.as_uuid()))
+    .bind(rollback_profile_id.map(|id| id.as_uuid()))
     .bind(reason_code)
     .bind(operator_confirmed)
     .bind(changed_by)
