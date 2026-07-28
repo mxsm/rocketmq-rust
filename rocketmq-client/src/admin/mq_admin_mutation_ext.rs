@@ -29,6 +29,7 @@ use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_protocol::protocol::admin::rollback_stats::RollbackStats;
 use rocketmq_protocol::protocol::body::broker_body::cluster_info::ClusterInfo;
 use rocketmq_protocol::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
+use rocketmq_protocol::protocol::body::proxy_drain::ProxyDrainStateResponseBody;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 
@@ -53,6 +54,20 @@ pub enum BrokerConfigPatchOutcome {
 /// keep it out of read-only process dependency graphs.
 #[allow(async_fn_in_trait)]
 pub trait MQAdminMutationExt: Send {
+    /// Begins one authenticated, reversible drain operation for a Proxy.
+    async fn begin_proxy_drain(
+        &self,
+        proxy_addr: CheetahString,
+        operation_id: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<ProxyDrainStateResponseBody>;
+
+    /// Cancels a timed-out drain and restores Proxy admission/readiness.
+    async fn cancel_proxy_drain(
+        &self,
+        proxy_addr: CheetahString,
+        operation_id: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<ProxyDrainStateResponseBody>;
+
     /// Reads the broker configuration generation used by supervised prechecks.
     async fn broker_config_generation(&self, broker_addr: CheetahString) -> rocketmq_error::RocketMQResult<u64>;
 
@@ -186,6 +201,22 @@ pub trait MQAdminMutationExt: Send {
 }
 
 impl MQAdminMutationExt for DefaultMQAdminExt {
+    async fn begin_proxy_drain(
+        &self,
+        proxy_addr: CheetahString,
+        operation_id: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<ProxyDrainStateResponseBody> {
+        MQAdminMutationExt::begin_proxy_drain(self.inner(), proxy_addr, operation_id).await
+    }
+
+    async fn cancel_proxy_drain(
+        &self,
+        proxy_addr: CheetahString,
+        operation_id: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<ProxyDrainStateResponseBody> {
+        MQAdminMutationExt::cancel_proxy_drain(self.inner(), proxy_addr, operation_id).await
+    }
+
     async fn broker_config_generation(&self, broker_addr: CheetahString) -> rocketmq_error::RocketMQResult<u64> {
         MQAdminMutationExt::broker_config_generation(self.inner(), broker_addr).await
     }

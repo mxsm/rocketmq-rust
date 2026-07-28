@@ -56,6 +56,10 @@ use crate::core::client_connection::QueryConsumerConnectionsResult;
 use crate::core::clock::Clock;
 use crate::core::consumer;
 use crate::core::consumer::ConsumerQueryAdmin;
+use crate::core::proxy::ProxyDrainPending;
+use crate::core::proxy::ProxyDrainState;
+use crate::core::proxy::ProxyQueryAdmin;
+use crate::core::proxy::QueryProxyDrainStateRequest;
 use crate::core::security::AdminCredentials;
 use crate::core::topic::GetTopicRouteRequest;
 use crate::core::topic::ListTopicsRequest;
@@ -247,6 +251,27 @@ impl Drop for ReadAdminSession {
         if !self.closed {
             tracing::warn!("read admin session dropped before explicit shutdown");
         }
+    }
+}
+
+impl ProxyQueryAdmin for ReadAdminSession {
+    fn query_drain_state<'a>(
+        &'a mut self,
+        request: &'a QueryProxyDrainStateRequest,
+    ) -> AdminFuture<'a, ProxyDrainState> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            let proxy_addr = request.proxy_addr.trim();
+            if proxy_addr.is_empty() {
+                return Err(AdminError::invalid_argument("proxyAddr", "must not be empty"));
+            }
+            let state = self
+                .inner
+                .proxy_drain_state(CheetahString::from(proxy_addr))
+                .await
+                .map_err(|error| backend_error("proxy_drain_state", error))?;
+            map_proxy_drain_state(state)
+        })
     }
 }
 
@@ -1059,6 +1084,30 @@ fn backend_error(operation: &'static str, error: RocketMQError) -> AdminError {
         context,
         view.http().status.as_u16(),
         view.is_retryable(),
+    )
+}
+
+fn map_proxy_drain_state(
+    state: rocketmq_protocol::protocol::body::proxy_drain::ProxyDrainStateResponseBody,
+) -> AdminResult<ProxyDrainState> {
+    ProxyDrainState::try_from_wire_parts(
+        state.schema_version,
+        state.phase.as_str(),
+        state.operation_id,
+        state.admission_open,
+        state.routing_open,
+        state.readiness_published,
+        state.zero_pending,
+        ProxyDrainPending {
+            active_connections: state.pending.active_connections,
+            sessions: state.pending.sessions,
+            receipt_handles: state.pending.receipt_handles,
+            prepared_transactions: state.pending.prepared_transactions,
+            telemetry_links: state.pending.telemetry_links,
+            remoting_channels: state.pending.remoting_channels,
+            telemetry_commands: state.pending.telemetry_commands,
+            rpc_in_flight: state.pending.rpc_in_flight,
+        },
     )
 }
 

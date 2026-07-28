@@ -28,6 +28,7 @@ use rocketmq_protocol::protocol::body::group_list::GroupList;
 use rocketmq_protocol::protocol::body::kv_table::KVTable;
 use rocketmq_protocol::protocol::body::producer_connection::ProducerConnection;
 use rocketmq_protocol::protocol::body::producer_table_info::ProducerTableInfo;
+use rocketmq_protocol::protocol::body::proxy_drain::ProxyDrainStateResponseBody;
 use rocketmq_protocol::protocol::body::topic::topic_list::TopicList;
 use rocketmq_protocol::protocol::header::get_consume_stats_request_header::GetConsumeStatsRequestHeader;
 use rocketmq_protocol::protocol::header::query_topic_consume_by_who_request_header::QueryTopicConsumeByWhoRequestHeader;
@@ -45,6 +46,12 @@ pub trait MQAdminReadExt: Send {
     async fn fetch_all_topic_list(&self) -> rocketmq_error::RocketMQResult<TopicList>;
 
     async fn fetch_broker_runtime_stats(&self, broker_addr: CheetahString) -> rocketmq_error::RocketMQResult<KVTable>;
+
+    /// Returns the authenticated, bounded drain state for one Proxy endpoint.
+    async fn proxy_drain_state(
+        &self,
+        proxy_addr: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<ProxyDrainStateResponseBody>;
 
     async fn examine_consume_stats(
         &self,
@@ -102,6 +109,16 @@ impl MQAdminReadExt for DefaultMQAdminExt {
         self.inner()
             .mq_client_api()?
             .get_broker_runtime_info(&broker_addr, self.inner().remoting_timeout_millis()?)
+            .await
+    }
+
+    async fn proxy_drain_state(
+        &self,
+        proxy_addr: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<ProxyDrainStateResponseBody> {
+        self.inner()
+            .mq_client_api()?
+            .get_proxy_drain_state(&proxy_addr, self.inner().remoting_timeout_millis()?)
             .await
     }
 

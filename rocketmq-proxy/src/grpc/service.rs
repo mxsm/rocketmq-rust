@@ -74,15 +74,15 @@ const DEFAULT_CONSUMER_RECEIVE_BATCH_SIZE: i32 = telemetry::DEFAULT_CONSUMER_REC
 #[cfg(test)]
 const DEFAULT_CONSUMER_CUSTOMIZED_BACKOFF_MS: [u64; 18] = telemetry::DEFAULT_CONSUMER_CUSTOMIZED_BACKOFF_MS;
 
-#[derive(Clone)]
 struct RequestObservation {
     context: ProxyContext,
     started_at: std::time::Instant,
     span: Span,
+    _drain_admission: rocketmq_proxy_core::ProxyDrainAdmission,
 }
 
 impl RequestObservation {
-    fn new(context: ProxyContext) -> Self {
+    fn new(context: ProxyContext, drain_admission: rocketmq_proxy_core::ProxyDrainAdmission) -> Self {
         let span = info_span!(
             rocketmq_observability::trace::span_names::PROXY_RPC,
             rpc = context.rpc_name(),
@@ -93,6 +93,7 @@ impl RequestObservation {
             context,
             started_at: std::time::Instant::now(),
             span,
+            _drain_admission: drain_admission,
         }
     }
 
@@ -141,6 +142,7 @@ pub struct ProxyGrpcService<P> {
     auth_runtime: Option<Arc<ProxyAuthRuntime>>,
     hooks: ProxyHookChain,
     metrics: ProxyMetrics,
+    drain: rocketmq_proxy_core::ProxyDrainController,
 }
 
 pub type ProxyHousekeepingRunReport = housekeeping::GrpcHousekeepingRunReport;
@@ -156,6 +158,7 @@ impl<P> Clone for ProxyGrpcService<P> {
             auth_runtime: self.auth_runtime.clone(),
             hooks: self.hooks.clone(),
             metrics: self.metrics.clone(),
+            drain: self.drain.clone(),
         }
     }
 }
@@ -183,6 +186,7 @@ impl<P> ProxyGrpcService<P> {
             auth_runtime: None,
             hooks: ProxyHookChain::default(),
             metrics: ProxyMetrics::default(),
+            drain: rocketmq_proxy_core::ProxyDrainController::default(),
         }
     }
 
@@ -225,6 +229,11 @@ impl<P> ProxyGrpcService<P> {
         self
     }
 
+    pub fn with_drain_controller(mut self, drain: rocketmq_proxy_core::ProxyDrainController) -> Self {
+        self.drain = drain;
+        self
+    }
+
     pub fn metrics_snapshot(&self) -> ProxyMetricsSnapshot {
         let auth = self
             .auth_runtime
@@ -251,8 +260,12 @@ impl<P> ProxyGrpcService<P> {
         Box::pin(stream::iter(items.into_iter().map(Ok)))
     }
 
-    async fn begin_observation(&self, context: ProxyContext) -> RequestObservation {
-        let observation = RequestObservation::new(context);
+    async fn begin_observation(
+        &self,
+        context: ProxyContext,
+        drain_admission: rocketmq_proxy_core::ProxyDrainAdmission,
+    ) -> RequestObservation {
+        let observation = RequestObservation::new(context, drain_admission);
         self.metrics.record_request_started(observation.context().rpc_name());
         self.hooks
             .before_request(observation.context())
@@ -305,6 +318,14 @@ impl<P> ProxyGrpcService<P> {
         Result<Response<TResponse>, Status>,
     > {
         self.reap_session_state_if_due();
+        let drain_admission = match self.drain.try_admit() {
+            Ok(admission) => admission,
+            Err(_) => {
+                let status = ProxyStatusMapper::to_tonic_status(&ProxyError::Draining);
+                self.record_transport_failure(rpc_name, &status);
+                return Err(Err(status));
+            }
+        };
         let mut context = match self.context(rpc_name, &request) {
             Ok(context) => context,
             Err(status) => {
@@ -312,7 +333,7 @@ impl<P> ProxyGrpcService<P> {
                 return Err(Err(status));
             }
         };
-        let mut observation = self.begin_observation(context.clone()).await;
+        let mut observation = self.begin_observation(context.clone(), drain_admission).await;
         let principal = match self.authenticate_request(&mut context, &request).await {
             Ok(principal) => principal,
             Err(error) => {
@@ -347,6 +368,14 @@ impl<P> ProxyGrpcService<P> {
         Result<Response<ResponseStream<TItem>>, Status>,
     > {
         self.reap_session_state_if_due();
+        let drain_admission = match self.drain.try_admit() {
+            Ok(admission) => admission,
+            Err(_) => {
+                let status = ProxyStatusMapper::to_tonic_status(&ProxyError::Draining);
+                self.record_transport_failure(rpc_name, &status);
+                return Err(Err(status));
+            }
+        };
         let mut context = match self.context(rpc_name, &request) {
             Ok(context) => context,
             Err(status) => {
@@ -354,7 +383,7 @@ impl<P> ProxyGrpcService<P> {
                 return Err(Err(status));
             }
         };
-        let mut observation = self.begin_observation(context.clone()).await;
+        let mut observation = self.begin_observation(context.clone(), drain_admission).await;
         let principal = match self.authenticate_request(&mut context, &request).await {
             Ok(principal) => principal,
             Err(error) => {

@@ -39,6 +39,10 @@ use rocketmq_protocol::protocol::body::get_consumer_list_by_group_response_body:
 use rocketmq_protocol::protocol::body::get_lite_group_info_response_body::GetLiteGroupInfoResponseBody;
 use rocketmq_protocol::protocol::body::get_lite_topic_info_response_body::GetLiteTopicInfoResponseBody;
 use rocketmq_protocol::protocol::body::get_parent_topic_info_response_body::GetParentTopicInfoResponseBody;
+use rocketmq_protocol::protocol::body::proxy_drain::ProxyDrainOperationRequestBody;
+use rocketmq_protocol::protocol::body::proxy_drain::ProxyDrainPendingBody;
+use rocketmq_protocol::protocol::body::proxy_drain::ProxyDrainStateResponseBody;
+use rocketmq_protocol::protocol::body::proxy_drain::PROXY_DRAIN_SCHEMA_VERSION;
 use rocketmq_protocol::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
 use rocketmq_protocol::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
 use rocketmq_protocol::protocol::command_custom_header::CommandCustomHeader;
@@ -71,10 +75,14 @@ use rocketmq_protocol::protocol::heartbeat::heartbeat_data::HeartbeatData;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_proxy_core::identity::ResourceIdentity;
-pub use rocketmq_proxy_core::ingress::remoting::ProxyRemotingBackend;
-use rocketmq_proxy_core::ingress::remoting::RemotingIngressDispatcher;
-use rocketmq_proxy_core::ingress::remoting::RemotingIngressRoute;
-use rocketmq_proxy_core::ingress::remoting::RemotingStatusMapper;
+pub use rocketmq_proxy_core::remoting::ProxyRemotingBackend;
+use rocketmq_proxy_core::remoting::RemotingIngressDispatcher;
+use rocketmq_proxy_core::remoting::RemotingIngressRoute;
+use rocketmq_proxy_core::remoting::RemotingStatusMapper;
+use rocketmq_proxy_core::ProxyDrainController;
+use rocketmq_proxy_core::ProxyDrainError;
+use rocketmq_proxy_core::ProxyDrainPhase;
+use rocketmq_proxy_core::ProxyDrainSnapshot;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_transport::run_remoting_server_with_report_with_service_context_and_telemetry;
@@ -111,6 +119,7 @@ use crate::session::ClientSessionRegistry;
 pub struct ProxyRemotingRequestProcessor<P> {
     dispatcher: Arc<ProxyRemotingDispatcher<P>>,
     auth_runtime: Option<ProxyAuthRuntime>,
+    drain: ProxyDrainController,
 }
 
 impl<P> Clone for ProxyRemotingRequestProcessor<P> {
@@ -118,6 +127,7 @@ impl<P> Clone for ProxyRemotingRequestProcessor<P> {
         Self {
             dispatcher: Arc::clone(&self.dispatcher),
             auth_runtime: self.auth_runtime.clone(),
+            drain: self.drain.clone(),
         }
     }
 }
@@ -133,14 +143,34 @@ where
         auth_runtime: Option<ProxyAuthRuntime>,
         remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
     ) -> Self {
+        Self::new_with_drain_controller(
+            config,
+            processor,
+            sessions,
+            auth_runtime,
+            remoting_backend,
+            ProxyDrainController::default(),
+        )
+    }
+
+    pub fn new_with_drain_controller(
+        config: Arc<ProxyConfig>,
+        processor: Arc<P>,
+        sessions: ClientSessionRegistry,
+        auth_runtime: Option<ProxyAuthRuntime>,
+        remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
+        drain: ProxyDrainController,
+    ) -> Self {
         Self {
-            dispatcher: Arc::new(ProxyRemotingDispatcher::new(
+            dispatcher: Arc::new(ProxyRemotingDispatcher::new_with_drain_controller(
                 config,
                 processor,
                 sessions,
                 remoting_backend,
+                drain.clone(),
             )),
             auth_runtime,
+            drain,
         }
     }
 }
@@ -157,6 +187,10 @@ where
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut context =
             ProxyContext::from_remoting_request(RemotingIngressRoute::rpc_name(request.code()), &channel, request);
+        let drain_management = is_drain_management_request(request.code());
+        if drain_management && self.auth_runtime.is_none() {
+            return Ok(Some(authentication_required_response(request.opaque())));
+        }
         if let Some(auth_runtime) = &self.auth_runtime {
             let source_ip = channel.remote_address().ip().to_string();
             match auth_runtime
@@ -167,10 +201,27 @@ where
                 Ok(None) => {}
                 Err(error) => return Ok(Some(auth_error_response(request.opaque(), error))),
             }
+            if drain_management && context.authenticated_principal().is_none() {
+                return Ok(Some(authentication_required_response(request.opaque())));
+            }
             if let Err(error) = auth_runtime.authorize_remoting(&channel, request).await {
                 return Ok(Some(auth_error_response(request.opaque(), error)));
             }
         }
+        let _drain_admission = if drain_management {
+            None
+        } else {
+            match self.drain.try_admit() {
+                Ok(admission) => Some(admission),
+                Err(_) => {
+                    return Ok(Some(
+                        RemotingCommand::create_response_command_with_code(ResponseCode::ServiceNotAvailable)
+                            .set_remark("Proxy is draining and does not accept new requests")
+                            .set_opaque(request.opaque()),
+                    ));
+                }
+            }
+        };
         self.dispatcher.bind_remoting_channel_if_heartbeat(&channel, request);
         Ok(Some(self.dispatcher.dispatch(&context, request).await))
     }
@@ -203,6 +254,7 @@ where
         sessions,
         auth_runtime,
         remoting_backend,
+        ProxyDrainController::default(),
         shutdown,
         None,
     )
@@ -234,6 +286,42 @@ where
         sessions,
         auth_runtime,
         remoting_backend,
+        ProxyDrainController::default(),
+        shutdown,
+        Some(Box::new(ready)),
+    )
+    .await
+}
+
+#[doc(hidden)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "preserves the established transport startup boundary"
+)]
+pub async fn serve_with_service_context_and_ready_and_drain<P, F, R>(
+    service_context: ChildServiceContext,
+    config: Arc<ProxyConfig>,
+    processor: Arc<P>,
+    sessions: ClientSessionRegistry,
+    auth_runtime: Option<ProxyAuthRuntime>,
+    remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
+    drain: ProxyDrainController,
+    shutdown: F,
+    ready: R,
+) -> ProxyResult<Option<ShutdownReport>>
+where
+    P: MessagingProcessor + 'static,
+    F: Future<Output = ()> + Send + 'static,
+    R: FnOnce() -> ProxyResult<()> + Send + 'static,
+{
+    serve_with_context(
+        service_context,
+        config,
+        processor,
+        sessions,
+        auth_runtime,
+        remoting_backend,
+        drain,
         shutdown,
         Some(Box::new(ready)),
     )
@@ -248,6 +336,7 @@ async fn serve_with_context<P, F>(
     sessions: ClientSessionRegistry,
     auth_runtime: Option<ProxyAuthRuntime>,
     remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
+    drain: ProxyDrainController,
     shutdown: F,
     ready: Option<Box<dyn FnOnce() -> ProxyResult<()> + Send>>,
 ) -> ProxyResult<Option<ShutdownReport>>
@@ -262,9 +351,15 @@ where
     if let Some(ready) = ready {
         ready()?;
     }
-    let request_processor =
-        ProxyRemotingRequestProcessor::new(config, processor, sessions, auth_runtime, remoting_backend);
-    let report = run_remoting_server_with_report_with_service_context_and_telemetry(
+    let request_processor = ProxyRemotingRequestProcessor::new_with_drain_controller(
+        config,
+        processor,
+        sessions,
+        auth_runtime,
+        remoting_backend,
+        drain,
+    );
+    let report = run_remoting_server_with_report_with_service_context(
         service_context,
         listener,
         shutdown,
@@ -292,6 +387,7 @@ pub struct ProxyRemotingDispatcher<P> {
     processor: Arc<P>,
     sessions: ClientSessionRegistry,
     remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
+    drain: ProxyDrainController,
 }
 
 impl<P> ProxyRemotingDispatcher<P>
@@ -304,10 +400,27 @@ where
         sessions: ClientSessionRegistry,
         remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
     ) -> Self {
+        Self::new_with_drain_controller(
+            _config,
+            processor,
+            sessions,
+            remoting_backend,
+            ProxyDrainController::default(),
+        )
+    }
+
+    pub fn new_with_drain_controller(
+        _config: Arc<ProxyConfig>,
+        processor: Arc<P>,
+        sessions: ClientSessionRegistry,
+        remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
+        drain: ProxyDrainController,
+    ) -> Self {
         Self {
             processor,
             sessions,
             remoting_backend,
+            drain,
         }
     }
 
@@ -334,6 +447,9 @@ where
             RemotingIngressRoute::GetParentTopicInfo => self.dispatch_get_parent_topic_info(request).await,
             RemotingIngressRoute::GetLiteTopicInfo => self.dispatch_get_lite_topic_info(request).await,
             RemotingIngressRoute::GetLiteGroupInfo => self.dispatch_get_lite_group_info(request).await,
+            RemotingIngressRoute::GetProxyDrainState => self.dispatch_get_proxy_drain_state(request),
+            RemotingIngressRoute::BeginProxyDrain => self.dispatch_begin_proxy_drain(request),
+            RemotingIngressRoute::CancelProxyDrain => self.dispatch_cancel_proxy_drain(request),
             RemotingIngressRoute::AuthAdminUnsupported => unsupported_response(
                 request.opaque(),
                 format!(
@@ -349,6 +465,32 @@ where
                     request.code()
                 ),
             ),
+        }
+    }
+
+    fn dispatch_get_proxy_drain_state(&self, request: &RemotingCommand) -> RemotingCommand {
+        proxy_drain_success_response(request.opaque(), self.drain.snapshot(&self.sessions))
+    }
+
+    fn dispatch_begin_proxy_drain(&self, request: &RemotingCommand) -> RemotingCommand {
+        let operation = match decode_proxy_drain_operation(request) {
+            Ok(operation) => operation,
+            Err(error) => return proxy_drain_request_error_response(request.opaque(), error),
+        };
+        match self.drain.begin(operation.operation_id.as_str()) {
+            Ok(()) => proxy_drain_success_response(request.opaque(), self.drain.snapshot(&self.sessions)),
+            Err(error) => proxy_drain_error_response(request.opaque(), error),
+        }
+    }
+
+    fn dispatch_cancel_proxy_drain(&self, request: &RemotingCommand) -> RemotingCommand {
+        let operation = match decode_proxy_drain_operation(request) {
+            Ok(operation) => operation,
+            Err(error) => return proxy_drain_request_error_response(request.opaque(), error),
+        };
+        match self.drain.cancel(operation.operation_id.as_str()) {
+            Ok(()) => proxy_drain_success_response(request.opaque(), self.drain.snapshot(&self.sessions)),
+            Err(error) => proxy_drain_error_response(request.opaque(), error),
         }
     }
 
@@ -1066,6 +1208,105 @@ where
     }
 }
 
+fn is_drain_management_request(code: i32) -> bool {
+    matches!(
+        RequestCode::from(code),
+        RequestCode::GetProxyDrainState | RequestCode::BeginProxyDrain | RequestCode::CancelProxyDrain
+    )
+}
+
+fn authentication_required_response(opaque: i32) -> RemotingCommand {
+    RemotingCommand::create_response_command_with_code(ResponseCode::NoPermission)
+        .set_remark("Proxy drain management requires an authenticated principal")
+        .set_opaque(opaque)
+}
+
+enum ProxyDrainRequestError {
+    MissingBody,
+    InvalidBody(String),
+    UnsupportedSchema(String),
+}
+
+fn decode_proxy_drain_operation(
+    request: &RemotingCommand,
+) -> Result<ProxyDrainOperationRequestBody, ProxyDrainRequestError> {
+    let Some(body) = request.body() else {
+        return Err(ProxyDrainRequestError::MissingBody);
+    };
+    let operation = ProxyDrainOperationRequestBody::decode(body.as_ref())
+        .map_err(|error| ProxyDrainRequestError::InvalidBody(error.to_string()))?;
+    if operation.schema_version != PROXY_DRAIN_SCHEMA_VERSION {
+        return Err(ProxyDrainRequestError::UnsupportedSchema(operation.schema_version));
+    }
+    Ok(operation)
+}
+
+fn proxy_drain_request_error_response(opaque: i32, error: ProxyDrainRequestError) -> RemotingCommand {
+    let remark = match error {
+        ProxyDrainRequestError::MissingBody => "Proxy drain operation body is required".to_owned(),
+        ProxyDrainRequestError::InvalidBody(error) => {
+            format!("invalid Proxy drain operation body: {error}")
+        }
+        ProxyDrainRequestError::UnsupportedSchema(schema) => {
+            format!("unsupported Proxy drain schema '{schema}'; expected '{PROXY_DRAIN_SCHEMA_VERSION}'")
+        }
+    };
+    RemotingCommand::create_response_command_with_code(ResponseCode::InvalidParameter)
+        .set_remark(remark)
+        .set_opaque(opaque)
+}
+
+fn proxy_drain_success_response(opaque: i32, snapshot: ProxyDrainSnapshot) -> RemotingCommand {
+    let phase = match snapshot.phase {
+        ProxyDrainPhase::Accepting => "accepting",
+        ProxyDrainPhase::Draining => "draining",
+        ProxyDrainPhase::Drained => "drained",
+    };
+    let body = ProxyDrainStateResponseBody {
+        schema_version: snapshot.schema_version,
+        phase: phase.to_owned(),
+        operation_id: snapshot.operation_id,
+        admission_open: snapshot.admission_open,
+        routing_open: snapshot.routing_open,
+        readiness_published: snapshot.readiness_published,
+        zero_pending: snapshot.zero_pending,
+        pending: ProxyDrainPendingBody {
+            active_connections: snapshot.pending.active_connections,
+            sessions: snapshot.pending.sessions,
+            receipt_handles: snapshot.pending.receipt_handles,
+            prepared_transactions: snapshot.pending.prepared_transactions,
+            telemetry_links: snapshot.pending.telemetry_links,
+            remoting_channels: snapshot.pending.remoting_channels,
+            telemetry_commands: snapshot.pending.telemetry_commands,
+            rpc_in_flight: snapshot.pending.rpc_in_flight,
+        },
+    };
+    match body.encode() {
+        Ok(body) => RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+            .set_body(body)
+            .set_opaque(opaque),
+        Err(error) => RemotingCommand::create_response_command_with_code(ResponseCode::SystemError)
+            .set_remark(format!("failed to encode Proxy drain state: {error}"))
+            .set_opaque(opaque),
+    }
+}
+
+fn proxy_drain_error_response(opaque: i32, error: ProxyDrainError) -> RemotingCommand {
+    let code = match error {
+        ProxyDrainError::LifecycleUnavailable | ProxyDrainError::ReadinessTransition { .. } => {
+            ResponseCode::ServiceNotAvailable
+        }
+        ProxyDrainError::AdmissionClosed
+        | ProxyDrainError::CounterOverflow
+        | ProxyDrainError::InvalidOperationId
+        | ProxyDrainError::OperationConflict { .. }
+        | ProxyDrainError::OperationMismatch => ResponseCode::InvalidParameter,
+    };
+    RemotingCommand::create_response_command_with_code(code)
+        .set_remark(error.to_string())
+        .set_opaque(opaque)
+}
+
 fn build_lite_topic_meta(subscriptions: &[crate::session::LiteSubscriptionSnapshot]) -> HashMap<CheetahString, i32> {
     subscriptions
         .iter()
@@ -1415,6 +1656,9 @@ mod tests {
     use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::code::response_code::ResponseCode;
     use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+    use rocketmq_protocol::protocol::body::proxy_drain::ProxyDrainOperationRequestBody;
+    use rocketmq_protocol::protocol::body::proxy_drain::ProxyDrainStateResponseBody;
+    use rocketmq_protocol::protocol::body::proxy_drain::PROXY_DRAIN_SCHEMA_VERSION;
     use rocketmq_protocol::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
     use rocketmq_protocol::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
     use rocketmq_protocol::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
@@ -1449,6 +1693,8 @@ mod tests {
     use rocketmq_protocol::protocol::route::route_data_view::QueueData;
     use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
     use rocketmq_runtime::RuntimeContext;
+    use rocketmq_runtime::ServiceLifecycle;
+    use rocketmq_runtime::ServiceLifecycleConfig;
     use rocketmq_security_api::Action;
     use rocketmq_transport::LocalRequestHarness;
     use rocketmq_transport::RemotingDeserializable;
@@ -1499,6 +1745,7 @@ mod tests {
     use crate::status::ProxyStatusMapper;
     use rocketmq_proxy_core::identity::ResourceIdentity;
     use rocketmq_proxy_core::ProxyContext as CoreProxyContext;
+    use rocketmq_proxy_core::ProxyDrainController;
     use rocketmq_proxy_core::ProxyMessage;
     use rocketmq_proxy_core::ProxyMessageExt;
 
@@ -1678,6 +1925,127 @@ mod tests {
                 .expect("unsupported auth admin response should carry remark")
                 .contains("send it to broker admin"));
         }
+    }
+
+    #[tokio::test]
+    async fn drain_management_requires_authentication_at_request_boundary() {
+        let sessions = ClientSessionRegistry::default();
+        let processor = Arc::new(DefaultMessagingProcessor::new(Arc::new(
+            LocalServiceManager::with_services(
+                Arc::new(StaticRouteService::default()),
+                Arc::new(StaticMetadataService::default()),
+                Arc::new(DefaultAssignmentService),
+                Arc::new(TestMessageService),
+                Arc::new(TestConsumerService),
+                Arc::new(DefaultTransactionService),
+            ),
+        )));
+        let mut request_processor = ProxyRemotingRequestProcessor::new(
+            Arc::new(ProxyConfig {
+                mode: ProxyMode::Local,
+                ..ProxyConfig::default()
+            }),
+            processor,
+            sessions,
+            None,
+            None,
+        );
+        let runtime = RuntimeContext::from_current("proxy-drain-auth-test");
+        let harness = LocalRequestHarness::new(runtime.service_context("local-harness").task_group().clone())
+            .await
+            .expect("local remoting harness should start");
+        let mut request = RemotingCommand::create_remoting_command(RequestCode::GetProxyDrainState);
+
+        let response = request_processor
+            .process_request(harness.channel(), harness.context(), &mut request)
+            .await
+            .expect("request should be rejected with a wire response")
+            .expect("request should return a response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::NoPermission);
+        assert!(response
+            .remark()
+            .expect("authentication rejection should include a stable remark")
+            .contains("authenticated principal"));
+    }
+
+    #[tokio::test]
+    async fn drain_dispatcher_stops_and_restores_readiness_with_exact_state() {
+        let sessions = ClientSessionRegistry::default();
+        let processor = Arc::new(DefaultMessagingProcessor::new(Arc::new(
+            LocalServiceManager::with_services(
+                Arc::new(StaticRouteService::default()),
+                Arc::new(StaticMetadataService::default()),
+                Arc::new(DefaultAssignmentService),
+                Arc::new(TestMessageService),
+                Arc::new(TestConsumerService),
+                Arc::new(DefaultTransactionService),
+            ),
+        )));
+        let drain = ProxyDrainController::default();
+        let lifecycle = ServiceLifecycle::new(ServiceLifecycleConfig {
+            service_name: Arc::from("proxy-drain-dispatch-test"),
+            probe_bind_addr: None,
+            shutdown_timeout: std::time::Duration::from_secs(45),
+            liveness_stale_after: std::time::Duration::from_secs(30),
+        });
+        lifecycle.mark_ready().expect("lifecycle should become ready");
+        drain
+            .attach_lifecycle(lifecycle.clone())
+            .expect("drain should attach lifecycle");
+        let dispatcher = ProxyRemotingDispatcher::new_with_drain_controller(
+            Arc::new(ProxyConfig {
+                mode: ProxyMode::Local,
+                ..ProxyConfig::default()
+            }),
+            processor,
+            sessions,
+            None,
+            drain,
+        );
+        let operation = ProxyDrainOperationRequestBody {
+            schema_version: PROXY_DRAIN_SCHEMA_VERSION.to_owned(),
+            operation_id: "restart-1".to_owned(),
+        };
+        let begin = RemotingCommand::new_request(
+            RequestCode::BeginProxyDrain,
+            operation.encode().expect("drain operation should encode"),
+        );
+
+        let begin_response = dispatcher.dispatch(&test_context(), &begin).await;
+        assert_eq!(ResponseCode::from(begin_response.code()), ResponseCode::Success);
+        let begun = ProxyDrainStateResponseBody::decode(
+            begin_response
+                .body()
+                .expect("begin response should contain state")
+                .as_ref(),
+        )
+        .expect("begin state should decode");
+        assert_eq!(begun.phase, "drained");
+        assert!(begun.zero_pending);
+        assert!(!begun.admission_open);
+        assert!(!begun.routing_open);
+        assert!(!begun.readiness_published);
+        assert!(!lifecycle.is_ready());
+
+        let cancel = RemotingCommand::new_request(
+            RequestCode::CancelProxyDrain,
+            operation.encode().expect("drain operation should encode"),
+        );
+        let cancel_response = dispatcher.dispatch(&test_context(), &cancel).await;
+        assert_eq!(ResponseCode::from(cancel_response.code()), ResponseCode::Success);
+        let cancelled = ProxyDrainStateResponseBody::decode(
+            cancel_response
+                .body()
+                .expect("cancel response should contain state")
+                .as_ref(),
+        )
+        .expect("cancel state should decode");
+        assert_eq!(cancelled.phase, "accepting");
+        assert!(cancelled.admission_open);
+        assert!(cancelled.routing_open);
+        assert!(cancelled.readiness_published);
+        assert!(lifecycle.is_ready());
     }
 
     #[tokio::test]

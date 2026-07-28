@@ -31,6 +31,7 @@ pub mod error;
 pub mod error_view;
 pub mod lite;
 pub mod message;
+pub mod proxy;
 pub mod queue;
 pub mod release_checkpoint;
 pub mod security;

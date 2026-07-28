@@ -210,6 +210,7 @@ fn parse_duration_env(
 struct ServiceLifecycleInner {
     config: ServiceLifecycleConfig,
     state: AtomicU8,
+    maintenance_readiness_suspended: AtomicBool,
     started_at: Instant,
     last_progress_millis: AtomicU64,
     shutdown_request: Mutex<Option<ShutdownRequest>>,
@@ -270,6 +271,7 @@ impl ServiceLifecycle {
             inner: Arc::new(ServiceLifecycleInner {
                 config,
                 state: AtomicU8::new(STATE_STARTING),
+                maintenance_readiness_suspended: AtomicBool::new(false),
                 started_at: Instant::now(),
                 last_progress_millis: AtomicU64::new(0),
                 shutdown_request: Mutex::new(None),
@@ -398,6 +400,7 @@ impl ServiceLifecycle {
     /// Returns whether ready.
     pub fn is_ready(&self) -> bool {
         self.state() == ServiceLifecycleState::Ready
+            && !self.inner.maintenance_readiness_suspended.load(Ordering::Acquire)
     }
 
     /// Returns whether live.
@@ -449,6 +452,52 @@ impl ServiceLifecycle {
                 ),
             }),
         }
+    }
+
+    /// Temporarily removes this process from readiness during a reversible
+    /// maintenance operation.
+    ///
+    /// This does not alter the process lifecycle state. A real shutdown request
+    /// remains irreversible and prevents a later readiness restore.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the process is ready and shutdown has not begun.
+    pub fn suspend_readiness_for_maintenance(&self) -> RuntimeResult<()> {
+        let shutdown_request = self.inner.shutdown_request.lock();
+        if shutdown_request.is_some() || self.state() != ServiceLifecycleState::Ready {
+            return Err(RuntimeError::LifecycleOperation {
+                operation: "suspend_service_readiness_for_maintenance",
+                message: format!("cannot suspend readiness while service is {}", self.state().as_str()),
+            });
+        }
+        self.inner
+            .maintenance_readiness_suspended
+            .store(true, Ordering::Release);
+        drop(shutdown_request);
+        self.record_progress();
+        Ok(())
+    }
+
+    /// Restores readiness after a reversible maintenance operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when shutdown, failure, or stop has begun.
+    pub fn restore_readiness_after_maintenance(&self) -> RuntimeResult<()> {
+        let shutdown_request = self.inner.shutdown_request.lock();
+        if shutdown_request.is_some() || self.state() != ServiceLifecycleState::Ready {
+            return Err(RuntimeError::LifecycleOperation {
+                operation: "restore_service_readiness_after_maintenance",
+                message: format!("cannot restore readiness while service is {}", self.state().as_str()),
+            });
+        }
+        self.inner
+            .maintenance_readiness_suspended
+            .store(false, Ordering::Release);
+        drop(shutdown_request);
+        self.record_progress();
+        Ok(())
     }
 
     /// Executes mark failed.
@@ -638,6 +687,25 @@ mod tests {
             lifecycle.mark_ready().is_err(),
             "drain must not transition back to ready"
         );
+    }
+
+    #[test]
+    fn maintenance_readiness_is_reversible_until_shutdown_begins() {
+        let lifecycle = ServiceLifecycle::new(config(None));
+        lifecycle.mark_ready().unwrap();
+
+        lifecycle.suspend_readiness_for_maintenance().unwrap();
+        assert_eq!(lifecycle.state(), ServiceLifecycleState::Ready);
+        assert!(!lifecycle.is_ready());
+
+        lifecycle.restore_readiness_after_maintenance().unwrap();
+        assert!(lifecycle.is_ready());
+
+        lifecycle.suspend_readiness_for_maintenance().unwrap();
+        lifecycle.request_shutdown(ShutdownReason::Internal);
+        assert!(lifecycle.restore_readiness_after_maintenance().is_err());
+        assert!(!lifecycle.is_ready());
+        assert_eq!(lifecycle.state(), ServiceLifecycleState::Draining);
     }
 
     #[test]

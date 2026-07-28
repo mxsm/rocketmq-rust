@@ -53,6 +53,10 @@ use crate::core::message::DirectConsumeResult;
 use crate::core::message::DlqMessageLookupRequest;
 use crate::core::message::DlqResendResult;
 use crate::core::message::MessageMutationAdmin;
+use crate::core::proxy::ProxyDrainOperationRequest;
+use crate::core::proxy::ProxyDrainPending;
+use crate::core::proxy::ProxyDrainState;
+use crate::core::proxy::ProxyMutationAdmin;
 use crate::core::topic::DeleteTopicAdminRequest;
 use crate::core::topic::ResetTopicConsumerOffsetRequest;
 use crate::core::topic::TopicMutationAdmin;
@@ -670,6 +674,39 @@ impl BrokerMutationAdmin for MutationAdminSession {
         })
     }
 }
+
+impl ProxyMutationAdmin for MutationAdminSession {
+    fn begin_drain<'a>(&'a mut self, request: &'a ProxyDrainOperationRequest) -> AdminFuture<'a, ProxyDrainState> {
+        Box::pin(async move {
+            self.inner.ensure_open()?;
+            let proxy_addr = require_non_empty("proxyAddr", &request.proxy_addr)?;
+            let operation_id = require_non_empty("operationId", &request.operation_id)?;
+            let state = self
+                .inner
+                .inner
+                .begin_proxy_drain(CheetahString::from(proxy_addr), CheetahString::from(operation_id))
+                .await
+                .map_err(|error| backend_error("begin_proxy_drain", error))?;
+            map_proxy_drain_state(state)
+        })
+    }
+
+    fn cancel_drain<'a>(&'a mut self, request: &'a ProxyDrainOperationRequest) -> AdminFuture<'a, ProxyDrainState> {
+        Box::pin(async move {
+            self.inner.ensure_open()?;
+            let proxy_addr = require_non_empty("proxyAddr", &request.proxy_addr)?;
+            let operation_id = require_non_empty("operationId", &request.operation_id)?;
+            let state = self
+                .inner
+                .inner
+                .cancel_proxy_drain(CheetahString::from(proxy_addr), CheetahString::from(operation_id))
+                .await
+                .map_err(|error| backend_error("cancel_proxy_drain", error))?;
+            map_proxy_drain_state(state)
+        })
+    }
+}
+
 impl DashboardMutationAdmin for MutationAdminSession {}
 
 async fn require_topic_route(
@@ -886,6 +923,30 @@ fn backend_error(operation: &'static str, error: RocketMQError) -> AdminError {
         context,
         view.http().status.as_u16(),
         view.is_retryable(),
+    )
+}
+
+fn map_proxy_drain_state(
+    state: rocketmq_protocol::protocol::body::proxy_drain::ProxyDrainStateResponseBody,
+) -> AdminResult<ProxyDrainState> {
+    ProxyDrainState::try_from_wire_parts(
+        state.schema_version,
+        state.phase.as_str(),
+        state.operation_id,
+        state.admission_open,
+        state.routing_open,
+        state.readiness_published,
+        state.zero_pending,
+        ProxyDrainPending {
+            active_connections: state.pending.active_connections,
+            sessions: state.pending.sessions,
+            receipt_handles: state.pending.receipt_handles,
+            prepared_transactions: state.pending.prepared_transactions,
+            telemetry_links: state.pending.telemetry_links,
+            remoting_channels: state.pending.remoting_channels,
+            telemetry_commands: state.pending.telemetry_commands,
+            rpc_in_flight: state.pending.rpc_in_flight,
+        },
     )
 }
 

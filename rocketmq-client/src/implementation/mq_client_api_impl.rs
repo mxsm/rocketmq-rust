@@ -110,6 +110,12 @@ use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_protocol::protocol::body::lite_subscription_ctl_request_body::LiteSubscriptionCtlRequestBody;
 use rocketmq_protocol::protocol::body::producer_connection::ProducerConnection;
 use rocketmq_protocol::protocol::body::producer_table_info::ProducerTableInfo;
+#[cfg(feature = "admin-mutation")]
+use rocketmq_protocol::protocol::body::proxy_drain::ProxyDrainOperationRequestBody;
+#[cfg(any(feature = "admin-read", feature = "admin-mutation"))]
+use rocketmq_protocol::protocol::body::proxy_drain::ProxyDrainStateResponseBody;
+#[cfg(any(feature = "admin-read", feature = "admin-mutation"))]
+use rocketmq_protocol::protocol::body::proxy_drain::PROXY_DRAIN_SCHEMA_VERSION;
 use rocketmq_protocol::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
 use rocketmq_protocol::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
 use rocketmq_protocol::protocol::body::query_consume_queue_response_body::QueryConsumeQueueResponseBody;

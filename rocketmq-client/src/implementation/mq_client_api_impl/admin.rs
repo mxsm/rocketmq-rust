@@ -1819,6 +1819,68 @@ impl MQClientAPIImpl {
 }
 
 impl MQClientAPIImpl {
+    #[cfg(feature = "admin-read")]
+    pub(crate) async fn get_proxy_drain_state(
+        &self,
+        addr: &CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<ProxyDrainStateResponseBody> {
+        let request = RemotingCommand::create_remoting_command(RequestCode::GetProxyDrainState);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+        decode_proxy_drain_response(response, "get_proxy_drain_state")
+    }
+
+    #[cfg(feature = "admin-mutation")]
+    pub(crate) async fn begin_proxy_drain(
+        &self,
+        addr: &CheetahString,
+        operation_id: CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<ProxyDrainStateResponseBody> {
+        self.proxy_drain_operation(addr, RequestCode::BeginProxyDrain, operation_id, timeout_millis)
+            .await
+    }
+
+    #[cfg(feature = "admin-mutation")]
+    pub(crate) async fn cancel_proxy_drain(
+        &self,
+        addr: &CheetahString,
+        operation_id: CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<ProxyDrainStateResponseBody> {
+        self.proxy_drain_operation(addr, RequestCode::CancelProxyDrain, operation_id, timeout_millis)
+            .await
+    }
+
+    #[cfg(feature = "admin-mutation")]
+    async fn proxy_drain_operation(
+        &self,
+        addr: &CheetahString,
+        request_code: RequestCode,
+        operation_id: CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<ProxyDrainStateResponseBody> {
+        if operation_id.trim().is_empty() {
+            return Err(RocketMQError::illegal_argument(
+                "Proxy drain operation id must not be empty",
+            ));
+        }
+        let body = ProxyDrainOperationRequestBody {
+            schema_version: PROXY_DRAIN_SCHEMA_VERSION.to_owned(),
+            operation_id: operation_id.to_string(),
+        }
+        .encode()?;
+        let request = RemotingCommand::new_request(request_code, body);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+        decode_proxy_drain_response(response, "proxy_drain_operation")
+    }
+
     #[cfg(feature = "admin-mutation")]
     pub(crate) async fn update_broker_config(
         &self,
@@ -2959,6 +3021,38 @@ impl MQClientAPIImpl {
         }
         Ok(sort_map)
     }
+}
+
+#[cfg(any(feature = "admin-read", feature = "admin-mutation"))]
+fn decode_proxy_drain_response(
+    response: RemotingCommand,
+    operation: &'static str,
+) -> RocketMQResult<ProxyDrainStateResponseBody> {
+    if ResponseCode::from(response.code()) != ResponseCode::Success {
+        return Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or_else(String::new, |remark| remark.to_string())
+        ));
+    }
+    let body = response.body().ok_or_else(|| RocketMQError::ResponseProcessFailed {
+        operation,
+        reason: "Proxy drain response body is missing".to_owned(),
+    })?;
+    let state =
+        ProxyDrainStateResponseBody::decode(body.as_ref()).map_err(|error| RocketMQError::ResponseProcessFailed {
+            operation,
+            reason: format!("invalid Proxy drain response body: {error}"),
+        })?;
+    if state.schema_version != PROXY_DRAIN_SCHEMA_VERSION {
+        return Err(RocketMQError::ResponseProcessFailed {
+            operation,
+            reason: format!(
+                "unsupported Proxy drain schema '{}'; expected '{PROXY_DRAIN_SCHEMA_VERSION}'",
+                state.schema_version
+            ),
+        });
+    }
+    Ok(state)
 }
 
 pub(super) fn pop_msg_queue_offset_for_index(

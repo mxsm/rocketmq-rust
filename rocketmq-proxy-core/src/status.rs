@@ -176,6 +176,7 @@ impl ProxyStatusMapper {
             ProxyErrorKind::TooManyRequests => {
                 ProxyGrpcMapping::new(v2::Code::TooManyRequests, TonicCode::ResourceExhausted)
             }
+            ProxyErrorKind::Draining => ProxyGrpcMapping::new(v2::Code::InternalError, TonicCode::Unavailable),
             ProxyErrorKind::InvalidMetadata => ProxyGrpcMapping::new(v2::Code::BadRequest, TonicCode::InvalidArgument),
             ProxyErrorKind::Transport => ProxyGrpcMapping::new(v2::Code::InternalError, TonicCode::Unavailable),
             ProxyErrorKind::IllegalMessageId => {

@@ -38,6 +38,7 @@ use rocketmq_protocol::protocol::admin::topic_offset::TopicOffset;
 use rocketmq_protocol::protocol::body::broker_body::cluster_info::ClusterInfo;
 use rocketmq_protocol::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_protocol::protocol::body::consumer_connection::ConsumerConnection;
+use rocketmq_protocol::protocol::body::proxy_drain::ProxyDrainStateResponseBody;
 use rocketmq_protocol::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader;
 use rocketmq_protocol::protocol::header::create_topic_request_header::CreateTopicRequestHeader;
 use rocketmq_protocol::protocol::header::delete_topic_request_header::DeleteTopicRequestHeader;
@@ -264,6 +265,26 @@ impl DefaultMQAdminExtImpl {
 }
 
 impl MQAdminMutationExt for DefaultMQAdminExtImpl {
+    async fn begin_proxy_drain(
+        &self,
+        proxy_addr: CheetahString,
+        operation_id: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<ProxyDrainStateResponseBody> {
+        self.mq_client_api()?
+            .begin_proxy_drain(&proxy_addr, operation_id, self.remoting_timeout_millis()?)
+            .await
+    }
+
+    async fn cancel_proxy_drain(
+        &self,
+        proxy_addr: CheetahString,
+        operation_id: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<ProxyDrainStateResponseBody> {
+        self.mq_client_api()?
+            .cancel_proxy_drain(&proxy_addr, operation_id, self.remoting_timeout_millis()?)
+            .await
+    }
+
     async fn broker_config_generation(&self, broker_addr: CheetahString) -> rocketmq_error::RocketMQResult<u64> {
         let runtime = self
             .mq_client_api()?
