@@ -17,5 +17,8 @@ mod model;
 mod repository;
 mod service;
 
+#[cfg(test)]
+mod repository_tests;
+
 pub(crate) use api::routes;
 pub(crate) use service::AutonomyService;
