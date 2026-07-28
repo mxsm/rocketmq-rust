@@ -119,6 +119,14 @@ pub(crate) async fn assert_phase_three_tables(pool: &PgPool) {
 }
 
 pub(crate) async fn seed_fixture(pool: &PgPool) -> Fixture {
+    seed_fixture_for_action(pool, ExecutionAction::ProxyScaleOutOne).await
+}
+
+pub(crate) async fn seed_logger_fixture(pool: &PgPool) -> Fixture {
+    seed_fixture_for_action(pool, ExecutionAction::ObservabilityLoggerLevelTtl).await
+}
+
+async fn seed_fixture_for_action(pool: &PgPool, action: ExecutionAction) -> Fixture {
     sqlx::raw_sql(include_str!("../../../../deploy/dev/postgres/phase3-seed.sql"))
         .execute(pool)
         .await
@@ -129,7 +137,14 @@ pub(crate) async fn seed_fixture(pool: &PgPool) -> Fixture {
     let diagnosis_id = DiagnosisRevisionId::from_uuid(fixture_uuid("03000000-0000-4000-8000-000000000004"));
     let primary_invocation_id = ModelInvocationId::from_uuid(fixture_uuid("03000000-0000-4000-8000-000000000006"));
     let critic_invocation_id = ModelInvocationId::from_uuid(fixture_uuid("03000000-0000-4000-8000-000000000007"));
-    let plan = action_plan(tenant_id, cluster_id, incident_id, diagnosis_id, primary_invocation_id);
+    let plan = action_plan(
+        tenant_id,
+        cluster_id,
+        incident_id,
+        diagnosis_id,
+        primary_invocation_id,
+        action,
+    );
     sqlx::query(
         "INSERT INTO action_plans (
             id, tenant_id, cluster_id, incident_id, diagnosis_revision_id,
@@ -177,8 +192,53 @@ fn action_plan(
     incident_id: IncidentId,
     diagnosis_id: DiagnosisRevisionId,
     primary_invocation_id: ModelInvocationId,
+    action: ExecutionAction,
 ) -> ActionPlan {
     let now = Utc::now();
+    let (resource, parameters, max_impact, verification, compensation) = match action {
+        ExecutionAction::ProxyScaleOutOne => (
+            "deployment/default/proxy".to_owned(),
+            json!({
+                "namespace": "default",
+                "workload": "proxy",
+                "expected_replicas": 2
+            }),
+            ImpactScope::OneReplica,
+            VerificationSpec {
+                resource_conditions: vec!["desired_replicas_plus_one".to_owned(), "new_replica_ready".to_owned()],
+                technical_slis: vec!["proxy_error_ratio".to_owned(), "proxy_p99_latency".to_owned()],
+                stable_window_seconds: 120,
+                max_wait_seconds: 900,
+            },
+            CompensationSpec {
+                mode: CompensationMode::Automatic,
+                required_before_fields: vec!["expected_replicas".to_owned()],
+                timeout_seconds: 600,
+            },
+        ),
+        ExecutionAction::ObservabilityLoggerLevelTtl => (
+            "broker/127.0.0.1:10911".to_owned(),
+            json!({
+                "component": "broker",
+                "logger": "rocketmq_broker::processor",
+                "level": "DEBUG",
+                "ttl_seconds": 60
+            }),
+            ImpactScope::SingleResource,
+            VerificationSpec {
+                resource_conditions: vec!["logger_level_applied".to_owned(), "ttl_restore_scheduled".to_owned()],
+                technical_slis: vec!["runtime_error_ratio".to_owned()],
+                stable_window_seconds: 30,
+                max_wait_seconds: 120,
+            },
+            CompensationSpec {
+                mode: CompensationMode::Automatic,
+                required_before_fields: vec!["previous_level".to_owned()],
+                timeout_seconds: 60,
+            },
+        ),
+        _ => panic!("the executor integration fixture supports only the two R1 scenarios under test"),
+    };
     let draft = ActionPlanDraft {
         id: rocketmq_sre_contracts::ActionPlanId::new(),
         tenant_id,
@@ -195,28 +255,15 @@ fn action_plan(
         steps: vec![PlanStep {
             id: PlanStepId::new(),
             sequence: 1,
-            action: ExecutionAction::ProxyScaleOutOne,
+            action,
             descriptor_version: "1.0.0".to_owned(),
-            resource: "deployment/default/proxy".to_owned(),
-            parameters: json!({
-                "namespace": "default",
-                "workload": "proxy",
-                "expected_replicas": 2
-            }),
+            resource,
+            parameters,
             evidence_ids: vec![EvidenceId::new()],
             precondition_hash: format!("sha256:{}", "b".repeat(64)),
-            max_impact: ImpactScope::OneReplica,
-            verification: VerificationSpec {
-                resource_conditions: vec!["desired_replicas_plus_one".to_owned(), "new_replica_ready".to_owned()],
-                technical_slis: vec!["proxy_error_ratio".to_owned(), "proxy_p99_latency".to_owned()],
-                stable_window_seconds: 120,
-                max_wait_seconds: 900,
-            },
-            compensation: CompensationSpec {
-                mode: CompensationMode::Automatic,
-                required_before_fields: vec!["expected_replicas".to_owned()],
-                timeout_seconds: 600,
-            },
+            max_impact,
+            verification,
+            compensation,
         }],
     };
     let mut plan = ActionPlan::seal(draft).expect("valid plan");
