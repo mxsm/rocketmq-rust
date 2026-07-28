@@ -24,6 +24,7 @@ import {
 } from "@/data/demo";
 
 import {
+  DEMO_CLUSTER_ID,
   DEMO_TENANT_ID,
   envelope,
   phase1Assets,
@@ -48,6 +49,11 @@ import {
   demoSimulation,
   demoUpgradeReadiness,
 } from "./phase2ForecastDemo";
+import {
+  emptyAutonomyReport,
+  phase4AutonomyOutcomes,
+  phase4AutonomyReports,
+} from "./phase4AutonomyDemo";
 import { createModelLifecycleMock } from "./modelLifecycleMock";
 import { phase4ModelCapabilities } from "./phase4ModelDemo";
 import {
@@ -1083,6 +1089,52 @@ export function createMockSreApi(auth?: ApiRequestContext): SreApi {
     runModelProfileSmoke: async (id, signal) => {
       await wait(signal);
       return modelLifecycle.smoke(id);
+    },
+    listAutonomyOutcomes: async (query, signal) => {
+      await wait(signal);
+      if (query.clusterId) {
+        scope(query.clusterId);
+      }
+      const allowedClusterIds = query.clusterId
+        ? [query.clusterId]
+        : (auth?.clusterIds ?? clusters.map((cluster) => cluster.id));
+      const matching = phase4AutonomyOutcomes.items.filter(
+        (item) =>
+          allowedClusterIds.includes(item.cluster_id) &&
+          (!query.action || item.action === query.action) &&
+          (!query.class || item.class === query.class) &&
+          (!query.from || item.occurred_at >= query.from) &&
+          (!query.until || item.occurred_at < query.until),
+      );
+      const limit = Math.max(1, Math.min(query.limit ?? 100, 200));
+      return {
+        ...clone(phase4AutonomyOutcomes),
+        items: clone(matching.slice(0, limit)),
+        truncated: matching.length > limit,
+      };
+    },
+    getAutonomyOperationalReport: async (query, signal) => {
+      await wait(signal);
+      if (query.clusterId) {
+        scope(query.clusterId);
+      }
+      const visibleClusterIds = query.clusterId
+        ? [query.clusterId]
+        : (auth?.clusterIds ?? clusters.map((cluster) => cluster.id));
+      const tenantId = auth?.tenantId ?? DEMO_TENANT_ID;
+      if (!visibleClusterIds.includes(DEMO_CLUSTER_ID)) {
+        return emptyAutonomyReport(
+          query.period,
+          tenantId,
+          visibleClusterIds,
+        );
+      }
+      const report = clone(phase4AutonomyReports[query.period]);
+      report.tenant_id = tenantId;
+      report.cluster_ids = report.cluster_ids.filter((clusterId) =>
+        visibleClusterIds.includes(clusterId),
+      );
+      return report;
     },
     subscribeWorkflowEvents: async (onEvent, signal) => {
       await new Promise<void>((resolve) => {
