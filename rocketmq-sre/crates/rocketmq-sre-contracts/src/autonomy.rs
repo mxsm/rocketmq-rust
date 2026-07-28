@@ -247,6 +247,52 @@ pub struct AutonomyQualificationSample {
     pub reconciled_at: DateTime<Utc>,
 }
 
+impl AutonomyQualificationSample {
+    /// Validates the immutable qualification result before persistence.
+    ///
+    /// # Errors
+    ///
+    /// Rejects incomplete identity bindings, invalid deduplication shapes,
+    /// unbounded reason codes, contradictory qualification facts, and
+    /// reconciliation timestamps that move backwards.
+    pub fn validate(&self) -> Result<(), ContractError> {
+        const MAX_REASON_CODES: usize = 32;
+        const MAX_REASON_CODE_CHARS: usize = 128;
+        let reasons = self
+            .reason_codes
+            .iter()
+            .map(|reason| reason.trim())
+            .collect::<std::collections::BTreeSet<_>>();
+        let execution_binding_valid = match self.kind {
+            AutonomySampleKind::ShadowOutcome => self.execution_id.is_none(),
+            AutonomySampleKind::SupervisedSuccess => self.execution_id.is_some(),
+        };
+        let facts_qualify = self.human_outcome_linked
+            && self.evidence_complete
+            && self.stable_window_passed
+            && self.reason_codes.is_empty();
+        if self.id.as_uuid().is_nil()
+            || self.cohort_id.as_uuid().is_nil()
+            || self.incident_id.as_uuid().is_nil()
+            || self.plan_id.as_uuid().is_nil()
+            || !is_sha256_digest(&self.plan_hash)
+            || !execution_binding_valid
+            || self.reason_codes.len() > MAX_REASON_CODES
+            || reasons.len() != self.reason_codes.len()
+            || reasons
+                .iter()
+                .any(|reason| reason.is_empty() || reason.chars().count() > MAX_REASON_CODE_CHARS)
+            || self.qualified != facts_qualify
+            || self.reconciled_at < self.observed_at
+        {
+            return Err(ContractError::InvalidDescriptor {
+                reason: "autonomy qualification sample is incomplete or contradictory".to_owned(),
+            });
+        }
+        Ok(())
+    }
+}
+
 /// Eligibility phase used for explainable decisions.
 #[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -575,6 +621,36 @@ mod tests {
         assert!(AutonomyMode::Shadow.is_safe_recovery_target());
         assert!(AutonomyMode::Supervised.is_safe_recovery_target());
         assert!(!AutonomyMode::Autonomous.is_safe_recovery_target());
+    }
+
+    #[test]
+    fn qualification_sample_requires_exact_deduplication_shape() {
+        let now = Utc::now();
+        let mut sample = AutonomyQualificationSample {
+            id: AutonomySampleId::new(),
+            cohort_id: AutonomyCohortId::new(),
+            kind: AutonomySampleKind::SupervisedSuccess,
+            incident_id: IncidentId::new(),
+            plan_id: ActionPlanId::new(),
+            plan_hash: digest('c'),
+            execution_id: Some(ExecutionId::new()),
+            qualified: true,
+            reason_codes: Vec::new(),
+            human_outcome_linked: true,
+            evidence_complete: true,
+            stable_window_passed: true,
+            observed_at: now,
+            reconciled_at: now,
+        };
+        assert!(sample.validate().is_ok());
+
+        sample.execution_id = None;
+        assert!(sample.validate().is_err());
+        sample.execution_id = Some(ExecutionId::new());
+        sample.qualified = false;
+        assert!(sample.validate().is_err());
+        sample.reason_codes = vec!["offline_replay".to_owned()];
+        assert!(sample.validate().is_ok());
     }
 
     #[test]
