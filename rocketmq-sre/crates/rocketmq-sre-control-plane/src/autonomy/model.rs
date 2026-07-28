@@ -196,6 +196,10 @@ pub(crate) struct RecordShadowOutcomeRequest {
     pub(crate) evidence_ids: Vec<EvidenceId>,
     pub(crate) human_outcome: Option<serde_json::Value>,
     pub(crate) stable_window: Option<serde_json::Value>,
+    #[serde(default)]
+    pub(crate) offline_replay: bool,
+    #[serde(default)]
+    pub(crate) debug_only: bool,
     pub(crate) observed_at: DateTime<Utc>,
     pub(crate) reconciled_at: DateTime<Utc>,
 }
