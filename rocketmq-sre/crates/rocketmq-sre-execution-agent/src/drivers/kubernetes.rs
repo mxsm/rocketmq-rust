@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_admin_core::core::proxy::ProxyDrainState;
 use rocketmq_sre_contracts::ExecutionId;
 use rocketmq_sre_contracts::PlanStepId;
 use serde::Serialize;
@@ -65,6 +66,67 @@ pub trait ProxyScaleClient: Send + Sync {
     fn scale_out_one<'a>(&'a self, request: &'a ProxyScaleOutOneWrite) -> DriverFuture<'a, ()>;
 
     fn restore_proxy_replicas<'a>(&'a self, request: &'a ProxyScaleRestore) -> DriverFuture<'a, ()>;
+}
+
+/// Sanitized pod, drain, and verification state for one Proxy restart.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ProxyRestartState {
+    pub drain_supported: bool,
+    pub pod_uid: String,
+    pub pod_ready: bool,
+    pub replacement_ready: bool,
+    pub synthetic_path_healthy: bool,
+    pub slo_healthy: bool,
+    pub last_operation_id: Option<String>,
+    pub drain: Option<ProxyDrainState>,
+}
+
+/// Closed drain-and-restart request for exactly one expected pod UID.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProxyRestartOneWrite {
+    pub namespace: String,
+    pub pod: String,
+    pub expected_uid: String,
+    pub drain_timeout_seconds: u32,
+    pub operation_id: String,
+    pub execution_id: ExecutionId,
+    pub plan_step_id: PlanStepId,
+}
+
+/// Closed cancellation/restoration request for an interrupted restart.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProxyRestartRestore {
+    pub namespace: String,
+    pub pod: String,
+    pub expected_uid: String,
+    pub operation_id: String,
+    pub execution_id: ExecutionId,
+    pub plan_step_id: PlanStepId,
+}
+
+/// Result of the bounded restart compensation primitive.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProxyRestartRestoreOutcome {
+    IngressRestored,
+    ManualTakeoverRequired,
+}
+
+/// Exact Kubernetes/Proxy orchestration available to `proxy.restart_one.v1`.
+///
+/// `restart_one_drained` must authenticate the Proxy drain endpoint, begin
+/// drain, stop admission/readiness/routing, wait until every pending counter is
+/// exactly zero, and only then issue one typed pod restart. Timeout before the
+/// restart must cancel drain and restore ingress. It must never force-delete a
+/// pod or restart more than the expected UID.
+pub trait ProxyRestartClient: Send + Sync {
+    fn proxy_restart_state<'a>(&'a self, namespace: &'a str, pod: &'a str) -> DriverFuture<'a, ProxyRestartState>;
+
+    fn restart_one_drained<'a>(&'a self, request: &'a ProxyRestartOneWrite) -> DriverFuture<'a, ()>;
+
+    fn cancel_restart_and_restore<'a>(
+        &'a self,
+        request: &'a ProxyRestartRestore,
+    ) -> DriverFuture<'a, ProxyRestartRestoreOutcome>;
 }
 
 /// Typed Kubernetes scale/restart/rollout adapter.
