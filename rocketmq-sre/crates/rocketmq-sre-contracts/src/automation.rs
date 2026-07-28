@@ -28,7 +28,9 @@ use crate::ContractError;
 use crate::CorrelationId;
 use crate::EvidenceId;
 use crate::IncidentId;
+use crate::InspectionRunId;
 use crate::ModelInvocationId;
+use crate::RecommendationId;
 use crate::TenantId;
 
 pub const AUTOMATION_SCHEMA_VERSION: &str = "rocketmq-sre.automation.v1";
@@ -263,6 +265,67 @@ impl PreventiveAutomationRequest {
     }
 }
 
+/// Durable outcome of one bounded preventive inspection.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreventiveAutomationRun {
+    pub schema_version: String,
+    pub id: AutomationRunId,
+    pub tenant_id: TenantId,
+    pub cluster_id: ClusterId,
+    pub correlation_id: CorrelationId,
+    pub risk_family: PreventiveRiskFamily,
+    pub status: AutomationRunStatus,
+    pub idempotency_key: String,
+    pub inspection_run_id: Option<InspectionRunId>,
+    #[serde(default)]
+    pub recommendation_ids: Vec<RecommendationId>,
+    pub freeze_id: Option<Uuid>,
+    pub kill_switch_suggested: bool,
+    pub result_code: String,
+    pub sanitized_summary: String,
+    pub started_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
+impl PreventiveAutomationRun {
+    /// Validates one bounded, operator-visible preventive result.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid identities, duplicate recommendations, sensitive or
+    /// unbounded summaries, and inconsistent lifecycle timestamps.
+    pub fn validate(&self) -> Result<(), ContractError> {
+        let recommendations = self.recommendation_ids.iter().collect::<BTreeSet<_>>();
+        let terminal_time_valid = self.status.is_terminal() == self.completed_at.is_some()
+            && self
+                .completed_at
+                .is_none_or(|completed_at| completed_at >= self.started_at);
+        let succeeded_has_inspection =
+            self.status != AutomationRunStatus::Succeeded || self.inspection_run_id.is_some();
+        if self.schema_version != AUTOMATION_SCHEMA_VERSION
+            || self.id.as_uuid().is_nil()
+            || self.tenant_id.as_uuid().is_nil()
+            || self.cluster_id.as_uuid().is_nil()
+            || self.correlation_id.as_uuid().is_nil()
+            || self.inspection_run_id.is_some_and(|id| id.as_uuid().is_nil())
+            || self.freeze_id.is_some_and(|id| id.is_nil())
+            || !bounded_key(&self.idempotency_key)
+            || !bounded_text(&self.result_code, 128)
+            || !bounded_text(&self.sanitized_summary, 2_048)
+            || contains_sensitive_marker(&self.sanitized_summary)
+            || self.recommendation_ids.len() > 256
+            || recommendations.len() != self.recommendation_ids.len()
+            || self.recommendation_ids.iter().any(|id| id.as_uuid().is_nil())
+            || !terminal_time_valid
+            || !succeeded_has_inspection
+        {
+            return Err(invalid("preventive automation result is incomplete or unsafe"));
+        }
+        Ok(())
+    }
+}
+
 /// Subjects that can receive immutable operator feedback.
 #[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -414,5 +477,36 @@ mod tests {
 
         run.sanitized_summary = "authorization: bearer sensitive".to_owned();
         assert!(run.validate().is_err());
+    }
+
+    #[test]
+    fn successful_preventive_result_requires_an_inspection_and_has_no_execution_surface() {
+        let now = Utc::now();
+        let mut run = PreventiveAutomationRun {
+            schema_version: AUTOMATION_SCHEMA_VERSION.to_owned(),
+            id: AutomationRunId::new(),
+            tenant_id: TenantId::new(),
+            cluster_id: ClusterId::new(),
+            correlation_id: CorrelationId::new(),
+            risk_family: PreventiveRiskFamily::Capacity,
+            status: AutomationRunStatus::Succeeded,
+            idempotency_key: "preventive:capacity:0001".to_owned(),
+            inspection_run_id: None,
+            recommendation_ids: Vec::new(),
+            freeze_id: None,
+            kill_switch_suggested: false,
+            result_code: "inspection_completed".to_owned(),
+            sanitized_summary: "Capacity inspection completed with no critical recommendations".to_owned(),
+            started_at: now,
+            completed_at: Some(now),
+        };
+        assert!(run.validate().is_err());
+
+        run.inspection_run_id = Some(InspectionRunId::new());
+        assert!(run.validate().is_ok());
+        let encoded = serde_json::to_value(run).expect("preventive run");
+        assert!(encoded.get("approval").is_none());
+        assert!(encoded.get("execution").is_none());
+        assert!(encoded.get("clear_freeze").is_none());
     }
 }
