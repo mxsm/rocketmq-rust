@@ -95,7 +95,7 @@ pub(crate) fn step_request(
                 action,
                 resource: target.to_owned(),
                 compensation: false,
-                audience: "execution-agent".to_owned(),
+                audience: "rocketmq-sre-execution-agent".to_owned(),
                 issued_at: now,
                 expires_at: now + TimeDelta::minutes(1),
                 nonce: "nonce".to_owned(),

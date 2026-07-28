@@ -347,7 +347,7 @@ fn dispatch_request() -> AgentDispatchRequest {
         action: step.action,
         resource: step.resource.clone(),
         compensation: false,
-        audience: "execution-agent".to_owned(),
+        audience: "rocketmq-sre-execution-agent".to_owned(),
         issued_at: now - TimeDelta::seconds(1),
         expires_at: now + TimeDelta::seconds(20),
         nonce: "test-grant-nonce".to_owned(),

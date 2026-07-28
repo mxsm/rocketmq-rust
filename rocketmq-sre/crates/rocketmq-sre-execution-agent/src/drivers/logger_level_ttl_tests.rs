@@ -241,7 +241,7 @@ fn step_request() -> AgentStepRequest {
                 action: ExecutionAction::ObservabilityLoggerLevelTtl,
                 resource: "broker/127.0.0.1:10911".to_owned(),
                 compensation: false,
-                audience: "execution-agent".to_owned(),
+                audience: "rocketmq-sre-execution-agent".to_owned(),
                 issued_at: now,
                 expires_at: now + TimeDelta::minutes(1),
                 nonce: "nonce".to_owned(),

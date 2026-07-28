@@ -341,7 +341,7 @@ pub(crate) fn step_intent(
             action: fixture.plan.steps[0].action,
             resource: fixture.plan.steps[0].resource.clone(),
             compensation: false,
-            audience: "execution-agent".to_owned(),
+            audience: "rocketmq-sre-execution-agent".to_owned(),
             issued_at: intended_at - TimeDelta::seconds(1),
             expires_at,
             nonce: format!("grant-{idempotency_key}"),
