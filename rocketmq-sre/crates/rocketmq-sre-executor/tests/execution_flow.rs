@@ -210,6 +210,7 @@ impl ExecutionAgentClient for TestAgent {
                 precondition_hash: self.precondition_hash.to_string(),
                 ready: true,
                 reason_codes: Vec::new(),
+                resource_conditions: Default::default(),
                 observed_at: Utc::now(),
             })
         })

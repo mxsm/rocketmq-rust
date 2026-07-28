@@ -35,6 +35,13 @@
       },
       "type": "array"
     },
+    "resource_conditions": {
+      "additionalProperties": {
+        "type": "boolean"
+      },
+      "default": {},
+      "type": "object"
+    },
     "schema_version": {
       "type": "string"
     },

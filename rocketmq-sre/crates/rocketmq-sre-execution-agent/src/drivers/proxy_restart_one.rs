@@ -116,6 +116,13 @@ where
                 live_state: &state,
             })
             .map_err(|_| ExecutionAgentError::InvalidRequest)?;
+            let accepting_and_routed = state.drain.as_ref().is_some_and(|drain| {
+                drain.phase == ProxyDrainPhase::Accepting
+                    && drain.admission_open
+                    && drain.routing_open
+                    && drain.readiness_published
+                    && drain.operation_id.is_none()
+            });
             Ok(AgentReadResult {
                 schema_version: EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
                 action: request.action,
@@ -123,6 +130,15 @@ where
                 precondition_hash,
                 ready: reasons.is_empty(),
                 reason_codes: reasons,
+                resource_conditions: [
+                    (
+                        "replacement_ready".to_owned(),
+                        state.replacement_ready && state.pod_ready,
+                    ),
+                    ("accepting_and_routed".to_owned(), accepting_and_routed),
+                ]
+                .into_iter()
+                .collect(),
                 observed_at: Utc::now(),
             })
         })

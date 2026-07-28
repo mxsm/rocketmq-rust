@@ -110,6 +110,18 @@ where
                 precondition_hash,
                 ready: reasons.is_empty(),
                 reason_codes: reasons,
+                resource_conditions: [
+                    (
+                        "generation_incremented".to_owned(),
+                        state.generation > parameters.expected_generation,
+                    ),
+                    (
+                        "patch_visible".to_owned(),
+                        patch_matches(&parameters.patch, &state.values),
+                    ),
+                ]
+                .into_iter()
+                .collect(),
                 observed_at: Utc::now(),
             })
         })

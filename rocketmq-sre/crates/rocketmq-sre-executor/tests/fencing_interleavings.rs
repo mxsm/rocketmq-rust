@@ -107,6 +107,7 @@ impl AgentActionHandler for BlockingKubernetesDriver {
                 precondition_hash: format!("sha256:{}", "b".repeat(64)),
                 ready: true,
                 reason_codes: Vec::new(),
+                resource_conditions: Default::default(),
                 observed_at: Utc::now(),
             })
         })

@@ -147,6 +147,12 @@ async fn apply_and_verify_one_expected_uid_then_require_manual_takeover() {
         .await
         .expect("replacement verification");
     assert_eq!(verified.state, ReconcileEffectState::Applied);
+    let conditions = handler
+        .read_state(&read_request())
+        .await
+        .expect("restart verification conditions");
+    assert_eq!(conditions.resource_conditions.get("replacement_ready"), Some(&true));
+    assert_eq!(conditions.resource_conditions.get("accepting_and_routed"), Some(&true));
 
     let compensation = handler
         .compensate(&request, "restart-compensate")

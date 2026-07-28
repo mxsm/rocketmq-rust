@@ -99,6 +99,7 @@ where
                 live_state: &live_state,
             })
             .map_err(|_| ExecutionAgentError::InvalidRequest)?;
+            let override_active = live_state.active_operation_id.is_some();
             Ok(AgentReadResult {
                 schema_version: EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
                 action: request.action,
@@ -106,6 +107,15 @@ where
                 precondition_hash,
                 ready: reason_codes.is_empty(),
                 reason_codes,
+                resource_conditions: [
+                    (
+                        "logger_level_applied".to_owned(),
+                        override_active && live_state.level == parameters.level,
+                    ),
+                    ("ttl_restore_scheduled".to_owned(), override_active),
+                ]
+                .into_iter()
+                .collect(),
                 observed_at: Utc::now(),
             })
         })

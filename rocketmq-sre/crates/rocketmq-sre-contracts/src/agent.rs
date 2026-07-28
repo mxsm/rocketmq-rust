@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeMap;
+
 use chrono::DateTime;
 use chrono::Utc;
 use schemars::JsonSchema;
@@ -56,6 +58,8 @@ pub struct AgentReadResult {
     pub precondition_hash: String,
     pub ready: bool,
     pub reason_codes: Vec<String>,
+    #[serde(default)]
+    pub resource_conditions: BTreeMap<String, bool>,
     pub observed_at: DateTime<Utc>,
 }
 

@@ -157,6 +157,12 @@ async fn apply_verify_and_compensate_use_one_typed_call_each() {
         .await
         .expect("typed verification");
     assert_eq!(verified.state, ReconcileEffectState::Applied);
+    let conditions = handler
+        .read_state(&read_request(request.parameters.clone()))
+        .await
+        .expect("logger verification conditions");
+    assert_eq!(conditions.resource_conditions.get("logger_level_applied"), Some(&true));
+    assert_eq!(conditions.resource_conditions.get("ttl_restore_scheduled"), Some(&true));
 
     let compensated = handler
         .compensate(&request, "op-compensate")

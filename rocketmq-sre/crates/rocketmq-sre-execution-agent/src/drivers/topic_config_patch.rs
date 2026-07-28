@@ -106,6 +106,18 @@ where
                 precondition_hash,
                 ready: reasons.is_empty(),
                 reason_codes: reasons,
+                resource_conditions: [
+                    (
+                        "topic_version_incremented".to_owned(),
+                        state.version > parameters.expected_version,
+                    ),
+                    (
+                        "patch_visible".to_owned(),
+                        state.configuration_consistent && patch_matches(&parameters.patch, &state.values),
+                    ),
+                ]
+                .into_iter()
+                .collect(),
                 observed_at: Utc::now(),
             })
         })

@@ -160,6 +160,15 @@ async fn apply_verify_and_inverse_patch_are_versioned() {
         .await
         .expect("version verification");
     assert_eq!(verified.state, ReconcileEffectState::Applied);
+    let conditions = handler
+        .read_state(&read_request())
+        .await
+        .expect("Topic verification conditions");
+    assert_eq!(
+        conditions.resource_conditions.get("topic_version_incremented"),
+        Some(&true)
+    );
+    assert_eq!(conditions.resource_conditions.get("patch_visible"), Some(&true));
 
     let restored = handler
         .compensate(&request, "topic-rollback")

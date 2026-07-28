@@ -165,6 +165,15 @@ async fn apply_verify_and_inverse_patch_advance_generation() {
         .await
         .expect("CAS verification");
     assert_eq!(verified.state, ReconcileEffectState::Applied);
+    let conditions = handler
+        .read_state(&read_request())
+        .await
+        .expect("Broker verification conditions");
+    assert_eq!(
+        conditions.resource_conditions.get("generation_incremented"),
+        Some(&true)
+    );
+    assert_eq!(conditions.resource_conditions.get("patch_visible"), Some(&true));
 
     let restored = handler
         .compensate(&request, "broker-rollback")

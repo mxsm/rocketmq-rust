@@ -108,6 +108,7 @@ where
                 live_state: &state,
             })
             .map_err(|_| ExecutionAgentError::InvalidRequest)?;
+            let target_replicas = parameters.expected_replicas.saturating_add(1);
             Ok(AgentReadResult {
                 schema_version: EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
                 action: request.action,
@@ -115,6 +116,18 @@ where
                 precondition_hash,
                 ready: reasons.is_empty(),
                 reason_codes: reasons,
+                resource_conditions: [
+                    (
+                        "desired_replicas_plus_one".to_owned(),
+                        state.desired_replicas == target_replicas,
+                    ),
+                    (
+                        "new_replica_ready".to_owned(),
+                        state.ready_replicas == target_replicas && state.unavailable_replicas == 0,
+                    ),
+                ]
+                .into_iter()
+                .collect(),
                 observed_at: Utc::now(),
             })
         })

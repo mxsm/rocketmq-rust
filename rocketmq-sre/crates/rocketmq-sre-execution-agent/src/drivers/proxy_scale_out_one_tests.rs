@@ -144,6 +144,15 @@ async fn apply_verify_and_compensate_are_exactly_one_replica() {
         .await
         .expect("verify scale");
     assert_eq!(verified.state, ReconcileEffectState::Applied);
+    let conditions = handler
+        .read_state(&read_request())
+        .await
+        .expect("scale verification conditions");
+    assert_eq!(
+        conditions.resource_conditions.get("desired_replicas_plus_one"),
+        Some(&true)
+    );
+    assert_eq!(conditions.resource_conditions.get("new_replica_ready"), Some(&true));
 
     handler
         .compensate(&request, "scale-rollback")
