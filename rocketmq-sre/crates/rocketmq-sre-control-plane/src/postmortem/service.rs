@@ -83,6 +83,34 @@ impl PostmortemService {
         incident_id: IncidentId,
         request: &CreatePostmortemRequest,
     ) -> Result<PostmortemView, ControlPlaneError> {
+        self.create_with_model_call_limit(auth, incident_id, request, None)
+            .await
+    }
+
+    pub(crate) async fn create_bounded_draft(
+        &self,
+        auth: &AuthContext,
+        incident_id: IncidentId,
+        request: &CreatePostmortemRequest,
+        max_model_calls: u8,
+    ) -> Result<PostmortemView, ControlPlaneError> {
+        if max_model_calls == 0 {
+            return Err(ControlPlaneError::validation(
+                "invalid_budget",
+                "postmortem automation requires at least one permitted model call",
+            ));
+        }
+        self.create_with_model_call_limit(auth, incident_id, request, Some(max_model_calls))
+            .await
+    }
+
+    async fn create_with_model_call_limit(
+        &self,
+        auth: &AuthContext,
+        incident_id: IncidentId,
+        request: &CreatePostmortemRequest,
+        max_model_calls: Option<u8>,
+    ) -> Result<PostmortemView, ControlPlaneError> {
         self.workflow.ensure_operator(auth)?;
         if request.operator_notes.len() > 32 || request.operator_notes.iter().any(|note| note.chars().count() > 1_024) {
             return Err(ControlPlaneError::validation(
@@ -112,6 +140,7 @@ impl PostmortemService {
                 deterministic,
                 &evidence,
                 CorrelationId::new(),
+                max_model_calls,
             )
             .await?;
         let content = decision.content;
