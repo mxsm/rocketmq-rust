@@ -30,6 +30,10 @@ import type {
   KnowledgeItem,
   MessageJourney,
   ModelCapabilitiesResponse,
+  ModelProfileLifecyclePage,
+  ModelProfileLifecycleTransitionRequest,
+  ModelProfileLifecycleView,
+  ModelProfileRollbackRequest,
   OnboardClusterRequest,
   OnboardOutcome,
   OperationsReport,
@@ -42,6 +46,7 @@ import type {
   PromoteInvestigationRequest,
   Recommendation,
   RecommendationDispositionRequest,
+  ProviderSmokeResult,
   ServiceStatus,
   ShiftHandoffSummary,
   TopologySnapshot,
@@ -373,6 +378,23 @@ export interface SreApi {
   getModelCapabilities: (
     signal?: AbortSignal,
   ) => Promise<ModelCapabilitiesResponse>;
+  listModelProfileLifecycles: (
+    signal?: AbortSignal,
+  ) => Promise<ModelProfileLifecyclePage>;
+  transitionModelProfileLifecycle: (
+    id: string,
+    input: ModelProfileLifecycleTransitionRequest,
+    signal?: AbortSignal,
+  ) => Promise<ModelProfileLifecycleView>;
+  rollbackModelProfile: (
+    id: string,
+    input: ModelProfileRollbackRequest,
+    signal?: AbortSignal,
+  ) => Promise<ModelProfileLifecycleView>;
+  runModelProfileSmoke: (
+    id: string,
+    signal?: AbortSignal,
+  ) => Promise<ProviderSmokeResult>;
   subscribeWorkflowEvents: (
     onEvent: (event: WorkflowStreamEvent) => void,
     signal: AbortSignal,
@@ -659,6 +681,29 @@ export function createHttpSreApi(auth?: ApiRequestContext): SreApi {
       ),
     getModelCapabilities: (signal) =>
       get<ModelCapabilitiesResponse>("/v1/models/capabilities", signal),
+    listModelProfileLifecycles: (signal) =>
+      get<ModelProfileLifecyclePage>(
+        "/v1/models/profiles/lifecycle",
+        signal,
+      ),
+    transitionModelProfileLifecycle: (id, input, signal) =>
+      post<ModelProfileLifecycleView>(
+        `/v1/models/profiles/${encodeURIComponent(id)}/lifecycle`,
+        input,
+        signal,
+      ),
+    rollbackModelProfile: (id, input, signal) =>
+      post<ModelProfileLifecycleView>(
+        `/v1/models/profiles/${encodeURIComponent(id)}/rollback`,
+        input,
+        signal,
+      ),
+    runModelProfileSmoke: (id, signal) =>
+      post<ProviderSmokeResult>(
+        `/v1/models/profiles/${encodeURIComponent(id)}/smoke`,
+        undefined,
+        signal,
+      ),
     subscribeWorkflowEvents: (onEvent, signal) =>
       streamWorkflowEvents(auth, onEvent, signal),
   };
