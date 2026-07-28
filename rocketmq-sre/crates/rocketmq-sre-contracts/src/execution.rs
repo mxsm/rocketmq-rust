@@ -199,8 +199,8 @@ impl ExecutionRequest {
                 reason: "approval grant does not bind the current plan and precondition hash".to_owned(),
             });
         }
-        if let Some(grant) = &self.autonomy_grant {
-            if grant.issuer.trim().is_empty()
+        if let Some(grant) = &self.autonomy_grant
+            && (grant.issuer.trim().is_empty()
                 || grant.audience != expected_audience
                 || grant.plan_id != self.plan.id
                 || grant.plan_hash != self.plan.plan_hash
@@ -222,12 +222,11 @@ impl ExecutionRequest {
                     .plan
                     .steps
                     .iter()
-                    .any(|step| step.action != grant.action || step.descriptor_version != grant.action_version)
-            {
-                return Err(ContractError::InvalidDescriptor {
-                    reason: "autonomy grant does not bind the current R1 plan scope".to_owned(),
-                });
-            }
+                    .any(|step| step.action != grant.action || step.descriptor_version != grant.action_version))
+        {
+            return Err(ContractError::InvalidDescriptor {
+                reason: "autonomy grant does not bind the current R1 plan scope".to_owned(),
+            });
         }
         Ok(())
     }
