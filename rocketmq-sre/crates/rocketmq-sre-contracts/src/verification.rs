@@ -12,14 +12,47 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeMap;
+
 use chrono::DateTime;
 use chrono::Utc;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::ClusterId;
+use crate::CorrelationId;
 use crate::EvidenceId;
 use crate::ExecutionStepId;
+use crate::TenantId;
+
+pub const EXECUTION_VERIFICATION_SCHEMA_VERSION: &str = "rocketmq-sre.execution-verification.v1";
+
+/// Bounded request for independently evaluated technical SLI conditions.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionSliQuery {
+    pub schema_version: String,
+    pub tenant_id: TenantId,
+    pub cluster_id: ClusterId,
+    pub correlation_id: CorrelationId,
+    pub conditions: Vec<String>,
+}
+
+/// Deterministic technical-SLI projection returned to the Executor.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionSliObservation {
+    pub schema_version: String,
+    pub tenant_id: TenantId,
+    pub cluster_id: ClusterId,
+    pub correlation_id: CorrelationId,
+    pub conditions: BTreeMap<String, bool>,
+    pub complete: bool,
+    #[serde(default)]
+    pub evidence_ids: Vec<EvidenceId>,
+    pub observed_at: DateTime<Utc>,
+}
 
 /// Deterministic verification outcome.
 #[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]

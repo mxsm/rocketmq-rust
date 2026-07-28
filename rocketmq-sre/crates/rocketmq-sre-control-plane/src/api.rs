@@ -664,6 +664,7 @@ fn build_routers_with_auth(
         .merge(crate::postmortem::routes())
         .merge(crate::supervised_execution::routes())
         .merge(crate::execution_authority::routes())
+        .merge(crate::execution_verification::routes())
         .with_state(state.clone())
         .layer(middleware::from_fn_with_state(
             state.clone(),

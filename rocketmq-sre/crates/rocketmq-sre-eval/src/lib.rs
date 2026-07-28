@@ -58,6 +58,8 @@ use rocketmq_sre_contracts::ExecutionAction;
 use rocketmq_sre_contracts::ExecutionAgentCapabilities;
 use rocketmq_sre_contracts::ExecutionRequest;
 use rocketmq_sre_contracts::ExecutionResult;
+use rocketmq_sre_contracts::ExecutionSliObservation;
+use rocketmq_sre_contracts::ExecutionSliQuery;
 use rocketmq_sre_contracts::ExecutionTransition;
 use rocketmq_sre_contracts::ExecutorLease;
 use rocketmq_sre_contracts::FenceAck;
@@ -328,6 +330,14 @@ pub fn phase3_generated_schemas() -> Result<Vec<(&'static str, serde_json::Value
         (
             "execution-request.schema.json",
             serde_json::to_value(schema_for!(ExecutionRequest))?,
+        ),
+        (
+            "execution-sli-query.schema.json",
+            serde_json::to_value(schema_for!(ExecutionSliQuery))?,
+        ),
+        (
+            "execution-sli-observation.schema.json",
+            serde_json::to_value(schema_for!(ExecutionSliObservation))?,
         ),
         (
             "step-intent.schema.json",
