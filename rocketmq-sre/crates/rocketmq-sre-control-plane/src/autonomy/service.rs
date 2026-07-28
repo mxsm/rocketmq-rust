@@ -61,8 +61,13 @@ use super::model::EvaluateDynamicSafetyRequest;
 use super::model::IssueAutonomyGrantRequest;
 use super::model::PrepareAutonomousCohortRequest;
 use super::model::RecordQualificationSampleRequest;
+use super::model::RecordShadowOutcomeRequest;
 use super::model::SetAutonomyFreezeRequest;
 use super::model::SetAutonomyKillSwitchRequest;
+use super::model::ShadowOutcomeListQuery;
+use super::model::ShadowOutcomePage;
+use super::model::ShadowOutcomeRecord;
+use super::model::ShadowOutcomeView;
 use crate::ControlPlaneError;
 use crate::PostgresRepository;
 use crate::SupervisedRepository;
@@ -403,6 +408,168 @@ impl AutonomyService {
             reconciled_at: request.reconciled_at,
         };
         self.repository.store_qualification_sample(&sample).await
+    }
+
+    pub(crate) async fn record_shadow_outcome(
+        &self,
+        auth: &AuthContext,
+        request: &RecordShadowOutcomeRequest,
+    ) -> Result<ShadowOutcomeView, ControlPlaneError> {
+        require_automation_service_or_operator(auth)?;
+        let scope = self
+            .scope(
+                auth,
+                &AutonomyScopeQuery {
+                    cluster_id: request.cluster_id,
+                    action: request.action,
+                    action_version: request.action_version.clone(),
+                },
+            )
+            .await?;
+        if scope.lifecycle.mode != AutonomyMode::Shadow {
+            return Err(ControlPlaneError::conflict_code(
+                "invalid_autonomy_state",
+                "Shadow runner records candidates only while the exact scope is in Shadow mode",
+            ));
+        }
+        let descriptor = self.descriptor(request.action, &request.action_version)?;
+        let cohort = self.repository.autonomy_cohort(request.cohort_id).await?;
+        validate_current_cohort(&scope, &cohort, AutonomySampleKind::ShadowOutcome)?;
+        let plan = self.repository.action_plan(request.plan_id).await?.plan;
+        validate_plan_scope(&plan, &scope, &request.plan_hash)?;
+        if plan.incident_id != request.incident_id
+            || plan.diagnosis_revision != request.diagnosis_revision_id
+            || !request.expected_effect.is_object()
+            || serde_json::to_vec(&request.expected_effect)
+                .map_err(|_| {
+                    ControlPlaneError::validation("invalid_expected_effect", "Shadow expected effect is not valid JSON")
+                })?
+                .len()
+                > 64 * 1024
+            || request.evidence_ids.len() > 64
+        {
+            return Err(ControlPlaneError::validation(
+                "invalid_shadow_outcome",
+                "Shadow outcome plan, expected effect, or Evidence bounds are invalid",
+            ));
+        }
+        let live = self.live_safety(auth, &scope).await;
+        let mut eligibility = EligibilityEngine::evaluate_base(
+            AutonomyCandidatePath::Shadow,
+            &scope.policy,
+            &scope.lifecycle,
+            descriptor,
+            &BaseEligibilityFacts {
+                diagnosis_execution_eligible: plan.diagnosis_execution_eligible,
+                rules_only: false,
+                root_cause_confirmed: true,
+                evidence_complete: !request.evidence_ids.is_empty(),
+                evidence_fresh: live.authoritative,
+                required_sources_present: !request.evidence_ids.is_empty(),
+                frequency_available: true,
+                cooldown_complete: true,
+                concurrency_available: true,
+                error_budget_available: live.error_budget_available,
+                freeze_active: !scope.active_freezes.is_empty(),
+                kill_switch_active: scope.kill_switch.as_ref().is_some_and(|state| state.active),
+                authoritative_safety_available: live.authoritative,
+            },
+            Utc::now(),
+        );
+        eligibility.cohort_id = Some(cohort.id);
+        eligibility.cohort_hash = Some(cohort.cohort_hash.clone());
+        let reconciled_window_valid = request.reconciled_at >= request.observed_at;
+        let mut reason_codes = eligibility.reason_codes.clone();
+        add_reason(
+            &mut reason_codes,
+            request.human_outcome.is_none(),
+            "human_outcome_missing",
+        );
+        add_reason(
+            &mut reason_codes,
+            request.stable_window.is_none(),
+            "stable_window_incomplete",
+        );
+        add_reason(&mut reason_codes, request.offline_replay, "offline_replay");
+        add_reason(&mut reason_codes, request.debug_only, "debug_only");
+        add_reason(
+            &mut reason_codes,
+            !reconciled_window_valid,
+            "invalid_reconciliation_window",
+        );
+        validate_reason_codes(&reason_codes)?;
+        let qualified = eligibility.allowed
+            && request.human_outcome.is_some()
+            && request.stable_window.is_some()
+            && reconciled_window_valid
+            && !request.offline_replay
+            && !request.debug_only;
+        let view = ShadowOutcomeView {
+            id: uuid::Uuid::new_v4(),
+            cohort_id: cohort.id,
+            incident_id: request.incident_id,
+            plan_id: request.plan_id,
+            plan_hash: request.plan_hash.clone(),
+            qualified,
+            reason_codes: reason_codes.clone(),
+            observed_at: request.observed_at,
+        };
+        let record = ShadowOutcomeRecord {
+            view,
+            tenant_id: auth.tenant_id,
+            cluster_id: request.cluster_id,
+            action: request.action,
+            action_version: request.action_version.clone(),
+            diagnosis_revision_id: request.diagnosis_revision_id,
+            eligibility,
+            expected_effect: request.expected_effect.clone(),
+            evidence_ids: request.evidence_ids.clone(),
+            human_outcome: request.human_outcome.clone(),
+            stable_window: request.stable_window.clone(),
+        };
+        let sample = AutonomyQualificationSample {
+            id: AutonomySampleId::new(),
+            cohort_id: cohort.id,
+            kind: AutonomySampleKind::ShadowOutcome,
+            incident_id: request.incident_id,
+            plan_id: request.plan_id,
+            plan_hash: request.plan_hash.clone(),
+            execution_id: None,
+            qualified,
+            reason_codes,
+            human_outcome_linked: request.human_outcome.is_some(),
+            evidence_complete: !request.evidence_ids.is_empty(),
+            stable_window_passed: request.stable_window.is_some(),
+            observed_at: request.observed_at,
+            reconciled_at: request.reconciled_at,
+        };
+        self.repository.store_shadow_outcome(&record, &sample).await
+    }
+
+    pub(crate) async fn shadow_outcomes(
+        &self,
+        auth: &AuthContext,
+        query: &ShadowOutcomeListQuery,
+    ) -> Result<ShadowOutcomePage, ControlPlaneError> {
+        require_cluster(auth, query.cluster_id)?;
+        let limit = query.limit.clamp(1, MAX_SCOPE_PAGE);
+        let mut items = self
+            .repository
+            .shadow_outcomes(
+                auth.tenant_id,
+                query.cluster_id,
+                query.action,
+                &query.action_version,
+                i64::from(limit) + 1,
+            )
+            .await?;
+        let truncated = items.len() > usize::from(limit);
+        items.truncate(usize::from(limit));
+        Ok(ShadowOutcomePage {
+            schema_version: rocketmq_sre_contracts::AUTONOMY_SCHEMA_VERSION,
+            items,
+            truncated,
+        })
     }
 
     pub(crate) async fn set_freeze(
