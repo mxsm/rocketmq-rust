@@ -23,8 +23,8 @@
 mod alerting;
 mod api;
 mod assets;
-mod autonomy;
 mod auth;
+mod autonomy;
 mod change_management;
 mod config;
 mod connector_channel;
