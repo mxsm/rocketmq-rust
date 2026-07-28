@@ -47,7 +47,7 @@ use crate::inspection::InspectionService;
 use crate::workflow::InspectionCreateRequest;
 
 const MAX_RUN_PAGE: u16 = 200;
-const MAX_DUE_RUNS_PER_TICK: u32 = 16;
+const MAX_DUE_RUNS_PER_TICK: u32 = 4;
 const SCHEDULED_OUTPUT_BYTES: u32 = 64 * 1_024;
 const SCHEDULED_TIMEOUT_SECONDS: u16 = 120;
 
