@@ -180,4 +180,49 @@ describe("mock SRE API", () => {
     expect(operation.cluster_mutation_performed).toBe(false);
     expect(state.owner).toBe("next-shift");
   });
+
+  it("serves scoped autonomy outcomes and human-reviewed cost operations", async () => {
+    const api = createMockSreApi(auth);
+    const outcomes = await api.listAutonomyOutcomes({
+      clusterId: DEMO_CLUSTER_ID,
+      class: "success",
+      limit: 1,
+    });
+    const report = await api.getAutonomyOperationalReport({
+      period: "monthly",
+      clusterId: DEMO_CLUSTER_ID,
+    });
+
+    expect(outcomes.items).toHaveLength(1);
+    expect(outcomes.items[0]?.class).toBe("success");
+    expect(outcomes.truncated).toBe(true);
+    expect(report.outcomes.candidates).toBe(186);
+    expect(report.model_usage.cost_micros).toBeGreaterThan(0);
+    expect(report.model_usage.calls_missing_cost).toBeGreaterThan(0);
+    expect(report.budget_alerts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          automatic_provider_mutation: false,
+        }),
+      ]),
+    );
+    expect(
+      report.optimization_candidates.every(
+        (candidate) =>
+          candidate.requires_human_review &&
+          !candidate.publication_allowed,
+      ),
+    ).toBe(true);
+    expect(JSON.stringify(report)).not.toContain("test-token");
+
+    await expect(
+      api.getAutonomyOperationalReport({
+        period: "weekly",
+        clusterId: "10000000-0000-4000-8000-000000000099",
+      }),
+    ).rejects.toMatchObject({
+      code: "cluster_not_allowed",
+      status: 403,
+    });
+  });
 });
