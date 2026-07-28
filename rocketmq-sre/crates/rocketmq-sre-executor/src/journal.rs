@@ -414,6 +414,44 @@ impl ExecutionJournal {
         phase: VerificationPhase,
         evidence: &EvidenceSnapshot,
     ) -> Result<bool, JournalError> {
+        self.append_verification_evidence_internal(execution_id, step_id, attempt, phase, evidence, None)
+            .await
+    }
+
+    /// Persists one immutable verification snapshot and its capture audit in
+    /// the same transaction.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed Evidence, execution scope drift, invalid attempts,
+    /// wrong audit kinds, and non-identical duplicate IDs.
+    pub async fn append_verification_evidence_with_audit(
+        &self,
+        execution_id: ExecutionId,
+        step_id: rocketmq_sre_contracts::ExecutionStepId,
+        attempt: u16,
+        phase: VerificationPhase,
+        evidence: &EvidenceSnapshot,
+        audit: &AuditEvent,
+    ) -> Result<bool, JournalError> {
+        if audit.event_kind != AuditEventKind::VerificationCaptured {
+            return Err(JournalError::InvalidInput(
+                "verification Evidence requires a verification_captured audit".to_owned(),
+            ));
+        }
+        self.append_verification_evidence_internal(execution_id, step_id, attempt, phase, evidence, Some(audit))
+            .await
+    }
+
+    async fn append_verification_evidence_internal(
+        &self,
+        execution_id: ExecutionId,
+        step_id: rocketmq_sre_contracts::ExecutionStepId,
+        attempt: u16,
+        phase: VerificationPhase,
+        evidence: &EvidenceSnapshot,
+        audit: Option<&AuditEvent>,
+    ) -> Result<bool, JournalError> {
         if attempt == 0 {
             return Err(JournalError::InvalidInput(
                 "verification Evidence attempt must be positive".to_owned(),
@@ -423,6 +461,9 @@ impl ExecutionJournal {
             .verify_content_hash()
             .map_err(|error| JournalError::InvalidInput(error.to_string()))?;
         let mut transaction = self.pool.begin().await?;
+        if let Some(audit) = audit {
+            ensure_execution_scope(&mut transaction, execution_id, audit).await?;
+        }
         let scope = sqlx::query(
             "SELECT tenant_id, cluster_id, correlation_id
              FROM executions
@@ -478,6 +519,9 @@ impl ExecutionJournal {
             if existing != snapshot {
                 return Err(JournalError::IdempotencyConflict);
             }
+        }
+        if let Some(audit) = audit {
+            append_audit(&mut transaction, audit).await?;
         }
         transaction.commit().await?;
         Ok(insert.rows_affected() == 1)

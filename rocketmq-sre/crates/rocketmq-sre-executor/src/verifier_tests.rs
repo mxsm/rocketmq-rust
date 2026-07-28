@@ -134,6 +134,36 @@ async fn missing_or_partial_signal_is_inconclusive() {
     assert_eq!(run.result.failed_conditions, ["sli:proxy_error_ratio"]);
 }
 
+#[tokio::test]
+async fn rollback_post_uses_the_descriptor_stability_window() {
+    let started_at = timestamp(0);
+    let request = request(VerificationPhase::RollbackPost);
+    let source = Arc::new(ScriptedSource {
+        observations: Mutex::new(
+            [
+                observation(&request, timestamp(0), true, true),
+                observation(&request, timestamp(30), true, true),
+            ]
+            .into(),
+        ),
+    });
+    let verifier = ExecutionVerifier::new(source, Duration::ZERO).with_max_observations(4);
+    let spec = VerificationSpec {
+        resource_conditions: request.resource_conditions.clone(),
+        technical_slis: request.technical_slis.clone(),
+        stable_window_seconds: 30,
+        max_wait_seconds: 60,
+    };
+
+    let run = verifier
+        .verify_post(&request, &spec, started_at, Vec::new(), Vec::new())
+        .await
+        .expect("rollback verification");
+
+    assert_eq!(run.result.outcome, VerificationOutcome::Succeeded);
+    assert_eq!(run.post_evidence.len(), 2);
+}
+
 fn request(phase: VerificationPhase) -> VerificationCaptureRequest {
     VerificationCaptureRequest {
         tenant_id: TenantId::new(),

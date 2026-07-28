@@ -140,26 +140,34 @@ async fn migrations_journal_locks_fences_and_restart_recovery_are_durable() {
     )
     .expect("verification Evidence");
     let verification_step_id = rocketmq_sre_contracts::ExecutionStepId::new();
+    let verification_capture_audit = audit(
+        &fixture,
+        AuditEventKind::VerificationCaptured,
+        "verification_pre_captured",
+        verification_observed_at,
+    );
     assert!(
         journal
-            .append_verification_evidence(
+            .append_verification_evidence_with_audit(
                 fixture.request.id,
                 verification_step_id,
                 1,
                 VerificationPhase::Pre,
                 &verification_evidence,
+                &verification_capture_audit,
             )
             .await
             .expect("append verification Evidence")
     );
     assert!(
         !journal
-            .append_verification_evidence(
+            .append_verification_evidence_with_audit(
                 fixture.request.id,
                 verification_step_id,
                 1,
                 VerificationPhase::Pre,
                 &verification_evidence,
+                &verification_capture_audit,
             )
             .await
             .expect("idempotent verification Evidence")

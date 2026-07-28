@@ -143,7 +143,7 @@ impl ExecutionVerifier {
         pre_evidence_ids: Vec<rocketmq_sre_contracts::EvidenceId>,
         during_evidence_ids: Vec<rocketmq_sre_contracts::EvidenceId>,
     ) -> Result<VerificationRun, ExecutorError> {
-        if request.phase != VerificationPhase::Post
+        if !matches!(request.phase, VerificationPhase::Post | VerificationPhase::RollbackPost)
             || spec.resource_conditions != request.resource_conditions
             || spec.technical_slis != request.technical_slis
             || spec.max_wait_seconds == 0
