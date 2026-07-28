@@ -109,8 +109,11 @@ struct UnsignedDynamicSafetyDecision<'a> {
     tenant_id: TenantId,
     cluster_id: ClusterId,
     action: rocketmq_sre_contracts::ExecutionAction,
+    action_version: &'a str,
     plan_id: rocketmq_sre_contracts::ActionPlanId,
     plan_hash: &'a str,
+    execution_id: ExecutionId,
+    execution_step_id: rocketmq_sre_contracts::ExecutionStepId,
     policy_definition_version: u64,
     lifecycle_revision: u64,
     error_budget_available: bool,
@@ -341,8 +344,11 @@ fn dynamic_safety_payload(decision: &DynamicSafetyDecision) -> Result<Vec<u8>, C
         tenant_id: decision.tenant_id,
         cluster_id: decision.cluster_id,
         action: decision.action,
+        action_version: &decision.action_version,
         plan_id: decision.plan_id,
         plan_hash: &decision.plan_hash,
+        execution_id: decision.execution_id,
+        execution_step_id: decision.execution_step_id,
         policy_definition_version: decision.policy_definition_version,
         lifecycle_revision: decision.lifecycle_revision,
         error_budget_available: decision.error_budget_available,
@@ -447,5 +453,39 @@ mod tests {
         let debug = format!("{signer:?}");
         assert!(debug.contains("[REDACTED]"));
         assert!(!debug.contains("highly-sensitive"));
+    }
+
+    #[test]
+    fn dynamic_safety_signature_binds_the_exact_execution_step() {
+        let signer = GrantSigner::new("dynamic-safety-signing-key").expect("signer");
+        let now = Utc::now();
+        let mut decision = DynamicSafetyDecision {
+            id: rocketmq_sre_contracts::DynamicSafetyDecisionId::new(),
+            tenant_id: TenantId::new(),
+            cluster_id: ClusterId::new(),
+            action: rocketmq_sre_contracts::ExecutionAction::ObservabilityLoggerLevelTtl,
+            action_version: "1.0.0".to_owned(),
+            plan_id: ActionPlanId::new(),
+            plan_hash: format!("sha256:{}", "c".repeat(64)),
+            execution_id: ExecutionId::new(),
+            execution_step_id: rocketmq_sre_contracts::ExecutionStepId::new(),
+            policy_definition_version: 1,
+            lifecycle_revision: 4,
+            error_budget_available: true,
+            freeze_revision: 0,
+            kill_switch_revision: 0,
+            evidence_fresh: true,
+            allowed: true,
+            reason_codes: Vec::new(),
+            issued_at: now,
+            expires_at: now + Duration::seconds(30),
+            nonce: uuid::Uuid::new_v4().to_string(),
+            signature: String::new(),
+        };
+        signer.sign_dynamic_safety(&mut decision).expect("signature");
+        signer.verify_dynamic_safety(&decision).expect("valid signature");
+
+        decision.execution_step_id = rocketmq_sre_contracts::ExecutionStepId::new();
+        assert!(signer.verify_dynamic_safety(&decision).is_err());
     }
 }
