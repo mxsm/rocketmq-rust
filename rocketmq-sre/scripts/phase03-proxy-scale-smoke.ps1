@@ -1,0 +1,167 @@
+# Copyright 2026 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0.
+
+[CmdletBinding()]
+param(
+    [string]$DatabaseUrl = 'postgres://rocketmq_sre:rocketmq_sre@127.0.0.1:5432/rocketmq_sre',
+    [string]$Kubeconfig = 'G:\rocketmq-sre-phase2-temp\kind-access\rocketmq-sre-phase00.kubeconfig',
+    [string]$Namespace = 'rocketmq-system',
+    [string]$Workload = 'rocketmq-proxy',
+    [string]$CargoTargetDir = 'G:\rocketmq-sre-phase2-cargo-target',
+    [string]$CargoHome = 'G:\rocketmq-sre-phase1-cargo-home',
+    [string]$TemporaryRoot = 'G:\rocketmq-sre-phase2-temp'
+)
+
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+$scriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
+$sreRoot = [IO.Path]::GetFullPath((Join-Path $scriptDirectory '..'))
+$manifestPath = Join-Path $sreRoot 'Cargo.toml'
+
+function Invoke-Native {
+    param(
+        [Parameter(Mandatory = $true)][string]$Command,
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$Description
+    )
+
+    & $Command @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Description failed with exit code $LASTEXITCODE."
+    }
+}
+
+function Assert-NonSystemPath([string]$Path, [string]$Description) {
+    $fullPath = [IO.Path]::GetFullPath($Path)
+    if ([IO.Path]::GetPathRoot($fullPath).Equals('C:\', [StringComparison]::OrdinalIgnoreCase)) {
+        throw "$Description must not use the C drive."
+    }
+}
+
+function Ensure-CargoCapacity {
+    $dDrive = Get-PSDrive -Name D
+    $gDrive = Get-PSDrive -Name G
+    Write-Host "D_FREE_GIB=$([Math]::Round($dDrive.Free / 1GB, 2))"
+    Write-Host "G_FREE_GIB=$([Math]::Round($gDrive.Free / 1GB, 2))"
+    if (($dDrive.Free / 1GB) -lt 15 -or ($gDrive.Free / 1GB) -lt 15) {
+        Invoke-Native cargo @(
+            '+1.95.0', 'clean',
+            '--manifest-path', $manifestPath,
+            '--target-dir', $CargoTargetDir
+        ) 'low-space Cargo cleanup'
+    }
+}
+
+foreach ($path in @(
+    @{ Value = $CargoTargetDir; Description = 'Cargo target directory' },
+    @{ Value = $CargoHome; Description = 'Cargo home' },
+    @{ Value = $TemporaryRoot; Description = 'temporary directory' },
+    @{ Value = $Kubeconfig; Description = 'Kubernetes test kubeconfig' }
+)) {
+    Assert-NonSystemPath $path.Value $path.Description
+}
+if (-not (Test-Path -LiteralPath $Kubeconfig -PathType Leaf)) {
+    throw "Kubernetes test kubeconfig does not exist: $Kubeconfig"
+}
+
+New-Item -ItemType Directory -Force -Path $CargoTargetDir, $CargoHome, $TemporaryRoot | Out-Null
+Ensure-CargoCapacity
+
+$savedEnvironment = @{}
+foreach ($name in @(
+    'CARGO_HOME',
+    'CARGO_TARGET_DIR',
+    'TEMP',
+    'TMP',
+    'KUBECONFIG',
+    'ROCKETMQ_SRE_TEST_DATABASE_URL',
+    'ROCKETMQ_SRE_TEST_PROXY_SCALE',
+    'ROCKETMQ_SRE_TEST_PROXY_NAMESPACE',
+    'ROCKETMQ_SRE_TEST_PROXY_WORKLOAD'
+)) {
+    $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+}
+
+try {
+    $env:CARGO_HOME = $CargoHome
+    $env:CARGO_TARGET_DIR = $CargoTargetDir
+    $env:TEMP = $TemporaryRoot
+    $env:TMP = $TemporaryRoot
+    $env:KUBECONFIG = [IO.Path]::GetFullPath($Kubeconfig)
+    $env:ROCKETMQ_SRE_TEST_DATABASE_URL = $DatabaseUrl
+    $env:ROCKETMQ_SRE_TEST_PROXY_SCALE = '1'
+    $env:ROCKETMQ_SRE_TEST_PROXY_NAMESPACE = $Namespace
+    $env:ROCKETMQ_SRE_TEST_PROXY_WORKLOAD = $Workload
+
+    Invoke-Native cargo @(
+        '+1.95.0', 'test',
+        '--manifest-path', $manifestPath,
+        '--locked',
+        '-p', 'rocketmq-sre-eval',
+        '--test', 'phase3_contracts',
+        'phase_three_descriptor_catalog_is_typed_and_fail_closed',
+        '--',
+        '--exact'
+    ) 'Proxy descriptor catalog contract'
+
+    Invoke-Native cargo @(
+        '+1.95.0', 'test',
+        '--manifest-path', $manifestPath,
+        '--locked',
+        '-p', 'rocketmq-sre-execution-agent',
+        'proxy_scale_out_one'
+    ) 'typed Proxy scale handler tests'
+
+    foreach ($testName in @(
+        'successful_verification_reaches_succeeded_and_releases_lock',
+        'failed_verification_runs_compensation_and_verifies_rollback'
+    )) {
+        Invoke-Native cargo @(
+            '+1.95.0', 'test',
+            '--manifest-path', $manifestPath,
+            '--locked',
+            '-p', 'rocketmq-sre-executor',
+            '--test', 'execution_flow',
+            $testName,
+            '--',
+            '--ignored',
+            '--exact',
+            '--test-threads=1'
+        ) "Executor Proxy scenario $testName"
+    }
+
+    Invoke-Native cargo @(
+        '+1.95.0', 'test',
+        '--manifest-path', $manifestPath,
+        '--locked',
+        '-p', 'rocketmq-sre-execution-agent',
+        'real_kind_proxy_scale_round_trip_is_bounded_and_reversible',
+        '--',
+        '--ignored',
+        '--test-threads=1'
+    ) 'real Kubernetes Proxy scale and rollback'
+
+    $deployment = kubectl `
+        --kubeconfig $Kubeconfig `
+        --namespace $Namespace `
+        get deployment $Workload `
+        --output json | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0) {
+        throw 'reading the restored Proxy Deployment failed.'
+    }
+    if ($deployment.spec.replicas -ne $deployment.status.readyReplicas) {
+        throw 'the Proxy Deployment did not return to a fully ready state.'
+    }
+
+    Write-Host (
+        'PHASE03_PROXY_SCALE_SMOKE_OK ' +
+        "namespace=$Namespace workload=$Workload " +
+        'typed_precheck=true supervised_success=true supervised_rollback=true ' +
+        'real_scale_out_one=true real_restore=true allowlist_deny=true'
+    )
+}
+finally {
+    foreach ($entry in $savedEnvironment.GetEnumerator()) {
+        [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process')
+    }
+}
