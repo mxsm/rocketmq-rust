@@ -22,6 +22,8 @@ use rocketmq_sre_contracts::ExecutionId;
 use rocketmq_sre_contracts::ExecutionRequest;
 use rocketmq_sre_contracts::ExecutionState;
 use rocketmq_sre_contracts::ExecutionTransition;
+use rocketmq_sre_contracts::NotificationDeliveryId;
+use rocketmq_sre_contracts::ResourceQuarantine;
 use rocketmq_sre_contracts::StepIntent;
 use rocketmq_sre_contracts::StepResult;
 use rocketmq_sre_contracts::VerificationResult;
@@ -63,6 +65,14 @@ pub struct VerificationEvidenceRecord {
     pub attempt: u16,
     pub phase: VerificationPhase,
     pub evidence: EvidenceSnapshot,
+}
+
+/// Result of an atomic rollback-failure escalation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ManualTakeoverEscalation {
+    pub escalated: bool,
+    pub quarantine_created: bool,
+    pub notifications_enqueued: u64,
 }
 
 /// PostgreSQL journal used before and after every external side effect.
@@ -569,6 +579,222 @@ impl ExecutionJournal {
                 })
             })
             .collect()
+    }
+
+    /// Atomically escalates a failed rollback, quarantines its resource, emits
+    /// the audit timeline, and enqueues configured human notifications.
+    ///
+    /// The temporary resource lock is intentionally not released here. The
+    /// caller may release it only after this transaction commits; the durable
+    /// quarantine remains independently active.
+    ///
+    /// # Errors
+    ///
+    /// Rejects non-compensation transitions, incomplete quarantine records,
+    /// scope drift, wrong audit kinds, stale execution state, and database
+    /// failures. An identical retry after commit is a no-op.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the atomic safety transaction requires three independently typed audit events"
+    )]
+    pub async fn escalate_manual_takeover(
+        &self,
+        execution_id: ExecutionId,
+        transition: &ExecutionTransition,
+        quarantine: &ResourceQuarantine,
+        state_audit: &AuditEvent,
+        quarantine_audit: &AuditEvent,
+        manual_takeover_audit: &AuditEvent,
+    ) -> Result<ManualTakeoverEscalation, JournalError> {
+        if transition.from != ExecutionState::Compensating
+            || transition.to != ExecutionState::Escalated
+            || quarantine.source_execution_id != Some(execution_id)
+            || !quarantine.is_active()
+            || quarantine.resource_key.trim().is_empty()
+            || quarantine.reason_code.trim().is_empty()
+            || quarantine.created_by.trim().is_empty()
+            || state_audit.event_kind != AuditEventKind::StateChanged
+            || quarantine_audit.event_kind != AuditEventKind::QuarantineCreated
+            || manual_takeover_audit.event_kind != AuditEventKind::ManualTakeoverRequired
+        {
+            return Err(JournalError::InvalidInput(
+                "manual takeover requires a compensating escalation, active quarantine, and typed audits".to_owned(),
+            ));
+        }
+        transition
+            .validate()
+            .map_err(|error| JournalError::InvalidInput(error.to_string()))?;
+
+        let mut transaction = self.pool.begin().await?;
+        for audit in [state_audit, quarantine_audit, manual_takeover_audit] {
+            ensure_execution_scope(&mut transaction, execution_id, audit).await?;
+        }
+        let execution = sqlx::query(
+            "SELECT execution.state, execution.tenant_id, execution.cluster_id,
+                    execution.correlation_id, plan.incident_id
+             FROM executions execution
+             JOIN action_plans plan ON plan.id = execution.plan_id
+             WHERE execution.id = $1
+             FOR UPDATE OF execution",
+        )
+        .bind(execution_id.as_uuid())
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or(JournalError::NotFound)?;
+        if execution.try_get::<Uuid, _>("tenant_id")? != quarantine.tenant_id.as_uuid()
+            || execution.try_get::<Uuid, _>("cluster_id")? != quarantine.cluster_id.as_uuid()
+            || execution.try_get::<Uuid, _>("correlation_id")? != state_audit.correlation_id.as_uuid()
+        {
+            return Err(JournalError::InvalidInput(
+                "manual takeover quarantine scope does not match execution".to_owned(),
+            ));
+        }
+        let current_state = parse_execution_state(execution.try_get::<String, _>("state")?.as_str())?;
+        if current_state == ExecutionState::Escalated {
+            let existing: Option<Uuid> = sqlx::query_scalar(
+                "SELECT id
+                 FROM resource_quarantines
+                 WHERE id = $1
+                   AND source_execution_id = $2
+                   AND tenant_id = $3
+                   AND cluster_id = $4
+                   AND resource_key = $5
+                   AND cleared_at IS NULL",
+            )
+            .bind(quarantine.id.as_uuid())
+            .bind(execution_id.as_uuid())
+            .bind(quarantine.tenant_id.as_uuid())
+            .bind(quarantine.cluster_id.as_uuid())
+            .bind(&quarantine.resource_key)
+            .fetch_optional(&mut *transaction)
+            .await?;
+            if existing.is_none() {
+                return Err(JournalError::IdempotencyConflict);
+            }
+            transaction.commit().await?;
+            return Ok(ManualTakeoverEscalation {
+                escalated: false,
+                quarantine_created: false,
+                notifications_enqueued: 0,
+            });
+        }
+        if current_state != transition.from {
+            return Err(JournalError::InvalidInput(
+                "execution is not in the compensating state".to_owned(),
+            ));
+        }
+
+        let quarantine_insert = sqlx::query(
+            "INSERT INTO resource_quarantines (
+                id, tenant_id, cluster_id, resource_key, action_id,
+                reason_code, source_execution_id, evidence_ids,
+                created_by, created_at
+             ) VALUES (
+                $1, $2, $3, $4, $5,
+                $6, $7, $8,
+                $9, $10
+             )
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(quarantine.id.as_uuid())
+        .bind(quarantine.tenant_id.as_uuid())
+        .bind(quarantine.cluster_id.as_uuid())
+        .bind(&quarantine.resource_key)
+        .bind(&quarantine.action_id)
+        .bind(&quarantine.reason_code)
+        .bind(execution_id.as_uuid())
+        .bind(
+            quarantine
+                .evidence_ids
+                .iter()
+                .copied()
+                .map(rocketmq_sre_contracts::EvidenceId::as_uuid)
+                .collect::<Vec<_>>(),
+        )
+        .bind(&quarantine.created_by)
+        .bind(quarantine.created_at)
+        .execute(&mut *transaction)
+        .await;
+        let quarantine_insert = match quarantine_insert {
+            Ok(result) => result,
+            Err(error) if database_message(&error) == Some("invalid_quarantine_source_scope") => {
+                return Err(JournalError::InvalidInput(
+                    "quarantine source scope does not match its execution".to_owned(),
+                ));
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if quarantine_insert.rows_affected() != 1 {
+            return Err(JournalError::IdempotencyConflict);
+        }
+
+        let state_update = sqlx::query(
+            "UPDATE executions
+             SET state = 'escalated',
+                 completed_at = $2,
+                 updated_at = $2
+             WHERE id = $1 AND state = 'compensating'",
+        )
+        .bind(execution_id.as_uuid())
+        .bind(transition.occurred_at)
+        .execute(&mut *transaction)
+        .await?;
+        if state_update.rows_affected() != 1 {
+            return Err(JournalError::IdempotencyConflict);
+        }
+        append_audit(&mut transaction, state_audit).await?;
+        append_audit(&mut transaction, quarantine_audit).await?;
+        append_audit(&mut transaction, manual_takeover_audit).await?;
+
+        let target_ids: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT id
+             FROM notification_targets
+             WHERE tenant_id = $1
+               AND enabled
+               AND (cluster_id IS NULL OR cluster_id = $2)
+             ORDER BY id",
+        )
+        .bind(quarantine.tenant_id.as_uuid())
+        .bind(quarantine.cluster_id.as_uuid())
+        .fetch_all(&mut *transaction)
+        .await?;
+        let incident_id: Uuid = execution.try_get("incident_id")?;
+        let summary = "Supervised RocketMQ SRE rollback requires manual takeover";
+        let deep_link = format!("/incidents/{incident_id}?execution={execution_id}");
+        let mut notifications_enqueued = 0;
+        for target_id in target_ids {
+            let delivery_key = format!("manual-takeover:{execution_id}:{target_id}");
+            let insert = sqlx::query(
+                "INSERT INTO notification_outbox (
+                    id, target_id, tenant_id, cluster_id, incident_id,
+                    delivery_key, status, sanitized_summary, deep_link,
+                    attempt_count, next_attempt_at, created_at
+                 ) VALUES (
+                    $1, $2, $3, $4, $5,
+                    $6, 'pending', $7, $8,
+                    0, $9, $9
+                 )
+                 ON CONFLICT (tenant_id, delivery_key) DO NOTHING",
+            )
+            .bind(NotificationDeliveryId::new().as_uuid())
+            .bind(target_id)
+            .bind(quarantine.tenant_id.as_uuid())
+            .bind(quarantine.cluster_id.as_uuid())
+            .bind(incident_id)
+            .bind(delivery_key)
+            .bind(summary)
+            .bind(&deep_link)
+            .bind(transition.occurred_at)
+            .execute(&mut *transaction)
+            .await?;
+            notifications_enqueued += insert.rows_affected();
+        }
+        transaction.commit().await?;
+        Ok(ManualTakeoverEscalation {
+            escalated: true,
+            quarantine_created: true,
+            notifications_enqueued,
+        })
     }
 
     /// Returns durable intents that have no matching result after a restart.

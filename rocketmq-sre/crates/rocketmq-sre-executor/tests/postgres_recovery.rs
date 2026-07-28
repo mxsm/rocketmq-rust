@@ -25,7 +25,9 @@ use rocketmq_sre_contracts::EvidenceId;
 use rocketmq_sre_contracts::EvidenceQuery;
 use rocketmq_sre_contracts::ExecutionAction;
 use rocketmq_sre_contracts::ExecutionState;
+use rocketmq_sre_contracts::ExecutionTransition;
 use rocketmq_sre_contracts::FenceAck;
+use rocketmq_sre_contracts::NotificationTargetId;
 use rocketmq_sre_contracts::QueryId;
 use rocketmq_sre_contracts::ResourceLockId;
 use rocketmq_sre_contracts::ResourceQuarantine;
@@ -474,6 +476,163 @@ async fn migrations_journal_locks_fences_and_restart_recovery_are_durable() {
     .await
     .expect("append-only step records");
     assert_eq!(step_record_count, 2);
+
+    cleanup_schema(&pool, &schema).await;
+}
+
+#[tokio::test]
+#[ignore = "requires ROCKETMQ_SRE_TEST_DATABASE_URL pointing to Docker PostgreSQL"]
+async fn rollback_failure_atomically_escalates_quarantines_and_notifies() {
+    let database_url = std::env::var("ROCKETMQ_SRE_TEST_DATABASE_URL").expect("test database URL must be explicit");
+    let schema = format!("phase3_{}", Uuid::new_v4().simple());
+    let pool = isolated_pool(&database_url, &schema).await;
+    sqlx::migrate!("../../migrations")
+        .run(&pool)
+        .await
+        .expect("empty-schema migrations");
+    let fixture = seed_fixture(&pool).await;
+    let target_id = NotificationTargetId::new();
+    let now = Utc::now();
+    sqlx::query(
+        "INSERT INTO notification_targets (
+            id, tenant_id, cluster_id, name, channel, endpoint,
+            enabled, created_at, updated_at
+         ) VALUES ($1, $2, $3, 'phase3-on-call', 'pager', 'mock://phase3-on-call', TRUE, $4, $4)",
+    )
+    .bind(target_id.as_uuid())
+    .bind(fixture.tenant_id.as_uuid())
+    .bind(fixture.cluster_id.as_uuid())
+    .bind(now)
+    .execute(&pool)
+    .await
+    .expect("notification target");
+
+    let journal = ExecutionJournal::new(pool.clone(), "rocketmq-sre-executor");
+    journal
+        .create_execution(
+            &fixture.request,
+            "deployment/default/proxy",
+            ExecutionAction::ProxyScaleOutOne,
+            now,
+        )
+        .await
+        .expect("execution");
+    for transition in [
+        ExecutionTransition {
+            from: ExecutionState::Pending,
+            to: ExecutionState::Prechecking,
+            reason_code: "precheck_started".to_owned(),
+            occurred_at: now + TimeDelta::seconds(1),
+        },
+        ExecutionTransition {
+            from: ExecutionState::Prechecking,
+            to: ExecutionState::Compensating,
+            reason_code: "rollback_required".to_owned(),
+            occurred_at: now + TimeDelta::seconds(2),
+        },
+    ] {
+        assert!(
+            journal
+                .transition(fixture.request.id, &transition)
+                .await
+                .expect("state transition")
+        );
+    }
+
+    let occurred_at = now + TimeDelta::seconds(3);
+    let quarantine = ResourceQuarantine {
+        id: ResourceQuarantineId::new(),
+        tenant_id: fixture.tenant_id,
+        cluster_id: fixture.cluster_id,
+        resource_key: "deployment/default/proxy".to_owned(),
+        action_id: Some(ExecutionAction::ProxyScaleOutOne.id().to_owned()),
+        reason_code: "rollback_verification_failed".to_owned(),
+        source_execution_id: Some(fixture.request.id),
+        evidence_ids: vec![EvidenceId::new()],
+        created_by: "executor-service".to_owned(),
+        created_at: occurred_at,
+        cleared_by: None,
+        clear_reason: None,
+        clear_evidence_ids: Vec::new(),
+        cleared_at: None,
+    };
+    let transition = ExecutionTransition {
+        from: ExecutionState::Compensating,
+        to: ExecutionState::Escalated,
+        reason_code: "manual_takeover_required".to_owned(),
+        occurred_at,
+    };
+    let state_audit = audit(
+        &fixture,
+        AuditEventKind::StateChanged,
+        "manual_takeover_required",
+        occurred_at,
+    );
+    let quarantine_audit = audit(
+        &fixture,
+        AuditEventKind::QuarantineCreated,
+        "rollback_verification_failed",
+        occurred_at,
+    );
+    let manual_audit = audit(
+        &fixture,
+        AuditEventKind::ManualTakeoverRequired,
+        "manual_takeover_required",
+        occurred_at,
+    );
+    let escalation = journal
+        .escalate_manual_takeover(
+            fixture.request.id,
+            &transition,
+            &quarantine,
+            &state_audit,
+            &quarantine_audit,
+            &manual_audit,
+        )
+        .await
+        .expect("atomic escalation");
+    assert!(escalation.escalated);
+    assert!(escalation.quarantine_created);
+    assert_eq!(escalation.notifications_enqueued, 1);
+    assert_eq!(
+        journal
+            .execution_state(fixture.request.id)
+            .await
+            .expect("execution state"),
+        ExecutionState::Escalated
+    );
+    let active_quarantine: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM resource_quarantines
+         WHERE id = $1 AND cleared_at IS NULL",
+    )
+    .bind(quarantine.id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("quarantine count");
+    assert_eq!(active_quarantine, 1);
+    let notification_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM notification_outbox
+         WHERE delivery_key = $1 AND status = 'pending'",
+    )
+    .bind(format!("manual-takeover:{}:{target_id}", fixture.request.id))
+    .fetch_one(&pool)
+    .await
+    .expect("notification count");
+    assert_eq!(notification_count, 1);
+
+    let replay = journal
+        .escalate_manual_takeover(
+            fixture.request.id,
+            &transition,
+            &quarantine,
+            &state_audit,
+            &quarantine_audit,
+            &manual_audit,
+        )
+        .await
+        .expect("idempotent escalation");
+    assert!(!replay.escalated);
+    assert_eq!(replay.notifications_enqueued, 0);
 
     cleanup_schema(&pool, &schema).await;
 }
