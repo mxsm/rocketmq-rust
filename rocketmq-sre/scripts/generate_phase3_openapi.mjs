@@ -5,6 +5,8 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { extendPhase3ReleaseManagement } from "./openapi/phase3_release_management.mjs";
+
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const source = join(root, "openapi", "rocketmq-sre-phase02.openapi.json");
 const output = join(root, "openapi", "rocketmq-sre-phase03.openapi.json");
@@ -23,8 +25,15 @@ const contractSchemas = {
   CriticGateState: "critic-gate-state.schema.json",
   CriticReview: "critic-review.schema.json",
   ExecutionRequest: "execution-request.schema.json",
+  ExternalApprovalInput: "external-approval-input.schema.json",
+  IntegrationDelivery: "integration-delivery.schema.json",
+  IntegrationTarget: "integration-target.schema.json",
   ManualRunbookDraft: "manual-runbook-draft.schema.json",
   PolicyDecision: "policy-decision.schema.json",
+  ReleaseObservation: "release-observation.schema.json",
+  ReleaseReadinessSnapshot: "release-readiness-snapshot.schema.json",
+  ReleaseReport: "release-report.schema.json",
+  ReleaseWorkflow: "release-workflow.schema.json",
   ResourceQuarantine: "resource-quarantine.schema.json",
   RunbookDefinition: "runbook-definition.schema.json",
   RunbookStepPlanBinding: "runbook-step-plan-binding.schema.json",
@@ -773,6 +782,15 @@ for (const decision of ["approve", "reject"]) {
     }),
   };
 }
+
+extendPhase3ReleaseManagement({
+  document,
+  schemas,
+  operation,
+  pathParameter,
+  uuid,
+  digest,
+});
 
 document.info.title = "RocketMQ Rust AI SRE Phase 3 API";
 document.info.version = "3.0.0";
