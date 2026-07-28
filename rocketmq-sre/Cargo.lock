@@ -3746,6 +3746,7 @@ dependencies = [
  "rocketmq-admin-core",
  "rocketmq-runtime",
  "rocketmq-sre-contracts",
+ "rustls",
  "schemars",
  "serde",
  "serde_jcs",

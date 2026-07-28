@@ -34,6 +34,7 @@ reqwest.workspace = true
 rocketmq-admin-core = { workspace = true, features = ["mutation-client-adapter", "read-client-adapter"] }
 rocketmq-runtime.workspace = true
 rocketmq-sre-contracts.workspace = true
+rustls.workspace = true
 schemars.workspace = true
 serde.workspace = true
 serde_jcs.workspace = true
