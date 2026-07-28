@@ -49,7 +49,14 @@ fn phase_three_descriptor_catalog_is_typed_and_fail_closed() {
     let mut catalog = ActionCatalog::default();
     for descriptor in descriptors {
         assert!(matches!(descriptor.risk, ActionRisk::R1 | ActionRisk::R2));
-        assert!(!descriptor.execution_supported);
+        let action = ExecutionAction::from_id(&descriptor.id).expect("closed action id");
+        assert_eq!(
+            descriptor.execution_supported,
+            matches!(
+                action,
+                ExecutionAction::ObservabilityLoggerLevelTtl | ExecutionAction::ProxyScaleOutOne
+            )
+        );
         assert!(!descriptor.parameter_schema.is_null());
         catalog.register(descriptor).expect("known R1/R2 descriptor");
     }
