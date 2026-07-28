@@ -160,6 +160,11 @@ spec:
             - {name: ROCKETMQ_SRE_AGENT_ENABLE_BROKER_CONFIG, value: "true"}
             - {name: ROCKETMQ_SRE_AGENT_ENABLE_PROXY_SCALE_OUT, value: "true"}
             - {name: ROCKETMQ_SRE_AGENT_PROXY_SCALE_TARGETS, value: "rocketmq-system/rocketmq-proxy"}
+            - {name: ROCKETMQ_SRE_AGENT_ENABLE_PROXY_RESTART, value: "true"}
+            - {name: ROCKETMQ_SRE_AGENT_PROXY_RESTART_TARGETS, value: "rocketmq-system/rocketmq-proxy=8080"}
+            - {name: ROCKETMQ_SRE_AGENT_VERIFICATION_URL, value: "http://sre-control-plane:8090"}
+            - {name: ROCKETMQ_SRE_AGENT_TENANT_ID, value: "00000000-0000-4000-8000-000000000002"}
+            - {name: ROCKETMQ_SRE_AGENT_CLUSTER_ID, value: "00000000-0000-4000-8000-000000000001"}
             - {name: ROCKETMQ_SRE_AGENT_NAMESRV_ADDR, value: "rocketmq-namesrv:9876"}
             - {name: ROCKETMQ_SRE_AGENT_BROKER_ADMIN_USE_TLS, value: "false"}
             - name: ROCKETMQ_SRE_AGENT_BROKER_READ_ACCESS_KEY
@@ -183,6 +188,11 @@ spec:
                   name: rocketmq-sre-kind-secrets
                   key: agent-mutation-secret-key
             - name: ROCKETMQ_SRE_AGENT_AUTHORITY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-sre-kind-secrets
+                  key: internal-token
+            - name: ROCKETMQ_SRE_AGENT_VERIFICATION_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: rocketmq-sre-kind-secrets
