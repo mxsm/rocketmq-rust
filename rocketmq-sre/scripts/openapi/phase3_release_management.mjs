@@ -221,7 +221,7 @@ function addReleaseSchemas({ schemas, uuid, digest }) {
   schemas.PrepareReleaseRequest = {
     type: "object",
     additionalProperties: false,
-    required: ["pdb_ready", "synthetic_probe_ready"],
+    required: ["pdb_ready", "synthetic_probe_ready", "evidence_ids"],
     properties: {
       pdb_ready: { type: "boolean" },
       synthetic_probe_ready: { type: "boolean" },
@@ -231,7 +231,6 @@ function addReleaseSchemas({ schemas, uuid, digest }) {
         maxItems: 64,
         uniqueItems: true,
         items: uuid,
-        default: [],
       },
       affected_resource_keys: {
         type: "array",
