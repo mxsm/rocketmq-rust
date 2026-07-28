@@ -117,6 +117,10 @@ impl AutomationService {
         let Some(dispatcher) = &self.dispatcher else {
             return Ok(run);
         };
+        let (run, claimed) = self.repository.claim_no_side_effect_run(auth.tenant_id, run.id).await?;
+        if !claimed {
+            return Ok(run);
+        }
         let dispatch = tokio::time::timeout(
             Duration::from_secs(u64::from(request.budget.timeout_seconds)),
             dispatcher.dispatch(auth, request),
