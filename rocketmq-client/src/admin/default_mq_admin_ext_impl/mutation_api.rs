@@ -17,6 +17,8 @@
 //! This module deliberately talks to the concrete client APIs instead of
 //! routing mutation-only builds through the legacy mixed `MQAdminExt` trait.
 
+mod log_filter;
+
 use std::collections::HashMap;
 use std::collections::HashSet;
 
@@ -319,6 +321,31 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
                 properties,
                 self.remoting_timeout_millis()?,
             )
+            .await
+    }
+
+    async fn set_broker_log_filter_ttl(
+        &self,
+        broker_addr: CheetahString,
+        logger: CheetahString,
+        level: CheetahString,
+        ttl_seconds: u32,
+        operation_id: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        let properties = log_filter::set_properties(&broker_addr, &logger, &level, ttl_seconds, &operation_id)?;
+        self.mq_client_api()?
+            .update_broker_config(&broker_addr, properties, self.remoting_timeout_millis()?)
+            .await
+    }
+
+    async fn restore_broker_log_filter(
+        &self,
+        broker_addr: CheetahString,
+        operation_id: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        let properties = log_filter::restore_properties(&broker_addr, &operation_id)?;
+        self.mq_client_api()?
+            .update_broker_config(&broker_addr, properties, self.remoting_timeout_millis()?)
             .await
     }
 
