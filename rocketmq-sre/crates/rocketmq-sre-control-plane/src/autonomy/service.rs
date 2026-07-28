@@ -774,6 +774,35 @@ impl AutonomyService {
             .await
     }
 
+    pub(crate) async fn set_preventive_freeze(
+        &self,
+        auth: &AuthContext,
+        cluster_id: rocketmq_sre_contracts::ClusterId,
+        reason: &str,
+    ) -> Result<super::model::AutonomyFreezeView, ControlPlaneError> {
+        require_role(auth, "automation_service")?;
+        require_cluster(auth, cluster_id)?;
+        if reason.trim().is_empty() || reason.chars().count() > 512 {
+            return Err(ControlPlaneError::validation(
+                "invalid_preventive_freeze",
+                "preventive freeze reason must be bounded plain text",
+            ));
+        }
+        self.repository
+            .set_autonomy_freeze(
+                auth.tenant_id,
+                Some(cluster_id),
+                None,
+                None,
+                true,
+                reason.trim(),
+                Utc::now(),
+                None,
+                &auth.subject,
+            )
+            .await
+    }
+
     pub(crate) async fn set_kill_switch(
         &self,
         auth: &AuthContext,
