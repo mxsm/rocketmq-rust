@@ -74,6 +74,7 @@ pub struct ProxyRestartState {
     pub drain_supported: bool,
     pub pod_uid: String,
     pub pod_ready: bool,
+    pub remaining_replicas_healthy: bool,
     pub replacement_ready: bool,
     pub synthetic_path_healthy: bool,
     pub slo_healthy: bool,
