@@ -586,18 +586,19 @@ async fn postgres_pause_reconciler_repairs_a_dropped_failure_event_once() {
     assert_eq!(pause_events_after_retry, 1);
 }
 
-struct Fixture {
-    tenant_id: TenantId,
-    cluster_id: ClusterId,
-    incident_id: IncidentId,
-    diagnosis_revision_id: DiagnosisRevisionId,
-    primary_invocation_id: ModelInvocationId,
-    primary_profile: String,
-    plan_id: ActionPlanId,
-    plan_hash: String,
+#[derive(Clone)]
+pub(super) struct Fixture {
+    pub(super) tenant_id: TenantId,
+    pub(super) cluster_id: ClusterId,
+    pub(super) incident_id: IncidentId,
+    pub(super) diagnosis_revision_id: DiagnosisRevisionId,
+    pub(super) primary_invocation_id: ModelInvocationId,
+    pub(super) primary_profile: String,
+    pub(super) plan_id: ActionPlanId,
+    pub(super) plan_hash: String,
 }
 
-async fn seed_fixture(repository: &PostgresRepository) -> Fixture {
+pub(super) async fn seed_fixture(repository: &PostgresRepository) -> Fixture {
     let profile_id = Uuid::new_v4();
     let fixture = Fixture {
         tenant_id: TenantId::new(),
@@ -724,15 +725,29 @@ async fn seed_fixture(repository: &PostgresRepository) -> Fixture {
     fixture
 }
 
-async fn seed_successful_supervised_execution(
+pub(super) async fn seed_successful_supervised_execution(
     repository: &PostgresRepository,
     fixture: &Fixture,
     stable_window_seconds: i64,
 ) -> ExecutionId {
+    seed_successful_supervised_execution_at(
+        repository,
+        fixture,
+        stable_window_seconds,
+        Utc::now() - Duration::seconds(2),
+    )
+    .await
+}
+
+pub(super) async fn seed_successful_supervised_execution_at(
+    repository: &PostgresRepository,
+    fixture: &Fixture,
+    stable_window_seconds: i64,
+    observed_at: chrono::DateTime<Utc>,
+) -> ExecutionId {
     let execution_id = ExecutionId::new();
     let lease_id = Uuid::new_v4();
     let step_id = Uuid::new_v4();
-    let observed_at = Utc::now() - Duration::seconds(2);
     let started_at = observed_at - Duration::seconds(stable_window_seconds + 1);
     sqlx::query(
         "INSERT INTO executor_leases (
@@ -835,7 +850,7 @@ async fn seed_successful_supervised_execution(
     execution_id
 }
 
-async fn seed_critic_review(
+pub(super) async fn seed_critic_review(
     repository: &PostgresRepository,
     fixture: &Fixture,
 ) -> (CriticReviewId, ModelInvocationId, String) {
@@ -945,7 +960,7 @@ fn policy(fixture: &Fixture, created_at: chrono::DateTime<Utc>) -> AutonomyPolic
     }
 }
 
-fn unique_digest() -> String {
+pub(super) fn unique_digest() -> String {
     let value = Uuid::new_v4().simple().to_string();
     format!("sha256:{value}{value}")
 }
