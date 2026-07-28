@@ -173,6 +173,7 @@ impl ExecutorAuthorityClient for TestAuthority {
                 plan_step_id: request.plan_step_id,
                 action: self.action,
                 resource: self.resource.to_string(),
+                compensation: request.compensation,
                 audience: "rocketmq-sre-execution-agent".to_owned(),
                 issued_at,
                 expires_at: issued_at + TimeDelta::minutes(2),
