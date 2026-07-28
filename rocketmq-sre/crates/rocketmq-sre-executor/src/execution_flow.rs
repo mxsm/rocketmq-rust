@@ -544,6 +544,7 @@ impl ChangeExecutor {
                 execution_id: request.id,
                 step_id,
                 plan_step_id: step.id,
+                compensation,
             })
             .await
             .inspect_err(|_| {
