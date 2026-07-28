@@ -110,4 +110,44 @@ describe("checked-in Phase 3 OpenAPI", () => {
         specification.paths["/v1/models/profiles/{id}/lifecycle"],
     ).toBe(false);
   });
+
+  it("publishes read-only bounded autonomy outcome and report queries", () => {
+    const outcomes =
+      specification.paths["/v1/autonomy/outcomes"];
+    const reports = specification.paths["/v1/autonomy/reports"];
+
+    expect(outcomes?.get).toBeDefined();
+    expect(reports?.get).toBeDefined();
+    expect("post" in outcomes).toBe(false);
+    expect("delete" in outcomes).toBe(false);
+    expect("post" in reports).toBe(false);
+    expect("delete" in reports).toBe(false);
+    expect(outcomes.get.parameters).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "cluster_id",
+          in: "query",
+        }),
+        expect.objectContaining({
+          name: "limit",
+          schema: expect.objectContaining({
+            minimum: 1,
+            maximum: 200,
+            default: 100,
+          }),
+        }),
+      ]),
+    );
+    expect(reports.get.parameters).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "period",
+          schema: expect.objectContaining({
+            enum: ["weekly", "monthly"],
+            default: "weekly",
+          }),
+        }),
+      ]),
+    );
+  });
 });
