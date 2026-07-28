@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod admin_core;
+mod broker_config_patch;
 mod config;
 mod kubernetes;
 mod logger_level_ttl;
@@ -25,6 +26,14 @@ use std::pin::Pin;
 use rocketmq_sre_contracts::AgentStepRequest;
 
 pub use admin_core::AdminCoreDriver;
+pub use admin_core::BrokerConfigPatch;
+pub use admin_core::BrokerConfigPatchApplyOutcome;
+pub use admin_core::BrokerConfigPatchClient;
+pub use admin_core::BrokerConfigPatchRestore;
+pub use admin_core::BrokerConfigPatchState;
+pub use admin_core::BrokerConfigPatchWrite;
+pub use broker_config_patch::BrokerConfigPatchHandler;
+pub use broker_config_patch::BrokerConfigPatchParameters;
 pub use config::ConfigDriver;
 pub use config::ConfigWriteClient;
 pub use config::LoggerLevelControlClient;
