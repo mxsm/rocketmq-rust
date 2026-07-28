@@ -120,16 +120,6 @@ impl PreventiveAutomationService {
                 "preventive schedule is outside the authenticated cluster scope",
             ));
         }
-        request
-            .budget
-            .validate()
-            .map_err(|error| ControlPlaneError::validation("invalid_preventive_budget", error.to_string()))?;
-        if request.budget.max_model_calls != 0 {
-            return Err(ControlPlaneError::validation(
-                "model_budget_not_allowed",
-                "preventive inspections are deterministic and cannot allocate model calls",
-            ));
-        }
         let template = preventive_template(request.risk_family);
         let inspection = self
             .inspections
