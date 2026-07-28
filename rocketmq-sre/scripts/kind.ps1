@@ -345,6 +345,10 @@ function New-SecretMaterial([switch]$ExistingCluster) {
         'probe-secret-key',
         'bootstrap-access-key',
         'bootstrap-secret-key',
+        'agent-read-access-key',
+        'agent-read-secret-key',
+        'agent-mutation-access-key',
+        'agent-mutation-secret-key',
         'mcp-token',
         'internal-token',
         'postgres-user',
@@ -375,6 +379,10 @@ function New-SecretMaterial([switch]$ExistingCluster) {
     $probeSecretKey = New-RandomSecret
     $bootstrapAccessKey = 'phase00-kind-bootstrap'
     $bootstrapSecretKey = New-RandomSecret
+    $agentReadAccessKey = 'phase03-kind-agent-read'
+    $agentReadSecretKey = New-RandomSecret
+    $agentMutationAccessKey = 'phase03-kind-agent-mutation'
+    $agentMutationSecretKey = New-RandomSecret
     $mcpToken = New-RandomSecret
     $internalToken = New-RandomSecret
     $postgresPassword = New-RandomSecret
@@ -405,6 +413,17 @@ function New-SecretMaterial([switch]$ExistingCluster) {
         '    admin: true'
         '    defaultTopicPerm: DENY'
         '    defaultGroupPerm: DENY'
+        "  - accessKey: $agentReadAccessKey"
+        "    secretKey: $agentReadSecretKey"
+        '    admin: false'
+        '    defaultTopicPerm: GET'
+        '    defaultGroupPerm: GET'
+        '    clusterPerm: GET'
+        "  - accessKey: $agentMutationAccessKey"
+        "    secretKey: $agentMutationSecretKey"
+        '    admin: true'
+        '    defaultTopicPerm: DENY'
+        '    defaultGroupPerm: DENY'
         ''
     ) -join "`n"
     $bootstrapAcl = @(
@@ -429,6 +448,10 @@ function New-SecretMaterial([switch]$ExistingCluster) {
         'probe-secret-key' = $probeSecretKey
         'bootstrap-access-key' = $bootstrapAccessKey
         'bootstrap-secret-key' = $bootstrapSecretKey
+        'agent-read-access-key' = $agentReadAccessKey
+        'agent-read-secret-key' = $agentReadSecretKey
+        'agent-mutation-access-key' = $agentMutationAccessKey
+        'agent-mutation-secret-key' = $agentMutationSecretKey
         'mcp-token' = $mcpToken
         'internal-token' = $internalToken
         'postgres-user' = 'rocketmq_sre'
@@ -486,7 +509,11 @@ function Apply-Secrets {
         "--from-file=admin-read-secret-key=$(Join-Path $artifactRoot 'admin-read-secret-key')"
     )
     Apply-GeneratedSecret $sreNamespace 'rocketmq-sre-kind-secrets' @(
-        "--from-file=internal-token=$(Join-Path $artifactRoot 'internal-token')"
+        "--from-file=internal-token=$(Join-Path $artifactRoot 'internal-token')",
+        "--from-file=agent-read-access-key=$(Join-Path $artifactRoot 'agent-read-access-key')",
+        "--from-file=agent-read-secret-key=$(Join-Path $artifactRoot 'agent-read-secret-key')",
+        "--from-file=agent-mutation-access-key=$(Join-Path $artifactRoot 'agent-mutation-access-key')",
+        "--from-file=agent-mutation-secret-key=$(Join-Path $artifactRoot 'agent-mutation-secret-key')"
     )
     Apply-GeneratedSecret $sreNamespace 'rocketmq-sre-control-plane-channel-server' @(
         "--from-file=control-plane-server-cert.pem=$(Join-Path $certificateRoot 'control-plane-server-cert.pem')",

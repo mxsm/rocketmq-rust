@@ -26,8 +26,9 @@ quarantine management, correlation-scoped Audit APIs, and a generated Phase 03
 OpenAPI/TypeScript contract. P3-04 adds a fail-closed heterogeneous Critic
 gate: R2 plans can advance to human approval only after an immutable review
 from a different normalized model family, with exact primary/Critic invocation
-lineage and fallback identity. Target-side execution remains fail closed until
-the dedicated Executor and Execution Agent are enabled in P3-05.
+lineage and fallback identity. Target-side execution remains fail closed unless
+the dedicated Executor, Execution Agent, action descriptor, policy, approval,
+lease/fence, and a typed driver are all explicitly enabled.
 
 ## Workspace boundaries
 
@@ -43,8 +44,10 @@ The nine crates are:
 - `rocketmq-sre-model-gateway`: canonical model IR and provider descriptors.
 - `rocketmq-sre-control-plane`: control-plane service composition root.
 - `rocketmq-sre-connector`: MCP connector composition root.
-- `rocketmq-sre-executor`: disabled Phase 00 execution boundary.
-- `rocketmq-sre-execution-agent`: disabled Phase 00 execution agent.
+- `rocketmq-sre-executor`: supervised execution, verification, rollback, and
+  recovery boundary; it has no target mutation credential.
+- `rocketmq-sre-execution-agent`: isolated typed-driver boundary with durable
+  fencing and opt-in target adapters.
 - `rocketmq-sre-probe`: bounded synthetic probe identity and validation.
 - `rocketmq-sre-eval`: schema and coverage validation utilities.
 

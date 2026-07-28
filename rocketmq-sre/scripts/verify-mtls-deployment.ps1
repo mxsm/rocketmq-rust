@@ -57,6 +57,8 @@ $kindNetworkPolicy = Join-Path $kindDirectory 'control-plane-network-policy.yaml
 $kindExecutionStack = Join-Path $kindDirectory 'execution-stack.yaml'
 $kindExecutionRbac = Join-Path $kindDirectory 'execution-rbac.yaml'
 $kindExecutionNetworkPolicy = Join-Path $kindDirectory 'execution-network-policy.yaml'
+$devRunner = Join-Path $scriptDirectory 'dev.ps1'
+$kindRunner = Join-Path $scriptDirectory 'kind.ps1'
 
 foreach ($proxyConfig in @($composeProxy, $kindProxy)) {
     Assert-Contains $proxyConfig 'ssl_verify_client\s+on;' 'mandatory client-certificate verification'
@@ -83,8 +85,13 @@ Assert-Contains $composeFile 'executor-agent:\s*\r?\n\s+name:.*\r?\n\s+internal:
 Assert-Contains $composeFile 'ROCKETMQ_SRE_EXECUTOR_URL:\s+http://sre-executor:8094' 'Compose isolated Executor URL'
 Assert-Contains $composeFile 'ROCKETMQ_SRE_EXECUTION_AGENT_URL:\s+http://sre-execution-agent:8095' 'Compose isolated Agent URL'
 Assert-Contains $composeFile 'ROCKETMQ_SRE_AGENT_ACK_KEY:' 'Compose Agent fence acknowledgement key'
+Assert-Contains $composeFile 'ROCKETMQ_SRE_AGENT_ENABLE_BROKER_CONFIG:\s+"true"' 'Compose explicit Broker driver enablement'
+Assert-Contains $composeFile 'ROCKETMQ_SRE_AGENT_NAMESRV_ADDR:\s+namesrv:9876' 'Compose Agent Broker target'
+Assert-Contains $composeFile 'env_file:\s*\r?\n\s+- .*agent-broker\.env' 'Compose isolated Agent Broker identities'
 Assert-NotContains $composeFile 'ROCKETMQ_SRE_CONTROL_PLANE_URL:\s+http://' 'plain HTTP connector channel'
 Assert-Contains $composeProxy 'proxy_pass\s+http://127\.0\.0\.1:8093;' 'Compose proxy loopback listener upstream'
+Assert-Contains $devRunner "phase03-compose-agent-read" 'Compose dedicated Agent read identity'
+Assert-Contains $devRunner "phase03-compose-agent-mutation" 'Compose dedicated Agent mutation identity'
 
 Assert-Contains $kindConnectorPatch 'ROCKETMQ_SRE_CONTROL_PLANE_URL,\s+value:\s+"https://' 'Kind HTTPS channel URL'
 Assert-Contains $kindConnectorPatch 'ROCKETMQ_SRE_CONTROL_PLANE_CLIENT_IDENTITY_PATH' 'Kind client identity'
@@ -115,10 +122,16 @@ Assert-Contains $kindExecutionStack 'name:\s+sre-executor\s*\r?\n\s+namespace:\s
 Assert-Contains $kindExecutionStack 'name:\s+sre-execution-agent\s*\r?\n\s+namespace:\s+rocketmq-sre\s*\r?\nautomountServiceAccountToken:\s+true' 'Kind Agent target identity'
 Assert-Contains $kindExecutionStack 'serviceAccountName:\s+sre-executor' 'Kind dedicated Executor ServiceAccount'
 Assert-Contains $kindExecutionStack 'serviceAccountName:\s+sre-execution-agent' 'Kind dedicated Agent ServiceAccount'
+Assert-Contains $kindExecutionStack 'ROCKETMQ_SRE_AGENT_ENABLE_BROKER_CONFIG,\s+value:\s+"true"' 'Kind explicit Broker driver enablement'
+Assert-Contains $kindExecutionStack 'ROCKETMQ_SRE_AGENT_NAMESRV_ADDR,\s+value:\s+"rocketmq-namesrv:9876"' 'Kind Agent Broker target'
+Assert-Contains $kindExecutionStack 'key:\s+agent-read-access-key' 'Kind Agent read identity'
+Assert-Contains $kindExecutionStack 'key:\s+agent-mutation-access-key' 'Kind Agent mutation identity'
 Assert-Contains $kindExecutionRbac 'name:\s+sre-execution-agent\s*\r?\n\s+namespace:\s+rocketmq-sre' 'Kind Agent-only mutation role binding'
 Assert-NotContains $kindExecutionRbac 'name:\s+sre-executor' 'Kind Executor target role binding'
 Assert-Contains $kindExecutionNetworkPolicy 'name:\s+sre-executor-isolation' 'Kind Executor network boundary'
 Assert-Contains $kindExecutionNetworkPolicy 'name:\s+sre-execution-agent-isolation' 'Kind Agent network boundary'
+Assert-Contains $kindRunner "phase03-kind-agent-read" 'Kind dedicated Agent read identity'
+Assert-Contains $kindRunner "phase03-kind-agent-mutation" 'Kind dedicated Agent mutation identity'
 
 $kindPatchContent = Get-Content -Raw -LiteralPath $kindConnectorPatch
 $connectorContainer = [regex]::Match(

@@ -47,10 +47,20 @@ Compose 配置校验和启动。Broker、NameServer、Controller、Proxy
 fixture 目录且不会挂载。观测组件通过 `observability` profile 一并启动。不要把
 `target/phase00-certs` 中的私钥复制到生产镜像或配置库。
 
-RocketMQ ACL 使用三套互不复用的开发身份：MCP reader 只有
+RocketMQ ACL 使用五套互不复用的开发身份：MCP reader 和 Agent reader 只有
 Topic/Group/Cluster `GET` 权限；Probe 只能对固定 `SRE_PROBE_` Topic 和 Group
-执行有界 PUB/SUB；bootstrap admin 只注入一次性 Topic 创建容器。MCP 不挂载
-Broker ACL 或 bootstrap secret，Probe 也无法读取 reader/bootstrap 凭据。
+执行有界 PUB/SUB；bootstrap admin 只注入一次性 Topic 创建容器；Agent mutation
+identity 只注入 Execution Agent。MCP 不挂载 Broker ACL、bootstrap secret 或
+Agent mutation secret，Probe 也无法读取 reader/bootstrap/Agent 凭据。Execution
+Agent 通过 `ROCKETMQ_SRE_AGENT_ENABLE_BROKER_CONFIG=true` 显式启用窄化的
+`broker.config.patch_allowlisted.v1` 适配器；`agent-broker.env` 提供互不复用的
+read/mutation identity，配置和 Debug 输出不会记录 secret。
+
+Compose 的 Broker 适配器只用于可丢弃的开发集群，使用 generation CAS、写前快照、
+追加式结果台账和漂移保护。生产环境必须使用 TLS，并分别配置
+`ROCKETMQ_SRE_AGENT_BROKER_READ_*` 与
+`ROCKETMQ_SRE_AGENT_BROKER_MUTATION_*`；缺少任一身份或两个身份使用同一 access key
+时，Agent 启动即失败。Executor 仍不持有 RocketMQ 凭据，也没有目标网络。
 
 Control Plane 的 onboarding 使用经过鉴权的租户、集群和主体上下文，并要求
 `rocketmq:onboard` 角色；开发模式由 Compose 显式传入固定的 tenant、cluster 和

@@ -156,6 +156,29 @@ spec:
             - {name: ROCKETMQ_SRE_LEASE_AUTHORITY_URL, value: "http://sre-control-plane:8090"}
             - {name: ROCKETMQ_SRE_AGENT_SUBJECT, value: "rocketmq-sre-execution-agent"}
             - {name: ROCKETMQ_SRE_AGENT_DEV_INSECURE_HTTP, value: "true"}
+            - {name: ROCKETMQ_SRE_AGENT_ENABLE_BROKER_CONFIG, value: "true"}
+            - {name: ROCKETMQ_SRE_AGENT_NAMESRV_ADDR, value: "rocketmq-namesrv:9876"}
+            - {name: ROCKETMQ_SRE_AGENT_BROKER_ADMIN_USE_TLS, value: "false"}
+            - name: ROCKETMQ_SRE_AGENT_BROKER_READ_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-sre-kind-secrets
+                  key: agent-read-access-key
+            - name: ROCKETMQ_SRE_AGENT_BROKER_READ_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-sre-kind-secrets
+                  key: agent-read-secret-key
+            - name: ROCKETMQ_SRE_AGENT_BROKER_MUTATION_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-sre-kind-secrets
+                  key: agent-mutation-access-key
+            - name: ROCKETMQ_SRE_AGENT_BROKER_MUTATION_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-sre-kind-secrets
+                  key: agent-mutation-secret-key
             - name: ROCKETMQ_SRE_AGENT_AUTHORITY_TOKEN
               valueFrom:
                 secretKeyRef:

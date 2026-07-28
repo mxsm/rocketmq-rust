@@ -30,10 +30,13 @@ only process that can reach the separate `127.0.0.1:8093` upstream.
 Development credentials are generated into `target/phase00-kind`; the shared
 RocketMQ and Connector-channel certificates are generated into
 `target/phase00-certs`. They are not production credentials.
-The runner creates separate MCP reader, bounded Probe, and one-shot bootstrap
-identities. The MCP Pod receives only its reader credential secret; the Broker
-ACL and bootstrap credential remain in the RocketMQ namespace secret, and the
-reader cannot perform Topic, Group, or cluster mutations.
+The runner creates separate MCP reader, Agent reader, Agent mutation, bounded
+Probe, and one-shot bootstrap identities. The MCP Pod receives only its reader
+credential secret; the Broker ACL and bootstrap credential remain in the
+RocketMQ namespace secret. The Agent receives its two identities through
+individual Secret keys in the SRE namespace. Neither reader can perform Topic,
+Group, or cluster mutations, and only the Execution Agent receives the mutation
+identity.
 Although MCP and Connector share a Pod, the Connector mounts a separate Secret
 projection containing only MCP's public `ca.crt`; it cannot read MCP's TLS
 private key, admin identity, request policy, or RocketMQ reader credential
@@ -82,7 +85,10 @@ Executor → Control Plane Lease Authority, and Executor → Agent. Executor has
 target namespace/Kubernetes API path and mounts no target credential. Only the
 Agent ServiceAccount is bound to the closed workload mutation Role; the Agent
 still requires an active epoch grant and durable shared/exclusive PostgreSQL
-barrier before invoking any registered handler.
+barrier before invoking any registered handler. The Kind test profile explicitly
+enables the generation-checked Broker configuration adapter against
+`rocketmq-namesrv:9876`; its read and mutation access keys are distinct. A
+production deployment must additionally use TLS and production secret delivery.
 
 `Up` builds and loads all local RocketMQ/SRE images. Use `-SkipBuild` only when
 every required image already exists in the local Docker engine. Re-running

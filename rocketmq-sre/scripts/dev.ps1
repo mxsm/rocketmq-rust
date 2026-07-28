@@ -28,6 +28,7 @@ $requiredBaseDevelopmentMaterial = @(
     'broker-acl.yml',
     'mcp-rmq-credentials.yml',
     'admin-read.env',
+    'agent-broker.env',
     'probe-secret-key',
     'probe.env',
     'bootstrap.env'
@@ -373,6 +374,10 @@ function New-DevelopmentCertificates {
     $probeSecretKey = New-RandomSecret
     $bootstrapAccessKey = 'phase00-compose-bootstrap'
     $bootstrapSecretKey = New-RandomSecret
+    $agentReadAccessKey = 'phase03-compose-agent-read'
+    $agentReadSecretKey = New-RandomSecret
+    $agentMutationAccessKey = 'phase03-compose-agent-mutation'
+    $agentMutationSecretKey = New-RandomSecret
     $probeTopic = 'SRE_PROBE_00000000000040008000000000000001_00000000000000000000000000000000'
     $probeProducerGroup = 'SRE_PROBE_G_P_00000000000040008000000000000001_00000000000000000000000000000000'
     $probeConsumerGroup = 'SRE_PROBE_G_C_00000000000040008000000000000001_00000000000000000000000000000000'
@@ -400,6 +405,17 @@ function New-DevelopmentCertificates {
         '    admin: true'
         '    defaultTopicPerm: DENY'
         '    defaultGroupPerm: DENY'
+        "  - accessKey: $agentReadAccessKey"
+        "    secretKey: $agentReadSecretKey"
+        '    admin: false'
+        '    defaultTopicPerm: GET'
+        '    defaultGroupPerm: GET'
+        '    clusterPerm: GET'
+        "  - accessKey: $agentMutationAccessKey"
+        "    secretKey: $agentMutationSecretKey"
+        '    admin: true'
+        '    defaultTopicPerm: DENY'
+        '    defaultGroupPerm: DENY'
         ''
     ) -join "`n"
     [IO.File]::WriteAllText(
@@ -415,6 +431,17 @@ function New-DevelopmentCertificates {
     [IO.File]::WriteAllText(
         (Join-Path $certificateDirectory 'admin-read.env'),
         "ROCKETMQ_SRE_ADMIN_ACCESS_KEY=$mcpAccessKey`nROCKETMQ_SRE_ADMIN_SECRET_KEY=$mcpSecretKey`n",
+        [Text.UTF8Encoding]::new($false)
+    )
+    [IO.File]::WriteAllText(
+        (Join-Path $certificateDirectory 'agent-broker.env'),
+        @(
+            "ROCKETMQ_SRE_AGENT_BROKER_READ_ACCESS_KEY=$agentReadAccessKey"
+            "ROCKETMQ_SRE_AGENT_BROKER_READ_SECRET_KEY=$agentReadSecretKey"
+            "ROCKETMQ_SRE_AGENT_BROKER_MUTATION_ACCESS_KEY=$agentMutationAccessKey"
+            "ROCKETMQ_SRE_AGENT_BROKER_MUTATION_SECRET_KEY=$agentMutationSecretKey"
+            ''
+        ) -join "`n",
         [Text.UTF8Encoding]::new($false)
     )
     [IO.File]::WriteAllText(
@@ -438,7 +465,7 @@ function New-DevelopmentCertificates {
         '--entrypoint', '/bin/sh',
         $opensslImage,
         '-ec',
-        'chown 10001:10001 /certs/ca-cert.pem /certs/server-cert.pem /certs/server-key.pem /certs/control-plane-server-ca-cert.pem /certs/control-plane-server-cert.pem /certs/control-plane-server-key.pem /certs/connector-client-ca-cert.pem /certs/connector-client-cert.pem /certs/connector-client-key.pem /certs/connector-client-identity.pem /certs/admin.identity /certs/request-policy.json /certs/broker-acl.yml /certs/mcp-rmq-credentials.yml /certs/admin-read.env /certs/probe-secret-key; chmod 0444 /certs/ca-cert.pem /certs/server-cert.pem /certs/control-plane-server-ca-cert.pem /certs/control-plane-server-cert.pem /certs/connector-client-ca-cert.pem /certs/connector-client-cert.pem /certs/admin.identity /certs/request-policy.json; chmod 0400 /certs/server-key.pem /certs/control-plane-server-key.pem /certs/connector-client-key.pem /certs/connector-client-identity.pem /certs/broker-acl.yml /certs/mcp-rmq-credentials.yml /certs/admin-read.env /certs/probe-secret-key'
+        'chown 10001:10001 /certs/ca-cert.pem /certs/server-cert.pem /certs/server-key.pem /certs/control-plane-server-ca-cert.pem /certs/control-plane-server-cert.pem /certs/control-plane-server-key.pem /certs/connector-client-ca-cert.pem /certs/connector-client-cert.pem /certs/connector-client-key.pem /certs/connector-client-identity.pem /certs/admin.identity /certs/request-policy.json /certs/broker-acl.yml /certs/mcp-rmq-credentials.yml /certs/admin-read.env /certs/agent-broker.env /certs/probe-secret-key; chmod 0444 /certs/ca-cert.pem /certs/server-cert.pem /certs/control-plane-server-ca-cert.pem /certs/control-plane-server-cert.pem /certs/connector-client-ca-cert.pem /certs/connector-client-cert.pem /certs/admin.identity /certs/request-policy.json; chmod 0400 /certs/server-key.pem /certs/control-plane-server-key.pem /certs/connector-client-key.pem /certs/connector-client-identity.pem /certs/broker-acl.yml /certs/mcp-rmq-credentials.yml /certs/admin-read.env /certs/agent-broker.env /certs/probe-secret-key'
     )
     foreach ($temporaryFile in @(
         'server.csr',
