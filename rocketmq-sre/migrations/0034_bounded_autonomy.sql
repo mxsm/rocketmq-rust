@@ -234,7 +234,7 @@ CREATE TABLE autonomy_dynamic_safety_decisions (
     plan_id UUID NOT NULL REFERENCES action_plans(id),
     plan_hash TEXT NOT NULL CHECK (plan_hash ~ '^sha256:[0-9A-Fa-f]{64}$'),
     execution_id UUID REFERENCES executions(id),
-    execution_step_id UUID REFERENCES execution_steps(id),
+    execution_step_id UUID,
     policy_definition_version BIGINT NOT NULL CHECK (policy_definition_version > 0),
     lifecycle_revision BIGINT NOT NULL CHECK (lifecycle_revision > 0),
     error_budget_available BOOLEAN NOT NULL,
