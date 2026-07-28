@@ -21,6 +21,7 @@ use serde_json::Value;
 
 use crate::ActionPlan;
 use crate::ApprovalGrant;
+use crate::AutonomyGrant;
 use crate::ClusterId;
 use crate::ContractError;
 use crate::CorrelationId;
@@ -111,6 +112,8 @@ pub struct ExecutionRequest {
     pub correlation_id: CorrelationId,
     pub plan: ActionPlan,
     pub approvals: Vec<ApprovalGrant>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autonomy_grant: Option<AutonomyGrant>,
     pub requested_by: String,
     pub idempotency_key: String,
     pub issuer: String,
@@ -132,8 +135,8 @@ impl ExecutionRequest {
     /// # Errors
     ///
     /// Rejects incompatible schemas, invalid validity windows, modified plans,
-    /// missing approvals, audience drift, and approval bindings that do not
-    /// match the exact plan snapshot.
+    /// ambiguous authorization, audience drift, and authorization bindings
+    /// that do not match the exact plan snapshot.
     pub fn validate_at(&self, now: DateTime<Utc>, expected_audience: &str) -> Result<(), ContractError> {
         if self.schema_version != Self::SCHEMA_VERSION {
             return Err(ContractError::UnsupportedSchemaFamily {
@@ -156,14 +159,22 @@ impl ExecutionRequest {
             });
         }
         self.plan.verify_plan_hash()?;
-        if self.plan.status != PlanStatus::Approved
+        let human_authorized = !self.approvals.is_empty();
+        let autonomous_authorized = self.autonomy_grant.is_some();
+        let authorization_is_exclusive = human_authorized ^ autonomous_authorized;
+        let plan_status_is_valid = if autonomous_authorized {
+            matches!(self.plan.status, PlanStatus::ReadyForApproval | PlanStatus::Approved)
+        } else {
+            self.plan.status == PlanStatus::Approved
+        };
+        if !authorization_is_exclusive
+            || !plan_status_is_valid
             || self.plan.tenant_id != self.tenant_id
             || self.plan.cluster_id != self.cluster_id
             || self.plan.expires_at <= now
-            || self.approvals.is_empty()
         {
             return Err(ContractError::InvalidDescriptor {
-                reason: "execution request requires an approved, current, same-scope plan".to_owned(),
+                reason: "execution request requires exactly one current, same-scope authorization".to_owned(),
             });
         }
         let precondition_hash = self.plan.compute_precondition_hash()?;
@@ -187,7 +198,43 @@ impl ExecutionRequest {
                 reason: "approval grant does not bind the current plan and precondition hash".to_owned(),
             });
         }
+        if let Some(grant) = &self.autonomy_grant {
+            if grant.issuer.trim().is_empty()
+                || grant.audience != expected_audience
+                || grant.plan_id != self.plan.id
+                || grant.plan_hash != self.plan.plan_hash
+                || !is_sha256_digest(&grant.plan_hash)
+                || grant.diagnosis_revision_id != self.plan.diagnosis_revision
+                || grant.tenant_id != self.tenant_id
+                || grant.cluster_id != self.cluster_id
+                || grant.policy_definition_version == 0
+                || grant.lifecycle_revision == 0
+                || !is_sha256_digest(&grant.autonomous_cohort_hash)
+                || grant.primary_model_invocation_id != self.plan.primary_model_invocation_id
+                || grant.primary_model_invocation_id == grant.critic_model_invocation_id
+                || grant.nonce.trim().is_empty()
+                || grant.signature.trim().is_empty()
+                || grant.issued_at > now
+                || grant.expires_at <= now
+                || grant.expires_at <= grant.issued_at
+                || self
+                    .plan
+                    .steps
+                    .iter()
+                    .any(|step| step.action != grant.action || step.descriptor_version != grant.action_version)
+            {
+                return Err(ContractError::InvalidDescriptor {
+                    reason: "autonomy grant does not bind the current R1 plan scope".to_owned(),
+                });
+            }
+        }
         Ok(())
+    }
+
+    /// Returns whether this request uses short-lived autonomy authorization.
+    #[must_use]
+    pub const fn is_autonomous(&self) -> bool {
+        self.autonomy_grant.is_some()
     }
 }
 
@@ -268,7 +315,22 @@ pub struct ExecutionResult {
 
 #[cfg(test)]
 mod tests {
+    use chrono::Duration;
+    use serde_json::json;
+
     use super::*;
+    use crate::ActionPlanDraft;
+    use crate::AutonomyCohortId;
+    use crate::AutonomyPolicyId;
+    use crate::CompensationMode;
+    use crate::CompensationSpec;
+    use crate::CriticReviewId;
+    use crate::DiagnosisRevisionId;
+    use crate::EvidenceId;
+    use crate::ImpactScope;
+    use crate::ModelInvocationId;
+    use crate::PlanStepId;
+    use crate::VerificationSpec;
 
     #[test]
     fn transition_graph_rejects_skipping_intent() {
@@ -292,5 +354,115 @@ mod tests {
         };
 
         assert!(transition.validate().is_ok());
+    }
+
+    #[test]
+    fn autonomous_request_requires_an_exclusive_exact_grant() {
+        let now = Utc::now();
+        let plan = ActionPlan::seal(ActionPlanDraft {
+            id: crate::ActionPlanId::new(),
+            tenant_id: TenantId::new(),
+            cluster_id: ClusterId::new(),
+            incident_id: crate::IncidentId::new(),
+            diagnosis_revision: DiagnosisRevisionId::new(),
+            primary_model_invocation_id: ModelInvocationId::new(),
+            diagnosis_execution_eligible: true,
+            version: 1,
+            created_by: "autonomy-orchestrator".to_owned(),
+            created_at: now - Duration::minutes(1),
+            expires_at: now + Duration::minutes(10),
+            evidence_hash: digest('a'),
+            steps: vec![PlanStep {
+                id: PlanStepId::new(),
+                sequence: 1,
+                action: ExecutionAction::ObservabilityLoggerLevelTtl,
+                descriptor_version: "1.0.0".to_owned(),
+                resource: "broker/broker-a".to_owned(),
+                parameters: json!({"logger": "rocketmq", "level": "debug", "ttl_seconds": 60}),
+                evidence_ids: vec![EvidenceId::new()],
+                precondition_hash: digest('b'),
+                max_impact: ImpactScope::SingleInstance,
+                verification: VerificationSpec {
+                    resource_conditions: vec!["logger_level_applied".to_owned()],
+                    technical_slis: vec!["broker_up".to_owned()],
+                    stable_window_seconds: 30,
+                    max_wait_seconds: 120,
+                },
+                compensation: CompensationSpec {
+                    mode: CompensationMode::Automatic,
+                    required_before_fields: vec!["level".to_owned()],
+                    timeout_seconds: 60,
+                },
+            }],
+        })
+        .expect("plan")
+        .submit_for_review(now, false)
+        .expect("ready plan");
+        let grant = AutonomyGrant {
+            issuer: "rocketmq-sre-control-plane".to_owned(),
+            audience: "rocketmq-sre-executor".to_owned(),
+            plan_id: plan.id,
+            plan_hash: plan.plan_hash.clone(),
+            diagnosis_revision_id: plan.diagnosis_revision,
+            tenant_id: plan.tenant_id,
+            cluster_id: plan.cluster_id,
+            action: ExecutionAction::ObservabilityLoggerLevelTtl,
+            action_version: "1.0.0".to_owned(),
+            policy_id: AutonomyPolicyId::new(),
+            policy_definition_version: 2,
+            lifecycle_revision: 4,
+            autonomous_cohort_id: AutonomyCohortId::new(),
+            autonomous_cohort_hash: digest('c'),
+            critic_review_id: CriticReviewId::new(),
+            primary_model_invocation_id: plan.primary_model_invocation_id,
+            critic_model_invocation_id: ModelInvocationId::new(),
+            issued_at: now - Duration::seconds(1),
+            expires_at: now + Duration::seconds(30),
+            nonce: "autonomy-grant-nonce".to_owned(),
+            signature: "hmac-sha256:test".to_owned(),
+        };
+        let mut request = ExecutionRequest {
+            schema_version: ExecutionRequest::SCHEMA_VERSION.to_owned(),
+            id: ExecutionId::new(),
+            tenant_id: plan.tenant_id,
+            cluster_id: plan.cluster_id,
+            correlation_id: CorrelationId::new(),
+            plan,
+            approvals: Vec::new(),
+            autonomy_grant: Some(grant),
+            requested_by: "autonomy-orchestrator".to_owned(),
+            idempotency_key: "autonomy-execution-1".to_owned(),
+            issuer: "rocketmq-sre-control-plane".to_owned(),
+            audience: "rocketmq-sre-executor".to_owned(),
+            issued_at: now - Duration::seconds(1),
+            expires_at: now + Duration::seconds(30),
+            nonce: "execution-request-nonce".to_owned(),
+            signature: "hmac-sha256:test".to_owned(),
+        };
+
+        assert!(request.validate_at(now, "rocketmq-sre-executor").is_ok());
+        request.approvals.push(ApprovalGrant {
+            issuer: "rocketmq-sre-control-plane".to_owned(),
+            audience: "rocketmq-sre-executor".to_owned(),
+            approval_id: crate::ApprovalId::new(),
+            plan_id: request.plan.id,
+            plan_hash: request.plan.plan_hash.clone(),
+            precondition_hash: request.plan.compute_precondition_hash().expect("precondition hash"),
+            tenant_id: request.tenant_id,
+            cluster_id: request.cluster_id,
+            approver_subject: "operator-a".to_owned(),
+            issued_at: now - Duration::seconds(1),
+            expires_at: now + Duration::seconds(30),
+            nonce: "approval-nonce".to_owned(),
+            signature: "hmac-sha256:test".to_owned(),
+        });
+        assert!(request.validate_at(now, "rocketmq-sre-executor").is_err());
+        request.approvals.clear();
+        request.autonomy_grant.as_mut().expect("grant").action_version = "2.0.0".to_owned();
+        assert!(request.validate_at(now, "rocketmq-sre-executor").is_err());
+    }
+
+    fn digest(value: char) -> String {
+        format!("sha256:{}", value.to_string().repeat(64))
     }
 }
