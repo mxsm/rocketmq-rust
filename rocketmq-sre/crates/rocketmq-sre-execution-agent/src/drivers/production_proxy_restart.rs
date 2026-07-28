@@ -60,6 +60,7 @@ use crate::config::BrokerAdminDriverConfig;
 use crate::config::ProxyRestartDriverConfig;
 
 const OPERATION_ANNOTATION: &str = "rocketmq.apache.org/sre-restart-operation";
+const LAST_OPERATION_ANNOTATION: &str = "rocketmq.apache.org/sre-restart-last-operation";
 const EXECUTION_ANNOTATION: &str = "rocketmq.apache.org/sre-restart-execution";
 const PLAN_STEP_ANNOTATION: &str = "rocketmq.apache.org/sre-restart-plan-step";
 const ORIGINAL_POD_ANNOTATION: &str = "rocketmq.apache.org/sre-restart-original-pod";
@@ -433,6 +434,28 @@ impl ProductionProxyRestartClient {
             .map_err(|_| ExecutionAgentError::DriverFailed)
     }
 
+    async fn complete_restart(
+        &self,
+        target: &AllowedTarget,
+        operation_id: &str,
+    ) -> Result<Deployment, ExecutionAgentError> {
+        let deployments: Api<Deployment> = Api::namespaced(self.kube.clone(), &target.namespace);
+        let mut deployment = deployments
+            .get(&target.deployment)
+            .await
+            .map_err(|_| ExecutionAgentError::DriverFailed)?;
+        if annotation(&deployment, OPERATION_ANNOTATION) != Some(operation_id) {
+            return Err(ExecutionAgentError::DriverFailed);
+        }
+        let annotations = deployment.metadata.annotations.get_or_insert_with(BTreeMap::new);
+        annotations.insert(LAST_OPERATION_ANNOTATION.to_owned(), operation_id.to_owned());
+        annotations.remove(OPERATION_ANNOTATION);
+        deployments
+            .replace(&target.deployment, &PostParams::default(), &deployment)
+            .await
+            .map_err(|_| ExecutionAgentError::DriverFailed)
+    }
+
     async fn replace_annotations(
         &self,
         target: &AllowedTarget,
@@ -546,7 +569,8 @@ impl ProxyRestartClient for ProductionProxyRestartClient {
     fn proxy_restart_state<'a>(&'a self, namespace: &'a str, pod: &'a str) -> DriverFuture<'a, ProxyRestartState> {
         Box::pin(async move {
             let resolved = self.resolve_target(namespace, pod).await?;
-            let operation_id = annotation(&resolved.deployment, OPERATION_ANNOTATION).map(str::to_owned);
+            let active_operation_id = annotation(&resolved.deployment, OPERATION_ANNOTATION).map(str::to_owned);
+            let last_operation_id = annotation(&resolved.deployment, LAST_OPERATION_ANNOTATION).map(str::to_owned);
             let original_uid = annotation(&resolved.deployment, ORIGINAL_UID_ANNOTATION);
             let current_pod = resolved.pod.ok_or(ExecutionAgentError::DriverFailed)?;
             let pod_uid = current_pod
@@ -556,8 +580,9 @@ impl ProxyRestartClient for ProductionProxyRestartClient {
                 .ok_or(ExecutionAgentError::DriverFailed)?;
             let pod_is_ready = pod_ready(&current_pod);
             let remaining_replicas_healthy = self.remaining_replicas_healthy(&resolved.deployment, &pod_uid).await?;
-            let replacement_ready =
-                operation_id.is_some() && original_uid.is_some_and(|uid| uid != pod_uid) && pod_is_ready;
+            let replacement_ready = (active_operation_id.is_some() || last_operation_id.is_some())
+                && original_uid.is_some_and(|uid| uid != pod_uid)
+                && pod_is_ready;
             let addr = proxy_addr(&current_pod, resolved.allowed.remoting_port)?;
             let drain = self.query_drain(&addr).await.ok();
             let verification = if replacement_ready {
@@ -573,7 +598,8 @@ impl ProxyRestartClient for ProductionProxyRestartClient {
                 replacement_ready,
                 synthetic_path_healthy: verification.synthetic_path_healthy,
                 slo_healthy: verification.slo_healthy,
-                last_operation_id: operation_id,
+                active_operation_id,
+                last_operation_id,
                 drain,
             })
         })
@@ -660,6 +686,7 @@ impl ProxyRestartClient for ProductionProxyRestartClient {
             if !accepting(&replacement_drain) || !verification.synthetic_path_healthy || !verification.slo_healthy {
                 return Err(ExecutionAgentError::DriverFailed);
             }
+            self.complete_restart(&resolved.allowed, &request.operation_id).await?;
             Ok(())
         })
     }
