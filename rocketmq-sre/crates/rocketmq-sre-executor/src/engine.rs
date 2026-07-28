@@ -24,8 +24,6 @@ use chrono::TimeDelta;
 use chrono::Utc;
 use rocketmq_sre_contracts::ActivateLeaseRequest;
 use rocketmq_sre_contracts::AdvanceFenceRequest;
-use rocketmq_sre_contracts::AgentDispatchRequest;
-use rocketmq_sre_contracts::AgentStepRequest;
 use rocketmq_sre_contracts::AuditEvent;
 use rocketmq_sre_contracts::AuditEventId;
 use rocketmq_sre_contracts::AuditEventKind;
@@ -35,10 +33,8 @@ use rocketmq_sre_contracts::EXECUTION_AGENT_SCHEMA_VERSION;
 use rocketmq_sre_contracts::ExecutionId;
 use rocketmq_sre_contracts::ExecutionRequest;
 use rocketmq_sre_contracts::ExecutionState;
-use rocketmq_sre_contracts::ExecutionStepId;
 use rocketmq_sre_contracts::ExecutionTransition;
 use rocketmq_sre_contracts::ExecutorLease;
-use rocketmq_sre_contracts::IssueFenceGrantRequest;
 use rocketmq_sre_contracts::LEASE_AUTHORITY_SCHEMA_VERSION;
 use rocketmq_sre_contracts::LeaseState;
 use rocketmq_sre_contracts::ReconcileEffectRequest;
@@ -55,6 +51,7 @@ use tokio::sync::Mutex;
 use crate::ExecutionAgentClient;
 use crate::ExecutionJournal;
 use crate::ExecutionPrechecker;
+use crate::ExecutionVerifier;
 use crate::ExecutorAuthorityClient;
 use crate::ExecutorError;
 use crate::ResourceLock;
@@ -115,6 +112,7 @@ pub struct ChangeExecutor {
     authority: Arc<dyn ExecutorAuthorityClient>,
     agent: Arc<dyn ExecutionAgentClient>,
     prechecker: ExecutionPrechecker,
+    verifier: Option<ExecutionVerifier>,
     executor_subject: Arc<str>,
     lease_ttl_seconds: u32,
     resource_lock_ttl: Duration,
@@ -144,12 +142,21 @@ impl ChangeExecutor {
             authority,
             agent,
             prechecker,
+            verifier: None,
             executor_subject: executor_subject.into(),
             lease_ttl_seconds,
             resource_lock_ttl,
             leases: Arc::new(Mutex::new(BTreeMap::new())),
             metrics: Arc::new(ExecutorMetrics::default()),
         }
+    }
+
+    /// Installs the read-only verification boundary required before any
+    /// descriptor can execute.
+    #[must_use]
+    pub fn with_verifier(mut self, verifier: ExecutionVerifier) -> Self {
+        self.verifier = Some(verifier);
+        self
     }
 
     /// Returns true when PostgreSQL and the typed Agent boundary are ready.
@@ -195,6 +202,7 @@ impl ChangeExecutor {
         for step in &request.plan.steps {
             self.prechecker.registry().validate_step(step)?;
         }
+        let verifier = self.verifier.as_ref().ok_or(ExecutorError::Configuration)?;
         let (resource_key, action) = execution_projection(request)?;
         let creation = self
             .journal
@@ -256,168 +264,18 @@ impl ChangeExecutor {
                 return Err(error);
             }
         };
-        let dispatch_result = self.dispatch_steps(request).await;
-        if dispatch_result.is_err() && !self.journal.has_intent(request.id).await.unwrap_or(true) {
+        let execution_result = self.execute_supervised_flow(request, &locks, verifier).await;
+        if execution_result.is_err() && !self.journal.has_intent(request.id).await.unwrap_or(true) {
             self.release_locks(&locks, request.id, "execution_rejected_before_dispatch")
                 .await;
         }
-        dispatch_result?;
+        let state = execution_result?;
         Ok(ExecuteOutcome {
             execution_id: request.id,
-            state: ExecutionState::Verifying,
+            state,
             replayed: false,
             accepted_steps: request.plan.steps.len(),
         })
-    }
-
-    async fn dispatch_steps(&self, request: &ExecutionRequest) -> Result<(), ExecutorError> {
-        for (index, step) in request.plan.steps.iter().enumerate() {
-            let lease = self.current_lease(request.cluster_id).await?;
-            let step_id = ExecutionStepId::new();
-            let grant = self
-                .authority
-                .issue_fence_grant(&IssueFenceGrantRequest {
-                    schema_version: LEASE_AUTHORITY_SCHEMA_VERSION.to_owned(),
-                    tenant_id: request.tenant_id,
-                    cluster_id: request.cluster_id,
-                    lease_id: lease.id,
-                    epoch: lease.epoch,
-                    execution_id: request.id,
-                    step_id,
-                    plan_step_id: step.id,
-                })
-                .await
-                .inspect_err(|_| {
-                    self.metrics.fence_rejections_total.fetch_add(1, Ordering::Relaxed);
-                })?;
-            let now = Utc::now();
-            let intent = StepIntent {
-                execution_id: request.id,
-                step_id,
-                plan_hash: request.plan.plan_hash.clone(),
-                step: step.clone(),
-                attempt: 1,
-                idempotency_key: format!("{}:{}:forward:1", request.idempotency_key, step.id),
-                fence_grant: grant,
-                intended_at: now,
-                compensation: false,
-            };
-            self.journal
-                .append_intent_with_audit(
-                    &intent,
-                    &self.audit(
-                        request,
-                        AuditEventKind::StepIntentPersisted,
-                        "step_intent",
-                        intent.step_id.to_string(),
-                        "step_intent_persisted",
-                        json!({
-                            "plan_step_id": step.id,
-                            "sequence": step.sequence,
-                            "action": step.action,
-                            "lease_epoch": intent.fence_grant.epoch,
-                        }),
-                        now,
-                    ),
-                )
-                .await?;
-            if index == 0 {
-                self.transition(
-                    request,
-                    ExecutionState::Prechecking,
-                    ExecutionState::IntentPersisted,
-                    "first_step_intent_persisted",
-                )
-                .await?;
-                self.transition(
-                    request,
-                    ExecutionState::IntentPersisted,
-                    ExecutionState::Applying,
-                    "agent_dispatch_started",
-                )
-                .await?;
-            }
-            let response = self
-                .agent
-                .dispatch(&AgentDispatchRequest {
-                    schema_version: EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
-                    tenant_id: request.tenant_id,
-                    request: AgentStepRequest {
-                        intent: intent.clone(),
-                        action: step.action,
-                        descriptor_version: step.descriptor_version.clone(),
-                        target: step.resource.clone(),
-                        parameters: step.parameters.clone(),
-                    },
-                })
-                .await;
-            let response = match response {
-                Ok(response) => response,
-                Err(error) => {
-                    self.transition(
-                        request,
-                        ExecutionState::Applying,
-                        ExecutionState::Unknown,
-                        "agent_effect_unknown",
-                    )
-                    .await?;
-                    self.transition(
-                        request,
-                        ExecutionState::Unknown,
-                        ExecutionState::Reconciling,
-                        "read_only_reconcile_required",
-                    )
-                    .await?;
-                    let reconcile = self.ensure_active_lease(request, true).await;
-                    return match reconcile {
-                        Ok(_) => Err(error),
-                        Err(ExecutorError::ReconcileBlocked) => {
-                            self.metrics.reconcile_blocks_total.fetch_add(1, Ordering::Relaxed);
-                            Err(ExecutorError::ReconcileBlocked)
-                        }
-                        Err(other) => Err(other),
-                    };
-                }
-            };
-            let completed_at = Utc::now();
-            let result = StepResult {
-                step_id,
-                state: ExecutionState::Verifying,
-                agent_result: Some(response.result),
-                verification: None,
-                reason_code: if response.replayed {
-                    "agent_effect_replayed"
-                } else {
-                    "agent_effect_confirmed"
-                }
-                .to_owned(),
-                completed_at,
-            };
-            self.journal
-                .append_result_with_audit(
-                    request.id,
-                    1,
-                    &result,
-                    &self.audit(
-                        request,
-                        AuditEventKind::StepResultPersisted,
-                        "step_result",
-                        step_id.to_string(),
-                        &result.reason_code,
-                        json!({"sequence": step.sequence, "action": step.action}),
-                        completed_at,
-                    ),
-                )
-                .await?;
-        }
-        self.transition(
-            request,
-            ExecutionState::Applying,
-            ExecutionState::Verifying,
-            "all_agent_effects_confirmed",
-        )
-        .await?;
-        Ok(())
     }
 
     async fn ensure_active_lease(
@@ -794,3 +652,6 @@ fn execution_projection(
     };
     Ok((resource, first.action))
 }
+
+#[path = "execution_flow.rs"]
+mod execution_flow;

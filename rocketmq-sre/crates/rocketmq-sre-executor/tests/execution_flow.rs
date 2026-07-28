@@ -1,0 +1,520 @@
+// Copyright 2026 The RocketMQ Rust Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#[allow(
+    dead_code,
+    reason = "the shared PostgreSQL fixture exposes recovery helpers not used by this focused flow test"
+)]
+#[path = "postgres_recovery/support.rs"]
+mod support;
+
+use std::collections::VecDeque;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::time::Duration;
+
+use chrono::TimeDelta;
+use chrono::Utc;
+use rocketmq_sre_contracts::ActivateLeaseRequest;
+use rocketmq_sre_contracts::AdvanceFenceRequest;
+use rocketmq_sre_contracts::AdvanceFenceResponse;
+use rocketmq_sre_contracts::AgentDispatchRequest;
+use rocketmq_sre_contracts::AgentDispatchResponse;
+use rocketmq_sre_contracts::AgentReadRequest;
+use rocketmq_sre_contracts::AgentReadResult;
+use rocketmq_sre_contracts::AgentStepResult;
+use rocketmq_sre_contracts::BeginLeaseTakeoverRequest;
+use rocketmq_sre_contracts::BeginLeaseTakeoverResponse;
+use rocketmq_sre_contracts::CoverageStatus;
+use rocketmq_sre_contracts::EXECUTION_AGENT_SCHEMA_VERSION;
+use rocketmq_sre_contracts::EffectState;
+use rocketmq_sre_contracts::EvidenceContent;
+use rocketmq_sre_contracts::EvidenceExposure;
+use rocketmq_sre_contracts::EvidenceQuery;
+use rocketmq_sre_contracts::ExecutionAction;
+use rocketmq_sre_contracts::ExecutionAgentCapabilities;
+use rocketmq_sre_contracts::ExecutionState;
+use rocketmq_sre_contracts::ExecutorLease;
+use rocketmq_sre_contracts::FenceAck;
+use rocketmq_sre_contracts::GrantVerification;
+use rocketmq_sre_contracts::IssueFenceGrantRequest;
+use rocketmq_sre_contracts::LEASE_AUTHORITY_SCHEMA_VERSION;
+use rocketmq_sre_contracts::LeaseFenceGrant;
+use rocketmq_sre_contracts::QueryId;
+use rocketmq_sre_contracts::ReconcileEffectRequest;
+use rocketmq_sre_contracts::ReconcileEffectResponse;
+use rocketmq_sre_contracts::ReconcileEffectState;
+use rocketmq_sre_contracts::ReconcileGrant;
+use rocketmq_sre_contracts::Sensitivity;
+use rocketmq_sre_contracts::TimeRange;
+use rocketmq_sre_contracts::VerifyExecutionRequest;
+use rocketmq_sre_contracts::current_evidence_schema;
+use rocketmq_sre_execution_agent::AgentEffectStore;
+use rocketmq_sre_executor::ChangeExecutor;
+use rocketmq_sre_executor::ExecutionAgentClient;
+use rocketmq_sre_executor::ExecutionJournal;
+use rocketmq_sre_executor::ExecutionPrechecker;
+use rocketmq_sre_executor::ExecutionVerifier;
+use rocketmq_sre_executor::ExecutorActionRegistry;
+use rocketmq_sre_executor::ExecutorAuthorityClient;
+use rocketmq_sre_executor::ExecutorError;
+use rocketmq_sre_executor::LeaseCoordinator;
+use rocketmq_sre_executor::ResourceSafetyStore;
+use rocketmq_sre_executor::VerificationCaptureRequest;
+use rocketmq_sre_executor::VerificationFuture;
+use rocketmq_sre_executor::VerificationObservation;
+use rocketmq_sre_executor::VerificationSource;
+use serde_json::json;
+use sqlx::PgPool;
+use uuid::Uuid;
+
+use support::cleanup_schema;
+use support::isolated_pool;
+use support::seed_fixture;
+
+type TestFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ExecutorError>> + Send + 'a>>;
+
+#[derive(Clone)]
+struct TestAuthority {
+    leases: LeaseCoordinator,
+    owner: Arc<str>,
+    action: ExecutionAction,
+    resource: Arc<str>,
+}
+
+impl ExecutorAuthorityClient for TestAuthority {
+    fn verify_execution<'a>(&'a self, request: &'a VerifyExecutionRequest) -> TestFuture<'a, GrantVerification> {
+        Box::pin(async move {
+            Ok(GrantVerification {
+                schema_version: LEASE_AUTHORITY_SCHEMA_VERSION.to_owned(),
+                valid: true,
+                cluster_id: request.execution.cluster_id,
+                epoch: rocketmq_sre_contracts::LeaseEpoch(0),
+                expires_at: request.execution.expires_at,
+            })
+        })
+    }
+
+    fn begin_takeover<'a>(
+        &'a self,
+        request: &'a BeginLeaseTakeoverRequest,
+    ) -> TestFuture<'a, BeginLeaseTakeoverResponse> {
+        Box::pin(async move {
+            let acquired_at = Utc::now();
+            let nonce = format!("test-takeover-{}", Uuid::new_v4());
+            let lease = self
+                .leases
+                .begin_takeover(
+                    request.tenant_id,
+                    request.cluster_id,
+                    &self.owner,
+                    &nonce,
+                    acquired_at,
+                    acquired_at + TimeDelta::seconds(i64::from(request.requested_ttl_seconds)),
+                )
+                .await?;
+            Ok(BeginLeaseTakeoverResponse {
+                schema_version: LEASE_AUTHORITY_SCHEMA_VERSION.to_owned(),
+                lease: lease_contract(&lease),
+                reconcile_grant: ReconcileGrant {
+                    lease_id: lease.id,
+                    owner: lease.owner,
+                    cluster_id: lease.cluster_id,
+                    pending_epoch: lease.epoch,
+                    audience: "rocketmq-sre-execution-agent".to_owned(),
+                    issued_at: acquired_at,
+                    expires_at: lease.expires_at,
+                    nonce,
+                    signature: "test-reconcile-signature".to_owned(),
+                },
+            })
+        })
+    }
+
+    fn activate<'a>(
+        &'a self,
+        _tenant_id: rocketmq_sre_contracts::TenantId,
+        _cluster_id: rocketmq_sre_contracts::ClusterId,
+        request: &'a ActivateLeaseRequest,
+    ) -> TestFuture<'a, ExecutorLease> {
+        Box::pin(async move {
+            let pending = self.leases.lease(request.lease_id).await?;
+            let active = self.leases.activate(&pending, &request.fence_ack).await?;
+            Ok(lease_contract(&active))
+        })
+    }
+
+    fn issue_fence_grant<'a>(&'a self, request: &'a IssueFenceGrantRequest) -> TestFuture<'a, LeaseFenceGrant> {
+        Box::pin(async move {
+            let issued_at = Utc::now();
+            Ok(LeaseFenceGrant {
+                lease_id: request.lease_id,
+                owner: self.owner.to_string(),
+                cluster_id: request.cluster_id,
+                epoch: request.epoch,
+                execution_id: request.execution_id,
+                step_id: request.step_id,
+                plan_step_id: request.plan_step_id,
+                action: self.action,
+                resource: self.resource.to_string(),
+                audience: "rocketmq-sre-execution-agent".to_owned(),
+                issued_at,
+                expires_at: issued_at + TimeDelta::minutes(2),
+                nonce: format!("test-grant-{}", request.step_id),
+                signature: "test-fence-signature".to_owned(),
+            })
+        })
+    }
+}
+
+#[derive(Clone)]
+struct TestAgent {
+    effects: AgentEffectStore,
+    precondition_hash: Arc<str>,
+    dispatches: Arc<Mutex<Vec<bool>>>,
+}
+
+impl ExecutionAgentClient for TestAgent {
+    fn capabilities<'a>(&'a self) -> TestFuture<'a, ExecutionAgentCapabilities> {
+        Box::pin(async {
+            Ok(ExecutionAgentCapabilities {
+                schema_version: EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
+                registered_actions: vec![ExecutionAction::ProxyScaleOutOne],
+                raw_admin_request_supported: false,
+                arbitrary_json_patch_supported: false,
+                shell_supported: false,
+                durable_fencing: true,
+            })
+        })
+    }
+
+    fn precheck<'a>(&'a self, request: &'a AgentReadRequest) -> TestFuture<'a, AgentReadResult> {
+        Box::pin(async move {
+            Ok(AgentReadResult {
+                schema_version: EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
+                action: request.action,
+                target: request.target.clone(),
+                precondition_hash: self.precondition_hash.to_string(),
+                ready: true,
+                reason_codes: Vec::new(),
+                observed_at: Utc::now(),
+            })
+        })
+    }
+
+    fn dispatch<'a>(&'a self, request: &'a AgentDispatchRequest) -> TestFuture<'a, AgentDispatchResponse> {
+        Box::pin(async move {
+            let compensation = request.request.intent.compensation;
+            self.dispatches.lock().expect("test dispatch lock").push(compensation);
+            Ok(AgentDispatchResponse {
+                schema_version: EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
+                result: AgentStepResult {
+                    execution_id: request.request.intent.execution_id,
+                    step_id: request.request.intent.step_id,
+                    state: EffectState::Confirmed,
+                    operation_id: format!("test-operation-{}", request.request.intent.step_id),
+                    outcome_code: if compensation {
+                        "proxy_replicas_restored"
+                    } else {
+                        "proxy_scaled_out_one"
+                    }
+                    .to_owned(),
+                    sanitized_summary: "bounded test driver result".to_owned(),
+                    completed_at: Utc::now(),
+                },
+                replayed: false,
+            })
+        })
+    }
+
+    fn reconcile<'a>(&'a self, _request: &'a ReconcileEffectRequest) -> TestFuture<'a, ReconcileEffectResponse> {
+        Box::pin(async {
+            Ok(ReconcileEffectResponse {
+                schema_version: EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
+                state: ReconcileEffectState::Applied,
+                outcome_code: "test_effect_applied".to_owned(),
+                sanitized_summary: "bounded test reconciliation".to_owned(),
+                observed_at: Utc::now(),
+            })
+        })
+    }
+
+    fn advance_fence<'a>(&'a self, request: &'a AdvanceFenceRequest) -> TestFuture<'a, AdvanceFenceResponse> {
+        Box::pin(async move {
+            let ack = FenceAck {
+                cluster_id: request.reconcile_grant.cluster_id,
+                epoch: request.reconcile_grant.pending_epoch,
+                pending_nonce: request.reconcile_grant.nonce.clone(),
+                agent_subject: "spiffe://rocketmq-sre/execution-agent".to_owned(),
+                acknowledged_at: Utc::now(),
+                signature: "test-fence-ack-signature".to_owned(),
+            };
+            self.effects
+                .accept_fence(request.tenant_id, request.reconcile_grant.lease_id, &ack)
+                .await
+                .map_err(|_| ExecutorError::AgentRejected)?;
+            Ok(AdvanceFenceResponse {
+                schema_version: EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
+                fence_ack: ack,
+            })
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Signal {
+    offset_seconds: i64,
+    resource_ok: bool,
+    sli_ok: bool,
+}
+
+struct ScriptedVerification {
+    base: chrono::DateTime<Utc>,
+    signals: Mutex<VecDeque<Signal>>,
+}
+
+impl VerificationSource for ScriptedVerification {
+    fn observe<'a>(&'a self, request: &'a VerificationCaptureRequest) -> VerificationFuture<'a> {
+        Box::pin(async move {
+            let signal = self
+                .signals
+                .lock()
+                .expect("verification script lock")
+                .pop_front()
+                .ok_or(ExecutorError::AgentUnavailable)?;
+            let observed_at = self.base + TimeDelta::seconds(signal.offset_seconds);
+            let resource_conditions = request
+                .resource_conditions
+                .iter()
+                .cloned()
+                .map(|condition| (condition, signal.resource_ok))
+                .collect();
+            let technical_slis = request
+                .technical_slis
+                .iter()
+                .cloned()
+                .map(|condition| (condition, signal.sli_ok))
+                .collect();
+            let query = EvidenceQuery {
+                query_id: QueryId::new(),
+                correlation_id: request.correlation_id,
+                tenant_id: request.tenant_id,
+                cluster_id: request.cluster_id,
+                source: "execution-flow-test".to_owned(),
+                resource: request.target.clone(),
+                time_range: TimeRange::new(observed_at, observed_at).map_err(|_| ExecutorError::InvalidRequest)?,
+            };
+            let mut evidence = rocketmq_sre_contracts::EvidenceSnapshot::capture(
+                query,
+                current_evidence_schema(),
+                observed_at,
+                EvidenceContent::Inline(json!({
+                    "resource_ok": signal.resource_ok,
+                    "sli_ok": signal.sli_ok,
+                })),
+            )
+            .map_err(|_| ExecutorError::InvalidRequest)?;
+            evidence.coverage = CoverageStatus::Available;
+            evidence.exposure = EvidenceExposure::Synthetic;
+            evidence.sensitivity = Sensitivity::Internal;
+            Ok(VerificationObservation {
+                evidence,
+                resource_conditions,
+                technical_slis,
+            })
+        })
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires ROCKETMQ_SRE_TEST_DATABASE_URL pointing to Docker PostgreSQL"]
+async fn successful_verification_reaches_succeeded_and_releases_lock() {
+    let signals = [signal(0, true), signal(1, true), signal(2, true), signal(122, true)];
+    let run = run_execution(&signals).await;
+
+    assert_eq!(run.state, ExecutionState::Succeeded);
+    assert_eq!(run.dispatches, vec![false]);
+    assert_eq!(run.active_locks, 0);
+    assert_eq!(run.compensation_intents, 0);
+    cleanup_schema(&run.pool, &run.schema).await;
+}
+
+#[tokio::test]
+#[ignore = "requires ROCKETMQ_SRE_TEST_DATABASE_URL pointing to Docker PostgreSQL"]
+async fn failed_verification_runs_compensation_and_verifies_rollback() {
+    let signals = [
+        signal(0, true),
+        signal(1, true),
+        signal(2, false),
+        signal(902, false),
+        signal(3, true),
+        signal(4, true),
+        signal(124, true),
+    ];
+    let run = run_execution(&signals).await;
+
+    assert_eq!(run.state, ExecutionState::RolledBack);
+    assert_eq!(run.dispatches, vec![false, true]);
+    assert_eq!(run.active_locks, 0);
+    assert_eq!(run.compensation_intents, 1);
+    let compensation_verifications: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM execution_verifications
+         WHERE execution_id = $1 AND compensation",
+    )
+    .bind(run.execution_id)
+    .fetch_one(&run.pool)
+    .await
+    .expect("compensation verification count");
+    assert_eq!(compensation_verifications, 1);
+    cleanup_schema(&run.pool, &run.schema).await;
+}
+
+#[tokio::test]
+#[ignore = "requires ROCKETMQ_SRE_TEST_DATABASE_URL pointing to Docker PostgreSQL"]
+async fn failed_rollback_escalates_quarantines_and_releases_temporary_lock() {
+    let signals = [
+        signal(0, true),
+        signal(1, true),
+        signal(2, false),
+        signal(902, false),
+        signal(3, true),
+        signal(4, false),
+        signal(904, false),
+    ];
+    let run = run_execution(&signals).await;
+
+    assert_eq!(run.state, ExecutionState::Escalated);
+    assert_eq!(run.dispatches, vec![false, true]);
+    assert_eq!(run.active_locks, 0);
+    assert_eq!(run.active_quarantines, 1);
+    cleanup_schema(&run.pool, &run.schema).await;
+}
+
+struct ExecutionRun {
+    pool: PgPool,
+    schema: String,
+    execution_id: Uuid,
+    state: ExecutionState,
+    dispatches: Vec<bool>,
+    active_locks: i64,
+    active_quarantines: i64,
+    compensation_intents: i64,
+}
+
+async fn run_execution(signals: &[Signal]) -> ExecutionRun {
+    let database_url = std::env::var("ROCKETMQ_SRE_TEST_DATABASE_URL").expect("test database URL must be explicit");
+    let schema = format!("phase3_flow_{}", Uuid::new_v4().simple());
+    let pool = isolated_pool(&database_url, &schema).await;
+    sqlx::migrate!("../../migrations")
+        .run(&pool)
+        .await
+        .expect("empty-schema migrations");
+    let fixture = seed_fixture(&pool).await;
+    let mut descriptor: rocketmq_sre_contracts::ActionDescriptor =
+        serde_yaml::from_str(include_str!("../../../config/actions/proxy.scale_out_one.v1.yaml"))
+            .expect("proxy scale descriptor");
+    descriptor.execution_supported = true;
+    let registry = Arc::new(ExecutorActionRegistry::from_descriptors([descriptor]).expect("test registry"));
+    let dispatches = Arc::new(Mutex::new(Vec::new()));
+    let agent = Arc::new(TestAgent {
+        effects: AgentEffectStore::new(pool.clone()),
+        precondition_hash: Arc::from(fixture.plan.steps[0].precondition_hash.as_str()),
+        dispatches: Arc::clone(&dispatches),
+    });
+    let authority = Arc::new(TestAuthority {
+        leases: LeaseCoordinator::new(pool.clone()),
+        owner: Arc::from("spiffe://rocketmq-sre/executor"),
+        action: fixture.plan.steps[0].action,
+        resource: Arc::from(fixture.plan.steps[0].resource.as_str()),
+    });
+    let verifier = ExecutionVerifier::new(
+        Arc::new(ScriptedVerification {
+            base: Utc::now(),
+            signals: Mutex::new(signals.iter().copied().collect()),
+        }),
+        Duration::ZERO,
+    );
+    let executor = ChangeExecutor::new(
+        ExecutionJournal::new(pool.clone(), "rocketmq-sre-executor"),
+        ResourceSafetyStore::new(pool.clone()),
+        authority,
+        agent.clone(),
+        ExecutionPrechecker::new(registry, agent),
+        "spiffe://rocketmq-sre/executor",
+        120,
+        Duration::from_secs(300),
+    )
+    .with_verifier(verifier);
+    let outcome = executor.execute(&fixture.request).await.expect("supervised execution");
+    let active_locks: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM resource_locks
+         WHERE holder_execution_id = $1 AND released_at IS NULL",
+    )
+    .bind(fixture.request.id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("active lock count");
+    let compensation_intents: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM execution_steps
+         WHERE execution_id = $1 AND record_kind = 'intent' AND compensation",
+    )
+    .bind(fixture.request.id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("compensation intent count");
+    let active_quarantines: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM resource_quarantines
+         WHERE source_execution_id = $1 AND cleared_at IS NULL",
+    )
+    .bind(fixture.request.id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("active quarantine count");
+    let dispatches = dispatches.lock().expect("test dispatch lock").clone();
+    ExecutionRun {
+        pool,
+        schema,
+        execution_id: fixture.request.id.as_uuid(),
+        state: outcome.state,
+        dispatches,
+        active_locks,
+        active_quarantines,
+        compensation_intents,
+    }
+}
+
+const fn signal(offset_seconds: i64, healthy: bool) -> Signal {
+    Signal {
+        offset_seconds,
+        resource_ok: healthy,
+        sli_ok: healthy,
+    }
+}
+
+fn lease_contract(record: &rocketmq_sre_executor::ExecutorLeaseRecord) -> ExecutorLease {
+    ExecutorLease {
+        id: record.id,
+        tenant_id: record.tenant_id,
+        cluster_id: record.cluster_id,
+        epoch: record.epoch,
+        owner: record.owner.clone(),
+        state: record.state,
+        pending_nonce: record.pending_nonce.clone(),
+        acquired_at: record.acquired_at,
+        activated_at: record.activated_at,
+        expires_at: record.expires_at,
+    }
+}

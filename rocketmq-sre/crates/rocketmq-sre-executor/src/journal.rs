@@ -264,6 +264,20 @@ impl ExecutionJournal {
         Ok(result.rows_affected() == 1)
     }
 
+    /// Appends one execution-scoped audit event without changing state.
+    ///
+    /// # Errors
+    ///
+    /// Rejects scope drift, duplicate IDs with different content, and
+    /// database failures.
+    pub async fn append_audit_event(&self, execution_id: ExecutionId, audit: &AuditEvent) -> Result<(), JournalError> {
+        let mut transaction = self.pool.begin().await?;
+        ensure_execution_scope(&mut transaction, execution_id, audit).await?;
+        append_audit(&mut transaction, audit).await?;
+        transaction.commit().await?;
+        Ok(())
+    }
+
     /// Atomically appends a StepIntent and its audit event before dispatch.
     ///
     /// # Errors
