@@ -68,6 +68,8 @@ pub struct ExecutionAgentConfig {
     pub(crate) driver_timeout: Duration,
     pub(crate) shutdown_timeout: Duration,
     pub(crate) dev_insecure_http: bool,
+    pub(crate) broker_config_patch_enabled: bool,
+    pub(crate) logger_ttl_enabled: bool,
     pub(crate) broker_admin: Option<BrokerAdminDriverConfig>,
 }
 
@@ -101,7 +103,13 @@ impl ExecutionAgentConfig {
         let request_timeout = duration_env("ROCKETMQ_SRE_AGENT_REQUEST_TIMEOUT_SECONDS", 10)?;
         let driver_timeout = duration_env("ROCKETMQ_SRE_AGENT_DRIVER_TIMEOUT_SECONDS", 30)?;
         let shutdown_timeout = duration_env("ROCKETMQ_SRE_AGENT_SHUTDOWN_SECONDS", 30)?;
-        let broker_admin = broker_admin_from_env(dev_insecure_http, shutdown_timeout)?;
+        let broker_config_patch_enabled = parse_env("ROCKETMQ_SRE_AGENT_ENABLE_BROKER_CONFIG", false)?;
+        let logger_ttl_enabled = parse_env("ROCKETMQ_SRE_AGENT_ENABLE_LOGGER_TTL", false)?;
+        let broker_admin = broker_admin_from_env(
+            dev_insecure_http,
+            shutdown_timeout,
+            broker_config_patch_enabled || logger_ttl_enabled,
+        )?;
         Ok(Self {
             bind_addr,
             database_url,
@@ -114,6 +122,8 @@ impl ExecutionAgentConfig {
             driver_timeout,
             shutdown_timeout,
             dev_insecure_http,
+            broker_config_patch_enabled,
+            logger_ttl_enabled,
             broker_admin,
         })
     }
@@ -139,6 +149,8 @@ impl Debug for ExecutionAgentConfig {
             .field("driver_timeout", &self.driver_timeout)
             .field("shutdown_timeout", &self.shutdown_timeout)
             .field("dev_insecure_http", &self.dev_insecure_http)
+            .field("broker_config_patch_enabled", &self.broker_config_patch_enabled)
+            .field("logger_ttl_enabled", &self.logger_ttl_enabled)
             .field("broker_admin", &self.broker_admin)
             .finish()
     }
@@ -177,8 +189,9 @@ fn duration_env(name: &str, default: u64) -> Result<Duration, ExecutionAgentErro
 fn broker_admin_from_env(
     dev_insecure: bool,
     shutdown_timeout: Duration,
+    enabled: bool,
 ) -> Result<Option<BrokerAdminDriverConfig>, ExecutionAgentError> {
-    if !parse_env("ROCKETMQ_SRE_AGENT_ENABLE_BROKER_CONFIG", false)? {
+    if !enabled {
         return Ok(None);
     }
     let read_credentials = admin_credentials_from_env("READ")?;
@@ -289,6 +302,8 @@ mod tests {
             driver_timeout: Duration::from_secs(1),
             shutdown_timeout: Duration::from_secs(1),
             dev_insecure_http: false,
+            broker_config_patch_enabled: false,
+            logger_ttl_enabled: false,
             broker_admin: None,
         };
         let debug = format!("{config:?}");
