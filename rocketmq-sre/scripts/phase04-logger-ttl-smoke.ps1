@@ -5,6 +5,7 @@
 param(
     [string]$DatabaseUrl = 'postgres://rocketmq_sre:rocketmq_sre@127.0.0.1:5432/rocketmq_sre',
     [string]$CargoTargetDir = 'G:\rocketmq-sre-phase2-cargo-target',
+    [string]$ClusterTargetDir = 'G:\rocketmq-sre-phase4-cluster-target',
     [string]$CargoHome = 'G:\rocketmq-sre-phase1-cargo-home',
     [string]$TemporaryRoot = 'G:\rocketmq-sre-phase2-temp',
     [ValidateRange(1024, 65535)]
@@ -121,6 +122,7 @@ function New-TestSecret {
 
 foreach ($path in @(
     @{ Value = $CargoTargetDir; Description = 'Cargo target directory' },
+    @{ Value = $ClusterTargetDir; Description = 'test-cluster Cargo target directory' },
     @{ Value = $CargoHome; Description = 'Cargo home' },
     @{ Value = $TemporaryRoot; Description = 'temporary directory' }
 )) {
@@ -138,7 +140,7 @@ foreach ($port in @(
     Assert-PortAvailable $port
 }
 
-New-Item -ItemType Directory -Force -Path $CargoTargetDir, $CargoHome, $TemporaryRoot | Out-Null
+New-Item -ItemType Directory -Force -Path $CargoTargetDir, $ClusterTargetDir, $CargoHome, $TemporaryRoot | Out-Null
 Ensure-CargoCapacity
 
 $runRoot = [IO.Path]::GetFullPath(
@@ -249,7 +251,7 @@ $brokerErr = ''
 $smokeSucceeded = $false
 try {
     $env:CARGO_HOME = $CargoHome
-    $env:CARGO_TARGET_DIR = $CargoTargetDir
+    $env:CARGO_TARGET_DIR = $ClusterTargetDir
     $env:TEMP = $TemporaryRoot
     $env:TMP = $TemporaryRoot
     Set-Location $repositoryRoot
@@ -262,8 +264,8 @@ try {
     ) 'RocketMQ logger test-cluster build'
     Ensure-CargoCapacity
 
-    $namesrvBinary = Join-Path $CargoTargetDir 'debug/rocketmq-namesrv-rust.exe'
-    $brokerBinary = Join-Path $CargoTargetDir 'debug/rocketmq-broker-rust.exe'
+    $namesrvBinary = Join-Path $ClusterTargetDir 'debug/rocketmq-namesrv-rust.exe'
+    $brokerBinary = Join-Path $ClusterTargetDir 'debug/rocketmq-broker-rust.exe'
     foreach ($binary in @($namesrvBinary, $brokerBinary)) {
         if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) {
             throw "Expected test-cluster binary is missing: $binary"
@@ -310,6 +312,7 @@ try {
     $env:ROCKETMQ_SRE_TEST_BROKER_READ_SECRET_KEY = $readSecretKey
     $env:ROCKETMQ_SRE_TEST_BROKER_MUTATION_ACCESS_KEY = $mutationAccessKey
     $env:ROCKETMQ_SRE_TEST_BROKER_MUTATION_SECRET_KEY = $mutationSecretKey
+    $env:CARGO_TARGET_DIR = $CargoTargetDir
     Invoke-Native cargo @(
         '+1.95.0', 'test',
         '--manifest-path', (Join-Path $sreRoot 'Cargo.toml'),
@@ -326,6 +329,14 @@ try {
 finally {
     Stop-OwnedProcess $brokerProcess
     Stop-OwnedProcess $namesrvProcess
+    if (Test-Path -LiteralPath $ClusterTargetDir -PathType Container) {
+        & cargo '+1.95.0' clean `
+            '--manifest-path' (Join-Path $repositoryRoot 'Cargo.toml') `
+            '--target-dir' $ClusterTargetDir
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Failed to clean the owned test-cluster target directory: $ClusterTargetDir"
+        }
+    }
     if (-not $smokeSucceeded) {
         foreach ($logPath in @($brokerErr, $brokerOut, $namesrvErr, $namesrvOut)) {
             if (-not [string]::IsNullOrWhiteSpace($logPath) -and (Test-Path -LiteralPath $logPath -PathType Leaf)) {
