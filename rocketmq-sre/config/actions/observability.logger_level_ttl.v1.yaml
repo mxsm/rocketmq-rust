@@ -15,10 +15,10 @@ parameter_schema:
   additionalProperties: false
   required: [component, logger, level, ttl_seconds]
   properties:
-    component: { type: string, enum: [broker, nameserver, controller, proxy] }
+    component: { type: string, enum: [broker] }
     logger: { type: string, maxLength: 128 }
     level: { type: string, enum: [INFO, DEBUG] }
-    ttl_seconds: { type: integer, minimum: 30, maximum: 900 }
+    ttl_seconds: { type: integer, minimum: 60, maximum: 900 }
 status: active
 deprecation: null
 risk: r1
