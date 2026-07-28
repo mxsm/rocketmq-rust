@@ -28,6 +28,9 @@ services:
       requests: {cpu: 100m, memory: 128Mi}
       limits: {cpu: 500m, memory: 512Mi}
   proxy:
+    pdb:
+      enabled: true
+      minAvailable: 1
     resources:
       requests: {cpu: 100m, memory: 128Mi}
       limits: {cpu: 500m, memory: 512Mi}
