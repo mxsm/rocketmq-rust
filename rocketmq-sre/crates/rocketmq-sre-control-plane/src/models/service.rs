@@ -109,6 +109,7 @@ const SCHEMA_REPAIR_PURPOSE: &str = "schema_repair";
 
 mod critic;
 mod lifecycle;
+mod smoke;
 
 #[derive(Clone, Copy, Debug)]
 struct ModelCallBudget {
