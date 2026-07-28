@@ -80,7 +80,7 @@ impl AutomationService {
         self.repository.create_no_side_effect_run(request).await
     }
 
-    pub(crate) async fn complete(
+    pub(super) async fn complete(
         &self,
         auth: &AuthContext,
         run_id: AutomationRunId,
@@ -92,7 +92,7 @@ impl AutomationService {
             .await
     }
 
-    pub(crate) async fn list(
+    pub(super) async fn list(
         &self,
         auth: &AuthContext,
         query: &AutomationRunListQuery,
@@ -120,7 +120,7 @@ impl AutomationService {
         })
     }
 
-    pub(crate) async fn record_feedback(
+    pub(super) async fn record_feedback(
         &self,
         auth: &AuthContext,
         request: &RecordAutomationFeedbackRequest,
