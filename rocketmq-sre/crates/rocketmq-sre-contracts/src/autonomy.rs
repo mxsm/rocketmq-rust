@@ -121,7 +121,9 @@ impl AutonomyPolicyDefinition {
             || self.required_evidence_sources.is_empty()
             || self.required_evidence_sources.len() > MAX_SOURCES
             || sources.len() != self.required_evidence_sources.len()
-            || sources.iter().any(|source| source.is_empty() || source.chars().count() > 128)
+            || sources
+                .iter()
+                .any(|source| source.is_empty() || source.chars().count() > 128)
         {
             return Err(ContractError::InvalidDescriptor {
                 reason: "autonomy policy violates bounded version, threshold, or source rules".to_owned(),
@@ -156,10 +158,17 @@ impl AutonomyLifecycleState {
     /// or unbounded operator-controlled text.
     pub fn validate(&self) -> Result<(), ContractError> {
         let paused_valid = match self.mode {
-            AutonomyMode::Paused => self
-                .previous_mode
-                .is_some_and(|mode| matches!(mode, AutonomyMode::Shadow | AutonomyMode::Supervised | AutonomyMode::Autonomous))
-                && self.pause_reason.as_ref().is_some_and(|reason| !reason.trim().is_empty()),
+            AutonomyMode::Paused => {
+                self.previous_mode.is_some_and(|mode| {
+                    matches!(
+                        mode,
+                        AutonomyMode::Shadow | AutonomyMode::Supervised | AutonomyMode::Autonomous
+                    )
+                }) && self
+                    .pause_reason
+                    .as_ref()
+                    .is_some_and(|reason| !reason.trim().is_empty())
+            }
             _ => self.previous_mode.is_none() && self.pause_reason.is_none(),
         };
         if self.lifecycle_revision == 0
@@ -168,7 +177,10 @@ impl AutonomyLifecycleState {
             || self.owner.chars().count() > 128
             || self.updated_by.trim().is_empty()
             || self.updated_by.chars().count() > 256
-            || self.pause_reason.as_ref().is_some_and(|reason| reason.chars().count() > 512)
+            || self
+                .pause_reason
+                .as_ref()
+                .is_some_and(|reason| reason.chars().count() > 512)
         {
             return Err(ContractError::InvalidDescriptor {
                 reason: "autonomy lifecycle state violates revision, pause, or operator bounds".to_owned(),
