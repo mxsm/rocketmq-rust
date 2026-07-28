@@ -87,7 +87,12 @@ impl ConfigWriteClient for FakeLoggerClient {
 }
 
 impl LoggerLevelControlClient for FakeLoggerClient {
-    fn logger_level_state<'a>(&'a self, _component: &'a str, _logger: &'a str) -> DriverFuture<'a, LoggerLevelState> {
+    fn logger_level_state<'a>(
+        &'a self,
+        _component: &'a str,
+        _broker_addr: &'a str,
+        _logger: &'a str,
+    ) -> DriverFuture<'a, LoggerLevelState> {
         Box::pin(async move { Ok(self.state.lock().expect("fake state lock").clone()) })
     }
 
@@ -148,7 +153,8 @@ async fn apply_verify_and_compensate_use_one_typed_call_each() {
     {
         let writes = client.writes.lock().expect("fake writes lock");
         assert_eq!(writes.len(), 1);
-        assert_eq!(writes[0].logger, "rocketmq_proxy::service");
+        assert_eq!(writes[0].broker_addr, "127.0.0.1:10911");
+        assert_eq!(writes[0].logger, "rocketmq_broker::processor");
         assert!(writes[0].expires_at > Utc::now() + TimeDelta::seconds(250));
     }
 
@@ -182,7 +188,7 @@ fn read_request(parameters: serde_json::Value) -> AgentReadRequest {
         plan_step_id: PlanStepId::new(),
         action: ExecutionAction::ObservabilityLoggerLevelTtl,
         descriptor_version: "1.0.0".to_owned(),
-        target: "component/proxy".to_owned(),
+        target: "broker/127.0.0.1:10911".to_owned(),
         parameters,
     }
 }
@@ -194,8 +200,8 @@ fn step_request() -> AgentStepRequest {
     let plan_step_id = PlanStepId::new();
     let cluster_id = ClusterId::new();
     let parameters = json!({
-        "component": "proxy",
-        "logger": "rocketmq_proxy::service",
+        "component": "broker",
+        "logger": "rocketmq_broker::processor",
         "level": "DEBUG",
         "ttl_seconds": 300
     });
@@ -204,7 +210,7 @@ fn step_request() -> AgentStepRequest {
         sequence: 1,
         action: ExecutionAction::ObservabilityLoggerLevelTtl,
         descriptor_version: "1.0.0".to_owned(),
-        resource: "component/proxy".to_owned(),
+        resource: "broker/127.0.0.1:10911".to_owned(),
         parameters: parameters.clone(),
         evidence_ids: Vec::new(),
         precondition_hash: digest('a'),
@@ -233,7 +239,7 @@ fn step_request() -> AgentStepRequest {
                 step_id,
                 plan_step_id,
                 action: ExecutionAction::ObservabilityLoggerLevelTtl,
-                resource: "component/proxy".to_owned(),
+                resource: "broker/127.0.0.1:10911".to_owned(),
                 compensation: false,
                 audience: "execution-agent".to_owned(),
                 issued_at: now,
@@ -247,7 +253,7 @@ fn step_request() -> AgentStepRequest {
         },
         action: ExecutionAction::ObservabilityLoggerLevelTtl,
         descriptor_version: "1.0.0".to_owned(),
-        target: "component/proxy".to_owned(),
+        target: "broker/127.0.0.1:10911".to_owned(),
         parameters,
     }
 }
