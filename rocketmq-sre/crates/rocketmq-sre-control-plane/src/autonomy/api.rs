@@ -24,6 +24,7 @@ use rocketmq_sre_contracts::AutonomyGrant;
 use rocketmq_sre_contracts::AutonomyOutcome;
 use rocketmq_sre_contracts::AutonomyQualificationCohort;
 use rocketmq_sre_contracts::AutonomyQualificationSample;
+use rocketmq_sre_contracts::ExecutionRequest;
 
 use super::model::AutonomyFreezeView;
 use super::model::AutonomyKillSwitchView;
@@ -38,6 +39,7 @@ use super::model::DynamicSafetyView;
 use super::model::EvaluateDynamicSafetyRequest;
 use super::model::IssueAutonomyGrantRequest;
 use super::model::PrepareAutonomousCohortRequest;
+use super::model::PrepareAutonomousExecutionRequest;
 use super::model::RecordAutonomyOutcomeRequest;
 use super::model::RecordQualificationSampleRequest;
 use super::model::RecordShadowOutcomeRequest;
@@ -90,6 +92,10 @@ pub(crate) fn routes() -> Router<AppState> {
         .route(
             "/internal/v1/autonomy/grants",
             post(issue_grant).layer(DefaultBodyLimit::max(64 * 1024)),
+        )
+        .route(
+            "/internal/v1/autonomy/executions/prepare",
+            post(prepare_execution).layer(DefaultBodyLimit::max(64 * 1024)),
         )
         .route(
             "/internal/v1/autonomy/outcomes",
@@ -220,6 +226,15 @@ async fn issue_grant(
 ) -> Result<Json<AutonomyGrant>, ControlPlaneError> {
     let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
     state.autonomy.issue_grant(&auth, &request).await.map(Json)
+}
+
+async fn prepare_execution(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<PrepareAutonomousExecutionRequest>,
+) -> Result<Json<ExecutionRequest>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, Some(request.grant.cluster_id)).await?;
+    state.autonomy.prepare_execution(&auth, &request).await.map(Json)
 }
 
 async fn record_outcome(
