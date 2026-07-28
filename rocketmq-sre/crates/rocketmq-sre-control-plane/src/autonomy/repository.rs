@@ -1397,6 +1397,42 @@ impl PostgresRepository {
         rows.iter().map(freeze_from_row).collect()
     }
 
+    pub(super) async fn autonomy_freeze_state(
+        &self,
+        tenant_id: TenantId,
+        cluster_id: ClusterId,
+        action: ExecutionAction,
+        action_version: &str,
+        now: DateTime<Utc>,
+    ) -> Result<(u64, bool), ControlPlaneError> {
+        let row = sqlx::query(
+            "SELECT COALESCE(MAX(revision), 0) AS revision,
+                    COALESCE(BOOL_OR(
+                        active AND starts_at <= $5
+                        AND (expires_at IS NULL OR expires_at > $5)
+                    ), FALSE) AS active
+             FROM autonomy_freezes
+             WHERE tenant_id = $1
+               AND (cluster_id IS NULL OR cluster_id = $2)
+               AND (
+                    action_id IS NULL
+                    OR (action_id = $3 AND action_version = $4)
+               )",
+        )
+        .bind(tenant_id.as_uuid())
+        .bind(cluster_id.as_uuid())
+        .bind(action.id())
+        .bind(action_version)
+        .bind(now)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok((
+            u64::try_from(row.try_get::<i64, _>("revision")?)
+                .map_err(|_| invalid_persisted("freeze revision is negative"))?,
+            row.try_get("active")?,
+        ))
+    }
+
     async fn autonomy_kill_switch(
         &self,
         tenant_id: TenantId,
