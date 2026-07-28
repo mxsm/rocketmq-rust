@@ -1,0 +1,132 @@
+{
+  "$defs": {
+    "ChangeScheduleId": {
+      "description": "Stable identifier for a scheduled runbook execution.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ChangeScheduleStatus": {
+      "description": "Durable scheduler lifecycle.",
+      "enum": [
+        "scheduled",
+        "running",
+        "paused",
+        "safe_stopping",
+        "reconciling",
+        "completed",
+        "cancelled",
+        "rejected"
+      ],
+      "type": "string"
+    },
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "RunbookId": {
+      "description": "Stable identifier for a versioned change runbook.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Scheduled runbook execution.",
+  "properties": {
+    "cancel_requested_at": {
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cluster_id": {
+      "$ref": "#/$defs/ClusterId"
+    },
+    "created_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "created_by": {
+      "type": "string"
+    },
+    "id": {
+      "$ref": "#/$defs/ChangeScheduleId"
+    },
+    "intent_persisted": {
+      "type": "boolean"
+    },
+    "next_step_sequence": {
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "pause_requested_at": {
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "resource_keys": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "runbook_id": {
+      "$ref": "#/$defs/RunbookId"
+    },
+    "runbook_version": {
+      "type": "string"
+    },
+    "scheduled_end": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "scheduled_start": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/ChangeScheduleStatus"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "id",
+    "tenant_id",
+    "cluster_id",
+    "runbook_id",
+    "runbook_version",
+    "scheduled_start",
+    "scheduled_end",
+    "status",
+    "intent_persisted",
+    "next_step_sequence",
+    "created_by",
+    "created_at",
+    "updated_at"
+  ],
+  "title": "ChangeSchedule",
+  "type": "object"
+}

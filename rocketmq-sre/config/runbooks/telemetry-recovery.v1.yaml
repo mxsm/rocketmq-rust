@@ -1,0 +1,48 @@
+schema_version: rocketmq-sre.runbook-definition.v1
+id: 10000000-0000-4000-8000-000000000004
+name: telemetry-recovery
+version: 1.0.0
+owner: messaging-observability
+description: Restart one degraded telemetry Collector while the remaining data path stays healthy, then verify exporter recovery.
+risk: r1
+max_parallelism: 1
+steps:
+  - id: 14000000-0000-4000-8000-000000000001
+    sequence: 1
+    name: restart one telemetry Collector
+    depends_on: []
+    parallel_group: null
+    condition: null
+    body:
+      kind: action
+      action: telemetry.collector.restart_one.v1
+      descriptor_version: 1.0.0
+      resource: pod/observability/otel-collector-0
+      parameters:
+        namespace: observability
+        pod: otel-collector-0
+        expected_uid: 30000000-0000-4000-8000-000000000001
+        pipeline: combined
+  - id: 14000000-0000-4000-8000-000000000002
+    sequence: 2
+    name: verify telemetry exporter recovery
+    depends_on:
+      - 14000000-0000-4000-8000-000000000001
+    parallel_group: null
+    condition:
+      fact: telemetry.exporter.connected
+      operator: equals
+      expected: true
+    body:
+      kind: manual_gate
+      gate:
+        gate_id: verify-telemetry-recovery
+        title: Verify telemetry recovery
+        instructions: Confirm readiness, exporter connectivity, bounded queue utilization, and recovery of metrics, logs, and traces.
+        required_role: approver
+        timeout_seconds: 900
+compensation_edges:
+  - from_step: 14000000-0000-4000-8000-000000000001
+    compensation_step: 14000000-0000-4000-8000-000000000002
+    trigger: verification_failed
+created_at: 2026-01-01T00:00:00Z

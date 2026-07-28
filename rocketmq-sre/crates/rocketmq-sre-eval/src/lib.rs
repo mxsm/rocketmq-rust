@@ -44,8 +44,12 @@ use rocketmq_sre_contracts::BacklogEta;
 use rocketmq_sre_contracts::BeginLeaseTakeoverRequest;
 use rocketmq_sre_contracts::BeginLeaseTakeoverResponse;
 use rocketmq_sre_contracts::CapacityForecast;
+use rocketmq_sre_contracts::ChangeConflict;
+use rocketmq_sre_contracts::ChangeSchedule;
+use rocketmq_sre_contracts::ChangeWindow;
 use rocketmq_sre_contracts::ClusterForecastReport;
 use rocketmq_sre_contracts::ClusterHealthReport;
+use rocketmq_sre_contracts::CompensationEdge;
 use rocketmq_sre_contracts::CriticAssessment;
 use rocketmq_sre_contracts::CriticFinding;
 use rocketmq_sre_contracts::CriticGateState;
@@ -71,6 +75,7 @@ use rocketmq_sre_contracts::IncidentOperationResult;
 use rocketmq_sre_contracts::IncidentOperationsState;
 use rocketmq_sre_contracts::IssueFenceGrantRequest;
 use rocketmq_sre_contracts::LeaseFenceGrant;
+use rocketmq_sre_contracts::ManualGate;
 use rocketmq_sre_contracts::ManualRunbookDraft;
 use rocketmq_sre_contracts::NotificationDelivery;
 use rocketmq_sre_contracts::OperationsReport;
@@ -83,6 +88,8 @@ use rocketmq_sre_contracts::ReconcileEffectRequest;
 use rocketmq_sre_contracts::ReconcileEffectResponse;
 use rocketmq_sre_contracts::ReconcileGrant;
 use rocketmq_sre_contracts::ResourceQuarantine;
+use rocketmq_sre_contracts::RunbookDefinition;
+use rocketmq_sre_contracts::RunbookStep;
 use rocketmq_sre_contracts::ShiftHandoffSummary;
 use rocketmq_sre_contracts::StepIntent;
 use rocketmq_sre_contracts::StepResult;
@@ -294,6 +301,34 @@ pub fn phase3_generated_schemas() -> Result<Vec<(&'static str, serde_json::Value
         (
             "manual-runbook-draft.schema.json",
             serde_json::to_value(schema_for!(ManualRunbookDraft))?,
+        ),
+        (
+            "runbook-definition.schema.json",
+            serde_json::to_value(schema_for!(RunbookDefinition))?,
+        ),
+        (
+            "runbook-step.schema.json",
+            serde_json::to_value(schema_for!(RunbookStep))?,
+        ),
+        (
+            "manual-gate.schema.json",
+            serde_json::to_value(schema_for!(ManualGate))?,
+        ),
+        (
+            "compensation-edge.schema.json",
+            serde_json::to_value(schema_for!(CompensationEdge))?,
+        ),
+        (
+            "change-window.schema.json",
+            serde_json::to_value(schema_for!(ChangeWindow))?,
+        ),
+        (
+            "change-schedule.schema.json",
+            serde_json::to_value(schema_for!(ChangeSchedule))?,
+        ),
+        (
+            "change-conflict.schema.json",
+            serde_json::to_value(schema_for!(ChangeConflict))?,
         ),
         (
             "approval-record.schema.json",

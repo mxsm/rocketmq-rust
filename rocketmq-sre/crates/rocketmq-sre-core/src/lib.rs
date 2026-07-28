@@ -16,6 +16,7 @@
 
 mod action_catalog;
 mod canonical_hash;
+mod change_calendar;
 pub mod correlation;
 pub mod diagnostics;
 mod embedded_actions;
@@ -26,11 +27,14 @@ mod plan;
 pub mod postmortem;
 pub mod prediction;
 mod registry;
+mod runbook;
 pub mod slo;
 
 pub use action_catalog::ActionCatalog;
 pub use action_catalog::ActionCatalogError;
 pub use canonical_hash::canonical_plan_hash;
+pub use change_calendar::ChangeCalendar;
+pub use change_calendar::ChangeCalendarError;
 pub use embedded_actions::EMBEDDED_ACTION_DESCRIPTOR_YAMLS;
 pub use execution_state::ExecutionStateMachine;
 pub use incident_manager::IncidentManager;
@@ -39,3 +43,5 @@ pub use plan::PlanError;
 pub use plan::PlanService;
 pub use registry::DescriptorRegistry;
 pub use registry::RegistryError;
+pub use runbook::RunbookError;
+pub use runbook::RunbookValidator;

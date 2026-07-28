@@ -43,6 +43,7 @@ mod postmortem;
 mod prediction;
 mod readiness;
 mod resource;
+mod runbook;
 mod simulation;
 mod slo;
 mod topology;
@@ -145,6 +146,8 @@ pub use ids::AssetSnapshotId;
 pub use ids::AuditEventId;
 pub use ids::BaselineId;
 pub use ids::ChangePointId;
+pub use ids::ChangeScheduleId;
+pub use ids::ChangeWindowId;
 pub use ids::ClusterId;
 pub use ids::ConnectorSessionId;
 pub use ids::ConversationId;
@@ -177,6 +180,8 @@ pub use ids::ReadinessReportId;
 pub use ids::RecommendationId;
 pub use ids::ResourceLockId;
 pub use ids::ResourceQuarantineId;
+pub use ids::RunbookId;
+pub use ids::RunbookStepId;
 pub use ids::SimulationId;
 pub use ids::TenantId;
 pub use ids::TimelineEventId;
@@ -252,6 +257,20 @@ pub use readiness::ReadinessFindingSeverity;
 pub use readiness::ReadinessStatus;
 pub use readiness::UpgradeReadinessReport;
 pub use resource::ResourceQuarantine;
+pub use runbook::ChangeConflict;
+pub use runbook::ChangeConflictCode;
+pub use runbook::ChangeSchedule;
+pub use runbook::ChangeScheduleStatus;
+pub use runbook::ChangeWindow;
+pub use runbook::ChangeWindowKind;
+pub use runbook::CompensationEdge;
+pub use runbook::CompensationTrigger;
+pub use runbook::ManualGate;
+pub use runbook::RunbookCondition;
+pub use runbook::RunbookConditionOperator;
+pub use runbook::RunbookDefinition;
+pub use runbook::RunbookStep;
+pub use runbook::RunbookStepBody;
 /// Parsed semantic version used to order descriptor revisions.
 pub use semver::Version as DescriptorVersion;
 pub use simulation::SimulationKind;
@@ -279,6 +298,12 @@ pub use verification::ExecutionSliQuery;
 pub use verification::VerificationOutcome;
 pub use verification::VerificationResult;
 pub use version::SchemaVersion;
+
+/// UTC timestamp type used by cross-crate SRE contracts.
+pub type SreTimestamp = chrono::DateTime<chrono::Utc>;
+
+/// JSON value type used by closed, schema-validated contract fields.
+pub type ContractJsonValue = serde_json::Value;
 
 /// Business schema family for canonical evidence.
 pub const EVIDENCE_SCHEMA_FAMILY: &str = "rocketmq-sre.evidence";

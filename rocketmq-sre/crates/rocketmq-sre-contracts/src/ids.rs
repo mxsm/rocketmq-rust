@@ -139,6 +139,10 @@ uuid_id!(
     ResourceQuarantineId,
     "Stable identifier for a persistent resource quarantine."
 );
+uuid_id!(RunbookId, "Stable identifier for a versioned change runbook.");
+uuid_id!(RunbookStepId, "Stable identifier for a typed runbook step.");
+uuid_id!(ChangeWindowId, "Stable identifier for a maintenance or freeze window.");
+uuid_id!(ChangeScheduleId, "Stable identifier for a scheduled runbook execution.");
 
 #[cfg(test)]
 mod tests {

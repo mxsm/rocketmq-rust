@@ -1,0 +1,82 @@
+{
+  "$defs": {
+    "ChangeConflictCode": {
+      "description": "Stable conflict classification returned by the scheduler.",
+      "enum": [
+        "outside_maintenance_window",
+        "freeze_window",
+        "blackout_window",
+        "resource_overlap",
+        "parallelism_exceeded"
+      ],
+      "type": "string"
+    },
+    "ChangeScheduleId": {
+      "description": "Stable identifier for a scheduled runbook execution.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ChangeWindowId": {
+      "description": "Stable identifier for a maintenance or freeze window.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One blocking calendar or schedule conflict.",
+  "properties": {
+    "blocking": {
+      "type": "boolean"
+    },
+    "code": {
+      "$ref": "#/$defs/ChangeConflictCode"
+    },
+    "conflicting_schedule_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ChangeScheduleId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "ends_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "message": {
+      "type": "string"
+    },
+    "resource_key": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "starts_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "window_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ChangeWindowId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "code",
+    "message",
+    "starts_at",
+    "ends_at",
+    "blocking"
+  ],
+  "title": "ChangeConflict",
+  "type": "object"
+}

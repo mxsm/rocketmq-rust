@@ -1,0 +1,86 @@
+schema_version: rocketmq-sre.runbook-definition.v1
+id: 10000000-0000-4000-8000-000000000002
+name: broker-one-by-one-restart
+version: 1.0.0
+owner: messaging-platform
+description: Restart two representative Brokers serially with HA and registration verification after each instance.
+risk: r2
+max_parallelism: 1
+steps:
+  - id: 12000000-0000-4000-8000-000000000001
+    sequence: 1
+    name: restart Broker A
+    depends_on: []
+    parallel_group: null
+    condition: null
+    body:
+      kind: action
+      action: broker.restart_one.v1
+      descriptor_version: 1.0.0
+      resource: pod/rocketmq/broker-a-0
+      parameters:
+        namespace: rocketmq
+        pod: broker-a-0
+        expected_uid: 20000000-0000-4000-8000-000000000001
+        broker_name: broker-a
+  - id: 12000000-0000-4000-8000-000000000002
+    sequence: 2
+    name: verify Broker A
+    depends_on:
+      - 12000000-0000-4000-8000-000000000001
+    parallel_group: null
+    condition:
+      fact: broker-a.sync_state_set.healthy
+      operator: equals
+      expected: true
+    body:
+      kind: manual_gate
+      gate:
+        gate_id: verify-broker-a
+        title: Verify Broker A
+        instructions: Confirm replacement UID, registration, sync-state-set health, and bounded send/consume probes.
+        required_role: approver
+        timeout_seconds: 1800
+  - id: 12000000-0000-4000-8000-000000000003
+    sequence: 3
+    name: restart Broker B
+    depends_on:
+      - 12000000-0000-4000-8000-000000000002
+    parallel_group: null
+    condition: null
+    body:
+      kind: action
+      action: broker.restart_one.v1
+      descriptor_version: 1.0.0
+      resource: pod/rocketmq/broker-b-0
+      parameters:
+        namespace: rocketmq
+        pod: broker-b-0
+        expected_uid: 20000000-0000-4000-8000-000000000002
+        broker_name: broker-b
+  - id: 12000000-0000-4000-8000-000000000004
+    sequence: 4
+    name: verify Broker B
+    depends_on:
+      - 12000000-0000-4000-8000-000000000003
+    parallel_group: null
+    condition:
+      fact: broker-b.sync_state_set.healthy
+      operator: equals
+      expected: true
+    body:
+      kind: manual_gate
+      gate:
+        gate_id: verify-broker-b
+        title: Verify Broker B
+        instructions: Confirm replacement UID, registration, sync-state-set health, and bounded send/consume probes.
+        required_role: approver
+        timeout_seconds: 1800
+compensation_edges:
+  - from_step: 12000000-0000-4000-8000-000000000001
+    compensation_step: 12000000-0000-4000-8000-000000000002
+    trigger: step_failed
+  - from_step: 12000000-0000-4000-8000-000000000003
+    compensation_step: 12000000-0000-4000-8000-000000000004
+    trigger: step_failed
+created_at: 2026-01-01T00:00:00Z

@@ -1,0 +1,103 @@
+{
+  "$defs": {
+    "ChangeWindowId": {
+      "description": "Stable identifier for a maintenance or freeze window.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ChangeWindowKind": {
+      "description": "Calendar window semantics.",
+      "enum": [
+        "maintenance",
+        "freeze",
+        "blackout"
+      ],
+      "type": "string"
+    },
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One absolute maintenance, freeze, or blackout interval.",
+  "properties": {
+    "cluster_id": {
+      "$ref": "#/$defs/ClusterId"
+    },
+    "created_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "created_by": {
+      "type": "string"
+    },
+    "ends_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "id": {
+      "$ref": "#/$defs/ChangeWindowId"
+    },
+    "kind": {
+      "$ref": "#/$defs/ChangeWindowKind"
+    },
+    "max_parallelism": {
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "name": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "resource_keys": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "starts_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    },
+    "timezone": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "id",
+    "tenant_id",
+    "cluster_id",
+    "name",
+    "kind",
+    "timezone",
+    "starts_at",
+    "ends_at",
+    "max_parallelism",
+    "reason",
+    "created_by",
+    "created_at"
+  ],
+  "title": "ChangeWindow",
+  "type": "object"
+}

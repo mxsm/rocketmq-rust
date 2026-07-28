@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Explicit human gate inside a composite runbook.",
+  "properties": {
+    "gate_id": {
+      "type": "string"
+    },
+    "instructions": {
+      "type": "string"
+    },
+    "required_role": {
+      "type": "string"
+    },
+    "timeout_seconds": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "title": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "gate_id",
+    "title",
+    "instructions",
+    "required_role",
+    "timeout_seconds"
+  ],
+  "title": "ManualGate",
+  "type": "object"
+}
