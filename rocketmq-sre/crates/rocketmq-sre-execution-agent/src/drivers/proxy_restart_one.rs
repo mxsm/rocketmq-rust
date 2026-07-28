@@ -96,6 +96,9 @@ where
             if !state.pod_ready {
                 reasons.push("proxy_pod_not_ready".to_owned());
             }
+            if !state.remaining_replicas_healthy {
+                reasons.push("proxy_remaining_replicas_unhealthy".to_owned());
+            }
             if let Some(drain) = &state.drain
                 && (drain.phase != ProxyDrainPhase::Accepting
                     || !drain.admission_open
@@ -134,6 +137,10 @@ where
                     (
                         "replacement_ready".to_owned(),
                         state.replacement_ready && state.pod_ready,
+                    ),
+                    (
+                        "remaining_replicas_healthy".to_owned(),
+                        state.remaining_replicas_healthy,
                     ),
                     ("accepting_and_routed".to_owned(), accepting_and_routed),
                 ]
