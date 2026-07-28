@@ -3,7 +3,7 @@ import type { PropsWithChildren } from "react";
 
 import { Button } from "@/components/ui/button";
 
-import { useAuth } from "./AuthContext";
+import { useAuth } from "@/auth/AuthContext";
 
 export function AuthGate({ children }: PropsWithChildren) {
   const { status, mode, error, signIn } = useAuth();

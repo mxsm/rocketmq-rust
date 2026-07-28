@@ -19,6 +19,7 @@ import {
   SearchCode,
   ShieldCheck,
   Siren,
+  Workflow,
   TrendingUp,
   UserRound,
 } from "lucide-react";
@@ -68,6 +69,12 @@ const groups = [
         icon: ClipboardList,
         end: false,
       },
+    ],
+  },
+  {
+    label: "变更",
+    items: [
+      { to: "/changes", label: "变更中心", icon: Workflow, end: false },
     ],
   },
   {
@@ -175,20 +182,20 @@ export function AppLayout() {
           <div className="boundary-note">
             <ShieldCheck aria-hidden="true" size={16} />
             <div>
-              <strong>诊断只读边界</strong>
-              <span>不提供审批、执行或 RocketMQ 资源变更能力。</span>
+              <strong>分层变更安全边界</strong>
+              <span>诊断默认只读；变更仅限审批、围栏和类型化 Agent。</span>
             </div>
           </div>
           <div className="sidebar-meta">
-            <span>v0.2.0 · Phase 02</span>
-            <span>execution_supported=false</span>
+            <span>v0.3.0 · Phase 03</span>
+            <span>R1/R2 supervised only</span>
           </div>
         </aside>
 
         <div className="workspace">
           <header className="utility-bar">
             <div className="utility-product">
-              <Badge variant="outline">READ ONLY</Badge>
+              <Badge variant="outline">SUPERVISED</Badge>
               <span>独立 AI SRE 运维面</span>
             </div>
             <div className="utility-actions">
@@ -212,7 +219,7 @@ export function AppLayout() {
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
-                    aria-label="关于只读边界"
+                    aria-label="关于受控变更边界"
                     className="icon-button"
                     type="button"
                   >
@@ -220,7 +227,7 @@ export function AppLayout() {
                   </button>
                 </TooltipTrigger>
                 <TooltipContent>
-                  数据只用于观测和诊断，不会修改 RocketMQ。
+                  诊断保持只读；仅审批后的 R1/R2 类型化动作可以进入 Executor。
                 </TooltipContent>
               </Tooltip>
               {auth.mode === "oidc" && (

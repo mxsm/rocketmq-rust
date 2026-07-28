@@ -12,8 +12,10 @@ This file applies to `rocketmq-sre/ui/`.
 
 ## Working agreement
 
-- Keep the interface dense, operational, and read-only during Phase 00.
-- Do not add approval, execution, mutation, or autonomy controls.
+- Keep the interface dense, desktop-first, and operational.
+- Read and diagnosis surfaces remain read-only. Phase 3 approval and execution
+  controls must call only the versioned Control Plane API and must never expose
+  shell, raw request, arbitrary patch, or target credential input.
 - Keep API DTOs under `src/api/` and page orchestration under `src/pages/`.
 - Never display credentials, tokens, message bodies, ACL/TLS material, or whole configurations.
 - Do not commit `dist/`, logs, or local environment files.

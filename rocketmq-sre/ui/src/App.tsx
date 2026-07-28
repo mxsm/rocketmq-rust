@@ -103,6 +103,31 @@ const OperationsPage = lazy(() =>
     default: module.OperationsPage,
   })),
 );
+const ChangeCenterPage = lazy(() =>
+  import("./pages/SupervisedExecutionPages").then((module) => ({
+    default: module.ChangeCenterPage,
+  })),
+);
+const PlanPage = lazy(() =>
+  import("./pages/SupervisedExecutionPages").then((module) => ({
+    default: module.PlanPage,
+  })),
+);
+const ExecutionPage = lazy(() =>
+  import("./pages/SupervisedExecutionPages").then((module) => ({
+    default: module.ExecutionPage,
+  })),
+);
+const AuditPageView = lazy(() =>
+  import("./pages/SupervisedExecutionPages").then((module) => ({
+    default: module.AuditPageView,
+  })),
+);
+const QuarantinePageView = lazy(() =>
+  import("./pages/SupervisedExecutionPages").then((module) => ({
+    default: module.QuarantinePageView,
+  })),
+);
 
 function RouteLoading() {
   return (
@@ -149,6 +174,17 @@ const router = createBrowserRouter([
       },
       { path: "action-items", element: <ActionItemsPage /> },
       { path: "operations", element: <OperationsPage /> },
+      { path: "changes", element: <ChangeCenterPage /> },
+      { path: "changes/plans/:planId", element: <PlanPage /> },
+      {
+        path: "changes/executions/:executionId",
+        element: <ExecutionPage />,
+      },
+      {
+        path: "changes/audit/:correlationId",
+        element: <AuditPageView />,
+      },
+      { path: "changes/quarantines", element: <QuarantinePageView /> },
       { path: "inspections", element: <InspectionsPage /> },
       { path: "forecasts", element: <ForecastPage /> },
       {

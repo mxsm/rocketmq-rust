@@ -97,6 +97,8 @@ function developmentSession(): AuthSession {
     roles: list(import.meta.env.VITE_SRE_DEV_ROLES, [
       "rocketmq:read",
       "rocketmq:diagnose",
+      "operator",
+      "approver",
     ]),
     accessToken:
       import.meta.env.VITE_SRE_DEV_TOKEN ?? "phase00-internal-token",
