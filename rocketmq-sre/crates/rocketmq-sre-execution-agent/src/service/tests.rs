@@ -19,6 +19,9 @@ use std::time::Duration;
 
 use chrono::TimeDelta;
 use chrono::Utc;
+use rocketmq_sre_contracts::AUTONOMY_SCHEMA_VERSION;
+use rocketmq_sre_contracts::ActionPlanId;
+use rocketmq_sre_contracts::AgentDispatchAuthorization;
 use rocketmq_sre_contracts::AgentDispatchRequest;
 use rocketmq_sre_contracts::AgentReadRequest;
 use rocketmq_sre_contracts::AgentReadResult;
@@ -26,6 +29,9 @@ use rocketmq_sre_contracts::AgentStepRequest;
 use rocketmq_sre_contracts::ClusterId;
 use rocketmq_sre_contracts::CompensationMode;
 use rocketmq_sre_contracts::CompensationSpec;
+use rocketmq_sre_contracts::DynamicSafetyDecision;
+use rocketmq_sre_contracts::DynamicSafetyDecisionId;
+use rocketmq_sre_contracts::DynamicSafetyVerification;
 use rocketmq_sre_contracts::EXECUTION_AGENT_SCHEMA_VERSION;
 use rocketmq_sre_contracts::ExecutionAction;
 use rocketmq_sre_contracts::ExecutionId;
@@ -68,6 +74,63 @@ impl LeaseAuthorityClient for UnavailableAuthority {
 
     fn verify_reconcile_grant<'a>(&'a self, _tenant_id: TenantId, _grant: &'a ReconcileGrant) -> AuthorityFuture<'a> {
         Box::pin(async { Err(ExecutionAgentError::AuthorityUnavailable) })
+    }
+
+    fn verify_dynamic_safety<'a>(
+        &'a self,
+        _tenant_id: TenantId,
+        _decision: &'a DynamicSafetyDecision,
+    ) -> AuthorityFuture<'a, DynamicSafetyVerification> {
+        Box::pin(async { Err(ExecutionAgentError::AuthorityUnavailable) })
+    }
+}
+
+#[derive(Clone)]
+struct AcceptingAuthority;
+
+impl LeaseAuthorityClient for AcceptingAuthority {
+    fn verify_fence_grant<'a>(&'a self, _tenant_id: TenantId, grant: &'a LeaseFenceGrant) -> AuthorityFuture<'a> {
+        Box::pin(async move {
+            Ok(rocketmq_sre_contracts::GrantVerification {
+                schema_version: rocketmq_sre_contracts::LEASE_AUTHORITY_SCHEMA_VERSION.to_owned(),
+                valid: true,
+                cluster_id: grant.cluster_id,
+                epoch: grant.epoch,
+                expires_at: grant.expires_at,
+            })
+        })
+    }
+
+    fn verify_reconcile_grant<'a>(&'a self, _tenant_id: TenantId, grant: &'a ReconcileGrant) -> AuthorityFuture<'a> {
+        Box::pin(async move {
+            Ok(rocketmq_sre_contracts::GrantVerification {
+                schema_version: rocketmq_sre_contracts::LEASE_AUTHORITY_SCHEMA_VERSION.to_owned(),
+                valid: true,
+                cluster_id: grant.cluster_id,
+                epoch: grant.pending_epoch,
+                expires_at: grant.expires_at,
+            })
+        })
+    }
+
+    fn verify_dynamic_safety<'a>(
+        &'a self,
+        tenant_id: TenantId,
+        decision: &'a DynamicSafetyDecision,
+    ) -> AuthorityFuture<'a, DynamicSafetyVerification> {
+        Box::pin(async move {
+            Ok(DynamicSafetyVerification {
+                schema_version: AUTONOMY_SCHEMA_VERSION.to_owned(),
+                valid: true,
+                decision_id: decision.id,
+                tenant_id,
+                cluster_id: decision.cluster_id,
+                plan_id: decision.plan_id,
+                execution_id: decision.execution_id,
+                execution_step_id: decision.execution_step_id,
+                expires_at: decision.expires_at,
+            })
+        })
     }
 }
 
@@ -173,6 +236,71 @@ async fn authority_outage_prevents_driver_invocation_before_database_access() {
     assert_eq!(agent.metrics().fence_rejections_total, 1);
 }
 
+#[tokio::test]
+async fn autonomous_forward_requires_live_safety_but_compensation_remains_available() {
+    let pool = PgPoolOptions::new()
+        .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+        .expect("syntactically valid lazy PostgreSQL URL");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut registry = AgentDriverRegistry::empty();
+    registry
+        .register_config(
+            ExecutionAction::ObservabilityLoggerLevelTtl,
+            CountingConfigDriver {
+                calls: Arc::clone(&calls),
+            },
+        )
+        .expect("closed config action registration");
+    let agent = ExecutionAgent::new(
+        AgentEffectStore::new(pool.clone()),
+        DispatchBarrier::new(pool),
+        Arc::new(AcceptingAuthority),
+        registry,
+        FenceAckSigner::new("agent-test-signing-key-at-least-32-bytes", "execution-agent-test").expect("test signer"),
+        Duration::from_secs(1),
+    );
+
+    let mut missing = autonomous_dispatch_request(false, false);
+    assert!(matches!(
+        agent.verify_dispatch_safety(&missing).await,
+        Err(ExecutionAgentError::AuthorityRejected)
+    ));
+
+    missing.request.intent.dynamic_safety = Some(dynamic_safety(&missing));
+    missing
+        .request
+        .intent
+        .dynamic_safety
+        .as_mut()
+        .expect("decision")
+        .expires_at = Utc::now();
+    assert!(matches!(
+        agent.verify_dispatch_safety(&missing).await,
+        Err(ExecutionAgentError::AuthorityRejected)
+    ));
+
+    let valid = autonomous_dispatch_request(false, true);
+    agent
+        .verify_dispatch_safety(&valid)
+        .await
+        .expect("current signed autonomous decision");
+
+    let compensation = autonomous_dispatch_request(true, false);
+    agent
+        .verify_dispatch_safety(&compensation)
+        .await
+        .expect("compensation does not depend on dynamic safety");
+    assert!(agent.registry.validate_dispatch(&compensation.request).is_ok());
+
+    let mut forged = compensation;
+    forged.request.intent.fence_grant.compensation = false;
+    assert!(matches!(
+        agent.registry.validate_dispatch(&forged.request),
+        Err(ExecutionAgentError::InvalidRequest)
+    ));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
 fn dispatch_request() -> AgentDispatchRequest {
     let now = Utc::now();
     let tenant_id = TenantId::new();
@@ -218,6 +346,7 @@ fn dispatch_request() -> AgentDispatchRequest {
         plan_step_id,
         action: step.action,
         resource: step.resource.clone(),
+        compensation: false,
         audience: "execution-agent".to_owned(),
         issued_at: now - TimeDelta::seconds(1),
         expires_at: now + TimeDelta::seconds(20),
@@ -227,6 +356,8 @@ fn dispatch_request() -> AgentDispatchRequest {
     AgentDispatchRequest {
         schema_version: EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
         tenant_id,
+        plan_id: Some(ActionPlanId::new()),
+        authorization: AgentDispatchAuthorization::HumanApproved,
         request: AgentStepRequest {
             intent: StepIntent {
                 execution_id,
@@ -236,6 +367,7 @@ fn dispatch_request() -> AgentDispatchRequest {
                 attempt: 1,
                 idempotency_key: "authority-outage-test".to_owned(),
                 fence_grant: grant,
+                dynamic_safety: None,
                 intended_at: now,
                 compensation: false,
             },
@@ -244,6 +376,44 @@ fn dispatch_request() -> AgentDispatchRequest {
             target: "component/rocketmq_proxy".to_owned(),
             parameters,
         },
+    }
+}
+
+fn autonomous_dispatch_request(compensation: bool, with_decision: bool) -> AgentDispatchRequest {
+    let mut request = dispatch_request();
+    request.authorization = AgentDispatchAuthorization::Autonomous;
+    request.request.intent.compensation = compensation;
+    request.request.intent.fence_grant.compensation = compensation;
+    if with_decision {
+        request.request.intent.dynamic_safety = Some(dynamic_safety(&request));
+    }
+    request
+}
+
+fn dynamic_safety(request: &AgentDispatchRequest) -> DynamicSafetyDecision {
+    let now = Utc::now();
+    DynamicSafetyDecision {
+        id: DynamicSafetyDecisionId::new(),
+        tenant_id: request.tenant_id,
+        cluster_id: request.request.intent.fence_grant.cluster_id,
+        action: request.request.action,
+        action_version: request.request.descriptor_version.clone(),
+        plan_id: request.plan_id.expect("test plan id"),
+        plan_hash: request.request.intent.plan_hash.clone(),
+        execution_id: request.request.intent.execution_id,
+        execution_step_id: request.request.intent.step_id,
+        policy_definition_version: 1,
+        lifecycle_revision: 1,
+        error_budget_available: true,
+        freeze_revision: 0,
+        kill_switch_revision: 0,
+        evidence_fresh: true,
+        allowed: true,
+        reason_codes: Vec::new(),
+        issued_at: now,
+        expires_at: now + TimeDelta::seconds(30),
+        nonce: "agent-dynamic-safety-test".to_owned(),
+        signature: "agent-dynamic-safety-signature".to_owned(),
     }
 }
 
