@@ -1,0 +1,50 @@
+id: controller.config.patch_allowlisted.v1
+version: 1.0.0
+owner: messaging-platform
+supported_versions:
+  - family: rocketmq-sre.action-plan
+    major: 1
+    minor: 0
+required_capabilities:
+  - admin.controller-config-cas
+config_schema:
+  type: object
+  additionalProperties: false
+parameter_schema:
+  type: object
+  additionalProperties: false
+  required: [controller, expected_version, patch]
+  properties:
+    controller: { type: string, maxLength: 255 }
+    expected_version: { type: integer, minimum: 0 }
+    patch:
+      type: object
+      minProperties: 1
+      maxProperties: 2
+      additionalProperties: false
+      properties:
+        scan_not_active_broker_interval_ms: { type: integer, minimum: 1000, maximum: 60000 }
+        jraft_snapshot_interval_seconds: { type: integer, minimum: 60, maximum: 86400 }
+status: active
+deprecation: null
+risk: r2
+execution_supported: false
+preconditions:
+  - valid_heterogeneous_critic
+  - controller_version_matches
+  - quorum_healthy
+  - every_field_allowlisted
+  - plan_not_expired
+max_impact: allowlisted_fields
+verification:
+  resource_conditions: [controller_version_incremented, patch_visible, quorum_unchanged]
+  technical_slis: [controller_quorum_health, controller_election_rate, stale_broker_count]
+  stable_window_seconds: 300
+  max_wait_seconds: 1200
+timeout_seconds: 1200
+compensation:
+  mode: automatic
+  required_before_fields: [before_config, latest_version, quorum_members]
+  timeout_seconds: 600
+forbidden_fields: [quorum, peers, clean_data, election, preferred_leader, auth, tls, raw_request_code]
+plan_only: false

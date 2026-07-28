@@ -1,0 +1,45 @@
+id: broker.restart_one.v1
+version: 1.0.0
+owner: messaging-platform
+supported_versions:
+  - family: rocketmq-sre.action-plan
+    major: 1
+    minor: 0
+required_capabilities:
+  - kubernetes.typed-restart
+  - broker.ha-readiness
+config_schema:
+  type: object
+  additionalProperties: false
+parameter_schema:
+  type: object
+  additionalProperties: false
+  required: [namespace, pod, expected_uid, broker_name]
+  properties:
+    namespace: { type: string, maxLength: 128 }
+    pod: { type: string, maxLength: 128 }
+    expected_uid: { type: string, maxLength: 128 }
+    broker_name: { type: string, maxLength: 128 }
+status: active
+deprecation: null
+risk: r2
+execution_supported: false
+preconditions:
+  - valid_heterogeneous_critic
+  - expected_pod_uid_matches
+  - ha_and_sync_state_set_healthy
+  - safe_offset_and_dispatch_healthy
+  - max_parallelism_one
+max_impact: single_instance
+verification:
+  resource_conditions: [replacement_uid_observed, broker_registered, sync_state_set_restored]
+  technical_slis: [send_success_ratio, consume_success_ratio, store_dispatch_latency]
+  stable_window_seconds: 600
+  max_wait_seconds: 1800
+timeout_seconds: 1800
+compensation:
+  mode: manual_takeover
+  required_before_fields: [expected_uid, broker_role, sync_state_set]
+  timeout_seconds: 600
+forbidden_fields: [force_delete, multiple_pods, broker_role_change, quorum_change, arbitrary_patch]
+plan_only: false

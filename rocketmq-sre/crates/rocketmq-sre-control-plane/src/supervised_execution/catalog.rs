@@ -19,22 +19,18 @@ use rocketmq_sre_contracts::ActionDescriptor;
 use rocketmq_sre_contracts::ActionRisk;
 use rocketmq_sre_contracts::DescriptorStatus;
 use rocketmq_sre_contracts::ExecutionAction;
+use rocketmq_sre_core::EMBEDDED_ACTION_DESCRIPTOR_YAMLS;
 use serde::Deserialize;
 use serde_json::Map;
 use serde_json::Value;
 
 use crate::ControlPlaneError;
 
-const LOGGER_LEVEL: &str = include_str!("../../../../config/actions/observability.logger_level_ttl.v1.yaml");
-const PROXY_SCALE: &str = include_str!("../../../../config/actions/proxy.scale_out_one.v1.yaml");
-const PROXY_RESTART: &str = include_str!("../../../../config/actions/proxy.restart_one.v1.yaml");
-const BROKER_CONFIG: &str = include_str!("../../../../config/actions/broker.config.patch_allowlisted.v1.yaml");
-const TOPIC_CONFIG: &str = include_str!("../../../../config/actions/topic.config.patch_allowlisted.v1.yaml");
 const CAPABILITY_CATALOG: &str = include_str!("../../../../config/capabilities/rocketmq-capability-catalog.v1.yaml");
 
 #[derive(Clone)]
 pub(super) struct ActionCatalog {
-    executable: BTreeMap<ExecutionAction, ActionDescriptor>,
+    supervised: BTreeMap<ExecutionAction, ActionDescriptor>,
     manual_only: BTreeMap<String, ManualAction>,
 }
 
@@ -46,7 +42,7 @@ pub(super) struct ManualAction {
 }
 
 pub(super) enum CatalogResolution<'a> {
-    Executable(ExecutionAction, &'a ActionDescriptor),
+    Supervised(ExecutionAction, &'a ActionDescriptor),
     ManualOnly(&'a ManualAction),
 }
 
@@ -65,8 +61,8 @@ struct CapabilityEntry {
 
 impl ActionCatalog {
     pub(super) fn embedded() -> Result<Self, ControlPlaneError> {
-        let mut executable = BTreeMap::new();
-        for yaml in [LOGGER_LEVEL, PROXY_SCALE, PROXY_RESTART, BROKER_CONFIG, TOPIC_CONFIG] {
+        let mut supervised = BTreeMap::new();
+        for yaml in EMBEDDED_ACTION_DESCRIPTOR_YAMLS {
             let descriptor: ActionDescriptor = serde_yaml::from_str(yaml).map_err(|error| {
                 ControlPlaneError::configuration(format!("Phase 3 action descriptor is invalid: {error}"))
             })?;
@@ -74,7 +70,7 @@ impl ActionCatalog {
                 ControlPlaneError::configuration("action descriptor is outside the closed execution catalog")
             })?;
             validate_descriptor(action, &descriptor)?;
-            if executable.insert(action, descriptor).is_some() {
+            if supervised.insert(action, descriptor).is_some() {
                 return Err(ControlPlaneError::configuration(
                     "action descriptor catalog contains a duplicate action",
                 ));
@@ -98,17 +94,17 @@ impl ActionCatalog {
             })
             .collect();
         Ok(Self {
-            executable,
+            supervised,
             manual_only,
         })
     }
 
     pub(super) fn resolve(&self, id: &str) -> Result<CatalogResolution<'_>, ControlPlaneError> {
         if let Some(action) = ExecutionAction::from_id(id) {
-            let descriptor = self.executable.get(&action).ok_or_else(|| {
-                ControlPlaneError::configuration("closed execution action has no embedded descriptor")
+            let descriptor = self.supervised.get(&action).ok_or_else(|| {
+                ControlPlaneError::configuration("closed supervised action has no embedded descriptor")
             })?;
-            return Ok(CatalogResolution::Executable(action, descriptor));
+            return Ok(CatalogResolution::Supervised(action, descriptor));
         }
         self.manual_only
             .get(id)
@@ -122,9 +118,9 @@ impl ActionCatalog {
     }
 
     pub(super) fn descriptor(&self, action: ExecutionAction) -> Result<&ActionDescriptor, ControlPlaneError> {
-        self.executable
+        self.supervised
             .get(&action)
-            .ok_or_else(|| ControlPlaneError::configuration("execution action has no embedded descriptor"))
+            .ok_or_else(|| ControlPlaneError::configuration("supervised action has no embedded descriptor"))
     }
 }
 
@@ -133,7 +129,7 @@ fn validate_descriptor(action: ExecutionAction, descriptor: &ActionDescriptor) -
         || descriptor.version.trim().is_empty()
         || descriptor.status != DescriptorStatus::Active
         || !matches!(descriptor.risk, ActionRisk::R1 | ActionRisk::R2)
-        || descriptor.plan_only
+        || (descriptor.plan_only && descriptor.execution_supported)
         || !descriptor.parameter_schema.is_object()
         || descriptor.timeout_seconds == 0
     {
@@ -293,19 +289,32 @@ mod tests {
     #[test]
     fn embedded_catalog_has_every_closed_action_and_manual_r3() {
         let catalog = ActionCatalog::embedded().expect("catalog");
-        for action in [
-            ExecutionAction::ObservabilityLoggerLevelTtl,
-            ExecutionAction::ProxyScaleOutOne,
-            ExecutionAction::ProxyRestartOne,
-            ExecutionAction::BrokerConfigPatchAllowlisted,
-            ExecutionAction::TopicConfigPatchAllowlisted,
-        ] {
+        for action in ExecutionAction::ALL {
             assert_eq!(catalog.descriptor(action).expect("descriptor").id, action.id());
+        }
+        for action in ExecutionAction::WAVE3_PLAN_ONLY {
+            let descriptor = catalog.descriptor(action).expect("plan-only descriptor");
+            assert!(descriptor.plan_only);
+            assert!(!descriptor.execution_supported);
         }
         assert!(matches!(
             catalog.resolve("broker.reset_master_flush_offset"),
             Ok(CatalogResolution::ManualOnly(_))
         ));
+        for id in [
+            "topic.delete",
+            "consumer.delete_subscription_group",
+            "auth.user.delete",
+            "auth.acl.delete",
+            "broker.clean_expired_cq",
+            "broker.delete_expired_commit_log",
+            "broker.clean_unused_topic",
+            "broker.reset_master_flush_offset",
+            "controller.metadata.clean",
+        ] {
+            assert!(matches!(catalog.resolve(id), Ok(CatalogResolution::ManualOnly(_))));
+            assert!(ExecutionAction::from_id(id).is_none());
+        }
         assert!(catalog.resolve("unknown.arbitrary.request").is_err());
     }
 

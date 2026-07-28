@@ -1,0 +1,48 @@
+id: topic.queue.expand_only.v1
+version: 1.0.0
+owner: messaging-platform
+supported_versions:
+  - family: rocketmq-sre.action-plan
+    major: 1
+    minor: 0
+required_capabilities:
+  - admin.topic-queue-cas
+  - evidence.static-topic-mapping
+config_schema:
+  type: object
+  additionalProperties: false
+parameter_schema:
+  type: object
+  additionalProperties: false
+  required:
+    [topic, expected_version, expected_read_queue_nums, expected_write_queue_nums, target_read_queue_nums, target_write_queue_nums]
+  properties:
+    topic: { type: string, maxLength: 255 }
+    expected_version: { type: integer, minimum: 0 }
+    expected_read_queue_nums: { type: integer, minimum: 1, maximum: 128 }
+    expected_write_queue_nums: { type: integer, minimum: 1, maximum: 128 }
+    target_read_queue_nums: { type: integer, minimum: 1, maximum: 128 }
+    target_write_queue_nums: { type: integer, minimum: 1, maximum: 128 }
+status: active
+deprecation: null
+risk: r2
+execution_supported: false
+preconditions:
+  - valid_heterogeneous_critic
+  - target_queue_counts_strictly_expand
+  - capacity_available
+  - static_topic_mapping_unchanged
+  - every_active_client_version_compatible
+max_impact: single_resource
+verification:
+  resource_conditions: [topic_version_incremented, target_queue_counts_visible, static_mapping_unchanged]
+  technical_slis: [send_success_ratio, consume_success_ratio, route_error_ratio]
+  stable_window_seconds: 300
+  max_wait_seconds: 1200
+timeout_seconds: 1200
+compensation:
+  mode: manual_takeover
+  required_before_fields: [expected_read_queue_nums, expected_write_queue_nums, static_mapping_hash]
+  timeout_seconds: 600
+forbidden_fields: [decrease_queue_count, static_topic_remap, mapping_epoch, delete_topic, raw_request_code]
+plan_only: false

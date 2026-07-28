@@ -19,16 +19,11 @@ use rocketmq_sre_contracts::ActionRisk;
 use rocketmq_sre_contracts::ExecutionAction;
 use rocketmq_sre_contracts::PlanStep;
 use rocketmq_sre_core::ActionCatalog;
+use rocketmq_sre_core::EMBEDDED_ACTION_DESCRIPTOR_YAMLS;
 use serde_json::Map;
 use serde_json::Value;
 
 use crate::ExecutorError;
-
-const LOGGER_LEVEL: &str = include_str!("../../../config/actions/observability.logger_level_ttl.v1.yaml");
-const PROXY_SCALE: &str = include_str!("../../../config/actions/proxy.scale_out_one.v1.yaml");
-const PROXY_RESTART: &str = include_str!("../../../config/actions/proxy.restart_one.v1.yaml");
-const BROKER_CONFIG: &str = include_str!("../../../config/actions/broker.config.patch_allowlisted.v1.yaml");
-const TOPIC_CONFIG: &str = include_str!("../../../config/actions/topic.config.patch_allowlisted.v1.yaml");
 
 /// Exact catalog snapshot revalidated inside Executor before every dispatch.
 #[derive(Clone, Debug)]
@@ -46,8 +41,9 @@ impl ExecutorActionRegistry {
     ///
     /// Rejects malformed YAML, duplicate versions, and catalog invariants.
     pub fn embedded() -> Result<Self, ExecutorError> {
-        let descriptors = [LOGGER_LEVEL, PROXY_SCALE, PROXY_RESTART, BROKER_CONFIG, TOPIC_CONFIG]
-            .into_iter()
+        let descriptors = EMBEDDED_ACTION_DESCRIPTOR_YAMLS
+            .iter()
+            .copied()
             .map(serde_yaml::from_str::<ActionDescriptor>)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|_| ExecutorError::Configuration)?;

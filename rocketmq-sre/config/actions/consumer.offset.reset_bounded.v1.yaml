@@ -1,0 +1,51 @@
+id: consumer.offset.reset_bounded.v1
+version: 1.0.0
+owner: messaging-platform
+supported_versions:
+  - family: rocketmq-sre.action-plan
+    major: 1
+    minor: 0
+required_capabilities:
+  - admin.consumer-offset-bounded-cas
+  - evidence.consumer-offset-preview
+config_schema:
+  type: object
+  additionalProperties: false
+parameter_schema:
+  type: object
+  additionalProperties: false
+  required:
+    [topic, group, queue_id, expected_current_offset, target_kind, target_value, preview_start_offset, preview_end_offset, max_affected_messages]
+  properties:
+    topic: { type: string, maxLength: 255 }
+    group: { type: string, maxLength: 255 }
+    queue_id: { type: integer, minimum: 0, maximum: 1023 }
+    expected_current_offset: { type: integer, minimum: 0 }
+    target_kind: { type: string, enum: [timestamp_ms, queue_offset] }
+    target_value: { type: integer, minimum: 0 }
+    preview_start_offset: { type: integer, minimum: 0 }
+    preview_end_offset: { type: integer, minimum: 0 }
+    max_affected_messages: { type: integer, minimum: 1, maximum: 100000 }
+status: active
+deprecation: null
+risk: r2
+execution_supported: false
+preconditions:
+  - valid_heterogeneous_critic
+  - consumer_stopped_or_fenced
+  - queue_offset_matches_expected
+  - bounded_message_window_previewed
+  - plan_not_expired
+max_impact: single_resource
+verification:
+  resource_conditions: [queue_offset_equals_target, consumer_resumed_from_target]
+  technical_slis: [consume_success_ratio, duplicate_delivery_ratio, consumer_lag]
+  stable_window_seconds: 300
+  max_wait_seconds: 1800
+timeout_seconds: 1800
+compensation:
+  mode: automatic
+  required_before_fields: [expected_current_offset, queue_id]
+  timeout_seconds: 600
+forbidden_fields: [all_queues, clone_group, skip_accumulated, force, reset_to_latest, raw_request_code]
+plan_only: false

@@ -40,8 +40,8 @@ struct RegisteredHandler {
     handler: Arc<dyn AgentActionHandler>,
 }
 
-/// Closed action-to-driver registry. R3 and unknown action IDs cannot be
-/// represented by [`ExecutionAction`] and therefore cannot be registered.
+/// Closed action-to-driver registry. Plan-only, R3, and unknown action IDs
+/// cannot be registered.
 #[derive(Clone, Default)]
 pub struct AgentDriverRegistry {
     handlers: BTreeMap<ExecutionAction, RegisteredHandler>,
@@ -95,7 +95,7 @@ impl AgentDriverRegistry {
         family: DriverFamily,
         handler: Arc<dyn AgentActionHandler>,
     ) -> Result<(), ExecutionAgentError> {
-        if expected_family(action) != family || self.handlers.contains_key(&action) {
+        if expected_family(action) != Some(family) || self.handlers.contains_key(&action) {
             return Err(ExecutionAgentError::InvalidRequest);
         }
         self.handlers.insert(action, RegisteredHandler { family, handler });
@@ -121,7 +121,7 @@ impl AgentDriverRegistry {
             .handlers
             .get(&request.action)
             .ok_or(ExecutionAgentError::ActionNotRegistered)?;
-        if registered.family != expected_family(request.action) {
+        if Some(registered.family) != expected_family(request.action) {
             return Err(ExecutionAgentError::InvalidRequest);
         }
         Ok(())
@@ -158,12 +158,61 @@ impl AgentDriverRegistry {
     }
 }
 
-const fn expected_family(action: ExecutionAction) -> DriverFamily {
+const fn expected_family(action: ExecutionAction) -> Option<DriverFamily> {
     match action {
-        ExecutionAction::ObservabilityLoggerLevelTtl => DriverFamily::Config,
-        ExecutionAction::ProxyScaleOutOne | ExecutionAction::ProxyRestartOne => DriverFamily::Kubernetes,
-        ExecutionAction::BrokerConfigPatchAllowlisted | ExecutionAction::TopicConfigPatchAllowlisted => {
-            DriverFamily::AdminCore
+        ExecutionAction::ObservabilityLoggerLevelTtl | ExecutionAction::SecurityCredentialRotateOverlap => {
+            Some(DriverFamily::Config)
         }
+        ExecutionAction::ProxyScaleOutOne
+        | ExecutionAction::ProxyRestartOne
+        | ExecutionAction::ProxyRolloutImageCanary
+        | ExecutionAction::BrokerRestartOne
+        | ExecutionAction::TelemetryCollectorRestartOne => Some(DriverFamily::Kubernetes),
+        ExecutionAction::BrokerConfigPatchAllowlisted
+        | ExecutionAction::TopicConfigPatchAllowlisted
+        | ExecutionAction::SubscriptionGroupPatchAllowlisted
+        | ExecutionAction::ConsumerRequestModePatchAllowlisted
+        | ExecutionAction::ConsumerOffsetResetBounded
+        | ExecutionAction::TopicQueueExpandOnly
+        | ExecutionAction::NameSrvConfigPatchAllowlisted
+        | ExecutionAction::ControllerConfigPatchAllowlisted
+        | ExecutionAction::StaticTopicPatchNonRemap
+        | ExecutionAction::TieredColdDataFlowPatchAllowlisted
+        | ExecutionAction::StoreReadaheadPatchAllowlisted => Some(DriverFamily::AdminCore),
+        ExecutionAction::ConsumerOffsetCloneOrResetBroad
+        | ExecutionAction::MessageDirectConsume
+        | ExecutionAction::MessageDlqResend
+        | ExecutionAction::TimerSwitch
+        | ExecutionAction::ControllerElect
+        | ExecutionAction::StaticTopicRemap
+        | ExecutionAction::BrokerContainerAddRemove => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wave_three_has_no_agent_driver_family() {
+        for action in ExecutionAction::WAVE3_PLAN_ONLY {
+            assert_eq!(expected_family(action), None);
+        }
+    }
+
+    #[test]
+    fn representative_wave_two_actions_have_distinct_typed_families() {
+        assert_eq!(
+            expected_family(ExecutionAction::SubscriptionGroupPatchAllowlisted),
+            Some(DriverFamily::AdminCore)
+        );
+        assert_eq!(
+            expected_family(ExecutionAction::ProxyRolloutImageCanary),
+            Some(DriverFamily::Kubernetes)
+        );
+        assert_eq!(
+            expected_family(ExecutionAction::SecurityCredentialRotateOverlap),
+            Some(DriverFamily::Config)
+        );
     }
 }

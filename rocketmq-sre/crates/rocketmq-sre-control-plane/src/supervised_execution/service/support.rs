@@ -46,7 +46,7 @@ pub(super) fn single_manual_action<'a>(
         .iter()
         .filter_map(|entry| match entry {
             CatalogResolution::ManualOnly(manual) => Some(*manual),
-            CatalogResolution::Executable(_, _) => None,
+            CatalogResolution::Supervised(_, _) => None,
         })
         .collect::<Vec<_>>();
     if manual.is_empty() {

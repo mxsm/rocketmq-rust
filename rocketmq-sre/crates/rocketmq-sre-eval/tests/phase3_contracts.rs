@@ -43,9 +43,9 @@ fn descriptors() -> Vec<ActionDescriptor> {
 }
 
 #[test]
-fn wave_one_descriptor_skeletons_are_typed_and_fail_closed() {
+fn phase_three_descriptor_catalog_is_typed_and_fail_closed() {
     let descriptors = descriptors();
-    assert_eq!(descriptors.len(), 5);
+    assert_eq!(descriptors.len(), ExecutionAction::ALL.len());
     let mut catalog = ActionCatalog::default();
     for descriptor in descriptors {
         assert!(matches!(descriptor.risk, ActionRisk::R1 | ActionRisk::R2));
@@ -53,8 +53,11 @@ fn wave_one_descriptor_skeletons_are_typed_and_fail_closed() {
         assert!(!descriptor.parameter_schema.is_null());
         catalog.register(descriptor).expect("known R1/R2 descriptor");
     }
-    assert_eq!(catalog.len(), 5);
+    assert_eq!(catalog.len(), ExecutionAction::ALL.len());
     assert!(catalog.descriptor(ExecutionAction::ProxyScaleOutOne, "1.0.1").is_err());
+    for action in ExecutionAction::WAVE3_PLAN_ONLY {
+        assert!(catalog.executable_descriptor(action, "1.0.0").is_err());
+    }
 }
 
 #[test]

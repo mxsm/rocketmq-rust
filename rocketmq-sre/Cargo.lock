@@ -3706,6 +3706,7 @@ dependencies = [
  "chrono",
  "rocketmq-sre-contracts",
  "serde_json",
+ "serde_yaml",
 ]
 
 [[package]]

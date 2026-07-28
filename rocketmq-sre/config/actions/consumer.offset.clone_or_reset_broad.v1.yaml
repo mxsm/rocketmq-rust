@@ -1,0 +1,43 @@
+id: consumer.offset.clone_or_reset_broad.v1
+version: 1.0.0
+owner: messaging-platform
+supported_versions:
+  - family: rocketmq-sre.action-plan
+    major: 1
+    minor: 0
+required_capabilities:
+  - planning.consumer-offset-impact
+config_schema:
+  type: object
+  additionalProperties: false
+parameter_schema:
+  type: object
+  additionalProperties: false
+  required: [topic, source_group, target_group, operation, impact_preview_id]
+  properties:
+    topic: { type: string, maxLength: 255 }
+    source_group: { type: string, maxLength: 255 }
+    target_group: { type: string, maxLength: 255 }
+    operation: { type: string, enum: [clone, reset_all_queues] }
+    impact_preview_id: { type: string, maxLength: 128 }
+status: active
+deprecation: null
+risk: r2
+execution_supported: false
+preconditions:
+  - impact_preview_complete
+  - source_and_target_scope_exact
+  - manual_runbook_owner_assigned
+max_impact: single_resource
+verification:
+  resource_conditions: [manual_offset_validation_defined]
+  technical_slis: [consumer_lag, duplicate_delivery_ratio]
+  stable_window_seconds: 300
+  max_wait_seconds: 1800
+timeout_seconds: 1800
+compensation:
+  mode: not_available
+  required_before_fields: []
+  timeout_seconds: 0
+forbidden_fields: [auto_execute, all_topics, wildcard_group, raw_request_code]
+plan_only: true

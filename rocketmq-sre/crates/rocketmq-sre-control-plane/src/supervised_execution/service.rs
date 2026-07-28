@@ -283,7 +283,7 @@ impl SupervisedExecutionService {
         let mut risks = Vec::with_capacity(request.steps.len());
         let mut steps = Vec::with_capacity(request.steps.len());
         for (index, candidate) in request.steps.iter().enumerate() {
-            let CatalogResolution::Executable(action, descriptor) = self.catalog.resolve(&candidate.action_id)? else {
+            let CatalogResolution::Supervised(action, descriptor) = self.catalog.resolve(&candidate.action_id)? else {
                 return Err(ControlPlaneError::validation(
                     "mixed_manual_and_execution_plan",
                     "manual-only and executable actions cannot share one plan",

@@ -1,0 +1,49 @@
+id: namesrv.config.patch_allowlisted.v1
+version: 1.0.0
+owner: messaging-platform
+supported_versions:
+  - family: rocketmq-sre.action-plan
+    major: 1
+    minor: 0
+required_capabilities:
+  - admin.namesrv-config-cas
+config_schema:
+  type: object
+  additionalProperties: false
+parameter_schema:
+  type: object
+  additionalProperties: false
+  required: [nameserver, expected_version, patch]
+  properties:
+    nameserver: { type: string, maxLength: 255 }
+    expected_version: { type: integer, minimum: 0 }
+    patch:
+      type: object
+      minProperties: 1
+      maxProperties: 2
+      additionalProperties: false
+      properties:
+        scan_not_active_broker_interval_ms: { type: integer, minimum: 1000, maximum: 60000 }
+        unregister_broker_queue_capacity: { type: integer, minimum: 100, maximum: 100000 }
+status: active
+deprecation: null
+risk: r2
+execution_supported: false
+preconditions:
+  - valid_heterogeneous_critic
+  - namesrv_version_matches
+  - every_field_allowlisted
+  - plan_not_expired
+max_impact: allowlisted_fields
+verification:
+  resource_conditions: [namesrv_version_incremented, patch_visible, route_freshness_healthy]
+  technical_slis: [namesrv_route_error_ratio, broker_registration_age]
+  stable_window_seconds: 300
+  max_wait_seconds: 1200
+timeout_seconds: 1200
+compensation:
+  mode: automatic
+  required_before_fields: [before_config, latest_version]
+  timeout_seconds: 600
+forbidden_fields: [auth, tls, delete, kv_namespace, quorum, raw_request_code]
+plan_only: false
