@@ -108,6 +108,7 @@ const PRIMARY_DIAGNOSIS_PURPOSE: &str = "primary_diagnosis";
 const SCHEMA_REPAIR_PURPOSE: &str = "schema_repair";
 
 mod critic;
+mod lifecycle;
 
 #[derive(Clone, Copy, Debug)]
 struct ModelCallBudget {
