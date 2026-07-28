@@ -148,6 +148,21 @@ const ChangeScheduleDetailPage = lazy(() =>
     default: module.ChangeScheduleDetailPage,
   })),
 );
+const ReleaseEscortPage = lazy(() =>
+  import("./pages/ReleaseEscortPage").then((module) => ({
+    default: module.ReleaseEscortPage,
+  })),
+);
+const ReleaseDetailPage = lazy(() =>
+  import("./pages/ReleaseDetailPage").then((module) => ({
+    default: module.ReleaseDetailPage,
+  })),
+);
+const IntegrationManagementPage = lazy(() =>
+  import("./pages/IntegrationManagementPage").then((module) => ({
+    default: module.IntegrationManagementPage,
+  })),
+);
 
 function RouteLoading() {
   return (
@@ -201,6 +216,15 @@ const router = createBrowserRouter([
       {
         path: "changes/schedules/:scheduleId",
         element: <ChangeScheduleDetailPage />,
+      },
+      { path: "changes/releases", element: <ReleaseEscortPage /> },
+      {
+        path: "changes/releases/:releaseId",
+        element: <ReleaseDetailPage />,
+      },
+      {
+        path: "changes/integrations",
+        element: <IntegrationManagementPage />,
       },
       { path: "changes/plans/:planId", element: <PlanPage /> },
       {
