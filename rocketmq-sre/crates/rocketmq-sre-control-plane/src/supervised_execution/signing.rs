@@ -70,6 +70,8 @@ struct UnsignedExecutionRequest<'a> {
     correlation_id: CorrelationId,
     plan: &'a ActionPlan,
     approvals: &'a [ApprovalGrant],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    autonomy_grant: Option<&'a AutonomyGrant>,
     requested_by: &'a str,
     idempotency_key: &'a str,
     issuer: &'a str,
@@ -301,6 +303,7 @@ fn execution_payload(request: &ExecutionRequest) -> Result<Vec<u8>, ControlPlane
         correlation_id: request.correlation_id,
         plan: &request.plan,
         approvals: &request.approvals,
+        autonomy_grant: request.autonomy_grant.as_ref(),
         requested_by: &request.requested_by,
         idempotency_key: &request.idempotency_key,
         issuer: &request.issuer,
