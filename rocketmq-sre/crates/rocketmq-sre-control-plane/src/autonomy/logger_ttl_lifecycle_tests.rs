@@ -26,7 +26,7 @@ use super::model::RecordQualificationSampleRequest;
 use super::repository_tests::Fixture;
 use super::repository_tests::seed_critic_review;
 use super::repository_tests::seed_fixture;
-use super::repository_tests::seed_successful_supervised_execution_at;
+use super::repository_tests::seed_successful_supervised_execution_for_action_at;
 use super::repository_tests::unique_digest;
 use crate::PostgresRepository;
 use crate::SupervisedRepository;
@@ -64,11 +64,63 @@ use uuid::Uuid;
 const SHADOW_SAMPLES: usize = 20;
 const SUPERVISED_SUCCESSES: usize = 5;
 const OBSERVATION_DAYS: i64 = 7;
-const STABLE_WINDOW_SECONDS: i64 = 30;
+
+#[derive(Clone, Copy)]
+enum R1ActionScenario {
+    LoggerTtl,
+    ProxyScaleOut,
+}
+
+impl R1ActionScenario {
+    const fn action(self) -> ExecutionAction {
+        match self {
+            Self::LoggerTtl => ExecutionAction::ObservabilityLoggerLevelTtl,
+            Self::ProxyScaleOut => ExecutionAction::ProxyScaleOutOne,
+        }
+    }
+
+    const fn diagnostic_pack_id(self) -> &'static str {
+        match self {
+            Self::LoggerTtl => "runtime-diagnostics",
+            Self::ProxyScaleOut => "proxy-connectivity",
+        }
+    }
+
+    const fn stable_window_seconds(self) -> i64 {
+        match self {
+            Self::LoggerTtl => 30,
+            Self::ProxyScaleOut => 120,
+        }
+    }
+
+    const fn symptom_family(self) -> &'static str {
+        match self {
+            Self::LoggerTtl => "logger_qualification",
+            Self::ProxyScaleOut => "proxy_capacity_qualification",
+        }
+    }
+
+    const fn resource(self) -> &'static str {
+        match self {
+            Self::LoggerTtl => "broker/test",
+            Self::ProxyScaleOut => "deployment/rocketmq-system/rocketmq-proxy",
+        }
+    }
+}
 
 #[tokio::test]
 #[ignore = "requires ROCKETMQ_SRE_TEST_DATABASE_URL pointing to Docker PostgreSQL"]
 async fn logger_ttl_qualifies_through_shadow_supervised_and_autonomous() {
+    qualify_r1_action_through_autonomy(R1ActionScenario::LoggerTtl).await;
+}
+
+#[tokio::test]
+#[ignore = "requires ROCKETMQ_SRE_TEST_DATABASE_URL pointing to Docker PostgreSQL"]
+async fn proxy_scale_qualifies_through_shadow_supervised_and_autonomous() {
+    qualify_r1_action_through_autonomy(R1ActionScenario::ProxyScaleOut).await;
+}
+
+async fn qualify_r1_action_through_autonomy(scenario: R1ActionScenario) {
     let Some(database_url) = std::env::var("ROCKETMQ_SRE_TEST_DATABASE_URL").ok() else {
         return;
     };
@@ -80,7 +132,7 @@ async fn logger_ttl_qualifies_through_shadow_supervised_and_autonomous() {
     let auth = operator_auth(&fixture);
     let clock_value = Arc::new(Mutex::new(started_at));
     let service = autonomy_service(&repository, Arc::clone(&clock_value));
-    let descriptor = logger_descriptor();
+    let descriptor = action_descriptor(scenario.action());
     let descriptor_digest = canonical_sha256(&descriptor).expect("descriptor digest");
 
     let created = service
@@ -88,10 +140,10 @@ async fn logger_ttl_qualifies_through_shadow_supervised_and_autonomous() {
             &auth,
             &CreateAutonomyPolicyRequest {
                 cluster_id: fixture.cluster_id,
-                action: ExecutionAction::ObservabilityLoggerLevelTtl,
+                action: scenario.action(),
                 action_version: descriptor.version.clone(),
                 descriptor_digest,
-                diagnostic_pack_id: "runtime-diagnostics".to_owned(),
+                diagnostic_pack_id: scenario.diagnostic_pack_id().to_owned(),
                 diagnostic_pack_version: "1.0.0".to_owned(),
                 owner: descriptor.owner.clone(),
                 minimum_evidence_freshness_seconds: 60,
@@ -104,14 +156,14 @@ async fn logger_ttl_qualifies_through_shadow_supervised_and_autonomous() {
                 max_executions_per_hour: 2,
                 cooldown_seconds: 900,
                 max_concurrent_executions: 1,
-                stable_window_seconds: STABLE_WINDOW_SECONDS as u64,
+                stable_window_seconds: scenario.stable_window_seconds() as u64,
             },
         )
         .await
         .expect("logger autonomy policy");
     assert_eq!(created.lifecycle.mode, AutonomyMode::Disabled);
 
-    let query = scope_query(fixture.cluster_id);
+    let query = scope_query(fixture.cluster_id, scenario.action());
     let shadow = service
         .transition(
             &auth,
@@ -130,7 +182,7 @@ async fn logger_ttl_qualifies_through_shadow_supervised_and_autonomous() {
             &auth,
             &CreateShadowCohortRequest {
                 cluster_id: fixture.cluster_id,
-                action: ExecutionAction::ObservabilityLoggerLevelTtl,
+                action: scenario.action(),
                 action_version: "1.0.0".to_owned(),
                 primary_profile: fixture.primary_profile.clone(),
                 primary_model_family: "deepseek".to_owned(),
@@ -142,7 +194,7 @@ async fn logger_ttl_qualifies_through_shadow_supervised_and_autonomous() {
 
     let mut plans = Vec::with_capacity(SHADOW_SAMPLES);
     for sequence in 0..SHADOW_SAMPLES {
-        plans.push(seed_logger_plan(&repository, &fixture, started_at, sequence).await);
+        plans.push(seed_action_plan(&repository, &fixture, started_at, sequence, scenario).await);
     }
     let shadow_observed_at = shadow_cohort.created_at + Duration::seconds(30);
     for plan in &plans {
@@ -155,6 +207,7 @@ async fn logger_ttl_qualifies_through_shadow_supervised_and_autonomous() {
                     AutonomySampleKind::ShadowOutcome,
                     None,
                     shadow_observed_at,
+                    scenario.action(),
                 ),
             )
             .await
@@ -207,7 +260,7 @@ async fn logger_ttl_qualifies_through_shadow_supervised_and_autonomous() {
             &auth,
             &PrepareAutonomousCohortRequest {
                 cluster_id: fixture.cluster_id,
-                action: ExecutionAction::ObservabilityLoggerLevelTtl,
+                action: scenario.action(),
                 action_version: "1.0.0".to_owned(),
                 diagnosis_revision_id: primary_plan.diagnosis_revision_id,
                 plan_id: primary_plan.plan_id,
@@ -228,9 +281,15 @@ async fn logger_ttl_qualifies_through_shadow_supervised_and_autonomous() {
     let supervised_observed_at = autonomous_cohort.created_at + Duration::seconds(30);
     set_clock(&clock_value, supervised_observed_at);
     for plan in plans.iter().take(SUPERVISED_SUCCESSES) {
-        let execution_id =
-            seed_successful_supervised_execution_at(&repository, plan, STABLE_WINDOW_SECONDS, supervised_observed_at)
-                .await;
+        let execution_id = seed_successful_supervised_execution_for_action_at(
+            &repository,
+            plan,
+            scenario.stable_window_seconds(),
+            supervised_observed_at,
+            scenario.action(),
+            scenario.resource(),
+        )
+        .await;
         let sample = service
             .record_qualification_sample(
                 &auth,
@@ -240,6 +299,7 @@ async fn logger_ttl_qualifies_through_shadow_supervised_and_autonomous() {
                     AutonomySampleKind::SupervisedSuccess,
                     Some(execution_id),
                     supervised_observed_at,
+                    scenario.action(),
                 ),
             )
             .await
@@ -301,24 +361,24 @@ fn autonomy_service(repository: &PostgresRepository, clock: Arc<Mutex<DateTime<U
 fn operator_auth(fixture: &Fixture) -> AuthContext {
     AuthContext {
         tenant_id: fixture.tenant_id,
-        subject: "logger-autonomy-owner".to_owned(),
+        subject: "r1-autonomy-owner".to_owned(),
         clusters: BTreeSet::from([fixture.cluster_id]),
         roles: BTreeSet::from(["operator".to_owned()]),
     }
 }
 
-fn logger_descriptor() -> ActionDescriptor {
+fn action_descriptor(action: ExecutionAction) -> ActionDescriptor {
     EMBEDDED_ACTION_DESCRIPTOR_YAMLS
         .iter()
         .map(|yaml| serde_yaml::from_str::<ActionDescriptor>(yaml).expect("embedded action descriptor"))
-        .find(|descriptor| descriptor.id == ExecutionAction::ObservabilityLoggerLevelTtl.id())
-        .expect("logger TTL descriptor")
+        .find(|descriptor| descriptor.id == action.id())
+        .expect("R1 action descriptor")
 }
 
-fn scope_query(cluster_id: rocketmq_sre_contracts::ClusterId) -> AutonomyScopeQuery {
+fn scope_query(cluster_id: rocketmq_sre_contracts::ClusterId, action: ExecutionAction) -> AutonomyScopeQuery {
     AutonomyScopeQuery {
         cluster_id,
-        action: ExecutionAction::ObservabilityLoggerLevelTtl,
+        action,
         action_version: "1.0.0".to_owned(),
     }
 }
@@ -333,10 +393,11 @@ fn qualification_request(
     kind: AutonomySampleKind,
     execution_id: Option<rocketmq_sre_contracts::ExecutionId>,
     observed_at: DateTime<Utc>,
+    action: ExecutionAction,
 ) -> RecordQualificationSampleRequest {
     RecordQualificationSampleRequest {
         cluster_id: fixture.cluster_id,
-        action: ExecutionAction::ObservabilityLoggerLevelTtl,
+        action,
         action_version: "1.0.0".to_owned(),
         cohort_id,
         kind,
@@ -355,11 +416,12 @@ fn qualification_request(
     }
 }
 
-async fn seed_logger_plan(
+async fn seed_action_plan(
     repository: &PostgresRepository,
     base: &Fixture,
     created_at: DateTime<Utc>,
     sequence: usize,
+    scenario: R1ActionScenario,
 ) -> Fixture {
     let fixture = Fixture {
         tenant_id: base.tenant_id,
@@ -376,14 +438,16 @@ async fn seed_logger_plan(
             id, tenant_id, cluster_id, title, resource, symptom_family,
             fingerprint, status, workflow_checkpoint, created_by_subject,
             created_at, updated_at
-         ) VALUES ($1, $2, $3, $4, 'broker/test', 'logger_qualification',
-                   $5, 'diagnosing', '{}'::JSONB, 'logger-autonomy-test',
-                   $6, $6)",
+         ) VALUES ($1, $2, $3, $4, $5, $6,
+                   $7, 'diagnosing', '{}'::JSONB, 'r1-autonomy-test',
+                   $8, $8)",
     )
     .bind(fixture.incident_id.as_uuid())
     .bind(fixture.tenant_id.as_uuid())
     .bind(fixture.cluster_id.as_uuid())
-    .bind(format!("Logger qualification sample {sequence}"))
+    .bind(format!("R1 qualification sample {sequence}"))
+    .bind(scenario.resource())
+    .bind(scenario.symptom_family())
     .bind(unique_digest())
     .bind(created_at)
     .execute(&repository.pool)
@@ -424,8 +488,8 @@ async fn seed_logger_plan(
             $1, $2, $3, $4, $5,
             NULL, 'primary_diagnosis', $6,
             $6, 'openai-compatible', 'deepseek', 'v3.2',
-            'local', '{}', 'logger-autonomy-test',
-            'rocketmq-sre.model.v1', 'logger qualification fixture', $7, $7
+            'local', '{}', 'r1-autonomy-test',
+            'rocketmq-sre.model.v1', 'R1 qualification fixture', $7, $7
          )",
     )
     .bind(fixture.primary_invocation_id.as_uuid())
@@ -449,7 +513,7 @@ async fn seed_logger_plan(
     .await
     .expect("bind primary model invocation");
     let mut fixture = fixture;
-    let plan = logger_plan(&fixture, created_at + Duration::seconds(sequence as i64));
+    let plan = action_plan(&fixture, created_at + Duration::seconds(sequence as i64), scenario);
     fixture.plan_hash.clone_from(&plan.plan_hash);
     repository
         .store_action_plan(&plan, ActionRisk::R1)
@@ -458,7 +522,50 @@ async fn seed_logger_plan(
     fixture
 }
 
-fn logger_plan(fixture: &Fixture, created_at: DateTime<Utc>) -> ActionPlan {
+fn action_plan(fixture: &Fixture, created_at: DateTime<Utc>, scenario: R1ActionScenario) -> ActionPlan {
+    let (resource, parameters, max_impact, verification, compensation) = match scenario {
+        R1ActionScenario::LoggerTtl => (
+            "broker/127.0.0.1:10911",
+            serde_json::json!({
+                "component": "broker",
+                "logger": "rocketmq_broker::processor",
+                "level": "DEBUG",
+                "ttl_seconds": 60
+            }),
+            ImpactScope::SingleResource,
+            VerificationSpec {
+                resource_conditions: vec!["logger_level_applied".to_owned(), "ttl_restore_scheduled".to_owned()],
+                technical_slis: vec!["runtime_error_ratio".to_owned()],
+                stable_window_seconds: scenario.stable_window_seconds() as u64,
+                max_wait_seconds: 120,
+            },
+            CompensationSpec {
+                mode: CompensationMode::Automatic,
+                required_before_fields: vec!["previous_level".to_owned()],
+                timeout_seconds: 60,
+            },
+        ),
+        R1ActionScenario::ProxyScaleOut => (
+            "deployment/rocketmq-system/rocketmq-proxy",
+            serde_json::json!({
+                "namespace": "rocketmq-system",
+                "workload": "rocketmq-proxy",
+                "expected_replicas": 1
+            }),
+            ImpactScope::OneReplica,
+            VerificationSpec {
+                resource_conditions: vec!["desired_replicas_plus_one".to_owned(), "new_replica_ready".to_owned()],
+                technical_slis: vec!["proxy_error_ratio".to_owned(), "proxy_p99_latency".to_owned()],
+                stable_window_seconds: scenario.stable_window_seconds() as u64,
+                max_wait_seconds: 900,
+            },
+            CompensationSpec {
+                mode: CompensationMode::Automatic,
+                required_before_fields: vec!["expected_replicas".to_owned()],
+                timeout_seconds: 600,
+            },
+        ),
+    };
     ActionPlan::seal(ActionPlanDraft {
         id: fixture.plan_id,
         tenant_id: fixture.tenant_id,
@@ -468,41 +575,27 @@ fn logger_plan(fixture: &Fixture, created_at: DateTime<Utc>) -> ActionPlan {
         primary_model_invocation_id: fixture.primary_invocation_id,
         diagnosis_execution_eligible: true,
         version: 1,
-        created_by: "logger-autonomy-owner".to_owned(),
+        created_by: "r1-autonomy-owner".to_owned(),
         created_at,
         expires_at: created_at + Duration::days(30),
         evidence_hash: unique_digest(),
         steps: vec![PlanStep {
             id: PlanStepId::new(),
             sequence: 1,
-            action: ExecutionAction::ObservabilityLoggerLevelTtl,
+            action: scenario.action(),
             descriptor_version: "1.0.0".to_owned(),
-            resource: "broker/127.0.0.1:10911".to_owned(),
-            parameters: serde_json::json!({
-                "component": "broker",
-                "logger": "rocketmq_broker::processor",
-                "level": "DEBUG",
-                "ttl_seconds": 60
-            }),
+            resource: resource.to_owned(),
+            parameters,
             evidence_ids: vec![EvidenceId::new()],
             precondition_hash: unique_digest(),
-            max_impact: ImpactScope::SingleResource,
-            verification: VerificationSpec {
-                resource_conditions: vec!["logger_level_applied".to_owned(), "ttl_restore_scheduled".to_owned()],
-                technical_slis: vec!["runtime_error_ratio".to_owned()],
-                stable_window_seconds: STABLE_WINDOW_SECONDS as u64,
-                max_wait_seconds: 120,
-            },
-            compensation: CompensationSpec {
-                mode: CompensationMode::Automatic,
-                required_before_fields: vec!["previous_level".to_owned()],
-                timeout_seconds: 60,
-            },
+            max_impact,
+            verification,
+            compensation,
         }],
     })
-    .expect("valid logger plan")
+    .expect("valid R1 plan")
     .submit_for_review(created_at + Duration::seconds(1), false)
-    .expect("ready logger plan")
+    .expect("ready R1 plan")
 }
 
 async fn seed_shared_critic_review(
