@@ -64,6 +64,7 @@ use super::model::CreatePlanRequest;
 use super::model::CreatePlanResponse;
 use super::model::EvidenceBinding;
 use super::model::ExecutionSubmissionView;
+use super::model::ExternalApprovalSource;
 use super::model::NewExecutionProjection;
 use super::model::QuarantineListQuery;
 use super::model::QuarantinePage;
