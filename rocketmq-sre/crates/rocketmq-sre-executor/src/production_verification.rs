@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use rocketmq_sre_contracts::AgentReadRequest;
@@ -93,7 +94,12 @@ fn assemble_observation(
     validate_technical(request, &technical)?;
     let observed_at = resource.observed_at.max(technical.observed_at);
     let started_at = resource.observed_at.min(technical.observed_at);
-    let resource_conditions = resource.resource_conditions;
+    let requested_resource_conditions = request.resource_conditions.iter().collect::<BTreeSet<_>>();
+    let resource_conditions = resource
+        .resource_conditions
+        .into_iter()
+        .filter(|(condition, _)| requested_resource_conditions.contains(condition))
+        .collect();
     let technical_slis = technical.conditions;
     let partial = !technical.complete;
     let content = EvidenceContent::Inline(json!({
@@ -138,7 +144,7 @@ fn validate_resource(request: &VerificationCaptureRequest, resource: &AgentReadR
         || resource.action != request.action
         || resource.target != request.target
         || !is_sha256_digest(&resource.precondition_hash)
-        || !exact_surface(&request.resource_conditions, &resource.resource_conditions)
+        || !required_surface(&request.resource_conditions, &resource.resource_conditions)
     {
         return Err(ExecutorError::VerificationRejected);
     }
@@ -162,6 +168,10 @@ fn validate_technical(
 
 fn exact_surface(expected: &[String], actual: &BTreeMap<String, bool>) -> bool {
     expected.len() == actual.len() && expected.iter().all(|condition| actual.contains_key(condition))
+}
+
+fn required_surface(expected: &[String], actual: &BTreeMap<String, bool>) -> bool {
+    expected.iter().all(|condition| actual.contains_key(condition))
 }
 
 const fn phase_name(phase: VerificationPhase) -> &'static str {
@@ -235,6 +245,24 @@ mod tests {
         let mut extra = technical(&request, now, true);
         extra.conditions.insert("unapproved_sli".to_owned(), true);
         assert!(assemble_observation(&request, resource(&request, now), extra).is_err());
+    }
+
+    #[test]
+    fn extra_resource_safety_conditions_are_bounded_to_the_descriptor_surface() {
+        let request = request();
+        let now = Utc::now();
+        let mut resource = resource(&request, now);
+        resource
+            .resource_conditions
+            .insert("independent_safety_precheck".to_owned(), true);
+
+        let observation =
+            assemble_observation(&request, resource, technical(&request, now, true)).expect("bounded observation");
+
+        assert_eq!(
+            observation.resource_conditions,
+            [("patch_visible".to_owned(), true)].into_iter().collect()
+        );
     }
 
     fn request() -> VerificationCaptureRequest {
