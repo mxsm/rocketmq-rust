@@ -20,8 +20,9 @@ instructions remain cumulative.
   be committed after review.
 - Never commit `target/`, `artifacts/`, crash outputs, generated minimization
   directories, profiler data, or temporary corpus files.
-- Do not run long-duration fuzzing as part of the normal validation route;
-  Phase 0 requires target compilation only.
+- Do not run long-duration fuzzing as part of the normal local validation
+  route. `.github/workflows/fuzz-ci.yml` owns short nightly and longer weekly
+  execution, corpus/crash retention, and commit-bound evidence artifacts.
 
 ## Validation
 

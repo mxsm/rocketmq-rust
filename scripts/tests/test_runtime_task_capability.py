@@ -44,14 +44,19 @@ class RuntimeTaskCapabilityContract(unittest.TestCase):
             for token in forbidden:
                 self.assertNotIn(token, source, f"{path.relative_to(ROOT)} contains {token}")
 
-    def test_compatibility_task_escape_apis_are_deprecated(self) -> None:
+    def test_raw_runtime_and_detached_spawn_are_not_public_apis(self) -> None:
         handle = (ROOT / "rocketmq-runtime" / "src" / "handle.rs").read_text(encoding="utf-8")
         context = (ROOT / "rocketmq-runtime" / "src" / "service_context.rs").read_text(encoding="utf-8")
         task_group = (ROOT / "rocketmq-runtime" / "src" / "task_group.rs").read_text(encoding="utf-8")
+        crate_root = (ROOT / "rocketmq-runtime" / "src" / "lib.rs").read_text(encoding="utf-8")
 
-        self.assertIn("raw Tokio handles are a compatibility boundary", handle)
-        self.assertIn("business modules should use task_spawner", context)
-        self.assertGreaterEqual(task_group.count("#[deprecated("), 3)
+        self.assertIn("pub(crate) struct RuntimeHandle", handle)
+        self.assertNotIn("pub fn inner(", handle)
+        self.assertNotIn("pub fn spawn(", handle)
+        self.assertNotIn("pub fn runtime(", context)
+        self.assertNotIn("pub fn root(", task_group)
+        self.assertNotIn("spawn_detached", task_group)
+        self.assertNotIn("pub use handle::RuntimeHandle", crate_root)
 
 
 if __name__ == "__main__":

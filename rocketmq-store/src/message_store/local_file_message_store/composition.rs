@@ -194,6 +194,7 @@ impl LocalFileMessageStore {
             commit_log_read,
             &mut dispatcher,
             telemetry.tiered_store().clone(),
+            runtime_scope.clone(),
         )?;
         #[cfg(feature = "tieredstore")]
         let minimum_pinned_wal_segment = tiered_store.as_ref().map(|tiered_store| {
@@ -311,6 +312,7 @@ impl LocalFileMessageStore {
         commit_log: CommitLogReadHandle,
         dispatcher: &mut CommitLogDispatcherDefault,
         metrics: rocketmq_observability::metrics::tiered_store::TieredStoreMetricsRecorder,
+        runtime_scope: StoreRuntimeScope,
     ) -> Result<Option<Arc<TieredStoreDecorator>>, StoreError> {
         let Some(tiered_store_config) = message_store_config.tiered_store_config.clone() else {
             return Ok(None);
@@ -319,7 +321,11 @@ impl LocalFileMessageStore {
             return Ok(None);
         }
 
-        let tiered_store = Arc::new(TieredStoreDecorator::new_with_metrics(tiered_store_config, metrics)?);
+        let tiered_store = Arc::new(TieredStoreDecorator::new_with_metrics(
+            tiered_store_config,
+            metrics,
+            runtime_scope.task_group("rocketmq-store.tiered"),
+        )?);
         let commit_log_for_dispatch = commit_log;
         let body_resolver = Arc::new(move |request: &DispatchRequest| -> Option<Bytes> {
             resolve_tiered_dispatch_body_with_reader(&commit_log_for_dispatch, request)

@@ -487,8 +487,8 @@ impl ClusterProducerIo for ScriptedProducer {
 
     fn set_send_timeout(&mut self, _timeout_millis: u32) {}
 
-    fn producer_group(&self) -> &str {
-        self.group.as_str()
+    fn producer_group(&self) -> CheetahString {
+        self.group.clone().into()
     }
 
     async fn start(&mut self) -> Result<(), RocketMQError> {

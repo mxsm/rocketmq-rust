@@ -87,7 +87,7 @@ where
     permits: Arc<Semaphore>,
     shutdown: CancellationToken,
     task_group: tokio::sync::Mutex<Option<rocketmq_runtime::TaskGroup>>,
-    parent_task_group: Option<TaskGroup>,
+    parent_task_group: TaskGroup,
     task_error: DispatcherTaskErrorSlot,
     metrics: Arc<TieredStoreMetrics>,
     progress: Arc<TieredProgressTracker>,
@@ -103,26 +103,9 @@ where
         config: Arc<TieredStoreConfig>,
         flat_file_store: Arc<TieredFlatFileStore<P>>,
         shutdown: CancellationToken,
-    ) -> Self {
-        Self::new_with_optional_task_group(config, flat_file_store, shutdown, None)
-    }
-
-    pub fn new_with_task_group(
-        config: Arc<TieredStoreConfig>,
-        flat_file_store: Arc<TieredFlatFileStore<P>>,
-        shutdown: CancellationToken,
         parent_task_group: TaskGroup,
     ) -> Self {
-        Self::new_with_optional_task_group(config, flat_file_store, shutdown, Some(parent_task_group))
-    }
-
-    fn new_with_optional_task_group(
-        config: Arc<TieredStoreConfig>,
-        flat_file_store: Arc<TieredFlatFileStore<P>>,
-        shutdown: CancellationToken,
-        parent_task_group: Option<TaskGroup>,
-    ) -> Self {
-        Self::new_with_optional_metrics(
+        Self::new_with_metrics(
             config,
             flat_file_store,
             shutdown,
@@ -136,26 +119,7 @@ where
         flat_file_store: Arc<TieredFlatFileStore<P>>,
         shutdown: CancellationToken,
         metrics: Arc<TieredStoreMetrics>,
-    ) -> Self {
-        Self::new_with_optional_metrics(config, flat_file_store, shutdown, metrics, None)
-    }
-
-    pub fn new_with_metrics_and_task_group(
-        config: Arc<TieredStoreConfig>,
-        flat_file_store: Arc<TieredFlatFileStore<P>>,
-        shutdown: CancellationToken,
-        metrics: Arc<TieredStoreMetrics>,
         parent_task_group: TaskGroup,
-    ) -> Self {
-        Self::new_with_optional_metrics(config, flat_file_store, shutdown, metrics, Some(parent_task_group))
-    }
-
-    fn new_with_optional_metrics(
-        config: Arc<TieredStoreConfig>,
-        flat_file_store: Arc<TieredFlatFileStore<P>>,
-        shutdown: CancellationToken,
-        metrics: Arc<TieredStoreMetrics>,
-        parent_task_group: Option<TaskGroup>,
     ) -> Self {
         let (sender, receiver) = mpsc::channel(config.max_pending_tasks.max(1));
         let permits = Arc::new(Semaphore::new((config.max_pending_tasks / 4).max(1)));
@@ -658,12 +622,7 @@ where
         let Some(receiver) = receiver_guard.take() else {
             return Ok(());
         };
-        let task_group = match self.parent_task_group.as_ref() {
-            Some(parent_task_group) => {
-                runtime::task_group_with_parent("rocketmq-tieredstore.dispatcher", parent_task_group)
-            }
-            None => runtime::task_group("rocketmq-tieredstore.dispatcher")?,
-        };
+        let task_group = runtime::task_group_with_parent("rocketmq-tieredstore.dispatcher", &self.parent_task_group);
         let task_error = self.task_error.clone();
         let flat_file_store = self.flat_file_store.clone();
         let permits = self.permits.clone();

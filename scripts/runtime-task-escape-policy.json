@@ -1,66 +1,26 @@
 {
   "schema_version": 1,
-  "policy": "Raw runtime and detached task capabilities are compatibility-only and must delegate to an observable lifecycle owner.",
+  "policy": "Raw runtime capabilities are crate-private implementation details of observable lifecycle owners; detached spawning has no public entry point.",
   "entries": [
     {
-      "caller": "rocketmq-runtime/src/handle.rs::RuntimeHandle::{inner,spawn}",
+      "caller": "rocketmq-runtime/src/handle.rs::RuntimeHandle::{new,tokio_handle,spawn_owned}",
       "owner": "rocketmq-runtime maintainers",
       "termination": "The application RuntimeOwner terminates the underlying Tokio runtime.",
-      "join_or_deadline": "Callers must use an owning TaskGroup; these deprecated methods provide no independent join contract.",
+      "join_or_deadline": "Only RuntimeOwner, TaskGroup, and crate-private runtime adapters can reach this handle; TaskGroup shutdown supplies the join deadline.",
       "metrics": "RuntimeDiagnostics and the owning TaskGroup shutdown report.",
-      "target_capability": "TaskSpawner or TaskGroup",
-      "reason": "Public compatibility surface for downstream callers during capability migration.",
-      "remove_by": "P3-release-boundary"
-    },
-    {
-      "caller": "rocketmq-runtime/src/service_context.rs::ChildServiceContext::runtime",
-      "owner": "rocketmq-runtime maintainers",
-      "termination": "The RootServiceContext and RuntimeOwner retain lifecycle ownership.",
-      "join_or_deadline": "Root TaskGroup shutdown uses the process absolute deadline.",
-      "metrics": "RuntimeDiagnosticsSnapshot",
-      "target_capability": "TaskSpawner, ScheduledTaskGroup, or BlockingExecutor",
-      "reason": "Deprecated compatibility accessor; root and standalone business modules no longer call it.",
-      "remove_by": "P3-release-boundary"
-    },
-    {
-      "caller": "rocketmq-runtime/src/task_group.rs::TaskGroup::{runtime,spawn_detached,spawn_detached_with_policy}",
-      "owner": "rocketmq-runtime maintainers",
-      "termination": "TaskGroup cancellation and shutdown own registered detached compatibility tasks.",
-      "join_or_deadline": "TaskGroup shutdown report records abort-on-shutdown or still-running track-only work.",
-      "metrics": "TaskSnapshot.detached_policy and ShutdownReport.detached_still_running",
-      "target_capability": "TaskSpawner or TaskGroup::{spawn,spawn_service}",
-      "reason": "Deprecated public compatibility surface retained until the release boundary.",
-      "remove_by": "P3-release-boundary"
-    },
-    {
-      "caller": "rocketmq-runtime/src/context.rs::RuntimeContext::{try_from_current,from_current}",
-      "owner": "rocketmq-runtime maintainers",
-      "termination": "The ambient runtime remains owned by the embedding test or migration harness.",
-      "join_or_deadline": "RuntimeContext::shutdown_tasks joins its root TaskGroup with a caller deadline.",
-      "metrics": "RuntimeDiagnosticsSnapshot and ShutdownReport",
-      "target_capability": "Injected ChildServiceContext",
-      "reason": "Document-hidden test and migration harness for borrowing an existing runtime.",
-      "remove_by": "P3-release-boundary"
+      "target_capability": "Crate-private RuntimeOwner and TaskGroup implementation",
+      "reason": "Tokio integration requires a raw handle inside the lifecycle owner, but it is not nameable by downstream crates.",
+      "remove_by": "crate-private-owner-boundary"
     },
     {
       "caller": "rocketmq-runtime/src/schedule/{executor.rs,scheduler.rs},rocketmq-runtime/src/task/service_task.rs",
-      "owner": "rocketmq-runtime scheduler maintainers",
+      "owner": "rocketmq-runtime maintainers",
       "termination": "Each compatibility adapter immediately wraps the ambient runtime in a TaskGroup-backed scheduler.",
       "join_or_deadline": "ScheduledTaskGroup or ServiceManager shutdown joins work with a bounded report.",
       "metrics": "ScheduledTaskSnapshot and ShutdownReport",
       "target_capability": "Injected ScheduledTaskGroup or TaskSpawner",
-      "reason": "Legacy scheduler constructors still accept an ambient runtime for source compatibility.",
-      "remove_by": "P3-release-boundary"
-    },
-    {
-      "caller": "rocketmq-tieredstore/src/runtime.rs::task_group",
-      "owner": "rocketmq-tieredstore maintainers",
-      "termination": "The returned TaskGroup owns all tiered-store tasks and is cancelled by component shutdown.",
-      "join_or_deadline": "shutdown_report_result requires a leak-free TaskGroup shutdown report.",
-      "metrics": "TaskGroup ShutdownReport",
-      "target_capability": "task_group_with_parent with injected TaskGroup",
-      "reason": "Fallback constructor for legacy callers that do not yet inject a parent.",
-      "remove_by": "P3-release-boundary"
+      "reason": "Legacy scheduler construction is isolated inside the runtime crate and cannot expose RuntimeHandle to callers.",
+      "remove_by": "crate-private-owner-boundary"
     }
   ]
 }

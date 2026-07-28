@@ -132,8 +132,9 @@ class RepositoryStableSurfaceContracts(unittest.TestCase):
         source = (REPO_ROOT / "rocketmq-transport" / "src" / "runtime" / "processor_v2.rs").read_text(
             encoding="utf-8"
         )
-        self.assertEqual(source.count("= Ready<RocketMQResult<Option<RemotingCommand>>>"), 3)
-        self.assertNotIn("= impl Future<Output = RocketMQResult<Option<RemotingCommand>>>", source)
+        production_source = source.split("#[cfg(test)]", maxsplit=1)[0]
+        self.assertEqual(production_source.count("= Ready<RocketMQResult<Option<RemotingCommand>>>"), 3)
+        self.assertNotIn("= impl Future<Output = RocketMQResult<Option<RemotingCommand>>>", production_source)
 
     def test_runtime_scheduler_uses_owned_stable_futures(self) -> None:
         crate_root = (REPO_ROOT / "rocketmq-runtime" / "src" / "lib.rs").read_text(encoding="utf-8")

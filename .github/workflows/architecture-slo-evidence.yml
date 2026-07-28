@@ -55,6 +55,8 @@ on:
         description: Prometheus API that observes the candidate cluster
         required: true
         type: string
+  schedule:
+    - cron: "47 21 * * 6"
 
 permissions:
   contents: read
@@ -83,12 +85,17 @@ jobs:
 
   dynamic-candidate:
     name: Dynamic fault and six-hour SLO evidence
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     needs: static-contract
     runs-on: ubuntu-latest
     timeout-minutes: 540
     env:
       PROMETHEUS_BEARER_TOKEN: ${{ secrets.M11_PROMETHEUS_BEARER_TOKEN }}
+      EVIDENCE_BACKEND: ${{ github.event_name == 'workflow_dispatch' && inputs.backend || vars.ARCHITECTURE_FAULT_BACKEND }}
+      BASELINE_IMAGES: ${{ github.event_name == 'workflow_dispatch' && inputs.baseline_images_json || vars.ARCHITECTURE_BASELINE_IMAGES_JSON }}
+      CANDIDATE_IMAGES: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_images_json || vars.ARCHITECTURE_CANDIDATE_IMAGES_JSON }}
+      COLLECTOR_IMAGE: ${{ github.event_name == 'workflow_dispatch' && inputs.collector_image || vars.ARCHITECTURE_COLLECTOR_IMAGE }}
+      PROMETHEUS_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.prometheus_url || vars.ARCHITECTURE_PROMETHEUS_URL }}
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -121,8 +128,6 @@ jobs:
       - name: Materialize dynamic inputs
         shell: bash
         env:
-          BASELINE_IMAGES: ${{ inputs.baseline_images_json }}
-          CANDIDATE_IMAGES: ${{ inputs.candidate_images_json }}
           RUNTIME_SECRET_B64: ${{ secrets.M11_RUNTIME_SECRET_MANIFEST_B64 }}
           ROTATED_RUNTIME_SECRET_B64: ${{ secrets.M11_ROTATED_RUNTIME_SECRET_MANIFEST_B64 }}
           BASELINE_DRIVER_SECRET_B64: ${{ secrets.M11_BASELINE_DRIVER_SECRET_MANIFEST_B64 }}
@@ -146,14 +151,14 @@ jobs:
         run: >-
           ./scripts/kind-architecture-refactor-e2e.ps1
           -Mode Run
-          -Backend '${{ inputs.backend }}'
+          -Backend '${{ env.EVIDENCE_BACKEND }}'
           -BaselineImageMap target/slo-inputs/baseline-images.json
           -CandidateImageMap target/slo-inputs/candidate-images.json
           -RuntimeSecretManifest target/slo-inputs/runtime-secret.yaml
           -RotatedRuntimeSecretManifest target/slo-inputs/rotated-runtime-secret.yaml
           -BaselineDriverSecretManifest target/slo-inputs/baseline-driver-secret.yaml
           -RotatedDriverSecretManifest target/slo-inputs/rotated-driver-secret.yaml
-          -CollectorImage '${{ inputs.collector_image }}'
+          -CollectorImage '${{ env.COLLECTOR_IMAGE }}'
           -KeepCluster
 
       - name: Promote candidate images for the sustained soak
@@ -181,13 +186,13 @@ jobs:
             -CandidateCommit '${{ github.sha }}' `
             -CandidateImageMap target/slo-inputs/candidate-images.json `
             -FaultEvidence $fault.FullName `
-            -PrometheusUrl '${{ inputs.prometheus_url }}'
+            -PrometheusUrl '${{ env.PROMETHEUS_URL }}'
 
       - name: Delete the retained cluster
         if: always()
         shell: bash
         run: |
-          if [ '${{ inputs.backend }}' = kind ]; then
+          if [ '${{ env.EVIDENCE_BACKEND }}' = kind ]; then
             kind delete cluster --name rocketmq-architecture-refactor || true
           else
             k3d cluster delete rocketmq-architecture-refactor || true
@@ -197,7 +202,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: m11-12-r24-${{ inputs.backend }}-${{ github.sha }}
+          name: m11-12-r24-${{ env.EVIDENCE_BACKEND }}-${{ github.sha }}
           path: |
             target/architecture-refactor/M11/fault-matrix
             target/architecture-refactor/M11/slo

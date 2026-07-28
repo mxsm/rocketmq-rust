@@ -151,9 +151,14 @@ Broker Name: broker-a
 
 ------
 
-## 6. Broker Naming in Dledger Mode
+## 6. DLedger Naming in Java RocketMQ Deployments
 
-In **Dledger mode** (Raft-based high availability), naming rules differ slightly:
+The configuration below describes Java RocketMQ's DLedger deployment mode and is retained only
+for interoperability reference. RocketMQ-Rust does not implement `enableDLegerCommitLog`; its
+controller path uses the pinned OpenRaft stack and the Rust Broker configuration documented in
+this repository.
+
+In a Java **DLedger mode** deployment, naming rules differ slightly:
 
 - `brokerId=0` no longer strictly indicates Master.
 - All nodes in the same Dledger group share the same `brokerName` and `brokerId=0`.

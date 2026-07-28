@@ -1,0 +1,138 @@
+name: Architecture nightly evidence
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "43 19 * * *"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_TEST_DEBUG: "false"
+
+jobs:
+  loom:
+    name: Complete Loom models
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Use repository Rust 1.95 toolchain
+        run: rustup show active-toolchain
+
+      - name: Execute runtime and mapped-write models
+        env:
+          LOOM_MAX_PREEMPTIONS: "3"
+        run: |
+          set -o pipefail
+          mkdir -p target/architecture-evidence/loom
+          rustc -Vv > target/architecture-evidence/loom/environment.txt
+          cargo test -p rocketmq-runtime \
+            --test arc_mut_replacement_loom \
+            --test resource_budget_loom \
+            --test task_group_shutdown_loom \
+            2>&1 | tee target/architecture-evidence/loom/test-output.txt
+          cargo test -p rocketmq-store-local --test mapped_write_lease_loom \
+            2>&1 | tee -a target/architecture-evidence/loom/test-output.txt
+
+      - name: Upload Loom evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: architecture-nightly-loom-${{ github.sha }}
+          path: target/architecture-evidence/loom
+          if-no-files-found: error
+          retention-days: 30
+
+  miri:
+    name: Miri capability model
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Set up fixed Miri nightly
+        run: >-
+          rustup toolchain install nightly-2026-07-05
+          --profile minimal
+          --component miri
+
+      - name: Execute mapped-write ownership tests under Miri
+        env:
+          MIRIFLAGS: "-Zmiri-strict-provenance -Zmiri-symbolic-alignment-check"
+        run: |
+          set -o pipefail
+          mkdir -p target/architecture-evidence/miri
+          rustc +nightly-2026-07-05 -Vv > target/architecture-evidence/miri/environment.txt
+          cargo +nightly-2026-07-05 miri setup
+          cargo +nightly-2026-07-05 miri test \
+            -p rocketmq-store-local \
+            --test mapped_write_lease_miri \
+            2>&1 | tee target/architecture-evidence/miri/test-output.txt
+
+      - name: Upload Miri evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: architecture-nightly-miri-${{ github.sha }}
+          path: target/architecture-evidence/miri
+          if-no-files-found: error
+          retention-days: 30
+
+  standalone-coverage:
+    name: Coverage ${{ matrix.id }}
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '43 19 * * *'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: example
+            manifest: rocketmq-example/Cargo.toml
+          - id: dashboard-gpui
+            manifest: rocketmq-dashboard/rocketmq-dashboard-gpui/Cargo.toml
+          - id: dashboard-tauri-backend
+            manifest: rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/Cargo.toml
+          - id: dashboard-web-backend
+            manifest: rocketmq-dashboard/rocketmq-dashboard-web/backend/Cargo.toml
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Install native and dashboard dependencies
+        run: >-
+          sudo apt-get update &&
+          sudo apt-get install -y
+          clang llvm libclang-dev cmake make ninja-build pkg-config protobuf-compiler
+          libsnappy-dev liblz4-dev libzstd-dev zlib1g-dev
+          libfontconfig1-dev libfreetype6-dev libx11-dev libxcb1-dev
+          libxkbcommon-dev libxkbcommon-x11-dev
+          libwebkit2gtk-4.1-dev libxdo-dev libssl-dev
+          libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Use repository Rust 1.95 toolchain
+        run: rustup show active-toolchain
+
+      - name: Install pinned coverage driver
+        run: cargo install cargo-llvm-cov --locked --version 0.8.7
+
+      - name: Generate standalone coverage
+        run: >-
+          cargo llvm-cov
+          --manifest-path ${{ matrix.manifest }}
+          --all-features
+          --lcov
+          --output-path ${{ matrix.id }}.lcov
+
+      - name: Upload standalone coverage
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: architecture-nightly-coverage-${{ matrix.id }}-${{ github.sha }}
+          path: ${{ matrix.id }}.lcov
+          if-no-files-found: error
+          retention-days: 30

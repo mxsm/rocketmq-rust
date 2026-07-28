@@ -89,10 +89,6 @@ mod utils;
 pub use crate::admin::DefaultMQAdminExt;
 pub use crate::admin::DefaultMQAdminExtImpl;
 pub use crate::admin::MQAdminExt;
-#[allow(deprecated, reason = "compatibility exports remain available through the 1.x line")]
-pub use crate::admin::MQAdminExtInner;
-#[allow(deprecated, reason = "compatibility exports remain available through the 1.x line")]
-pub use crate::admin::MQAdminExtInnerImpl;
 pub use crate::base::client_config::ClientConfig;
 pub use crate::base::query_result::QueryResult;
 pub use crate::base::MQAdmin;

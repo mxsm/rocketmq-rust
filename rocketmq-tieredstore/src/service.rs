@@ -42,7 +42,7 @@ where
     cleanup_schedule: tokio::sync::Mutex<Option<ScheduledTaskGroup>>,
     cleanup_shutdown: tokio::sync::Mutex<Option<CancellationToken>>,
     cleanup_error: CleanupErrorSlot,
-    parent_task_group: Option<TaskGroup>,
+    parent_task_group: TaskGroup,
     _marker: std::marker::PhantomData<P>,
 }
 
@@ -50,15 +50,7 @@ impl<P> TieredServiceSet<P>
 where
     P: TieredStoreProvider,
 {
-    pub fn new() -> Self {
-        Self::new_with_optional_task_group(None)
-    }
-
-    pub fn new_with_task_group(parent_task_group: TaskGroup) -> Self {
-        Self::new_with_optional_task_group(Some(parent_task_group))
-    }
-
-    fn new_with_optional_task_group(parent_task_group: Option<TaskGroup>) -> Self {
+    pub fn new(parent_task_group: TaskGroup) -> Self {
         Self {
             cleanup_group: tokio::sync::Mutex::new(None),
             cleanup_schedule: tokio::sync::Mutex::new(None),
@@ -83,12 +75,7 @@ where
         }
         let service = CleanupService::new(config, flat_file_store, shutdown);
         let cleanup_shutdown = service.shutdown_token();
-        let task_group = match self.parent_task_group.as_ref() {
-            Some(parent_task_group) => {
-                runtime::task_group_with_parent("rocketmq-tieredstore.cleanup", parent_task_group)
-            }
-            None => runtime::task_group("rocketmq-tieredstore.cleanup")?,
-        };
+        let task_group = runtime::task_group_with_parent("rocketmq-tieredstore.cleanup", &self.parent_task_group);
         let scheduled_tasks = service.schedule(&task_group, self.cleanup_error.clone())?;
         *self.cleanup_shutdown.lock().await = Some(cleanup_shutdown);
         *self.cleanup_schedule.lock().await = Some(scheduled_tasks);
@@ -145,15 +132,6 @@ where
     }
 }
 
-impl<P> Default for TieredServiceSet<P>
-where
-    P: TieredStoreProvider,
-{
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -183,7 +161,7 @@ mod tests {
         ));
         let context = RuntimeContext::from_current("tieredstore-cleanup-parent-test");
         let service = context.service_context("tieredstore-cleanup");
-        let services = TieredServiceSet::<MemoryProvider>::new_with_task_group(service.task_group().clone());
+        let services = TieredServiceSet::<MemoryProvider>::new(service.task_group().clone());
 
         services
             .start_cleanup(config, flat_file_store, CancellationToken::new())

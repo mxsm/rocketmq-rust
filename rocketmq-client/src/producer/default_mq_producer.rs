@@ -19,7 +19,6 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
-use parking_lot::Mutex;
 use rocketmq_error::RocketMQError;
 use rocketmq_model::common::compression::compression_type::CompressionType;
 use rocketmq_model::common::message::message_batch::MessageBatch;
@@ -63,67 +62,24 @@ use crate::trace::trace_dispatcher::Type;
 pub(crate) const MIN_BACK_PRESSURE_FOR_ASYNC_SEND_NUM: u32 = 10;
 pub(crate) const MIN_BACK_PRESSURE_FOR_ASYNC_SEND_SIZE: u32 = 1024 * 1024;
 
-const COMPAT_CONFIG_GENERATION_LIMIT: usize = 1024;
-
 /// Clone-shared immutable configuration snapshots.
-struct StableConfigHistory<T> {
-    current: ArcSwap<T>,
-    /// Compatibility-only owners for deprecated borrowed getters.
-    borrowed_generations: Mutex<Vec<Arc<T>>>,
-}
-
 struct StableConfig<T> {
-    history: Arc<StableConfigHistory<T>>,
+    current: Arc<ArcSwap<T>>,
 }
 
 impl<T> StableConfig<T> {
     fn new(value: T) -> Self {
-        let value = Arc::new(value);
         Self {
-            history: Arc::new(StableConfigHistory {
-                current: ArcSwap::from(Arc::clone(&value)),
-                borrowed_generations: Mutex::new(vec![value]),
-            }),
+            current: Arc::new(ArcSwap::from_pointee(value)),
         }
     }
 
     fn replace(&self, value: T) {
-        self.history.current.store(Arc::new(value));
-    }
-
-    fn compatibility_borrow(&self) -> &T {
-        let current = self.history.current.load_full();
-        let mut generations = self.history.borrowed_generations.lock();
-        if generations
-            .last()
-            .is_none_or(|retained| !Arc::ptr_eq(retained, &current))
-            && generations.len() < COMPAT_CONFIG_GENERATION_LIMIT
-        {
-            generations.push(current);
-        }
-        let current = if let Some(retained) = generations.last() {
-            Arc::as_ptr(retained)
-        } else {
-            let current = self.history.current.load_full();
-            let retained = Arc::as_ptr(&current);
-            generations.push(current);
-            retained
-        };
-
-        // SAFETY: every returned allocation is owned by `borrowed_generations`
-        // for the complete lifetime of the shared history. Entries are never
-        // removed or mutated. Once the compatibility cap is reached, the
-        // deprecated borrowed API returns the last retained generation while
-        // the snapshot API continues to observe every current generation.
-        unsafe { &*current }
+        self.current.store(Arc::new(value));
     }
 
     fn snapshot(&self) -> Arc<T> {
-        self.history.current.load_full()
-    }
-
-    fn borrowed_generation_count(&self) -> usize {
-        self.history.borrowed_generations.lock().len()
+        self.current.load_full()
     }
 }
 
@@ -131,7 +87,7 @@ impl<T: Clone> StableConfig<T> {
     fn update<R>(&self, update: impl FnOnce(&mut T) -> R) -> R {
         let mut next = self.snapshot().as_ref().clone();
         let result = update(&mut next);
-        self.history.current.store(Arc::new(next));
+        self.current.store(Arc::new(next));
         result
     }
 }
@@ -139,7 +95,7 @@ impl<T: Clone> StableConfig<T> {
 impl<T> Clone for StableConfig<T> {
     fn clone(&self) -> Self {
         Self {
-            history: Arc::clone(&self.history),
+            current: Arc::clone(&self.current),
         }
     }
 }
@@ -931,13 +887,6 @@ impl DefaultMQProducer {
         self.client_config.snapshot()
     }
 
-    /// Returns a compatibility borrow pinned until this facade history is dropped.
-    #[deprecated(since = "1.1.0", note = "use client_config_snapshot; remove in 2.0.0")]
-    #[inline]
-    pub fn client_config(&self) -> &ClientConfig {
-        self.client_config.compatibility_borrow()
-    }
-
     #[inline]
     pub fn default_mq_producer_impl(&self) -> Option<&Arc<DefaultMQProducerImpl>> {
         self.default_mqproducer_impl.as_ref()
@@ -949,42 +898,42 @@ impl DefaultMQProducer {
     }
 
     #[inline]
-    pub fn retry_response_codes(&self) -> &HashSet<i32> {
-        &self.producer_config.compatibility_borrow().retry_response_codes
+    pub fn retry_response_codes(&self) -> HashSet<i32> {
+        self.producer_config.snapshot().retry_response_codes.clone()
     }
 
     #[inline]
-    pub fn get_retry_response_codes(&self) -> &HashSet<i32> {
+    pub fn get_retry_response_codes(&self) -> HashSet<i32> {
         self.retry_response_codes()
     }
 
     #[inline]
-    pub fn producer_group(&self) -> &str {
-        &self.producer_config.compatibility_borrow().producer_group
+    pub fn producer_group(&self) -> CheetahString {
+        self.producer_config.snapshot().producer_group.clone()
     }
 
     #[inline]
-    pub fn get_producer_group(&self) -> &str {
+    pub fn get_producer_group(&self) -> CheetahString {
         self.producer_group()
     }
 
     #[inline]
-    pub fn topics(&self) -> &Vec<CheetahString> {
-        &self.producer_config.compatibility_borrow().topics
+    pub fn topics(&self) -> Vec<CheetahString> {
+        self.producer_config.snapshot().topics.clone()
     }
 
     #[inline]
-    pub fn get_topics(&self) -> &Vec<CheetahString> {
+    pub fn get_topics(&self) -> Vec<CheetahString> {
         self.topics()
     }
 
     #[inline]
-    pub fn create_topic_key(&self) -> &str {
-        &self.producer_config.compatibility_borrow().create_topic_key
+    pub fn create_topic_key(&self) -> CheetahString {
+        self.producer_config.snapshot().create_topic_key.clone()
     }
 
     #[inline]
-    pub fn get_create_topic_key(&self) -> &str {
+    pub fn get_create_topic_key(&self) -> CheetahString {
         self.create_topic_key()
     }
 
@@ -1069,12 +1018,12 @@ impl DefaultMQProducer {
     }
 
     #[inline]
-    pub fn trace_dispatcher(&self) -> Option<&ArcTraceDispatcher> {
-        self.producer_config.compatibility_borrow().trace_dispatcher()
+    pub fn trace_dispatcher(&self) -> Option<ArcTraceDispatcher> {
+        self.producer_config.snapshot().trace_dispatcher.clone()
     }
 
     #[inline]
-    pub fn get_trace_dispatcher(&self) -> Option<&ArcTraceDispatcher> {
+    pub fn get_trace_dispatcher(&self) -> Option<ArcTraceDispatcher> {
         self.trace_dispatcher()
     }
 
@@ -1083,8 +1032,8 @@ impl DefaultMQProducer {
         self.producer_config.snapshot().auto_batch
     }
 
-    pub fn produce_accumulator(&self) -> Option<&Arc<ProduceAccumulator>> {
-        self.producer_config.compatibility_borrow().produce_accumulator()
+    pub fn produce_accumulator(&self) -> Option<Arc<ProduceAccumulator>> {
+        self.producer_config.snapshot().produce_accumulator.clone()
     }
 
     pub fn enable_backpressure_for_async_mode(&self) -> bool {
@@ -1154,8 +1103,8 @@ impl DefaultMQProducer {
         self.total_batch_max_bytes()
     }
 
-    pub fn rpc_hook(&self) -> &Option<Arc<dyn RPCHook>> {
-        &self.producer_config.compatibility_borrow().rpc_hook
+    pub fn rpc_hook(&self) -> Option<Arc<dyn RPCHook>> {
+        self.producer_config.snapshot().rpc_hook.clone()
     }
 
     pub fn compress_level(&self) -> i32 {
@@ -1429,21 +1378,6 @@ impl DefaultMQProducer {
         self.producer_config.snapshot()
     }
 
-    /// Returns a compatibility borrow pinned until this facade history is dropped.
-    #[deprecated(since = "1.1.0", note = "use producer_config_snapshot; remove in 2.0.0")]
-    pub fn producer_config(&self) -> &ProducerConfig {
-        self.producer_config.compatibility_borrow()
-    }
-
-    /// Returns compatibility-history occupancy for diagnostics and regression tests.
-    #[doc(hidden)]
-    pub fn compatibility_config_generation_counts(&self) -> (usize, usize) {
-        (
-            self.client_config.borrowed_generation_count(),
-            self.producer_config.borrowed_generation_count(),
-        )
-    }
-
     fn apply_batch_config_to_accumulator(&self, produce_accumulator: &ProduceAccumulator) {
         let producer_config = self.producer_config.snapshot();
         if let Some(delay_ms) = producer_config.batch_max_delay_ms {
@@ -1497,11 +1431,11 @@ impl DefaultMQProducer {
             .unwrap_or_else(|| self.client_config.snapshot().is_start_detector_enable())
     }
 
-    pub fn latency_max(&self) -> &[u64] {
-        self.producer_config.compatibility_borrow().latency_max()
+    pub fn latency_max(&self) -> Vec<u64> {
+        self.producer_config.snapshot().latency_max.clone()
     }
 
-    pub fn get_latency_max(&self) -> &[u64] {
+    pub fn get_latency_max(&self) -> Vec<u64> {
         self.latency_max()
     }
 
@@ -1514,11 +1448,11 @@ impl DefaultMQProducer {
         }
     }
 
-    pub fn not_available_duration(&self) -> &[u64] {
-        self.producer_config.compatibility_borrow().not_available_duration()
+    pub fn not_available_duration(&self) -> Vec<u64> {
+        self.producer_config.snapshot().not_available_duration.clone()
     }
 
-    pub fn get_not_available_duration(&self) -> &[u64] {
+    pub fn get_not_available_duration(&self) -> Vec<u64> {
         self.not_available_duration()
     }
 
@@ -2620,30 +2554,17 @@ mod facade_tests {
     }
 
     #[test]
-    fn high_frequency_snapshot_updates_do_not_grow_compatibility_history() {
+    fn high_frequency_snapshot_updates_publish_only_the_current_generation() {
         let config = StableConfig::new(0_u64);
+        let original = config.snapshot();
 
         for value in 1..=10_000 {
             config.replace(value);
             assert_eq!(*config.snapshot(), value);
         }
 
-        assert_eq!(config.borrowed_generation_count(), 1);
-    }
-
-    #[test]
-    fn deprecated_borrow_history_has_a_hard_compatibility_cap() {
-        let config = StableConfig::new(0_u64);
-
-        for value in 1..=(super::COMPAT_CONFIG_GENERATION_LIMIT as u64 + 64) {
-            config.replace(value);
-            let _ = *config.compatibility_borrow();
-        }
-
-        assert_eq!(
-            config.borrowed_generation_count(),
-            super::COMPAT_CONFIG_GENERATION_LIMIT
-        );
+        assert_eq!(*original, 0);
+        assert_eq!(*config.snapshot(), 10_000);
     }
 
     fn message() -> Message {

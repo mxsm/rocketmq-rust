@@ -122,7 +122,7 @@ RocketMQ is a distributed message middleware, and its core architecture consists
   - **Synchronous Replication (SYNC_MASTER)**: Returns an ACK only after messages are written to both Master and Slave, ensuring strong data consistency.
   - **Asynchronous Replication (ASYNC_MASTER)**: Returns immediately after writing to the Master, with the Slave replicating asynchronously.
 - **Fault Recovery**:
-  - **Automatic Failover**: Achieved through DLedger (Raft protocol) for automatic Master-Slave switching.
+  - **Automatic Failover**: Controller mode uses the repository's pinned OpenRaft implementation to elect controller leadership and coordinate Broker role changes.
   - **Data Recovery**: Recovers CommitLog and ConsumeQueue from the Slave.
 
 ---

@@ -91,9 +91,34 @@ rocketmq-store-rocksdb = { version = "1.0.0", path = "./rocketmq-store-rocksdb",
 rocketmq-tieredstore   = { version = "1.0.0", path = "./rocketmq-tieredstore" }
 rocketmq-transport    = { version = "1.0.0", path = "./rocketmq-transport", default-features = false }
 
-tokio        = { version = "1.52", features = ["full"] }
-tokio-util   = { version = "0.7.18", features = ["full"] }
-tokio-stream = { version = "0.1.18", features = ["full"] }
+tokio = { version = "1.52", features = [
+  "fs",
+  "io-std",
+  "io-util",
+  "macros",
+  "net",
+  "process",
+  "rt-multi-thread",
+  "signal",
+  "sync",
+  "time",
+] }
+tokio-util = { version = "0.7.18", features = [
+  "codec",
+  "compat",
+  "io-util",
+  "net",
+  "rt",
+  "time",
+] }
+tokio-stream = { version = "0.1.18", features = [
+  "fs",
+  "io-util",
+  "net",
+  "signal",
+  "sync",
+  "time",
+] }
 
 tracing            = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["time", "env-filter", "json", "registry", "tracing-log"] }

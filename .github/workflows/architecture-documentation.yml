@@ -1,0 +1,52 @@
+name: Architecture documentation
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - ".github/workflows/**"
+      - "Cargo.toml"
+      - "rust-toolchain.toml"
+      - "fuzz/Cargo.toml"
+      - "rocketmq-example/Cargo.toml"
+      - "rocketmq-dashboard/rocketmq-dashboard-gpui/Cargo.toml"
+      - "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/Cargo.toml"
+      - "rocketmq-dashboard/rocketmq-dashboard-web/backend/Cargo.toml"
+      - "rocketmq-doc/en/architecture-major-version-migration.md"
+      - "rocketmq-doc/en/architecture-release-evidence-index.md"
+      - "scripts/architecture-validation-inventory.json"
+      - "scripts/architecture_documentation_guard.py"
+      - "scripts/tests/test_architecture_documentation_guard.py"
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - ".github/workflows/**"
+      - "Cargo.toml"
+      - "rust-toolchain.toml"
+      - "fuzz/Cargo.toml"
+      - "rocketmq-example/Cargo.toml"
+      - "rocketmq-dashboard/rocketmq-dashboard-gpui/Cargo.toml"
+      - "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/Cargo.toml"
+      - "rocketmq-dashboard/rocketmq-dashboard-web/backend/Cargo.toml"
+      - "rocketmq-doc/en/architecture-major-version-migration.md"
+      - "rocketmq-doc/en/architecture-release-evidence-index.md"
+      - "scripts/architecture-validation-inventory.json"
+      - "scripts/architecture_documentation_guard.py"
+      - "scripts/tests/test_architecture_documentation_guard.py"
+
+permissions:
+  contents: read
+
+jobs:
+  documentation:
+    name: Generated architecture evidence
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Validate architecture documentation
+        run: python scripts/architecture_documentation_guard.py --check
+
+      - name: Test documentation guard
+        run: python -m unittest scripts.tests.test_architecture_documentation_guard -v

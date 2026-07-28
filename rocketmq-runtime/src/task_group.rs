@@ -236,7 +236,7 @@ impl Drop for TaskCompletionGuard {
 }
 
 impl TaskGroup {
-    pub fn root(name: impl Into<Arc<str>>, runtime: RuntimeHandle) -> Self {
+    pub(crate) fn root(name: impl Into<Arc<str>>, runtime: RuntimeHandle) -> Self {
         let next_group_id = Arc::new(AtomicU64::new(2));
         Self {
             inner: Arc::new(TaskGroupInner::new(
@@ -260,14 +260,6 @@ impl TaskGroup {
 
     pub fn name(&self) -> &str {
         &self.inner.name
-    }
-
-    #[deprecated(
-        since = "1.1.0",
-        note = "raw runtime access bypasses task ownership; use TaskSpawner or TaskGroup spawn methods"
-    )]
-    pub fn runtime(&self) -> &RuntimeHandle {
-        &self.inner.runtime
     }
 
     pub fn cancellation_token(&self) -> CancellationToken {
@@ -415,34 +407,6 @@ impl TaskGroup {
         F: Future<Output = ()> + Send + 'static,
     {
         self.spawn_with_handle(name, TaskKind::Service, future)
-    }
-
-    #[deprecated(
-        since = "1.1.0",
-        note = "detached spawn is a compatibility boundary; use spawn or spawn_service"
-    )]
-    pub fn spawn_detached<F>(&self, name: impl Into<Arc<str>>, kind: TaskKind, future: F) -> RuntimeResult<TaskId>
-    where
-        F: Future<Output = ()> + Send + 'static,
-    {
-        self.spawn_inner(name.into(), kind, Some(DetachedTaskPolicy::TrackOnly), future)
-    }
-
-    #[deprecated(
-        since = "1.1.0",
-        note = "detached spawn is a compatibility boundary; use spawn or spawn_service"
-    )]
-    pub fn spawn_detached_with_policy<F>(
-        &self,
-        name: impl Into<Arc<str>>,
-        kind: TaskKind,
-        policy: DetachedTaskPolicy,
-        future: F,
-    ) -> RuntimeResult<TaskId>
-    where
-        F: Future<Output = ()> + Send + 'static,
-    {
-        self.spawn_inner(name.into(), kind, Some(policy), future)
     }
 
     pub fn cancel(&self) {

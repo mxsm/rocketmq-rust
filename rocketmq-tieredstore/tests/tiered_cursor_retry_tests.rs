@@ -19,6 +19,8 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use rocketmq_error::RocketMQError;
+use rocketmq_runtime::RuntimeContext;
+use rocketmq_runtime::TaskGroup;
 use rocketmq_store_api::DerivedRecordId;
 use rocketmq_tieredstore::DefaultTieredDispatcher;
 use rocketmq_tieredstore::FileSegmentType;
@@ -33,6 +35,12 @@ use rocketmq_tieredstore::TieredStorageLevel;
 use rocketmq_tieredstore::TieredStore;
 use rocketmq_tieredstore::TieredStoreConfig;
 use rocketmq_tieredstore::TieredStoreProvider;
+
+fn test_task_group() -> TaskGroup {
+    RuntimeContext::from_current("tiered-cursor-retry-test")
+        .root_group()
+        .clone()
+}
 
 #[derive(Clone, Default)]
 struct FailureControl {
@@ -217,6 +225,7 @@ async fn timeout_ledger_survives_restart_without_payload_and_releases_wal_pin() 
     let store = TieredStore::with_provider(
         config.clone(),
         ControlledPosixProvider::new(provider_root.clone(), control),
+        test_task_group(),
     )?;
     store.load().await?;
     store.start().await?;
@@ -242,6 +251,7 @@ async fn timeout_ledger_survives_restart_without_payload_and_releases_wal_pin() 
     let restarted = TieredStore::with_provider(
         config.clone(),
         ControlledPosixProvider::new(provider_root, FailureControl::default()),
+        test_task_group(),
     )?;
     restarted.load().await?;
     assert_eq!(restarted.dispatcher().health().retry_count(), 1);
@@ -276,6 +286,7 @@ async fn partial_provider_write_resumes_and_duplicate_commit_is_idempotent() -> 
     let store = TieredStore::with_provider(
         config.clone(),
         ControlledPosixProvider::new(temp_dir.path().join("provider"), control.clone()),
+        test_task_group(),
     )?;
     store.load().await?;
     let retry_body = body.clone();
@@ -319,6 +330,7 @@ async fn failed_partition_is_isolated_after_retry_is_durable() -> Result<(), Roc
     let store = TieredStore::with_provider(
         config.clone(),
         ControlledPosixProvider::new(temp_dir.path().join("provider"), control),
+        test_task_group(),
     )?;
     store.load().await?;
     store.start().await?;
@@ -361,6 +373,7 @@ async fn full_retry_ledger_holds_cursor_and_applies_byte_backpressure() -> Resul
     let store = TieredStore::with_provider(
         config.clone(),
         ControlledPosixProvider::new(temp_dir.path().join("provider"), control.clone()),
+        test_task_group(),
     )?;
     store.load().await?;
     store.start().await?;
@@ -412,6 +425,7 @@ async fn retry_source_byte_limit_stops_cursor_before_unrecorded_failure() -> Res
     let store = TieredStore::with_provider(
         config.clone(),
         ControlledPosixProvider::new(temp_dir.path().join("provider"), control.clone()),
+        test_task_group(),
     )?;
     store.load().await?;
     store.start().await?;
@@ -452,6 +466,7 @@ async fn retry_age_limit_fails_readiness_without_losing_durable_entry() -> Resul
     let store = TieredStore::with_provider(
         config.clone(),
         ControlledPosixProvider::new(temp_dir.path().join("provider"), control),
+        test_task_group(),
     )?;
     store.load().await?;
     store.start().await?;
@@ -479,6 +494,7 @@ async fn corrupted_progress_snapshot_fails_restart_closed() -> Result<(), Rocket
     let store = TieredStore::with_provider(
         config.clone(),
         ControlledPosixProvider::new(provider_root.clone(), FailureControl::default()),
+        test_task_group(),
     )?;
     store.load().await?;
     store.start().await?;
@@ -505,6 +521,7 @@ async fn corrupted_progress_snapshot_fails_restart_closed() -> Result<(), Rocket
     let restarted = TieredStore::with_provider(
         config,
         ControlledPosixProvider::new(provider_root, FailureControl::default()),
+        test_task_group(),
     )?;
     let error = restarted
         .load()

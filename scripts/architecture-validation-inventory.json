@@ -1,0 +1,158 @@
+{
+  "schema_version": 1,
+  "toolchains": {
+    "formal": "1.95.0",
+    "fuzz_miri": "nightly-2026-07-05"
+  },
+  "root": {
+    "owner": "RocketMQ Rust maintainers",
+    "manifest": "Cargo.toml",
+    "workflow": ".github/workflows/rocketmq-rust-ci.yaml",
+    "commands": [
+      "cargo fmt --all -- --check",
+      "cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings",
+      "cargo test --workspace --all-features",
+      "cargo doc --workspace --no-deps --all-features"
+    ]
+  },
+  "standalone": [
+    {
+      "id": "fuzz",
+      "owner": "Fuzz and production input maintainers",
+      "manifest": "fuzz/Cargo.toml",
+      "instructions": "fuzz/AGENTS.md",
+      "workflow": ".github/workflows/fuzz-ci.yml",
+      "toolchain": "nightly-2026-07-05",
+      "commands": [
+        "cargo +nightly-2026-07-05 check --locked --manifest-path fuzz/Cargo.toml --all-targets --all-features"
+      ]
+    },
+    {
+      "id": "example",
+      "owner": "Examples maintainers",
+      "manifest": "rocketmq-example/Cargo.toml",
+      "instructions": "rocketmq-example/AGENTS.md",
+      "workflow": ".github/workflows/rocketmq-example-ci.yaml",
+      "toolchain": "1.95.0",
+      "commands": [
+        "cargo fmt --all -- --check",
+        "cargo clippy --all-targets -- -D warnings",
+        "cargo test",
+        "cargo build --examples"
+      ]
+    },
+    {
+      "id": "dashboard-gpui",
+      "owner": "Dashboard GPUI maintainers",
+      "manifest": "rocketmq-dashboard/rocketmq-dashboard-gpui/Cargo.toml",
+      "instructions": "rocketmq-dashboard/rocketmq-dashboard-gpui/AGENTS.md",
+      "workflow": ".github/workflows/dashboard-gpui-ci.yml",
+      "toolchain": "1.95.0",
+      "commands": [
+        "cargo fmt --all -- --check",
+        "cargo clippy --all-targets --all-features -- -D warnings",
+        "cargo check --all-targets --all-features",
+        "cargo test"
+      ]
+    },
+    {
+      "id": "dashboard-tauri-backend",
+      "owner": "Dashboard Tauri maintainers",
+      "manifest": "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/Cargo.toml",
+      "instructions": "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/AGENTS.md",
+      "workflow": ".github/workflows/dashboard-tauri-ci.yml",
+      "toolchain": "1.95.0",
+      "commands": [
+        "cargo fmt --all -- --check",
+        "cargo clippy --all-targets --all-features -- -D warnings",
+        "cargo test --all-features"
+      ]
+    },
+    {
+      "id": "dashboard-web-backend",
+      "owner": "Dashboard Web backend maintainers",
+      "manifest": "rocketmq-dashboard/rocketmq-dashboard-web/backend/Cargo.toml",
+      "instructions": "rocketmq-dashboard/rocketmq-dashboard-web/backend/AGENTS.md",
+      "workflow": ".github/workflows/dashboard-web-ci.yml",
+      "toolchain": "1.95.0",
+      "commands": [
+        "cargo fmt --all -- --check",
+        "cargo clippy --all-targets --all-features -- -D warnings",
+        "cargo build --all-targets --all-features",
+        "cargo test"
+      ]
+    }
+  ],
+  "node_projects": [
+    {
+      "id": "dashboard-tauri",
+      "path": "rocketmq-dashboard/rocketmq-dashboard-tauri",
+      "workflow": ".github/workflows/dashboard-tauri-ci.yml",
+      "commands": ["npm ci", "npm run build"]
+    },
+    {
+      "id": "dashboard-web-frontend",
+      "path": "rocketmq-dashboard/rocketmq-dashboard-web/frontend",
+      "workflow": ".github/workflows/dashboard-web-ci.yml",
+      "commands": ["npm ci", "npm run build"]
+    },
+    {
+      "id": "website",
+      "path": "rocketmq-website",
+      "workflow": ".github/workflows/website-check.yml",
+      "commands": ["npm ci", "npm run build"]
+    }
+  ],
+  "tokio_full_allowed": [
+    "rocketmq-example/Cargo.toml",
+    "rocketmq-dashboard/rocketmq-dashboard-gpui/Cargo.toml",
+    "rocketmq-dashboard/rocketmq-dashboard-web/backend/Cargo.toml"
+  ],
+  "coverage": {
+    "config": "codecov.yml",
+    "root_target": "auto",
+    "allowed_regression": "1%",
+    "patch_target": "50%",
+    "standalone_workflow": ".github/workflows/architecture-nightly-evidence.yml",
+    "fuzz_workflow": ".github/workflows/fuzz-ci.yml"
+  },
+  "critical_action_pins": {
+    "checkout": "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
+    "upload_artifact": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+  },
+  "critical_workflows": [
+    ".github/workflows/fuzz-ci.yml",
+    ".github/workflows/architecture-nightly-evidence.yml",
+    ".github/workflows/architecture-performance-evidence.yml",
+    ".github/workflows/architecture-slo-evidence.yml",
+    ".github/workflows/kubernetes-fault-matrix.yml"
+  ],
+  "evidence_artifacts": [
+    {
+      "kind": "fuzz",
+      "workflow": ".github/workflows/fuzz-ci.yml",
+      "artifact": "architecture-fuzz-<target>-<commit>"
+    },
+    {
+      "kind": "miri-loom-coverage",
+      "workflow": ".github/workflows/architecture-nightly-evidence.yml",
+      "artifact": "architecture-nightly-<kind>-<commit>"
+    },
+    {
+      "kind": "performance",
+      "workflow": ".github/workflows/architecture-performance-evidence.yml",
+      "artifact": "architecture-performance-<commit>"
+    },
+    {
+      "kind": "fault",
+      "workflow": ".github/workflows/kubernetes-fault-matrix.yml",
+      "artifact": "m11-11-<backend>-<commit>"
+    },
+    {
+      "kind": "six-hour-soak",
+      "workflow": ".github/workflows/architecture-slo-evidence.yml",
+      "artifact": "m11-12-r24-<backend>-<commit>"
+    }
+  ],
+  "generated_document": "rocketmq-doc/en/architecture-release-evidence-index.md"
+}

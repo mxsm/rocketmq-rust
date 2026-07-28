@@ -54,7 +54,7 @@ impl RuntimeOwner {
         let runtime = builder.build()?;
         let runtime_handle = RuntimeHandle::new(runtime.handle().clone());
         let root_group = TaskGroup::root(config.thread_name.clone(), runtime_handle.clone());
-        let diagnostics = RuntimeDiagnostics::new(runtime_handle.clone());
+        let diagnostics = RuntimeDiagnostics::new();
         let root_context = RootServiceContext::new(
             config.thread_name.clone().into(),
             runtime_handle,

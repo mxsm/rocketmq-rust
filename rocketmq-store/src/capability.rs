@@ -16,7 +16,7 @@
 //!
 //! The legacy `MessageStore` implementations below are compatibility
 //! projections. New request paths depend on the corresponding
-//! `rocketmq-store-api` capability and must not extend `MessageStoreInner`.
+//! `rocketmq-store-api` capability and must not extend the broad `MessageStore` facade.
 
 use std::future::Future;
 

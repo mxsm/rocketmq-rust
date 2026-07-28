@@ -73,8 +73,9 @@ checkpoint storage identity semantics are unchanged.
 ## Store capability migration
 
 The existing store-api capabilities are the canonical target interfaces.
-`LegacyMessageStoreAdapter<S>` is crate-private and delegates only capabilities
-that have a real consumer:
+Store capability implementations now bind directly to the canonical Local,
+RocksDB, and Tiered owners. The unused `LegacyMessageStoreAdapter<S>` and its
+compatibility module were removed at the approved major-version boundary:
 
 | Use case | Canonical capability | Current primary seam | Remaining compatibility |
 |---|---|---|---|
@@ -84,11 +85,10 @@ that have a real consumer:
 | Startup and shutdown | `StoreLifecycle` | Local/RocksDB conformance surface | Broker process lifecycle still owns the concrete implementation |
 | Replication and HA | `ReplicationControl` or a narrower use-case port | Existing native HA modules | Legacy `MessageStore` remains until HA consumers migrate |
 
-The adapter owner is `rocketmq-store`. It may not gain speculative methods.
-It is removed when all root-workspace and standalone consumers use native
-capabilities; the compatibility deadline is 2.0.0. `MessageStoreInner` is
-frozen during this migration and must not acquire new methods without an
-explicit compatibility owner and removal version.
+`MessageStoreInner` was removed rather than re-exported or renamed. The
+`trait_variant` transformation now generates the public, `Send` future
+contract in place as `MessageStore`; capability consumers do not depend on an
+inner compatibility trait.
 
 `capability_conformance_tests` exercises the shared lifecycle and capability
 surface for Local by default and RocksDB with `rocksdb_store`. Tiered Store
@@ -161,27 +161,21 @@ The old `MQProducer` facade is preserved through the compatibility cycle; its
 error and unsupported-operation behavior is not silently changed. The
 capability implementation delegates to the same operations.
 
-`MQAdminExtInner` is deprecated with a 2.0.0 removal version and no longer
-participates in client registration or dispatch. Admin registration stores
-only group presence, and behavior tests cover duplicate registration, lookup,
+`MQAdminExtInner`, its empty implementation alias, modules, and crate-root
+re-exports were removed at the 2.0.0 boundary. Admin registration stores only
+group presence, and behavior tests cover duplicate registration, lookup,
 unregistration, and absence.
 
 ## Immutable configuration snapshots
 
-Producer configuration now has an `ArcSwap` current value. Internal callers use
-`client_config_snapshot()` and `producer_config_snapshot()` and never obtain a
-long-lived borrow from the compatibility history.
-
-The old borrowed getters are isolated behind `compatibility_borrow`. Their
-allocations are retained only because Rust references returned by the public
-compatibility facade must remain valid. The retained history has a hard limit
-of 1,024 generations and exposes occupancy through
-`compatibility_config_generation_counts`. At saturation, borrowed getters
-continue returning the last safely retained generation, while snapshot getters
-always return the latest configuration. The owner is Client Producer; callers
-must migrate to snapshots before the borrowed facade is removed in 2.0.0.
-Tests cover 10,000 snapshot updates, bounded compatibility retention, and
-current snapshot visibility.
+Producer configuration has one clone-shared `ArcSwap` current value. Internal
+callers use `client_config_snapshot()` and `producer_config_snapshot()`.
+Borrowed config getters, `compatibility_borrow`, the retained-generation list,
+its unsafe reference reconstruction, and occupancy diagnostics were removed.
+Facade accessors that remain useful now return owned collections, strings, or
+`Arc` values derived from the current immutable snapshot.
+Tests cover 10,000 snapshot updates, preservation of an explicitly held old
+snapshot, and current-generation visibility without retained history.
 
 ## Pin projection, shared state, and trait policy
 
@@ -262,12 +256,14 @@ length. No new `mod.rs` is introduced; the touched historical Proxy
 | Surface | Why retained | Removal condition | Owner | Target |
 |---|---|---|---|---|
 | `rocketmq_auth::*` maintenance contract exports | Downstream source compatibility | Consumers import security-api directly | Security | 2.0.0 |
-| Legacy `MessageStore` and crate-private adapter | Incremental Broker/standalone migration | All consumers use native capabilities | Store | 2.0.0 |
+| Legacy `MessageStore` | Real downstream lifecycle and HA value; inner trait and adapter are gone | Next approved major-release review after remaining facade consumers migrate | Store | Next major review |
 | Legacy `MQProducer` | Existing overload and error compatibility | Public migration window completed | Client Producer | 2.0.0 decision gate |
-| `MQAdminExtInner` marker | Public source compatibility only | No downstream marker implementations remain | Client Admin | 2.0.0 |
-| Borrowed producer configuration getters | Returned-reference source compatibility | Callers use immutable snapshots | Client Producer | 2.0.0 |
 | Proxy `service`, `grpc`, and `remoting` paths | Downstream module-path compatibility | Consumers import `contracts`/`ingress` paths | Proxy Core | 2.0.0 |
 | `ControllerManager::new` | Security-disabled source compatibility | Keep as convenience constructor while it remains fail closed | Controller | Retained |
+
+Removed at the approved boundary: `MessageStoreInner`, the Store compatibility
+adapter, `MQAdminExtInner`, borrowed producer configuration getters/history,
+public `RuntimeHandle`, and detached task spawning.
 
 ## Acceptance evidence
 

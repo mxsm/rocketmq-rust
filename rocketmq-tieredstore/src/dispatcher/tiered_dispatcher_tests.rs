@@ -59,7 +59,13 @@ async fn dispatch_writes_commit_log_and_consume_queue_unit() -> Result<(), Rocke
         Arc::new(JsonMetadataStore::new(config.clone())),
         MemoryProvider::default(),
     ));
-    let dispatcher = DefaultTieredDispatcher::new(config, flat_file_store.clone(), CancellationToken::new());
+    let context = RuntimeContext::from_current("tieredstore-dispatch-write-test");
+    let dispatcher = DefaultTieredDispatcher::new(
+        config,
+        flat_file_store.clone(),
+        CancellationToken::new(),
+        context.root_group().clone(),
+    );
 
     dispatcher.start().await?;
     dispatcher
@@ -115,7 +121,7 @@ async fn new_with_task_group_parents_dispatcher_task() -> Result<(), RocketMQErr
     ));
     let context = RuntimeContext::from_current("tieredstore-dispatcher-parent-test");
     let service = context.service_context("tieredstore-dispatcher");
-    let dispatcher = DefaultTieredDispatcher::new_with_task_group(
+    let dispatcher = DefaultTieredDispatcher::new(
         config,
         flat_file_store,
         CancellationToken::new(),
@@ -155,7 +161,9 @@ async fn cancellation_releases_a_sender_waiting_for_byte_capacity() -> Result<()
         MemoryProvider::default(),
     ));
     let shutdown = CancellationToken::new();
-    let dispatcher = DefaultTieredDispatcher::new(config, flat_file_store, shutdown.clone());
+    let context = RuntimeContext::from_current("tieredstore-dispatch-cancellation-test");
+    let dispatcher =
+        DefaultTieredDispatcher::new(config, flat_file_store, shutdown.clone(), context.root_group().clone());
     let request = || TieredDispatchRequest {
         topic: "TopicA".to_owned(),
         queue_id: 0,

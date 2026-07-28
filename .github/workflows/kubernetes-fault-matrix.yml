@@ -43,6 +43,8 @@ on:
         description: OpenTelemetry Collector image@sha256 reference
         required: true
         type: string
+  schedule:
+    - cron: "11 21 * * 6"
 
 permissions:
   contents: read
@@ -70,11 +72,16 @@ jobs:
         run: ./scripts/kind-architecture-refactor-e2e.ps1 -Mode Validate
 
   dynamic-fault-matrix:
-    name: Dynamic ${{ inputs.backend }} fault matrix
-    if: github.event_name == 'workflow_dispatch'
+    name: Dynamic fault matrix
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     needs: static-contract
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    env:
+      EVIDENCE_BACKEND: ${{ github.event_name == 'workflow_dispatch' && inputs.backend || vars.ARCHITECTURE_FAULT_BACKEND }}
+      BASELINE_IMAGES: ${{ github.event_name == 'workflow_dispatch' && inputs.baseline_images_json || vars.ARCHITECTURE_BASELINE_IMAGES_JSON }}
+      CANDIDATE_IMAGES: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_images_json || vars.ARCHITECTURE_CANDIDATE_IMAGES_JSON }}
+      COLLECTOR_IMAGE: ${{ github.event_name == 'workflow_dispatch' && inputs.collector_image || vars.ARCHITECTURE_COLLECTOR_IMAGE }}
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -107,8 +114,6 @@ jobs:
       - name: Materialize explicit dynamic inputs
         shell: bash
         env:
-          BASELINE_IMAGES: ${{ inputs.baseline_images_json }}
-          CANDIDATE_IMAGES: ${{ inputs.candidate_images_json }}
           RUNTIME_SECRET_B64: ${{ secrets.M11_RUNTIME_SECRET_MANIFEST_B64 }}
           ROTATED_RUNTIME_SECRET_B64: ${{ secrets.M11_ROTATED_RUNTIME_SECRET_MANIFEST_B64 }}
           BASELINE_DRIVER_SECRET_B64: ${{ secrets.M11_BASELINE_DRIVER_SECRET_MANIFEST_B64 }}
@@ -132,20 +137,20 @@ jobs:
         run: >-
           ./scripts/kind-architecture-refactor-e2e.ps1
           -Mode Run
-          -Backend '${{ inputs.backend }}'
+          -Backend '${{ env.EVIDENCE_BACKEND }}'
           -BaselineImageMap target/fault-inputs/baseline-images.json
           -CandidateImageMap target/fault-inputs/candidate-images.json
           -RuntimeSecretManifest target/fault-inputs/runtime-secret.yaml
           -RotatedRuntimeSecretManifest target/fault-inputs/rotated-runtime-secret.yaml
           -BaselineDriverSecretManifest target/fault-inputs/baseline-driver-secret.yaml
           -RotatedDriverSecretManifest target/fault-inputs/rotated-driver-secret.yaml
-          -CollectorImage '${{ inputs.collector_image }}'
+          -CollectorImage '${{ env.COLLECTOR_IMAGE }}'
 
       - name: Upload immutable fault evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: m11-11-${{ inputs.backend }}-${{ github.sha }}
+          name: m11-11-${{ env.EVIDENCE_BACKEND }}-${{ github.sha }}
           path: target/architecture-refactor/M11/fault-matrix
           if-no-files-found: error
           retention-days: 30

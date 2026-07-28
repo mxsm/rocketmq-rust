@@ -4377,10 +4377,11 @@ mod tests {
 
     #[tokio::test]
     async fn route_query_via_client_processor_returns_order_config_and_route_contract() {
-        let bootstrap = build_bootstrap_with_config(NamesrvConfig {
+        let (namesrv_config, _namesrv_root) = isolated_namesrv_config(NamesrvConfig {
             order_message_enable: true,
             ..NamesrvConfig::default()
         });
+        let bootstrap = build_bootstrap_with_config(namesrv_config);
         let harness = LocalRequestHarness::new(test_task_group("namesrv-local-harness"))
             .await
             .unwrap();

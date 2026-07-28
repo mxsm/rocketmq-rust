@@ -81,8 +81,8 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Set up Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
+      - name: Use repository Rust 1.95 toolchain
+        run: rustup show active-toolchain
 
       - name: Test architecture guards
         run: python -m unittest discover -s scripts/tests -p "test_*guard.py" -v
@@ -98,6 +98,9 @@ jobs:
 
       - name: Check architecture release package
         run: python scripts/architecture_release_guard.py
+
+      - name: Check generated architecture documentation
+        run: python scripts/architecture_documentation_guard.py --check
 
       - name: Check production environment writes
         run: python scripts/environment_write_guard.py
@@ -136,8 +139,8 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Set up Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
+      - name: Use repository Rust 1.95 toolchain
+        run: rustup show active-toolchain
 
       - name: Run strict target and retain the debt report
         id: strict-target
@@ -207,10 +210,10 @@ jobs:
             fi
           fi
 
-      - name: Set up Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: rustfmt, clippy
+      - name: Use repository Rust 1.95 toolchain
+        run: |
+          rustup show active-toolchain
+          rustup component add rustfmt clippy
 
       - name: Cache Rust + RocksDB
         uses: Swatinem/rust-cache@v2
@@ -250,6 +253,9 @@ jobs:
       - name: Clippy (all features)
         run: cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
 
+      - name: Document workspace public API
+        run: cargo doc --workspace --no-deps --all-features
+
   # =========================
   # Observability feature matrix
   # =========================
@@ -288,10 +294,10 @@ jobs:
           echo "CXX=clang++" >> $GITHUB_ENV
           echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> $GITHUB_ENV
 
-      - name: Set up Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: clippy
+      - name: Use repository Rust 1.95 toolchain
+        run: |
+          rustup show active-toolchain
+          rustup component add clippy
 
       - name: Cache Rust + RocksDB
         uses: Swatinem/rust-cache@v2
@@ -372,10 +378,10 @@ jobs:
           choco install cmake ninja protoc llvm -y
           Add-Content -Path $env:GITHUB_ENV -Value "LIBCLANG_PATH=C:\Program Files\LLVM\bin"
 
-      - name: Set up Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: clippy
+      - name: Use repository Rust 1.95 toolchain
+        run: |
+          rustup show active-toolchain
+          rustup component add clippy
 
       - name: Cache Rust + RocksDB
         uses: Swatinem/rust-cache@v2
@@ -483,8 +489,8 @@ jobs:
         run: |
           choco install cmake ninja protoc -y
 
-      - name: Set up Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
+      - name: Use repository Rust 1.95 toolchain
+        run: rustup show active-toolchain
 
       - name: Cache Rust + RocksDB
         uses: Swatinem/rust-cache@v2
@@ -506,6 +512,48 @@ jobs:
       - name: Test (all features)
         if: matrix.os == 'ubuntu-latest'
         run: cargo test --workspace --all-features
+
+  interface-contracts:
+    name: Store, Producer, Tiered, and Loom contracts
+    needs: check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install native build dependencies
+        run: >-
+          sudo apt-get update &&
+          sudo apt-get install -y
+          clang llvm libclang-dev cmake make ninja-build pkg-config
+          protobuf-compiler libsnappy-dev liblz4-dev libzstd-dev zlib1g-dev
+
+      - name: Use repository Rust 1.95 toolchain
+        run: rustup show active-toolchain
+
+      - name: Store capability interfaces
+        run: >-
+          cargo test -p rocketmq-store
+          --test capability_conformance_tests
+          --test public_api_contract
+
+      - name: Producer capability interfaces
+        run: >-
+          cargo test -p rocketmq-client-rust
+          --test client_capability_boundaries
+          --test public_api_exports_test
+
+      - name: Tiered provider and lifecycle interfaces
+        run: cargo test -p rocketmq-tieredstore --lib --tests
+
+      - name: Quick Loom contracts
+        run: |
+          cargo test -p rocketmq-runtime \
+            --test arc_mut_replacement_loom \
+            --test resource_budget_loom \
+            --test task_group_shutdown_loom
+          cargo test -p rocketmq-store-local --test mapped_write_lease_loom
 
   # =========================
   # Coverage (Ubuntu only)
@@ -556,8 +604,8 @@ jobs:
             fi
           fi
 
-      - name: Set up Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
+      - name: Use repository Rust 1.95 toolchain
+        run: rustup show active-toolchain
 
       - name: Cache Rust + RocksDB
         uses: Swatinem/rust-cache@v2
@@ -584,5 +632,5 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
-          fail_ci_if_error: false
+          fail_ci_if_error: true
           verbose: true

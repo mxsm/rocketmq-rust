@@ -8,11 +8,23 @@ on:
     branches: [ "main" ]
     paths:
       - 'rocketmq-dashboard/rocketmq-dashboard-tauri/**'
+      - 'rocketmq-dashboard/rocketmq-dashboard-common/**'
+      - 'rocketmq-runtime/**'
+      - 'rocketmq-tools/rocketmq-admin/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
       - '.github/workflows/dashboard-tauri-ci.yml'
   pull_request:
     branches: [ "main" ]
     paths:
       - 'rocketmq-dashboard/rocketmq-dashboard-tauri/**'
+      - 'rocketmq-dashboard/rocketmq-dashboard-common/**'
+      - 'rocketmq-runtime/**'
+      - 'rocketmq-tools/rocketmq-admin/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
       - '.github/workflows/dashboard-tauri-ci.yml'
 
 env:
@@ -74,10 +86,11 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev
 
-      - name: Set up Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: rustfmt, clippy
+      - name: Use repository Rust 1.95 toolchain
+        working-directory: rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri
+        run: |
+          rustup show active-toolchain
+          rustup component add rustfmt clippy
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -157,11 +170,6 @@ jobs:
         if: matrix.platform.os == 'windows-latest'
         run: |
           # WebView2 is pre-installed on GitHub Windows runners
-
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.platform.target }}
 
       - name: Install Rust target (ensure it's available)
         run: rustup target add ${{ matrix.platform.target }}

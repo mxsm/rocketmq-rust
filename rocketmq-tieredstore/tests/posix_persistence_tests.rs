@@ -16,6 +16,7 @@ use bytes::Bytes;
 use bytes::BytesMut;
 use rocketmq_error::RocketMQError;
 use rocketmq_model::boundary_type::BoundaryType;
+use rocketmq_runtime::RuntimeContext;
 use rocketmq_tieredstore::fetcher::TieredGetMessageStatus;
 use rocketmq_tieredstore::TieredDispatchRequest;
 use rocketmq_tieredstore::TieredDispatcher;
@@ -48,7 +49,8 @@ async fn posix_store_recovers_dispatched_messages_and_index_after_restart() -> R
     let store_timestamp = 1_700_000_i64;
     let message = encoded_message(store_timestamp, b"persisted-posix-message");
 
-    let store = TieredStore::new(config.clone())?;
+    let context = RuntimeContext::from_current("tiered-posix-persistence-test");
+    let store = TieredStore::new(config.clone(), context.root_group().clone())?;
     store.load().await?;
     store.start().await?;
     store
@@ -70,7 +72,7 @@ async fn posix_store_recovers_dispatched_messages_and_index_after_restart() -> R
         .await?;
     store.shutdown().await?;
 
-    let reloaded = TieredStore::new(config)?;
+    let reloaded = TieredStore::new(config, context.root_group().clone())?;
     reloaded.load().await?;
 
     let fetched = reloaded

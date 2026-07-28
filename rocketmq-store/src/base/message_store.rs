@@ -235,13 +235,12 @@ impl From<&StoreError> for StoreHealthError {
     }
 }
 
-#[trait_variant::make(MessageStore: Send)]
 /// Frozen compatibility surface for pre-capability Store implementations.
 ///
 /// Do not add methods. New Store behavior belongs in a narrow
-/// `rocketmq-store-api` capability and is adapted in `crate::compat` only while
-/// legacy callers are being drained.
-pub trait MessageStoreInner: Sync + 'static {
+/// `rocketmq-store-api` capability.
+#[trait_variant::make(Send)]
+pub trait MessageStore: Send + Sync + 'static {
     /// Load previously stored messages.
     ///
     /// Returns true if successful, false otherwise.
