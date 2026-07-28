@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "head": "8c0102a3f871e3df1c9d4572e29c3b2b3d105fbd",
+  "head": "a4c71a710086e8ca5079dc1db7a585a283cfcfca",
   "cargo_metadata_command": "cargo metadata --format-version 1 --no-deps",
-  "metadata_sha256": "52bb4a6b396b84ada9cdcc5e24c21730136aac6e54db4029dbd7d7119aa4d8d1",
-  "rustc_version": "rustc 1.99.0-nightly (3659db0d3 2026-07-05)",
-  "cargo_version": "cargo 1.99.0-nightly (2f0e7011e 2026-07-05)",
+  "metadata_sha256": "3a9b687015667879554c591c486abc78591f64dac8bb8a9bf67727714b9b3e77",
+  "rustc_version": "rustc 1.95.0 (59807616e 2026-04-14)",
+  "cargo_version": "cargo 1.95.0 (f2d3ce0bd 2026-03-21)",
   "generated_output_path": "target/architecture-refactor/P1-03/cargo-metadata.normalized.json",
   "workspace_packages": [
     "rocketmq-admin-cli",

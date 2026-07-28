@@ -92,154 +92,106 @@ impl EnvUtils {
             .unwrap_or(default)
     }
 
-    /// Sets the value of the specified environment variable.
-    ///
-    /// # Arguments
-    ///
-    /// * `key` - The name of the environment variable to set.
-    /// * `value` - The value to set the environment variable to.
-    ///
-    /// # Safety
-    ///
-    /// This function uses `unsafe` because it modifies the environment variables,
-    /// which can have side effects on the entire process.
-    pub fn put_property<K: AsRef<OsStr>, V: AsRef<OsStr>>(key: K, value: V) {
-        unsafe {
-            std::env::set_var(key, value);
-        }
-    }
-
     /// Gets the value of the ROCKETMQ_HOME environment variable.
     ///
-    /// If ROCKETMQ_HOME is not set, it defaults to the current directory and sets ROCKETMQ_HOME
-    /// accordingly.
+    /// If ROCKETMQ_HOME is not set, it defaults to the current directory without
+    /// mutating the process environment.
     ///
     /// # Returns
     ///
     /// The value of the ROCKETMQ_HOME environment variable as a `String`.
     pub fn get_rocketmq_home() -> String {
-        std::env::var(ROCKETMQ_HOME_ENV).unwrap_or_else(|_| unsafe {
-            // If ROCKETMQ_HOME is not set, use the current directory as the default value
-            let rocketmq_home_dir = std::env::current_dir()
+        std::env::var(ROCKETMQ_HOME_ENV).unwrap_or_else(|_| {
+            std::env::current_dir()
                 .ok()
-                .and_then(|p| p.into_os_string().into_string().ok())
-                .unwrap_or_else(|| ".".to_string());
-
-            // Set ROCKETMQ_HOME to the current directory
-            std::env::set_var(ROCKETMQ_HOME_ENV, &rocketmq_home_dir);
-            rocketmq_home_dir
+                .and_then(|path| path.into_os_string().into_string().ok())
+                .unwrap_or_else(|| ".".to_string())
         })
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
+    use std::sync::Mutex;
 
     use super::*;
 
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct EnvironmentRestore {
+        key: &'static str,
+        original: Option<OsString>,
+    }
+
+    impl Drop for EnvironmentRestore {
+        fn drop(&mut self) {
+            // SAFETY: ENV_LOCK serializes every environment mutation in this
+            // module, and the guard restores the original value before release.
+            unsafe {
+                match &self.original {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+    }
+
+    fn with_environment<R>(key: &'static str, value: Option<&str>, test: impl FnOnce() -> R) -> R {
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let restore = EnvironmentRestore {
+            key,
+            original: std::env::var_os(key),
+        };
+        // SAFETY: ENV_LOCK prevents concurrent mutations made by this module;
+        // EnvironmentRestore restores the original process value after the test.
+        unsafe {
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+        }
+        let result = test();
+        drop(restore);
+        result
+    }
+
     #[test]
     fn test_get_property_existing_variable() {
-        // Set up
-        let key = "HOME";
-        let expected_value = "/home/user";
-
-        unsafe {
-            std::env::set_var(key, expected_value);
-        }
-
-        // Test
-        let result = EnvUtils::get_property(key);
-
-        // Assert
-        assert_eq!(result, Some(expected_value.to_string()));
+        with_environment("ROCKETMQ_ENV_UTILS_EXISTING", Some("expected"), || {
+            assert_eq!(
+                EnvUtils::get_property("ROCKETMQ_ENV_UTILS_EXISTING"),
+                Some("expected".to_string())
+            );
+        });
     }
 
     #[test]
     fn test_get_property_non_existing_variable() {
         // Set up
-        let key = "NON_EXISTING_VARIABLE";
-
-        // Test
-        let result = EnvUtils::get_property(key);
-
-        // Assert
-        assert_eq!(result, None);
-    }
-
-    /*    #[test]
-    fn test_get_rocketmq_home_existing_variable() {
-        // Set up
-        let expected_value = PathBuf::from("/path/to/rocketmq_home");
-
-        std::env::set_var(ROCKETMQ_HOME_ENV, expected_value.clone());
-
-        // Test
-        let result = EnvUtils::get_rocketmq_home();
-
-        // Assert
-        assert_eq!(result, expected_value.to_string_lossy().to_string());
-    }*/
-
-    #[test]
-    fn test_get_rocketmq_home_non_existing_variable() {
-        // Set up
-        unsafe {
-            std::env::remove_var(ROCKETMQ_HOME_ENV);
-        }
-
-        // Test
-        let result = EnvUtils::get_rocketmq_home();
-
-        // Assert
-        assert_eq!(result, std::env::current_dir().unwrap().to_string_lossy().to_string());
+        with_environment("ROCKETMQ_ENV_UTILS_MISSING", None, || {
+            assert_eq!(EnvUtils::get_property("ROCKETMQ_ENV_UTILS_MISSING"), None);
+        });
     }
 
     #[test]
-    fn put_property_sets_value() {
-        let key = "TEST_ENV_VAR";
-        let value = "test_value";
+    fn rocketmq_home_fallback_does_not_write_the_environment() {
+        with_environment(ROCKETMQ_HOME_ENV, None, || {
+            let result = EnvUtils::get_rocketmq_home();
 
-        EnvUtils::put_property(key, value);
-
-        let result = std::env::var(key).unwrap();
-        assert_eq!(result, value);
-    }
-
-    #[test]
-    fn put_property_overwrites_existing_value() {
-        let key = "TEST_ENV_VAR1";
-        let initial_value = "initial_value";
-        let new_value = "new_value";
-
-        unsafe {
-            std::env::set_var(key, initial_value);
-        }
-
-        EnvUtils::put_property(key, new_value);
-
-        let result = std::env::var(key).unwrap();
-        assert_eq!(result, new_value);
-    }
-
-    #[test]
-    fn put_property_handles_empty_value() {
-        let key = "TEST_ENV_VAR2";
-        let value = "";
-
-        EnvUtils::put_property(key, value);
-
-        let result = std::env::var(key).unwrap();
-        assert_eq!(result, value);
+            assert_eq!(result, std::env::current_dir().unwrap().to_string_lossy());
+            assert_eq!(std::env::var_os(ROCKETMQ_HOME_ENV), None);
+        });
     }
 
     #[test]
     fn retrieves_env_variable_value() {
-        std::env::set_var("TEST_KEY", "test_value");
-        assert_eq!(
-            EnvUtils::get_property_or_default("TEST_KEY", "default_value"),
-            "test_value"
-        );
-        std::env::remove_var("TEST_KEY");
+        with_environment("ROCKETMQ_ENV_UTILS_STRING", Some("test_value"), || {
+            assert_eq!(
+                EnvUtils::get_property_or_default("ROCKETMQ_ENV_UTILS_STRING", "default_value"),
+                "test_value"
+            );
+        });
     }
 
     #[test]
@@ -252,9 +204,9 @@ mod tests {
 
     #[test]
     fn retrieves_env_variable_as_i32() {
-        std::env::set_var("TEST_INT_KEY", "42");
-        assert_eq!(EnvUtils::get_property_as_i32("TEST_INT_KEY", 0), 42);
-        std::env::remove_var("TEST_INT_KEY");
+        with_environment("ROCKETMQ_ENV_UTILS_INT", Some("42"), || {
+            assert_eq!(EnvUtils::get_property_as_i32("ROCKETMQ_ENV_UTILS_INT", 0), 42);
+        });
     }
 
     #[test]
@@ -264,9 +216,9 @@ mod tests {
 
     #[test]
     fn returns_default_when_env_variable_as_i32_invalid() {
-        std::env::set_var("INVALID_INT_KEY", "not_a_number");
-        assert_eq!(EnvUtils::get_property_as_i32("INVALID_INT_KEY", 5), 5);
-        std::env::remove_var("INVALID_INT_KEY");
+        with_environment("ROCKETMQ_ENV_UTILS_INVALID_INT", Some("not_a_number"), || {
+            assert_eq!(EnvUtils::get_property_as_i32("ROCKETMQ_ENV_UTILS_INVALID_INT", 5), 5);
+        });
     }
 
     #[test]
@@ -277,9 +229,12 @@ mod tests {
 
     #[test]
     fn returns_default_when_env_variable_as_bool_invalid() {
-        std::env::set_var("INVALID_BOOL_KEY", "not_a_bool");
-        assert!(EnvUtils::get_property_as_bool("INVALID_BOOL_KEY", true));
-        assert!(!EnvUtils::get_property_as_bool("INVALID_BOOL_KEY", false));
-        std::env::remove_var("INVALID_BOOL_KEY");
+        with_environment("ROCKETMQ_ENV_UTILS_INVALID_BOOL", Some("not_a_bool"), || {
+            assert!(EnvUtils::get_property_as_bool("ROCKETMQ_ENV_UTILS_INVALID_BOOL", true));
+            assert!(!EnvUtils::get_property_as_bool(
+                "ROCKETMQ_ENV_UTILS_INVALID_BOOL",
+                false
+            ));
+        });
     }
 }

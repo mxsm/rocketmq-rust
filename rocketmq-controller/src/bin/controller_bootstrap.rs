@@ -30,8 +30,7 @@ use rocketmq_controller::ControllerManager;
 use rocketmq_controller::Node;
 use rocketmq_error::ControllerError;
 use rocketmq_model::common::mq_version::CURRENT_VERSION;
-use rocketmq_model::utils::env_utils::EnvUtils;
-use rocketmq_protocol::protocol::remoting_command;
+use rocketmq_protocol::protocol::remoting_command_facade::initialize_remoting_version;
 use rocketmq_runtime::common::parse_config_file;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeConfig;
@@ -121,11 +120,8 @@ fn controller_runtime_config() -> RuntimeConfig {
 }
 
 async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) -> Result<()> {
-    // Set remoting version
-    EnvUtils::put_property(
-        remoting_command::REMOTING_VERSION_KEY,
-        (CURRENT_VERSION as u32).to_string(),
-    );
+    initialize_remoting_version(CURRENT_VERSION as i32)
+        .context("failed to initialize the immutable Controller remoting version")?;
 
     // Parse command line and load configuration
     let (cli, config) = parse_command_line()?;

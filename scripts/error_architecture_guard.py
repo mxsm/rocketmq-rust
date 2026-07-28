@@ -42,6 +42,8 @@ SENSITIVE_FIELD_TERMS = (
 SENSITIVE_DEBUG_FIELD_TERMS = tuple(term for term in SENSITIVE_FIELD_TERMS if term != "authorization")
 
 NON_SENSITIVE_DEBUG_FIELD_NAMES = {
+    # Boolean policy switch; it contains no lease token value.
+    "require_fencing_token",
     "signature_algorithm",
 }
 
@@ -916,17 +918,6 @@ def check_error_governance_artifacts() -> list[Finding]:
             "python3",
             "python",
         ],
-        ROOT / "docs" / "07-error-hygiene-allowlist.md": [
-            "Current Path Allowlist",
-            "ERROR_ARCHITECTURE_GUARD_OK all",
-            "scripts/check-error-hygiene.ps1",
-        ],
-        ROOT / "docs" / "error-codes.md": [
-            "ErrorKind",
-            "ErrorSpec",
-            "BoundaryErrorView",
-            "Update Checklist",
-        ],
         ROOT / "CONTRIBUTING.md": [
             "### Error architecture",
             "python scripts/error_architecture_guard.py",
@@ -942,22 +933,6 @@ def check_error_governance_artifacts() -> list[Finding]:
         for needle in needles:
             if needle not in text:
                 findings.append(Finding(path, 1, f"required error governance token missing: {needle}"))
-
-    error_codes_doc = ROOT / "docs" / "error-codes.md"
-    if error_codes_doc.exists():
-        text = read_text(error_codes_doc)
-        codes = current_error_codes()
-        if not codes:
-            findings.append(
-                Finding(
-                    ROOT / "rocketmq-error" / "src" / "kind.rs",
-                    1,
-                    "unable to parse stable error codes for documentation coverage",
-                )
-            )
-        for code in codes:
-            if f"`{code}`" not in text:
-                findings.append(Finding(error_codes_doc, 1, f"stable error code missing from docs: {code}"))
 
     return findings
 

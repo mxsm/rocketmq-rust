@@ -12,93 +12,156 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::cell::UnsafeCell;
-use std::fs::File;
-use std::io;
-use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
+use std::sync::Mutex;
+use std::sync::MutexGuard;
 
-use rocketmq_store_local::mapped_file::MappedMemory;
+use rocketmq_store_local::mapped_file::MappedFileError;
+use rocketmq_store_local::mapped_file::MappedFileResult;
+use rocketmq_store_local::mapped_file::MappedWriteLease;
 
-/// Heap-backed mapping used to run the production mapped-copy boundary under Miri.
-#[derive(Clone)]
-struct MiriMappedMemory {
-    bytes: Arc<MiriMappedBytes>,
+/// Safe heap-backed owner used to exercise the production write-lease interface
+/// under Miri without relying on operating-system memory mapping support.
+struct SafeLeaseOwner {
+    bytes: Mutex<Vec<u8>>,
+    wrote_position: AtomicUsize,
+    writer: Mutex<()>,
 }
 
-struct MiriMappedBytes(UnsafeCell<Box<[u8]>>);
-
-// SAFETY: the allocation is stable, and the `MappedMemory` contract requires the mapped-file
-// owner to serialize mutation against all reads.
-unsafe impl Sync for MiriMappedBytes {}
-
-impl MiriMappedMemory {
-    fn new(len: usize) -> Self {
+impl SafeLeaseOwner {
+    fn new(capacity: usize) -> Self {
         Self {
-            bytes: Arc::new(MiriMappedBytes(UnsafeCell::new(vec![0; len].into_boxed_slice()))),
+            bytes: Mutex::new(vec![0; capacity]),
+            wrote_position: AtomicUsize::new(0),
+            writer: Mutex::new(()),
         }
     }
+
+    fn reserve_write(&self, required_space: usize) -> MappedFileResult<SafeWriteLease<'_>> {
+        let writer = self.writer.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let start_position = self.wrote_position.load(Ordering::Acquire);
+        let capacity = self.bytes.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).len();
+        if required_space == 0 {
+            return Err(MappedFileError::InvalidWriteCommit { reserved: 0, actual: 0 });
+        }
+        if start_position >= capacity {
+            return Err(MappedFileError::file_full(start_position, capacity as u64));
+        }
+
+        let reserved = required_space.min(capacity - start_position);
+        Ok(SafeWriteLease {
+            owner: self,
+            _writer: writer,
+            staging: vec![0; reserved],
+            start_position,
+        })
+    }
+
+    fn snapshot(&self) -> Vec<u8> {
+        self.bytes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
 }
 
-// SAFETY: the heap allocation remains live for every clone, mutable access is sequenced by
-// `DefaultMappedFile`, and regions are returned as independent immutable copies.
-unsafe impl MappedMemory for MiriMappedMemory {
-    type Region = Vec<u8>;
+struct SafeWriteLease<'a> {
+    owner: &'a SafeLeaseOwner,
+    _writer: MutexGuard<'a, ()>,
+    staging: Vec<u8>,
+    start_position: usize,
+}
 
-    fn map_mut(file: &File) -> io::Result<Self> {
-        let len = usize::try_from(file.metadata()?.len())
-            .map_err(|_| io::Error::other("mapped-file length does not fit usize"))?;
-        Ok(Self::new(len))
+impl MappedWriteLease for SafeWriteLease<'_> {
+    fn start_position(&self) -> usize {
+        self.start_position
     }
 
-    fn as_slice(&self) -> &[u8] {
-        // SAFETY: callers obey the `MappedMemory` sequencing contract documented above.
-        unsafe { &*self.bytes.0.get() }
+    fn capacity(&self) -> usize {
+        self.staging.len()
     }
 
-    fn as_mut_ptr(&self) -> *mut u8 {
-        // SAFETY: callers obey the `MappedMemory` sequencing contract documented above.
-        unsafe { (&mut *self.bytes.0.get()).as_mut_ptr() }
+    fn buffer_mut(&mut self) -> &mut [u8] {
+        &mut self.staging
     }
 
-    fn flush(&self) -> io::Result<()> {
-        Ok(())
-    }
+    fn commit(self, actual_bytes: usize, _store_timestamp: Option<u64>) -> MappedFileResult<usize> {
+        if actual_bytes == 0 || actual_bytes > self.capacity() {
+            return Err(MappedFileError::InvalidWriteCommit {
+                reserved: self.capacity(),
+                actual: actual_bytes,
+            });
+        }
+        let end_position = self
+            .start_position
+            .checked_add(actual_bytes)
+            .filter(|end| {
+                *end <= self
+                    .owner
+                    .bytes
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .len()
+            })
+            .ok_or_else(|| {
+                let capacity = self
+                    .owner
+                    .bytes
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .len();
+                MappedFileError::out_of_bounds(self.start_position, actual_bytes, capacity as u64)
+            })?;
 
-    fn flush_range(&self, _offset: usize, _len: usize) -> io::Result<()> {
-        Ok(())
-    }
-
-    fn region(&self, offset: usize, len: usize) -> Self::Region {
-        self.as_slice()[offset..offset + len].to_vec()
+        let mut bytes = self.owner.bytes.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        bytes[self.start_position..end_position].copy_from_slice(&self.staging[..actual_bytes]);
+        self.owner.wrote_position.store(end_position, Ordering::Release);
+        Ok(end_position)
     }
 }
 
 #[test]
-fn mapped_memory_copy_boundary_is_valid_under_miri() {
-    let mapping = MiriMappedMemory::new(16);
+fn write_lease_publishes_only_committed_bytes() {
+    let owner = SafeLeaseOwner::new(16);
+    let mut lease = owner.reserve_write(8).expect("safe lease reservation");
+    lease.buffer_mut()[..6].copy_from_slice(b"commit");
 
-    // SAFETY: this test has exclusive logical access to the mapping and the static source is a
-    // disjoint allocation.
-    unsafe {
-        mapping
-            .copy_from_slice(4, b"commit")
-            .expect("checked mapped-memory copy");
-    }
-
-    assert_eq!(&mapping.as_slice()[..4], &[0; 4]);
-    assert_eq!(&mapping.as_slice()[4..10], b"commit");
-    assert_eq!(&mapping.as_slice()[10..], &[0; 6]);
+    assert_eq!(lease.commit(6, None).expect("safe lease commit"), 6);
+    assert_eq!(&owner.snapshot()[..6], b"commit");
+    assert_eq!(&owner.snapshot()[6..], &[0; 10]);
 }
 
 #[test]
-fn mapped_memory_copy_rejects_invalid_ranges_before_pointer_arithmetic() {
-    let mapping = MiriMappedMemory::new(8);
-
-    // SAFETY: the test has exclusive logical access and both sources are disjoint. The method must
-    // reject each range before dereferencing its destination.
-    unsafe {
-        assert!(mapping.copy_from_slice(7, b"no").is_err());
-        assert!(mapping.copy_from_slice(usize::MAX, b"x").is_err());
+fn dropped_write_lease_does_not_publish_staged_bytes() {
+    let owner = SafeLeaseOwner::new(8);
+    {
+        let mut lease = owner.reserve_write(4).expect("safe lease reservation");
+        lease.buffer_mut().copy_from_slice(b"drop");
     }
-    assert_eq!(mapping.as_slice(), &[0; 8]);
+
+    assert_eq!(owner.wrote_position.load(Ordering::Acquire), 0);
+    assert_eq!(owner.snapshot(), vec![0; 8]);
+}
+
+#[test]
+fn invalid_commit_preserves_bytes_and_position() {
+    let owner = SafeLeaseOwner::new(8);
+    let lease = owner.reserve_write(4).expect("safe lease reservation");
+
+    assert!(lease.commit(5, None).is_err());
+    assert_eq!(owner.wrote_position.load(Ordering::Acquire), 0);
+    assert_eq!(owner.snapshot(), vec![0; 8]);
+}
+
+#[test]
+fn tail_reservation_is_bounded_by_remaining_capacity() {
+    let owner = SafeLeaseOwner::new(8);
+    let mut first = owner.reserve_write(6).expect("first safe lease reservation");
+    first.buffer_mut().copy_from_slice(b"first!");
+    assert_eq!(first.commit(6, None).expect("first safe lease commit"), 6);
+
+    let tail = owner.reserve_write(8).expect("tail safe lease reservation");
+    assert_eq!(tail.start_position(), 6);
+    assert_eq!(tail.capacity(), 2);
 }

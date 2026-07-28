@@ -19,8 +19,7 @@ use rocketmq_admin_core::client_adapter::ClientRuntime;
 use rocketmq_admin_core::client_adapter::ClientRuntimeConfig;
 use rocketmq_admin_core::client_adapter::TelemetryHandle;
 use rocketmq_model::common::mq_version::CURRENT_VERSION;
-use rocketmq_model::utils::env_utils::EnvUtils;
-use rocketmq_protocol::protocol::remoting_command;
+use rocketmq_protocol::protocol::remoting_command_facade::initialize_remoting_version;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 
@@ -75,10 +74,10 @@ fn admin_cli_runtime_config() -> RuntimeConfig {
 }
 
 async fn async_main(client_runtime: std::sync::Arc<ClientRuntime>) -> i32 {
-    EnvUtils::put_property(
-        remoting_command::REMOTING_VERSION_KEY,
-        (CURRENT_VERSION as u32).to_string(),
-    );
+    if let Err(error) = initialize_remoting_version(CURRENT_VERSION as i32) {
+        eprintln!("failed to initialize the immutable admin CLI remoting version: {error}");
+        return 1;
+    }
 
     let cli = RocketMQCli::parse_from_java_compatible_args();
     cli.handle(client_runtime).await

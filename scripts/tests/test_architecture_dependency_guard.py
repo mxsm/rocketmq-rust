@@ -76,7 +76,7 @@ class ArchitectureDependencyGuardTests(unittest.TestCase):
             temp = Path(temp_dir)
             metadata_file = temp / "metadata.json"
             selected_policy = policy_override or json.loads(POLICY.read_text(encoding="utf-8"))
-            if mode == "target" and complete_target:
+            if mode in {"transition", "target"} and complete_target:
                 fixture = copy.deepcopy(fixture)
                 existing = {item["name"] for item in fixture["packages"]}
                 for name in selected_policy["target_dag"]:
@@ -346,7 +346,7 @@ class ArchitectureDependencyGuardTests(unittest.TestCase):
                 result = self.run_guard(metadata([caller, package("rocketmq-client-rust")]))
                 self.assert_rule(result, "client-manifest-allowlist")
 
-    def test_client_source_allowlist_matches_caller_prefix_and_alias(self) -> None:
+    def test_client_source_allowlist_matches_caller_path_and_alias(self) -> None:
         manifest = "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/Cargo.toml"
         fixture = metadata(
             [
@@ -361,9 +361,12 @@ class ArchitectureDependencyGuardTests(unittest.TestCase):
         allowed = self.run_guard(
             fixture,
             source_files={
-                "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/client_adapter/ok.rs": (
+                "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/client_adapter.rs": (
                     "use rocketmq_client_rust::ClientConfig;\n"
-                )
+                ),
+                "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/client_adapter/consumer.rs": (
+                    "use rocketmq_client_rust::ClientConfig;\n"
+                ),
             },
         )
         self.assertNotIn("rule=client-source-allowlist", allowed.stdout)
@@ -391,7 +394,7 @@ class ArchitectureDependencyGuardTests(unittest.TestCase):
         renamed = self.run_guard(
             renamed_fixture,
             source_files={
-                "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/client_adapter/renamed.rs": (
+                "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/client_adapter.rs": (
                     "use renamed_client::ClientConfig;\n"
                 )
             },
@@ -692,6 +695,82 @@ use rocketmq_client_rust::producer::Producer;
         )
         result = self.run_guard(duplicate)
         self.assert_rule(result, "compatibility-manifest-target-growth")
+
+    def test_transition_allows_only_an_exact_unexpired_target_debt_edge(self) -> None:
+        policy = json.loads(POLICY.read_text(encoding="utf-8"))
+        policy["target_debt"]["entries"] = [
+            {
+                "caller": "rocketmq-controller",
+                "target": "rocketmq-auth",
+                "kind": "normal",
+                "path": "rocketmq-controller/Cargo.toml",
+                "alias": "rocketmq_auth",
+                "owner": "controller-security",
+                "reason": "fixture debt",
+                "remove_phase": "P2.1",
+                "remove_by": "2099-12-31",
+            }
+        ]
+        fixture = metadata(
+            [
+                package(
+                    "rocketmq-controller",
+                    [dependency("rocketmq-auth")],
+                    manifest_path="rocketmq-controller/Cargo.toml",
+                ),
+                package("rocketmq-auth"),
+            ]
+        )
+
+        transition = self.run_guard(
+            fixture,
+            mode="transition",
+            policy_override=policy,
+        )
+        self.assertEqual(0, transition.returncode, transition.stdout + transition.stderr)
+        self.assertIn("TARGET_DEBT_LEDGER active_edges=1 entries=1", transition.stdout)
+
+        strict = self.run_guard(fixture, policy_override=policy)
+        self.assert_rule(strict, "target-dag-direct-dependency")
+
+    def test_transition_rejects_stale_and_expired_target_debt(self) -> None:
+        policy = json.loads(POLICY.read_text(encoding="utf-8"))
+        entry = {
+            "caller": "rocketmq-controller",
+            "target": "rocketmq-auth",
+            "kind": "normal",
+            "path": "rocketmq-controller/Cargo.toml",
+            "alias": "rocketmq_auth",
+            "owner": "controller-security",
+            "reason": "fixture debt",
+            "remove_phase": "P2.1",
+            "remove_by": "2099-12-31",
+        }
+        policy["target_debt"]["entries"] = [entry]
+        stale = self.run_guard(
+            metadata([package("rocketmq-controller"), package("rocketmq-auth")]),
+            mode="transition",
+            policy_override=policy,
+        )
+        self.assert_rule(stale, "target-debt-stale")
+
+        expired_policy = copy.deepcopy(policy)
+        expired_policy["target_debt"]["entries"][0]["remove_by"] = "2000-01-01"
+        expired = self.run_guard(
+            metadata(
+                [
+                    package(
+                        "rocketmq-controller",
+                        [dependency("rocketmq-auth")],
+                        manifest_path="rocketmq-controller/Cargo.toml",
+                    ),
+                    package("rocketmq-auth"),
+                ]
+            ),
+            mode="transition",
+            policy_override=expired_policy,
+        )
+        self.assert_rule(expired, "target-debt-expired")
 
     def test_test_dependency_allowlist_cannot_promote_to_normal(self) -> None:
         accepted = metadata(

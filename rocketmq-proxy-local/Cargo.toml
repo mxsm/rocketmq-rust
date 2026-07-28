@@ -35,7 +35,6 @@ tieredstore = ["rocketmq-broker/tieredstore"]
 rocketmq-broker = { workspace = true }
 rocketmq-error = { workspace = true }
 rocketmq-model = { workspace = true }
-rocketmq-observability = { workspace = true }
 rocketmq-proxy-core = { workspace = true }
 rocketmq-runtime = { workspace = true }
 

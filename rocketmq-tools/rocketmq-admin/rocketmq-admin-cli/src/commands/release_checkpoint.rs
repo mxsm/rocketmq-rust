@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -27,6 +28,7 @@ use rocketmq_admin_core::core::release_checkpoint::verify_checkpoint_set_restore
 use rocketmq_admin_core::core::security::AdminCredentials;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_error::Sensitive;
 use rocketmq_protocol::protocol::body::release_checkpoint::ControllerReleaseSnapshotManifest;
 use rocketmq_protocol::protocol::body::release_checkpoint::MaintenanceCapabilitiesResponse;
 use rocketmq_protocol::protocol::body::release_checkpoint::ReleaseCheckpointRestoreVerification;
@@ -83,7 +85,7 @@ impl CapabilitiesCommand {
     }
 }
 
-#[derive(Clone, Debug, Args)]
+#[derive(Clone, Args)]
 pub struct CreateSetCommand {
     #[arg(long, value_name = "FILE")]
     controller_manifest: PathBuf,
@@ -99,6 +101,21 @@ pub struct CreateSetCommand {
     max_store_members: u32,
     #[arg(long, value_name = "FILE")]
     output: PathBuf,
+}
+
+impl fmt::Debug for CreateSetCommand {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CreateSetCommand")
+            .field("controller_manifest", &self.controller_manifest)
+            .field("store_manifest", &self.store_manifest)
+            .field("release_id", &self.release_id)
+            .field("policy_version", &self.policy_version)
+            .field("fencing_token", &Sensitive::new(self.fencing_token))
+            .field("max_store_members", &self.max_store_members)
+            .field("output", &self.output)
+            .finish()
+    }
 }
 
 impl CreateSetCommand {

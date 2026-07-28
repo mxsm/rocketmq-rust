@@ -44,6 +44,22 @@ env:
   ROCKSDB_DISABLE_JEMALLOC: 1
 
 jobs:
+  error-architecture:
+    name: Error Architecture
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Check error architecture
+        run: python scripts/error_architecture_guard.py
+
   # =========================
   # Architecture migration guards
   # =========================
@@ -77,8 +93,20 @@ jobs:
       - name: Check dependency baseline
         run: python scripts/architecture_dependency_guard.py --mode baseline
 
+      - name: Check dependency transition
+        run: python scripts/architecture_dependency_guard.py --mode transition
+
       - name: Check architecture release package
         run: python scripts/architecture_release_guard.py
+
+      - name: Check production environment writes
+        run: python scripts/environment_write_guard.py
+
+      - name: Check Rust hygiene
+        run: python scripts/rust_hygiene_guard.py
+
+      - name: Check Trait policy inventory
+        run: python scripts/trait_policy_guard.py
 
       - name: Check architecture performance profiles
         run: python scripts/architecture_performance_guard.py --validate-profiles
@@ -94,6 +122,43 @@ jobs:
 
       - name: Check stable nightly surface baseline
         run: python scripts/stable_surface_guard.py --mode baseline
+
+  architecture-target:
+    name: Architecture Strict Target (visible debt)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Set up Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Run strict target and retain the debt report
+        id: strict-target
+        continue-on-error: true
+        run: python scripts/architecture_dependency_guard.py --mode target --output target/architecture-dependency-target.json
+
+      - name: Publish strict target summary
+        if: always()
+        shell: bash
+        run: |
+          echo "### Strict architecture target" >> "$GITHUB_STEP_SUMMARY"
+          echo "Result: ${{ steps.strict-target.outcome }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "This check becomes required when the P2.1/P2.2 target debt ledger is empty." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload strict target report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: architecture-dependency-target
+          path: target/architecture-dependency-target.json
+          if-no-files-found: error
 
   # =========================
   # Format + Clippy + Shear

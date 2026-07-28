@@ -13,10 +13,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Validate the M09 R0/R1/next-major architecture release package."""
+"""Validate the active architecture release topology without legacy resources."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import date
 import json
 import re
 import sys
@@ -29,562 +31,381 @@ ROOT = Path(__file__).resolve().parents[1]
 PLAN_PATH = ROOT / "scripts" / "architecture-release-plan.json"
 POLICY_PATH = ROOT / "scripts" / "architecture-dependency-policy.json"
 BASELINE_PATH = ROOT / "scripts" / "architecture-dependency-baseline.json"
-ARC_MUT_BASELINE_PATH = ROOT / "scripts" / "arc-mut-baseline.json"
 CI_PATH = ROOT / ".github" / "workflows" / "rocketmq-rust-ci.yaml"
-PROXY_MANIFEST = ROOT / "rocketmq-proxy" / "Cargo.toml"
-
-REQUIRED_CHAIN = [
-    "model/error/runtime/security/store-api",
-    "protocol/observability",
-    "transport/auth/local/tiered",
-    "rocks",
-    "facade",
-    "service/tool",
-]
-NEW_CRATES = {
-    "rocketmq-model",
-    "rocketmq-protocol",
-    "rocketmq-transport",
-    "rocketmq-security-api",
-    "rocketmq-store-api",
-    "rocketmq-store-local",
-    "rocketmq-store-rocksdb",
-    "rocketmq-proxy-core",
-    "rocketmq-proxy-cluster",
-    "rocketmq-proxy-local",
-}
 EDGE_FIELDS = ("caller", "target", "kind", "path", "alias")
-REQUIRED_ARC_MUT_DEPRECATIONS = {
-    "arc-mut-type": (
-        "rocketmq/src/arc_mut.rs",
-        "pub struct ArcMut",
-        "use std::sync::Arc with RwLock, Mutex, atomics, or an exclusive owner",
-    ),
-    "weak-arc-mut-type": (
-        "rocketmq/src/arc_mut.rs",
-        "pub struct WeakArcMut",
-        "use std::sync::Weak with an explicit lock or immutable state",
-    ),
-    "sync-unsafe-cell-wrapper-type": (
-        "rocketmq/src/arc_mut.rs",
-        "pub struct SyncUnsafeCellWrapper",
-        "use parking_lot::RwLock or an exclusive owner",
-    ),
-    "arc-mut-root-reexport": (
-        "rocketmq/src/lib.rs",
-        "pub use arc_mut::ArcMut;",
-        "use std::sync::Arc with RwLock, Mutex, atomics, or an exclusive owner",
-    ),
-    "weak-arc-mut-root-reexport": (
-        "rocketmq/src/lib.rs",
-        "pub use arc_mut::WeakArcMut;",
-        "use std::sync::Weak with an explicit lock or immutable state",
-    ),
-    "sync-unsafe-cell-wrapper-root-reexport": (
-        "rocketmq/src/lib.rs",
-        "pub use arc_mut::SyncUnsafeCellWrapper;",
-        "use parking_lot::RwLock or an exclusive owner",
-    ),
-    "generic-message-store": (
-        "rocketmq-store/src/message_store.rs",
-        "pub enum GenericMessageStore",
-        "use OwnedMessageStore and inject narrow Store capabilities into shared consumers",
-    ),
-    "local-file-shared-root-wiring": (
-        "rocketmq-store/src/message_store/local_file_message_store.rs",
-        "pub fn set_message_store_arc(",
-        "use LocalFileMessageStore::wire_owned_root_dependencies",
-    ),
-    "timer-full-store-field": (
-        "rocketmq-store/src/timer/timer_message_store.rs",
-        "pub default_message_store:",
-        "use new_with_message_store_config or wire_owned_root_dependencies",
-    ),
-    "timer-full-store-constructor": (
-        "rocketmq-store/src/timer/timer_message_store.rs",
-        "pub fn new(default_message_store:",
-        "use new_with_message_store_config or wire_owned_root_dependencies",
-    ),
-    "timer-full-store-config-constructor": (
-        "rocketmq-store/src/timer/timer_message_store.rs",
-        "pub fn new_with_config(",
-        "use new_with_message_store_config or wire_owned_root_dependencies",
-    ),
-    "timer-full-store-setter": (
-        "rocketmq-store/src/timer/timer_message_store.rs",
-        "pub fn set_default_message_store(",
-        "use new_with_message_store_config or wire_owned_root_dependencies",
-    ),
-}
-REQUIRED_ARC_MUT_REPLACEMENTS = {
-    "owned-message-store": (
-        "rocketmq-store/src/message_store/owned_message_store.rs",
-        "pub enum OwnedMessageStore",
-    ),
-    "owned-root-wiring": (
-        "rocketmq-store/src/message_store/local_file_message_store.rs",
-        "pub fn wire_owned_root_dependencies(",
-    ),
-    "timer-config-constructor": (
-        "rocketmq-store/src/timer/timer_message_store.rs",
-        "pub fn new_with_message_store_config(",
-    ),
-}
-SCOPE_MARKER = (
-    "<!-- architecture-refactor-scope: "
-    "phases=1-3; execution=R01-R18,R20,R22-R25; "
-    "follow-up=R19,R21,R26-R31 -->"
-)
-SCOPE_DOCUMENTS = (
-    "docs/architecture-refactor-design.md",
-    "docs/plans/architecture-refactor-migration/README.md",
-    "docs/plans/architecture-refactor-migration/CHECKLIST.md",
-    "docs/plans/architecture-refactor-migration/REMAINING-TASKS.md",
-    "docs/plans/architecture-refactor-migration/phase-4-ai-native/12-ai-native-operations.md",
-)
-REQUIRED_SCOPE_SUMMARIES = {
-    "docs/plans/architecture-refactor-migration/README.md": (
-        "当前范围 76/76 工作包完成",
-        "23 个最小可审查单元已完成 23 个",
-        "当前范围无未完成项",
-    ),
-    "docs/plans/architecture-refactor-migration/CHECKLIST.md": (
-        "当前范围只统计 Phase 1～3 的 76 个顶层",
-        "执行层清单共 23 个最小可审查单元",
-        "当前范围无未完成项",
-    ),
-    "docs/plans/architecture-refactor-migration/REMAINING-TASKS.md": (
-        "当前范围的正式工作包已完成 76/76",
-        "**23 个最小可审查单元**",
-        "当前范围无未完成项",
-    ),
-}
-REQUIRED_OBJECTIVE_SCOPE = {
-    "architecture_refactor_phases": ["Phase 1", "Phase 2", "Phase 3"],
-    "architecture_refactor_work_packages": 76,
-    "architecture_refactor_execution_items": [
-        *[f"R{index:02d}" for index in range(1, 19)],
-        "R20",
-        *[f"R{index:02d}" for index in range(22, 26)],
-    ],
-    "remaining_execution_items": [],
-    "immediate_execution_items": [],
-    "closeout_execution_items": [],
-    "excluded_platform_follow_up_items": ["R21"],
-    "excluded_performance_follow_up_items": ["R19"],
-    "excluded_follow_up_phase": "Phase 4 AI Native",
-    "excluded_follow_up_items": [
-        f"R{index:02d}" for index in range(26, 32)
-    ],
-    "constraint": (
-        "R19 target-hardware performance acceptance, R21 platform evidence, "
-        "and the Phase 4 design remain available as separate follow-up "
-        "proposals, but R19, R21, and R26-R31 do not contribute to "
-        "architecture-refactor progress, remaining-task counts, or completion "
-        "gates."
-    ),
-}
-REQUIRED_CURRENT_SCOPE_CLOSEOUT = {
-    "item": "R25",
-    "status": "completed",
-    "candidate_commit": "1571e73fd458a7c493172787e6c2d001bd0dcba6",
-    "candidate_subject": "[ISSUE #8702]♻️Remove shared-mutation compatibility APIs (#8703)",
-    "signed_on": "2026-07-24",
-    "signatures": {
-        "ARCH": "approved",
-        "REV": "approved",
-        "TEST": "approved",
-        "HUMAN": "approved",
-    },
-    "scope": "R01-R18,R20,R22-R25",
-    "follow_up": "R19,R21,R26-R31",
-}
 
 
-def load_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+@dataclass(frozen=True)
+class Finding:
+    code: str
+    path: str
+    detail: str
+
+    def render(self) -> str:
+        return f"RELEASE_FINDING code={self.code} path={self.path} detail={self.detail}"
 
 
-def edge_identity(edge: dict[str, Any]) -> tuple[str, ...]:
-    return tuple(str(edge[field]) for field in EDGE_FIELDS)
+def load_json(path: Path, label: str, findings: list[Finding]) -> dict[str, Any] | None:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        findings.append(Finding("input-invalid", path.as_posix(), f"{label}: {error}"))
+        return None
+    if not isinstance(value, dict):
+        findings.append(Finding("input-invalid", path.as_posix(), f"{label} must be a JSON object"))
+        return None
+    return value
 
 
-def baseline_edges(baseline: dict[str, Any], window: str) -> set[tuple[str, ...]]:
-    return {
-        edge_identity(edge)
-        for edge in baseline["compatibility_manifest_exceptions"]
-        if edge["remove_by"] == window
-    }
+def normalized_relative_path(value: object) -> str | None:
+    if (
+        not isinstance(value, str)
+        or not value
+        or "\\" in value
+        or Path(value).is_absolute()
+        or ".." in Path(value).parts
+    ):
+        return None
+    return value
 
 
-def expand_r1_consumers(plan: dict[str, Any]) -> set[tuple[str, ...]]:
-    edges: set[tuple[str, ...]] = set()
-    for consumer in plan["r1"]["consumers"]:
-        for target in consumer["targets"]:
-            edges.add(
-                (
-                    consumer["caller"],
-                    target,
-                    "normal",
-                    consumer["path"],
-                    target.replace("-", "_"),
+def read_toml(path: Path, label: str, findings: list[Finding]) -> dict[str, Any] | None:
+    try:
+        value = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+        findings.append(Finding("manifest-invalid", path.as_posix(), f"{label}: {error}"))
+        return None
+    if not isinstance(value, dict):
+        findings.append(Finding("manifest-invalid", path.as_posix(), f"{label} must be a TOML table"))
+        return None
+    return value
+
+
+def workspace_manifests(root: Path, findings: list[Finding]) -> dict[str, str]:
+    root_manifest_path = root / "Cargo.toml"
+    root_manifest = read_toml(root_manifest_path, "workspace manifest", findings)
+    if root_manifest is None:
+        return {}
+    members = root_manifest.get("workspace", {}).get("members")
+    if not isinstance(members, list) or any(not isinstance(item, str) for item in members):
+        findings.append(
+            Finding(
+                "manifest-section-missing",
+                "Cargo.toml",
+                "workspace.members must be a list of manifest directories",
+            )
+        )
+        return {}
+
+    packages: dict[str, str] = {}
+    for member in members:
+        relative = normalized_relative_path(member)
+        if relative is None:
+            findings.append(Finding("manifest-path-invalid", "Cargo.toml", f"workspace member={member!r}"))
+            continue
+        manifest_path = root / relative / "Cargo.toml"
+        manifest = read_toml(manifest_path, "package manifest", findings)
+        if manifest is None:
+            continue
+        package = manifest.get("package")
+        name = package.get("name") if isinstance(package, dict) else None
+        if not isinstance(name, str) or not name:
+            findings.append(
+                Finding(
+                    "manifest-section-missing",
+                    manifest_path.relative_to(root).as_posix(),
+                    "package.name is required",
                 )
             )
-    return edges
+            continue
+        if name in packages:
+            findings.append(
+                Finding(
+                    "package-duplicate",
+                    manifest_path.relative_to(root).as_posix(),
+                    f"package={name}",
+                )
+            )
+            continue
+        packages[name] = f"{relative}/Cargo.toml"
+    return packages
 
 
-def manifest_has_edge(edge: tuple[str, ...]) -> bool:
-    _, target, kind, relative_path, alias = edge
-    manifest = tomllib.loads((ROOT / relative_path).read_text(encoding="utf-8"))
-    section = "dev-dependencies" if kind == "dev" else "dependencies"
-    dependencies = manifest.get(section, {})
-    manifest_key = alias if alias in dependencies else target
-    dependency = dependencies.get(manifest_key)
-    if dependency is None:
-        return False
-    package = dependency.get("package") if isinstance(dependency, dict) else None
-    return (package or manifest_key.replace("_", "-")) == target
+def edge_identity(edge: dict[str, Any]) -> tuple[str, str, str, str, str] | None:
+    if not all(isinstance(edge.get(field), str) and edge[field] for field in EDGE_FIELDS):
+        return None
+    return tuple(edge[field] for field in EDGE_FIELDS)  # type: ignore[return-value]
 
 
-def check_release_topology(
-    plan: dict[str, Any], policy: dict[str, Any], findings: list[str]
-) -> None:
-    topology = plan["release_topology"]
-    if topology.get("required_chain") != REQUIRED_CHAIN:
-        findings.append("release topology does not preserve the approved six-stage chain")
-
-    publish_order = topology.get("publish_order", [])
-    target_dag = policy["target_dag"]
-    if len(publish_order) != len(set(publish_order)):
-        findings.append("release publish order contains duplicate packages")
-    if set(publish_order) != set(target_dag):
-        missing = sorted(set(target_dag) - set(publish_order))
-        extra = sorted(set(publish_order) - set(target_dag))
-        findings.append(f"release publish order package mismatch: missing={missing}, extra={extra}")
+def manifest_has_edge(edge: dict[str, Any], root: Path, findings: list[Finding]) -> None:
+    identity = edge_identity(edge)
+    if identity is None:
+        findings.append(Finding("edge-schema-invalid", "release-plan", f"edge={edge!r}"))
         return
+    _caller, target, kind, relative_path, alias = identity
+    normalized = normalized_relative_path(relative_path)
+    if normalized is None or not normalized.endswith("Cargo.toml"):
+        findings.append(Finding("manifest-path-invalid", relative_path, "edge path must identify Cargo.toml"))
+        return
+    manifest = read_toml(root / normalized, "edge manifest", findings)
+    if manifest is None:
+        return
+    section_name = {
+        "normal": "dependencies",
+        "dev": "dev-dependencies",
+        "build": "build-dependencies",
+    }.get(kind)
+    if section_name is None:
+        findings.append(Finding("edge-kind-invalid", normalized, f"kind={kind}"))
+        return
+    section = manifest.get(section_name)
+    if not isinstance(section, dict):
+        findings.append(
+            Finding("manifest-section-missing", normalized, f"section={section_name}")
+        )
+        return
+    manifest_key = alias if alias in section else target
+    specification = section.get(manifest_key)
+    if specification is None:
+        findings.append(
+            Finding(
+                "dependency-missing",
+                normalized,
+                f"section={section_name} alias={alias} target={target}",
+            )
+        )
+        return
+    package = specification.get("package") if isinstance(specification, dict) else None
+    actual_target = package or manifest_key.replace("_", "-")
+    if actual_target != target:
+        findings.append(
+            Finding(
+                "dependency-target-mismatch",
+                normalized,
+                f"alias={alias} expected={target} actual={actual_target}",
+            )
+        )
 
-    position = {package: index for index, package in enumerate(publish_order)}
-    for caller, dependencies in target_dag.items():
-        for dependency in dependencies:
-            if position[dependency] >= position[caller]:
+
+def validate_design_source(plan: dict[str, Any], root: Path, findings: list[Finding]) -> None:
+    source = plan.get("design_source")
+    if not isinstance(source, str) or "#" not in source:
+        findings.append(Finding("design-source-invalid", "release-plan", "path#section is required"))
+        return
+    relative, fragment = source.split("#", 1)
+    normalized = normalized_relative_path(relative)
+    if normalized is None or not normalized.startswith("rocketmq-doc/en/") or not fragment:
+        findings.append(
+            Finding("design-source-invalid", str(source), "source must be a rocketmq-doc/en path#section")
+        )
+        return
+    path = root / normalized
+    try:
+        content = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        findings.append(Finding("design-source-missing", normalized, str(error)))
+        return
+    headings = re.findall(r"^#{1,6}\s+(.+?)\s*$", content, re.MULTILINE)
+    slugs = {
+        re.sub(r"-+", "-", re.sub(r"[^a-z0-9 -]", "", heading.lower()).replace(" ", "-")).strip("-")
+        for heading in headings
+    }
+    if fragment not in slugs:
+        findings.append(Finding("design-section-missing", normalized, f"section={fragment}"))
+
+
+def validate_release_topology(
+    plan: dict[str, Any],
+    policy: dict[str, Any],
+    packages: dict[str, str],
+    root: Path,
+    findings: list[Finding],
+) -> None:
+    topology = plan.get("release_topology")
+    if not isinstance(topology, dict):
+        findings.append(Finding("plan-section-missing", "release-plan", "release_topology"))
+        return
+    order = topology.get("publish_order")
+    if not isinstance(order, list) or any(not isinstance(item, str) for item in order):
+        findings.append(Finding("publish-order-invalid", "release-plan", "publish_order must be a string list"))
+        return
+    if len(order) != len(set(order)):
+        findings.append(Finding("publish-order-duplicate", "release-plan", "duplicate package"))
+
+    target_dag = policy.get("target_dag")
+    if not isinstance(target_dag, dict):
+        findings.append(Finding("policy-section-missing", "dependency-policy", "target_dag"))
+        return
+    expected = set(target_dag)
+    actual = set(order)
+    if actual != expected:
+        findings.append(
+            Finding(
+                "publish-package-mismatch",
+                "release-plan",
+                f"missing={sorted(expected - actual)} extra={sorted(actual - expected)}",
+            )
+        )
+    if set(packages) != expected:
+        findings.append(
+            Finding(
+                "workspace-package-mismatch",
+                "Cargo.toml",
+                f"missing={sorted(expected - set(packages))} extra={sorted(set(packages) - expected)}",
+            )
+        )
+
+    dependencies: dict[str, set[str]] = {}
+    for caller, values in target_dag.items():
+        if not isinstance(values, list) or any(not isinstance(item, str) for item in values):
+            findings.append(Finding("target-dag-invalid", "dependency-policy", f"caller={caller}"))
+            continue
+        dependencies[caller] = set(values)
+    target_debt = policy.get("target_debt", {}).get("entries", [])
+    if not isinstance(target_debt, list):
+        findings.append(Finding("policy-section-missing", "dependency-policy", "target_debt.entries"))
+        target_debt = []
+    for edge in target_debt:
+        if not isinstance(edge, dict):
+            findings.append(Finding("edge-schema-invalid", "dependency-policy", f"edge={edge!r}"))
+            continue
+        identity = edge_identity(edge)
+        if identity is None:
+            findings.append(Finding("edge-schema-invalid", "dependency-policy", f"edge={edge!r}"))
+            continue
+        caller, target, _kind, _path, _alias = identity
+        remove_by = edge.get("remove_by")
+        try:
+            expired = not isinstance(remove_by, str) or date.fromisoformat(remove_by) < date.today()
+        except ValueError:
+            expired = True
+        if expired:
+            findings.append(
+                Finding("target-debt-expired", edge["path"], f"caller={caller} target={target}")
+            )
+        dependencies.setdefault(caller, set()).add(target)
+        manifest_has_edge(edge, root, findings)
+
+    position = {package: index for index, package in enumerate(order)}
+    for caller, targets in dependencies.items():
+        for target in targets:
+            if caller not in position or target not in position:
+                continue
+            if position[target] >= position[caller]:
                 findings.append(
-                    f"publish order violation: {dependency} must precede {caller}"
+                    Finding(
+                        "publish-order-violation",
+                        "release-plan",
+                        f"dependency={target} caller={caller}",
+                    )
                 )
 
 
-def check_release_windows(
-    plan: dict[str, Any], baseline: dict[str, Any], findings: list[str]
-) -> None:
-    new_crates = {item["package"] for item in plan["r0"]["new_crates"]}
-    if new_crates != NEW_CRATES or len(plan["r0"]["new_crates"]) != 10:
-        findings.append("R0 new-crate inventory must contain the exact ten approved crates")
-    for item in plan["r0"]["new_crates"]:
-        if not (ROOT / item["path"]).is_file():
-            findings.append(f"R0 new crate manifest is missing: {item['path']}")
-
-    planned_r1 = expand_r1_consumers(plan)
-    recorded_r1 = baseline_edges(baseline, "R1")
-    if planned_r1 != recorded_r1 or plan["r1"].get("expected_edges") != 29:
-        findings.append(
-            "R1 consumer plan must exactly match the 29-edge compatibility baseline"
-        )
-
-    planned_next_major = {
-        edge_identity(edge) for edge in plan["next_major"]["dependency_edges"]
-    }
-    recorded_next_major = baseline_edges(baseline, "next-major")
-    if (
-        planned_next_major != recorded_next_major
-        or plan["next_major"].get("expected_edges") != 4
-    ):
-        findings.append(
-            "next-major plan must exactly match the four-edge compatibility baseline"
-        )
-
-    preserved = {
-        edge_identity(edge) for edge in plan["long_term"]["preserved_edges"]
-    }
-    recorded_long_term = baseline_edges(baseline, "long-term")
-    if preserved != recorded_long_term or plan["long_term"].get("expected_edges") != 2:
-        findings.append("long-term plan must preserve the two approved composition edges")
-
-    for edge in sorted(planned_r1 | planned_next_major | preserved):
-        if not manifest_has_edge(edge):
-            findings.append(
-                "release package removed a compatibility edge before its approved window: "
-                + "|".join(edge)
-            )
-
-
-def check_proxy_activation(plan: dict[str, Any], findings: list[str]) -> None:
-    fixture_path = ROOT / plan["next_major"]["proxy_feature_fixture"]
-    fixture = tomllib.loads(fixture_path.read_text(encoding="utf-8"))
-    proxy = tomllib.loads(PROXY_MANIFEST.read_text(encoding="utf-8"))
-    if fixture.get("activation_window") != "next-major":
-        findings.append("Proxy feature fixture activation window is not next-major")
-
-    current_features = proxy.get("features", {})
-    for feature in ("cluster-mode", "local-mode", "compat-all-modes"):
-        if feature in current_features:
-            findings.append(f"Proxy next-major feature was activated early: {feature}")
-    for dependency in ("rocketmq-proxy-cluster", "rocketmq-proxy-local"):
-        specification = proxy.get("dependencies", {}).get(dependency)
-        if not isinstance(specification, dict) or specification.get("optional", False):
-            findings.append(
-                f"Proxy adapter dependency changed before next-major: {dependency}"
-            )
-
-
-def check_usage_and_approval(plan: dict[str, Any], findings: list[str]) -> None:
-    approval = plan.get("human_approval", {})
-    if approval.get("status") != "approved":
-        findings.append("relative release windows and notification plan lack Human approval")
-    if approval.get("destructive_removal") != "approved-early-human-override":
-        findings.append("R09/R18 early removal lacks the explicit Human override")
-    if approval.get("recorded_on") != "2026-07-24":
-        findings.append("R09/R18 Human override date is missing or changed")
-
-    external = plan.get("external_usage", {})
-    if len(external.get("collection_sources", [])) < 4:
-        findings.append("external usage collection must cover at least four independent sources")
-    gates = external.get("removal_gates", {})
-    expected_gates = {
-        "minimum_deprecation_releases": 2,
-        "minimum_major_boundaries": 1,
-        "workspace_and_standalone_internal_usages": 0,
-        "unresolved_high_impact_external_consumers": 0,
-        "migration_guide_published": True,
-        "release_manager_and_human_approval_required": True,
-    }
-    if gates != expected_gates:
-        findings.append("external usage removal gates differ from the approved thresholds")
-    if len(external.get("notification_channels", [])) < 4:
-        findings.append("external notification plan must contain at least four channels")
-
-
-def check_arc_mut_deprecations(
+def validate_compatibility_windows(
     plan: dict[str, Any],
-    findings: list[str],
-    source_overrides: dict[str, str] | None = None,
+    baseline: dict[str, Any],
+    root: Path,
+    findings: list[Finding],
 ) -> None:
-    policy = plan.get("arc_mut_deprecation", {})
-    if policy.get("since") != "1.0.0":
-        findings.append("ArcMut compatibility deprecation must start in 1.0.0")
-    if policy.get("minimum_deprecation_releases") != 2:
-        findings.append("ArcMut removal must retain two deprecation releases")
-    if policy.get("minimum_major_boundaries") != 1:
-        findings.append("ArcMut historical policy must retain one major-version boundary")
-    if policy.get("destructive_removal") != "completed-human-override":
-        findings.append("ArcMut destructive removal must record the completed Human override")
-    expected_override = {
-        "approved_on": "2026-07-24",
-        "approved_role": "HUMAN",
-        "decision": "remove-before-release-window",
-        "rollback_release": "v0.9.0",
-        "target_hardware_performance": "excluded-follow-up",
-    }
-    if policy.get("human_override") != expected_override:
-        findings.append("ArcMut Human override record differs from the approved decision")
-
-    surfaces = policy.get("surfaces", [])
-    observed = {
-        surface.get("id"): (
-            surface.get("path"),
-            surface.get("declaration"),
-            surface.get("note"),
-        )
-        for surface in surfaces
-        if isinstance(surface, dict)
-    }
-    if observed != REQUIRED_ARC_MUT_DEPRECATIONS or len(surfaces) != len(observed):
-        findings.append("ArcMut removal inventory differs from the approved 12-surface contract")
-
-    replacements = policy.get("canonical_replacements", [])
-    observed_replacements = {
-        replacement.get("id"): (
-            replacement.get("path"),
-            replacement.get("declaration"),
-        )
-        for replacement in replacements
-        if isinstance(replacement, dict)
-    }
-    if (
-        observed_replacements != REQUIRED_ARC_MUT_REPLACEMENTS
-        or len(replacements) != len(observed_replacements)
-    ):
-        findings.append("ArcMut canonical replacement inventory differs from the approved contract")
-
-    for surface_id, (relative_path, declaration, _note) in REQUIRED_ARC_MUT_DEPRECATIONS.items():
-        path = ROOT / relative_path
-        if source_overrides is not None and relative_path in source_overrides:
-            content = source_overrides[relative_path]
-        elif path.is_file():
-            content = path.read_text(encoding="utf-8")
-        else:
-            content = ""
-
-        if declaration in content:
-            findings.append(f"ArcMut removed surface returned: {surface_id}")
-
-    for replacement_id, (relative_path, declaration) in REQUIRED_ARC_MUT_REPLACEMENTS.items():
-        path = ROOT / relative_path
-        if source_overrides is not None and relative_path in source_overrides:
-            content = source_overrides[relative_path]
-        elif path.is_file():
-            content = path.read_text(encoding="utf-8")
-        else:
-            findings.append(f"ArcMut replacement source is missing: {relative_path}")
-            continue
-
-        if content.count(declaration) != 1:
-            findings.append(f"ArcMut replacement declaration must be unique: {replacement_id}")
-            continue
-        declaration_index = content.index(declaration)
-        prefix = content[:declaration_index]
-        attribute_block = prefix[prefix.rfind("\n\n") + 2 :]
-        if re.search(r"#\[\s*deprecated(?:\s*\(|\s*\])", attribute_block):
-            findings.append(f"ArcMut canonical replacement is deprecated: {replacement_id}")
-        if replacement_id == "owned-message-store" and "#[doc(hidden)]" in attribute_block:
-            findings.append("OwnedMessageStore canonical replacement is hidden from Rustdoc")
-
-    arc_mut_baseline = load_json(ARC_MUT_BASELINE_PATH)
-    if arc_mut_baseline.get("entries") != []:
-        findings.append("ArcMut baseline must be empty after the approved removal")
-
-
-def check_objective_scope(
-    plan: dict[str, Any],
-    findings: list[str],
-    source_overrides: dict[str, str] | None = None,
-) -> None:
-    if plan.get("objective_scope") != REQUIRED_OBJECTIVE_SCOPE:
+    windows = plan.get("compatibility_windows")
+    if not isinstance(windows, dict):
+        findings.append(Finding("plan-section-missing", "release-plan", "compatibility_windows"))
+        return
+    edges = windows.get("preserved_edges")
+    if not isinstance(edges, list) or any(not isinstance(edge, dict) for edge in edges):
+        findings.append(Finding("edge-schema-invalid", "release-plan", "preserved_edges"))
+        return
+    baseline_edges = baseline.get("compatibility_manifest_exceptions")
+    if not isinstance(baseline_edges, list):
         findings.append(
-            "architecture-refactor objective scope must exclude R19 target-hardware "
-            "performance, R21 platform evidence, and Phase 4 R26-R31 as follow-up work"
+            Finding("baseline-section-missing", "dependency-baseline", "compatibility_manifest_exceptions")
         )
-    if plan.get("current_scope_closeout") != REQUIRED_CURRENT_SCOPE_CLOSEOUT:
+        return
+    expected = {
+        (*identity, edge.get("remove_by"))
+        for edge in baseline_edges
+        if isinstance(edge, dict) and (identity := edge_identity(edge)) is not None
+    }
+    actual = {
+        (*identity, edge.get("remove_by"))
+        for edge in edges
+        if (identity := edge_identity(edge)) is not None
+    }
+    if actual != expected or len(actual) != len(edges):
         findings.append(
-            "R25 closeout must bind all four approvals to the frozen current-scope candidate"
+            Finding(
+                "compatibility-window-mismatch",
+                "release-plan",
+                f"expected={len(expected)} actual={len(actual)}",
+            )
+        )
+    for edge in edges:
+        manifest_has_edge(edge, root, findings)
+
+
+def validate_transition_contract(plan: dict[str, Any], findings: list[Finding]) -> None:
+    expected = {
+        "source": "scripts/architecture-dependency-policy.json#target_debt",
+        "required_mode": "transition",
+        "strict_target_required_when_empty": True,
+    }
+    if plan.get("transition_debt") != expected:
+        findings.append(
+            Finding("transition-contract-invalid", "release-plan", "transition_debt contract drifted")
         )
 
-    contents: dict[str, str] = {}
-    for relative_path in SCOPE_DOCUMENTS:
-        path = ROOT / relative_path
-        if source_overrides is not None and relative_path in source_overrides:
-            content = source_overrides[relative_path]
-        elif path.is_file():
-            content = path.read_text(encoding="utf-8")
-        else:
-            findings.append(f"architecture scope document is missing: {relative_path}")
-            continue
-        contents[relative_path] = content
-        if content.count(SCOPE_MARKER) != 1:
-            findings.append(
-                f"architecture scope marker must appear exactly once: {relative_path}"
-            )
-        for required_summary in REQUIRED_SCOPE_SUMMARIES.get(relative_path, ()):
-            if required_summary not in content:
-                findings.append(
-                    "architecture scope summary drifted: "
-                    f"{relative_path}: {required_summary}"
-                )
 
-    for relative_path in (
-        "docs/plans/architecture-refactor-migration/CHECKLIST.md",
-        "docs/plans/architecture-refactor-migration/REMAINING-TASKS.md",
-    ):
-        content = contents.get(relative_path, "")
-        if re.search(
-            r"^\s*-\s+\[[ xX]\]\s+R(?:19|21|2[6-9]|3[01])\b",
-            content,
-            re.MULTILINE,
-        ):
-            findings.append(
-                "excluded follow-up items must not be active refactor "
-                f"checkboxes: {relative_path}"
-            )
-        if relative_path.endswith("CHECKLIST.md") and re.search(
-            r"^\s*-\s+\[[ xX]\]\s+PR-M12-", content, re.MULTILINE
-        ):
-            findings.append(
-                "Phase 4 work packages must not be active refactor checkboxes: "
-                f"{relative_path}"
-            )
-
-
-def check_ci_and_documents(plan: dict[str, Any], findings: list[str]) -> None:
-    workflow = CI_PATH.read_text(encoding="utf-8")
+def validate_ci(root: Path, findings: list[Finding]) -> None:
+    try:
+        workflow = (root / CI_PATH.relative_to(ROOT)).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        findings.append(Finding("ci-workflow-missing", CI_PATH.as_posix(), str(error)))
+        return
     for command in (
         "python scripts/architecture_dependency_guard.py --mode baseline",
+        "python scripts/architecture_dependency_guard.py --mode transition",
+        "python scripts/architecture_dependency_guard.py --mode target",
         "python scripts/architecture_release_guard.py",
     ):
         if command not in workflow:
-            findings.append(f"CI workflow does not enforce release rule: {command}")
-
-    document_tokens = {
-        "r0": ("R0", "canonical", "deprecated", "no behavior change", "rollback"),
-        "r1": ("R1", "29", "CI", "external usage"),
-        "next_major": (
-            "next-major",
-            "admin legacy",
-            "common compat",
-            "remoting deep path",
-            "Proxy optional mode feature",
-        ),
-        "evidence": ("M09-05", "58/82"),
-    }
-    for key, tokens in document_tokens.items():
-        path = ROOT / plan["documents"][key]
-        if not path.is_file():
-            findings.append(f"release document is missing: {path.relative_to(ROOT)}")
-            continue
-        content = path.read_text(encoding="utf-8")
-        for token in tokens:
-            if token not in content:
-                findings.append(
-                    f"release document {path.name} is missing required marker: {token}"
-                )
+            findings.append(Finding("ci-command-missing", CI_PATH.as_posix(), command))
 
 
-def validate() -> list[str]:
-    plan = load_json(PLAN_PATH)
-    policy = load_json(POLICY_PATH)
-    baseline = load_json(BASELINE_PATH)
-    findings: list[str] = []
-
-    if plan.get("schema_version") != 1 or plan.get("milestone") != "M09-05":
-        findings.append("release plan schema or milestone is invalid")
-    check_release_topology(plan, policy, findings)
-    check_release_windows(plan, baseline, findings)
-    check_proxy_activation(plan, findings)
-    check_usage_and_approval(plan, findings)
-    check_arc_mut_deprecations(plan, findings)
-    check_objective_scope(plan, findings)
-    check_ci_and_documents(plan, findings)
-    return findings
+def validate(
+    plan: dict[str, Any],
+    policy: dict[str, Any],
+    baseline: dict[str, Any],
+    *,
+    root: Path = ROOT,
+    check_ci: bool = True,
+) -> list[Finding]:
+    findings: list[Finding] = []
+    if plan.get("schema_version") != 2 or plan.get("milestone") != "P0":
+        findings.append(Finding("plan-schema-invalid", "release-plan", "expected schema_version=2 milestone=P0"))
+    validate_design_source(plan, root, findings)
+    packages = workspace_manifests(root, findings)
+    validate_release_topology(plan, policy, packages, root, findings)
+    validate_compatibility_windows(plan, baseline, root, findings)
+    validate_transition_contract(plan, findings)
+    if check_ci:
+        validate_ci(root, findings)
+    return sorted(findings, key=Finding.render)
 
 
 def main() -> int:
-    findings = validate()
+    findings: list[Finding] = []
+    plan = load_json(PLAN_PATH, "release plan", findings)
+    policy = load_json(POLICY_PATH, "dependency policy", findings)
+    baseline = load_json(BASELINE_PATH, "dependency baseline", findings)
+    if plan is not None and policy is not None and baseline is not None:
+        findings.extend(validate(plan, policy, baseline))
+    findings = sorted(findings, key=Finding.render)
     if findings:
-        print(f"architecture release guard: FAILED ({len(findings)} finding(s))")
+        print(f"ARCHITECTURE_RELEASE_GUARD_FAILED findings={len(findings)}")
         for finding in findings:
-            print(f"- {finding}")
+            print(finding.render())
         return 1
-    print("architecture release guard: PASSED")
-    print("- release topology: 32/32 packages in dependency order")
-    print("- R0 new crates: 10/10")
-    print("- compatibility windows: R1 29, next-major 4, long-term 2")
-    print("- early removals: 12/12 Human-approved; Proxy feature activation: 0")
-    print("- external usage and notification gates: approved and enforced")
-    print("- ArcMut removal contract: 12/12 absent, 3/3 canonical replacements")
-    print("- Human compatibility override: approved 2026-07-24")
-    print(
-        "- objective scope: Phase 1-3/R01-R18,R20,R22-R25; "
-        "R19/R21 and Phase 4 R26-R31 excluded as follow-up"
-    )
-    print("- R25 closeout: four-party approved on candidate 1571e73fd")
-    print("- current remaining: none; current scope complete")
+    print("ARCHITECTURE_RELEASE_GUARD_OK packages=29 transition_debt=tracked")
     return 0
 
 

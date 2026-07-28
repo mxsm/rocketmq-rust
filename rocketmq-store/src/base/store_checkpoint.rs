@@ -63,6 +63,8 @@ impl StoreCheckpoint {
             .truncate(false)
             .open(checkpoint_path)?;
         file.set_len(OS_PAGE_SIZE)?;
+        // SAFETY: the file is sized to one page before mapping, remains owned
+        // by StoreCheckpoint, and is never resized while the mapping is live.
         let mmap = unsafe { MmapMut::map_mut(&file)? };
         if file.metadata()?.len() > 0 {
             let physic_msg_timestamp = read_checkpoint_u64(&mmap, 0, "physicMsgTimestamp")?;

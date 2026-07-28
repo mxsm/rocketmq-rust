@@ -20,11 +20,13 @@
 //! release checkpoint request is accepted.
 
 use std::collections::BTreeSet;
+use std::fmt;
 use std::fs;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 
+use rocketmq_error::Sensitive;
 use serde::Deserialize;
 use serde::Serialize;
 use sha2::Digest;
@@ -355,7 +357,7 @@ impl LoadedMaintenancePolicy {
 }
 
 /// Authenticated request facts supplied by the service composition root.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct MaintenanceAuthorizationContext {
     /// Whether the authentication runtime is enabled.
     pub authentication_enabled: bool,
@@ -373,8 +375,23 @@ pub struct MaintenanceAuthorizationContext {
     pub fencing_token: Option<u64>,
 }
 
+impl fmt::Debug for MaintenanceAuthorizationContext {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MaintenanceAuthorizationContext")
+            .field("authentication_enabled", &self.authentication_enabled)
+            .field("authorization_enabled", &self.authorization_enabled)
+            .field("principal", &Sensitive::new(self.principal.as_deref()))
+            .field("request_class", &self.request_class)
+            .field("capability", &self.capability)
+            .field("deadline_unix_millis", &self.deadline_unix_millis)
+            .field("fencing_token", &Sensitive::new(self.fencing_token))
+            .finish()
+    }
+}
+
 /// Auditable authorization result carried into a checkpoint operation.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct MaintenanceAuthorizationGrant {
     /// Authenticated identity.
     principal: String,
@@ -390,6 +407,21 @@ pub struct MaintenanceAuthorizationGrant {
     fencing_token: u64,
     /// Resource budget pinned by the authorizing policy.
     resource_budget: MaintenanceResourceBudget,
+}
+
+impl fmt::Debug for MaintenanceAuthorizationGrant {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MaintenanceAuthorizationGrant")
+            .field("principal", &Sensitive::new(&self.principal))
+            .field("role", &self.role)
+            .field("capability", &self.capability)
+            .field("policy_version", &self.policy_version)
+            .field("deadline_unix_millis", &self.deadline_unix_millis)
+            .field("fencing_token", &Sensitive::new(self.fencing_token))
+            .field("resource_budget", &self.resource_budget)
+            .finish()
+    }
 }
 
 impl MaintenanceAuthorizationGrant {
@@ -600,4 +632,41 @@ fn is_canonical_principal(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'@' | b':' | b'/'))
+}
+
+#[cfg(test)]
+mod redaction_tests {
+    use super::*;
+
+    #[test]
+    fn maintenance_authorization_debug_redacts_identity_and_fencing() {
+        let context = MaintenanceAuthorizationContext {
+            authentication_enabled: true,
+            authorization_enabled: true,
+            principal: Some("principal-secret".to_string()),
+            request_class: MaintenanceRequestClass::PrivilegedMaintenance,
+            capability: MaintenanceCapability::ReleaseCheckpoint,
+            deadline_unix_millis: 1_800_000_000_000,
+            fencing_token: Some(987_654_321),
+        };
+        let grant = MaintenanceAuthorizationGrant {
+            principal: "principal-secret".to_string(),
+            role: MaintenanceRole::ReleaseOperator,
+            capability: MaintenanceCapability::ReleaseCheckpoint,
+            policy_version: 7,
+            deadline_unix_millis: 1_800_000_000_000,
+            fencing_token: 987_654_321,
+            resource_budget: MaintenanceResourceBudget {
+                max_checkpoint_bytes: 1024,
+                max_store_members: 3,
+                max_concurrent_operations: 1,
+            },
+        };
+
+        for debug in [format!("{context:?}"), format!("{grant:?}")] {
+            assert!(debug.contains("<redacted>"));
+            assert!(!debug.contains("principal-secret"));
+            assert!(!debug.contains("987654321"));
+        }
+    }
 }

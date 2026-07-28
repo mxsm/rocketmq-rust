@@ -1,0 +1,5559 @@
+{
+  "schema_version": 1,
+  "source": "production Rust files under src/",
+  "policy": "rocketmq-doc/en/rust-trait-design-guidelines.md",
+  "entries": [
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-controller/src/openraft/grpc_server.rs",
+      "line": 211,
+      "item": "impl OpenRaftService",
+      "owner": "controller",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-controller/src/storage/file_backend.rs",
+      "line": 403,
+      "item": "impl StorageBackend",
+      "owner": "controller",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-controller/src/storage/mod.rs",
+      "line": 61,
+      "item": "trait StorageBackend",
+      "owner": "controller",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-controller/src/storage/mod.rs",
+      "line": 113,
+      "item": "trait StorageBackendExt",
+      "owner": "controller",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-controller/src/storage/mod.rs",
+      "line": 187,
+      "item": "impl StorageBackend",
+      "owner": "controller",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-controller/src/storage/rocksdb_backend.rs",
+      "line": 122,
+      "item": "impl StorageBackend",
+      "owner": "controller",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-dashboard/rocketmq-dashboard-common/src/api.rs",
+      "line": 21,
+      "item": "trait DashboardClient",
+      "owner": "dashboard",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 126,
+      "item": "trait ClusterClient",
+      "owner": "proxy-cluster",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 217,
+      "item": "trait ClusterClientIo",
+      "owner": "proxy-cluster",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 426,
+      "item": "impl ClusterClientIo",
+      "owner": "proxy-cluster",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 660,
+      "item": "trait ClusterProducerIo",
+      "owner": "proxy-cluster",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 692,
+      "item": "impl ClusterProducerIo",
+      "owner": "proxy-cluster",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 807,
+      "item": "impl ClusterClient",
+      "owner": "proxy-cluster",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-cluster/src/cluster_behavior_tests.rs",
+      "line": 163,
+      "item": "impl ClusterClientIo",
+      "owner": "proxy-cluster",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-cluster/src/cluster_behavior_tests.rs",
+      "line": 478,
+      "item": "impl ClusterProducerIo",
+      "owner": "proxy-cluster",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-cluster/src/remoting.rs",
+      "line": 42,
+      "item": "impl ProxyRemotingBackend",
+      "owner": "proxy-cluster",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-cluster/src/service.rs",
+      "line": 81,
+      "item": "impl RouteService",
+      "owner": "proxy-cluster",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-cluster/src/service.rs",
+      "line": 103,
+      "item": "impl MetadataService",
+      "owner": "proxy-cluster",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-cluster/src/service.rs",
+      "line": 145,
+      "item": "impl AssignmentService",
+      "owner": "proxy-cluster",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-cluster/src/service.rs",
+      "line": 170,
+      "item": "impl MessageService",
+      "owner": "proxy-cluster",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-cluster/src/service.rs",
+      "line": 199,
+      "item": "impl ConsumerService",
+      "owner": "proxy-cluster",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-cluster/src/service.rs",
+      "line": 264,
+      "item": "impl TransactionService",
+      "owner": "proxy-cluster",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-core/src/processor.rs",
+      "line": 297,
+      "item": "trait MessagingProcessor",
+      "owner": "proxy-core",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-core/src/processor.rs",
+      "line": 375,
+      "item": "impl MessagingProcessor",
+      "owner": "proxy-core",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-core/src/remoting.rs",
+      "line": 37,
+      "item": "trait ProxyRemotingBackend",
+      "owner": "proxy-core",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-core/src/service.rs",
+      "line": 76,
+      "item": "trait RouteService",
+      "owner": "proxy-core",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-core/src/service.rs",
+      "line": 86,
+      "item": "trait MetadataService",
+      "owner": "proxy-core",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-core/src/service.rs",
+      "line": 115,
+      "item": "trait AssignmentService",
+      "owner": "proxy-core",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-core/src/service.rs",
+      "line": 126,
+      "item": "trait MessageService",
+      "owner": "proxy-core",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-core/src/service.rs",
+      "line": 141,
+      "item": "trait ConsumerService",
+      "owner": "proxy-core",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-core/src/service.rs",
+      "line": 180,
+      "item": "trait TransactionService",
+      "owner": "proxy-core",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-core/src/service.rs",
+      "line": 218,
+      "item": "impl RouteService",
+      "owner": "proxy-core",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-core/src/service.rs",
+      "line": 233,
+      "item": "impl MetadataService",
+      "owner": "proxy-core",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-core/src/service.rs",
+      "line": 256,
+      "item": "impl AssignmentService",
+      "owner": "proxy-core",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-core/src/service.rs",
+      "line": 272,
+      "item": "impl MessageService",
+      "owner": "proxy-core",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-core/src/service.rs",
+      "line": 294,
+      "item": "impl ConsumerService",
+      "owner": "proxy-core",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-core/src/service.rs",
+      "line": 360,
+      "item": "impl TransactionService",
+      "owner": "proxy-core",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-core/src/service.rs",
+      "line": 382,
+      "item": "impl RouteService",
+      "owner": "proxy-core",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-core/src/service.rs",
+      "line": 413,
+      "item": "impl MetadataService",
+      "owner": "proxy-core",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-core/src/service.rs",
+      "line": 448,
+      "item": "impl MessageService",
+      "owner": "proxy-core",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-local/src/local.rs",
+      "line": 517,
+      "item": "impl ProxyRemotingBackend",
+      "owner": "proxy-local",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-local/src/local.rs",
+      "line": 535,
+      "item": "impl RouteService",
+      "owner": "proxy-local",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-local/src/local.rs",
+      "line": 558,
+      "item": "impl MetadataService",
+      "owner": "proxy-local",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-local/src/local.rs",
+      "line": 593,
+      "item": "impl AssignmentService",
+      "owner": "proxy-local",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-local/src/local.rs",
+      "line": 624,
+      "item": "impl MessageService",
+      "owner": "proxy-local",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-local/src/local.rs",
+      "line": 666,
+      "item": "impl TransactionService",
+      "owner": "proxy-local",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy-local/src/local.rs",
+      "line": 698,
+      "item": "impl ConsumerService",
+      "owner": "proxy-local",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy/src/grpc/service.rs",
+      "line": 779,
+      "item": "impl RecordingHook",
+      "owner": "proxy",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-proxy/src/observability.rs",
+      "line": 91,
+      "item": "trait ProxyHook",
+      "owner": "proxy",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/admin_session.rs",
+      "line": 60,
+      "item": "trait AdminSession",
+      "owner": "mcp",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/admin_session.rs",
+      "line": 81,
+      "item": "trait AdminSessionFactory",
+      "owner": "mcp",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/admin_session.rs",
+      "line": 108,
+      "item": "impl AdminSessionFactory",
+      "owner": "mcp",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/admin_session.rs",
+      "line": 138,
+      "item": "impl AdminSession",
+      "owner": "mcp",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/query_facade.rs",
+      "line": 77,
+      "item": "trait ReadOnlyQuery",
+      "owner": "mcp",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/query_facade.rs",
+      "line": 577,
+      "item": "impl AdminSessionFactory",
+      "owner": "mcp",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-tools/rocketmq-mcp/src/guard/audit.rs",
+      "line": 538,
+      "item": "trait AuditSink",
+      "owner": "mcp",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-tools/rocketmq-mcp/src/guard/audit.rs",
+      "line": 549,
+      "item": "impl AuditSink",
+      "owner": "mcp",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-tools/rocketmq-mcp/src/guard/audit.rs",
+      "line": 573,
+      "item": "impl AuditSink",
+      "owner": "mcp",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-tools/rocketmq-mcp/src/guard/audit.rs",
+      "line": 598,
+      "item": "impl AuditSink",
+      "owner": "mcp",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-tools/rocketmq-mcp/src/guard/audit/tests.rs",
+      "line": 46,
+      "item": "impl AuditSink",
+      "owner": "mcp",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-tools/rocketmq-mcp/src/guard/jwks.rs",
+      "line": 31,
+      "item": "trait JwksSource",
+      "owner": "mcp",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "async_trait",
+      "path": "rocketmq-tools/rocketmq-mcp/src/guard/jwks.rs",
+      "line": 57,
+      "item": "impl JwksSource",
+      "owner": "mcp",
+      "decision": "migrate-on-touch"
+    },
+    {
+      "kind": "empty_marker",
+      "path": "rocketmq-auth/src/authorization/context/authentication_context.rs",
+      "line": 17,
+      "item": "trait AuthenticationContext",
+      "owner": "auth",
+      "decision": "retain-reviewed-marker"
+    },
+    {
+      "kind": "empty_marker",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_inner.rs",
+      "line": 15,
+      "item": "trait MQAdminExtInner",
+      "owner": "client",
+      "decision": "remove-in-P2.4"
+    },
+    {
+      "kind": "empty_marker",
+      "path": "rocketmq-client/src/consumer/consumer_impl/consume_message_service.rs",
+      "line": 415,
+      "item": "trait ConsumeMessageService",
+      "owner": "client",
+      "decision": "retain-reviewed-marker"
+    },
+    {
+      "kind": "empty_marker",
+      "path": "rocketmq-controller/src/heartbeat/broker_live_info.rs",
+      "line": 20,
+      "item": "trait RemotingChannel",
+      "owner": "controller",
+      "decision": "retain-reviewed-marker"
+    },
+    {
+      "kind": "empty_marker",
+      "path": "rocketmq-transport/src/connection.rs",
+      "line": 83,
+      "item": "trait ConnectionTransport",
+      "owner": "transport",
+      "decision": "retain-reviewed-marker"
+    },
+    {
+      "kind": "empty_marker",
+      "path": "rocketmq-transport/src/remoting_server.rs",
+      "line": 19,
+      "item": "trait RemotingServer",
+      "owner": "transport",
+      "decision": "retain-reviewed-marker"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-auth/src/authentication/manager/authentication_metadata_manager.rs",
+      "line": 75,
+      "item": "trait AuthenticationMetadataManager::shutdown",
+      "owner": "auth",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-auth/src/authentication/manager/authentication_metadata_manager.rs",
+      "line": 86,
+      "item": "trait AuthenticationMetadataManager::init_user",
+      "owner": "auth",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-auth/src/authentication/manager/authentication_metadata_manager.rs",
+      "line": 104,
+      "item": "trait AuthenticationMetadataManager::create_user",
+      "owner": "auth",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-auth/src/authentication/manager/authentication_metadata_manager.rs",
+      "line": 116,
+      "item": "trait AuthenticationMetadataManager::update_user",
+      "owner": "auth",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-auth/src/authentication/manager/authentication_metadata_manager.rs",
+      "line": 128,
+      "item": "trait AuthenticationMetadataManager::delete_user",
+      "owner": "auth",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-auth/src/authentication/manager/authentication_metadata_manager.rs",
+      "line": 140,
+      "item": "trait AuthenticationMetadataManager::get_user",
+      "owner": "auth",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-auth/src/authentication/manager/authentication_metadata_manager.rs",
+      "line": 152,
+      "item": "trait AuthenticationMetadataManager::list_users",
+      "owner": "auth",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-auth/src/authentication/manager/authentication_metadata_manager.rs",
+      "line": 165,
+      "item": "trait AuthenticationMetadataManager::is_super_user",
+      "owner": "auth",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-auth/src/authentication/provider/authentication_provider.rs",
+      "line": 34,
+      "item": "trait AuthenticationProvider::initialize",
+      "owner": "auth",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-auth/src/authentication/provider/authentication_provider.rs",
+      "line": 41,
+      "item": "trait AuthenticationProvider::authenticate",
+      "owner": "auth",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-auth/src/authentication/strategy/abstract_authentication_strategy.rs",
+      "line": 41,
+      "item": "trait AbstractAuthenticationStrategy::do_evaluate",
+      "owner": "auth",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-auth/src/authentication/strategy/abstract_authentication_strategy.rs",
+      "line": 55,
+      "item": "trait AbstractAuthenticationStrategy::authenticate_with_provider",
+      "owner": "auth",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-auth/src/authorization/metadata_provider.rs",
+      "line": 161,
+      "item": "trait AuthorizationMetadataProvider::create_acl",
+      "owner": "auth",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-auth/src/authorization/metadata_provider.rs",
+      "line": 183,
+      "item": "trait AuthorizationMetadataProvider::delete_acl",
+      "owner": "auth",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-auth/src/authorization/metadata_provider.rs",
+      "line": 208,
+      "item": "trait AuthorizationMetadataProvider::update_acl",
+      "owner": "auth",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-auth/src/authorization/metadata_provider.rs",
+      "line": 276,
+      "item": "trait AuthorizationMetadataProvider::list_acl",
+      "owner": "auth",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-auth/src/authorization/provider.rs",
+      "line": 252,
+      "item": "trait AuthorizationProvider::authorize",
+      "owner": "auth",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-broker/src/long_polling/long_polling_service/pop_lite_long_polling_service.rs",
+      "line": 55,
+      "item": "trait LocalPopLiteLongPollingRequestProcessor::process_request_when_wakeup",
+      "owner": "broker",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-broker/src/long_polling/long_polling_service/pop_long_polling_service.rs",
+      "line": 113,
+      "item": "trait LocalPopLongPollingRequestProcessor::process_request_when_wakeup",
+      "owner": "broker",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-broker/src/processor/pull_message_result_handler.rs",
+      "line": 58,
+      "item": "trait PullMessageResultHandler::handle",
+      "owner": "broker",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-broker/src/transaction/transactional_message_check_listener.rs",
+      "line": 36,
+      "item": "trait TransactionalMessageCheckListenerInner::send_check_message",
+      "owner": "broker",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-broker/src/transaction/transactional_message_check_listener.rs",
+      "line": 55,
+      "item": "trait TransactionalMessageCheckListenerInner::resolve_half_msg",
+      "owner": "broker",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-broker/src/transaction/transactional_message_service.rs",
+      "line": 38,
+      "item": "trait TransactionalMessageServiceLocal::prepare_message",
+      "owner": "broker",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-broker/src/transaction/transactional_message_service.rs",
+      "line": 49,
+      "item": "trait TransactionalMessageServiceLocal::async_prepare_message",
+      "owner": "broker",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-broker/src/transaction/transactional_message_service.rs",
+      "line": 60,
+      "item": "trait TransactionalMessageServiceLocal::delete_prepare_message",
+      "owner": "broker",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-broker/src/transaction/transactional_message_service.rs",
+      "line": 71,
+      "item": "trait TransactionalMessageServiceLocal::commit_message",
+      "owner": "broker",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-broker/src/transaction/transactional_message_service.rs",
+      "line": 82,
+      "item": "trait TransactionalMessageServiceLocal::rollback_message",
+      "owner": "broker",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-broker/src/transaction/transactional_message_service.rs",
+      "line": 90,
+      "item": "trait TransactionalMessageServiceLocal::check",
+      "owner": "broker",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-broker/src/transaction/transactional_message_service.rs",
+      "line": 105,
+      "item": "trait TransactionalMessageServiceLocal::close",
+      "owner": "broker",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 71,
+      "item": "trait MQAdminExt::start",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 72,
+      "item": "trait MQAdminExt::shutdown",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 73,
+      "item": "trait MQAdminExt::add_broker_to_container",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 79,
+      "item": "trait MQAdminExt::remove_broker_from_container",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 87,
+      "item": "trait MQAdminExt::update_broker_config",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 93,
+      "item": "trait MQAdminExt::get_broker_config",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 98,
+      "item": "trait MQAdminExt::create_and_update_topic_config",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 104,
+      "item": "trait MQAdminExt::create_and_update_topic_config_list",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 110,
+      "item": "trait MQAdminExt::create_and_update_plain_access_config",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 116,
+      "item": "trait MQAdminExt::delete_plain_access_config",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 122,
+      "item": "trait MQAdminExt::update_global_white_addr_config",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 129,
+      "item": "trait MQAdminExt::examine_broker_cluster_acl_version_info",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 134,
+      "item": "trait MQAdminExt::create_and_update_subscription_group_config",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 140,
+      "item": "trait MQAdminExt::create_and_update_subscription_group_config_list",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 146,
+      "item": "trait MQAdminExt::examine_subscription_group_config",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 152,
+      "item": "trait MQAdminExt::examine_topic_stats",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 158,
+      "item": "trait MQAdminExt::examine_topic_stats_concurrent",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 160,
+      "item": "trait MQAdminExt::fetch_all_topic_list",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 162,
+      "item": "trait MQAdminExt::fetch_topics_by_cluster",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 164,
+      "item": "trait MQAdminExt::fetch_broker_runtime_stats",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 166,
+      "item": "trait MQAdminExt::examine_consume_stats",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 175,
+      "item": "trait MQAdminExt::check_rocksdb_cq_write_progress",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 182,
+      "item": "trait MQAdminExt::examine_broker_cluster_info",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 184,
+      "item": "trait MQAdminExt::examine_topic_route_info",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 189,
+      "item": "trait MQAdminExt::examine_consumer_connection_info",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 195,
+      "item": "trait MQAdminExt::examine_producer_connection_info",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 201,
+      "item": "trait MQAdminExt::get_all_producer_info",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 206,
+      "item": "trait MQAdminExt::get_name_server_address_list",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 208,
+      "item": "trait MQAdminExt::wipe_write_perm_of_broker",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 214,
+      "item": "trait MQAdminExt::add_write_perm_of_broker",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 220,
+      "item": "trait MQAdminExt::put_kv_config",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 222,
+      "item": "trait MQAdminExt::get_kv_config",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 228,
+      "item": "trait MQAdminExt::get_kv_list_by_namespace",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 230,
+      "item": "trait MQAdminExt::delete_topic",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 236,
+      "item": "trait MQAdminExt::delete_topic_in_broker",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 242,
+      "item": "trait MQAdminExt::delete_topic_in_broker_concurrent",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 248,
+      "item": "trait MQAdminExt::delete_topic_in_name_server",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 255,
+      "item": "trait MQAdminExt::delete_subscription_group",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 262,
+      "item": "trait MQAdminExt::create_and_update_kv_config",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 269,
+      "item": "trait MQAdminExt::delete_kv_config",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 275,
+      "item": "trait MQAdminExt::reset_offset_by_timestamp_old",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 284,
+      "item": "trait MQAdminExt::reset_offset_by_timestamp",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 293,
+      "item": "trait MQAdminExt::reset_offset_new",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 300,
+      "item": "trait MQAdminExt::reset_offset_new_concurrent",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 307,
+      "item": "trait MQAdminExt::get_consume_status",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 314,
+      "item": "trait MQAdminExt::create_or_update_order_conf",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 321,
+      "item": "trait MQAdminExt::query_topic_consume_by_who",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 323,
+      "item": "trait MQAdminExt::query_topics_by_consumer",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 325,
+      "item": "trait MQAdminExt::query_topics_by_consumer_concurrent",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 327,
+      "item": "trait MQAdminExt::query_subscription",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 333,
+      "item": "trait MQAdminExt::query_consume_time_span",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 339,
+      "item": "trait MQAdminExt::query_consume_time_span_concurrent",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 345,
+      "item": "trait MQAdminExt::clean_expired_consumer_queue",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 351,
+      "item": "trait MQAdminExt::clean_expired_consumer_queue_by_addr",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 353,
+      "item": "trait MQAdminExt::delete_expired_commit_log",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 359,
+      "item": "trait MQAdminExt::delete_expired_commit_log_by_addr",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 361,
+      "item": "trait MQAdminExt::clean_unused_topic",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 367,
+      "item": "trait MQAdminExt::clean_unused_topic_by_addr",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 369,
+      "item": "trait MQAdminExt::get_consumer_running_info",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 377,
+      "item": "trait MQAdminExt::consume_message_directly",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 385,
+      "item": "trait MQAdminExt::consume_message_directly_ext",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 394,
+      "item": "trait MQAdminExt::message_track_detail",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 396,
+      "item": "trait MQAdminExt::message_track_detail_concurrent",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 398,
+      "item": "trait MQAdminExt::clone_group_offset",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 406,
+      "item": "trait MQAdminExt::view_broker_stats_data",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 413,
+      "item": "trait MQAdminExt::get_cluster_list",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 415,
+      "item": "trait MQAdminExt::fetch_consume_stats_in_broker",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 422,
+      "item": "trait MQAdminExt::get_topic_cluster_list",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 424,
+      "item": "trait MQAdminExt::get_all_subscription_group",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 430,
+      "item": "trait MQAdminExt::get_user_subscription_group",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 436,
+      "item": "trait MQAdminExt::get_all_topic_config",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 442,
+      "item": "trait MQAdminExt::get_user_topic_config",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 449,
+      "item": "trait MQAdminExt::update_consume_offset",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 457,
+      "item": "trait MQAdminExt::update_name_server_config",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 463,
+      "item": "trait MQAdminExt::get_name_server_config",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 468,
+      "item": "trait MQAdminExt::probe_name_server",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 470,
+      "item": "trait MQAdminExt::query_consume_queue",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 480,
+      "item": "trait MQAdminExt::resume_check_half_message",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 486,
+      "item": "trait MQAdminExt::set_message_request_mode",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 496,
+      "item": "trait MQAdminExt::reset_offset_by_queue_id",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 505,
+      "item": "trait MQAdminExt::examine_topic_config",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 511,
+      "item": "trait MQAdminExt::create_static_topic",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 520,
+      "item": "trait MQAdminExt::update_and_get_group_read_forbidden",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 528,
+      "item": "trait MQAdminExt::query_message",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 535,
+      "item": "trait MQAdminExt::get_broker_ha_status",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 537,
+      "item": "trait MQAdminExt::get_in_sync_state_data",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 543,
+      "item": "trait MQAdminExt::get_broker_epoch_cache",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 548,
+      "item": "trait MQAdminExt::get_controller_meta_data",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 553,
+      "item": "trait MQAdminExt::reset_master_flush_offset",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 559,
+      "item": "trait MQAdminExt::get_controller_config",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 564,
+      "item": "trait MQAdminExt::update_controller_config",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 570,
+      "item": "trait MQAdminExt::elect_master",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 578,
+      "item": "trait MQAdminExt::clean_controller_broker_data",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 587,
+      "item": "trait MQAdminExt::update_cold_data_flow_ctr_group_config",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 593,
+      "item": "trait MQAdminExt::remove_cold_data_flow_ctr_group_config",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 599,
+      "item": "trait MQAdminExt::get_cold_data_flow_ctr_info",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 604,
+      "item": "trait MQAdminExt::set_commit_log_read_ahead_mode",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 610,
+      "item": "trait MQAdminExt::create_user",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 618,
+      "item": "trait MQAdminExt::create_user_with_info",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 625,
+      "item": "trait MQAdminExt::update_user",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 634,
+      "item": "trait MQAdminExt::update_user_with_info",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 641,
+      "item": "trait MQAdminExt::delete_user",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 647,
+      "item": "trait MQAdminExt::get_user",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 653,
+      "item": "trait MQAdminExt::list_users",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 659,
+      "item": "trait MQAdminExt::list_user",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 667,
+      "item": "trait MQAdminExt::create_acl",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 677,
+      "item": "trait MQAdminExt::create_acl_with_info",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 683,
+      "item": "trait MQAdminExt::update_acl",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 693,
+      "item": "trait MQAdminExt::update_acl_with_info",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 699,
+      "item": "trait MQAdminExt::delete_acl",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 706,
+      "item": "trait MQAdminExt::get_acl",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 712,
+      "item": "trait MQAdminExt::list_acl",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 719,
+      "item": "trait MQAdminExt::create_lite_pull_topic",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 729,
+      "item": "trait MQAdminExt::update_lite_pull_topic",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 737,
+      "item": "trait MQAdminExt::get_lite_pull_topic",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 743,
+      "item": "trait MQAdminExt::delete_lite_pull_topic",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 750,
+      "item": "trait MQAdminExt::query_lite_pull_topic_list",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 752,
+      "item": "trait MQAdminExt::query_lite_pull_topic_by_cluster",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 757,
+      "item": "trait MQAdminExt::query_lite_pull_subscription_list",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 763,
+      "item": "trait MQAdminExt::update_lite_pull_consumer_offset",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 772,
+      "item": "trait MQAdminExt::examine_consume_stats_with_queue",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 779,
+      "item": "trait MQAdminExt::examine_consume_stats_concurrent",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 785,
+      "item": "trait MQAdminExt::examine_consume_stats_concurrent_with_cluster",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 792,
+      "item": "trait MQAdminExt::export_rocksdb_consumer_offset_to_json",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 798,
+      "item": "trait MQAdminExt::export_rocksdb_consumer_offset_from_memory",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 803,
+      "item": "trait MQAdminExt::sync_broker_member_group",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 810,
+      "item": "trait MQAdminExt::get_topic_config_by_topic_name",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 816,
+      "item": "trait MQAdminExt::notify_min_broker_id_changed",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 826,
+      "item": "trait MQAdminExt::get_topic_stats_info",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 832,
+      "item": "trait MQAdminExt::query_broker_has_topic",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 838,
+      "item": "trait MQAdminExt::get_system_topic_list_from_broker",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 843,
+      "item": "trait MQAdminExt::examine_topic_route_info_with_timeout",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 849,
+      "item": "trait MQAdminExt::export_pop_records",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 851,
+      "item": "trait MQAdminExt::switch_timer_engine",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 857,
+      "item": "trait MQAdminExt::get_broker_lite_info",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 862,
+      "item": "trait MQAdminExt::get_parent_topic_info",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 868,
+      "item": "trait MQAdminExt::get_lite_topic_info",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 875,
+      "item": "trait MQAdminExt::get_lite_client_info",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 883,
+      "item": "trait MQAdminExt::get_lite_group_info",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 891,
+      "item": "trait MQAdminExt::trigger_lite_dispatch",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 898,
+      "item": "trait MQAdminExt::export_rocksdb_config_to_json",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 904,
+      "item": "trait MQAdminExt::search_offset",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 913,
+      "item": "trait MQAdminExt::min_offset",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "line": 920,
+      "item": "trait MQAdminExt::max_offset",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/base/mq_client_admin.rs",
+      "line": 63,
+      "item": "trait MqClientAdminInner::query_message",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/base/mq_client_admin.rs",
+      "line": 83,
+      "item": "trait MqClientAdminInner::get_topic_stats_info",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/base/mq_client_admin.rs",
+      "line": 101,
+      "item": "trait MqClientAdminInner::query_consume_time_span",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/base/mq_client_admin.rs",
+      "line": 119,
+      "item": "trait MqClientAdminInner::update_or_create_topic",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/base/mq_client_admin.rs",
+      "line": 137,
+      "item": "trait MqClientAdminInner::update_or_create_subscription_group",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/base/mq_client_admin.rs",
+      "line": 155,
+      "item": "trait MqClientAdminInner::delete_topic_in_broker",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/base/mq_client_admin.rs",
+      "line": 173,
+      "item": "trait MqClientAdminInner::delete_topic_in_nameserver",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/base/mq_client_admin.rs",
+      "line": 191,
+      "item": "trait MqClientAdminInner::delete_kv_config",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/base/mq_client_admin.rs",
+      "line": 209,
+      "item": "trait MqClientAdminInner::delete_subscription_group",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/base/mq_client_admin.rs",
+      "line": 227,
+      "item": "trait MqClientAdminInner::invoke_broker_to_reset_offset",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/base/mq_client_admin.rs",
+      "line": 245,
+      "item": "trait MqClientAdminInner::view_message",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/base/mq_client_admin.rs",
+      "line": 262,
+      "item": "trait MqClientAdminInner::get_broker_cluster_info",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/base/mq_client_admin.rs",
+      "line": 279,
+      "item": "trait MqClientAdminInner::get_consumer_connection_list",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/base/mq_client_admin.rs",
+      "line": 297,
+      "item": "trait MqClientAdminInner::query_topics_by_consumer",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/base/mq_client_admin.rs",
+      "line": 315,
+      "item": "trait MqClientAdminInner::query_subscription_by_consumer",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/base/mq_client_admin.rs",
+      "line": 333,
+      "item": "trait MqClientAdminInner::get_consume_stats",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/base/mq_client_admin.rs",
+      "line": 351,
+      "item": "trait MqClientAdminInner::query_topic_consume_by_who",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/base/mq_client_admin.rs",
+      "line": 369,
+      "item": "trait MqClientAdminInner::get_consumer_running_info",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/base/mq_client_admin.rs",
+      "line": 387,
+      "item": "trait MqClientAdminInner::consume_message_directly",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/consumer_impl/consume_message_service.rs",
+      "line": 336,
+      "item": "trait ConsumeMessageServiceTrait::shutdown",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/consumer_impl/consume_message_service.rs",
+      "line": 370,
+      "item": "trait ConsumeMessageServiceTrait::consume_message_directly",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/consumer_impl/consume_message_service.rs",
+      "line": 385,
+      "item": "trait ConsumeMessageServiceTrait::submit_consume_request",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/consumer_impl/consume_message_service.rs",
+      "line": 401,
+      "item": "trait ConsumeMessageServiceTrait::submit_pop_consume_request",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/consumer_impl/re_balance.rs",
+      "line": 65,
+      "item": "trait RebalanceLocal::message_queue_changed",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/consumer_impl/re_balance.rs",
+      "line": 82,
+      "item": "trait RebalanceLocal::remove_unnecessary_message_queue",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/consumer_impl/re_balance.rs",
+      "line": 110,
+      "item": "trait RebalanceLocal::remove_dirty_offset",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/consumer_impl/re_balance.rs",
+      "line": 121,
+      "item": "trait RebalanceLocal::compute_pull_from_where_with_exception",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/consumer_impl/re_balance.rs",
+      "line": 132,
+      "item": "trait RebalanceLocal::compute_pull_from_where",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/consumer_impl/re_balance.rs",
+      "line": 147,
+      "item": "trait RebalanceLocal::dispatch_pull_request",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/consumer_impl/re_balance.rs",
+      "line": 155,
+      "item": "trait RebalanceLocal::dispatch_pop_pull_request",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/consumer_impl/re_balance.rs",
+      "line": 176,
+      "item": "trait RebalanceLocal::remove_process_queue",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/consumer_impl/re_balance.rs",
+      "line": 184,
+      "item": "trait RebalanceLocal::unlock",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/consumer_impl/re_balance.rs",
+      "line": 187,
+      "item": "trait RebalanceLocal::lock_all",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/consumer_impl/re_balance.rs",
+      "line": 194,
+      "item": "trait RebalanceLocal::unlock_all",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/consumer_impl/re_balance.rs",
+      "line": 205,
+      "item": "trait RebalanceLocal::do_rebalance",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 56,
+      "item": "trait LitePullConsumerLocal::start",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 62,
+      "item": "trait LitePullConsumerLocal::shutdown",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 67,
+      "item": "trait LitePullConsumerLocal::is_running",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 81,
+      "item": "trait LitePullConsumerLocal::subscribe",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 97,
+      "item": "trait LitePullConsumerLocal::subscribe_with_expression",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 116,
+      "item": "trait LitePullConsumerLocal::subscribe_with_listener",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 138,
+      "item": "trait LitePullConsumerLocal::subscribe_with_selector",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 152,
+      "item": "trait LitePullConsumerLocal::unsubscribe",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 161,
+      "item": "trait LitePullConsumerLocal::assignment",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 175,
+      "item": "trait LitePullConsumerLocal::assign",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 190,
+      "item": "trait LitePullConsumerLocal::set_sub_expression_for_assign",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 209,
+      "item": "trait LitePullConsumerLocal::build_subscriptions_for_heartbeat",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 215,
+      "item": "trait LitePullConsumerLocal::subscriptions_for_heartbeat",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 248,
+      "item": "trait LitePullConsumerLocal::poll_zero_copy",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 268,
+      "item": "trait LitePullConsumerLocal::poll_with_timeout_zero_copy",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 295,
+      "item": "trait LitePullConsumerLocal::poll",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 308,
+      "item": "trait LitePullConsumerLocal::poll_with_timeout",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 311,
+      "item": "trait LitePullConsumerLocal::message_model",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 316,
+      "item": "trait LitePullConsumerLocal::set_message_model",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 319,
+      "item": "trait LitePullConsumerLocal::consume_from_where",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 326,
+      "item": "trait LitePullConsumerLocal::set_consume_from_where",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 329,
+      "item": "trait LitePullConsumerLocal::consume_timestamp",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 332,
+      "item": "trait LitePullConsumerLocal::set_consume_timestamp",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 335,
+      "item": "trait LitePullConsumerLocal::allocate_message_queue_strategy",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 340,
+      "item": "trait LitePullConsumerLocal::set_allocate_message_queue_strategy",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 346,
+      "item": "trait LitePullConsumerLocal::message_queue_listener",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 352,
+      "item": "trait LitePullConsumerLocal::set_message_queue_listener",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 355,
+      "item": "trait LitePullConsumerLocal::offset_store",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 362,
+      "item": "trait LitePullConsumerLocal::set_offset_store",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 365,
+      "item": "trait LitePullConsumerLocal::topic_metadata_check_interval_millis",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 371,
+      "item": "trait LitePullConsumerLocal::set_topic_metadata_check_interval_millis",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 378,
+      "item": "trait LitePullConsumerLocal::poll_timeout_millis",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 389,
+      "item": "trait LitePullConsumerLocal::set_poll_timeout_millis",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 392,
+      "item": "trait LitePullConsumerLocal::broker_suspend_max_time_millis",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 398,
+      "item": "trait LitePullConsumerLocal::set_broker_suspend_max_time_millis",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 401,
+      "item": "trait LitePullConsumerLocal::consumer_timeout_millis_when_suspend",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 407,
+      "item": "trait LitePullConsumerLocal::set_consumer_timeout_millis_when_suspend",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 410,
+      "item": "trait LitePullConsumerLocal::consumer_pull_timeout_millis",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 416,
+      "item": "trait LitePullConsumerLocal::set_consumer_pull_timeout_millis",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 419,
+      "item": "trait LitePullConsumerLocal::pull_batch_size",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 424,
+      "item": "trait LitePullConsumerLocal::set_pull_batch_size",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 427,
+      "item": "trait LitePullConsumerLocal::pull_thread_nums",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 432,
+      "item": "trait LitePullConsumerLocal::set_pull_thread_nums",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 435,
+      "item": "trait LitePullConsumerLocal::pull_threshold_for_all",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 440,
+      "item": "trait LitePullConsumerLocal::set_pull_threshold_for_all",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 443,
+      "item": "trait LitePullConsumerLocal::pull_threshold_for_queue",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 448,
+      "item": "trait LitePullConsumerLocal::set_pull_threshold_for_queue",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 451,
+      "item": "trait LitePullConsumerLocal::pull_threshold_size_for_queue",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 456,
+      "item": "trait LitePullConsumerLocal::set_pull_threshold_size_for_queue",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 459,
+      "item": "trait LitePullConsumerLocal::consume_max_span",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 464,
+      "item": "trait LitePullConsumerLocal::set_consume_max_span",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 467,
+      "item": "trait LitePullConsumerLocal::is_connect_broker_by_user",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 472,
+      "item": "trait LitePullConsumerLocal::set_connect_broker_by_user",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 475,
+      "item": "trait LitePullConsumerLocal::default_broker_id",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 480,
+      "item": "trait LitePullConsumerLocal::set_default_broker_id",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 498,
+      "item": "trait LitePullConsumerLocal::seek",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 511,
+      "item": "trait LitePullConsumerLocal::pause",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 520,
+      "item": "trait LitePullConsumerLocal::resume",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 525,
+      "item": "trait LitePullConsumerLocal::is_auto_commit",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 541,
+      "item": "trait LitePullConsumerLocal::set_auto_commit",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 544,
+      "item": "trait LitePullConsumerLocal::is_unit_mode",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 549,
+      "item": "trait LitePullConsumerLocal::set_unit_mode",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 554,
+      "item": "trait LitePullConsumerLocal::auto_commit_interval_millis",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 566,
+      "item": "trait LitePullConsumerLocal::set_auto_commit_interval_millis",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 580,
+      "item": "trait LitePullConsumerLocal::fetch_message_queues",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 595,
+      "item": "trait LitePullConsumerLocal::offset_for_timestamp",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 613,
+      "item": "trait LitePullConsumerLocal::earliest_msg_store_time",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 627,
+      "item": "trait LitePullConsumerLocal::max_offset",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 641,
+      "item": "trait LitePullConsumerLocal::min_offset",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 654,
+      "item": "trait LitePullConsumerLocal::commit_sync",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 672,
+      "item": "trait LitePullConsumerLocal::commit_sync_with_map",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 681,
+      "item": "trait LitePullConsumerLocal::commit",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 691,
+      "item": "trait LitePullConsumerLocal::commit_with_map",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 701,
+      "item": "trait LitePullConsumerLocal::commit_with_set",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 715,
+      "item": "trait LitePullConsumerLocal::committed",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 730,
+      "item": "trait LitePullConsumerLocal::register_topic_message_queue_change_listener",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 745,
+      "item": "trait LitePullConsumerLocal::update_name_server_address",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 759,
+      "item": "trait LitePullConsumerLocal::seek_to_begin",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 776,
+      "item": "trait LitePullConsumerLocal::seek_to_end",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 793,
+      "item": "trait LitePullConsumerLocal::commit_all",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 810,
+      "item": "trait LitePullConsumerLocal::is_paused",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/mq_consumer.rs",
+      "line": 33,
+      "item": "trait MQConsumer::create_topic",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/mq_consumer.rs",
+      "line": 44,
+      "item": "trait MQConsumer::create_topic_with_flag",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/mq_consumer.rs",
+      "line": 56,
+      "item": "trait MQConsumer::search_offset",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/mq_consumer.rs",
+      "line": 61,
+      "item": "trait MQConsumer::max_offset",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/mq_consumer.rs",
+      "line": 66,
+      "item": "trait MQConsumer::min_offset",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/mq_consumer.rs",
+      "line": 71,
+      "item": "trait MQConsumer::earliest_msg_store_time",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/mq_consumer.rs",
+      "line": 76,
+      "item": "trait MQConsumer::query_message",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/mq_consumer.rs",
+      "line": 88,
+      "item": "trait MQConsumer::view_message",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/mq_consumer.rs",
+      "line": 92,
+      "item": "trait MQConsumer::send_message_back",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/mq_consumer.rs",
+      "line": 104,
+      "item": "trait MQConsumer::send_message_back_to_origin_broker",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/mq_consumer.rs",
+      "line": 113,
+      "item": "trait MQConsumer::fetch_subscribe_message_queues",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/mq_consumer_inner.rs",
+      "line": 56,
+      "item": "trait MQConsumerInnerLocal::do_rebalance",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/mq_consumer_inner.rs",
+      "line": 60,
+      "item": "trait MQConsumerInnerLocal::try_rebalance",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/mq_consumer_inner.rs",
+      "line": 63,
+      "item": "trait MQConsumerInnerLocal::persist_consumer_offset",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/mq_consumer_inner.rs",
+      "line": 71,
+      "item": "trait MQConsumerInnerLocal::update_topic_subscribe_info",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/mq_consumer_inner.rs",
+      "line": 82,
+      "item": "trait MQConsumerInnerLocal::is_subscribe_topic_need_update",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/mq_consumer_inner.rs",
+      "line": 88,
+      "item": "trait MQConsumerInnerLocal::reset_offsets",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/mq_consumer_inner.rs",
+      "line": 91,
+      "item": "trait MQConsumerInnerLocal::consumer_status",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/mq_consumer_inner.rs",
+      "line": 94,
+      "item": "trait MQConsumerInnerLocal::consumer_running_info",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/mq_push_consumer.rs",
+      "line": 36,
+      "item": "trait MQPushConsumer::start",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/mq_push_consumer.rs",
+      "line": 41,
+      "item": "trait MQPushConsumer::shutdown",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/mq_push_consumer.rs",
+      "line": 98,
+      "item": "trait MQPushConsumer::subscribe",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/mq_push_consumer.rs",
+      "line": 117,
+      "item": "trait MQPushConsumer::subscribe_with_selector",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/mq_push_consumer.rs",
+      "line": 130,
+      "item": "trait MQPushConsumer::unsubscribe",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/mq_push_consumer.rs",
+      "line": 135,
+      "item": "trait MQPushConsumer::suspend",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/mq_push_consumer.rs",
+      "line": 140,
+      "item": "trait MQPushConsumer::resume",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/pop_callback.rs",
+      "line": 42,
+      "item": "trait PopCallbackInner::on_success",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/pull_callback.rs",
+      "line": 42,
+      "item": "trait PullCallbackLocal::on_success",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/store/offset_store.rs",
+      "line": 295,
+      "item": "trait OffsetStoreTrait::load",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/store/offset_store.rs",
+      "line": 301,
+      "item": "trait OffsetStoreTrait::update_offset",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/store/offset_store.rs",
+      "line": 305,
+      "item": "trait OffsetStoreTrait::update_and_freeze_offset",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/store/offset_store.rs",
+      "line": 311,
+      "item": "trait OffsetStoreTrait::read_offset",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/store/offset_store.rs",
+      "line": 314,
+      "item": "trait OffsetStoreTrait::persist_all",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/store/offset_store.rs",
+      "line": 317,
+      "item": "trait OffsetStoreTrait::persist",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/store/offset_store.rs",
+      "line": 320,
+      "item": "trait OffsetStoreTrait::remove_offset",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/store/offset_store.rs",
+      "line": 323,
+      "item": "trait OffsetStoreTrait::clone_offset_table",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/consumer/store/offset_store.rs",
+      "line": 332,
+      "item": "trait OffsetStoreTrait::update_consume_offset_to_broker",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/latency/latency_fault_tolerance.rs",
+      "line": 32,
+      "item": "trait LatencyFaultTolerance::update_fault_item",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/latency/latency_fault_tolerance.rs",
+      "line": 61,
+      "item": "trait LatencyFaultTolerance::remove",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/latency/latency_fault_tolerance.rs",
+      "line": 68,
+      "item": "trait LatencyFaultTolerance::pick_one_at_least",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/latency/latency_fault_tolerance.rs",
+      "line": 77,
+      "item": "trait LatencyFaultTolerance::detect_by_one_round",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/latency/resolver.rs",
+      "line": 19,
+      "item": "trait ResolverLocal::resolve",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/latency/service_detector.rs",
+      "line": 21,
+      "item": "trait ServiceDetectorLocal::detect",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 42,
+      "item": "trait MQProducer::start",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 45,
+      "item": "trait MQProducer::shutdown",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 57,
+      "item": "trait MQProducer::fetch_publish_message_queues",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 63,
+      "item": "trait MQProducer::create_topic",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 74,
+      "item": "trait MQProducer::create_topic_with_flag",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 86,
+      "item": "trait MQProducer::search_offset",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 91,
+      "item": "trait MQProducer::max_offset",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 96,
+      "item": "trait MQProducer::min_offset",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 101,
+      "item": "trait MQProducer::earliest_msg_store_time",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 106,
+      "item": "trait MQProducer::query_message",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 118,
+      "item": "trait MQProducer::view_message",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 136,
+      "item": "trait MQProducer::send",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 151,
+      "item": "trait MQProducer::send_with_timeout",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 174,
+      "item": "trait MQProducer::send_with_callback",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 194,
+      "item": "trait MQProducer::send_with_callback_timeout",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 217,
+      "item": "trait MQProducer::send_oneway",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 237,
+      "item": "trait MQProducer::send_to_queue",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 261,
+      "item": "trait MQProducer::send_to_queue_with_timeout",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 286,
+      "item": "trait MQProducer::send_to_queue_with_callback",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 313,
+      "item": "trait MQProducer::send_to_queue_with_callback_timeout",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 338,
+      "item": "trait MQProducer::send_oneway_to_queue",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 360,
+      "item": "trait MQProducer::send_with_selector",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 390,
+      "item": "trait MQProducer::send_with_selector_timeout",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 420,
+      "item": "trait MQProducer::send_with_selector_callback",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 452,
+      "item": "trait MQProducer::send_with_selector_callback_timeout",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 483,
+      "item": "trait MQProducer::send_oneway_with_selector",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 505,
+      "item": "trait MQProducer::send_message_in_transaction",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 524,
+      "item": "trait MQProducer::send_batch",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 539,
+      "item": "trait MQProducer::send_batch_with_timeout",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 558,
+      "item": "trait MQProducer::send_batch_to_queue",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 578,
+      "item": "trait MQProducer::send_batch_to_queue_with_timeout",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 597,
+      "item": "trait MQProducer::send_batch_with_callback",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 613,
+      "item": "trait MQProducer::send_batch_with_callback_timeout",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 634,
+      "item": "trait MQProducer::send_batch_to_queue_with_callback",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 656,
+      "item": "trait MQProducer::send_batch_to_queue_with_callback_timeout",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 682,
+      "item": "trait MQProducer::request",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 706,
+      "item": "trait MQProducer::request_with_callback",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 735,
+      "item": "trait MQProducer::request_with_selector",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 767,
+      "item": "trait MQProducer::request_with_selector_callback",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 797,
+      "item": "trait MQProducer::request_to_queue",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 823,
+      "item": "trait MQProducer::request_to_queue_with_callback",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-client/src/producer/mq_producer.rs",
+      "line": 888,
+      "item": "trait MQProducer::recall_message",
+      "owner": "client",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-controller/src/controller.rs",
+      "line": 166,
+      "item": "trait Controller::startup",
+      "owner": "controller",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-controller/src/controller.rs",
+      "line": 183,
+      "item": "trait Controller::shutdown",
+      "owner": "controller",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-controller/src/controller.rs",
+      "line": 207,
+      "item": "trait Controller::start_scheduling",
+      "owner": "controller",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-controller/src/controller.rs",
+      "line": 217,
+      "item": "trait Controller::stop_scheduling",
+      "owner": "controller",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-controller/src/controller.rs",
+      "line": 265,
+      "item": "trait Controller::register_broker",
+      "owner": "controller",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-controller/src/controller.rs",
+      "line": 281,
+      "item": "trait Controller::get_next_broker_id",
+      "owner": "controller",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-controller/src/controller.rs",
+      "line": 297,
+      "item": "trait Controller::apply_broker_id",
+      "owner": "controller",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-controller/src/controller.rs",
+      "line": 311,
+      "item": "trait Controller::clean_broker_data",
+      "owner": "controller",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-controller/src/controller.rs",
+      "line": 348,
+      "item": "trait Controller::elect_master",
+      "owner": "controller",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-controller/src/controller.rs",
+      "line": 379,
+      "item": "trait Controller::alter_sync_state_set",
+      "owner": "controller",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-controller/src/controller.rs",
+      "line": 404,
+      "item": "trait Controller::get_replica_info",
+      "owner": "controller",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-controller/src/controller.rs",
+      "line": 420,
+      "item": "trait Controller::get_controller_metadata",
+      "owner": "controller",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-controller/src/controller.rs",
+      "line": 434,
+      "item": "trait Controller::get_sync_state_data",
+      "owner": "controller",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-controller/src/storage/mod.rs",
+      "line": 64,
+      "item": "trait StorageBackend::put",
+      "owner": "controller",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-controller/src/storage/mod.rs",
+      "line": 67,
+      "item": "trait StorageBackend::get",
+      "owner": "controller",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-controller/src/storage/mod.rs",
+      "line": 70,
+      "item": "trait StorageBackend::delete",
+      "owner": "controller",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-controller/src/storage/mod.rs",
+      "line": 73,
+      "item": "trait StorageBackend::list_keys",
+      "owner": "controller",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-controller/src/storage/mod.rs",
+      "line": 76,
+      "item": "trait StorageBackend::batch_put",
+      "owner": "controller",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-controller/src/storage/mod.rs",
+      "line": 79,
+      "item": "trait StorageBackend::batch_delete",
+      "owner": "controller",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-controller/src/storage/mod.rs",
+      "line": 82,
+      "item": "trait StorageBackend::write_batch",
+      "owner": "controller",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-controller/src/storage/mod.rs",
+      "line": 85,
+      "item": "trait StorageBackend::exists",
+      "owner": "controller",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-controller/src/storage/mod.rs",
+      "line": 88,
+      "item": "trait StorageBackend::clear",
+      "owner": "controller",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-controller/src/storage/mod.rs",
+      "line": 91,
+      "item": "trait StorageBackend::sync",
+      "owner": "controller",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-controller/src/storage/mod.rs",
+      "line": 94,
+      "item": "trait StorageBackend::stats",
+      "owner": "controller",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-controller/src/storage/mod.rs",
+      "line": 116,
+      "item": "trait StorageBackendExt::put_json",
+      "owner": "controller",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-controller/src/storage/mod.rs",
+      "line": 123,
+      "item": "trait StorageBackendExt::get_json",
+      "owner": "controller",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-controller/src/storage/mod.rs",
+      "line": 135,
+      "item": "trait StorageBackendExt::list_json",
+      "owner": "controller",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-dashboard/rocketmq-dashboard-common/src/api.rs",
+      "line": 24,
+      "item": "trait DashboardClient::get_brokers",
+      "owner": "dashboard",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-dashboard/rocketmq-dashboard-common/src/api.rs",
+      "line": 27,
+      "item": "trait DashboardClient::get_topics",
+      "owner": "dashboard",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-dashboard/rocketmq-dashboard-common/src/api.rs",
+      "line": 30,
+      "item": "trait DashboardClient::get_consumer_groups",
+      "owner": "dashboard",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 133,
+      "item": "trait ClusterClient::readiness_check",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 137,
+      "item": "trait ClusterClient::query_route",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 139,
+      "item": "trait ClusterClient::query_assignment",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 146,
+      "item": "trait ClusterClient::query_topic_message_type",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 148,
+      "item": "trait ClusterClient::query_subscription_group",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 154,
+      "item": "trait ClusterClient::query_user",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 158,
+      "item": "trait ClusterClient::query_acl",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 162,
+      "item": "trait ClusterClient::send_message",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 168,
+      "item": "trait ClusterClient::recall_message",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 174,
+      "item": "trait ClusterClient::receive_message",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 180,
+      "item": "trait ClusterClient::pull_message",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 182,
+      "item": "trait ClusterClient::ack_message",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 188,
+      "item": "trait ClusterClient::forward_message_to_dead_letter_queue",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 194,
+      "item": "trait ClusterClient::change_invisible_duration",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 200,
+      "item": "trait ClusterClient::update_offset",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 206,
+      "item": "trait ClusterClient::get_offset",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 208,
+      "item": "trait ClusterClient::query_offset",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 210,
+      "item": "trait ClusterClient::end_transaction",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 219,
+      "item": "trait ClusterClientIo::start",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 221,
+      "item": "trait ClusterClientIo::shutdown",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 223,
+      "item": "trait ClusterClientIo::topic_route",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 225,
+      "item": "trait ClusterClientIo::lock_batch_mq",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 232,
+      "item": "trait ClusterClientIo::unlock_batch_mq",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 243,
+      "item": "trait ClusterClientIo::query_assignment",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 254,
+      "item": "trait ClusterClientIo::pop_message",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 262,
+      "item": "trait ClusterClientIo::ack_message",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 269,
+      "item": "trait ClusterClientIo::change_invisible_time",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 277,
+      "item": "trait ClusterClientIo::end_transaction",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 285,
+      "item": "trait ClusterClientIo::find_subscribe_broker_addr",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 292,
+      "item": "trait ClusterClientIo::refresh_topic_route",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 294,
+      "item": "trait ClusterClientIo::broker_name_for_queue",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 296,
+      "item": "trait ClusterClientIo::pull_outcome_from_broker",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 304,
+      "item": "trait ClusterClientIo::consumer_send_message_back",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 315,
+      "item": "trait ClusterClientIo::update_consumer_offset",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 322,
+      "item": "trait ClusterClientIo::query_consumer_offset",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 329,
+      "item": "trait ClusterClientIo::min_offset",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 336,
+      "item": "trait ClusterClientIo::max_offset",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 343,
+      "item": "trait ClusterClientIo::search_offset",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 352,
+      "item": "trait ClusterClientIo::topic_config",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 359,
+      "item": "trait ClusterClientIo::subscription_group_config",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 366,
+      "item": "trait ClusterClientIo::broker_cluster_info",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 368,
+      "item": "trait ClusterClientIo::user",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 375,
+      "item": "trait ClusterClientIo::acl",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 670,
+      "item": "trait ClusterProducerIo::start",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 672,
+      "item": "trait ClusterProducerIo::shutdown",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 674,
+      "item": "trait ClusterProducerIo::recall_message",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 680,
+      "item": "trait ClusterProducerIo::fetch_publish_message_queues",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 682,
+      "item": "trait ClusterProducerIo::send",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "line": 684,
+      "item": "trait ClusterProducerIo::send_to_queue",
+      "owner": "proxy-cluster",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-core/src/processor.rs",
+      "line": 305,
+      "item": "trait MessagingProcessor::query_route",
+      "owner": "proxy-core",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-core/src/processor.rs",
+      "line": 307,
+      "item": "trait MessagingProcessor::query_assignment",
+      "owner": "proxy-core",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-core/src/processor.rs",
+      "line": 313,
+      "item": "trait MessagingProcessor::send_message",
+      "owner": "proxy-core",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-core/src/processor.rs",
+      "line": 315,
+      "item": "trait MessagingProcessor::recall_message",
+      "owner": "proxy-core",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-core/src/processor.rs",
+      "line": 321,
+      "item": "trait MessagingProcessor::receive_message",
+      "owner": "proxy-core",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-core/src/processor.rs",
+      "line": 327,
+      "item": "trait MessagingProcessor::pull_message",
+      "owner": "proxy-core",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-core/src/processor.rs",
+      "line": 329,
+      "item": "trait MessagingProcessor::ack_message",
+      "owner": "proxy-core",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-core/src/processor.rs",
+      "line": 331,
+      "item": "trait MessagingProcessor::forward_message_to_dead_letter_queue",
+      "owner": "proxy-core",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-core/src/processor.rs",
+      "line": 337,
+      "item": "trait MessagingProcessor::change_invisible_duration",
+      "owner": "proxy-core",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-core/src/processor.rs",
+      "line": 343,
+      "item": "trait MessagingProcessor::update_offset",
+      "owner": "proxy-core",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-core/src/processor.rs",
+      "line": 349,
+      "item": "trait MessagingProcessor::get_offset",
+      "owner": "proxy-core",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-core/src/processor.rs",
+      "line": 351,
+      "item": "trait MessagingProcessor::query_offset",
+      "owner": "proxy-core",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-core/src/processor.rs",
+      "line": 353,
+      "item": "trait MessagingProcessor::end_transaction",
+      "owner": "proxy-core",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-core/src/remoting.rs",
+      "line": 46,
+      "item": "trait ProxyRemotingBackend::process",
+      "owner": "proxy-core",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-core/src/service.rs",
+      "line": 78,
+      "item": "trait RouteService::query_route",
+      "owner": "proxy-core",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-core/src/service.rs",
+      "line": 89,
+      "item": "trait MetadataService::readiness_check",
+      "owner": "proxy-core",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-core/src/service.rs",
+      "line": 93,
+      "item": "trait MetadataService::topic_message_type",
+      "owner": "proxy-core",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-core/src/service.rs",
+      "line": 99,
+      "item": "trait MetadataService::subscription_group",
+      "owner": "proxy-core",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-core/src/service.rs",
+      "line": 106,
+      "item": "trait MetadataService::user",
+      "owner": "proxy-core",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-core/src/service.rs",
+      "line": 110,
+      "item": "trait MetadataService::acl",
+      "owner": "proxy-core",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-core/src/service.rs",
+      "line": 117,
+      "item": "trait AssignmentService::query_assignment",
+      "owner": "proxy-core",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-core/src/service.rs",
+      "line": 128,
+      "item": "trait MessageService::send_message",
+      "owner": "proxy-core",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-core/src/service.rs",
+      "line": 134,
+      "item": "trait MessageService::recall_message",
+      "owner": "proxy-core",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-core/src/service.rs",
+      "line": 143,
+      "item": "trait ConsumerService::receive_message",
+      "owner": "proxy-core",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-core/src/service.rs",
+      "line": 149,
+      "item": "trait ConsumerService::pull_message",
+      "owner": "proxy-core",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-core/src/service.rs",
+      "line": 151,
+      "item": "trait ConsumerService::ack_message",
+      "owner": "proxy-core",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-core/src/service.rs",
+      "line": 157,
+      "item": "trait ConsumerService::forward_message_to_dead_letter_queue",
+      "owner": "proxy-core",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-core/src/service.rs",
+      "line": 163,
+      "item": "trait ConsumerService::change_invisible_duration",
+      "owner": "proxy-core",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-core/src/service.rs",
+      "line": 169,
+      "item": "trait ConsumerService::update_offset",
+      "owner": "proxy-core",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-core/src/service.rs",
+      "line": 175,
+      "item": "trait ConsumerService::get_offset",
+      "owner": "proxy-core",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-core/src/service.rs",
+      "line": 177,
+      "item": "trait ConsumerService::query_offset",
+      "owner": "proxy-core",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy-core/src/service.rs",
+      "line": 190,
+      "item": "trait TransactionService::end_transaction",
+      "owner": "proxy-core",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy/src/observability.rs",
+      "line": 93,
+      "item": "trait ProxyHook::before_request",
+      "owner": "proxy",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-proxy/src/observability.rs",
+      "line": 97,
+      "item": "trait ProxyHook::after_request",
+      "owner": "proxy",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-runtime/src/common/thread.rs",
+      "line": 34,
+      "item": "trait RocketMQTokioRunnable::run",
+      "owner": "runtime",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store-api/src/capability/release_checkpoint.rs",
+      "line": 37,
+      "item": "trait ReleaseCheckpointStore::create_release_checkpoint",
+      "owner": "store-api",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store-api/src/capability/release_checkpoint.rs",
+      "line": 50,
+      "item": "trait ReleaseCheckpointStore::restore_verify_release_checkpoint",
+      "owner": "store-api",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store-local/src/release_checkpoint.rs",
+      "line": 65,
+      "item": "trait LocalReleaseCheckpointBarrier::begin_release_checkpoint",
+      "owner": "store-local",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store-local/src/release_checkpoint.rs",
+      "line": 72,
+      "item": "trait LocalReleaseCheckpointBarrier::verify_release_checkpoint_restore",
+      "owner": "store-local",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/base/flush_manager.rs",
+      "line": 52,
+      "item": "trait RocketMQFlushManager::handle_disk_flush",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/base/message_store.rs",
+      "line": 243,
+      "item": "trait MessageStoreInner::load",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/base/message_store.rs",
+      "line": 246,
+      "item": "trait MessageStoreInner::start",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/base/message_store.rs",
+      "line": 249,
+      "item": "trait MessageStoreInner::init",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/base/message_store.rs",
+      "line": 257,
+      "item": "trait MessageStoreInner::shutdown_gracefully",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/base/message_store.rs",
+      "line": 260,
+      "item": "trait MessageStoreInner::shutdown",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/base/message_store.rs",
+      "line": 297,
+      "item": "trait MessageStoreInner::put_message",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/base/message_store.rs",
+      "line": 306,
+      "item": "trait MessageStoreInner::put_messages",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/base/message_store.rs",
+      "line": 320,
+      "item": "trait MessageStoreInner::get_message",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/base/message_store.rs",
+      "line": 342,
+      "item": "trait MessageStoreInner::get_message_with_size_limit",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/base/message_store.rs",
+      "line": 396,
+      "item": "trait MessageStoreInner::get_offset_in_queue_by_time_async",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/base/message_store.rs",
+      "line": 405,
+      "item": "trait MessageStoreInner::get_offset_in_queue_by_time_with_boundary_async",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/base/message_store.rs",
+      "line": 463,
+      "item": "trait MessageStoreInner::get_message_store_timestamp_async",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/base/message_store.rs",
+      "line": 480,
+      "item": "trait MessageStoreInner::append_to_commit_log",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/base/message_store.rs",
+      "line": 492,
+      "item": "trait MessageStoreInner::query_message",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/base/message_store.rs",
+      "line": 502,
+      "item": "trait MessageStoreInner::update_ha_master_address",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/ha/ha_client.rs",
+      "line": 22,
+      "item": "trait RocketmqHAClient::start",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/ha/ha_client.rs",
+      "line": 27,
+      "item": "trait RocketmqHAClient::shutdown",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/ha/ha_client.rs",
+      "line": 33,
+      "item": "trait RocketmqHAClient::wakeup",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/ha/ha_client.rs",
+      "line": 39,
+      "item": "trait RocketmqHAClient::update_master_address",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/ha/ha_client.rs",
+      "line": 45,
+      "item": "trait RocketmqHAClient::update_ha_master_address",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/ha/ha_client.rs",
+      "line": 84,
+      "item": "trait RocketmqHAClient::close_master",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/ha/ha_connection.rs",
+      "line": 28,
+      "item": "trait RocketmqHAConnection::start",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/ha/ha_connection.rs",
+      "line": 33,
+      "item": "trait RocketmqHAConnection::shutdown",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/ha/ha_connection.rs",
+      "line": 50,
+      "item": "trait RocketmqHAConnection::get_current_state",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/ha/ha_service.rs",
+      "line": 33,
+      "item": "trait RocketHAService::start",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/ha/ha_service.rs",
+      "line": 36,
+      "item": "trait RocketHAService::shutdown",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/ha/ha_service.rs",
+      "line": 45,
+      "item": "trait RocketHAService::change_to_master",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/ha/ha_service.rs",
+      "line": 54,
+      "item": "trait RocketHAService::change_to_master_when_last_role_is_master",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/ha/ha_service.rs",
+      "line": 65,
+      "item": "trait RocketHAService::change_to_slave",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/ha/ha_service.rs",
+      "line": 80,
+      "item": "trait RocketHAService::change_to_slave_when_master_not_change",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/ha/ha_service.rs",
+      "line": 90,
+      "item": "trait RocketHAService::update_master_address",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/ha/ha_service.rs",
+      "line": 96,
+      "item": "trait RocketHAService::update_ha_master_address",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/ha/ha_service.rs",
+      "line": 120,
+      "item": "trait RocketHAService::put_request",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/ha/ha_service.rs",
+      "line": 126,
+      "item": "trait RocketHAService::put_group_connection_state_request",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/ha/ha_service.rs",
+      "line": 132,
+      "item": "trait RocketHAService::snapshot_acked_replicas",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/ha/ha_service.rs",
+      "line": 138,
+      "item": "trait RocketHAService::connection_state",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/ha/ha_service.rs",
+      "line": 179,
+      "item": "trait RocketHAService::is_slave_ok",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/queue/consume_queue_store.rs",
+      "line": 48,
+      "item": "trait ConsumeQueueStoreInterface::recover",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/queue/consume_queue_store.rs",
+      "line": 54,
+      "item": "trait ConsumeQueueStoreInterface::recover_concurrently",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/queue/consume_queue_store.rs",
+      "line": 60,
+      "item": "trait ConsumeQueueStoreInterface::recover_concurrently_with_parallelism",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/queue/consume_queue_store.rs",
+      "line": 94,
+      "item": "trait ConsumeQueueStoreInterface::clean_expired",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/queue/consume_queue_store.rs",
+      "line": 180,
+      "item": "trait ConsumeQueueStoreInterface::range_query",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-store/src/queue/consume_queue_store.rs",
+      "line": 191,
+      "item": "trait ConsumeQueueStoreInterface::get",
+      "owner": "store",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/dispatcher/tiered_dispatcher.rs",
+      "line": 60,
+      "item": "trait TieredDispatcher::dispatch",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/dispatcher/tiered_dispatcher.rs",
+      "line": 63,
+      "item": "trait TieredDispatcher::dispatch_derived",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/dispatcher/tiered_dispatcher.rs",
+      "line": 72,
+      "item": "trait TieredDispatcher::start",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/dispatcher/tiered_dispatcher.rs",
+      "line": 74,
+      "item": "trait TieredDispatcher::shutdown",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/fetcher/tiered_message_fetcher.rs",
+      "line": 54,
+      "item": "trait TieredMessageFetcher::get_message",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/fetcher/tiered_message_fetcher.rs",
+      "line": 62,
+      "item": "trait TieredMessageFetcher::get_message_timestamp",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/fetcher/tiered_message_fetcher.rs",
+      "line": 69,
+      "item": "trait TieredMessageFetcher::get_offset_by_time",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/fetcher/tiered_message_fetcher.rs",
+      "line": 76,
+      "item": "trait TieredMessageFetcher::get_offset_by_time_with_boundary",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/fetcher/tiered_message_fetcher.rs",
+      "line": 84,
+      "item": "trait TieredMessageFetcher::query_message",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/file/file_segment.rs",
+      "line": 60,
+      "item": "trait FileSegmentInner::append",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/file/file_segment.rs",
+      "line": 62,
+      "item": "trait FileSegmentInner::read",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/file/file_segment.rs",
+      "line": 64,
+      "item": "trait FileSegmentInner::commit",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/file/file_segment.rs",
+      "line": 66,
+      "item": "trait FileSegmentInner::seal",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/lifecycle.rs",
+      "line": 19,
+      "item": "trait TieredLifecycle::load",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/lifecycle.rs",
+      "line": 21,
+      "item": "trait TieredLifecycle::start",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/lifecycle.rs",
+      "line": 23,
+      "item": "trait TieredLifecycle::shutdown",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/lifecycle.rs",
+      "line": 25,
+      "item": "trait TieredLifecycle::destroy",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/metadata/metadata_store.rs",
+      "line": 34,
+      "item": "trait TieredMetadataStore::load",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/metadata/metadata_store.rs",
+      "line": 36,
+      "item": "trait TieredMetadataStore::persist",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/metadata/metadata_store.rs",
+      "line": 38,
+      "item": "trait TieredMetadataStore::destroy",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/metadata/metadata_store.rs",
+      "line": 40,
+      "item": "trait TieredMetadataStore::get_topic",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/metadata/metadata_store.rs",
+      "line": 42,
+      "item": "trait TieredMetadataStore::upsert_topic",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/metadata/metadata_store.rs",
+      "line": 44,
+      "item": "trait TieredMetadataStore::delete_topic",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/metadata/metadata_store.rs",
+      "line": 46,
+      "item": "trait TieredMetadataStore::get_queue",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/metadata/metadata_store.rs",
+      "line": 48,
+      "item": "trait TieredMetadataStore::list_queues",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/metadata/metadata_store.rs",
+      "line": 50,
+      "item": "trait TieredMetadataStore::upsert_queue",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/metadata/metadata_store.rs",
+      "line": 52,
+      "item": "trait TieredMetadataStore::delete_queue",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/metadata/metadata_store.rs",
+      "line": 54,
+      "item": "trait TieredMetadataStore::list_file_segments",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/metadata/metadata_store.rs",
+      "line": 56,
+      "item": "trait TieredMetadataStore::list_all_file_segments",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/metadata/metadata_store.rs",
+      "line": 58,
+      "item": "trait TieredMetadataStore::upsert_file_segment",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/metadata/metadata_store.rs",
+      "line": 60,
+      "item": "trait TieredMetadataStore::mark_file_segment_deleted",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/metadata/metadata_store.rs",
+      "line": 62,
+      "item": "trait TieredMetadataStore::list_index_entries",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/metadata/metadata_store.rs",
+      "line": 64,
+      "item": "trait TieredMetadataStore::upsert_index_entry",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/metadata/metadata_store.rs",
+      "line": 66,
+      "item": "trait TieredMetadataStore::delete_index_entries_before",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/provider.rs",
+      "line": 34,
+      "item": "trait TieredStoreProviderInner::create_segment",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/provider.rs",
+      "line": 44,
+      "item": "trait TieredStoreProviderInner::segment_size",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/provider.rs",
+      "line": 46,
+      "item": "trait TieredStoreProviderInner::read",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/provider.rs",
+      "line": 48,
+      "item": "trait TieredStoreProviderInner::write",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tieredstore/src/provider.rs",
+      "line": 50,
+      "item": "trait TieredStoreProviderInner::delete",
+      "owner": "tieredstore",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/src/commands.rs",
+      "line": 54,
+      "item": "trait CommandExecute::execute",
+      "owner": "admin",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/admin_session.rs",
+      "line": 62,
+      "item": "trait AdminSession::broker_rows",
+      "owner": "mcp",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/admin_session.rs",
+      "line": 64,
+      "item": "trait AdminSession::topic_entries",
+      "owner": "mcp",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/admin_session.rs",
+      "line": 66,
+      "item": "trait AdminSession::topic_route",
+      "owner": "mcp",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/admin_session.rs",
+      "line": 68,
+      "item": "trait AdminSession::consumer_groups",
+      "owner": "mcp",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/admin_session.rs",
+      "line": 70,
+      "item": "trait AdminSession::consumer_lag",
+      "owner": "mcp",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/admin_session.rs",
+      "line": 76,
+      "item": "trait AdminSession::probe_broker_runtime",
+      "owner": "mcp",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/admin_session.rs",
+      "line": 78,
+      "item": "trait AdminSession::shutdown",
+      "owner": "mcp",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/admin_session.rs",
+      "line": 85,
+      "item": "trait AdminSessionFactory::start",
+      "owner": "mcp",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/query_facade.rs",
+      "line": 79,
+      "item": "trait ReadOnlyQuery::cluster_overview",
+      "owner": "mcp",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/query_facade.rs",
+      "line": 84,
+      "item": "trait ReadOnlyQuery::list_topics",
+      "owner": "mcp",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/query_facade.rs",
+      "line": 86,
+      "item": "trait ReadOnlyQuery::describe_topic",
+      "owner": "mcp",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/query_facade.rs",
+      "line": 91,
+      "item": "trait ReadOnlyQuery::query_topic_route",
+      "owner": "mcp",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/query_facade.rs",
+      "line": 96,
+      "item": "trait ReadOnlyQuery::list_consumer_groups",
+      "owner": "mcp",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/query_facade.rs",
+      "line": 101,
+      "item": "trait ReadOnlyQuery::query_consumer_lag",
+      "owner": "mcp",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/query_facade.rs",
+      "line": 106,
+      "item": "trait ReadOnlyQuery::describe_broker",
+      "owner": "mcp",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tools/rocketmq-mcp/src/adapter/query_facade.rs",
+      "line": 111,
+      "item": "trait ReadOnlyQuery::diagnose_consumer_lag",
+      "owner": "mcp",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tools/rocketmq-mcp/src/guard/audit.rs",
+      "line": 540,
+      "item": "trait AuditSink::write",
+      "owner": "mcp",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tools/rocketmq-mcp/src/guard/audit.rs",
+      "line": 541,
+      "item": "trait AuditSink::flush",
+      "owner": "mcp",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-tools/rocketmq-mcp/src/guard/jwks.rs",
+      "line": 33,
+      "item": "trait JwksSource::fetch",
+      "owner": "mcp",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-transport/src/clients.rs",
+      "line": 44,
+      "item": "trait RemotingClient::update_name_server_address_list",
+      "owner": "transport",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-transport/src/clients.rs",
+      "line": 67,
+      "item": "trait RemotingClient::invoke_request",
+      "owner": "transport",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-transport/src/clients.rs",
+      "line": 75,
+      "item": "trait RemotingClient::invoke_request_with_deadline",
+      "owner": "transport",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-transport/src/clients.rs",
+      "line": 88,
+      "item": "trait RemotingClient::invoke_request_oneway",
+      "owner": "transport",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-transport/src/remoting.rs",
+      "line": 38,
+      "item": "trait RemotingService::start",
+      "owner": "transport",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-transport/src/rpc/rpc_client.rs",
+      "line": 24,
+      "item": "trait RpcClientLocal::invoke",
+      "owner": "transport",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-transport/src/rpc/rpc_client.rs",
+      "line": 30,
+      "item": "trait RpcClientLocal::invoke_mq",
+      "owner": "transport",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "native_async",
+      "path": "rocketmq-transport/src/runtime/processor.rs",
+      "line": 26,
+      "item": "trait LocalRequestProcessor::process_request",
+      "owner": "transport",
+      "decision": "preferred-static-dispatch"
+    },
+    {
+      "kind": "trait_variant",
+      "path": "rocketmq-broker/src/long_polling/long_polling_service/pop_lite_long_polling_service.rs",
+      "line": 53,
+      "item": "trait LocalPopLiteLongPollingRequestProcessor",
+      "owner": "broker",
+      "decision": "retain-send-contract-review-on-touch"
+    },
+    {
+      "kind": "trait_variant",
+      "path": "rocketmq-broker/src/long_polling/long_polling_service/pop_long_polling_service.rs",
+      "line": 111,
+      "item": "trait LocalPopLongPollingRequestProcessor",
+      "owner": "broker",
+      "decision": "retain-send-contract-review-on-touch"
+    },
+    {
+      "kind": "trait_variant",
+      "path": "rocketmq-broker/src/transaction/transactional_message_check_listener.rs",
+      "line": 18,
+      "item": "trait TransactionalMessageCheckListenerInner",
+      "owner": "broker",
+      "decision": "retain-send-contract-review-on-touch"
+    },
+    {
+      "kind": "trait_variant",
+      "path": "rocketmq-broker/src/transaction/transactional_message_service.rs",
+      "line": 27,
+      "item": "trait TransactionalMessageServiceLocal",
+      "owner": "broker",
+      "decision": "retain-send-contract-review-on-touch"
+    },
+    {
+      "kind": "trait_variant",
+      "path": "rocketmq-client/src/base/mq_client_admin.rs",
+      "line": 48,
+      "item": "trait MqClientAdminInner",
+      "owner": "client",
+      "decision": "retain-send-contract-review-on-touch"
+    },
+    {
+      "kind": "trait_variant",
+      "path": "rocketmq-client/src/consumer/consumer_impl/re_balance.rs",
+      "line": 56,
+      "item": "trait RebalanceLocal",
+      "owner": "client",
+      "decision": "retain-send-contract-review-on-touch"
+    },
+    {
+      "kind": "trait_variant",
+      "path": "rocketmq-client/src/consumer/lite_pull_consumer.rs",
+      "line": 46,
+      "item": "trait LitePullConsumerLocal",
+      "owner": "client",
+      "decision": "retain-send-contract-review-on-touch"
+    },
+    {
+      "kind": "trait_variant",
+      "path": "rocketmq-client/src/consumer/mq_consumer_inner.rs",
+      "line": 38,
+      "item": "trait MQConsumerInnerLocal",
+      "owner": "client",
+      "decision": "retain-send-contract-review-on-touch"
+    },
+    {
+      "kind": "trait_variant",
+      "path": "rocketmq-client/src/consumer/pop_callback.rs",
+      "line": 35,
+      "item": "trait PopCallbackInner",
+      "owner": "client",
+      "decision": "retain-send-contract-review-on-touch"
+    },
+    {
+      "kind": "trait_variant",
+      "path": "rocketmq-client/src/consumer/pull_callback.rs",
+      "line": 40,
+      "item": "trait PullCallbackLocal",
+      "owner": "client",
+      "decision": "retain-send-contract-review-on-touch"
+    },
+    {
+      "kind": "trait_variant",
+      "path": "rocketmq-client/src/latency/resolver.rs",
+      "line": 17,
+      "item": "trait ResolverLocal",
+      "owner": "client",
+      "decision": "retain-send-contract-review-on-touch"
+    },
+    {
+      "kind": "trait_variant",
+      "path": "rocketmq-client/src/latency/service_detector.rs",
+      "line": 16,
+      "item": "trait ServiceDetectorLocal",
+      "owner": "client",
+      "decision": "retain-send-contract-review-on-touch"
+    },
+    {
+      "kind": "trait_variant",
+      "path": "rocketmq-runtime/src/common/thread.rs",
+      "line": 32,
+      "item": "trait RocketMQTokioRunnable",
+      "owner": "runtime",
+      "decision": "retain-send-contract-review-on-touch"
+    },
+    {
+      "kind": "trait_variant",
+      "path": "rocketmq-store/src/base/flush_manager.rs",
+      "line": 24,
+      "item": "trait RocketMQFlushManager",
+      "owner": "store",
+      "decision": "retain-send-contract-review-on-touch"
+    },
+    {
+      "kind": "trait_variant",
+      "path": "rocketmq-store/src/base/message_store.rs",
+      "line": 238,
+      "item": "trait MessageStoreInner",
+      "owner": "store",
+      "decision": "retain-send-contract-review-on-touch"
+    },
+    {
+      "kind": "trait_variant",
+      "path": "rocketmq-store/src/ha/ha_client.rs",
+      "line": 17,
+      "item": "trait RocketmqHAClient",
+      "owner": "store",
+      "decision": "retain-send-contract-review-on-touch"
+    },
+    {
+      "kind": "trait_variant",
+      "path": "rocketmq-store/src/ha/ha_connection.rs",
+      "line": 23,
+      "item": "trait RocketmqHAConnection",
+      "owner": "store",
+      "decision": "retain-send-contract-review-on-touch"
+    },
+    {
+      "kind": "trait_variant",
+      "path": "rocketmq-store/src/ha/ha_service.rs",
+      "line": 27,
+      "item": "trait RocketHAService",
+      "owner": "store",
+      "decision": "retain-send-contract-review-on-touch"
+    },
+    {
+      "kind": "trait_variant",
+      "path": "rocketmq-store/src/queue/consume_queue_store.rs",
+      "line": 30,
+      "item": "trait ConsumeQueueStoreInterface",
+      "owner": "store",
+      "decision": "retain-send-contract-review-on-touch"
+    },
+    {
+      "kind": "trait_variant",
+      "path": "rocketmq-tieredstore/src/file/file_segment.rs",
+      "line": 46,
+      "item": "trait FileSegmentInner",
+      "owner": "tieredstore",
+      "decision": "retain-send-contract-review-on-touch"
+    },
+    {
+      "kind": "trait_variant",
+      "path": "rocketmq-tieredstore/src/provider.rs",
+      "line": 32,
+      "item": "trait TieredStoreProviderInner",
+      "owner": "tieredstore",
+      "decision": "retain-send-contract-review-on-touch"
+    },
+    {
+      "kind": "trait_variant",
+      "path": "rocketmq-transport/src/rpc/rpc_client.rs",
+      "line": 22,
+      "item": "trait RpcClientLocal",
+      "owner": "transport",
+      "decision": "retain-send-contract-review-on-touch"
+    },
+    {
+      "kind": "trait_variant",
+      "path": "rocketmq-transport/src/runtime/processor.rs",
+      "line": 23,
+      "item": "trait LocalRequestProcessor",
+      "owner": "transport",
+      "decision": "retain-send-contract-review-on-touch"
+    }
+  ]
+}

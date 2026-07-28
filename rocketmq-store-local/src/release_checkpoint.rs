@@ -41,6 +41,7 @@ use rocketmq_protocol::protocol::body::release_checkpoint::StoreReleaseCheckpoin
 use rocketmq_protocol::protocol::body::release_checkpoint::StoreReleaseCheckpointRequest;
 use rocketmq_protocol::protocol::body::release_checkpoint::RELEASE_CHECKPOINT_SCHEMA_VERSION;
 use rocketmq_runtime::BlockingExecutor;
+use rocketmq_runtime::RuntimeError;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_store_api::ReleaseCheckpointStore;
 use sha2::Digest;
@@ -172,7 +173,9 @@ where
             .barrier
             .begin_release_checkpoint(&request, deadline)
             .await
-            .map_err(|error| LocalReleaseCheckpointError::Barrier(error.to_string()))?;
+            .map_err(|source| LocalReleaseCheckpointError::Barrier {
+                source: Box::new(source),
+            })?;
         if snapshot.storage_identity() != &request.storage_identity {
             return Err(LocalReleaseCheckpointError::StorageIdentityMismatch);
         }
@@ -204,7 +207,7 @@ where
                 )
             })
             .await
-            .map_err(|error| LocalReleaseCheckpointError::Runtime(error.to_string()))??;
+            .map_err(LocalReleaseCheckpointError::Runtime)??;
         drop(snapshot);
         manifest.validate()?;
         Ok(manifest)
@@ -234,7 +237,7 @@ where
                 hash_checkpoint_directory(&checkpoint_path_for_hash, max_checkpoint_bytes)
             })
             .await
-            .map_err(|error| LocalReleaseCheckpointError::Runtime(error.to_string()))??;
+            .map_err(LocalReleaseCheckpointError::Runtime)??;
         if digest.sha256 != expected_sha256 || digest.length_bytes != expected_length {
             return Err(LocalReleaseCheckpointError::ArtifactChecksumMismatch);
         }
@@ -243,7 +246,9 @@ where
             .barrier
             .verify_release_checkpoint_restore(&checkpoint_path, manifest, deadline)
             .await
-            .map_err(|error| LocalReleaseCheckpointError::RestoreVerification(error.to_string()))?;
+            .map_err(|source| LocalReleaseCheckpointError::RestoreVerification {
+                source: Box::new(source),
+            })?;
         if restored_offsets != manifest.offsets {
             return Err(LocalReleaseCheckpointError::RestoreOffsetsChanged {
                 expected: manifest.offsets,
@@ -395,8 +400,7 @@ fn create_atomic_checkpoint(
     };
     manifest.validate()?;
     let manifest_path = partial_path.join(RELEASE_CHECKPOINT_MANIFEST_FILE);
-    let manifest_bytes = serde_json::to_vec_pretty(&manifest)
-        .map_err(|source| LocalReleaseCheckpointError::Serialize(source.to_string()))?;
+    let manifest_bytes = serde_json::to_vec_pretty(&manifest).map_err(LocalReleaseCheckpointError::Serialize)?;
     write_synced_file(&manifest_path, &manifest_bytes)?;
     sync_directory(&partial_path)?;
     fs::rename(&partial_path, &final_path).map_err(|source| io_error("publish checkpoint", &final_path, source))?;
@@ -587,9 +591,9 @@ fn authorization_deadline(
 fn unix_millis() -> Result<u64, LocalReleaseCheckpointError> {
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|error| LocalReleaseCheckpointError::Clock(error.to_string()))?
+        .map_err(LocalReleaseCheckpointError::Clock)?
         .as_millis();
-    u64::try_from(millis).map_err(|_| LocalReleaseCheckpointError::Clock("Unix time exceeds u64".to_string()))
+    u64::try_from(millis).map_err(|_| LocalReleaseCheckpointError::ClockOverflow)
 }
 
 fn io_error(operation: &'static str, path: &Path, source: io::Error) -> LocalReleaseCheckpointError {
@@ -611,15 +615,21 @@ pub enum LocalReleaseCheckpointError {
     InvalidConfiguration(String),
     #[error("Store checkpoint storage identity changed before flush")]
     StorageIdentityMismatch,
-    #[error("Store flush barrier failed: {0}")]
-    Barrier(String),
+    #[error("Store flush barrier failed")]
+    Barrier {
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
     #[error("Store flush offsets changed: expected {expected:?}, actual {actual:?}")]
     BarrierOffsetsChanged {
         expected: ReleaseCheckpointOffsets,
         actual: ReleaseCheckpointOffsets,
     },
-    #[error("checkpoint restore verification failed: {0}")]
-    RestoreVerification(String),
+    #[error("checkpoint restore verification failed")]
+    RestoreVerification {
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
     #[error("restored checkpoint offsets changed: expected {expected:?}, actual {actual:?}")]
     RestoreOffsetsChanged {
         expected: ReleaseCheckpointOffsets,
@@ -647,12 +657,14 @@ pub enum LocalReleaseCheckpointError {
     PathEscaped(PathBuf),
     #[error("unsupported checkpoint URI: {0}")]
     UnsupportedUri(String),
-    #[error("failed to serialize checkpoint manifest: {0}")]
-    Serialize(String),
-    #[error("system clock error: {0}")]
-    Clock(String),
-    #[error("blocking checkpoint operation failed: {0}")]
-    Runtime(String),
+    #[error("failed to serialize checkpoint manifest")]
+    Serialize(#[source] serde_json::Error),
+    #[error("system clock error")]
+    Clock(#[source] std::time::SystemTimeError),
+    #[error("Unix time exceeds u64 milliseconds")]
+    ClockOverflow,
+    #[error("blocking checkpoint operation failed")]
+    Runtime(#[source] RuntimeError),
     #[error("checkpoint validation failed: {0}")]
     Validation(#[from] ReleaseCheckpointValidationError),
     #[error("{operation} failed for {path}: {source}")]

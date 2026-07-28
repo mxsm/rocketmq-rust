@@ -34,7 +34,7 @@ use rocketmq_namesrv::bootstrap::Builder;
 use rocketmq_namesrv::parse_command_and_config_file;
 use rocketmq_namesrv::NamesrvConfig;
 use rocketmq_observability::MetricsExporterType;
-use rocketmq_protocol::protocol::remoting_command;
+use rocketmq_protocol::protocol::remoting_command_facade::initialize_remoting_version;
 use rocketmq_runtime::common::parse_config_file;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeConfig;
@@ -105,10 +105,8 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     // Parse command line arguments first
     let args = Args::parse();
 
-    EnvUtils::put_property(
-        remoting_command::REMOTING_VERSION_KEY,
-        (CURRENT_VERSION as u32).to_string(),
-    );
+    initialize_remoting_version(CURRENT_VERSION as i32)
+        .context("failed to initialize the immutable NameServer remoting version")?;
 
     // Parse and merge configurations
     let (namesrv_config, server_config, controller_config, logging_overrides) =

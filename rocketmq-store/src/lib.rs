@@ -638,11 +638,14 @@ pub mod bench_support {
     #[cfg(unix)]
     fn process_user_cpu_nanos() -> Option<u128> {
         let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+        // SAFETY: usage points to writable storage for one libc::rusage value;
+        // getrusage initializes it on a zero return and does not retain the pointer.
         let result = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
         if result != 0 {
             return None;
         }
 
+        // SAFETY: the successful getrusage call above initialized the complete value.
         let usage = unsafe { usage.assume_init() };
         timeval_to_nanos(usage.ru_utime)
     }
