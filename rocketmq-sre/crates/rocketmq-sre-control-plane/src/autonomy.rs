@@ -14,3 +14,6 @@
 
 mod model;
 mod repository;
+mod service;
+
+pub(crate) use service::AutonomyService;
