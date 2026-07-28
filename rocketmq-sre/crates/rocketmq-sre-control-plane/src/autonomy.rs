@@ -14,6 +14,7 @@
 
 mod api;
 mod model;
+mod reconciler;
 mod repository;
 mod service;
 
@@ -21,4 +22,5 @@ mod service;
 mod repository_tests;
 
 pub(crate) use api::routes;
+pub(crate) use reconciler::AutonomyPauseReconciler;
 pub(crate) use service::AutonomyService;
