@@ -472,6 +472,36 @@ async fn autonomous_execution_persists_live_safety_before_forward_dispatch() {
     cleanup_schema(&run.pool, &run.schema).await;
 }
 
+#[tokio::test]
+#[ignore = "requires ROCKETMQ_SRE_TEST_DATABASE_URL pointing to Docker PostgreSQL"]
+async fn autonomous_rollback_reuses_journal_without_a_new_safety_gate() {
+    let signals = [
+        signal(0, true),
+        signal(1, true),
+        signal(2, false),
+        signal(902, false),
+        signal(3, true),
+        signal(4, true),
+        signal(124, true),
+    ];
+    let run = run_execution_with_authorization(&signals, true).await;
+
+    assert_eq!(run.state, ExecutionState::RolledBack);
+    assert_eq!(run.dynamic_safety_calls, 1);
+    assert_eq!(run.dispatches, vec![false, true]);
+    assert_eq!(run.compensation_intents, 1);
+    let compensation_verifications: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM execution_verifications
+         WHERE execution_id = $1 AND compensation",
+    )
+    .bind(run.execution_id)
+    .fetch_one(&run.pool)
+    .await
+    .expect("autonomous compensation verification count");
+    assert_eq!(compensation_verifications, 1);
+    cleanup_schema(&run.pool, &run.schema).await;
+}
+
 struct ExecutionRun {
     pool: PgPool,
     schema: String,
