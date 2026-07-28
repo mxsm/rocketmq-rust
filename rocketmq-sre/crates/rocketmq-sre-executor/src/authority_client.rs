@@ -24,6 +24,8 @@ use rocketmq_sre_contracts::ActivateLeaseRequest;
 use rocketmq_sre_contracts::BeginLeaseTakeoverRequest;
 use rocketmq_sre_contracts::BeginLeaseTakeoverResponse;
 use rocketmq_sre_contracts::ClusterId;
+use rocketmq_sre_contracts::DynamicSafetyDecision;
+use rocketmq_sre_contracts::DynamicSafetyEvaluationRequest;
 use rocketmq_sre_contracts::ExecutorLease;
 use rocketmq_sre_contracts::GrantVerification;
 use rocketmq_sre_contracts::IssueFenceGrantRequest;
@@ -61,6 +63,11 @@ pub trait ExecutorAuthorityClient: Send + Sync {
     ) -> AuthorityFuture<'a, ExecutorLease>;
 
     fn issue_fence_grant<'a>(&'a self, request: &'a IssueFenceGrantRequest) -> AuthorityFuture<'a, LeaseFenceGrant>;
+
+    fn evaluate_dynamic_safety<'a>(
+        &'a self,
+        request: &'a DynamicSafetyEvaluationRequest,
+    ) -> AuthorityFuture<'a, DynamicSafetyDecision>;
 }
 
 /// Redirect-free, bounded, workload-authenticated Authority client.
@@ -237,6 +244,37 @@ impl ExecutorAuthorityClient for HttpExecutorAuthorityClient {
                 return Err(ExecutorError::AuthorityRejected);
             }
             Ok(grant)
+        })
+    }
+
+    fn evaluate_dynamic_safety<'a>(
+        &'a self,
+        request: &'a DynamicSafetyEvaluationRequest,
+    ) -> AuthorityFuture<'a, DynamicSafetyDecision> {
+        Box::pin(async move {
+            let decision: DynamicSafetyDecision = self
+                .post(
+                    "/internal/v1/autonomy/dynamic-safety",
+                    request.tenant_id,
+                    request.cluster_id,
+                    request,
+                )
+                .await?;
+            if decision.validate_allow_at(chrono::Utc::now()).is_err()
+                || decision.tenant_id != request.tenant_id
+                || decision.cluster_id != request.cluster_id
+                || decision.action != request.action
+                || decision.action_version != request.action_version
+                || decision.plan_id != request.plan_id
+                || decision.plan_hash != request.plan_hash
+                || decision.execution_id != request.execution_id
+                || decision.execution_step_id != request.execution_step_id
+                || decision.policy_definition_version != request.policy_definition_version
+                || decision.lifecycle_revision != request.lifecycle_revision
+            {
+                return Err(ExecutorError::AuthorityRejected);
+            }
+            Ok(decision)
         })
     }
 }
