@@ -45,7 +45,7 @@ use crate::release_management::model::ReleasePage;
 use crate::release_management::model::ReleasePreparationView;
 
 impl ReleaseManagementService {
-    pub(crate) async fn create_release(
+    pub(in crate::release_management) async fn create_release(
         &self,
         auth: &AuthContext,
         request: &CreateReleaseRequest,
@@ -158,7 +158,7 @@ impl ReleaseManagementService {
         self.release(auth, workflow.id).await
     }
 
-    pub(crate) async fn release(
+    pub(in crate::release_management) async fn release(
         &self,
         auth: &AuthContext,
         release_id: ReleaseId,
@@ -167,7 +167,7 @@ impl ReleaseManagementService {
         self.release_detail(workflow).await
     }
 
-    pub(crate) async fn releases(
+    pub(in crate::release_management) async fn releases(
         &self,
         auth: &AuthContext,
         query: &ReleaseListQuery,
@@ -187,7 +187,7 @@ impl ReleaseManagementService {
         })
     }
 
-    pub(crate) async fn prepare_release(
+    pub(in crate::release_management) async fn prepare_release(
         &self,
         auth: &AuthContext,
         release_id: ReleaseId,
