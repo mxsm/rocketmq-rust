@@ -54,7 +54,9 @@ fn phase_three_descriptor_catalog_is_typed_and_fail_closed() {
             descriptor.execution_supported,
             matches!(
                 action,
-                ExecutionAction::ObservabilityLoggerLevelTtl | ExecutionAction::ProxyScaleOutOne
+                ExecutionAction::ObservabilityLoggerLevelTtl
+                    | ExecutionAction::ProxyScaleOutOne
+                    | ExecutionAction::ProxyRestartOne
             )
         );
         assert!(!descriptor.parameter_schema.is_null());
