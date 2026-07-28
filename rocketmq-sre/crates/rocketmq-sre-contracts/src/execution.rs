@@ -25,6 +25,7 @@ use crate::AutonomyGrant;
 use crate::ClusterId;
 use crate::ContractError;
 use crate::CorrelationId;
+use crate::DynamicSafetyDecision;
 use crate::ExecutionAction;
 use crate::ExecutionId;
 use crate::ExecutionStepId;
@@ -249,6 +250,8 @@ pub struct StepIntent {
     pub attempt: u16,
     pub idempotency_key: String,
     pub fence_grant: LeaseFenceGrant,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dynamic_safety: Option<DynamicSafetyDecision>,
     pub intended_at: DateTime<Utc>,
     pub compensation: bool,
 }
