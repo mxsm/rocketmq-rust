@@ -597,12 +597,19 @@ impl ProxyRestartClient for ProductionProxyRestartClient {
             if !accepting(&before) {
                 return Err(ExecutionAgentError::DriverFailed);
             }
-            let begun = self.begin_drain(&original_proxy_addr, &request.operation_id).await?;
+            let begun = match self.begin_drain(&original_proxy_addr, &request.operation_id).await {
+                Ok(state) => state,
+                Err(error) => {
+                    let _ = self.cancel_drain(&original_proxy_addr, &request.operation_id).await;
+                    return Err(error);
+                }
+            };
             if begun.operation_id.as_deref() != Some(request.operation_id.as_str())
                 || begun.admission_open
                 || begun.routing_open
                 || begun.readiness_published
             {
+                let _ = self.cancel_drain(&original_proxy_addr, &request.operation_id).await;
                 return Err(ExecutionAgentError::DriverFailed);
             }
 
@@ -619,15 +626,17 @@ impl ProxyRestartClient for ProductionProxyRestartClient {
                 self.cancel_drain(&original_proxy_addr, &request.operation_id).await?;
                 return Err(ExecutionAgentError::DriverFailed);
             }
-            let final_drain = self.query_drain(&original_proxy_addr).await?;
-            if final_drain.operation_id.as_deref() != Some(request.operation_id.as_str())
-                || final_drain.phase != ProxyDrainPhase::Drained
-                || !final_drain.zero_pending
-                || !final_drain.pending.is_zero()
-                || !self
-                    .remaining_replicas_healthy(&resolved.deployment, &request.expected_uid)
-                    .await?
-            {
+            let final_drain = self.query_drain(&original_proxy_addr).await;
+            let remaining_replicas_healthy = self
+                .remaining_replicas_healthy(&resolved.deployment, &request.expected_uid)
+                .await;
+            let final_drain_is_safe = final_drain.as_ref().is_ok_and(|state| {
+                state.operation_id.as_deref() == Some(request.operation_id.as_str())
+                    && state.phase == ProxyDrainPhase::Drained
+                    && state.zero_pending
+                    && state.pending.is_zero()
+            });
+            if !final_drain_is_safe || !matches!(remaining_replicas_healthy, Ok(true)) {
                 self.cancel_drain(&original_proxy_addr, &request.operation_id).await?;
                 self.clear_restart(&resolved.allowed, &request.operation_id).await?;
                 return Err(ExecutionAgentError::DriverFailed);
