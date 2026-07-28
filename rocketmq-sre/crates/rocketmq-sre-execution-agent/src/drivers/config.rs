@@ -36,6 +36,7 @@ pub struct LoggerLevelState {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LoggerLevelTtlWrite {
     pub component: String,
+    pub broker_addr: String,
     pub logger: String,
     pub level: String,
     pub expires_at: DateTime<Utc>,
@@ -48,6 +49,7 @@ pub struct LoggerLevelTtlWrite {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LoggerLevelTtlRestore {
     pub component: String,
+    pub broker_addr: String,
     pub logger: String,
     pub execution_id: ExecutionId,
     pub plan_step_id: PlanStepId,
@@ -69,7 +71,12 @@ pub trait ConfigWriteClient: Send + Sync {
 /// addressed by `(execution_id, plan_step_id)` and is never supplied by an
 /// untrusted action parameter.
 pub trait LoggerLevelControlClient: ConfigWriteClient {
-    fn logger_level_state<'a>(&'a self, component: &'a str, logger: &'a str) -> DriverFuture<'a, LoggerLevelState>;
+    fn logger_level_state<'a>(
+        &'a self,
+        component: &'a str,
+        broker_addr: &'a str,
+        logger: &'a str,
+    ) -> DriverFuture<'a, LoggerLevelState>;
 
     fn restore_logger_level<'a>(
         &'a self,
