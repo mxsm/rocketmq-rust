@@ -38,10 +38,10 @@ use uuid::Uuid;
 
 use crate::ControlPlaneError;
 use crate::auth::AuthContext;
-use crate::execution_authority::repository::LeaseAuthorityRepository;
 use crate::supervised_execution::signing::GrantSigner;
 
 pub(crate) use api::routes;
+pub(crate) use repository::LeaseAuthorityRepository;
 
 const EXECUTOR_AUDIENCE: &str = "rocketmq-sre-executor";
 const CONTROL_PLANE_ISSUER: &str = "rocketmq-sre-control-plane";
