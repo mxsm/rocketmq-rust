@@ -1,0 +1,100 @@
+{
+  "$defs": {
+    "GovernanceActorKind": {
+      "description": "Actor class recorded in lifecycle audit. Model actors are never authorized\nto publish or retire versions.",
+      "enum": [
+        "human",
+        "service",
+        "model"
+      ],
+      "type": "string"
+    },
+    "GovernanceArtifactId": {
+      "description": "Stable identifier for one governed logical artifact.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "GovernanceEventId": {
+      "description": "Stable identifier for an append-only governance lifecycle event.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "GovernanceLifecycleState": {
+      "description": "Unified artifact lifecycle.",
+      "enum": [
+        "draft",
+        "review",
+        "active",
+        "deprecated",
+        "quarantined",
+        "retired"
+      ],
+      "type": "string"
+    },
+    "GovernanceVersionId": {
+      "description": "Stable identifier for an immutable governed artifact version.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Append-only governance transition event.",
+  "properties": {
+    "actor": {
+      "type": "string"
+    },
+    "actor_kind": {
+      "$ref": "#/$defs/GovernanceActorKind"
+    },
+    "artifact_id": {
+      "$ref": "#/$defs/GovernanceArtifactId"
+    },
+    "from_state": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/GovernanceLifecycleState"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "id": {
+      "$ref": "#/$defs/GovernanceEventId"
+    },
+    "occurred_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    },
+    "to_state": {
+      "$ref": "#/$defs/GovernanceLifecycleState"
+    },
+    "version_id": {
+      "$ref": "#/$defs/GovernanceVersionId"
+    }
+  },
+  "required": [
+    "id",
+    "tenant_id",
+    "artifact_id",
+    "version_id",
+    "to_state",
+    "actor",
+    "actor_kind",
+    "reason",
+    "occurred_at"
+  ],
+  "title": "GovernanceEvent",
+  "type": "object"
+}
