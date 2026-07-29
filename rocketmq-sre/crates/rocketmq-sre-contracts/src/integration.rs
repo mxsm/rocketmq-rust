@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
 use chrono::DateTime;
@@ -23,6 +24,7 @@ use serde::Serialize;
 use crate::ActionPlanId;
 use crate::ApprovalDecision;
 use crate::ClusterId;
+use crate::EnterpriseIntegrationEventId;
 use crate::IncidentId;
 use crate::IntegrationDeliveryId;
 use crate::IntegrationTargetId;
@@ -31,6 +33,8 @@ use crate::TenantId;
 
 /// Wire family emitted by Phase 3 integration adapters.
 pub const INTEGRATION_DELIVERY_SCHEMA_VERSION: &str = "rocketmq-sre.integration-delivery.v1";
+/// Wire family for signed CMDB, GitOps, and CI/CD ingress.
+pub const ENTERPRISE_INTEGRATION_EVENT_SCHEMA_VERSION: &str = "rocketmq-sre.enterprise-integration-event.v1";
 
 /// Closed adapter families supported by the first integration SPI.
 #[derive(Clone, Copy, Debug, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -41,6 +45,162 @@ pub enum IntegrationAdapterKind {
     ChatOpsWebhook,
     Pager,
     Email,
+    MockCmdb,
+    MockGitOps,
+    SignedReleaseWebhook,
+}
+
+/// Data classification declared by an enterprise integration descriptor.
+#[derive(Clone, Copy, Debug, Default, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IntegrationDataClass {
+    #[default]
+    AggregatedMetadata,
+    OperationalMetadata,
+    RestrictedMetadata,
+}
+
+/// Bounded retry and health policy attached to one adapter descriptor.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntegrationOperationalPolicy {
+    #[serde(default)]
+    pub required_scopes: BTreeSet<String>,
+    #[serde(default)]
+    pub data_class: IntegrationDataClass,
+    pub rate_limit_per_minute: u32,
+    pub timeout_seconds: u16,
+    pub max_attempts: u16,
+    pub health_check_interval_seconds: u32,
+    pub secret_required: bool,
+}
+
+impl Default for IntegrationOperationalPolicy {
+    fn default() -> Self {
+        Self {
+            required_scopes: BTreeSet::new(),
+            data_class: IntegrationDataClass::AggregatedMetadata,
+            rate_limit_per_minute: 60,
+            timeout_seconds: 8,
+            max_attempts: 5,
+            health_check_interval_seconds: 300,
+            secret_required: true,
+        }
+    }
+}
+
+/// Runtime health of one configured integration target.
+#[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IntegrationHealthStatus {
+    Unknown,
+    Healthy,
+    Degraded,
+    Unavailable,
+    Disabled,
+}
+
+/// Signed inbound event families accepted by representative enterprise adapters.
+#[derive(Clone, Copy, Debug, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EnterpriseIntegrationEventKind {
+    CmdbSnapshot,
+    GitOpsSnapshot,
+    ReleaseStarted,
+    ReleaseCanary,
+    ReleasePromoted,
+    ReleaseRolledBack,
+}
+
+/// Sanitized CMDB ownership and dependency projection.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CmdbSnapshot {
+    pub cluster_id: ClusterId,
+    pub owner: String,
+    pub environment: String,
+    #[serde(default)]
+    pub service_dependencies: BTreeSet<String>,
+    #[serde(default)]
+    pub labels: BTreeMap<String, String>,
+}
+
+/// Sanitized GitOps desired-state projection without repository credentials.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GitOpsSnapshot {
+    pub cluster_id: ClusterId,
+    pub repository_ref: String,
+    pub commit_sha: String,
+    pub desired_image_digest: Option<String>,
+    pub configuration_digest: Option<String>,
+    pub feature_digest: Option<String>,
+    pub rollout_link: Option<String>,
+}
+
+/// Sanitized CI/CD release event that may only start read-only readiness work.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReleasePipelineEvent {
+    pub cluster_id: ClusterId,
+    pub release_ref: String,
+    pub change_id: String,
+    pub artifact_digest: String,
+    pub target_version: String,
+}
+
+/// Closed typed payload set; arbitrary JSON never reaches an adapter handler.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "payload", rename_all = "snake_case")]
+pub enum EnterpriseIntegrationPayload {
+    Cmdb(CmdbSnapshot),
+    GitOps(GitOpsSnapshot),
+    Release(ReleasePipelineEvent),
+}
+
+impl EnterpriseIntegrationPayload {
+    /// Returns the cluster scope embedded in the typed payload.
+    #[must_use]
+    pub const fn cluster_id(&self) -> ClusterId {
+        match self {
+            Self::Cmdb(payload) => payload.cluster_id,
+            Self::GitOps(payload) => payload.cluster_id,
+            Self::Release(payload) => payload.cluster_id,
+        }
+    }
+}
+
+/// Immutable signed inbound event after replay and scope validation.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EnterpriseIntegrationEvent {
+    pub schema_version: String,
+    pub id: EnterpriseIntegrationEventId,
+    pub target_id: IntegrationTargetId,
+    pub tenant_id: TenantId,
+    pub cluster_id: ClusterId,
+    pub event_kind: EnterpriseIntegrationEventKind,
+    pub external_event_id: String,
+    pub source_version: String,
+    pub payload_digest: String,
+    pub payload: EnterpriseIntegrationPayload,
+    pub signature_verified: bool,
+    pub occurred_at: DateTime<Utc>,
+    pub received_at: DateTime<Utc>,
+}
+
+/// Latest bounded config/secret/endpoint health observation.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntegrationHealth {
+    pub target_id: IntegrationTargetId,
+    pub status: IntegrationHealthStatus,
+    pub config_valid: bool,
+    pub secret_available: bool,
+    pub endpoint_valid: bool,
+    pub last_delivery_at: Option<DateTime<Utc>>,
+    pub last_error_code: Option<String>,
+    pub observed_at: DateTime<Utc>,
 }
 
 /// Events an external adapter may receive.
