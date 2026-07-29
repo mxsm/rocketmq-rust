@@ -20,6 +20,7 @@ use rocketmq_sre_contracts::ClusterId;
 use rocketmq_sre_contracts::GovernanceAccessPath;
 use rocketmq_sre_contracts::GovernanceAdmission;
 use rocketmq_sre_contracts::GovernanceAdmissionId;
+use rocketmq_sre_contracts::GovernanceDependency;
 use rocketmq_sre_contracts::GovernanceLifecycleState;
 use rocketmq_sre_contracts::GovernanceObjectKind;
 use rocketmq_sre_contracts::GovernanceSignaturePayload;
@@ -136,6 +137,52 @@ impl GovernanceAdmissionGuard {
                 "governance_admission_denied",
                 format!(
                     "high-privilege execution was denied by governance: {}",
+                    decision.reason_codes.join(",")
+                ),
+            ))
+        }
+    }
+
+    pub(crate) async fn ensure_dependencies_active(
+        &self,
+        tenant_id: TenantId,
+        dependencies: &BTreeSet<GovernanceDependency>,
+        now: DateTime<Utc>,
+    ) -> Result<(), ControlPlaneError> {
+        if dependencies.is_empty() {
+            return Ok(());
+        }
+        let mut versions = Vec::with_capacity(dependencies.len());
+        let mut reasons = BTreeSet::new();
+        for dependency in dependencies {
+            let configured = self
+                .repository
+                .governance_override(tenant_id, dependency.kind, &dependency.logical_key, &dependency.version)
+                .await?;
+            match configured.version {
+                Some(version) => versions.push(version),
+                None => {
+                    reasons.insert("governance_dependency_missing".to_owned());
+                }
+            }
+        }
+        let decision = self
+            .evaluate_versions(
+                tenant_id,
+                None,
+                GovernanceAccessPath::HighPrivilege,
+                versions,
+                reasons,
+                now,
+            )
+            .await?;
+        if decision.allowed {
+            Ok(())
+        } else {
+            Err(ControlPlaneError::conflict_code(
+                "governance_dependency_not_active",
+                format!(
+                    "governance dependencies are not eligible for activation: {}",
                     decision.reason_codes.join(",")
                 ),
             ))
