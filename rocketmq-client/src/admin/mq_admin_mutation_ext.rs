@@ -47,13 +47,6 @@ pub enum BrokerConfigPatchOutcome {
     },
 }
 
-/// Topic configuration paired with the Broker's monotonic metadata version.
-#[derive(Clone, Debug, PartialEq)]
-pub struct TopicConfigVersioned {
-    pub version: u64,
-    pub config: TopicConfig,
-}
-
 /// Closed Topic fields accepted by the supervised version-CAS operation.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct TopicConfigPatch {
@@ -110,13 +103,6 @@ pub trait MQAdminMutationExt: Send {
         expected_generation: u64,
         properties: HashMap<CheetahString, CheetahString>,
     ) -> rocketmq_error::RocketMQResult<BrokerConfigPatchOutcome>;
-
-    /// Reads one Broker's Topic config and metadata version atomically.
-    async fn topic_config_with_version(
-        &self,
-        broker_addr: CheetahString,
-        topic: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<TopicConfigVersioned>;
 
     /// Changes only the three fields in [`TopicConfigPatch`] when the Broker's
     /// current Topic metadata version still matches `expected_version`.
@@ -314,14 +300,6 @@ impl MQAdminMutationExt for DefaultMQAdminExt {
             properties,
         )
         .await
-    }
-
-    async fn topic_config_with_version(
-        &self,
-        broker_addr: CheetahString,
-        topic: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<TopicConfigVersioned> {
-        MQAdminMutationExt::topic_config_with_version(self.inner(), broker_addr, topic).await
     }
 
     async fn patch_topic_config_if_version(
