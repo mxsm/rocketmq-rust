@@ -140,10 +140,7 @@ impl FinOpsRepository {
             let latency = unsigned(row.try_get("latency_millis")?, "report latency")?;
             let cost = unsigned(row.try_get("cost_micros")?, "report cost")?;
             let row_entries = unsigned(row.try_get("entries")?, "report entries")?;
-            let missing = unsigned(
-                row.try_get("entries_missing_cost")?,
-                "report entries missing cost",
-            )?;
+            let missing = unsigned(row.try_get("entries_missing_cost")?, "report entries missing cost")?;
             total_cost_micros = total_cost_micros.saturating_add(cost);
             entries = entries.saturating_add(row_entries);
             entries_missing_cost = entries_missing_cost.saturating_add(missing);
@@ -160,8 +157,7 @@ impl FinOpsRepository {
                 estimated_minutes_saved: 0,
             });
         }
-        let (successful_outcomes, estimated_minutes_saved) =
-            self.outcomes_and_savings(tenant_id, query).await?;
+        let (successful_outcomes, estimated_minutes_saved) = self.outcomes_and_savings(tenant_id, query).await?;
         if let Some(tenant_row) = report_rows.first_mut() {
             tenant_row.successful_outcomes = successful_outcomes;
             tenant_row.estimated_minutes_saved = estimated_minutes_saved;
