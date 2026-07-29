@@ -47,6 +47,7 @@ use crate::ExecutionAgentError;
 use crate::FenceAckSigner;
 use crate::HttpLeaseAuthorityClient;
 use crate::LoggerLevelTtlHandler;
+use crate::ProxyImageCanaryHandler;
 use crate::ProxyRestartOneHandler;
 use crate::ProxyScaleOutOneHandler;
 use crate::ReconcileEffectRequest;
@@ -55,6 +56,7 @@ use crate::SubscriptionGroupPatchHandler;
 use crate::TelemetryCollectorRestartOneHandler;
 use crate::TopicConfigPatchHandler;
 use crate::drivers::ProductionBrokerConfigPatchClient;
+use crate::drivers::ProductionProxyImageCanaryClient;
 use crate::drivers::ProductionProxyRestartClient;
 use crate::drivers::ProductionProxyScaleClient;
 use crate::drivers::ProductionSubscriptionGroupPatchClient;
@@ -172,6 +174,13 @@ pub async fn run(
     } else {
         None
     };
+    let proxy_image_canary_driver = if config.proxy_image_canary_enabled {
+        Some(Arc::new(
+            ProductionProxyImageCanaryClient::start(config.proxy_image_canary_targets.clone(), pool.clone()).await?,
+        ))
+    } else {
+        None
+    };
     let telemetry_collector_restart_driver = if config.telemetry_collector_restart_enabled {
         Some(Arc::new(
             ProductionTelemetryCollectorRestartClient::start(config.telemetry_collector_restart_targets.clone())
@@ -223,6 +232,12 @@ pub async fn run(
     }
     if let Some(driver) = proxy_scale_driver {
         registry.register_kubernetes(ExecutionAction::ProxyScaleOutOne, ProxyScaleOutOneHandler::new(driver))?;
+    }
+    if let Some(driver) = proxy_image_canary_driver {
+        registry.register_kubernetes(
+            ExecutionAction::ProxyRolloutImageCanary,
+            ProxyImageCanaryHandler::new(driver),
+        )?;
     }
     if let Some(driver) = &proxy_restart_driver {
         registry.register_kubernetes(
