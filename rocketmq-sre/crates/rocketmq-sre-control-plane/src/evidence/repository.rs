@@ -457,6 +457,7 @@ const fn exposure_name(exposure: EvidenceExposure) -> &'static str {
         EvidenceExposure::TempoApi => "tempo_api",
         EvidenceExposure::KubernetesApi => "kubernetes_api",
         EvidenceExposure::RuntimeDiagnostics => "runtime_diagnostics",
+        EvidenceExposure::RequiredSignals => "required_signals",
         EvidenceExposure::Synthetic => "synthetic",
         EvidenceExposure::Unsupported => "unsupported",
     }
@@ -474,6 +475,7 @@ fn parse_exposure(value: &str) -> Result<EvidenceExposure, ControlPlaneError> {
         "tempo_api" => Ok(EvidenceExposure::TempoApi),
         "kubernetes_api" => Ok(EvidenceExposure::KubernetesApi),
         "runtime_diagnostics" => Ok(EvidenceExposure::RuntimeDiagnostics),
+        "required_signals" => Ok(EvidenceExposure::RequiredSignals),
         "synthetic" => Ok(EvidenceExposure::Synthetic),
         "unsupported" => Ok(EvidenceExposure::Unsupported),
         _ => Err(invalid_stored_evidence("exposure")),
@@ -504,6 +506,17 @@ mod tests {
         assert_eq!(
             evidence_expires_at(collected_at),
             collected_at + chrono::Duration::days(30)
+        );
+    }
+
+    #[test]
+    fn required_signal_exposure_round_trips_through_storage() {
+        let stored = exposure_name(EvidenceExposure::RequiredSignals);
+
+        assert_eq!(stored, "required_signals");
+        assert_eq!(
+            parse_exposure(stored).expect("required signal exposure should remain readable"),
+            EvidenceExposure::RequiredSignals
         );
     }
 }
