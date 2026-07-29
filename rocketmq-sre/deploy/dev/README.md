@@ -52,12 +52,16 @@ Topic/Group/Cluster `GET` 权限；Probe 只能对固定 `SRE_PROBE_` Topic 和 
 执行有界 PUB/SUB；bootstrap admin 只注入一次性 Topic 创建容器；Agent mutation
 identity 只注入 Execution Agent。MCP 不挂载 Broker ACL、bootstrap secret 或
 Agent mutation secret，Probe 也无法读取 reader/bootstrap/Agent 凭据。Execution
-Agent 通过 `ROCKETMQ_SRE_AGENT_ENABLE_BROKER_CONFIG=true` 显式启用窄化的
-`broker.config.patch_allowlisted.v1` 适配器；`agent-broker.env` 提供互不复用的
-read/mutation identity，配置和 Debug 输出不会记录 secret。
+Agent 通过 `ROCKETMQ_SRE_AGENT_ENABLE_BROKER_CONFIG=true` 和
+`ROCKETMQ_SRE_AGENT_ENABLE_TOPIC_CONFIG=true` 显式启用窄化的
+`broker.config.patch_allowlisted.v1` 与 `topic.config.patch_allowlisted.v1`
+适配器；`agent-broker.env` 提供互不复用的 read/mutation identity，配置和 Debug
+输出不会记录 secret。
 
-Compose 的 Broker 适配器只用于可丢弃的开发集群，使用 generation CAS、写前快照、
-追加式结果台账和漂移保护。生产环境必须使用 TLS，并分别配置
+Compose 的 Broker/Topic 适配器只用于可丢弃的开发集群，使用 generation/version
+CAS、写前快照、追加式结果台账和漂移保护。Topic 适配器通过 read identity 解析完整
+路由并校验所有 Broker 的闭合字段；多 Broker 部分提交会补偿已知效果并返回
+`effect_unknown`，不会误报成功。生产环境必须使用 TLS，并分别配置
 `ROCKETMQ_SRE_AGENT_BROKER_READ_*` 与
 `ROCKETMQ_SRE_AGENT_BROKER_MUTATION_*`；缺少任一身份或两个身份使用同一 access key
 时，Agent 启动即失败。Executor 仍不持有 RocketMQ 凭据，也没有目标网络。
