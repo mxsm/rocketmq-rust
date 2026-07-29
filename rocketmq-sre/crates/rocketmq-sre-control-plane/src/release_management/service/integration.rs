@@ -55,6 +55,9 @@ impl ReleaseManagementService {
             IntegrationAdapterKind::ChatOpsWebhook,
             IntegrationAdapterKind::Pager,
             IntegrationAdapterKind::Email,
+            IntegrationAdapterKind::MockCmdb,
+            IntegrationAdapterKind::MockGitOps,
+            IntegrationAdapterKind::SignedReleaseWebhook,
         ]
         .into_iter()
         .map(descriptor_for)
