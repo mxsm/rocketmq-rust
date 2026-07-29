@@ -35,6 +35,7 @@ mod error;
 mod evidence;
 mod execution_authority;
 mod execution_verification;
+mod finops;
 mod fleet;
 mod forecast;
 mod governance;
