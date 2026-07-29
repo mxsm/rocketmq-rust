@@ -79,6 +79,9 @@ use rocketmq_sre_contracts::FinOpsBudgetDecision;
 use rocketmq_sre_contracts::FinOpsCostEntry;
 use rocketmq_sre_contracts::FinOpsReport;
 use rocketmq_sre_contracts::FleetHealthReport;
+use rocketmq_sre_contracts::FleetRelease;
+use rocketmq_sre_contracts::FleetReleaseReport;
+use rocketmq_sre_contracts::FleetReleaseTarget;
 use rocketmq_sre_contracts::GrantVerification;
 use rocketmq_sre_contracts::GovernanceAdmission;
 use rocketmq_sre_contracts::GovernanceArtifact;
@@ -596,6 +599,18 @@ fn generated_schemas() -> Result<Vec<(&'static str, serde_json::Value)>, EvalErr
             serde_json::to_value(schema_for!(FleetHealthReport))?,
         ),
         (
+            "fleet-release.schema.json",
+            serde_json::to_value(schema_for!(FleetRelease))?,
+        ),
+        (
+            "fleet-release-target.schema.json",
+            serde_json::to_value(schema_for!(FleetReleaseTarget))?,
+        ),
+        (
+            "fleet-release-report.schema.json",
+            serde_json::to_value(schema_for!(FleetReleaseReport))?,
+        ),
+        (
             "capacity-forecast.schema.json",
             serde_json::to_value(schema_for!(CapacityForecast))?,
         ),
@@ -969,6 +984,18 @@ signals:
             (
                 "fleet-health-report.schema.json",
                 include_str!("../../../schemas/fleet-health-report.schema.json"),
+            ),
+            (
+                "fleet-release.schema.json",
+                include_str!("../../../schemas/fleet-release.schema.json"),
+            ),
+            (
+                "fleet-release-target.schema.json",
+                include_str!("../../../schemas/fleet-release-target.schema.json"),
+            ),
+            (
+                "fleet-release-report.schema.json",
+                include_str!("../../../schemas/fleet-release-report.schema.json"),
             ),
             (
                 "capacity-forecast.schema.json",
