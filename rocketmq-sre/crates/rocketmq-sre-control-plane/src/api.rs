@@ -59,6 +59,7 @@ use crate::connector_channel;
 use crate::connector_channel::PostgresConnectorChannelService;
 use crate::evidence::EvidenceBlobStore;
 use crate::evidence::EvidenceService;
+use crate::fleet::FleetService;
 use crate::forecast::ForecastService;
 use crate::inspection::InspectionService;
 use crate::knowledge::KnowledgeService;
@@ -524,6 +525,7 @@ pub(crate) struct AppState {
     pub(crate) change_management: crate::change_management::ChangeManagementService,
     pub(crate) connector_channel: PostgresConnectorChannelService,
     pub(crate) evidence: EvidenceService,
+    pub(crate) fleet: FleetService,
     pub(crate) lease_authority: crate::execution_authority::LeaseAuthorityService,
     pub(crate) forecast: ForecastService,
     pub(crate) knowledge: KnowledgeService,
@@ -592,6 +594,7 @@ fn build_routers_with_auth(
 ) -> Result<ControlPlaneRouters, ControlPlaneError> {
     let alerting = AlertingService::new(repository.clone(), workflow.clone())?;
     let evidence = EvidenceService::new(repository.clone(), evidence_blobs);
+    let fleet = FleetService::new(repository.clone());
     let assets = AssetTopologyService::new(repository.clone(), dashboard_links);
     let knowledge = KnowledgeService::new(repository.clone());
     let postmortems = crate::postmortem::PostmortemService::new(
@@ -664,6 +667,7 @@ fn build_routers_with_auth(
         change_management: change_management.clone(),
         connector_channel,
         evidence,
+        fleet,
         lease_authority,
         forecast: forecast.clone(),
         knowledge,
@@ -702,6 +706,7 @@ fn build_routers_with_auth(
         .merge(crate::release_management::routes())
         .merge(crate::execution_authority::routes())
         .merge(crate::execution_verification::routes())
+        .merge(crate::fleet::routes())
         .with_state(state.clone())
         .layer(middleware::from_fn_with_state(
             state.clone(),
