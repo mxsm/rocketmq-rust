@@ -130,6 +130,19 @@ uuid_id!(
     GovernanceAdmissionId,
     "Stable identifier for one immutable governance admission decision."
 );
+uuid_id!(
+    FinOpsCostEntryId,
+    "Stable identifier for one append-only FinOps cost ledger entry."
+);
+uuid_id!(FinOpsBudgetId, "Stable identifier for a versioned FinOps budget.");
+uuid_id!(
+    FinOpsDecisionId,
+    "Stable identifier for one immutable FinOps budget decision."
+);
+uuid_id!(
+    FinOpsAllocationPolicyId,
+    "Stable identifier for a showback or confirmed chargeback allocation policy."
+);
 uuid_id!(ConversationId, "Stable identifier for an operator conversation.");
 uuid_id!(InvestigationId, "Stable identifier for a multi-step investigation.");
 uuid_id!(TimelineEventId, "Stable identifier for a workflow timeline event.");
