@@ -9,6 +9,7 @@ import "./styles/tokens.css";
 import "./styles/app.css";
 import "./styles/autonomy-operations.css";
 import "./styles/change-management.css";
+import "./styles/enterprise-operations.css";
 import "./styles/model-governance.css";
 import "./styles/release-management.css";
 
