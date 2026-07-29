@@ -210,9 +210,9 @@ impl FinOpsService {
             protected_controls: FinOpsBudgetDecision::required_protected_controls(),
             evaluated_at: now,
         };
-        decision.validate_safety_boundary().map_err(|detail| {
-            ControlPlaneError::configuration(format!("FinOps safety invariant failed: {detail}"))
-        })?;
+        decision
+            .validate_safety_boundary()
+            .map_err(|detail| ControlPlaneError::configuration(format!("FinOps safety invariant failed: {detail}")))?;
         Ok(FinOpsBudgetDecisionView {
             schema_version: FINOPS_API_SCHEMA_VERSION,
             decision: self.repository.record_decision(&decision).await?,
@@ -316,7 +316,8 @@ impl FinOpsService {
             warnings.push("showback_rows_truncated".to_owned());
         }
         warnings.push(
-            "slo_outcome_attribution_not_available:cost and successful outcomes are shown without fabricated SLO attribution"
+            "slo_outcome_attribution_not_available:cost and successful outcomes are shown without fabricated SLO \
+             attribution"
                 .to_owned(),
         );
         if data.successful_outcomes == 0 && data.estimated_minutes_saved == 0 {
@@ -345,17 +346,13 @@ impl FinOpsService {
         })
     }
 
-    async fn forecast(
-        &self,
-        budget: &FinOpsBudget,
-        now: DateTime<Utc>,
-    ) -> Result<FinOpsForecast, ControlPlaneError> {
+    async fn forecast(&self, budget: &FinOpsBudget, now: DateTime<Utc>) -> Result<FinOpsForecast, ControlPlaneError> {
         let (from, to) = period_window(budget.period, now)?;
         let (observed, samples) = self.repository.budget_cost(budget, from, to).await?;
         let elapsed_millis = (now - from).num_milliseconds().max(1) as u128;
         let period_millis = (to - from).num_milliseconds().max(1) as u128;
-        let projected = (u128::from(observed).saturating_mul(period_millis) / elapsed_millis)
-            .min(u128::from(u64::MAX)) as u64;
+        let projected =
+            (u128::from(observed).saturating_mul(period_millis) / elapsed_millis).min(u128::from(u64::MAX)) as u64;
         Ok(FinOpsForecast {
             budget_id: budget.id,
             period_start: from,
@@ -384,16 +381,8 @@ fn budget_outcome(
     }
     if projected <= budget.hard_limit_micros {
         return match work_class {
-            FinOpsWorkClass::Background => (
-                true,
-                FinOpsDegradation::ReduceSampling,
-                "soft_budget_pressure",
-            ),
-            _ => (
-                true,
-                FinOpsDegradation::PreferLowerCostModel,
-                "soft_budget_pressure",
-            ),
+            FinOpsWorkClass::Background => (true, FinOpsDegradation::ReduceSampling, "soft_budget_pressure"),
+            _ => (true, FinOpsDegradation::PreferLowerCostModel, "soft_budget_pressure"),
         };
     }
     match work_class {
@@ -402,11 +391,7 @@ fn budget_outcome(
             FinOpsDegradation::PreferLowerCostModel,
             "hard_budget_interactive_degradation",
         ),
-        FinOpsWorkClass::Background => (
-            false,
-            FinOpsDegradation::DenyLowPriority,
-            "hard_budget_exceeded",
-        ),
+        FinOpsWorkClass::Background => (false, FinOpsDegradation::DenyLowPriority, "hard_budget_exceeded"),
         FinOpsWorkClass::SafetyCheck
         | FinOpsWorkClass::Audit
         | FinOpsWorkClass::Verification
@@ -426,9 +411,7 @@ fn period_window(
         FinOpsBudgetPeriod::Daily => Utc
             .with_ymd_and_hms(now.year(), now.month(), now.day(), 0, 0, 0)
             .single(),
-        FinOpsBudgetPeriod::Monthly => Utc
-            .with_ymd_and_hms(now.year(), now.month(), 1, 0, 0, 0)
-            .single(),
+        FinOpsBudgetPeriod::Monthly => Utc.with_ymd_and_hms(now.year(), now.month(), 1, 0, 0, 0).single(),
     }
     .ok_or_else(|| ControlPlaneError::configuration("FinOps period boundary is invalid"))?;
     let end = match period {
@@ -482,10 +465,7 @@ fn validate_cost_request(request: &RecordFinOpsCostRequest) -> Result<(), Contro
     Ok(())
 }
 
-fn validate_budget_request(
-    auth: &AuthContext,
-    request: &CreateFinOpsBudgetRequest,
-) -> Result<(), ControlPlaneError> {
+fn validate_budget_request(auth: &AuthContext, request: &CreateFinOpsBudgetRequest) -> Result<(), ControlPlaneError> {
     validate_text("FinOps scope key", &request.scope_key, 256)?;
     validate_text("FinOps budget owner", &request.owner, 256)?;
     if request.owner.trim() != auth.subject {
@@ -500,9 +480,7 @@ fn validate_budget_request(
             "FinOps budget requires 0 <= soft limit <= non-zero hard limit",
         ));
     }
-    if request.scope_kind == FinOpsBudgetScopeKind::Tenant
-        && request.scope_key.trim() != auth.tenant_id.to_string()
-    {
+    if request.scope_kind == FinOpsBudgetScopeKind::Tenant && request.scope_key.trim() != auth.tenant_id.to_string() {
         return Err(ControlPlaneError::forbidden(
             "tenant_mismatch",
             "tenant budget scope must match the authenticated tenant",
@@ -597,10 +575,7 @@ fn validate_report_window(query: &FinOpsReportQuery) -> Result<(), ControlPlaneE
     Ok(())
 }
 
-fn validate_window(
-    from: Option<DateTime<Utc>>,
-    to: Option<DateTime<Utc>>,
-) -> Result<(), ControlPlaneError> {
+fn validate_window(from: Option<DateTime<Utc>>, to: Option<DateTime<Utc>>) -> Result<(), ControlPlaneError> {
     if from.zip(to).is_some_and(|(from, to)| from >= to) {
         Err(ControlPlaneError::validation(
             "invalid_finops_window",
@@ -625,11 +600,7 @@ fn default_showback_policy(tenant_id: TenantId) -> FinOpsAllocationPolicy {
     }
 }
 
-fn cost_anomalies(
-    tenant_id: TenantId,
-    current: u64,
-    baseline: u64,
-) -> Vec<FinOpsAnomaly> {
+fn cost_anomalies(tenant_id: TenantId, current: u64, baseline: u64) -> Vec<FinOpsAnomaly> {
     let anomalous = if baseline == 0 {
         current > 0
     } else {
@@ -644,30 +615,22 @@ fn cost_anomalies(
         current_cost_micros: current,
         baseline_cost_micros: baseline,
         change_basis_points: (baseline > 0).then(|| {
-            (u128::from(current.saturating_sub(baseline)) * 10_000 / u128::from(baseline))
-                .min(u128::from(u32::MAX)) as u32
+            (u128::from(current.saturating_sub(baseline)) * 10_000 / u128::from(baseline)).min(u128::from(u32::MAX))
+                as u32
         }),
         reason_code: "cost_increase_above_50_percent".to_owned(),
     }]
 }
 
 fn coverage_basis_points(covered: u64, total: u64) -> Option<u32> {
-    (total > 0).then(|| {
-        (u128::from(covered) * 10_000 / u128::from(total))
-            .min(u128::from(10_000_u32)) as u32
-    })
+    (total > 0).then(|| (u128::from(covered) * 10_000 / u128::from(total)).min(u128::from(10_000_u32)) as u32)
 }
 
 fn require_finops_read(auth: &AuthContext) -> Result<(), ControlPlaneError> {
     if auth.roles.iter().any(|role| {
         matches!(
             role.as_str(),
-            "diagnose"
-                | "rocketmq:diagnose"
-                | "operator"
-                | "approver"
-                | "model-governance"
-                | "finops"
+            "diagnose" | "rocketmq:diagnose" | "operator" | "approver" | "model-governance" | "finops"
         )
     }) {
         Ok(())
@@ -754,19 +717,11 @@ mod tests {
     fn background_work_is_softly_then_hardly_degraded() {
         assert_eq!(
             budget_outcome(&budget(), FinOpsWorkClass::Background, 150),
-            (
-                true,
-                FinOpsDegradation::ReduceSampling,
-                "soft_budget_pressure"
-            )
+            (true, FinOpsDegradation::ReduceSampling, "soft_budget_pressure")
         );
         assert_eq!(
             budget_outcome(&budget(), FinOpsWorkClass::Background, 250),
-            (
-                false,
-                FinOpsDegradation::DenyLowPriority,
-                "hard_budget_exceeded"
-            )
+            (false, FinOpsDegradation::DenyLowPriority, "hard_budget_exceeded")
         );
     }
 }
