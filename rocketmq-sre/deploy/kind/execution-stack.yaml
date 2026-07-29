@@ -165,6 +165,8 @@ spec:
             - {name: ROCKETMQ_SRE_AGENT_ENABLE_LOGGER_TTL, value: "true"}
             - {name: ROCKETMQ_SRE_AGENT_ENABLE_PROXY_SCALE_OUT, value: "true"}
             - {name: ROCKETMQ_SRE_AGENT_PROXY_SCALE_TARGETS, value: "rocketmq-system/rocketmq-proxy"}
+            - {name: ROCKETMQ_SRE_AGENT_ENABLE_PROXY_IMAGE_CANARY, value: "true"}
+            - {name: ROCKETMQ_SRE_AGENT_PROXY_IMAGE_CANARY_TARGETS, value: "rocketmq-system/rocketmq-proxy"}
             - {name: ROCKETMQ_SRE_AGENT_ENABLE_PROXY_RESTART, value: "true"}
             - {name: ROCKETMQ_SRE_AGENT_PROXY_RESTART_TARGETS, value: "rocketmq-system/rocketmq-proxy=8080"}
             - {name: ROCKETMQ_SRE_AGENT_ENABLE_TELEMETRY_COLLECTOR_RESTART, value: "true"}
