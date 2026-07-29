@@ -168,6 +168,31 @@ const IntegrationManagementPage = lazy(() =>
     default: module.IntegrationManagementPage,
   })),
 );
+const EnterpriseFleetPage = lazy(() =>
+  import("./pages/EnterpriseFleetPage").then((module) => ({
+    default: module.EnterpriseFleetPage,
+  })),
+);
+const FleetCompliancePage = lazy(() =>
+  import("./pages/FleetCompliancePage").then((module) => ({
+    default: module.FleetCompliancePage,
+  })),
+);
+const DrCenterPage = lazy(() =>
+  import("./pages/DrCenterPage").then((module) => ({
+    default: module.DrCenterPage,
+  })),
+);
+const GovernanceCenterPage = lazy(() =>
+  import("./pages/GovernanceCenterPage").then((module) => ({
+    default: module.GovernanceCenterPage,
+  })),
+);
+const FinOpsCenterPage = lazy(() =>
+  import("./pages/FinOpsCenterPage").then((module) => ({
+    default: module.FinOpsCenterPage,
+  })),
+);
 
 function RouteLoading() {
   return (
@@ -188,6 +213,9 @@ const router = createBrowserRouter([
     ),
     children: [
       { index: true, element: <OverviewPage /> },
+      { path: "fleet", element: <EnterpriseFleetPage /> },
+      { path: "fleet/compliance", element: <FleetCompliancePage /> },
+      { path: "fleet/dr", element: <DrCenterPage /> },
       { path: "clusters", element: <ClustersPage /> },
       { path: "clusters/onboard", element: <OnboardingPage /> },
       { path: "clusters/:clusterId", element: <ClusterDetailPage /> },
@@ -252,6 +280,8 @@ const router = createBrowserRouter([
       { path: "coverage", element: <CoverageMatrixPage /> },
       { path: "knowledge", element: <KnowledgePage /> },
       { path: "models", element: <ModelsPage /> },
+      { path: "governance", element: <GovernanceCenterPage /> },
+      { path: "finops", element: <FinOpsCenterPage /> },
       { path: "autonomy", element: <AutonomyOperationsPage /> },
       { path: "system", element: <SystemStatusPage /> },
       { path: "*", element: <Navigate replace to="/" /> },
