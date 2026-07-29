@@ -237,6 +237,8 @@ pub struct RecoveryCheckpoint {
     pub evidence_ids: Vec<EvidenceId>,
     pub finding_codes: Vec<String>,
     pub note: Option<String>,
+    pub started_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
     pub observed_at: DateTime<Utc>,
 }
 
