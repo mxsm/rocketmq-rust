@@ -121,6 +121,10 @@ services:
       tag: local
       digest: ""
       pullPolicy: Never
+    innerCredentials:
+      enabled: false
+      secretName: ""
+      secretKey: proxy-inner-credentials.yml
     pdb:
       enabled: true
       minAvailable: 1
