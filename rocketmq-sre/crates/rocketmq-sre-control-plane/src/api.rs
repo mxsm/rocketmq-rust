@@ -526,6 +526,7 @@ pub(crate) struct AppState {
     pub(crate) connector_channel: PostgresConnectorChannelService,
     pub(crate) dr: crate::dr::DrService,
     pub(crate) evidence: EvidenceService,
+    pub(crate) finops: crate::finops::FinOpsService,
     pub(crate) fleet: FleetService,
     pub(crate) lease_authority: crate::execution_authority::LeaseAuthorityService,
     pub(crate) forecast: ForecastService,
@@ -596,6 +597,7 @@ fn build_routers_with_auth(
 ) -> Result<ControlPlaneRouters, ControlPlaneError> {
     let alerting = AlertingService::new(repository.clone(), workflow.clone())?;
     let evidence = EvidenceService::new(repository.clone(), evidence_blobs);
+    let finops = crate::finops::FinOpsService::new(repository.clone());
     let fleet = FleetService::new(repository.clone());
     let assets = AssetTopologyService::new(repository.clone(), dashboard_links);
     let knowledge = KnowledgeService::new(repository.clone());
@@ -672,6 +674,7 @@ fn build_routers_with_auth(
         connector_channel,
         dr,
         evidence,
+        finops,
         fleet,
         lease_authority,
         forecast: forecast.clone(),
@@ -715,6 +718,7 @@ fn build_routers_with_auth(
         .merge(crate::fleet::routes())
         .merge(crate::dr::routes())
         .merge(crate::governance::routes())
+        .merge(crate::finops::routes())
         .with_state(state.clone())
         .layer(middleware::from_fn_with_state(
             state.clone(),
