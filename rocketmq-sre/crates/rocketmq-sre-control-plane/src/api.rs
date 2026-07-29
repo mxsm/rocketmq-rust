@@ -167,7 +167,13 @@ struct DiagnosticPack {
 struct RequiredSignalManifest {
     schema_version: String,
     component: String,
+    exposure: RequiredSignalExposure,
     signals: Vec<RequiredSignal>,
+}
+
+#[derive(Deserialize)]
+struct RequiredSignalExposure {
+    remote_queryable: serde_yaml::Value,
 }
 
 #[derive(Clone, Deserialize)]
@@ -178,6 +184,7 @@ struct RequiredSignal {
     registry_reference: String,
     signal_type: String,
     status: String,
+    query_resource: Option<String>,
     freshness_seconds: Option<u64>,
     #[serde(default)]
     expected_attributes: Vec<String>,
@@ -258,19 +265,12 @@ fn build_coverage_matrix() -> Result<Value, ControlPlaneError> {
         serde_yaml::from_str(COVERAGE).map_err(|error| ControlPlaneError::CapabilityDocument {
             detail: format!("capability coverage cannot be parsed: {error}"),
         })?;
-    let manifests = [
-        parse_signal_manifest("broker", BROKER_SIGNALS)?,
-        parse_signal_manifest("nameserver", NAMESERVER_SIGNALS)?,
-        parse_signal_manifest("controller", CONTROLLER_SIGNALS)?,
-        parse_signal_manifest("proxy", PROXY_SIGNALS)?,
-        parse_signal_manifest("mcp", MCP_SIGNALS)?,
-        parse_signal_manifest("runtime", RUNTIME_SIGNALS)?,
-    ];
+    let manifests = required_signal_manifests()?;
     let registry: TelemetryRegistry =
         serde_json::from_str(TELEMETRY_REGISTRY).map_err(|error| ControlPlaneError::CapabilityDocument {
             detail: format!("telemetry semantic registry cannot be parsed: {error}"),
         })?;
-    let owners = validate_semantic_registry_owners(&registry, &coverage.semantic_registry_owners)?;
+    let owners = validate_semantic_registry_owners(&registry, &coverage.semantic_registry_owners, &manifests)?;
 
     let packs = PACK_ORDER
         .iter()
@@ -334,9 +334,21 @@ fn build_coverage_matrix() -> Result<Value, ControlPlaneError> {
     })
 }
 
+fn required_signal_manifests() -> Result<[RequiredSignalManifest; 6], ControlPlaneError> {
+    Ok([
+        parse_signal_manifest("broker", BROKER_SIGNALS)?,
+        parse_signal_manifest("nameserver", NAMESERVER_SIGNALS)?,
+        parse_signal_manifest("controller", CONTROLLER_SIGNALS)?,
+        parse_signal_manifest("proxy", PROXY_SIGNALS)?,
+        parse_signal_manifest("mcp", MCP_SIGNALS)?,
+        parse_signal_manifest("runtime", RUNTIME_SIGNALS)?,
+    ])
+}
+
 fn validate_semantic_registry_owners(
     registry: &TelemetryRegistry,
     configured: &[SemanticRegistryOwnerCoverage],
+    manifests: &[RequiredSignalManifest],
 ) -> Result<BTreeSet<String>, ControlPlaneError> {
     let registry_owners = registry
         .signals
@@ -364,16 +376,15 @@ fn validate_semantic_registry_owners(
                 ),
             });
         }
-        if owner.owner != "mcp"
-            && (owner.exposure == "queryable"
-                || owner
-                    .notable_sources
-                    .iter()
-                    .any(|source| source.exposure == "queryable"))
-        {
+        let claims_remote_queryability = owner.exposure == "queryable"
+            || owner
+                .notable_sources
+                .iter()
+                .any(|source| source.exposure == "queryable");
+        if claims_remote_queryability && !owner_has_protected_query_route(&owner.owner, manifests) {
             return Err(ControlPlaneError::CapabilityDocument {
                 detail: format!(
-                    "semantic registry owner `{}` cannot claim remote queryability in Phase 00",
+                    "semantic registry owner `{}` cannot claim remote queryability without a protected fixed route",
                     owner.owner
                 ),
             });
@@ -404,6 +415,39 @@ fn validate_semantic_registry_owners(
     Ok(registry_owners)
 }
 
+fn owner_has_protected_query_route(owner: &str, manifests: &[RequiredSignalManifest]) -> bool {
+    manifests.iter().any(|manifest| {
+        manifest.exposure.has_protected_query_route()
+            && manifest.signals.iter().any(|signal| {
+                signal.owner == owner && signal.status == "queryable" && signal_has_fixed_query_route(signal)
+            })
+    })
+}
+
+fn signal_has_fixed_query_route(signal: &RequiredSignal) -> bool {
+    match signal.signal_type.as_str() {
+        "metric" => signal
+            .query_resource
+            .as_deref()
+            .is_some_and(|resource| resource.starts_with("metrics/") && resource.len() > "metrics/".len()),
+        "log" | "span" => true,
+        "resource" => matches!(
+            signal.registry_reference.as_str(),
+            "rocketmq://system/runtime/v1" | "rocketmq.runtime-diagnostics.v1" | "rocketmq://system/observability/v1"
+        ),
+        _ => false,
+    }
+}
+
+impl RequiredSignalExposure {
+    fn has_protected_query_route(&self) -> bool {
+        matches!(
+            self.remote_queryable.as_str(),
+            Some("protected_connector_api" | "protected_system_resources_only")
+        )
+    }
+}
+
 fn parse_signal_manifest(name: &str, input: &str) -> Result<RequiredSignalManifest, ControlPlaneError> {
     let manifest: RequiredSignalManifest =
         serde_yaml::from_str(input).map_err(|error| ControlPlaneError::CapabilityDocument {
@@ -417,7 +461,19 @@ fn parse_signal_manifest(name: &str, input: &str) -> Result<RequiredSignalManife
             ),
         });
     }
+    let valid_remote_exposure = manifest.remote_queryable_is_valid();
+    if !valid_remote_exposure {
+        return Err(ControlPlaneError::CapabilityDocument {
+            detail: format!("{name} required-signal manifest has an unsupported remote query exposure"),
+        });
+    }
     Ok(manifest)
+}
+
+impl RequiredSignalManifest {
+    fn remote_queryable_is_valid(&self) -> bool {
+        self.exposure.remote_queryable == serde_yaml::Value::Bool(false) || self.exposure.has_protected_query_route()
+    }
 }
 
 fn status_for(manifest: &RequiredSignalManifest, pack: &DiagnosticPack) -> CoverageCellStatus {
@@ -1451,14 +1507,15 @@ mod tests {
             serde_yaml::from_str(COVERAGE).expect("coverage YAML should match its contract");
         let registry: TelemetryRegistry =
             serde_json::from_str(TELEMETRY_REGISTRY).expect("semantic registry should match its contract");
+        let manifests = required_signal_manifests().expect("required-signal manifests should parse");
 
-        let owners = validate_semantic_registry_owners(&registry, &coverage.semantic_registry_owners)
+        let owners = validate_semantic_registry_owners(&registry, &coverage.semantic_registry_owners, &manifests)
             .expect("every semantic registry owner should be mapped exactly once");
         assert_eq!(owners.len(), 16);
 
         let mut incomplete = coverage.clone();
         incomplete.semantic_registry_owners[0].backlog.clear();
-        let error = validate_semantic_registry_owners(&registry, &incomplete.semantic_registry_owners)
+        let error = validate_semantic_registry_owners(&registry, &incomplete.semantic_registry_owners, &manifests)
             .expect_err("missing exposure metadata must fail closed");
         assert!(matches!(
             error,
@@ -1466,10 +1523,24 @@ mod tests {
                 if detail.contains("current exposure, backlog")
         ));
 
+        let broker = coverage
+            .semantic_registry_owners
+            .iter_mut()
+            .find(|owner| owner.owner == "broker")
+            .expect("broker owner");
+        broker.exposure = "queryable".to_owned();
+        validate_semantic_registry_owners(&registry, &coverage.semantic_registry_owners, &manifests)
+            .expect("broker has a protected fixed Required Signals route");
+
         let mut false_remote = coverage.clone();
-        false_remote.semantic_registry_owners[0].exposure = "queryable".to_owned();
-        let error = validate_semantic_registry_owners(&registry, &false_remote.semantic_registry_owners)
-            .expect_err("non-MCP remote queryability must fail closed");
+        let client = false_remote
+            .semantic_registry_owners
+            .iter_mut()
+            .find(|owner| owner.owner == "client")
+            .expect("client owner");
+        client.exposure = "queryable".to_owned();
+        let error = validate_semantic_registry_owners(&registry, &false_remote.semantic_registry_owners, &manifests)
+            .expect_err("queryability without a protected fixed route must fail closed");
         assert!(matches!(
             error,
             ControlPlaneError::CapabilityDocument { detail }
@@ -1477,7 +1548,7 @@ mod tests {
         ));
 
         coverage.semantic_registry_owners[1].owner = coverage.semantic_registry_owners[0].owner.clone();
-        let error = validate_semantic_registry_owners(&registry, &coverage.semantic_registry_owners)
+        let error = validate_semantic_registry_owners(&registry, &coverage.semantic_registry_owners, &manifests)
             .expect_err("duplicate owner mapping must fail closed");
         assert!(matches!(
             error,
@@ -1521,7 +1592,13 @@ mod tests {
             })
             .map(|owner| owner.owner.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(remotely_queryable, ["mcp"]);
+        assert!(remotely_queryable.contains(&"mcp"));
+        let manifests = required_signal_manifests().expect("required-signal manifests should parse");
+        assert!(
+            remotely_queryable
+                .iter()
+                .all(|owner| owner_has_protected_query_route(owner, &manifests))
+        );
     }
 
     #[test]
@@ -1534,6 +1611,16 @@ mod tests {
             error,
             ControlPlaneError::CapabilityDocument { detail }
                 if detail.contains("does not equal `rocketmq.sre.required-signals.v1`")
+        ));
+
+        let unprotected = BROKER_SIGNALS.replace("protected_connector_api", "true");
+        let error = parse_signal_manifest("broker", &unprotected)
+            .err()
+            .expect("unprotected remote query exposure must fail closed");
+        assert!(matches!(
+            error,
+            ControlPlaneError::CapabilityDocument { detail }
+                if detail.contains("unsupported remote query exposure")
         ));
     }
 
