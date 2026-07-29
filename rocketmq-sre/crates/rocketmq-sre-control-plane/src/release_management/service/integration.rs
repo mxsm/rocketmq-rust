@@ -15,6 +15,7 @@
 use rocketmq_sre_contracts::AuditEventKind;
 use rocketmq_sre_contracts::CorrelationId;
 use rocketmq_sre_contracts::IntegrationAdapterKind;
+use rocketmq_sre_contracts::IntegrationDeliveryId;
 use rocketmq_sre_contracts::IntegrationDescriptor;
 use rocketmq_sre_contracts::IntegrationTarget;
 use rocketmq_sre_contracts::IntegrationTargetId;
@@ -40,7 +41,11 @@ use crate::release_management::model::IntegrationTargetListQuery;
 use crate::release_management::model::IntegrationTargetPage;
 use crate::release_management::model::IntegrationTargetView;
 use crate::release_management::model::RegisterIntegrationTargetRequest;
+use crate::release_management::model::ReplayIntegrationDeliveryRequest;
+use crate::release_management::model::ReplayIntegrationDeliveryView;
+use crate::release_management::model::RotateIntegrationSecretRequest;
 use crate::release_management::model::SetIntegrationTargetStateRequest;
+use crate::release_management::secret_provider::valid_secret_reference;
 use crate::supervised_execution::ApprovalDecisionRequest;
 use crate::supervised_execution::ExternalApprovalSource;
 
@@ -234,6 +239,48 @@ impl ReleaseManagementService {
             .await
     }
 
+    pub(in crate::release_management) async fn rotate_integration_secret(
+        &self,
+        auth: &AuthContext,
+        target_id: IntegrationTargetId,
+        request: &RotateIntegrationSecretRequest,
+        correlation_id: CorrelationId,
+    ) -> Result<IntegrationTargetView, ControlPlaneError> {
+        require_operator(auth)?;
+        let current = self.integration_target(auth, target_id).await?;
+        if !valid_secret_reference(&request.secret_reference) {
+            return Err(ControlPlaneError::validation(
+                "integration_secret_reference_invalid",
+                "integration secret reference is invalid",
+            ));
+        }
+        if !self.secrets.available(&request.secret_reference) {
+            return Err(ControlPlaneError::conflict_code(
+                "integration_secret_unavailable",
+                "rotated integration secret is unavailable",
+            ));
+        }
+        let cluster_id = current.target.cluster_id.ok_or(ControlPlaneError::NotFound)?;
+        let now = self.now();
+        let audit = audit_event(
+            auth,
+            cluster_id,
+            correlation_id,
+            AuditEventKind::StateChanged,
+            "integration_target",
+            target_id.to_string(),
+            "IntegrationSecretReferenceRotated",
+            json!({
+                "descriptor_id": &current.target.descriptor_id,
+                "descriptor_version": &current.target.descriptor_version,
+            }),
+            now,
+        );
+        self.repository
+            .rotate_integration_secret(&current, request.secret_reference.trim(), now, &audit)
+            .await
+    }
+
     pub(in crate::release_management) async fn integration_deliveries(
         &self,
         auth: &AuthContext,
@@ -260,6 +307,50 @@ impl ReleaseManagementService {
             schema_version: "rocketmq-sre.integration-delivery-page.v1",
             items,
             partial,
+        })
+    }
+
+    pub(in crate::release_management) async fn replay_integration_delivery(
+        &self,
+        auth: &AuthContext,
+        delivery_id: IntegrationDeliveryId,
+        request: &ReplayIntegrationDeliveryRequest,
+        correlation_id: CorrelationId,
+    ) -> Result<ReplayIntegrationDeliveryView, ControlPlaneError> {
+        require_operator(auth)?;
+        validate_bounded_text("integration replay reason", &request.reason, 1_024)?;
+        reject_sensitive(&request.reason)?;
+        let delivery = self
+            .repository
+            .integration_delivery(auth.tenant_id, delivery_id)
+            .await?;
+        require_cluster(auth, delivery.cluster_id)?;
+        let target = self.integration_target(auth, delivery.target_id).await?;
+        if !target.target.enabled {
+            return Err(ControlPlaneError::conflict_code(
+                "integration_target_disabled",
+                "disabled integration target cannot replay deliveries",
+            ));
+        }
+        let audit = audit_event(
+            auth,
+            delivery.cluster_id,
+            correlation_id,
+            AuditEventKind::IntegrationDeliveryQueued,
+            "integration_delivery",
+            delivery.id.to_string(),
+            "IntegrationDeliveryManualReplay",
+            json!({
+                "target_id": delivery.target_id,
+                "event_kind": delivery.event_kind,
+                "reason": request.reason.trim(),
+            }),
+            self.now(),
+        );
+        let delivery = self.repository.replay_integration_delivery(&delivery, &audit).await?;
+        Ok(ReplayIntegrationDeliveryView {
+            schema_version: "rocketmq-sre.integration-delivery.v1",
+            delivery,
         })
     }
 
@@ -376,6 +467,6 @@ fn validate_duplicate_approval(
     Ok(())
 }
 
-fn bounded_page_size(limit: Option<u32>) -> u32 {
+pub(super) fn bounded_page_size(limit: Option<u32>) -> u32 {
     limit.unwrap_or(DEFAULT_PAGE_SIZE).clamp(1, MAX_PAGE_SIZE)
 }
