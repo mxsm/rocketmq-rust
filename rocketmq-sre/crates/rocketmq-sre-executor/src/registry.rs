@@ -244,6 +244,7 @@ mod tests {
                 ExecutionAction::ObservabilityLoggerLevelTtl,
                 ExecutionAction::ProxyScaleOutOne,
                 ExecutionAction::ProxyRestartOne,
+                ExecutionAction::BrokerConfigPatchAllowlisted,
                 ExecutionAction::TelemetryCollectorRestartOne,
             ]
         );
@@ -266,16 +267,14 @@ mod tests {
         let r1_registry = ExecutorActionRegistry::from_descriptors([r1]).expect("R1 registry");
         assert!(r1_registry.validate_step_authorization(&r1_step, true).is_ok());
 
-        let mut r2 = descriptor(ExecutionAction::BrokerRestartOne);
-        r2.execution_supported = true;
+        let r2 = descriptor(ExecutionAction::BrokerConfigPatchAllowlisted);
         let r2_step = step(
             &r2,
-            ExecutionAction::BrokerRestartOne,
+            ExecutionAction::BrokerConfigPatchAllowlisted,
             json!({
-                "namespace": "rocketmq",
-                "pod": "broker-0",
-                "expected_uid": "pod-uid",
-                "broker_name": "broker-a"
+                "broker": "broker-a",
+                "expected_generation": 9,
+                "patch": {"send_message_thread_pool_nums": 32}
             }),
         );
         let r2_registry = ExecutorActionRegistry::from_descriptors([r2]).expect("R2 registry");
