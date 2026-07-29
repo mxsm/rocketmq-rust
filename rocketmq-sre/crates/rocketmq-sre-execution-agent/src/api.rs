@@ -51,9 +51,11 @@ use crate::ProxyRestartOneHandler;
 use crate::ProxyScaleOutOneHandler;
 use crate::ReconcileEffectRequest;
 use crate::ReconcileEffectResponse;
+use crate::TelemetryCollectorRestartOneHandler;
 use crate::drivers::ProductionBrokerConfigPatchClient;
 use crate::drivers::ProductionProxyRestartClient;
 use crate::drivers::ProductionProxyScaleClient;
+use crate::drivers::ProductionTelemetryCollectorRestartClient;
 
 #[derive(Clone)]
 struct AppState {
@@ -138,6 +140,14 @@ pub async fn run(
     } else {
         None
     };
+    let telemetry_collector_restart_driver = if config.telemetry_collector_restart_enabled {
+        Some(Arc::new(
+            ProductionTelemetryCollectorRestartClient::start(config.telemetry_collector_restart_targets.clone())
+                .await?,
+        ))
+    } else {
+        None
+    };
     let proxy_restart_driver = match (&config.proxy_restart, &config.broker_admin) {
         (Some(restart_config), Some(admin_config)) => Some(Arc::new(
             ProductionProxyRestartClient::start(
@@ -174,6 +184,12 @@ pub async fn run(
         registry.register_kubernetes(
             ExecutionAction::ProxyRestartOne,
             ProxyRestartOneHandler::new(Arc::clone(driver)),
+        )?;
+    }
+    if let Some(driver) = telemetry_collector_restart_driver {
+        registry.register_kubernetes(
+            ExecutionAction::TelemetryCollectorRestartOne,
+            TelemetryCollectorRestartOneHandler::new(driver),
         )?;
     }
     let authority = Arc::new(HttpLeaseAuthorityClient::new(
