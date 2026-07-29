@@ -89,6 +89,8 @@ SPAN_ATTRIBUTES = {
     "MCP_TOOL": ["operation", "result"],
     "MCP_RESOURCE": ["operation", "result"],
     "PROXY_RPC": ["rpc", "result"],
+    "PROXY_FORWARD": ["rpc", "result"],
+    "PROXY_AUTH": ["rpc", "result"],
 }
 EVENT_CONTRACTS = {
     "AUTH_DECISION": ("auth-mcp", "security", ["operation", "decision", "result", "reason"]),
@@ -218,6 +220,8 @@ def build_registry() -> dict[str, Any]:
         "MCP_TOOL": "mcp",
         "MCP_RESOURCE": "mcp",
         "PROXY_RPC": "proxy",
+        "PROXY_FORWARD": "proxy",
+        "PROXY_AUTH": "proxy",
     }
     for symbol, span_id in inventory["spans"].items():
         attributes = SPAN_ATTRIBUTES[symbol]
