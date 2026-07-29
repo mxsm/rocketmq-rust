@@ -202,6 +202,7 @@ spec:
             - {name: ROCKETMQ_SRE_MIGRATIONS_DIR, value: "/opt/rocketmq-sre/migrations"}
             - {name: ROCKETMQ_SRE_DEV_AUTH, value: "true"}
             - {name: ROCKETMQ_SRE_EXECUTOR_URL, value: "http://sre-executor:8094"}
+            - {name: ROCKETMQ_SRE_EXECUTOR_TIMEOUT_SECONDS, value: "240"}
             - {name: ROCKETMQ_SRE_EXECUTOR_ALLOW_INSECURE_HTTP, value: "true"}
             - {name: ROCKETMQ_SRE_OBJECT_STORE_LOCAL_PATH, value: "/var/lib/rocketmq-sre/evidence"}
             - {name: ROCKETMQ_SRE_MODEL_ENABLED, value: "true"}
