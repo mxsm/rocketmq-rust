@@ -158,9 +158,6 @@ impl ConsumeMessageConcurrentlyService {
                 let failed_msgs = consume_request.msgs.split_off((ack_index + 1) as usize);
                 for mut msg in failed_msgs {
                     if !consume_request.process_queue.contains_message(&msg).await {
-                        /*info!("Message is not found in its process queue; skip send-back-procedure, topic={}, "
-                            + "brokerName={}, queueId={}, queueOffset={}", msg.get_topic(), msg.get_broker_name(),
-                        msg.getQueueId(), msg.getQueueOffset());*/
                         continue;
                     }
 
@@ -184,6 +181,12 @@ impl ConsumeMessageConcurrentlyService {
                 }
             }
         }
+
+        // Hold the per-queue commit lock while removing messages and updating the offset
+        // so that concurrent chunk tasks for the same queue cannot interleave their
+        // offset advancement. Independent queues are not blocked because each
+        // ProcessQueue carries its own lock.
+        let _commit_guard = consume_request.process_queue.commit_lock.lock().await;
         let offset = consume_request
             .process_queue
             .remove_message(&consume_request.msgs)

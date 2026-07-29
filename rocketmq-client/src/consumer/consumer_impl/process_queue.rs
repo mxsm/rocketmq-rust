@@ -29,6 +29,7 @@ use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::protocol::body::process_queue_info::ProcessQueueInfo;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::RocketMQTokioRwLock;
+use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
@@ -65,6 +66,9 @@ pub(crate) struct ProcessQueue {
     pub(crate) last_lock_timestamp: Arc<AtomicU64>,
     pub(crate) consuming: Arc<AtomicBool>,
     pub(crate) msg_acc_cnt: Arc<AtomicI64>,
+    /// Serializes per-queue commit operations so that concurrent chunk tasks
+    /// cannot interleave offset advancement or ProcessQueue removal.
+    pub(crate) commit_lock: Arc<Mutex<()>>,
 }
 
 impl ProcessQueue {
@@ -85,6 +89,7 @@ impl ProcessQueue {
             last_lock_timestamp: Arc::new(AtomicU64::new(get_current_millis())),
             consuming: Arc::new(AtomicBool::new(false)),
             msg_acc_cnt: Arc::new(AtomicI64::new(0)),
+            commit_lock: Arc::new(Mutex::new(())),
         }
     }
 }
@@ -448,5 +453,41 @@ mod tests {
         assert_eq!(offset, 3, "when empty, offset should be queue_offset_max + 1");
         assert_eq!(pq.msg_count(), 0);
         assert_eq!(pq.msg_size(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_commit_lock_serializes_concurrent_removals() {
+        use std::sync::Arc;
+        let pq = Arc::new(ProcessQueue::new());
+        let offsets: Vec<i64> = (0..32).collect();
+        put_msgs(&pq, &offsets, 4).await;
+
+        let pq1 = pq.clone();
+        let pq2 = pq.clone();
+
+        let first_chunk: Vec<ArcMut<MessageExt>> = (0..16).map(|o| make_msg(o, 4)).collect();
+        let second_chunk: Vec<ArcMut<MessageExt>> = (16..32).map(|o| make_msg(o, 4)).collect();
+
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let b1 = barrier.clone();
+        let b2 = barrier.clone();
+
+        let h1 = tokio::spawn(async move {
+            let _g = pq1.commit_lock.lock().await;
+            b1.wait().await;
+            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+            pq1.remove_message(&first_chunk).await
+        });
+        let h2 = tokio::spawn(async move {
+            b2.wait().await;
+            let _g = pq2.commit_lock.lock().await;
+            pq2.remove_message(&second_chunk).await
+        });
+
+        let (r1, r2) = tokio::join!(h1, h2);
+        let _o1 = r1.unwrap();
+        let _o2 = r2.unwrap();
+
+        assert_eq!(pq.msg_count(), 0, "all messages must be removed");
     }
 }
