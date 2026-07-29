@@ -273,12 +273,6 @@ try {
         '-w', '1',
         '-p', '6'
     ) 'dedicated retry Topic bootstrap'
-    Invoke-Native $adminBinary @(
-        'topic', 'topicRoute',
-        '-n', "127.0.0.1:$NameServerPort",
-        '-t', $retryTopic,
-        '-l', 'true'
-    ) 'dedicated retry Topic route readiness'
 
     $env:ROCKETMQ_SRE_TEST_DATABASE_URL = $DatabaseUrl
     $env:ROCKETMQ_SRE_TEST_NAMESRV_ADDR = "127.0.0.1:$NameServerPort"
