@@ -23,3 +23,13 @@ pub use opentelemetry::metrics::Meter;
 pub use opentelemetry::metrics::ObservableGauge;
 pub use opentelemetry::metrics::UpDownCounter;
 pub use opentelemetry::KeyValue;
+pub use opentelemetry_sdk::metrics::SdkMeterProvider;
+
+/// Returns a meter owned by the process-wide provider.
+///
+/// Service metric managers use this when bootstrap installed the exporter
+/// before the service-specific instruments are constructed. When no provider
+/// is installed, OpenTelemetry returns its normal no-op meter.
+pub fn global_meter(name: &'static str) -> Meter {
+    opentelemetry::global::meter(name)
+}
