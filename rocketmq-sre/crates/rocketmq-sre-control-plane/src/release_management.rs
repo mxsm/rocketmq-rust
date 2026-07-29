@@ -17,6 +17,7 @@ mod api;
 mod descriptors;
 mod model;
 mod repository;
+mod secret_provider;
 mod service;
 
 #[cfg(test)]
