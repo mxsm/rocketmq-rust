@@ -47,9 +47,7 @@ pub(super) fn cost_entry_from_row(row: &PgRow) -> Result<FinOpsCostEntry, Contro
         fleet_id: FleetId::from_uuid(row.try_get("fleet_id")?),
         tenant_id: TenantId::from_uuid(row.try_get("tenant_id")?),
         region_id: RegionId::from_uuid(row.try_get("region_id")?),
-        cluster_id: row
-            .try_get::<Option<Uuid>, _>("cluster_id")?
-            .map(ClusterId::from_uuid),
+        cluster_id: row.try_get::<Option<Uuid>, _>("cluster_id")?.map(ClusterId::from_uuid),
         source: cost_source(row.try_get("source_kind")?)?,
         workload_kind: workload_kind(row.try_get("workload_kind")?)?,
         provider_profile: row.try_get("provider_profile")?,
@@ -92,9 +90,7 @@ pub(super) fn decision_from_row(row: &PgRow) -> Result<FinOpsBudgetDecision, Con
     Ok(FinOpsBudgetDecision {
         id: FinOpsDecisionId::from_uuid(row.try_get("id")?),
         tenant_id: TenantId::from_uuid(row.try_get("tenant_id")?),
-        cluster_id: row
-            .try_get::<Option<Uuid>, _>("cluster_id")?
-            .map(ClusterId::from_uuid),
+        cluster_id: row.try_get::<Option<Uuid>, _>("cluster_id")?.map(ClusterId::from_uuid),
         budget_id: FinOpsBudgetId::from_uuid(row.try_get("budget_id")?),
         work_class: work_class(row.try_get("work_class")?)?,
         requested_cost_micros: unsigned(row.try_get("requested_cost_micros")?, "requested cost")?,
