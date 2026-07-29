@@ -12,16 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
 use std::time::Duration;
 
-use hmac::Hmac;
-use hmac::Mac;
 use rocketmq_sre_contracts::IntegrationAdapterKind;
 use serde::Serialize;
-use sha2::Sha256;
 
 use super::model::AdapterDeliveryReceipt;
 use super::model::IntegrationDeliveryClaim;
+use super::secret_provider::EnvSecretProvider;
+use super::secret_provider::SecretProvider;
+use super::secret_provider::hmac_sha256;
 use crate::ControlPlaneError;
 use crate::PostgresRepository;
 
@@ -34,6 +35,7 @@ const ITSM_TICKET_HEADER: &str = "x-itsm-ticket-key";
 pub(crate) struct IntegrationOutboxWorker {
     repository: PostgresRepository,
     client: reqwest::Client,
+    secrets: Arc<dyn SecretProvider>,
 }
 
 impl IntegrationOutboxWorker {
@@ -44,7 +46,11 @@ impl IntegrationOutboxWorker {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|_| ControlPlaneError::configuration("integration HTTP client cannot be built"))?;
-        Ok(Self { repository, client })
+        Ok(Self {
+            repository,
+            client,
+            secrets: Arc::new(EnvSecretProvider),
+        })
     }
 
     pub(crate) async fn run_due(&self) {
@@ -91,7 +97,7 @@ impl IntegrationOutboxWorker {
             return Err("endpoint_not_allowed");
         }
         let secret_reference = claim.secret_reference.as_deref().ok_or("secret_reference_missing")?;
-        let secret = resolve_secret_reference(secret_reference)?;
+        let secret = self.secrets.resolve(secret_reference)?;
         let payload = ItsmPayload {
             schema_version: "rocketmq-sre.itsm-delivery.v1",
             delivery_id: claim.delivery.id.to_string(),
@@ -106,7 +112,7 @@ impl IntegrationOutboxWorker {
         if body.len() > MAX_ADAPTER_BODY_BYTES {
             return Err("payload_too_large");
         }
-        let signature = hmac_sha256(secret.as_bytes(), &body)?;
+        let signature = hmac_sha256(&secret, &body)?;
         let response = self
             .client
             .post(endpoint)
@@ -160,38 +166,6 @@ fn allowed_endpoint(endpoint: &url::Url) -> bool {
         && endpoint
             .host_str()
             .is_some_and(|host| matches!(host, "localhost" | "127.0.0.1" | "::1"))
-}
-
-fn resolve_secret_reference(reference: &str) -> Result<String, &'static str> {
-    let name = reference.strip_prefix("env:").ok_or("unsupported_secret_reference")?;
-    if name.is_empty()
-        || name.len() > 128
-        || !name
-            .bytes()
-            .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
-    {
-        return Err("invalid_secret_reference");
-    }
-    std::env::var(name)
-        .ok()
-        .filter(|secret| !secret.is_empty() && secret.len() <= 4_096)
-        .ok_or("secret_unavailable")
-}
-
-fn hmac_sha256(key: &[u8], message: &[u8]) -> Result<String, &'static str> {
-    let mut mac = Hmac::<Sha256>::new_from_slice(key).map_err(|_| "invalid_signature_key")?;
-    mac.update(message);
-    Ok(hex_lower(&mac.finalize().into_bytes()))
-}
-
-fn hex_lower(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        output.push(char::from(HEX[usize::from(byte >> 4)]));
-        output.push(char::from(HEX[usize::from(byte & 0x0f)]));
-    }
-    output
 }
 
 fn valid_ticket_key(value: &str) -> bool {
@@ -274,7 +248,7 @@ mod tests {
     #[test]
     fn hmac_uses_sha256_and_lowercase_hex() {
         assert_eq!(
-            hmac_sha256(&[0x0b; 20], b"Hi There").expect("HMAC"),
+            super::super::secret_provider::hmac_sha256_bytes(&[0x0b; 20], b"Hi There").expect("HMAC"),
             "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"
         );
     }
