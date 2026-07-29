@@ -92,12 +92,20 @@ impl R1ActionScenario {
         }
     }
 
-    const fn stable_window_seconds(self) -> i64 {
+    const fn qualification_stable_window_seconds(self) -> i64 {
+        match self {
+            Self::LoggerTtl => 300,
+            Self::ProxyScaleOut => 600,
+            Self::ProxyRestartOne => 900,
+            Self::TelemetryCollectorRestartOne => 600,
+        }
+    }
+
+    const fn execution_stable_window_seconds(self) -> i64 {
         match self {
             Self::LoggerTtl => 30,
             Self::ProxyScaleOut => 120,
-            Self::ProxyRestartOne => 180,
-            Self::TelemetryCollectorRestartOne => 600,
+            Self::ProxyRestartOne | Self::TelemetryCollectorRestartOne => 180,
         }
     }
 
@@ -180,7 +188,7 @@ async fn qualify_r1_action_through_autonomy(scenario: R1ActionScenario) {
                 max_executions_per_hour: 2,
                 cooldown_seconds: 900,
                 max_concurrent_executions: 1,
-                stable_window_seconds: scenario.stable_window_seconds() as u64,
+                stable_window_seconds: scenario.qualification_stable_window_seconds() as u64,
             },
         )
         .await
@@ -308,7 +316,7 @@ async fn qualify_r1_action_through_autonomy(scenario: R1ActionScenario) {
         let execution_id = seed_successful_supervised_execution_for_action_at(
             &repository,
             plan,
-            scenario.stable_window_seconds(),
+            scenario.qualification_stable_window_seconds(),
             supervised_observed_at,
             scenario.action(),
             scenario.resource(),
@@ -560,7 +568,7 @@ fn action_plan(fixture: &Fixture, created_at: DateTime<Utc>, scenario: R1ActionS
             VerificationSpec {
                 resource_conditions: vec!["logger_level_applied".to_owned(), "ttl_restore_scheduled".to_owned()],
                 technical_slis: vec!["runtime_error_ratio".to_owned()],
-                stable_window_seconds: scenario.stable_window_seconds() as u64,
+                stable_window_seconds: scenario.execution_stable_window_seconds() as u64,
                 max_wait_seconds: 120,
             },
             CompensationSpec {
@@ -580,7 +588,7 @@ fn action_plan(fixture: &Fixture, created_at: DateTime<Utc>, scenario: R1ActionS
             VerificationSpec {
                 resource_conditions: vec!["desired_replicas_plus_one".to_owned(), "new_replica_ready".to_owned()],
                 technical_slis: vec!["proxy_error_ratio".to_owned(), "proxy_p99_latency".to_owned()],
-                stable_window_seconds: scenario.stable_window_seconds() as u64,
+                stable_window_seconds: scenario.execution_stable_window_seconds() as u64,
                 max_wait_seconds: 900,
             },
             CompensationSpec {
@@ -600,7 +608,7 @@ fn action_plan(fixture: &Fixture, created_at: DateTime<Utc>, scenario: R1ActionS
             VerificationSpec {
                 resource_conditions: vec!["replacement_ready".to_owned(), "accepting_and_routed".to_owned()],
                 technical_slis: vec!["proxy_error_ratio".to_owned(), "synthetic_message_path".to_owned()],
-                stable_window_seconds: scenario.stable_window_seconds() as u64,
+                stable_window_seconds: scenario.execution_stable_window_seconds() as u64,
                 max_wait_seconds: 1_200,
             },
             CompensationSpec {
@@ -632,7 +640,7 @@ fn action_plan(fixture: &Fixture, created_at: DateTime<Utc>, scenario: R1ActionS
                     "telemetry_export_success_ratio".to_owned(),
                     "telemetry_queue_utilization".to_owned(),
                 ],
-                stable_window_seconds: scenario.stable_window_seconds() as u64,
+                stable_window_seconds: scenario.execution_stable_window_seconds() as u64,
                 max_wait_seconds: 900,
             },
             CompensationSpec {
