@@ -1,0 +1,196 @@
+{
+  "$defs": {
+    "GovernanceArtifactId": {
+      "description": "Stable identifier for one governed logical artifact.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "GovernanceDependency": {
+      "description": "Exact dependency on another governed artifact.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/GovernanceObjectKind"
+        },
+        "logical_key": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "logical_key",
+        "version"
+      ],
+      "type": "object"
+    },
+    "GovernanceLifecycleState": {
+      "description": "Unified artifact lifecycle.",
+      "enum": [
+        "draft",
+        "review",
+        "active",
+        "deprecated",
+        "quarantined",
+        "retired"
+      ],
+      "type": "string"
+    },
+    "GovernanceObjectKind": {
+      "description": "Closed set of artifacts governed by the lifecycle center.",
+      "enum": [
+        "data_policy",
+        "evidence_policy",
+        "prompt",
+        "knowledge",
+        "model_profile",
+        "provider_profile",
+        "diagnostic_pack",
+        "policy_bundle",
+        "action_descriptor",
+        "runbook",
+        "integration_adapter"
+      ],
+      "type": "string"
+    },
+    "GovernanceSignature": {
+      "description": "Detached signature stored for a reviewed artifact version.",
+      "properties": {
+        "algorithm": {
+          "type": "string"
+        },
+        "key_id": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "algorithm",
+        "key_id",
+        "value"
+      ],
+      "type": "object"
+    },
+    "GovernanceVersionId": {
+      "description": "Stable identifier for an immutable governed artifact version.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Immutable content identity plus a human-controlled lifecycle.",
+  "properties": {
+    "applicable_components": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "applicable_version_range": {
+      "type": "string"
+    },
+    "artifact_id": {
+      "$ref": "#/$defs/GovernanceArtifactId"
+    },
+    "content_digest": {
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "created_by": {
+      "type": "string"
+    },
+    "dependencies": {
+      "items": {
+        "$ref": "#/$defs/GovernanceDependency"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "expires_at": {
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "id": {
+      "$ref": "#/$defs/GovernanceVersionId"
+    },
+    "replacement_version_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/GovernanceVersionId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "review_due_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "rollback_version_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/GovernanceVersionId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "signature": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/GovernanceSignature"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "state": {
+      "$ref": "#/$defs/GovernanceLifecycleState"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "version": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "artifact_id",
+    "tenant_id",
+    "version",
+    "content_digest",
+    "state",
+    "applicable_components",
+    "applicable_version_range",
+    "dependencies",
+    "review_due_at",
+    "created_by",
+    "created_at",
+    "updated_at"
+  ],
+  "title": "GovernanceVersion",
+  "type": "object"
+}
