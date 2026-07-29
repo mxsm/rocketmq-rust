@@ -106,6 +106,15 @@ mod tests {
         "/v1/fleet/quotas/evaluate",
         "/v1/fleet/regional-endpoints",
         "/v1/fleet/regional-route",
+        "/v1/fleet/releases",
+        "/v1/fleet/releases/{id}",
+        "/v1/fleet/releases/{id}/batches/{sequence}/start",
+        "/v1/fleet/releases/{id}/pause",
+        "/v1/fleet/releases/{id}/readiness/start",
+        "/v1/fleet/releases/{id}/report",
+        "/v1/fleet/releases/{id}/resume",
+        "/v1/fleet/releases/{id}/targets/{cluster_id}/outcome",
+        "/v1/fleet/releases/{id}/targets/{cluster_id}/readiness",
         "/v1/governance/admissions/evaluate",
         "/v1/governance/artifacts",
         "/v1/governance/artifacts/{id}/versions",
@@ -268,6 +277,12 @@ mod tests {
             "FleetAssetPage",
             "ComplianceFindingPage",
             "FleetInspectionPage",
+            "FleetRelease",
+            "FleetReleaseTarget",
+            "FleetReleaseReport",
+            "FleetReleasePage",
+            "FleetReleaseView",
+            "CreateFleetReleaseRequest",
             "DrPlanPage",
             "DrExercisePage",
             "DrActionItemPage",
@@ -289,6 +304,19 @@ mod tests {
         assert_eq!(
             document["paths"]["/v1/fleet/onboarding/register"]["post"]["security"][0]["oidc"],
             serde_json::json!(["rocketmq:fleet:manage"])
+        );
+        assert_eq!(
+            document["paths"]["/v1/fleet/releases"]["post"]["security"][0]["oidc"],
+            serde_json::json!(["rocketmq:fleet:manage"])
+        );
+        assert_eq!(
+            document["paths"]["/v1/fleet/releases"]["get"]["security"][0]["oidc"],
+            serde_json::json!(["rocketmq:read"])
+        );
+        assert_eq!(
+            document["paths"]["/v1/fleet/releases"]["post"]["requestBody"]["content"]["application/json"]["schema"]
+                ["$ref"],
+            "#/components/schemas/CreateFleetReleaseRequest"
         );
         assert_eq!(
             document["paths"]["/v1/dr/exercises"]["post"]["security"][0]["oidc"],
