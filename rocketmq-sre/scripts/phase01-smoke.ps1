@@ -1109,6 +1109,7 @@ if ([string]::IsNullOrWhiteSpace($modelStatus.schema_version)) {
 }
 $openApi = Invoke-PublicApi Get '/v1/openapi.json' $null
 $srePhase = [int]$openApi.'x-rocketmq-sre-phase'
+$openApiFields = @($openApi.PSObject.Properties.Name)
 if ($srePhase -le 1) {
     if (
         $openApi.'x-rocketmq-effective-access' -ne 'read_only' `
@@ -1117,11 +1118,35 @@ if ($srePhase -le 1) {
         throw 'OpenAPI did not freeze the Phase 01 read-only boundary.'
     }
 }
-elseif (
-    $openApi.'x-rocketmq-unattended-arbitrary-mutation-supported' -ne $false `
-        -or $openApi.'x-rocketmq-r3-agent-reachable' -ne $false
-) {
-    throw 'A later-phase OpenAPI surface escaped the bounded mutation boundary required by Phase 01 compatibility.'
+else {
+    $arbitraryMutationSupported = if (
+        $openApiFields -contains 'x-rocketmq-unattended-arbitrary-mutation-supported'
+    ) {
+        $openApi.'x-rocketmq-unattended-arbitrary-mutation-supported'
+    }
+    else {
+        $openApi.'x-rocketmq-arbitrary-mutation-supported'
+    }
+    $unattendedMutationSupported = if (
+        $openApiFields -contains 'x-rocketmq-unattended-mutation-supported'
+    ) {
+        $openApi.'x-rocketmq-unattended-mutation-supported'
+    }
+    else {
+        $openApi.'x-rocketmq-unattended-arbitrary-mutation-supported'
+    }
+    if (
+        $arbitraryMutationSupported -ne $false `
+            -or $unattendedMutationSupported -ne $false
+    ) {
+        throw 'A later-phase OpenAPI surface escaped the bounded mutation boundary required by Phase 01 compatibility.'
+    }
+    if (
+        $openApiFields -contains 'x-rocketmq-r3-agent-reachable' `
+            -and $openApi.'x-rocketmq-r3-agent-reachable' -ne $false
+    ) {
+        throw 'A later-phase OpenAPI surface made an R3 execution agent reachable.'
+    }
 }
 foreach ($path in @($openApi.paths.PSObject.Properties)) {
     foreach ($method in @('delete', 'put')) {
