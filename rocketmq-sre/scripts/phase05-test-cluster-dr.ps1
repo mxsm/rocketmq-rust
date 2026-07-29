@@ -58,37 +58,42 @@ function Assert-NonSystemPath([string]$Path, [string]$Description) {
     }
 }
 
-function Invoke-BoundedProbe([string]$Phase) {
-    & kubectl -n $rocketmqNamespace delete job $probeJob --ignore-not-found=true --wait=true | Out-Host
-    if ($LASTEXITCODE -ne 0) {
-        throw "Unable to clear the prior bounded probe before '$Phase'."
+function Invoke-BoundedProbe([string]$Phase, [int]$MaxAttempts = 1) {
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        & kubectl -n $rocketmqNamespace delete job $probeJob --ignore-not-found=true --wait=true | Out-Host
+        if ($LASTEXITCODE -ne 0) {
+            throw "Unable to clear the prior bounded probe before '$Phase'."
+        }
+        Invoke-Native kubectl @(
+            'apply', '-f', $probeManifest
+        ) "$Phase bounded probe creation" | Out-Host
+        & kubectl -n $rocketmqNamespace wait `
+            --for=condition=complete `
+            --timeout=190s `
+            "job/$probeJob" | Out-Host
+        $waitExitCode = $LASTEXITCODE
+        $probeOutput = & kubectl -n $rocketmqNamespace logs "job/$probeJob" -c bounded-probe 2>$null
+        $logExitCode = $LASTEXITCODE
+        $evidenceLine = $probeOutput |
+            Where-Object { $_ -match '"sent_messages":10' } |
+            Select-Object -Last 1
+        if (
+            $waitExitCode -eq 0 -and
+            $logExitCode -eq 0 -and
+            -not [string]::IsNullOrWhiteSpace($evidenceLine) -and
+            $evidenceLine -match '"received_messages":10' -and
+            $evidenceLine -match '"acknowledged_messages":10' -and
+            $evidenceLine -match '"status":"succeeded"'
+        ) {
+            return ($evidenceLine | ConvertFrom-Json)
+        }
+        $probeOutput | Out-Host
+        if ($attempt -lt $MaxAttempts) {
+            Write-Warning "The '$Phase' bounded probe attempt $attempt did not converge; retrying once."
+            Start-Sleep -Seconds 10
+        }
     }
-    Invoke-Native kubectl @(
-        'apply', '-f', $probeManifest
-    ) "$Phase bounded probe creation" | Out-Host
-    Invoke-Native kubectl @(
-        '-n', $rocketmqNamespace,
-        'wait',
-        '--for=condition=complete',
-        '--timeout=180s',
-        "job/$probeJob"
-    ) "$Phase bounded probe completion" | Out-Host
-    $probeOutput = & kubectl -n $rocketmqNamespace logs "job/$probeJob" -c bounded-probe
-    if ($LASTEXITCODE -ne 0) {
-        throw "Unable to read the '$Phase' bounded probe."
-    }
-    $evidenceLine = $probeOutput |
-        Where-Object { $_ -match '"sent_messages":10' } |
-        Select-Object -Last 1
-    if (
-        [string]::IsNullOrWhiteSpace($evidenceLine) -or
-        $evidenceLine -notmatch '"received_messages":10' -or
-        $evidenceLine -notmatch '"acknowledged_messages":10' -or
-        $evidenceLine -notmatch '"status":"succeeded"'
-    ) {
-        throw "The '$Phase' RocketMQ bounded probe did not complete 10/10/10."
-    }
-    $evidenceLine | ConvertFrom-Json
+    throw "The '$Phase' RocketMQ bounded probe did not complete 10/10/10 after $MaxAttempts attempt(s)."
 }
 
 function Wait-BrokerReplacement([string]$PreviousUid) {
@@ -205,7 +210,7 @@ try {
         ([DateTimeOffset]::UtcNow - $restartStartedAt).TotalSeconds
     )
     $brokerDisrupted = $false
-    $postProbe = Invoke-BoundedProbe 'post-recovery'
+    $postProbe = Invoke-BoundedProbe 'post-recovery' 2
 
     $portForward = Start-Process `
         -FilePath 'kubectl' `
