@@ -637,3 +637,7 @@ fn duration_millis(duration: std::time::Duration) -> Result<u64, ExecutionAgentE
 #[cfg(test)]
 #[path = "production_subscription_group_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "production_subscription_group_e2e_tests.rs"]
+mod e2e_tests;
