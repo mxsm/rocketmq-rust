@@ -130,10 +130,7 @@ pub(super) fn checkpoint_from_row(row: &PgRow) -> Result<RecoveryCheckpoint, Con
             row.try_get("expected_duration_seconds")?,
             "expected checkpoint duration",
         )?,
-        actual_duration_seconds: optional_u64(
-            row.try_get("actual_duration_seconds")?,
-            "actual checkpoint duration",
-        )?,
+        actual_duration_seconds: optional_u64(row.try_get("actual_duration_seconds")?, "actual checkpoint duration")?,
         observed_rpo_seconds: optional_u64(row.try_get("observed_rpo_seconds")?, "observed RPO")?,
         manual_confirmation_required: row.try_get("manual_confirmation_required")?,
         confirmed_by: row.try_get("confirmed_by")?,
@@ -231,9 +228,7 @@ pub(super) const fn checkpoint_status_name(value: rocketmq_sre_contracts::Recove
         rocketmq_sre_contracts::RecoveryCheckpointStatus::Running => "running",
         rocketmq_sre_contracts::RecoveryCheckpointStatus::Passed => "passed",
         rocketmq_sre_contracts::RecoveryCheckpointStatus::Failed => "failed",
-        rocketmq_sre_contracts::RecoveryCheckpointStatus::ManualConfirmationRequired => {
-            "manual_confirmation_required"
-        }
+        rocketmq_sre_contracts::RecoveryCheckpointStatus::ManualConfirmationRequired => "manual_confirmation_required",
         rocketmq_sre_contracts::RecoveryCheckpointStatus::Skipped => "skipped",
     }
 }
@@ -321,9 +316,7 @@ fn exercise_state(value: &str) -> Result<DrExerciseState, ControlPlaneError> {
     }
 }
 
-fn checkpoint_status(
-    value: &str,
-) -> Result<rocketmq_sre_contracts::RecoveryCheckpointStatus, ControlPlaneError> {
+fn checkpoint_status(value: &str) -> Result<rocketmq_sre_contracts::RecoveryCheckpointStatus, ControlPlaneError> {
     match value {
         "pending" => Ok(rocketmq_sre_contracts::RecoveryCheckpointStatus::Pending),
         "running" => Ok(rocketmq_sre_contracts::RecoveryCheckpointStatus::Running),
