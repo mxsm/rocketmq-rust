@@ -289,7 +289,10 @@ async fn postgres_dr_center_enforces_test_boundary_and_tracks_findings() {
         .findings(&auth, exercise.id)
         .await
         .expect("resolved DR findings");
-    assert_eq!(findings.items[0].status, rocketmq_sre_contracts::DrFindingStatus::Resolved);
+    assert_eq!(
+        findings.items[0].status,
+        rocketmq_sre_contracts::DrFindingStatus::Resolved
+    );
 }
 
 fn plan_request(
