@@ -23,6 +23,7 @@ members = [
   "crates/rocketmq-sre-execution-agent",
   "crates/rocketmq-sre-probe",
   "crates/rocketmq-sre-eval",
+  "crates/rocketmq-sre-client",
 ]
 resolver = "3"
 
@@ -73,6 +74,7 @@ url = { version = "2.5.4", features = ["serde"] }
 rocketmq-sre-contracts = { path = "crates/rocketmq-sre-contracts" }
 rocketmq-sre-core = { path = "crates/rocketmq-sre-core" }
 rocketmq-sre-model-gateway = { path = "crates/rocketmq-sre-model-gateway" }
+rocketmq-sre-client = { path = "crates/rocketmq-sre-client" }
 rocketmq-admin-core = { path = "../rocketmq-tools/rocketmq-admin/rocketmq-admin-core", default-features = false }
 rocketmq-client-rust = { path = "../rocketmq-client", default-features = false }
 rocketmq-error = { path = "../rocketmq-error" }
