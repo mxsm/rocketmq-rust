@@ -212,10 +212,7 @@ impl GovernanceRepository {
         let mut state_counts = BTreeMap::new();
         for row in rows {
             let count = u64::try_from(row.try_get::<i64, _>("count")?).map_err(|_| {
-                ControlPlaneError::validation(
-                    "invalid_persisted_governance_state",
-                    "governance count is negative",
-                )
+                ControlPlaneError::validation("invalid_persisted_governance_state", "governance count is negative")
             })?;
             state_counts.insert(row.try_get("lifecycle_state")?, count);
         }
@@ -264,9 +261,6 @@ impl GovernanceRepository {
 
 fn count(row: &sqlx::postgres::PgRow, column: &str) -> Result<u64, ControlPlaneError> {
     u64::try_from(row.try_get::<i64, _>(column)?).map_err(|_| {
-        ControlPlaneError::validation(
-            "invalid_persisted_governance_state",
-            "governance count is negative",
-        )
+        ControlPlaneError::validation("invalid_persisted_governance_state", "governance count is negative")
     })
 }
