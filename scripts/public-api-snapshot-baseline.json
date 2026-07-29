@@ -199,7 +199,7 @@
     }
   },
   "schema_version": 1,
-  "source_commit": "8b001cd57fd632725fef6e2098de5a764d4af674",
+  "source_commit": "4795a93227f28b9ec6f0bbfcbd770d0c8101bdcc",
   "toolchain": {
     "cargo": "cargo 1.98.0-nightly (a335d47ff 2026-06-26)",
     "rustc": "rustc 1.98.0-nightly (c397dae80 2026-07-02)",

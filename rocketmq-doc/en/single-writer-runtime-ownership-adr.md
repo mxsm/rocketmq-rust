@@ -112,3 +112,27 @@ behavior, and user-visible command semantics remain unchanged.
 - `rocketmq-runtime/src/config.rs`
 - `rocketmq-runtime/tests/runtime_model.rs`
 - `scripts/runtime-audit.ps1`
+
+### Performance comparison
+
+The Transport session-writer benchmark runs 256 request/response round trips
+through the bounded canonical writer. Both measurements used commit-clean
+checkouts, the same benchmark source, the same command, and the same host:
+
+- Host: Windows, Intel Core i7-11700K, 8 cores/16 logical processors, 31.9 GiB RAM.
+- Baseline source: `8b001cd57fd632725fef6e2098de5a764d4af674`; the clean local measurement
+  commit `e9edd2d6652ea03b31a8a6e3343a307ad9e5fa92` adds only the benchmark harness
+  that is committed in the candidate.
+- Candidate: `4795a93227f28b9ec6f0bbfcbd770d0c8101bdcc`.
+- Command:
+  `cargo bench -p rocketmq-transport --bench frame_write -- transport_session_writer/round_trip_256 --noplot --sample-size 20 --warm-up-time 2 --measurement-time 5`.
+- Baseline interval/center: 4.8223/4.9387/5.0976 ms.
+- Candidate interval/center: 3.3473/3.3993/3.4579 ms.
+- Center-value change: -31.17%; the candidate is faster and remains within
+  the no-more-than-5% regression threshold.
+
+The correctness gate ran before this comparison. It includes Transport
+same-session ordering, cross-session progress, bounded writer diagnostics,
+deadline/retirement behavior, runtime Loom models, Dashboard generation
+fencing, the TUI burst contract, Broker shutdown lock release, and the
+three-controller/two-broker failover-and-rejoin regression.
