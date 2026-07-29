@@ -79,6 +79,13 @@ fn split_topic_group_key(key: &CheetahString) -> Option<(&str, &str)> {
     Some((topic, group))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ConsumerLagObservation {
+    pub(crate) topic: String,
+    pub(crate) consumer_group: String,
+    pub(crate) lag_messages: i64,
+}
+
 pub(crate) struct ConsumerOffsetManager<MS: MessageStore> {
     broker_config: Arc<BrokerConfig>,
     message_store_config: Arc<MessageStoreConfig>,
@@ -510,6 +517,62 @@ where
 
     pub fn offset_table_len(&self) -> usize {
         self.consumer_offset_wrapper.offset_table.read().len()
+    }
+
+    pub(crate) fn consumer_lag_snapshot(&self) -> Vec<ConsumerLagObservation> {
+        let Some(message_store) = self.message_store.provider() else {
+            return Vec::new();
+        };
+
+        self.consumer_lag_snapshot_with(self.broker_config.metrics_cardinality_limit, |topic, queue_id| {
+            message_store.get_max_offset_from_local_store(topic, queue_id).ok()
+        })
+    }
+
+    fn consumer_lag_snapshot_with<F>(&self, limit: usize, mut max_offset: F) -> Vec<ConsumerLagObservation>
+    where
+        F: FnMut(&CheetahString, i32) -> Option<i64>,
+    {
+        let mut entries = self
+            .offset_table_snapshot()
+            .into_iter()
+            .filter_map(|(topic_group, offsets)| {
+                let (topic, group) = split_topic_group_key(&topic_group)?;
+                Some((topic.to_owned(), group.to_owned(), offsets))
+            })
+            .collect::<Vec<_>>();
+        entries.sort_unstable_by(|left, right| (&left.0, &left.1).cmp(&(&right.0, &right.1)));
+
+        entries
+            .into_iter()
+            .take(limit)
+            .filter_map(|(topic, consumer_group, offsets)| {
+                if offsets.is_empty() {
+                    return None;
+                }
+
+                let topic_key = CheetahString::from_slice(&topic);
+                let mut queue_offsets = offsets.into_iter().collect::<Vec<_>>();
+                queue_offsets.sort_unstable_by_key(|(queue_id, _)| *queue_id);
+                let mut lag_messages = 0i64;
+                for (queue_id, consumer_offset) in queue_offsets {
+                    if consumer_offset < 0 {
+                        return None;
+                    }
+                    let queue_max_offset = max_offset(&topic_key, queue_id)?;
+                    if queue_max_offset < 0 {
+                        return None;
+                    }
+                    lag_messages = lag_messages.saturating_add(queue_max_offset.saturating_sub(consumer_offset).max(0));
+                }
+
+                Some(ConsumerLagObservation {
+                    topic,
+                    consumer_group,
+                    lag_messages,
+                })
+            })
+            .collect()
     }
 
     pub fn data_version(&self) -> Arc<DataVersion> {
@@ -1114,6 +1177,54 @@ mod tests {
         assert!(offsets.contains_key("@group-a"));
         assert!(offsets.contains_key("topic-a@"));
         assert!(offsets.contains_key("topic-a@group-a@extra"));
+    }
+
+    #[test]
+    fn consumer_lag_snapshot_is_deterministic_bounded_and_fail_closed() {
+        let manager = new_manager();
+        {
+            let mut offsets = manager.consumer_offset_wrapper.offset_table.write();
+            offsets.insert(
+                CheetahString::from_static_str("topic-b@group-b"),
+                HashMap::from([(0, 4), (1, 8)]),
+            );
+            offsets.insert(
+                CheetahString::from_static_str("topic-a@group-a"),
+                HashMap::from([(0, 10), (1, 20)]),
+            );
+            offsets.insert(
+                CheetahString::from_static_str("topic-c@group-c"),
+                HashMap::from([(0, 1), (1, 2)]),
+            );
+        }
+
+        let bounded = manager.consumer_lag_snapshot_with(2, |topic, queue_id| match (topic.as_str(), queue_id) {
+            ("topic-a", 0) => Some(16),
+            ("topic-a", 1) => Some(30),
+            ("topic-b", 0) => Some(9),
+            ("topic-b", 1) => Some(10),
+            _ => None,
+        });
+        assert_eq!(
+            bounded,
+            vec![
+                super::ConsumerLagObservation {
+                    topic: "topic-a".to_owned(),
+                    consumer_group: "group-a".to_owned(),
+                    lag_messages: 16,
+                },
+                super::ConsumerLagObservation {
+                    topic: "topic-b".to_owned(),
+                    consumer_group: "group-b".to_owned(),
+                    lag_messages: 7,
+                },
+            ]
+        );
+
+        let fail_closed = manager.consumer_lag_snapshot_with(3, |topic, queue_id| {
+            (topic.as_str() != "topic-c" || queue_id == 0).then_some(10)
+        });
+        assert!(fail_closed.iter().all(|observation| observation.topic != "topic-c"));
     }
 
     #[test]
