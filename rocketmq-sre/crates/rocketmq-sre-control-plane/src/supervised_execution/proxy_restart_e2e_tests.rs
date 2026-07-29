@@ -330,7 +330,7 @@ async fn real_kind_supervised_telemetry_collector_restart_reaches_verified_succe
     assert_eq!(submitted.state, ExecutionState::Succeeded);
 }
 
-async fn fetch_agent_state(
+pub(super) async fn fetch_agent_state(
     base_url: &str,
     token: &str,
     tenant_id: TenantId,
@@ -374,16 +374,16 @@ async fn fetch_agent_state(
 }
 
 #[derive(Clone, Copy)]
-struct ExecutionFixture {
-    tenant_id: TenantId,
-    cluster_id: ClusterId,
-    incident_id: IncidentId,
-    diagnosis_id: DiagnosisRevisionId,
-    model_invocation_id: Uuid,
-    agent_evidence_id: EvidenceId,
+pub(super) struct ExecutionFixture {
+    pub(super) tenant_id: TenantId,
+    pub(super) cluster_id: ClusterId,
+    pub(super) incident_id: IncidentId,
+    pub(super) diagnosis_id: DiagnosisRevisionId,
+    pub(super) model_invocation_id: Uuid,
+    pub(super) agent_evidence_id: EvidenceId,
 }
 
-async fn seed_execution_fixture(
+pub(super) async fn seed_execution_fixture(
     repository: &PostgresRepository,
     tenant_id: TenantId,
     cluster_id: ClusterId,
@@ -418,7 +418,7 @@ async fn seed_execution_fixture(
     fixture
 }
 
-async fn persist_agent_evidence(
+pub(super) async fn persist_agent_evidence(
     repository: &PostgresRepository,
     fixture: &ExecutionFixture,
     target: &str,
@@ -561,7 +561,7 @@ async fn insert_diagnosis_records(
     .expect("model invocation fixture");
 }
 
-async fn seed_complete_slo_evidence(repository: &PostgresRepository, fixture: &ExecutionFixture) {
+pub(super) async fn seed_complete_slo_evidence(repository: &PostgresRepository, fixture: &ExecutionFixture) {
     let observed_at = Utc::now().with_nanosecond(0).expect("whole-second SLO timestamp");
     let sample_at = observed_at + Duration::seconds(55);
     let mut series = Vec::new();
@@ -621,7 +621,7 @@ async fn seed_complete_slo_evidence(repository: &PostgresRepository, fixture: &E
         .expect("persist complete SLO Evidence");
 }
 
-fn auth(tenant_id: TenantId, cluster_id: ClusterId, subject: &str, roles: &[&str]) -> AuthContext {
+pub(super) fn auth(tenant_id: TenantId, cluster_id: ClusterId, subject: &str, roles: &[&str]) -> AuthContext {
     AuthContext {
         tenant_id,
         subject: subject.to_owned(),
