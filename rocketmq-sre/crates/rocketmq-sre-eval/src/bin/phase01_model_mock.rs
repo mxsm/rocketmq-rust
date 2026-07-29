@@ -13,8 +13,10 @@
 // limitations under the License.
 
 //! Network-isolated OpenAI-compatible provider fixture for Phase 01 live
-//! acceptance. It has no tools, credentials, outbound client, or RocketMQ
-//! access and returns only a bounded diagnosis tied to supplied Evidence IDs.
+//! acceptance. It has no credentials, outbound client, or RocketMQ access. In
+//! addition to a bounded diagnosis tied to supplied Evidence IDs, it can emit
+//! the exact synthetic read-only tool call used by the Provider smoke check;
+//! it never executes that tool or accepts an arbitrary tool surface.
 
 use std::net::SocketAddr;
 
@@ -37,6 +39,9 @@ const DEFAULT_BIND_ADDR: &str = "0.0.0.0:8094";
 const MAX_REQUEST_BYTES: usize = 256 * 1024;
 const MAX_MESSAGES: usize = 8;
 const MAX_PROMPT_CHARS: usize = 128 * 1024;
+const PROVIDER_SMOKE_EVIDENCE_ID: &str = "provider-smoke-evidence";
+const PROVIDER_SMOKE_RESOURCE: &str = "provider-smoke-resource";
+const PROVIDER_SMOKE_TOOL: &str = "read_smoke_evidence";
 
 #[derive(Debug, thiserror::Error)]
 enum MockProviderError {
@@ -137,12 +142,6 @@ fn build_completion(request: &ChatCompletionRequest) -> Result<Value, StatusCode
         || request.model.chars().count() > 200
         || request.messages.is_empty()
         || request.messages.len() > MAX_MESSAGES
-        || request.tools.as_ref().is_some_and(non_empty_json)
-        || request
-            .tool_choice
-            .as_ref()
-            .is_some_and(|choice| choice != "none" && !choice.is_null())
-        || request.response_format.is_none()
     {
         return Err(StatusCode::BAD_REQUEST);
     }
@@ -154,6 +153,49 @@ fn build_completion(request: &ChatCompletionRequest) -> Result<Value, StatusCode
         .and_then(|message| message.content.as_str())
         .filter(|content| content.chars().count() <= MAX_PROMPT_CHARS)
         .ok_or(StatusCode::UNPROCESSABLE_ENTITY)?;
+
+    if provider_connectivity_probe(request, prompt) {
+        return completion(request, Value::String("OK".to_owned()), None, "stop");
+    }
+    if provider_structured_probe(request, prompt) {
+        return completion(
+            request,
+            Value::String(
+                json!({
+                    "status": "ok",
+                    "evidence_id": PROVIDER_SMOKE_EVIDENCE_ID
+                })
+                .to_string(),
+            ),
+            None,
+            "stop",
+        );
+    }
+    if provider_tool_probe(request, prompt) {
+        return completion(
+            request,
+            Value::Null,
+            Some(json!([{
+                "id": "call-phase01-provider-smoke",
+                "type": "function",
+                "function": {
+                    "name": PROVIDER_SMOKE_TOOL,
+                    "arguments": json!({"resource": PROVIDER_SMOKE_RESOURCE}).to_string()
+                }
+            }])),
+            "tool_calls",
+        );
+    }
+    if request.tools.as_ref().is_some_and(non_empty_json)
+        || request
+            .tool_choice
+            .as_ref()
+            .is_some_and(|choice| choice != "none" && !choice.is_null())
+        || request.response_format.is_none()
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
     let prompt: Value = serde_json::from_str(prompt).map_err(|_| StatusCode::UNPROCESSABLE_ENTITY)?;
     let evidence_ids = allowed_evidence_ids(&prompt);
     let evidence_id = evidence_ids.first().ok_or(StatusCode::UNPROCESSABLE_ENTITY)?;
@@ -168,19 +210,94 @@ fn build_completion(request: &ChatCompletionRequest) -> Result<Value, StatusCode
         "rationale": "The conclusion is limited to the supplied canonical Evidence citation."
     });
     let content = serde_json::to_string(&diagnosis).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let prompt_tokens = token_estimate(prompt.to_string().len());
-    let completion_tokens = token_estimate(content.len());
+    completion(request, Value::String(content), None, "stop")
+}
+
+fn provider_connectivity_probe(request: &ChatCompletionRequest, prompt: &str) -> bool {
+    prompt == "Provider health probe. Respond with the single word OK."
+        && !request.tools.as_ref().is_some_and(non_empty_json)
+        && request.response_format.is_none()
+}
+
+fn provider_structured_probe(request: &ChatCompletionRequest, prompt: &str) -> bool {
+    prompt
+        == format!(
+            "Return the required JSON object and cite evidence_id {PROVIDER_SMOKE_EVIDENCE_ID}. Do not include other \
+             fields."
+        )
+        && !request.tools.as_ref().is_some_and(non_empty_json)
+        && request.response_format.as_ref().is_some_and(|format| {
+            format.get("type").and_then(Value::as_str) == Some("json_schema")
+                && format
+                    .get("json_schema")
+                    .and_then(|schema| schema.get("name"))
+                    .and_then(Value::as_str)
+                    == Some("provider_smoke")
+        })
+}
+
+fn provider_tool_probe(request: &ChatCompletionRequest, prompt: &str) -> bool {
+    if prompt != format!("Call {PROVIDER_SMOKE_TOOL} for resource {PROVIDER_SMOKE_RESOURCE}.") {
+        return false;
+    }
+    let Some(tool) = request
+        .tools
+        .as_ref()
+        .and_then(Value::as_array)
+        .filter(|tools| tools.len() == 1)
+        .and_then(|tools| tools.first())
+    else {
+        return false;
+    };
+    let function = tool.get("function");
+    let resource = function
+        .and_then(|value| value.get("parameters"))
+        .and_then(|value| value.get("properties"))
+        .and_then(|value| value.get("resource"))
+        .and_then(|value| value.get("const"))
+        .and_then(Value::as_str);
+    let selected = request
+        .tool_choice
+        .as_ref()
+        .and_then(|value| value.get("function"))
+        .and_then(|value| value.get("name"))
+        .and_then(Value::as_str);
+    tool.get("type").and_then(Value::as_str) == Some("function")
+        && function.and_then(|value| value.get("name")).and_then(Value::as_str) == Some(PROVIDER_SMOKE_TOOL)
+        && resource == Some(PROVIDER_SMOKE_RESOURCE)
+        && selected == Some(PROVIDER_SMOKE_TOOL)
+        && request.response_format.is_none()
+}
+
+fn completion(
+    request: &ChatCompletionRequest,
+    content: Value,
+    tool_calls: Option<Value>,
+    finish_reason: &str,
+) -> Result<Value, StatusCode> {
+    let prompt_bytes = request
+        .messages
+        .iter()
+        .map(|message| message.content.to_string().len())
+        .sum();
+    let completion_bytes = content.to_string().len() + tool_calls.as_ref().map_or(0, |value| value.to_string().len());
+    let prompt_tokens = token_estimate(prompt_bytes);
+    let completion_tokens = token_estimate(completion_bytes);
+    let mut message = json!({
+        "role": "assistant",
+        "content": content
+    });
+    if let Some(tool_calls) = tool_calls {
+        message["tool_calls"] = tool_calls;
+    }
     Ok(json!({
         "id": "chatcmpl-phase01-read-only-fixture",
         "object": "chat.completion",
         "model": request.model,
         "choices": [{
             "index": 0,
-            "message": {
-                "role": "assistant",
-                "content": content
-            },
-            "finish_reason": "stop"
+            "message": message,
+            "finish_reason": finish_reason
         }],
         "usage": {
             "prompt_tokens": prompt_tokens,
@@ -302,6 +419,95 @@ mod tests {
 
         assert_eq!(
             build_completion(&request).expect_err("tool surface"),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[test]
+    fn fixture_supports_only_the_exact_bounded_provider_smoke_contract() {
+        let connectivity = ChatCompletionRequest {
+            model: "phase01-mock".to_owned(),
+            messages: vec![ChatMessage {
+                role: "user".to_owned(),
+                content: Value::String("Provider health probe. Respond with the single word OK.".to_owned()),
+            }],
+            tools: None,
+            tool_choice: None,
+            response_format: None,
+        };
+        let response = build_completion(&connectivity).expect("connectivity smoke");
+        assert_eq!(response["choices"][0]["message"]["content"], "OK");
+
+        let structured = ChatCompletionRequest {
+            model: "phase01-mock".to_owned(),
+            messages: vec![ChatMessage {
+                role: "user".to_owned(),
+                content: Value::String(format!(
+                    "Return the required JSON object and cite evidence_id {PROVIDER_SMOKE_EVIDENCE_ID}. Do not \
+                     include other fields."
+                )),
+            }],
+            tools: None,
+            tool_choice: None,
+            response_format: Some(json!({
+                "type": "json_schema",
+                "json_schema": {"name": "provider_smoke"}
+            })),
+        };
+        let response = build_completion(&structured).expect("structured smoke");
+        let content = response["choices"][0]["message"]["content"]
+            .as_str()
+            .expect("structured content");
+        assert_eq!(
+            serde_json::from_str::<Value>(content).expect("structured JSON"),
+            json!({"status": "ok", "evidence_id": PROVIDER_SMOKE_EVIDENCE_ID})
+        );
+
+        let tool = ChatCompletionRequest {
+            model: "phase01-mock".to_owned(),
+            messages: vec![ChatMessage {
+                role: "user".to_owned(),
+                content: Value::String(format!(
+                    "Call {PROVIDER_SMOKE_TOOL} for resource {PROVIDER_SMOKE_RESOURCE}."
+                )),
+            }],
+            tools: Some(json!([{
+                "type": "function",
+                "function": {
+                    "name": PROVIDER_SMOKE_TOOL,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "resource": {"type": "string", "const": PROVIDER_SMOKE_RESOURCE}
+                        },
+                        "required": ["resource"],
+                        "additionalProperties": false
+                    }
+                }
+            }])),
+            tool_choice: Some(json!({
+                "type": "function",
+                "function": {"name": PROVIDER_SMOKE_TOOL}
+            })),
+            response_format: None,
+        };
+        let response = build_completion(&tool).expect("read-only tool smoke");
+        assert_eq!(response["choices"][0]["finish_reason"], "tool_calls");
+        assert_eq!(
+            response["choices"][0]["message"]["tool_calls"][0]["function"]["name"],
+            PROVIDER_SMOKE_TOOL
+        );
+
+        let mut arbitrary = tool;
+        arbitrary.tools = Some(json!([{
+            "type": "function",
+            "function": {
+                "name": "apply_cluster_change",
+                "parameters": {"type": "object"}
+            }
+        }]));
+        assert_eq!(
+            build_completion(&arbitrary).expect_err("arbitrary tool must fail closed"),
             StatusCode::BAD_REQUEST
         );
     }
