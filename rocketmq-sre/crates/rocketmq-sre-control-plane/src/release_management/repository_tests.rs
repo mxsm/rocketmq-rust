@@ -22,7 +22,13 @@ use rocketmq_sre_contracts::AuditEvent;
 use rocketmq_sre_contracts::AuditEventId;
 use rocketmq_sre_contracts::AuditEventKind;
 use rocketmq_sre_contracts::ClusterId;
+use rocketmq_sre_contracts::CmdbSnapshot;
 use rocketmq_sre_contracts::CorrelationId;
+use rocketmq_sre_contracts::ENTERPRISE_INTEGRATION_EVENT_SCHEMA_VERSION;
+use rocketmq_sre_contracts::EnterpriseIntegrationEvent;
+use rocketmq_sre_contracts::EnterpriseIntegrationEventId;
+use rocketmq_sre_contracts::EnterpriseIntegrationEventKind;
+use rocketmq_sre_contracts::EnterpriseIntegrationPayload;
 use rocketmq_sre_contracts::INTEGRATION_DELIVERY_SCHEMA_VERSION;
 use rocketmq_sre_contracts::IncidentId;
 use rocketmq_sre_contracts::IntegrationAdapterKind;
@@ -30,6 +36,8 @@ use rocketmq_sre_contracts::IntegrationDelivery;
 use rocketmq_sre_contracts::IntegrationDeliveryId;
 use rocketmq_sre_contracts::IntegrationDeliveryStatus;
 use rocketmq_sre_contracts::IntegrationEventKind;
+use rocketmq_sre_contracts::IntegrationHealth;
+use rocketmq_sre_contracts::IntegrationHealthStatus;
 use rocketmq_sre_contracts::IntegrationTarget;
 use rocketmq_sre_contracts::IntegrationTargetId;
 use rocketmq_sre_contracts::ReleaseId;
@@ -130,7 +138,7 @@ async fn postgres_release_and_integration_records_are_durable_idempotent_and_app
             .next_attempt_at
             .is_some_and(|next_attempt| next_attempt >= delivery.created_at)
     );
-    let claims = repository.claim_integration_deliveries(4).await.expect("claim outbox");
+    let claims = repository.claim_integration_deliveries(32).await.expect("claim outbox");
     let claim = claims
         .into_iter()
         .find(|claim| claim.delivery.id == delivery.id)
@@ -150,6 +158,37 @@ async fn postgres_release_and_integration_records_are_durable_idempotent_and_app
         .expect("delivered outbox");
     assert_eq!(delivered[0].status, IntegrationDeliveryStatus::Delivered);
     assert_eq!(delivered[0].attempt_count, 1);
+    sqlx::query(
+        "UPDATE integration_outbox
+         SET status = 'failed', last_error_code = 'repository_test_failure',
+             delivered_at = NULL
+         WHERE id = $1",
+    )
+    .bind(delivery.id.as_uuid())
+    .execute(&repository.pool)
+    .await
+    .expect("failed delivery fixture");
+    let failed = repository
+        .integration_delivery(fixture.tenant_id, delivery.id)
+        .await
+        .expect("failed delivery");
+    let replayed = repository
+        .replay_integration_delivery(
+            &failed,
+            &audit(
+                &fixture,
+                correlation_id,
+                AuditEventKind::IntegrationDeliveryQueued,
+                "integration_delivery",
+                delivery.id.to_string(),
+                "RepositoryTestIntegrationDeliveryReplay",
+                Utc::now(),
+            ),
+        )
+        .await
+        .expect("manual delivery replay");
+    assert_eq!(replayed.status, IntegrationDeliveryStatus::Pending);
+    assert_eq!(replayed.attempt_count, 0);
 
     let mut current = workflow;
     for next in [
@@ -282,6 +321,152 @@ async fn postgres_release_and_integration_records_are_durable_idempotent_and_app
             .execute(&repository.pool)
             .await
             .is_err()
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires ROCKETMQ_SRE_TEST_DATABASE_URL pointing to Docker PostgreSQL"]
+async fn postgres_enterprise_integration_events_are_signed_scoped_and_idempotent() {
+    let Some(database_url) = std::env::var("ROCKETMQ_SRE_TEST_DATABASE_URL").ok() else {
+        return;
+    };
+    let repository = PostgresRepository::connect(&database_url, 5)
+        .await
+        .expect("repository with enterprise integration migrations");
+    let fixture = seed_fixture(&repository).await;
+    let now = Utc::now().with_nanosecond(0).expect("whole-second timestamp");
+    let target = IntegrationTargetView {
+        target: IntegrationTarget {
+            id: IntegrationTargetId::new(),
+            tenant_id: fixture.tenant_id,
+            cluster_id: Some(fixture.cluster_id),
+            descriptor_id: "rocketmq-sre.integration.mock-cmdb.v1".to_owned(),
+            descriptor_version: "1.0.0".to_owned(),
+            name: format!("CMDB repository test {}", Uuid::new_v4()),
+            adapter_kind: IntegrationAdapterKind::MockCmdb,
+            endpoint: "https://cmdb.example.test/events".to_owned(),
+            secret_reference: Some("env:ROCKETMQ_SRE_CMDB_TEST_SECRET".to_owned()),
+            enabled: true,
+            inbound_approval: false,
+            outbound_events: BTreeSet::new(),
+            created_at: now,
+            updated_at: now,
+        },
+        notification_target_id: None,
+    };
+    repository
+        .insert_integration_target(
+            &target,
+            &audit(
+                &fixture,
+                CorrelationId::new(),
+                AuditEventKind::IntegrationTargetRegistered,
+                "integration_target",
+                target.target.id.to_string(),
+                "EnterpriseRepositoryTargetRegistered",
+                now,
+            ),
+        )
+        .await
+        .expect("CMDB target");
+    let target = repository
+        .rotate_integration_secret(
+            &target,
+            "env:ROCKETMQ_SRE_CMDB_ROTATED_SECRET",
+            now + Duration::seconds(1),
+            &audit(
+                &fixture,
+                CorrelationId::new(),
+                AuditEventKind::StateChanged,
+                "integration_target",
+                target.target.id.to_string(),
+                "EnterpriseRepositorySecretRotated",
+                now + Duration::seconds(1),
+            ),
+        )
+        .await
+        .expect("secret reference rotation");
+    assert_eq!(
+        target.target.secret_reference.as_deref(),
+        Some("env:ROCKETMQ_SRE_CMDB_ROTATED_SECRET")
+    );
+    let event = EnterpriseIntegrationEvent {
+        schema_version: ENTERPRISE_INTEGRATION_EVENT_SCHEMA_VERSION.to_owned(),
+        id: EnterpriseIntegrationEventId::new(),
+        target_id: target.target.id,
+        tenant_id: fixture.tenant_id,
+        cluster_id: fixture.cluster_id,
+        event_kind: EnterpriseIntegrationEventKind::CmdbSnapshot,
+        external_event_id: format!("cmdb-event-{}", Uuid::new_v4()),
+        source_version: "1.0.0".to_owned(),
+        payload_digest: unique_digest(),
+        payload: EnterpriseIntegrationPayload::Cmdb(CmdbSnapshot {
+            cluster_id: fixture.cluster_id,
+            owner: "messaging-platform".to_owned(),
+            environment: "test".to_owned(),
+            service_dependencies: BTreeSet::from(["nameserver".to_owned()]),
+            labels: std::collections::BTreeMap::from([("tier".to_owned(), "messaging".to_owned())]),
+        }),
+        signature_verified: true,
+        occurred_at: now,
+        received_at: now,
+    };
+    let nonce = format!("nonce-{}", Uuid::new_v4());
+    let (stored, duplicate, followup) = repository
+        .store_enterprise_integration_event(&event, &nonce)
+        .await
+        .expect("signed enterprise event");
+    assert_eq!(stored, event);
+    assert!(!duplicate);
+    assert!(followup.is_none());
+    let (reloaded, duplicate, _) = repository
+        .store_enterprise_integration_event(&event, "different-valid-nonce")
+        .await
+        .expect("idempotent enterprise event");
+    assert_eq!(reloaded, event);
+    assert!(duplicate);
+    let replay = EnterpriseIntegrationEvent {
+        id: EnterpriseIntegrationEventId::new(),
+        external_event_id: format!("cmdb-event-{}", Uuid::new_v4()),
+        ..event.clone()
+    };
+    assert!(
+        repository
+            .store_enterprise_integration_event(&replay, &nonce)
+            .await
+            .is_err()
+    );
+    let events = repository
+        .enterprise_events(
+            fixture.tenant_id,
+            target.target.id,
+            Some(EnterpriseIntegrationEventKind::CmdbSnapshot),
+            10,
+        )
+        .await
+        .expect("enterprise event history");
+    assert_eq!(events, vec![event]);
+
+    let health = IntegrationHealth {
+        target_id: target.target.id,
+        status: IntegrationHealthStatus::Healthy,
+        config_valid: true,
+        secret_available: true,
+        endpoint_valid: true,
+        last_delivery_at: None,
+        last_error_code: None,
+        observed_at: now,
+    };
+    repository
+        .store_integration_health(&health)
+        .await
+        .expect("integration health");
+    assert_eq!(
+        repository
+            .integration_health(fixture.tenant_id, target.target.id)
+            .await
+            .expect("latest integration health"),
+        health
     );
 }
 
