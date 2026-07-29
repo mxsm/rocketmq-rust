@@ -36,6 +36,7 @@ use crate::ConnectorError;
 use crate::ConnectorErrorCode;
 
 const PROMETHEUS_EVIDENCE_SCHEMA: &str = "rocketmq.prometheus-evidence.v1";
+const TELEMETRY_CLUSTER_LABEL: &str = "rocketmq_cluster";
 const SEVEN_DAYS: Duration = Duration::days(7);
 const THIRTY_DAYS: Duration = Duration::days(30);
 
@@ -152,16 +153,16 @@ impl PrometheusSource {
             .base_url
             .as_ref()
             .ok_or_else(|| ConnectorError::source("Prometheus source is not configured"))?;
-        require_label(&self.label_allowlist, "cluster")?;
+        require_label(&self.label_allowlist, TELEMETRY_CLUSTER_LABEL)?;
         let (kind, metric) = parse_resource(resource)?;
         validate_metric(metric)?;
         validate_identifier(cluster, "cluster")?;
-        let mut selector = vec![format!(r#"cluster="{cluster}""#)];
+        let mut selector = vec![format!(r#"{TELEMETRY_CLUSTER_LABEL}="{cluster}""#)];
         for (label, value) in matchers {
             validate_label(label)?;
             require_label(&self.label_allowlist, label)?;
             validate_identifier(value, "Prometheus label value")?;
-            if label == "cluster" {
+            if label == TELEMETRY_CLUSTER_LABEL {
                 return Err(ConnectorError::new(
                     ConnectorErrorCode::InvalidEvidenceQuery,
                     false,
@@ -580,7 +581,7 @@ mod tests {
                 "data": {
                     "resultType": "matrix",
                     "result": [{
-                        "metric": {"cluster": "local"},
+                        "metric": {"rocketmq_cluster": "local"},
                         "values": [[1_700_000_000, "1"]]
                     }]
                 }
@@ -599,7 +600,7 @@ mod tests {
         let source = PrometheusSource::new(
             Client::new(),
             Some(Url::parse(&format!("http://{address}/")).expect("fixture URL")),
-            BTreeSet::from(["cluster".to_owned()]),
+            BTreeSet::from([TELEMETRY_CLUSTER_LABEL.to_owned()]),
             std::time::Duration::from_secs(30 * 24 * 60 * 60),
         );
         let end = DateTime::from_timestamp(1_800_000_000, 0).expect("timestamp");
@@ -622,7 +623,7 @@ mod tests {
         assert_eq!(requests[0].0, "/api/v1/query_range");
         assert_eq!(
             requests[0].1.get("query").map(String::as_str),
-            Some("rocketmq_broker_up{cluster=\"local\"}")
+            Some("rocketmq_broker_up{rocketmq_cluster=\"local\"}")
         );
         let start = requests[0].1["start"].parse::<i64>().expect("start");
         let end = requests[0].1["end"].parse::<i64>().expect("end");
