@@ -88,6 +88,7 @@ async fn healthy_collector_is_ready_for_one_typed_restart() {
 
     assert!(result.ready);
     assert!(result.reason_codes.is_empty());
+    assert_eq!(result.resource_conditions.get("replacement_uid_observed"), Some(&false));
     assert_eq!(result.resource_conditions.get("collector_ready"), Some(&true));
     assert_eq!(result.resource_conditions.get("exporter_connected"), Some(&true));
 }
@@ -145,6 +146,14 @@ async fn apply_reconcile_and_manual_takeover_bind_one_execution_step() {
         assert_eq!(writes[0].expected_uid, "collector-uid-before");
         assert_eq!(writes[0].pipeline, "combined");
     }
+
+    let post = handler
+        .read_state(&read)
+        .await
+        .expect("post-change Collector verification state");
+    assert_eq!(post.resource_conditions.get("replacement_uid_observed"), Some(&true));
+    assert_eq!(post.resource_conditions.get("collector_ready"), Some(&true));
+    assert_eq!(post.resource_conditions.get("exporter_connected"), Some(&true));
 
     let verified = handler
         .reconcile(&read, Some("collector-forward"))
