@@ -1,0 +1,305 @@
+{
+  "$defs": {
+    "FinOpsAllocationMode": {
+      "description": "Allocation mode is showback unless an organization explicitly confirms\nits chargeback keys.",
+      "enum": [
+        "showback",
+        "chargeback"
+      ],
+      "type": "string"
+    },
+    "FinOpsAnomaly": {
+      "additionalProperties": false,
+      "description": "Simple bounded deviation from a preceding comparable window.",
+      "properties": {
+        "baseline_cost_micros": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "change_basis_points": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "current_cost_micros": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reason_code": {
+          "type": "string"
+        },
+        "scope_key": {
+          "type": "string"
+        },
+        "scope_kind": {
+          "$ref": "#/$defs/FinOpsBudgetScopeKind"
+        }
+      },
+      "required": [
+        "scope_kind",
+        "scope_key",
+        "current_cost_micros",
+        "baseline_cost_micros",
+        "reason_code"
+      ],
+      "type": "object"
+    },
+    "FinOpsBudgetId": {
+      "description": "Stable identifier for a versioned FinOps budget.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "FinOpsBudgetScopeKind": {
+      "description": "Scope supported by a soft/hard cost budget.",
+      "enum": [
+        "tenant",
+        "provider",
+        "model",
+        "region",
+        "cluster",
+        "incident",
+        "diagnostic_pack",
+        "workflow"
+      ],
+      "type": "string"
+    },
+    "FinOpsForecast": {
+      "additionalProperties": false,
+      "description": "Period projection for one budget.",
+      "properties": {
+        "budget_id": {
+          "$ref": "#/$defs/FinOpsBudgetId"
+        },
+        "coverage_basis_points": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "generated_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "hard_limit_micros": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "observed_cost_micros": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "period_end": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "period_start": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "projected_cost_micros": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "projected_over_budget": {
+          "type": "boolean"
+        },
+        "sample_count": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "budget_id",
+        "period_start",
+        "period_end",
+        "observed_cost_micros",
+        "projected_cost_micros",
+        "hard_limit_micros",
+        "sample_count",
+        "coverage_basis_points",
+        "projected_over_budget",
+        "generated_at"
+      ],
+      "type": "object"
+    },
+    "FinOpsShowbackRow": {
+      "additionalProperties": false,
+      "description": "Cost, quality, SLO and saved-time values for one showback dimension.",
+      "properties": {
+        "average_latency_millis": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "cost_micros": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "dimensions": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "error_count": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "estimated_minutes_saved": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "input_tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "output_tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "request_count": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "slo_compliant_outcomes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "successful_outcomes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "dimensions",
+        "request_count",
+        "input_tokens",
+        "output_tokens",
+        "error_count",
+        "cost_micros",
+        "successful_outcomes",
+        "slo_compliant_outcomes",
+        "estimated_minutes_saved"
+      ],
+      "type": "object"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Bounded report that exposes coverage rather than fabricating missing cost.",
+  "properties": {
+    "allocation_mode": {
+      "$ref": "#/$defs/FinOpsAllocationMode"
+    },
+    "anomalies": {
+      "items": {
+        "$ref": "#/$defs/FinOpsAnomaly"
+      },
+      "type": "array"
+    },
+    "chargeback_enabled": {
+      "type": "boolean"
+    },
+    "cost_coverage_basis_points": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "entries_missing_cost": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "forecasts": {
+      "items": {
+        "$ref": "#/$defs/FinOpsForecast"
+      },
+      "type": "array"
+    },
+    "from": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "generated_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "ledger_entries": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "rows": {
+      "items": {
+        "$ref": "#/$defs/FinOpsShowbackRow"
+      },
+      "type": "array"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    },
+    "to": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "total_cost_micros": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "warnings": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "tenant_id",
+    "from",
+    "to",
+    "allocation_mode",
+    "chargeback_enabled",
+    "rows",
+    "total_cost_micros",
+    "ledger_entries",
+    "entries_missing_cost",
+    "forecasts",
+    "anomalies",
+    "warnings",
+    "generated_at"
+  ],
+  "title": "FinOpsReport",
+  "type": "object"
+}
