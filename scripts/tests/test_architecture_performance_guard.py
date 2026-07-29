@@ -112,6 +112,8 @@ class ArchitecturePerformanceGuardTest(unittest.TestCase):
 
     def test_live_profile_inventory_and_cli_validation_pass(self) -> None:
         self.assertEqual([], guard.validate_profile_policy(self.policy))
+        workflow = guard.DEFAULT_WORKFLOW.read_text(encoding="utf-8")
+        self.assertEqual([], guard.validate_workflow_contract(workflow))
         self.assertEqual(guard.REQUIRED_PROFILE_IDS, {profile["id"] for profile in self.policy["profiles"]})
         self.assertEqual(11, sum(len(profile["variants"]) for profile in self.policy["profiles"]))
 
@@ -126,6 +128,33 @@ class ArchitecturePerformanceGuardTest(unittest.TestCase):
         )
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertIn("profiles=8 variants=11 metric_contracts=50", result.stdout)
+
+    def test_workflow_contract_rejects_candidate_only_or_optional_comparison(self) -> None:
+        workflow = guard.DEFAULT_WORKFLOW.read_text(encoding="utf-8")
+
+        candidate_only = workflow.replace(
+            "ref: ${{ env.BASELINE_REF }}\n          path: baseline",
+            "ref: ${{ env.CANDIDATE_REF }}\n          path: candidate",
+            1,
+        )
+        findings = guard.validate_workflow_contract(candidate_only)
+        self.assertTrue(any("baseline checkout" in finding for finding in findings))
+
+        optional = workflow.replace(
+            "- name: Compare approved baseline with candidate\n        run:",
+            "- name: Compare approved baseline with candidate\n        if: env.BASELINE_REPORT != ''\n        run:",
+            1,
+        )
+        findings = guard.validate_workflow_contract(optional)
+        self.assertTrue(any("must not be conditional" in finding for finding in findings))
+
+        external_path = workflow.replace(
+            "RUSTUP_TOOLCHAIN: 1.95.0",
+            "APPROVED_BASELINE_REPORT: ${{ vars.ARCHITECTURE_PERFORMANCE_BASELINE_REPORT }}",
+            1,
+        )
+        findings = guard.validate_workflow_contract(external_path)
+        self.assertTrue(any("external baseline report path" in finding for finding in findings))
 
     def test_collection_contract_preserves_target_hardware_requirement(self) -> None:
         invalid = copy.deepcopy(self.policy)

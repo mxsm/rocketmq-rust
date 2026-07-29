@@ -2,6 +2,17 @@ name: Architecture performance evidence
 
 on:
   workflow_dispatch:
+    inputs:
+      baseline_ref:
+        description: Approved pre-refactor baseline commit
+        required: true
+        default: 7c952cdcd1ce625604de9c54975a201d7b1b755b
+        type: string
+      candidate_ref:
+        description: Candidate commit or ref
+        required: true
+        default: main
+        type: string
   schedule:
     - cron: "29 20 * * 0"
 
@@ -42,60 +53,106 @@ jobs:
     runs-on: [self-hosted, linux, x64, rocketmq-benchmark]
     timeout-minutes: 480
     env:
+      BASELINE_REF: ${{ inputs.baseline_ref || vars.ARCHITECTURE_PERFORMANCE_BASELINE_REF || '7c952cdcd1ce625604de9c54975a201d7b1b755b' }}
+      CANDIDATE_REF: ${{ inputs.candidate_ref || github.sha }}
       BENCHMARK_HARDWARE_ID: ${{ vars.ARCHITECTURE_BENCHMARK_HARDWARE_ID }}
       BENCHMARK_FILESYSTEM: ${{ vars.ARCHITECTURE_BENCHMARK_FILESYSTEM }}
       BENCHMARK_FEATURES: ${{ vars.ARCHITECTURE_BENCHMARK_FEATURES }}
       BENCHMARK_METHOD: ${{ vars.ARCHITECTURE_BENCHMARK_METHOD }}
-      APPROVED_BASELINE_REPORT: ${{ vars.ARCHITECTURE_PERFORMANCE_BASELINE_REPORT }}
+      RUSTUP_TOOLCHAIN: 1.95.0
 
     steps:
-      - name: Checkout
+      - name: Checkout approved baseline
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ env.BASELINE_REF }}
+          path: baseline
 
-      - name: Use repository Rust 1.95 toolchain
+      - name: Checkout candidate
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ env.CANDIDATE_REF }}
+          path: candidate
+
+      - name: Bind immutable baseline and candidate commits
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$BASELINE_REF" =~ ^[0-9a-f]{40}$ ]]
+          BASELINE_COMMIT=$(git -C baseline rev-parse HEAD)
+          CANDIDATE_COMMIT=$(git -C candidate rev-parse HEAD)
+          [[ "$BASELINE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$CANDIDATE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$BASELINE_COMMIT" = "$BASELINE_REF"
+          test "$BASELINE_COMMIT" != "$CANDIDATE_COMMIT"
+          test -z "$(git -C baseline status --porcelain)"
+          test -z "$(git -C candidate status --porcelain)"
+          {
+            echo "BASELINE_COMMIT=$BASELINE_COMMIT"
+            echo "CANDIDATE_COMMIT=$CANDIDATE_COMMIT"
+          } >> "$GITHUB_ENV"
+          mkdir -p target/architecture-refactor/M10
+          printf '%s\n' \
+            "baseline=$BASELINE_COMMIT" \
+            "candidate=$CANDIDATE_COMMIT" \
+            "toolchain=$RUSTUP_TOOLCHAIN" \
+            > target/architecture-refactor/M10/revisions.txt
+
+      - name: Use approved Rust toolchain
         run: rustup show active-toolchain
 
-      - name: Materialize the reviewed runner manifest
+      - name: Materialize identical reviewed runner manifests
         run: |
           set -euo pipefail
           test -n "$BENCHMARK_HARDWARE_ID"
           test -n "$BENCHMARK_FILESYSTEM"
           test -n "$BENCHMARK_FEATURES"
           test -n "$BENCHMARK_METHOD"
-          python scripts/architecture_performance_sidecar.py \
-            --generate-manifest target/architecture-refactor/M10/runner-manifest.json
+          python baseline/scripts/architecture_performance_sidecar.py \
+            --generate-manifest baseline/target/architecture-refactor/M10/runner-manifest.json
+          python candidate/scripts/architecture_performance_sidecar.py \
+            --generate-manifest candidate/target/architecture-refactor/M10/runner-manifest.json
           python - <<'PY'
           import json
           import os
           from pathlib import Path
 
-          path = Path("target/architecture-refactor/M10/runner-manifest.json")
-          manifest = json.loads(path.read_text(encoding="utf-8"))
-          manifest["environment"].update(
-              hardware_id=os.environ["BENCHMARK_HARDWARE_ID"],
-              filesystem=os.environ["BENCHMARK_FILESYSTEM"],
-              features=sorted(filter(None, os.environ["BENCHMARK_FEATURES"].split(","))),
-              measurement_method=os.environ["BENCHMARK_METHOD"],
-          )
-          path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+          for checkout in ("baseline", "candidate"):
+              path = Path(checkout) / "target/architecture-refactor/M10/runner-manifest.json"
+              manifest = json.loads(path.read_text(encoding="utf-8"))
+              manifest["environment"].update(
+                  hardware_id=os.environ["BENCHMARK_HARDWARE_ID"],
+                  filesystem=os.environ["BENCHMARK_FILESYSTEM"],
+                  features=sorted(filter(None, os.environ["BENCHMARK_FEATURES"].split(","))),
+                  measurement_method=os.environ["BENCHMARK_METHOD"],
+              )
+              path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
           PY
 
-      - name: Collect correctness and measurement evidence
-        run: >-
-          python scripts/architecture_performance_sidecar.py
-          --manifest target/architecture-refactor/M10/runner-manifest.json
-          --output-dir target/architecture-refactor/M10/performance
-          --run-id ${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Collect baseline correctness and measurement evidence
+        run: |
+          python baseline/scripts/architecture_performance_sidecar.py \
+            --manifest baseline/target/architecture-refactor/M10/runner-manifest.json \
+            --output-dir baseline/target/architecture-refactor/M10/performance \
+            --run-id ${{ github.run_id }}-${{ github.run_attempt }}-baseline
 
-      - name: Compare with the approved baseline when configured
-        if: env.APPROVED_BASELINE_REPORT != ''
+      - name: Collect candidate correctness and measurement evidence
+        run: |
+          python candidate/scripts/architecture_performance_sidecar.py \
+            --manifest candidate/target/architecture-refactor/M10/runner-manifest.json \
+            --output-dir candidate/target/architecture-refactor/M10/performance \
+            --run-id ${{ github.run_id }}-${{ github.run_attempt }}-candidate
+
+      - name: Compare approved baseline with candidate
         run: |
           set -euo pipefail
-          CANDIDATE=$(find target/architecture-refactor/M10/performance -name report.json -print -quit)
-          test -n "$CANDIDATE"
-          python scripts/architecture_performance_guard.py \
-            --baseline "$APPROVED_BASELINE_REPORT" \
-            --candidate "$CANDIDATE" \
+          BASELINE_REPORT=$(find baseline/target/architecture-refactor/M10/performance -name measurement-report.json -print -quit)
+          CANDIDATE_REPORT=$(find candidate/target/architecture-refactor/M10/performance -name measurement-report.json -print -quit)
+          test -n "$BASELINE_REPORT"
+          test -n "$CANDIDATE_REPORT"
+          python candidate/scripts/architecture_performance_guard.py \
+            --baseline "$BASELINE_REPORT" \
+            --candidate "$CANDIDATE_REPORT" \
             --output target/architecture-refactor/M10/comparison.json
 
       - name: Upload immutable performance evidence
@@ -103,6 +160,9 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: architecture-performance-${{ github.sha }}
-          path: target/architecture-refactor/M10
+          path: |
+            baseline/target/architecture-refactor/M10
+            candidate/target/architecture-refactor/M10
+            target/architecture-refactor/M10
           if-no-files-found: error
           retention-days: 90
