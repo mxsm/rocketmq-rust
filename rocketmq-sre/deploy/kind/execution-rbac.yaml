@@ -35,6 +35,38 @@ roleRef:
   name: sre-execution-agent-typed-workloads
 ---
 apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sre-execution-agent-credential-selector
+  namespace: rocketmq-sre
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["broker-admin-credential-selector"]
+    verbs: ["get", "update"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      - broker-admin-credential-v1
+      - broker-admin-credential-v2
+      - broker-admin-credential-invalid
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sre-execution-agent-credential-selector
+  namespace: rocketmq-sre
+subjects:
+  - kind: ServiceAccount
+    name: sre-execution-agent
+    namespace: rocketmq-sre
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: sre-execution-agent-credential-selector
+---
+apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: sre-execution-agent-node-capacity
