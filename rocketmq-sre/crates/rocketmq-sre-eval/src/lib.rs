@@ -55,6 +55,11 @@ use rocketmq_sre_contracts::CriticFinding;
 use rocketmq_sre_contracts::CriticGateState;
 use rocketmq_sre_contracts::CriticReview;
 use rocketmq_sre_contracts::Descriptor;
+use rocketmq_sre_contracts::DrActionItem;
+use rocketmq_sre_contracts::DrBackupAsset;
+use rocketmq_sre_contracts::DrExercise;
+use rocketmq_sre_contracts::DrFinding;
+use rocketmq_sre_contracts::DrPlan;
 use rocketmq_sre_contracts::DrReadinessReport;
 use rocketmq_sre_contracts::EvidenceQuery;
 use rocketmq_sre_contracts::EvidenceSnapshot;
@@ -91,6 +96,7 @@ use rocketmq_sre_contracts::PostmortemRevision;
 use rocketmq_sre_contracts::ReconcileEffectRequest;
 use rocketmq_sre_contracts::ReconcileEffectResponse;
 use rocketmq_sre_contracts::ReconcileGrant;
+use rocketmq_sre_contracts::RecoveryCheckpoint;
 use rocketmq_sre_contracts::ReleaseObservation;
 use rocketmq_sre_contracts::ReleaseReadinessSnapshot;
 use rocketmq_sre_contracts::ReleaseReport;
@@ -606,6 +612,27 @@ fn generated_schemas() -> Result<Vec<(&'static str, serde_json::Value)>, EvalErr
         (
             "dr-readiness-report.schema.json",
             serde_json::to_value(schema_for!(DrReadinessReport))?,
+        ),
+        ("dr-plan.schema.json", serde_json::to_value(schema_for!(DrPlan))?),
+        (
+            "dr-backup-asset.schema.json",
+            serde_json::to_value(schema_for!(DrBackupAsset))?,
+        ),
+        (
+            "dr-exercise.schema.json",
+            serde_json::to_value(schema_for!(DrExercise))?,
+        ),
+        (
+            "recovery-checkpoint.schema.json",
+            serde_json::to_value(schema_for!(RecoveryCheckpoint))?,
+        ),
+        (
+            "dr-finding.schema.json",
+            serde_json::to_value(schema_for!(DrFinding))?,
+        ),
+        (
+            "dr-action-item.schema.json",
+            serde_json::to_value(schema_for!(DrActionItem))?,
         ),
         (
             "notification-delivery.schema.json",
