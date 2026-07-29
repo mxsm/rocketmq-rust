@@ -500,6 +500,7 @@
         "replicas",
         "replicaGroupName",
         "autoCreateTopicEnable",
+        "logFilterReloadEnabled",
         "image",
         "persistence",
         "pdb",
@@ -516,6 +517,9 @@
           "minLength": 1
         },
         "autoCreateTopicEnable": {
+          "type": "boolean"
+        },
+        "logFilterReloadEnabled": {
           "type": "boolean"
         },
         "image": {
