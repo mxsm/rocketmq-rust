@@ -86,9 +86,11 @@ target namespace/Kubernetes API path and mounts no target credential. Only the
 Agent ServiceAccount is bound to the closed workload mutation Role; the Agent
 still requires an active epoch grant and durable shared/exclusive PostgreSQL
 barrier before invoking any registered handler. The Kind test profile explicitly
-enables the generation-checked Broker configuration adapter against
-`rocketmq-namesrv:9876`; its read and mutation access keys are distinct. A
-production deployment must additionally use TLS and production secret delivery.
+enables the generation-checked Broker configuration adapter and the
+version-checked Topic configuration adapter against `rocketmq-namesrv:9876`;
+their read and mutation access keys are distinct. Topic precheck resolves every
+route Broker and fails closed on configuration/version drift. A production
+deployment must additionally use TLS and production secret delivery.
 
 `Up` builds and loads all local RocketMQ/SRE images. Use `-SkipBuild` only when
 every required image already exists in the local Docker engine. Re-running
