@@ -116,10 +116,7 @@ impl GovernanceRepository {
         event: &GovernanceEvent,
     ) -> Result<GovernanceVersion, ControlPlaneError> {
         let components = serde_json::to_value(&version.applicable_components).map_err(|_| {
-            ControlPlaneError::validation(
-                "invalid_governance_version",
-                "applicable components cannot be encoded",
-            )
+            ControlPlaneError::validation("invalid_governance_version", "applicable components cannot be encoded")
         })?;
         let dependencies = dependency_value(&version.dependencies)?;
         let mut transaction = self.pool.begin().await?;
