@@ -474,14 +474,14 @@ impl MQClientInstance {
 
         {
             let producer_table = self.producer_table.read().await;
-            for (_, value) in producer_table.iter() {
+            for value in producer_table.values() {
                 topic_list.extend(value.get_publish_topic_list());
             }
         }
 
         {
             let consumer_table = self.consumer_table.read().await;
-            for (_, value) in consumer_table.iter() {
+            for value in consumer_table.values() {
                 value.subscriptions().iter().for_each(|sub| {
                     topic_list.insert(sub.topic.clone());
                 });
@@ -601,16 +601,13 @@ impl MQClientInstance {
                 .unwrap()
                 .get_topic_route_info_from_name_server(topic, self.client_config.mq_client_api_timeout)
                 .await
-                .map_or_else(
-                    |err| {
-                        warn!(
-                            "getTopicRouteInfoFromNameServer failed, topic: {}, err: {:?}",
-                            topic, err
-                        );
-                        None
-                    },
-                    |v| v,
-                )
+                .unwrap_or_else(|err| {
+                    warn!(
+                        "getTopicRouteInfoFromNameServer failed, topic: {}, err: {:?}",
+                        topic, err
+                    );
+                    None
+                })
         };
         if let Some(mut topic_route_data) = topic_route_data {
             let mut topic_route_table = self.topic_route_table.write().await;
@@ -648,7 +645,7 @@ impl MQClientInstance {
                     let mut publish_info = topic_route_data2topic_publish_info(topic, &mut topic_route_data);
                     publish_info.have_topic_router_info = true;
                     let mut producer_table = self.producer_table.write().await;
-                    for (_, value) in producer_table.iter_mut() {
+                    for value in producer_table.values_mut() {
                         value.update_topic_publish_info(topic.to_string(), Some(publish_info.clone()));
                     }
                 }
@@ -658,7 +655,7 @@ impl MQClientInstance {
                     let consumer_table = self.consumer_table.read().await;
                     if !consumer_table.is_empty() {
                         let subscribe_info = topic_route_data2topic_subscribe_info(topic, &topic_route_data);
-                        for (_, value) in consumer_table.iter() {
+                        for value in consumer_table.values() {
                             value.update_topic_subscribe_info(topic.clone(), &subscribe_info).await;
                         }
                     }
@@ -703,7 +700,7 @@ impl MQClientInstance {
 
     pub async fn persist_all_consumer_offset(&mut self) {
         let consumer_table = self.consumer_table.read().await;
-        for (_, value) in consumer_table.iter() {
+        for value in consumer_table.values() {
             value.persist_consumer_offset().await;
         }
     }
@@ -924,9 +921,9 @@ impl MQClientInstance {
 
     async fn is_broker_in_name_server(&self, broker_name: &str) -> bool {
         let broker_addr_table = self.topic_route_table.read().await;
-        for (_, value) in broker_addr_table.iter() {
+        for value in broker_addr_table.values() {
             for bd in value.broker_datas.iter() {
-                for (_, value) in bd.broker_addrs().iter() {
+                for value in bd.broker_addrs().values() {
                     if value.as_str() == broker_name {
                         return true;
                     }
@@ -943,7 +940,7 @@ impl MQClientInstance {
         };
 
         let consumer_table = self.consumer_table.read().await;
-        for (_, value) in consumer_table.iter() {
+        for value in consumer_table.values() {
             let mut consumer_data = ConsumerData {
                 group_name: value.group_name(),
                 consume_type: value.consume_type(),
@@ -961,7 +958,7 @@ impl MQClientInstance {
         }
         drop(consumer_table);
         let producer_table = self.producer_table.read().await;
-        for (group_name, _) in producer_table.iter() {
+        for group_name in producer_table.keys() {
             let producer_data = ProducerData {
                 group_name: group_name.clone(),
             };
@@ -1175,9 +1172,9 @@ impl MQClientInstance {
 
     async fn is_broker_addr_exist_in_topic_route_table(&self, addr: &str) -> bool {
         let topic_route_table = self.topic_route_table.read().await;
-        for (_, value) in topic_route_table.iter() {
+        for value in topic_route_table.values() {
             for bd in value.broker_datas.iter() {
-                for (_, value) in bd.broker_addrs().iter() {
+                for value in bd.broker_addrs().values() {
                     if value.as_str() == addr {
                         return true;
                     }
@@ -1258,101 +1255,6 @@ impl MQClientInstance {
         }
 
         None
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
-    use crate::consumer::default_mq_push_consumer::ConsumerConfig;
-    use std::sync::atomic::AtomicUsize;
-    use std::sync::atomic::Ordering;
-
-    fn test_consumer(group: &str) -> MQConsumerInnerImpl {
-        let mut consumer_config = ArcMut::new(ConsumerConfig::default());
-        consumer_config.consumer_group = group.into();
-        let mut consumer_impl = ArcMut::new(DefaultMQPushConsumerImpl::new(
-            ClientConfig::default(),
-            consumer_config,
-            None,
-        ));
-        let consumer_impl_clone = consumer_impl.clone();
-        consumer_impl.set_default_mqpush_consumer_impl(consumer_impl_clone.clone());
-        MQConsumerInnerImpl {
-            default_mqpush_consumer_impl: consumer_impl_clone,
-        }
-    }
-
-    #[tokio::test]
-    async fn unregister_consumer_always_removes_the_local_entry() {
-        let mut instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "phase3-unregister-client", None);
-        let group = CheetahString::from("phase3-unregister-group");
-
-        assert!(instance.register_consumer(&group, test_consumer(group.as_str())).await);
-        assert!(instance.consumer_table.read().await.contains_key(&group));
-
-        instance.unregister_consumer(group.clone()).await;
-
-        assert!(!instance.consumer_table.read().await.contains_key(&group));
-    }
-
-    #[tokio::test]
-    async fn select_consumer_hides_non_running_consumers() {
-        let mut instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "phase3-select-client", None);
-        let group = CheetahString::from("phase3-select-group");
-        assert!(instance.register_consumer(&group, test_consumer(group.as_str())).await);
-
-        assert!(instance.select_consumer(group.as_str()).await.is_none());
-    }
-
-    #[tokio::test]
-    async fn shutdown_keeps_the_shared_client_alive_for_a_sibling_consumer() {
-        let mut instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "phase3-sibling-client", None);
-        let first = CheetahString::from("phase3-sibling-one");
-        let second = CheetahString::from("phase3-sibling-two");
-        instance.service_state = ServiceState::Running;
-        assert!(instance.register_consumer(&first, test_consumer(first.as_str())).await);
-        assert!(
-            instance
-                .register_consumer(&second, test_consumer(second.as_str()))
-                .await
-        );
-
-        instance.unregister_consumer(first).await;
-        instance.shutdown().await;
-        assert_eq!(instance.service_state, ServiceState::Running);
-
-        instance.unregister_consumer(second).await;
-        instance.shutdown().await;
-        assert_eq!(instance.service_state, ServiceState::ShutdownAlready);
-    }
-
-    #[tokio::test]
-    async fn shared_factory_start_lock_is_single_flight() {
-        let instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "phase3-start-lock-client", None);
-        let active = Arc::new(AtomicUsize::new(0));
-        let peak = Arc::new(AtomicUsize::new(0));
-        let mut tasks = Vec::new();
-
-        for _ in 0..4 {
-            let lock = instance.lock_startup.clone();
-            let active = active.clone();
-            let peak = peak.clone();
-            tasks.push(tokio::spawn(async move {
-                let _guard = lock.lock().await;
-                let current = active.fetch_add(1, Ordering::SeqCst) + 1;
-                peak.fetch_max(current, Ordering::SeqCst);
-                tokio::task::yield_now().await;
-                active.fetch_sub(1, Ordering::SeqCst);
-            }));
-        }
-
-        for task in tasks {
-            task.await.expect("startup lock task");
-        }
-
-        assert_eq!(peak.load(Ordering::SeqCst), 1);
     }
 }
 
@@ -1451,4 +1353,99 @@ pub fn topic_route_data2topic_subscribe_info(topic: &str, route: &TopicRouteData
         }
     }
     mq_list
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
+    use crate::consumer::default_mq_push_consumer::ConsumerConfig;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+
+    fn test_consumer(group: &str) -> MQConsumerInnerImpl {
+        let mut consumer_config = ArcMut::new(ConsumerConfig::default());
+        consumer_config.consumer_group = group.into();
+        let mut consumer_impl = ArcMut::new(DefaultMQPushConsumerImpl::new(
+            ClientConfig::default(),
+            consumer_config,
+            None,
+        ));
+        let consumer_impl_clone = consumer_impl.clone();
+        consumer_impl.set_default_mqpush_consumer_impl(consumer_impl_clone.clone());
+        MQConsumerInnerImpl {
+            default_mqpush_consumer_impl: consumer_impl_clone,
+        }
+    }
+
+    #[tokio::test]
+    async fn unregister_consumer_always_removes_the_local_entry() {
+        let mut instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "phase3-unregister-client", None);
+        let group = CheetahString::from("phase3-unregister-group");
+
+        assert!(instance.register_consumer(&group, test_consumer(group.as_str())).await);
+        assert!(instance.consumer_table.read().await.contains_key(&group));
+
+        instance.unregister_consumer(group.clone()).await;
+
+        assert!(!instance.consumer_table.read().await.contains_key(&group));
+    }
+
+    #[tokio::test]
+    async fn select_consumer_hides_non_running_consumers() {
+        let mut instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "phase3-select-client", None);
+        let group = CheetahString::from("phase3-select-group");
+        assert!(instance.register_consumer(&group, test_consumer(group.as_str())).await);
+
+        assert!(instance.select_consumer(group.as_str()).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn shutdown_keeps_the_shared_client_alive_for_a_sibling_consumer() {
+        let mut instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "phase3-sibling-client", None);
+        let first = CheetahString::from("phase3-sibling-one");
+        let second = CheetahString::from("phase3-sibling-two");
+        instance.service_state = ServiceState::Running;
+        assert!(instance.register_consumer(&first, test_consumer(first.as_str())).await);
+        assert!(
+            instance
+                .register_consumer(&second, test_consumer(second.as_str()))
+                .await
+        );
+
+        instance.unregister_consumer(first).await;
+        instance.shutdown().await;
+        assert_eq!(instance.service_state, ServiceState::Running);
+
+        instance.unregister_consumer(second).await;
+        instance.shutdown().await;
+        assert_eq!(instance.service_state, ServiceState::ShutdownAlready);
+    }
+
+    #[tokio::test]
+    async fn shared_factory_start_lock_is_single_flight() {
+        let instance = MQClientInstance::new_arc(ClientConfig::default(), 0, "phase3-start-lock-client", None);
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let mut tasks = Vec::new();
+
+        for _ in 0..4 {
+            let lock = instance.lock_startup.clone();
+            let active = active.clone();
+            let peak = peak.clone();
+            tasks.push(tokio::spawn(async move {
+                let _guard = lock.lock().await;
+                let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(current, Ordering::SeqCst);
+                tokio::task::yield_now().await;
+                active.fetch_sub(1, Ordering::SeqCst);
+            }));
+        }
+
+        for task in tasks {
+            task.await.expect("startup lock task");
+        }
+
+        assert_eq!(peak.load(Ordering::SeqCst), 1);
+    }
 }

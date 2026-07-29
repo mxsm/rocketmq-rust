@@ -18,7 +18,7 @@ impl MessageListenerConcurrently for NoopListener {
     fn consume_message(
         &self,
         _msgs: &[&MessageExt],
-        _context: &ConsumeConcurrentlyContext,
+        _context: &mut ConsumeConcurrentlyContext,
     ) -> RocketMQResult<ConsumeConcurrentlyStatus> {
         Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
     }

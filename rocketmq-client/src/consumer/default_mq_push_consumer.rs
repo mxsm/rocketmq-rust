@@ -12,10 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::thread;
-
 use cheetah_string::CheetahString;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_common::common::message::message_ext::MessageExt;
@@ -26,6 +22,10 @@ use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_rust::ArcMut;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 use tokio::runtime::Handle;
 
 use crate::base::client_config::ClientConfig;
@@ -88,6 +88,12 @@ pub struct ConsumerConfig {
     pub(crate) trace_dispatcher: Option<Arc<Box<dyn TraceDispatcher + Send + Sync>>>,
     pub(crate) client_rebalance: bool,
     pub(crate) rpc_hook: Option<Arc<dyn RPCHook>>,
+    /// Delay between retry attempts for BROADCASTING mode failures (default 100ms).
+    pub(crate) broadcast_retry_delay: Duration,
+    /// Maximum number of retry attempts after the initial failed callback in
+    /// BROADCASTING mode (default 3). Zero means no retry; terminal handling
+    /// fires after the first failure.
+    pub(crate) broadcast_max_retries: u32,
 }
 
 impl ConsumerConfig {
@@ -356,6 +362,23 @@ impl ConsumerConfig {
     pub fn set_rpc_hook(&mut self, rpc_hook: Option<Arc<dyn RPCHook>>) {
         self.rpc_hook = rpc_hook;
     }
+
+    pub fn broadcast_retry_delay(&self) -> Duration {
+        self.broadcast_retry_delay
+    }
+
+    pub fn set_broadcast_retry_delay(&mut self, delay: Duration) {
+        assert!(!delay.is_zero(), "broadcast_retry_delay must be greater than zero");
+        self.broadcast_retry_delay = delay;
+    }
+
+    pub fn broadcast_max_retries(&self) -> u32 {
+        self.broadcast_max_retries
+    }
+
+    pub fn set_broadcast_max_retries(&mut self, max_retries: u32) {
+        self.broadcast_max_retries = max_retries;
+    }
 }
 
 impl Default for ConsumerConfig {
@@ -398,6 +421,8 @@ impl Default for ConsumerConfig {
             trace_dispatcher: None,
             client_rebalance: true,
             rpc_hook: None,
+            broadcast_retry_delay: Duration::from_millis(100),
+            broadcast_max_retries: 3,
         }
     }
 }
@@ -663,5 +688,38 @@ mod tests {
 
         consumer.shutdown().await;
         consumer.shutdown().await;
+    }
+
+    #[test]
+    fn consumer_config_default_broadcast_retry_delay_is_100ms() {
+        let cfg = ConsumerConfig::default();
+        assert_eq!(cfg.broadcast_retry_delay(), Duration::from_millis(100));
+    }
+
+    #[test]
+    fn consumer_config_default_broadcast_max_retries_is_3() {
+        let cfg = ConsumerConfig::default();
+        assert_eq!(cfg.broadcast_max_retries(), 3);
+    }
+
+    #[test]
+    fn consumer_config_set_broadcast_retry_delay() {
+        let mut cfg = ConsumerConfig::default();
+        cfg.set_broadcast_retry_delay(Duration::from_millis(500));
+        assert_eq!(cfg.broadcast_retry_delay(), Duration::from_millis(500));
+    }
+
+    #[test]
+    fn consumer_config_set_broadcast_max_retries_zero() {
+        let mut cfg = ConsumerConfig::default();
+        cfg.set_broadcast_max_retries(0);
+        assert_eq!(cfg.broadcast_max_retries(), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "broadcast_retry_delay must be greater than zero")]
+    fn consumer_config_set_broadcast_retry_delay_zero_panics() {
+        let mut cfg = ConsumerConfig::default();
+        cfg.set_broadcast_retry_delay(Duration::ZERO);
     }
 }

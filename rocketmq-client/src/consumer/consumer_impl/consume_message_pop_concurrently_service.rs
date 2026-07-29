@@ -99,7 +99,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
 
         let mq = MessageQueue::from_parts(msg.topic().clone(), broker_name.unwrap_or_default(), msg.queue_id());
         let mut msgs = vec![ArcMut::new(msg)];
-        let context = ConsumeConcurrentlyContext::new(mq);
+        let mut context = ConsumeConcurrentlyContext::new(mq);
         self.default_mqpush_consumer_impl
             .as_ref()
             .unwrap()
@@ -110,7 +110,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
 
         let status = self.message_listener.consume_message(
             &msgs.iter().map(|msg| msg.as_ref()).collect::<Vec<&MessageExt>>(),
-            &context,
+            &mut context,
         );
         let mut result = ConsumeMessageDirectlyResult::default();
         result.set_order(false);
@@ -188,23 +188,17 @@ impl ConsumeMessagePopConcurrentlyService {
         if consume_request.msgs.is_empty() {
             return;
         }
-        let mut ack_index = context.ack_index;
-        match status {
-            ConsumeConcurrentlyStatus::ConsumeSuccess => {
-                if ack_index >= consume_request.msgs.len() as i32 {
-                    ack_index = consume_request.msgs.len() as i32 - 1;
-                }
-                /*int ok = ackIndex + 1;
-                int failed = consumeRequest.getMsgs().size() - ok;
-                this.getConsumerStatsManager().incConsumeOKTPS(consumerGroup, topic, ok);
-                this.getConsumerStatsManager().incConsumeFailedTPS(consumerGroup, topic, failed);*/
-            }
-            ConsumeConcurrentlyStatus::ReconsumeLater => {
-                //this.getConsumerStatsManager().incConsumeFailedTPS(consumerGroup, topic, failed);
-                // Java code
-                ack_index = -1;
-            }
-        }
+        let msgs_len = consume_request.msgs.len() as i32;
+        let ack_index = match status {
+            ConsumeConcurrentlyStatus::ConsumeSuccess => match context.ack_index {
+                None => msgs_len - 1,
+                Some(idx) => idx.clamp(-1, msgs_len - 1),
+            },
+            ConsumeConcurrentlyStatus::ReconsumeLater => match context.ack_index {
+                None => -1,
+                Some(idx) => idx.clamp(-1, msgs_len - 1),
+            },
+        };
 
         //ack if consume success
         for i in 0..ack_index {
@@ -375,11 +369,7 @@ impl ConsumeRequest {
             self.process_queue.dec_found_msg(self.msgs.len());
             return;
         }
-        let context = ConsumeConcurrentlyContext {
-            message_queue: self.message_queue.clone(),
-            delay_level_when_next_consume: 0,
-            ack_index: i32::MAX,
-        };
+        let mut context = ConsumeConcurrentlyContext::new(self.message_queue.clone());
 
         let mut default_mqpush_consumer_impl = self.default_mqpush_consumer_impl.as_ref().unwrap().clone();
         default_mqpush_consumer_impl.reset_retry_and_namespace(&mut self.msgs, self.consumer_group.as_str());
@@ -417,7 +407,7 @@ impl ConsumeRequest {
             default_mqpush_consumer_impl.execute_hook_before(&mut consume_message_context);
         }
         let vec = self.msgs.iter().map(|msg| msg.as_ref()).collect::<Vec<&MessageExt>>();
-        match self.message_listener.consume_message(&vec, &context) {
+        match self.message_listener.consume_message(&vec, &mut context) {
             Ok(value) => {
                 status = Some(value);
             }

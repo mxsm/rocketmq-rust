@@ -699,7 +699,7 @@ impl RouteInfoManager {
 
     fn operate_write_perm_of_broker(&self, broker_name: &CheetahString, request_code: RequestCode) -> i32 {
         let mut topic_cnt = 0;
-        for (_topic, qd_map) in self.topic_queue_table.mut_from_ref().iter_mut() {
+        for qd_map in self.topic_queue_table.mut_from_ref().values_mut() {
             let qd = qd_map.get_mut(broker_name);
             if qd.is_none() {
                 continue;
@@ -902,7 +902,7 @@ impl RouteInfoManager {
             .broker_addr
             .clone_from(&CheetahString::from_slice(broker_addr_info.broker_addr.as_str()));
 
-        for (_broker_addr, broker_data) in self.broker_addr_table.iter() {
+        for broker_data in self.broker_addr_table.values() {
             if broker_addr_info.cluster_name != broker_data.cluster() {
                 continue;
             }

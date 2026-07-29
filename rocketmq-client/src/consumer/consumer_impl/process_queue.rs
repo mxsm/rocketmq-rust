@@ -29,6 +29,7 @@ use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::protocol::body::process_queue_info::ProcessQueueInfo;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::RocketMQTokioRwLock;
+use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
@@ -65,6 +66,9 @@ pub(crate) struct ProcessQueue {
     pub(crate) last_lock_timestamp: Arc<AtomicU64>,
     pub(crate) consuming: Arc<AtomicBool>,
     pub(crate) msg_acc_cnt: Arc<AtomicI64>,
+    /// Serializes per-queue commit operations so that concurrent chunk tasks
+    /// cannot interleave offset advancement or ProcessQueue removal.
+    pub(crate) commit_lock: Arc<Mutex<()>>,
 }
 
 impl ProcessQueue {
@@ -85,6 +89,7 @@ impl ProcessQueue {
             last_lock_timestamp: Arc::new(AtomicU64::new(get_current_millis())),
             consuming: Arc::new(AtomicBool::new(false)),
             msg_acc_cnt: Arc::new(AtomicI64::new(0)),
+            commit_lock: Arc::new(Mutex::new(())),
         }
     }
 }
@@ -222,21 +227,23 @@ impl ProcessQueue {
             return result;
         }
         result = self.queue_offset_max.load(Ordering::Acquire) as i64 + 1;
-        let mut removed_cnt = 0;
+        let mut removed_cnt: u64 = 0;
         for message in messages {
             let prev = msg_tree_map.remove(&message.queue_offset);
-            if let Some(prev) = prev {
+            if prev.is_some() {
                 removed_cnt += 1;
                 self.msg_size
                     .fetch_sub(message.body().as_ref().unwrap().len() as u64, Ordering::AcqRel);
             }
+        }
+        if removed_cnt > 0 {
             self.msg_count.fetch_sub(removed_cnt, Ordering::AcqRel);
-            if self.msg_count.load(Ordering::Acquire) == 0 {
-                self.msg_size.store(0, Ordering::Release);
-            }
-            if !msg_tree_map.is_empty() {
-                result = *msg_tree_map.first_key_value().unwrap().0;
-            }
+        }
+        if self.msg_count.load(Ordering::Acquire) == 0 {
+            self.msg_size.store(0, Ordering::Release);
+        }
+        if !msg_tree_map.is_empty() {
+            result = *msg_tree_map.first_key_value().unwrap().0;
         }
         result
     }
@@ -332,5 +339,157 @@ impl ProcessQueue {
 
     pub(crate) fn is_locked(&self) -> bool {
         self.locked.load(std::sync::atomic::Ordering::Acquire)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+    use rocketmq_common::common::message::message_ext::MessageExt;
+    use rocketmq_rust::ArcMut;
+
+    use super::ProcessQueue;
+
+    fn make_msg(offset: i64, body_size: usize) -> ArcMut<MessageExt> {
+        let mut msg = MessageExt {
+            queue_offset: offset,
+            ..MessageExt::default()
+        };
+        msg.message.body = Some(Bytes::from(vec![0u8; body_size]));
+        ArcMut::new(msg)
+    }
+
+    async fn put_msgs(pq: &ProcessQueue, offsets: &[i64], body_size: usize) {
+        let msgs = offsets.iter().map(|&o| make_msg(o, body_size)).collect();
+        pq.put_message(msgs).await;
+    }
+
+    #[tokio::test]
+    async fn test_remove_single_message_correct_count() {
+        let pq = ProcessQueue::new();
+        put_msgs(&pq, &[0], 10).await;
+        assert_eq!(pq.msg_count(), 1);
+        assert_eq!(pq.msg_size(), 10);
+
+        let msgs = vec![make_msg(0, 10)];
+        pq.remove_message(&msgs).await;
+
+        assert_eq!(pq.msg_count(), 0);
+        assert_eq!(pq.msg_size(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_remove_two_messages_correct_count() {
+        let pq = ProcessQueue::new();
+        put_msgs(&pq, &[0, 1], 10).await;
+        assert_eq!(pq.msg_count(), 2);
+
+        let msgs = vec![make_msg(0, 10), make_msg(1, 10)];
+        pq.remove_message(&msgs).await;
+
+        assert_eq!(pq.msg_count(), 0);
+        assert_eq!(pq.msg_size(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_remove_16_messages_correct_count() {
+        let pq = ProcessQueue::new();
+        let offsets: Vec<i64> = (0..16).collect();
+        put_msgs(&pq, &offsets, 5).await;
+        assert_eq!(pq.msg_count(), 16);
+        assert_eq!(pq.msg_size(), 80);
+
+        let msgs: Vec<ArcMut<MessageExt>> = offsets.iter().map(|&o| make_msg(o, 5)).collect();
+        pq.remove_message(&msgs).await;
+
+        assert_eq!(pq.msg_count(), 0);
+        assert_eq!(pq.msg_size(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_remove_subset_correct_count() {
+        let pq = ProcessQueue::new();
+        put_msgs(&pq, &[0, 1, 2, 3, 4], 4).await;
+        assert_eq!(pq.msg_count(), 5);
+
+        let to_remove: Vec<ArcMut<MessageExt>> = [0, 1, 2].iter().map(|&o| make_msg(o, 4)).collect();
+        pq.remove_message(&to_remove).await;
+
+        let tree = pq.msg_tree_map.read().await;
+        assert_eq!(pq.msg_count(), 2, "count should match retained map size");
+        assert_eq!(tree.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_msg_count_no_underflow() {
+        let pq = ProcessQueue::new();
+        put_msgs(&pq, &[0], 4).await;
+
+        let msgs = vec![make_msg(0, 4), make_msg(99, 4)];
+        pq.remove_message(&msgs).await;
+
+        assert_eq!(pq.msg_count(), 0, "count must not underflow");
+    }
+
+    #[tokio::test]
+    async fn test_partial_remove_offset_is_lowest_retained() {
+        let pq = ProcessQueue::new();
+        let offsets: Vec<i64> = (0..16).collect();
+        put_msgs(&pq, &offsets, 4).await;
+
+        let to_remove: Vec<ArcMut<MessageExt>> = (0..5).map(|o| make_msg(o, 4)).collect();
+        let offset = pq.remove_message(&to_remove).await;
+
+        assert_eq!(offset, 5, "next offset should be the lowest retained key");
+        assert_eq!(pq.msg_count(), 11);
+    }
+
+    #[tokio::test]
+    async fn test_full_remove_returns_max_plus_one() {
+        let pq = ProcessQueue::new();
+        put_msgs(&pq, &[0, 1, 2], 4).await;
+
+        let to_remove: Vec<ArcMut<MessageExt>> = (0..3).map(|o| make_msg(o, 4)).collect();
+        let offset = pq.remove_message(&to_remove).await;
+
+        assert_eq!(offset, 3, "when empty, offset should be queue_offset_max + 1");
+        assert_eq!(pq.msg_count(), 0);
+        assert_eq!(pq.msg_size(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_commit_lock_serializes_concurrent_removals() {
+        use std::sync::Arc;
+        let pq = Arc::new(ProcessQueue::new());
+        let offsets: Vec<i64> = (0..32).collect();
+        put_msgs(&pq, &offsets, 4).await;
+
+        let pq1 = pq.clone();
+        let pq2 = pq.clone();
+
+        let first_chunk: Vec<ArcMut<MessageExt>> = (0..16).map(|o| make_msg(o, 4)).collect();
+        let second_chunk: Vec<ArcMut<MessageExt>> = (16..32).map(|o| make_msg(o, 4)).collect();
+
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let b1 = barrier.clone();
+        let b2 = barrier.clone();
+
+        let h1 = tokio::spawn(async move {
+            let _g = pq1.commit_lock.lock().await;
+            b1.wait().await;
+            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+            pq1.remove_message(&first_chunk).await
+        });
+        let h2 = tokio::spawn(async move {
+            b2.wait().await;
+            let _g = pq2.commit_lock.lock().await;
+            pq2.remove_message(&second_chunk).await
+        });
+
+        let (r1, r2) = tokio::join!(h1, h2);
+        let _o1 = r1.unwrap();
+        let _o2 = r2.unwrap();
+
+        assert_eq!(pq.msg_count(), 0, "all messages must be removed");
     }
 }

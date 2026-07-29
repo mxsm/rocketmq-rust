@@ -169,9 +169,9 @@ mod tests {
             ResourcePattern::Prefixed,
         ] {
             let serialized = serde_json::to_string(&variant)
-                .unwrap_or_else(|e| panic!("Could not serialize ResourcePattern::{:?}: {}", &variant.name(), e));
+                .unwrap_or_else(|e| panic!("Could not serialize ResourcePattern::{:?}: {}", variant.name(), e));
             let parsed: ResourcePattern = serde_json::from_str(&serialized)
-                .unwrap_or_else(|e| panic!("Could not parse {:?} as ResourcePattern: {}", &serialized, e));
+                .unwrap_or_else(|e| panic!("Could not parse {:?} as ResourcePattern: {}", serialized, e));
             assert_eq!(variant, parsed);
         }
     }

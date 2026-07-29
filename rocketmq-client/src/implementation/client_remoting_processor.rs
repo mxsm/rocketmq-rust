@@ -88,17 +88,6 @@ impl RequestProcessor for ClientRemotingProcessor {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn unsupported_lifecycle_requests_return_a_response_instead_of_panicking() {
-        let response = unsupported_request_response();
-        assert_eq!(response.code(), ResponseCode::RequestCodeNotSupported.to_i32());
-    }
-}
-
 impl ClientRemotingProcessor {
     async fn receive_reply_message(
         &mut self,
@@ -293,5 +282,16 @@ impl ClientRemotingProcessor {
                 )),
             ))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unsupported_lifecycle_requests_return_a_response_instead_of_panicking() {
+        let response = unsupported_request_response();
+        assert_eq!(response.code(), ResponseCode::RequestCodeNotSupported.to_i32());
     }
 }

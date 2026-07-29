@@ -75,7 +75,6 @@ impl<'de> Deserialize<'de> for SerializableBitVec {
 
 #[cfg(test)]
 mod tests {
-    use bitvec::prelude::*;
     use cheetah_string::CheetahString;
     use serde_json;
 
