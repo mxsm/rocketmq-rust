@@ -210,8 +210,8 @@ impl GovernanceRepository {
         event: &GovernanceEvent,
     ) -> Result<GovernanceVersion, ControlPlaneError> {
         let mut transaction = self.pool.begin().await?;
-        if event.to_state == GovernanceLifecycleState::Active {
-            if let Some(previous) = sqlx::query(
+        if event.to_state == GovernanceLifecycleState::Active
+            && let Some(previous) = sqlx::query(
                 "SELECT *
                  FROM governance_versions
                  WHERE artifact_id = $1 AND lifecycle_state = 'active'
@@ -220,37 +220,36 @@ impl GovernanceRepository {
             .bind(current.artifact_id.as_uuid())
             .fetch_optional(&mut *transaction)
             .await?
-            {
-                let previous = version_from_row(&previous)?;
-                sqlx::query(
-                    "UPDATE governance_versions
-                     SET lifecycle_state = 'deprecated',
-                         replacement_version_id = $2,
-                         updated_at = $3
-                     WHERE id = $1 AND lifecycle_state = 'active'",
-                )
-                .bind(previous.id.as_uuid())
-                .bind(current.id.as_uuid())
-                .bind(event.occurred_at)
-                .execute(&mut *transaction)
-                .await?;
-                insert_event(
-                    &mut transaction,
-                    &GovernanceEvent {
-                        id: GovernanceEventId::new(),
-                        tenant_id: previous.tenant_id,
-                        artifact_id: previous.artifact_id,
-                        version_id: previous.id,
-                        from_state: Some(GovernanceLifecycleState::Active),
-                        to_state: GovernanceLifecycleState::Deprecated,
-                        actor: event.actor.clone(),
-                        actor_kind: event.actor_kind,
-                        reason: format!("Superseded by {}", current.id),
-                        occurred_at: event.occurred_at,
-                    },
-                )
-                .await?;
-            }
+        {
+            let previous = version_from_row(&previous)?;
+            sqlx::query(
+                "UPDATE governance_versions
+                 SET lifecycle_state = 'deprecated',
+                     replacement_version_id = $2,
+                     updated_at = $3
+                 WHERE id = $1 AND lifecycle_state = 'active'",
+            )
+            .bind(previous.id.as_uuid())
+            .bind(current.id.as_uuid())
+            .bind(event.occurred_at)
+            .execute(&mut *transaction)
+            .await?;
+            insert_event(
+                &mut transaction,
+                &GovernanceEvent {
+                    id: GovernanceEventId::new(),
+                    tenant_id: previous.tenant_id,
+                    artifact_id: previous.artifact_id,
+                    version_id: previous.id,
+                    from_state: Some(GovernanceLifecycleState::Active),
+                    to_state: GovernanceLifecycleState::Deprecated,
+                    actor: event.actor.clone(),
+                    actor_kind: event.actor_kind,
+                    reason: format!("Superseded by {}", current.id),
+                    occurred_at: event.occurred_at,
+                },
+            )
+            .await?;
         }
         let row = sqlx::query(
             "UPDATE governance_versions
