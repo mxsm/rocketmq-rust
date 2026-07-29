@@ -6,7 +6,7 @@ on:
       baseline_ref:
         description: Approved pre-refactor baseline commit
         required: true
-        default: 7c952cdcd1ce625604de9c54975a201d7b1b755b
+        default: a4c71a710086e8ca5079dc1db7a585a283cfcfca
         type: string
       candidate_ref:
         description: Candidate commit or ref
@@ -53,7 +53,7 @@ jobs:
     runs-on: [self-hosted, linux, x64, rocketmq-benchmark]
     timeout-minutes: 480
     env:
-      BASELINE_REF: ${{ inputs.baseline_ref || vars.ARCHITECTURE_PERFORMANCE_BASELINE_REF || '7c952cdcd1ce625604de9c54975a201d7b1b755b' }}
+      BASELINE_REF: ${{ inputs.baseline_ref || vars.ARCHITECTURE_PERFORMANCE_BASELINE_REF || 'a4c71a710086e8ca5079dc1db7a585a283cfcfca' }}
       CANDIDATE_REF: ${{ inputs.candidate_ref || github.sha }}
       BENCHMARK_HARDWARE_ID: ${{ vars.ARCHITECTURE_BENCHMARK_HARDWARE_ID }}
       BENCHMARK_FILESYSTEM: ${{ vars.ARCHITECTURE_BENCHMARK_FILESYSTEM }}

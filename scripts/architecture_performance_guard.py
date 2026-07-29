@@ -34,7 +34,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PROFILES = ROOT / "scripts" / "architecture-performance-profiles.json"
 DEFAULT_EXCEPTIONS = ROOT / "scripts" / "architecture-performance-exceptions.json"
 DEFAULT_WORKFLOW = ROOT / ".github" / "workflows" / "architecture-performance-evidence.yml"
-APPROVED_BASELINE_COMMIT = "7c952cdcd1ce625604de9c54975a201d7b1b755b"
+APPROVED_BASELINE_COMMIT = "a4c71a710086e8ca5079dc1db7a585a283cfcfca"
 REQUIRED_PROFILE_IDS = {
     "local-append",
     "sync-flush",
