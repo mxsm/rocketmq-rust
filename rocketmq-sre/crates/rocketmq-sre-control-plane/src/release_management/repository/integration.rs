@@ -454,6 +454,9 @@ pub(super) async fn enqueue_delivery_in_transaction(
             .rows_affected()
                 == 1
         }
+        IntegrationAdapterKind::MockCmdb
+        | IntegrationAdapterKind::MockGitOps
+        | IntegrationAdapterKind::SignedReleaseWebhook => false,
     };
     if queued {
         insert_audit(transaction, audit).await?;
@@ -496,6 +499,14 @@ async fn validate_notification_target(
             return Err(ControlPlaneError::validation(
                 "integration_target_invalid",
                 "ITSM adapters cannot reference the notification outbox",
+            ));
+        }
+        IntegrationAdapterKind::MockCmdb
+        | IntegrationAdapterKind::MockGitOps
+        | IntegrationAdapterKind::SignedReleaseWebhook => {
+            return Err(ControlPlaneError::validation(
+                "integration_target_invalid",
+                "inbound-only adapters cannot reference the notification outbox",
             ));
         }
     };
