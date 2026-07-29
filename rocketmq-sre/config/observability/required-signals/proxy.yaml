@@ -3,7 +3,7 @@ component: proxy
 exposure:
   implementation: implemented_local
   observable: true
-  remote_queryable: false
+  remote_queryable: protected_connector_api
 signals:
   - requirement_id: proxy.availability
     purpose: Determine whether the proxy process is serving.
@@ -11,8 +11,9 @@ signals:
     source_symbol: PROXY_UP
     registry_reference: rocketmq_proxy_up
     signal_type: metric
-    status: existing
+    status: queryable
     query: max(rocketmq_proxy_up)
+    query_resource: metrics/rocketmq_proxy_up_ratio
     freshness_seconds: 30
     expected_attributes: [cluster, node_id, proxy_mode]
     sensitivity: operational
@@ -24,8 +25,9 @@ signals:
     source_symbol: PROXY_ACTIVE_CONNECTIONS
     registry_reference: rocketmq_proxy_active_connections
     signal_type: metric
-    status: in_process_only
-    query: null
+    status: queryable
+    query: max(rocketmq_proxy_active_connections)
+    query_resource: metrics/rocketmq_proxy_active_connections
     freshness_seconds: 30
     expected_attributes: []
     sensitivity: operational
@@ -37,8 +39,9 @@ signals:
     source_symbol: PROXY_GRPC_ERRORS_TOTAL
     registry_reference: rocketmq_proxy_grpc_errors_total
     signal_type: metric
-    status: existing
+    status: queryable
     query: sum by (result) (rate(rocketmq_proxy_grpc_errors_total[5m]))
+    query_resource: metrics/rocketmq_proxy_grpc_errors_total
     freshness_seconds: 60
     expected_attributes: [result]
     sensitivity: operational
@@ -50,8 +53,9 @@ signals:
     source_symbol: PROXY_GRPC_REQUEST_LATENCY
     registry_reference: rocketmq_proxy_grpc_request_latency
     signal_type: metric
-    status: existing
-    query: histogram_quantile(0.99, sum by (le) (rate(rocketmq_proxy_grpc_request_latency_bucket[5m])))
+    status: queryable
+    query: histogram_quantile(0.99, sum by (le) (rate(rocketmq_proxy_grpc_request_latency_milliseconds_bucket[5m])))
+    query_resource: metrics/rocketmq_proxy_grpc_request_latency_milliseconds_bucket
     freshness_seconds: 60
     expected_attributes: []
     sensitivity: operational
@@ -63,8 +67,9 @@ signals:
     source_symbol: PROXY_FORWARD_LATENCY
     registry_reference: rocketmq_proxy_forward_latency
     signal_type: metric
-    status: missing_instrumentation
-    query: null
+    status: queryable
+    query: histogram_quantile(0.99, sum by (le) (rate(rocketmq_proxy_forward_latency_milliseconds_bucket[5m])))
+    query_resource: metrics/rocketmq_proxy_forward_latency_milliseconds_bucket
     freshness_seconds: 60
     expected_attributes: []
     sensitivity: operational
@@ -76,7 +81,7 @@ signals:
     source_symbol: PROXY_RPC
     registry_reference: rocketmq_proxy.rpc
     signal_type: span
-    status: existing
+    status: queryable
     query: span.name = "rocketmq_proxy.rpc"
     freshness_seconds: 300
     expected_attributes: [rpc, result]
@@ -90,10 +95,10 @@ signals:
     source_symbol: PROXY_FORWARD
     registry_reference: RocketMQ PROXY FORWARD
     signal_type: span
-    status: missing_instrumentation
-    query: null
+    status: queryable
+    query: span.name = "RocketMQ PROXY FORWARD"
     freshness_seconds: 300
-    expected_attributes: [result]
+    expected_attributes: [rpc, result]
     sensitivity: operational
     missing_behavior: not_production_verified
     evidence_field: proxy.forward_trace
@@ -103,10 +108,10 @@ signals:
     source_symbol: PROXY_AUTH
     registry_reference: RocketMQ PROXY AUTH
     signal_type: span
-    status: missing_instrumentation
-    query: null
+    status: queryable
+    query: span.name = "RocketMQ PROXY AUTH"
     freshness_seconds: 300
-    expected_attributes: [result]
+    expected_attributes: [rpc, result]
     sensitivity: operational
     missing_behavior: not_production_verified
     evidence_field: proxy.auth_trace
