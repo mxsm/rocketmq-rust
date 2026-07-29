@@ -26,8 +26,14 @@ impl BrokerControlPlane {
 
 impl BrokerRuntime {
     pub(super) fn initialize_observability(&mut self) {
-        #[cfg(feature = "otel-metrics")]
-        if !self.composition.state.telemetry_handle.is_active() {
+        let broker_config = self.composition.state.broker_config();
+        let mut bootstrap_config = build_broker_telemetry_bootstrap_config(&broker_config);
+        if let Err(error) = rocketmq_observability::apply_standard_otlp_environment(&mut bootstrap_config) {
+            warn!("Failed to apply broker OTLP environment: {error}");
+            return;
+        }
+        let config = &bootstrap_config.observability;
+        if !config.enabled {
             return;
         }
 
@@ -42,8 +48,13 @@ impl BrokerRuntime {
                 let subscription_group_manager = self.composition.state.subscription_group_manager().clone();
                 let producer_manager = self.composition.state.producer_manager.clone_shared_state();
                 let consumer_manager = self.composition.state.consumer_manager.clone_shared_state();
-                metrics_manager.register_observables(
-                    None::<fn() -> Vec<(String, i64)>>,
+                let broker_fast_failure = self.composition.state.broker_fast_failure.clone();
+                crate::metrics::broker_metrics_manager::BrokerMetricsManager::init_global_with_observables_and_configs(
+                    provider,
+                    attributes_supplier,
+                    label_config,
+                    sampling_config,
+                    Some(move || broker_fast_failure.pending_count_snapshot()),
                     move || broker_permission,
                     move || i64::try_from(topic_config_manager.topic_config_table().len()).unwrap_or(i64::MAX),
                     move || i64::try_from(subscription_group_manager.group_count()).unwrap_or(i64::MAX),
@@ -80,10 +91,22 @@ impl BrokerRuntime {
                             .collect()
                     },
                 );
-            }
-
-            let pop_metrics_manager = self.composition.state.pop_metrics_manager.clone();
-            if let Some(metrics_manager) = pop_metrics_manager {
+                let consumer_offset_manager = self.composition.state.consumer_offset_manager_handle();
+                if let Some(metrics) = crate::metrics::broker_metrics_manager::BrokerMetricsManager::try_global() {
+                    metrics.register_consumer_lag_observable_gauge(move || {
+                        consumer_offset_manager
+                            .consumer_lag_snapshot()
+                            .into_iter()
+                            .map(|observation| {
+                                crate::metrics::broker_metrics_manager::ConsumerLagAttributes::new(
+                                    observation.topic,
+                                    observation.consumer_group,
+                                    observation.lag_messages,
+                                )
+                            })
+                            .collect()
+                    });
+                }
                 let pop_offset_processor = self.composition.state.pop_message_processor.clone();
                 let pop_checkpoint_processor = self.composition.state.pop_message_processor.clone();
                 let ack_message_processor = self.composition.state.ack_message_processor.clone();
@@ -115,30 +138,42 @@ impl BrokerRuntime {
                 );
             }
 
-            let store_observable = self.composition.state.escape_bridge().store_capability();
-            self.composition
-                .state
-                .store_telemetry
-                .store()
-                .register_observables(move || {
-                    store_observable
-                        .with_store(|message_store| {
-                            let max_phy_offset = message_store.get_max_phy_offset();
-                            let min_phy_offset = message_store.get_min_phy_offset();
-                            let earliest_message_time = message_store.get_earliest_message_time_store();
-                            rocketmq_observability::metrics::store::StoreObservableValues {
-                                storage_size_bytes: (max_phy_offset - min_phy_offset).max(0),
-                                flush_behind_bytes: (max_phy_offset - message_store.get_flushed_where()).max(0),
-                                dispatch_behind_bytes: message_store.dispatch_behind_bytes().max(0),
-                                message_reserve_time_millis: if earliest_message_time > 0 {
-                                    current_millis() as i64 - earliest_message_time
-                                } else {
-                                    0
-                                },
-                            }
-                        })
-                        .unwrap_or_default()
-                });
+                let store_meter = rocketmq_observability::meter(provider, "rocketmq-store");
+                let store_observable = self.composition.state.escape_bridge().store_capability();
+                let replication_lag_observable = store_observable.clone();
+                let _ = rocketmq_observability::metrics::store::init_global_with_observables_and_replication_lag(
+                    &store_meter,
+                    move || {
+                        store_observable
+                            .with_store(|message_store| {
+                                let max_phy_offset = message_store.get_max_phy_offset();
+                                let min_phy_offset = message_store.get_min_phy_offset();
+                                let earliest_message_time = message_store.get_earliest_message_time_store();
+                                rocketmq_observability::metrics::store::StoreObservableValues {
+                                    storage_size_bytes: (max_phy_offset - min_phy_offset).max(0),
+                                    flush_behind_bytes: (max_phy_offset - message_store.get_flushed_where()).max(0),
+                                    dispatch_behind_bytes: message_store.dispatch_behind_bytes().max(0),
+                                    message_reserve_time_millis: if earliest_message_time > 0 {
+                                        current_millis() as i64 - earliest_message_time
+                                    } else {
+                                        0
+                                    },
+                                }
+                            })
+                            .unwrap_or_default()
+                    },
+                    move || {
+                        replication_lag_observable
+                            .with_store(|message_store| {
+                                observed_replication_lag_bytes(
+                                    message_store.get_max_phy_offset(),
+                                    message_store.get_confirm_offset(),
+                                )
+                            })
+                            .ok()
+                            .flatten()
+                    },
+                );
 
             let timer_observable = self.composition.state.timer_message_store().cloned();
             self.composition
@@ -750,5 +785,26 @@ impl BrokerRuntime {
             .map_err(|error| BrokerStartupError::component_start("broker_registration", error))?;
         self.composition.state.online_role_state.set_isolated(false);
         Ok(())
+    }
+}
+
+fn observed_replication_lag_bytes(max_phy_offset: i64, confirm_offset: i64) -> Option<u64> {
+    if max_phy_offset < 0 || confirm_offset < 0 || confirm_offset > max_phy_offset {
+        return None;
+    }
+    u64::try_from(max_phy_offset - confirm_offset).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::observed_replication_lag_bytes;
+
+    #[test]
+    fn replication_lag_is_observed_only_for_valid_store_offsets() {
+        assert_eq!(observed_replication_lag_bytes(128, 96), Some(32));
+        assert_eq!(observed_replication_lag_bytes(128, 128), Some(0));
+        assert_eq!(observed_replication_lag_bytes(-1, 0), None);
+        assert_eq!(observed_replication_lag_bytes(128, -1), None);
+        assert_eq!(observed_replication_lag_bytes(96, 128), None);
     }
 }
