@@ -16,6 +16,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use chrono::SecondsFormat;
 use chrono::Utc;
 use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::apps::v1::ReplicaSet;
@@ -280,8 +281,7 @@ impl ProductionProxyRestartClient {
             .map(|spec| &spec.selector)
             .ok_or(ExecutionAgentError::DriverFailed)?;
         let original_uid = annotation(deployment, ORIGINAL_UID_ANNOTATION);
-        let started_at = annotation(deployment, STARTED_AT_ANNOTATION)
-            .and_then(|value| value.parse::<k8s_openapi::jiff::Timestamp>().ok());
+        let started_at = annotation(deployment, STARTED_AT_ANNOTATION);
         let pods = Api::<Pod>::namespaced(self.kube.clone(), &namespace)
             .list(&ListParams::default())
             .await
@@ -296,7 +296,7 @@ impl ProductionProxyRestartClient {
                     pod.metadata
                         .creation_timestamp
                         .as_ref()
-                        .is_some_and(|created| created.0 >= started_at)
+                        .is_some_and(|created| replacement_started_at_or_after(&created.0, started_at))
                 })
             })
             .collect::<Vec<_>>();
@@ -476,7 +476,10 @@ impl ProductionProxyRestartClient {
         annotations.insert(PLAN_STEP_ANNOTATION.to_owned(), request.plan_step_id.to_string());
         annotations.insert(ORIGINAL_POD_ANNOTATION.to_owned(), request.pod.clone());
         annotations.insert(ORIGINAL_UID_ANNOTATION.to_owned(), request.expected_uid.clone());
-        annotations.insert(STARTED_AT_ANNOTATION.to_owned(), Utc::now().to_rfc3339());
+        annotations.insert(
+            STARTED_AT_ANNOTATION.to_owned(),
+            Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+        );
         deployments
             .replace(&target.deployment, &PostParams::default(), &deployment)
             .await
@@ -774,6 +777,11 @@ fn annotation<'a>(deployment: &'a Deployment, key: &str) -> Option<&'a str> {
         .as_ref()
         .and_then(|annotations| annotations.get(key))
         .map(String::as_str)
+}
+
+fn replacement_started_at_or_after(created: &k8s_openapi::jiff::Timestamp, started_at: &str) -> bool {
+    chrono::DateTime::parse_from_rfc3339(started_at)
+        .is_ok_and(|started_at| created.as_second() >= started_at.timestamp())
 }
 
 fn accepting(state: &ProxyDrainState) -> bool {
