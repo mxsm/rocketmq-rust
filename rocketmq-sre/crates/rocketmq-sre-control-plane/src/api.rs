@@ -529,6 +529,7 @@ pub(crate) struct AppState {
     pub(crate) fleet: FleetService,
     pub(crate) lease_authority: crate::execution_authority::LeaseAuthorityService,
     pub(crate) forecast: ForecastService,
+    pub(crate) governance: crate::governance::GovernanceService,
     pub(crate) knowledge: KnowledgeService,
     pub(crate) model_gateway: ModelGatewayService,
     pub(crate) observability: SreObservability,
@@ -607,6 +608,7 @@ fn build_routers_with_auth(
     let operations = crate::operator_workbench::OperatorWorkbenchService::new(repository.clone());
     let connector_channel = PostgresConnectorChannelService::postgres(repository.clone(), internal_token.clone())?;
     let dr = crate::dr::DrService::new(repository.clone());
+    let governance = crate::governance::GovernanceService::new(repository.clone(), grant_signing_key.as_bytes())?;
     let slo = SloService::new(
         repository.clone(),
         connector_channel.clone(),
@@ -673,6 +675,7 @@ fn build_routers_with_auth(
         fleet,
         lease_authority,
         forecast: forecast.clone(),
+        governance,
         knowledge,
         model_gateway,
         observability,
@@ -711,6 +714,7 @@ fn build_routers_with_auth(
         .merge(crate::execution_verification::routes())
         .merge(crate::fleet::routes())
         .merge(crate::dr::routes())
+        .merge(crate::governance::routes())
         .with_state(state.clone())
         .layer(middleware::from_fn_with_state(
             state.clone(),
