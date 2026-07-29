@@ -69,6 +69,7 @@ const OBSERVATION_DAYS: i64 = 7;
 enum R1ActionScenario {
     LoggerTtl,
     ProxyScaleOut,
+    ProxyRestartOne,
 }
 
 impl R1ActionScenario {
@@ -76,6 +77,7 @@ impl R1ActionScenario {
         match self {
             Self::LoggerTtl => ExecutionAction::ObservabilityLoggerLevelTtl,
             Self::ProxyScaleOut => ExecutionAction::ProxyScaleOutOne,
+            Self::ProxyRestartOne => ExecutionAction::ProxyRestartOne,
         }
     }
 
@@ -83,6 +85,7 @@ impl R1ActionScenario {
         match self {
             Self::LoggerTtl => "runtime-diagnostics",
             Self::ProxyScaleOut => "proxy-connectivity",
+            Self::ProxyRestartOne => "proxy-drain-readiness",
         }
     }
 
@@ -90,6 +93,7 @@ impl R1ActionScenario {
         match self {
             Self::LoggerTtl => 30,
             Self::ProxyScaleOut => 120,
+            Self::ProxyRestartOne => 180,
         }
     }
 
@@ -97,6 +101,7 @@ impl R1ActionScenario {
         match self {
             Self::LoggerTtl => "logger_qualification",
             Self::ProxyScaleOut => "proxy_capacity_qualification",
+            Self::ProxyRestartOne => "proxy_restart_qualification",
         }
     }
 
@@ -104,6 +109,7 @@ impl R1ActionScenario {
         match self {
             Self::LoggerTtl => "broker/test",
             Self::ProxyScaleOut => "deployment/rocketmq-system/rocketmq-proxy",
+            Self::ProxyRestartOne => "pod/rocketmq-system/rocketmq-proxy-qualification",
         }
     }
 }
@@ -118,6 +124,12 @@ async fn logger_ttl_qualifies_through_shadow_supervised_and_autonomous() {
 #[ignore = "requires ROCKETMQ_SRE_TEST_DATABASE_URL pointing to Docker PostgreSQL"]
 async fn proxy_scale_qualifies_through_shadow_supervised_and_autonomous() {
     qualify_r1_action_through_autonomy(R1ActionScenario::ProxyScaleOut).await;
+}
+
+#[tokio::test]
+#[ignore = "requires ROCKETMQ_SRE_TEST_DATABASE_URL pointing to Docker PostgreSQL"]
+async fn proxy_restart_qualifies_through_shadow_supervised_and_autonomous() {
+    qualify_r1_action_through_autonomy(R1ActionScenario::ProxyRestartOne).await;
 }
 
 async fn qualify_r1_action_through_autonomy(scenario: R1ActionScenario) {
@@ -563,6 +575,30 @@ fn action_plan(fixture: &Fixture, created_at: DateTime<Utc>, scenario: R1ActionS
                 mode: CompensationMode::Automatic,
                 required_before_fields: vec!["expected_replicas".to_owned()],
                 timeout_seconds: 600,
+            },
+        ),
+        R1ActionScenario::ProxyRestartOne => (
+            "pod/rocketmq-system/rocketmq-proxy-qualification",
+            serde_json::json!({
+                "namespace": "rocketmq-system",
+                "pod": "rocketmq-proxy-qualification",
+                "expected_uid": "00000000-0000-4000-8000-000000000001"
+            }),
+            ImpactScope::SingleInstance,
+            VerificationSpec {
+                resource_conditions: vec!["replacement_ready".to_owned(), "accepting_and_routed".to_owned()],
+                technical_slis: vec!["proxy_error_ratio".to_owned(), "synthetic_message_path".to_owned()],
+                stable_window_seconds: scenario.stable_window_seconds() as u64,
+                max_wait_seconds: 1_200,
+            },
+            CompensationSpec {
+                mode: CompensationMode::ManualTakeover,
+                required_before_fields: vec![
+                    "admission_state".to_owned(),
+                    "readiness_state".to_owned(),
+                    "routing_state".to_owned(),
+                ],
+                timeout_seconds: 300,
             },
         ),
     };
