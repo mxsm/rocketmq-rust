@@ -95,7 +95,7 @@ async fn postgres_r2_critic_is_heterogeneous_durable_and_required_for_approval()
     let service = SupervisedExecutionService::new_with_clock_and_model(
         repository.clone(),
         workflow,
-        "phase3-critic-test-signing-key",
+        "phase3-critic-test-signing-key-32-bytes",
         model_gateway,
         Arc::new(Utc::now),
     )
@@ -265,7 +265,7 @@ async fn postgres_same_family_alias_and_endpoint_degrade_without_unlocking_r2() 
     let service = SupervisedExecutionService::new_with_clock_and_model(
         repository,
         workflow,
-        "phase3-same-family-signing-key",
+        "phase3-same-family-signing-key-32-bytes",
         model_gateway,
         Arc::new(Utc::now),
     )
