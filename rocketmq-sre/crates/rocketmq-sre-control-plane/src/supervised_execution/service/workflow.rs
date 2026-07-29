@@ -260,6 +260,8 @@ impl SupervisedExecutionService {
                     submitted_at: existing.submitted_at,
                 });
             }
+            self.ensure_governed_execution(&existing.request.plan, self.now())
+                .await?;
             let receipt = self.executor.submit(&existing.request).await?;
             return Ok(ExecutionSubmissionView {
                 execution: existing.request,
@@ -290,6 +292,7 @@ impl SupervisedExecutionService {
                 "persisted plan risk no longer matches its action descriptors",
             ));
         }
+        self.ensure_governed_execution(&plan, now).await?;
         ensure_live_ready(live.facts)?;
         if request.precondition_hash != live.precondition_hash || plan.evidence_hash != live.evidence_hash {
             return Err(ControlPlaneError::conflict_code(
@@ -408,6 +411,27 @@ impl SupervisedExecutionService {
             state: receipt.state,
             submitted_at: stored.submitted_at,
         })
+    }
+
+    async fn ensure_governed_execution(
+        &self,
+        plan: &ActionPlan,
+        now: chrono::DateTime<Utc>,
+    ) -> Result<(), ControlPlaneError> {
+        let mut requirements = Vec::with_capacity(plan.steps.len() + 1);
+        requirements.push(GovernanceRequirement {
+            kind: GovernanceObjectKind::PolicyBundle,
+            logical_key: "supervised-execution",
+            version: self.policy.version(),
+        });
+        requirements.extend(plan.steps.iter().map(|step| GovernanceRequirement {
+            kind: GovernanceObjectKind::ActionDescriptor,
+            logical_key: step.action.id(),
+            version: &step.descriptor_version,
+        }));
+        self.governance
+            .ensure_high_privilege_overrides(plan.tenant_id, plan.cluster_id, &requirements, now)
+            .await
     }
 
     pub(crate) async fn execution(
