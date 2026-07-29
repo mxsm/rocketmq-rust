@@ -178,5 +178,11 @@
       "actions/upload-artifact": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
     }
   },
+  "publication": {
+    "workflow": ".github/workflows/service-image-publish.yml",
+    "artifact_prefix": "architecture-service-images",
+    "platform": "linux/amd64",
+    "automatic_release": true
+  },
   "compatibility_exceptions": []
 }
