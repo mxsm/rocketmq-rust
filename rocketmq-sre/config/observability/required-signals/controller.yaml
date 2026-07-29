@@ -3,7 +3,7 @@ component: controller
 exposure:
   implementation: implemented_local
   observable: true
-  remote_queryable: false
+  remote_queryable: protected_connector_api
 signals:
   - requirement_id: controller.quorum_health
     purpose: Report an observed leader with committed state.
@@ -11,8 +11,9 @@ signals:
     source_symbol: CONTROLLER_QUORUM_HEALTH
     registry_reference: rocketmq_controller_quorum_health
     signal_type: metric
-    status: existing
-    query: max(rocketmq_controller_quorum_health)
+    status: queryable
+    query: max(rocketmq_controller_quorum_health_ratio)
+    query_resource: metrics/rocketmq_controller_quorum_health_ratio
     freshness_seconds: 30
     expected_attributes: []
     sensitivity: operational
@@ -24,8 +25,9 @@ signals:
     source_symbol: CONTROLLER_ELECTION_TOTAL
     registry_reference: rocketmq_controller_election_total
     signal_type: metric
-    status: existing
+    status: queryable
     query: sum(rate(rocketmq_controller_election_total[5m]))
+    query_resource: metrics/rocketmq_controller_election_total
     freshness_seconds: 60
     expected_attributes: []
     sensitivity: operational
@@ -37,8 +39,9 @@ signals:
     source_symbol: CONTROLLER_ELECTION_LATENCY
     registry_reference: rocketmq_controller_election_latency
     signal_type: metric
-    status: existing
-    query: histogram_quantile(0.99, sum by (le) (rate(rocketmq_controller_election_latency_bucket[5m])))
+    status: queryable
+    query: histogram_quantile(0.99, sum by (le) (rate(rocketmq_controller_election_latency_milliseconds_bucket[5m])))
+    query_resource: metrics/rocketmq_controller_election_latency_milliseconds_bucket
     freshness_seconds: 60
     expected_attributes: []
     sensitivity: operational
@@ -50,8 +53,9 @@ signals:
     source_symbol: CONTROLLER_HEARTBEAT_AGE
     registry_reference: rocketmq_controller_heartbeat_age
     signal_type: metric
-    status: missing_instrumentation
-    query: null
+    status: queryable
+    query: histogram_quantile(0.99, sum by (le) (rate(rocketmq_controller_heartbeat_age_milliseconds_bucket[5m])))
+    query_resource: metrics/rocketmq_controller_heartbeat_age_milliseconds_bucket
     freshness_seconds: 60
     expected_attributes: []
     sensitivity: operational
@@ -63,8 +67,9 @@ signals:
     source_symbol: CONTROLLER_STALE_BROKERS
     registry_reference: rocketmq_controller_stale_brokers
     signal_type: metric
-    status: existing
+    status: queryable
     query: max(rocketmq_controller_stale_brokers)
+    query_resource: metrics/rocketmq_controller_stale_brokers
     freshness_seconds: 30
     expected_attributes: []
     sensitivity: operational
@@ -76,7 +81,7 @@ signals:
     source_symbol: CONTROLLER_HEARTBEAT_SCAN
     registry_reference: RocketMQ CONTROLLER HEARTBEAT_SCAN
     signal_type: span
-    status: existing
+    status: queryable
     query: span.name = "RocketMQ CONTROLLER HEARTBEAT_SCAN"
     freshness_seconds: 300
     expected_attributes: [result, stale_count]
@@ -89,7 +94,7 @@ signals:
     source_symbol: CONTROLLER_HEARTBEAT
     registry_reference: rocketmq.controller.heartbeat
     signal_type: log
-    status: existing
+    status: queryable
     query: event = "rocketmq.controller.heartbeat"
     freshness_seconds: 300
     expected_attributes: [state, result, stale_count]
@@ -102,7 +107,7 @@ signals:
     source_symbol: CONTROLLER_ELECTION
     registry_reference: RocketMQ CONTROLLER ELECTION
     signal_type: span
-    status: existing
+    status: queryable
     query: span.name = "RocketMQ CONTROLLER ELECTION"
     freshness_seconds: 300
     expected_attributes: [result]
@@ -115,7 +120,7 @@ signals:
     source_symbol: CONTROLLER_ELECTION
     registry_reference: rocketmq.controller.election
     signal_type: log
-    status: existing
+    status: queryable
     query: event = "rocketmq.controller.election"
     freshness_seconds: 300
     expected_attributes: [state, result]
