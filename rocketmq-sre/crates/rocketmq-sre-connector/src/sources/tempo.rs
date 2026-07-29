@@ -53,6 +53,7 @@ impl TempoSource {
     )]
     pub(crate) async fn query(
         &self,
+        cluster: &str,
         resource: &str,
         start: DateTime<Utc>,
         end: DateTime<Utc>,
@@ -65,7 +66,9 @@ impl TempoSource {
             .base_url
             .as_ref()
             .ok_or_else(|| ConnectorError::source("Tempo source is not configured"))?;
+        require_label(&self.label_allowlist, "rocketmq.cluster")?;
         require_label(&self.label_allowlist, "service.name")?;
+        validate_identifier(cluster, "cluster")?;
         let service = resource
             .strip_prefix("traces/service/")
             .or_else(|| resource.strip_prefix("tempo/service/"))
@@ -80,9 +83,9 @@ impl TempoSource {
         let endpoint = base_url
             .join("api/search")
             .map_err(|_| ConnectorError::configuration("Tempo query URL cannot be constructed"))?;
-        let tags = format!("service.name={service}");
+        let traceql = trace_selector(cluster, service);
         let request = self.client.get(endpoint).query(&[
-            ("tags", tags),
+            ("q", traceql),
             ("start", start.timestamp().to_string()),
             ("end", end.timestamp().to_string()),
             ("limit", max_rows.to_string()),
@@ -102,5 +105,22 @@ impl TempoSource {
         let mut output = SourceOutput::available(value, end);
         output.sensitivity = rocketmq_sre_contracts::Sensitivity::Confidential;
         Ok(output)
+    }
+}
+
+fn trace_selector(cluster: &str, service: &str) -> String {
+    format!(r#"{{ resource.service.name = "{service}" && resource.rocketmq.cluster = "{cluster}" }}"#)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::trace_selector;
+
+    #[test]
+    fn selector_requires_cluster_and_fixed_service_identity() {
+        assert_eq!(
+            trace_selector("cluster-a", "rocketmq-controller"),
+            r#"{ resource.service.name = "rocketmq-controller" && resource.rocketmq.cluster = "cluster-a" }"#
+        );
     }
 }
