@@ -67,9 +67,7 @@ pub(crate) fn routes() -> Router<AppState> {
         )
         .route(
             "/v1/governance/versions/{id}/impacts",
-            post(record_impact)
-                .get(impacts)
-                .layer(DefaultBodyLimit::max(64 * 1024)),
+            post(record_impact).get(impacts).layer(DefaultBodyLimit::max(64 * 1024)),
         )
         .route(
             "/v1/governance/admissions/evaluate",
@@ -204,9 +202,6 @@ fn parse_artifact_id(value: &str) -> Result<GovernanceArtifactId, ControlPlaneEr
 
 fn parse_version_id(value: &str) -> Result<GovernanceVersionId, ControlPlaneError> {
     value.parse().map_err(|_| {
-        ControlPlaneError::validation(
-            "invalid_governance_version_id",
-            "governance version ID must be a UUID",
-        )
+        ControlPlaneError::validation("invalid_governance_version_id", "governance version ID must be a UUID")
     })
 }
