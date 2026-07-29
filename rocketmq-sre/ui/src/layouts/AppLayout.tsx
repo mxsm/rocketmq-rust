@@ -1,5 +1,7 @@
 import {
   Activity,
+  ArchiveRestore,
+  BadgeCheck,
   BookOpenCheck,
   Bot,
   Boxes,
@@ -8,7 +10,9 @@ import {
   CircleHelp,
   ClipboardList,
   Clock3,
+  CircleDollarSign,
   DatabaseZap,
+  Globe2,
   GitBranch,
   Gauge,
   ListChecks,
@@ -16,8 +20,11 @@ import {
   MessageSquareText,
   Network,
   PackageSearch,
+  PlugZap,
   RadioTower,
+  Rocket,
   SearchCode,
+  ScrollText,
   ShieldCheck,
   Siren,
   Workflow,
@@ -48,6 +55,18 @@ import {
 
 const groups = [
   {
+    label: "Fleet",
+    items: [
+      { to: "/fleet", label: "Fleet 态势", icon: Globe2, end: true },
+      {
+        to: "/fleet/compliance",
+        label: "资产与合规",
+        icon: BadgeCheck,
+      },
+      { to: "/fleet/dr", label: "灾备中心", icon: ArchiveRestore },
+    ],
+  },
+  {
     label: "态势",
     items: [
       { to: "/", label: "总览", icon: Gauge, end: true },
@@ -76,6 +95,8 @@ const groups = [
     label: "变更",
     items: [
       { to: "/changes", label: "变更中心", icon: Workflow, end: false },
+      { to: "/changes/releases", label: "发布护航", icon: Rocket },
+      { to: "/changes/integrations", label: "企业集成", icon: PlugZap },
     ],
   },
   {
@@ -91,6 +112,8 @@ const groups = [
     label: "平台",
     items: [
       { to: "/models", label: "模型能力", icon: Bot },
+      { to: "/governance", label: "治理中心", icon: ScrollText },
+      { to: "/finops", label: "模型与成本", icon: CircleDollarSign },
       {
         to: "/autonomy",
         label: "自治运营",
@@ -193,15 +216,15 @@ export function AppLayout() {
             </div>
           </div>
           <div className="sidebar-meta">
-            <span>v0.4.0 · Phase 04 in progress</span>
-            <span>Bounded operations only</span>
+            <span>v0.5.0 · Enterprise Fleet</span>
+            <span>Typed, fenced operations only</span>
           </div>
         </aside>
 
         <div className="workspace">
           <header className="utility-bar">
             <div className="utility-product">
-              <Badge variant="outline">SUPERVISED</Badge>
+              <Badge variant="outline">ENTERPRISE</Badge>
               <span>独立 AI SRE 运维面</span>
             </div>
             <div className="utility-actions">
