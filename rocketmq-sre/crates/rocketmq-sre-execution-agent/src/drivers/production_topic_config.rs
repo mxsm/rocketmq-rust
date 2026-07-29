@@ -184,9 +184,7 @@ impl ProductionTopicConfigPatchClient {
             .iter()
             .all(|broker| broker.state.version == first.state.version && state_patch(broker.state) == values);
         let last_operation_id = if configuration_consistent {
-            self.journal
-                .last_applied_operation(topic, version, &targets)
-                .await?
+            self.journal.last_applied_operation(topic, version, &targets).await?
         } else {
             None
         };
@@ -283,12 +281,7 @@ impl ProductionTopicConfigPatchClient {
     ) -> Result<(), ExecutionAgentError> {
         for (broker_addr, current_version) in applied.iter().rev() {
             let outcome = self
-                .apply_one(
-                    broker_addr,
-                    &request.topic,
-                    *current_version,
-                    &before.forward_patch,
-                )
+                .apply_one(broker_addr, &request.topic, *current_version, &before.forward_patch)
                 .await
                 .map_err(|_| ExecutionAgentError::DriverUnknown)?;
             self.journal
@@ -361,12 +354,7 @@ impl TopicConfigPatchClient for ProductionTopicConfigPatchClient {
             let mut applied = Vec::new();
             for broker in &before.brokers {
                 let outcome = match self
-                    .apply_one(
-                        &broker.broker_addr,
-                        &request.topic,
-                        broker.version,
-                        &request.patch,
-                    )
+                    .apply_one(&broker.broker_addr, &request.topic, broker.version, &request.patch)
                     .await
                 {
                     Ok(outcome) => outcome,
@@ -467,12 +455,7 @@ impl TopicConfigPatchClient for ProductionTopicConfigPatchClient {
                     .get(broker.broker_addr.as_str())
                     .ok_or(ExecutionAgentError::DriverFailed)?;
                 let outcome = match self
-                    .apply_one(
-                        &broker.broker_addr,
-                        &request.topic,
-                        broker.state.version,
-                        inverse,
-                    )
+                    .apply_one(&broker.broker_addr, &request.topic, broker.state.version, inverse)
                     .await
                 {
                     Ok(outcome) => outcome,
