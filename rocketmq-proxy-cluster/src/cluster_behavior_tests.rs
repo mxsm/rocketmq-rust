@@ -59,9 +59,12 @@ struct ScriptedClientIo {
     pops: Mutex<VecDeque<Result<PopResult, RocketMQError>>>,
     acks: Mutex<VecDeque<Result<AckResult, RocketMQError>>>,
     broker_lookup_misses: AtomicUsize,
+    route_panics: AtomicUsize,
     route_calls: AtomicUsize,
     refresh_calls: AtomicUsize,
     ack_calls: AtomicUsize,
+    pull_calls: AtomicUsize,
+    readiness_calls: AtomicUsize,
     start_entered: Mutex<Option<oneshot::Sender<()>>>,
     start_block: Option<Arc<Notify>>,
     pull_entered: Mutex<Option<oneshot::Sender<()>>>,
@@ -78,9 +81,12 @@ impl ScriptedClientIo {
             pops: Mutex::new(VecDeque::new()),
             acks: Mutex::new(VecDeque::new()),
             broker_lookup_misses: AtomicUsize::new(0),
+            route_panics: AtomicUsize::new(0),
             route_calls: AtomicUsize::new(0),
             refresh_calls: AtomicUsize::new(0),
             ack_calls: AtomicUsize::new(0),
+            pull_calls: AtomicUsize::new(0),
+            readiness_calls: AtomicUsize::new(0),
             start_entered: Mutex::new(None),
             start_block: None,
             pull_entered: Mutex::new(None),
@@ -147,6 +153,10 @@ impl ScriptedClientIo {
         self.broker_lookup_misses.store(count, Ordering::Release);
     }
 
+    fn panic_route_times(&self, count: usize) {
+        self.route_panics.store(count, Ordering::Release);
+    }
+
     fn scripted<T>(queue: &Mutex<VecDeque<Result<T, RocketMQError>>>, operation: &str) -> Result<T, RocketMQError> {
         queue
             .lock()
@@ -188,6 +198,15 @@ impl ClusterClientIo for ScriptedClientIo {
     async fn topic_route(&self, _topic: &str, _timeout_millis: u64) -> Result<Option<TopicRouteData>, RocketMQError> {
         self.record("client.route");
         self.route_calls.fetch_add(1, Ordering::AcqRel);
+        if self
+            .route_panics
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
+                remaining.checked_sub(1)
+            })
+            .is_ok()
+        {
+            panic!("scripted route panic");
+        }
         Self::scripted(&self.routes, "topic_route")
     }
 
@@ -303,6 +322,7 @@ impl ClusterClientIo for ScriptedClientIo {
         _timeout_millis: u64,
     ) -> Result<PullOutcome<MessageExt>, RocketMQError> {
         self.record("client.pull");
+        self.pull_calls.fetch_add(1, Ordering::AcqRel);
         if let Some(sender) = self
             .pull_entered
             .lock()
@@ -396,6 +416,7 @@ impl ClusterClientIo for ScriptedClientIo {
     }
 
     async fn broker_cluster_info(&self, _timeout_millis: u64) -> Result<ClusterInfo, RocketMQError> {
+        self.readiness_calls.fetch_add(1, Ordering::AcqRel);
         Err(unexpected_client_call("broker_cluster_info"))
     }
 
@@ -634,6 +655,31 @@ fn target() -> MessageQueueTarget {
     }
 }
 
+fn pull_request(group: &str) -> PullMessageRequest {
+    PullMessageRequest {
+        group: ResourceIdentity::new("", group),
+        target: target(),
+        offset: 5,
+        batch_size: 16,
+        filter_expression: filter_expression(),
+        long_polling_timeout: Duration::from_secs(1),
+    }
+}
+
+async fn wait_until(mut condition: impl FnMut() -> bool) {
+    tokio::time::timeout(Duration::from_millis(250), async {
+        while !condition() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("deterministic execution condition was not reached");
+}
+
+fn shutdown_report_panics(report: &rocketmq_runtime::ShutdownReport) -> usize {
+    report.panicked + report.children.iter().map(shutdown_report_panics).sum::<usize>()
+}
+
 #[tokio::test]
 async fn unrelated_route_progresses_while_pull_is_blocked() {
     let events = Arc::new(Mutex::new(Vec::new()));
@@ -697,6 +743,239 @@ async fn unrelated_route_progresses_while_pull_is_blocked() {
 }
 
 #[tokio::test]
+async fn same_consumer_key_is_fifo_without_serializing_distinct_keys() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let (client, first_pull_entered) = ScriptedClientIo::blocking_pull(events.clone());
+    client.push_pull(PullOutcome::new(
+        PullStatus::NoNewMsg,
+        11,
+        1,
+        21,
+        None::<Vec<MessageExt>>,
+    ));
+    client.push_pull(PullOutcome::new(
+        PullStatus::NoNewMsg,
+        22,
+        1,
+        32,
+        None::<Vec<MessageExt>>,
+    ));
+    let client = Arc::new(client);
+    let factory = Arc::new(ScriptedProducerFactory {
+        events,
+        send_results: Arc::new(Mutex::new(VecDeque::new())),
+        start_control: None,
+    });
+
+    run_test_worker(client.clone(), factory, |executor, cancellation| async move {
+        let first = executor.pull_message(pull_request("GroupA"), Some(Duration::from_secs(2)));
+        let probe = async {
+            first_pull_entered.await.expect("first pull entered remote I/O");
+            let second = executor.pull_message(pull_request("GroupA"), Some(Duration::from_secs(2)));
+            let observe = async {
+                wait_until(|| executor.lanes.snapshot().queued_and_active == 2).await;
+                assert_eq!(
+                    client.pull_calls.load(Ordering::Acquire),
+                    1,
+                    "the second same-key command must remain queued"
+                );
+                client.pull_block.as_ref().expect("blocking pull control").notify_one();
+                wait_until(|| client.pull_calls.load(Ordering::Acquire) == 2).await;
+                client.pull_block.as_ref().expect("blocking pull control").notify_one();
+            };
+            let (second, ()) = tokio::join!(second, observe);
+            second
+        };
+        let (first, second) = tokio::join!(first, probe);
+        assert_eq!(first.expect("first pull").next_offset, 11);
+        assert_eq!(second.expect("second pull").next_offset, 22);
+        cancellation.cancel();
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn distinct_consumer_keys_reach_remote_io_concurrently() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let (client, first_pull_entered) = ScriptedClientIo::blocking_pull(events.clone());
+    client.push_pull(PullOutcome::new(
+        PullStatus::NoNewMsg,
+        11,
+        1,
+        21,
+        None::<Vec<MessageExt>>,
+    ));
+    client.push_pull(PullOutcome::new(
+        PullStatus::NoNewMsg,
+        22,
+        1,
+        32,
+        None::<Vec<MessageExt>>,
+    ));
+    let client = Arc::new(client);
+    let factory = Arc::new(ScriptedProducerFactory {
+        events,
+        send_results: Arc::new(Mutex::new(VecDeque::new())),
+        start_control: None,
+    });
+
+    run_test_worker(client.clone(), factory, |executor, cancellation| async move {
+        let first = executor.pull_message(pull_request("GroupA"), Some(Duration::from_secs(2)));
+        let probe = async {
+            first_pull_entered.await.expect("first pull entered remote I/O");
+            let second = executor.pull_message(pull_request("GroupB"), Some(Duration::from_secs(2)));
+            let observe = async {
+                wait_until(|| client.pull_calls.load(Ordering::Acquire) == 2).await;
+                assert_eq!(executor.lanes.snapshot().current_inflight, 2);
+                client
+                    .pull_block
+                    .as_ref()
+                    .expect("blocking pull control")
+                    .notify_waiters();
+            };
+            let (second, ()) = tokio::join!(second, observe);
+            second
+        };
+        let (first, second) = tokio::join!(first, probe);
+        assert!(first.is_ok(), "first distinct-key pull");
+        assert!(second.is_ok(), "second distinct-key pull");
+        assert_eq!(executor.lanes.snapshot().max_inflight, 2);
+        cancellation.cancel();
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn data_saturation_preserves_readiness_capacity_and_releases_all_permits() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let (client, first_pull_entered) = ScriptedClientIo::blocking_pull(events.clone());
+    client.push_pull(PullOutcome::new(
+        PullStatus::NoNewMsg,
+        11,
+        1,
+        21,
+        None::<Vec<MessageExt>>,
+    ));
+    let client = Arc::new(client);
+    let factory = Arc::new(ScriptedProducerFactory {
+        events,
+        send_results: Arc::new(Mutex::new(VecDeque::new())),
+        start_control: None,
+    });
+    let state = ClusterWorkerState::with_test_runtime(client.clone(), factory);
+    let policy = ClusterExecutionPolicy {
+        capacity_count: 3,
+        capacity_bytes: 16 * 1024,
+        max_queue_age: Duration::from_secs(2),
+        io_max_inflight: 2,
+        control_reserve: 1,
+        lane_idle_timeout: Duration::from_secs(1),
+    };
+
+    run_scripted_worker_with_policy(
+        ClusterConfig::default(),
+        state,
+        policy,
+        |executor, cancellation| async move {
+            let first = executor.pull_message(pull_request("GroupA"), Some(Duration::from_secs(2)));
+            let probe = async {
+                first_pull_entered.await.expect("first pull entered remote I/O");
+                let second = executor.pull_message(pull_request("GroupB"), Some(Duration::from_secs(2)));
+                let checks = async {
+                    wait_until(|| {
+                        let snapshot = executor.lanes.snapshot();
+                        snapshot.queued_and_active == 2 && snapshot.current_inflight == 1
+                    })
+                    .await;
+                    let data_error = executor
+                        .query_route(ResourceIdentity::new("", "DataOverflow"))
+                        .await
+                        .expect_err("data capacity is saturated");
+                    assert!(matches!(data_error, ProxyError::TooManyRequests { .. }));
+
+                    let readiness_error = executor
+                        .readiness_check()
+                        .await
+                        .expect_err("scripted readiness returns a remote error");
+                    assert!(
+                        !matches!(readiness_error, ProxyError::TooManyRequests { .. }),
+                        "control reserve must admit readiness"
+                    );
+                    assert_eq!(client.readiness_calls.load(Ordering::Acquire), 1);
+                    cancellation.cancel();
+                };
+                let (second, ()) = tokio::join!(second, checks);
+                second
+            };
+            let (first, second) = tokio::join!(first, probe);
+            assert!(first.is_err(), "shutdown cancels the active data command");
+            assert!(second.is_err(), "shutdown cancels the queued data command");
+            wait_until(|| {
+                let snapshot = executor.lanes.snapshot();
+                snapshot.current_inflight == 0 && snapshot.queued_and_active == 0 && snapshot.active_keys == 0
+            })
+            .await;
+            assert_eq!(executor.lanes.snapshot().oldest_queued_age_ms, None);
+        },
+    )
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn idle_key_lane_is_reclaimed_without_leaking_budget_or_tasks() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let client = Arc::new(ScriptedClientIo::new(events.clone()));
+    client.push_route(TopicRouteData::default());
+    client.push_route(TopicRouteData::default());
+    let factory = Arc::new(ScriptedProducerFactory {
+        events,
+        send_results: Arc::new(Mutex::new(VecDeque::new())),
+        start_control: None,
+    });
+    let state = ClusterWorkerState::with_test_runtime(client, factory);
+    let policy = ClusterExecutionPolicy {
+        capacity_count: 4,
+        capacity_bytes: 16 * 1024,
+        max_queue_age: Duration::from_secs(1),
+        io_max_inflight: 2,
+        control_reserve: 1,
+        lane_idle_timeout: Duration::from_millis(10),
+    };
+
+    run_scripted_worker_with_policy(
+        ClusterConfig::default(),
+        state,
+        policy,
+        |executor, cancellation| async move {
+            executor
+                .query_route(ResourceIdentity::new("", "TopicA"))
+                .await
+                .expect("route command");
+            assert_eq!(executor.lanes.snapshot().active_keys, 1);
+            tokio::time::advance(Duration::from_millis(10)).await;
+            wait_until(|| {
+                let snapshot = executor.lanes.snapshot();
+                snapshot.active_keys == 0
+                    && snapshot.active_lane_tasks == 0
+                    && snapshot.current_inflight == 0
+                    && snapshot.queued_and_active == 0
+            })
+            .await;
+            executor
+                .query_route(ResourceIdentity::new("", "TopicA"))
+                .await
+                .expect("retired exact key is recreated with a new generation");
+            assert_eq!(executor.lanes.snapshot().active_keys, 1);
+            tokio::time::advance(Duration::from_millis(10)).await;
+            wait_until(|| executor.lanes.snapshot().active_lane_tasks == 0).await;
+            tokio::time::resume();
+            cancellation.cancel();
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn active_command_holds_its_global_admission_permit() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let (client, pull_entered) = ScriptedClientIo::blocking_pull(events.clone());
@@ -715,9 +994,12 @@ async fn active_command_holds_its_global_admission_permit() {
     });
     let state = ClusterWorkerState::with_test_runtime(client.clone(), factory);
     let policy = ClusterExecutionPolicy {
-        capacity_count: 1,
+        capacity_count: 2,
         capacity_bytes: 4 * 1024,
-        default_queue_deadline: Duration::from_secs(1),
+        max_queue_age: Duration::from_secs(1),
+        io_max_inflight: 2,
+        control_reserve: 1,
+        lane_idle_timeout: Duration::from_secs(1),
     };
 
     run_scripted_worker_with_policy(
@@ -766,6 +1048,100 @@ async fn active_command_holds_its_global_admission_permit() {
         },
     )
     .await;
+}
+
+#[tokio::test]
+async fn request_timeout_cancels_remote_io_and_releases_all_permits() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let (client, pull_entered) = ScriptedClientIo::blocking_pull(events.clone());
+    client.push_pull(PullOutcome::new(
+        PullStatus::NoNewMsg,
+        7,
+        1,
+        11,
+        None::<Vec<MessageExt>>,
+    ));
+    let client = Arc::new(client);
+    let factory = Arc::new(ScriptedProducerFactory {
+        events,
+        send_results: Arc::new(Mutex::new(VecDeque::new())),
+        start_control: None,
+    });
+
+    run_test_worker(client, factory, |executor, cancellation| async move {
+        let request = executor.pull_message(pull_request("TimedOutGroup"), Some(Duration::from_millis(10)));
+        let observe = async {
+            pull_entered.await.expect("pull entered remote I/O");
+        };
+        let (result, ()) = tokio::join!(request, observe);
+        assert!(matches!(
+            result,
+            Err(ProxyError::RocketMQ(RocketMQError::Timeout {
+                operation: "proxy cluster command",
+                timeout_ms: 10,
+            }))
+        ));
+        wait_until(|| {
+            let snapshot = executor.lanes.snapshot();
+            snapshot.current_inflight == 0
+                && snapshot.queued_and_active == 0
+                && snapshot.cancelled == 1
+                && snapshot.timed_out == 1
+        })
+        .await;
+        cancellation.cancel();
+        wait_until(|| executor.lanes.snapshot().active_lane_tasks == 0).await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn panicked_lane_is_reclaimed_and_closes_without_leaks() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let client = Arc::new(ScriptedClientIo::new(events.clone()));
+    client.panic_route_times(1);
+    let factory = Arc::new(ScriptedProducerFactory {
+        events,
+        send_results: Arc::new(Mutex::new(VecDeque::new())),
+        start_control: None,
+    });
+    let state = ClusterWorkerState::with_test_runtime(client, factory);
+    let service = test_service_context("proxy-cluster-panicked-lane");
+    let executor_result = ClusterTaskExecutor::new_with_test_state(
+        ClusterConfig::default(),
+        state,
+        &service,
+        ClusterExecutionPolicy::default(),
+    );
+    assert!(executor_result.is_ok(), "scripted cluster execution starts");
+    let Some((executor, cancellation)) = executor_result.ok() else {
+        std::process::abort();
+    };
+
+    let first = executor
+        .query_route(ResourceIdentity::new("", "RecoveredTopic"))
+        .await
+        .expect_err("first keyed lane panics");
+    assert!(matches!(first, ProxyError::Transport { .. }));
+    wait_until(|| {
+        let snapshot = executor.lanes.snapshot();
+        snapshot.active_keys == 0
+            && snapshot.active_lane_tasks == 0
+            && snapshot.current_inflight == 0
+            && snapshot.queued_and_active == 0
+    })
+    .await;
+
+    let closed = executor
+        .query_route(ResourceIdentity::new("", "RecoveredTopic"))
+        .await
+        .expect_err("a lane panic cancels the owning execution task group");
+    assert!(matches!(closed, ProxyError::Transport { .. }));
+    cancellation.cancel();
+    let report = service.task_group().shutdown(Duration::from_secs(1)).await;
+    assert_eq!(report.leaked, 0, "{}", report.to_json());
+    assert_eq!(report.detached_still_running, 0, "{}", report.to_json());
+    assert_eq!(shutdown_report_panics(&report), 1, "{}", report.to_json());
 }
 
 #[tokio::test]
@@ -978,7 +1354,7 @@ async fn worker_passes_the_outbound_signer_hook_to_the_client_transport_factory(
         producer_factory,
     );
     let topic = ResourceIdentity::new("", "TopicA");
-    let expected_domain_id = cluster_lane_domain_id(domain_id, cluster_lane(0, &topic));
+    let expected_domain_id = domain_id;
 
     run_scripted_worker(ClusterConfig::default(), state, |executor, cancellation| async move {
         let route_result = executor.query_route(topic).await;

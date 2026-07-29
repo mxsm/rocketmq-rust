@@ -4953,6 +4953,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "cheetah-string",
+ "criterion",
  "rocketmq-client-rust",
  "rocketmq-error",
  "rocketmq-model",

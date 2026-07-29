@@ -1727,6 +1727,14 @@ function Get-SchedulerDisposition {
         }
     }
 
+    if ($path -eq "rocketmq-proxy-cluster/src/cluster_execution.rs") {
+        return [pscustomobject]@{
+            Disposition = "proxy-cluster-owned-execution-timer"
+            ActionRequired = $false
+            Reason = "Allowed request deadline, inflight admission timeout, and keyed-lane idle retirement inside tasks owned by the injected Proxy Cluster TaskGroup."
+        }
+    }
+
     if ($path -match "^rocketmq-controller/src/") {
         return [pscustomobject]@{
             Disposition = "controller-retry-backoff"

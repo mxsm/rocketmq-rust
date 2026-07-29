@@ -27,6 +27,7 @@ rust-version.workspace = true
 
 [features]
 default = []
+bench-support = []
 observability = ["rocketmq-client-rust/observability-metrics"]
 observability-traces = ["rocketmq-client-rust/observability"]
 
@@ -46,3 +47,12 @@ serde = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+criterion = { version = "0.8", features = ["html_reports"] }
+tokio = { workspace = true, features = ["test-util"] }
+
+[[bench]]
+name = "cluster_executor"
+harness = false
+required-features = ["bench-support"]

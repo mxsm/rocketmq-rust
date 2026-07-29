@@ -110,14 +110,14 @@
       "crate_version": "1.0.0",
       "public_path_count": 24,
       "public_path_sha256": "3c461c0143acb1fe6316118715e11a4fb31620b6b6f1bd7fdf6e3170eedd6e9a",
-      "rustdoc_json_sha256": "9f7d54c18335ddc4722616bf0d84cda5c7199b92df42a17d9ea8e129d14cc082",
+      "rustdoc_json_sha256": "bd0829ac8ee9a9a7ac8d95eef9ccee5b3f1ac802da95bf9ad60652ccf2e1439d",
       "target": "rocketmq_proxy"
     },
     "rocketmq-proxy-cluster": {
       "crate_version": "1.0.0",
-      "public_path_count": 16,
-      "public_path_sha256": "a54347aa28148322afe3d20aaf05915c76060a2c32efb7809271c063296e32b2",
-      "rustdoc_json_sha256": "bd8784a47d47c5270cef5e01e4d73e373a42bfb99ae2aebabaccba354af5e4ea",
+      "public_path_count": 17,
+      "public_path_sha256": "9c935df58f31dc54ca22ec4c844ac4b76c2750b39725779c8bfce92d99fe4a2b",
+      "rustdoc_json_sha256": "10b2bc560886eb69787c6184d398c23cf8254eafddf76c1d3d5f5e7194b0cc88",
       "target": "rocketmq_proxy_cluster"
     },
     "rocketmq-proxy-core": {
@@ -199,7 +199,7 @@
     }
   },
   "schema_version": 1,
-  "source_commit": "875aefe8c5476e1c6148c566d8e37b0df16b1b39",
+  "source_commit": "96e7a95b428ba53b8876a3f9487e065856c6cbb5",
   "toolchain": {
     "cargo": "cargo 1.98.0-nightly (a335d47ff 2026-06-26)",
     "rustc": "rustc 1.98.0-nightly (c397dae80 2026-07-02)",

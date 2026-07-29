@@ -55,18 +55,15 @@ use rocketmq_proxy_core::SendMessageResultEntry;
 use rocketmq_proxy_core::SubscriptionGroupMetadata;
 use rocketmq_proxy_core::UpdateOffsetPlan;
 use rocketmq_proxy_core::UpdateOffsetRequest;
-use rocketmq_runtime::BudgetedQueue;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_security_api::OutboundSigner;
-use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 
-use super::cluster_admission::cluster_lane_domain_id;
 use super::cluster_admission::ClusterExecutionLanes;
 use super::cluster_admission::ClusterExecutionPolicy;
-use super::cluster_admission::QueuedClusterCommand;
-use super::cluster_admission::CLUSTER_EXECUTION_LANE_COUNT;
+use super::cluster_admission::ClusterLaneRegistration;
 use super::handle_cluster_command;
 use super::ClusterClientFactory;
 use super::ClusterProducerFactory;
@@ -78,6 +75,19 @@ use crate::config::ClusterConfig;
 #[derive(Clone)]
 pub(super) struct ClusterTaskExecutor {
     pub(super) lanes: Arc<ClusterExecutionLanes>,
+    runtime: Arc<ClusterExecutionRuntime>,
+    cancellation: CancellationToken,
+}
+
+struct ClusterExecutionRuntime {
+    config: ClusterConfig,
+    worker_context: ChildServiceContext,
+    shutdown_context: ChildServiceContext,
+    client_runtime: Arc<ClientRuntime>,
+    base_domain_id: u64,
+    rpc_hook: Option<Arc<ClientRpcHook>>,
+    client_factory: Arc<dyn ClusterClientFactory>,
+    producer_factory: Arc<dyn ClusterProducerFactory>,
 }
 
 pub(super) enum ClusterCommand {
@@ -204,6 +214,7 @@ impl ClusterTaskExecutor {
             telemetry_handle,
         )?;
         let base_domain_id = worker_context.task_group().id().as_u64();
+        let policy = ClusterExecutionPolicy::from_config(&config);
         Self::spawn_execution(
             config,
             rpc_hook,
@@ -213,7 +224,7 @@ impl ClusterTaskExecutor {
             base_domain_id,
             Arc::new(DefaultClusterClientFactory),
             Arc::new(DefaultClusterProducerFactory),
-            ClusterExecutionPolicy::default(),
+            policy,
         )
         .map(|(executor, _)| executor)
     }
@@ -264,62 +275,37 @@ impl ClusterTaskExecutor {
     ) -> ProxyResult<(Self, tokio_util::sync::CancellationToken)> {
         let lanes = Arc::new(ClusterExecutionLanes::new(policy)?);
         let cancellation = worker_context.task_group().cancellation_token();
-        let queue_clones = lanes.queue_clones();
-        let (completed_sender, completed_receiver) = mpsc::channel(CLUSTER_EXECUTION_LANE_COUNT);
-
-        for (lane, queue) in queue_clones.iter().cloned().enumerate() {
-            let lane_context = worker_context.child(format!("command-lane-{lane}"));
-            let lane_cancellation = lane_context.task_group().cancellation_token();
-            let lane_shutdown_context = service_context.clone();
-            let lane_config = config.clone();
-            let lane_state = ClusterWorkerState::with_factories(
-                client_runtime.clone(),
-                cluster_lane_domain_id(base_domain_id, lane),
-                rpc_hook.clone(),
-                client_factory.clone(),
-                producer_factory.clone(),
-            );
-            let completed_sender = completed_sender.clone();
-            if let Err(error) = lane_context.spawn_service(format!("proxy.cluster.lane-{lane}"), async move {
-                run_cluster_lane(lane_config, lane_state, queue, lane_cancellation, lane_shutdown_context).await;
-                let _ = completed_sender.try_send(());
-            }) {
-                worker_context.task_group().cancel();
-                for queue in &queue_clones {
-                    queue.close();
-                }
-                return Err(ProxyError::Transport {
-                    message: format!("failed to spawn proxy cluster execution lane {lane}: {error}"),
-                });
-            }
-        }
-        drop(completed_sender);
-
+        let runtime = Arc::new(ClusterExecutionRuntime {
+            config: config.clone(),
+            worker_context: worker_context.clone(),
+            shutdown_context: service_context.clone(),
+            client_runtime: client_runtime.clone(),
+            base_domain_id,
+            rpc_hook,
+            client_factory,
+            producer_factory,
+        });
         let owner_runtime = client_runtime;
-        let owner_queues = queue_clones;
+        let owner_lanes = lanes.clone();
         let owner_cancellation = cancellation.clone();
-        let owner_config = config;
         let owner_shutdown_context = service_context.clone();
         if let Err(error) = worker_context.spawn_service("proxy.cluster.execution-owner", async move {
-            run_cluster_execution_owner(
-                owner_config,
-                owner_runtime,
-                owner_queues,
-                completed_receiver,
-                owner_cancellation,
-                owner_shutdown_context,
-            )
-            .await;
+            run_cluster_execution_owner(owner_runtime, owner_lanes, owner_cancellation, owner_shutdown_context).await;
         }) {
             worker_context.task_group().cancel();
-            for queue in &lanes.queues {
-                queue.close();
-            }
+            lanes.close();
             return Err(ProxyError::Transport {
                 message: format!("failed to spawn proxy cluster execution owner: {error}"),
             });
         }
-        Ok((Self { lanes }, cancellation))
+        Ok((
+            Self {
+                lanes,
+                runtime,
+                cancellation: cancellation.clone(),
+            },
+            cancellation,
+        ))
     }
 
     pub(super) async fn readiness_check(&self) -> ProxyResult<()> {
@@ -537,21 +523,125 @@ impl ClusterTaskExecutor {
         T: Send + 'static,
     {
         let (reply, receiver) = oneshot::channel();
-        self.lanes.enqueue(command(reply))?;
-        receiver.await.map_err(|_| ProxyError::Transport {
-            message: "proxy cluster worker dropped response".to_owned(),
-        })?
+        let command = command(reply);
+        let request_deadline = command.queue_deadline();
+        let command_cancellation = CancellationToken::new();
+        let _drop_guard = CommandCancellationGuard(command_cancellation.clone());
+        if let Some(registration) = self
+            .lanes
+            .enqueue(command, command_cancellation.clone(), &self.runtime.config)?
+        {
+            self.spawn_lane(registration)?;
+        }
+
+        let receive = async {
+            receiver.await.map_err(|_| ProxyError::Transport {
+                message: "proxy cluster keyed executor dropped response".to_owned(),
+            })?
+        };
+        tokio::pin!(receive);
+        match request_deadline {
+            Some(deadline) => {
+                tokio::select! {
+                    biased;
+                    result = &mut receive => result,
+                    () = self.cancellation.cancelled() => {
+                        self.lanes.record_shutdown_rejected();
+                        Err(cluster_shutdown_error())
+                    },
+                    () = tokio::time::sleep(deadline.max(Duration::from_millis(1))) => {
+                        self.lanes.record_timeout();
+                        Err(cluster_command_timeout(deadline))
+                    },
+                }
+            }
+            None => {
+                tokio::select! {
+                    biased;
+                    result = &mut receive => result,
+                    () = self.cancellation.cancelled() => {
+                        self.lanes.record_shutdown_rejected();
+                        Err(cluster_shutdown_error())
+                    },
+                }
+            }
+        }
+    }
+
+    fn spawn_lane(&self, registration: ClusterLaneRegistration) -> ProxyResult<()> {
+        let lanes = self.lanes.clone();
+        let runtime = self.runtime.clone();
+        let cancellation = self.cancellation.clone();
+        let task_registration = registration.clone();
+        lanes.lane_task_started();
+        let task_lanes = lanes.clone();
+        let worker_context = runtime.worker_context.clone();
+        let lane_task = LaneTaskGuard {
+            lanes: task_lanes.clone(),
+            registration: task_registration.clone(),
+        };
+        let spawn_result = worker_context.spawn_service("proxy.cluster.keyed-lane", async move {
+            let _lane_task = lane_task;
+            let state = ClusterWorkerState::with_factories(
+                runtime.client_runtime.clone(),
+                runtime.base_domain_id,
+                runtime.rpc_hook.clone(),
+                runtime.client_factory.clone(),
+                runtime.producer_factory.clone(),
+            );
+            run_cluster_lane(
+                runtime.config.clone(),
+                state,
+                task_registration,
+                cancellation,
+                runtime.shutdown_context.clone(),
+                task_lanes.clone(),
+            )
+            .await;
+        });
+        if let Err(error) = spawn_result {
+            let message = format!("failed to spawn proxy cluster keyed lane: {error}");
+            return Err(ProxyError::Transport { message });
+        }
+        Ok(())
+    }
+}
+
+struct LaneTaskGuard {
+    lanes: Arc<ClusterExecutionLanes>,
+    registration: ClusterLaneRegistration,
+}
+
+impl Drop for LaneTaskGuard {
+    fn drop(&mut self) {
+        self.lanes.reject_failed_lane(
+            &self.registration,
+            "proxy cluster keyed lane terminated before completing the command",
+        );
+        self.lanes.lane_task_finished();
+    }
+}
+
+struct CommandCancellationGuard(CancellationToken);
+
+impl Drop for CommandCancellationGuard {
+    fn drop(&mut self) {
+        self.0.cancel();
     }
 }
 
 pub(super) async fn run_cluster_lane(
     config: ClusterConfig,
     mut state: ClusterWorkerState,
-    queue: BudgetedQueue<QueuedClusterCommand>,
-    cancellation: tokio_util::sync::CancellationToken,
+    registration: ClusterLaneRegistration,
+    cancellation: CancellationToken,
     shutdown_context: ChildServiceContext,
+    lanes: Arc<ClusterExecutionLanes>,
 ) {
+    let queue = &registration.queue;
     loop {
+        let idle = tokio::time::sleep(lanes.idle_timeout());
+        tokio::pin!(idle);
         let queued = tokio::select! {
             biased;
             () = cancellation.cancelled() => {
@@ -561,31 +651,91 @@ pub(super) async fn run_cluster_lane(
             command = queue.recv_budgeted() => match command {
                 Some(command) => command,
                 None => break,
-            }
+            },
+            () = &mut idle => {
+                shutdown_cluster_state(&config, &mut state, &shutdown_context).await;
+                if lanes.retire(&registration) {
+                    return;
+                }
+                continue;
+            },
         };
         let (queued, active_permit, _) = queued.into_parts();
         let waited = queued.enqueued_at.elapsed();
-        if waited >= queued.deadline {
-            queued.command.reject(cluster_queue_timeout(queued.deadline));
+        if waited >= queued.queue_deadline {
+            lanes.record_timeout();
+            queued.command.reject(cluster_queue_timeout(queued.queue_deadline));
             drop(active_permit);
             continue;
         }
-        let mut command = queued.command;
-        command.apply_queue_wait(waited);
-        tokio::select! {
-            biased;
-            () = cancellation.cancelled() => break,
-            () = handle_cluster_command(&config, &mut state, command) => {}
+        if queued.cancellation.is_cancelled() {
+            lanes.record_cancelled();
+            drop(active_permit);
+            continue;
         }
+
+        let remaining_queue_time = queued.queue_deadline.saturating_sub(waited);
+        let acquire_inflight = lanes.acquire_inflight(queued.class);
+        tokio::pin!(acquire_inflight);
+        let inflight_permit = tokio::select! {
+            biased;
+            () = cancellation.cancelled() => {
+                lanes.record_shutdown_rejected();
+                queued.command.reject(cluster_shutdown_error());
+                drop(active_permit);
+                break;
+            },
+            () = queued.cancellation.cancelled() => {
+                lanes.record_cancelled();
+                drop(active_permit);
+                continue;
+            },
+            () = tokio::time::sleep(remaining_queue_time) => {
+                lanes.record_timeout();
+                queued.command.reject(cluster_queue_timeout(queued.queue_deadline));
+                drop(active_permit);
+                continue;
+            },
+            permit = &mut acquire_inflight => permit,
+        };
+
+        let mut command = queued.command;
+        command.apply_queue_wait(queued.enqueued_at.elapsed());
+        let shutdown_during_command = tokio::select! {
+            biased;
+            () = cancellation.cancelled() => {
+                lanes.record_shutdown_rejected();
+                true
+            },
+            () = queued.cancellation.cancelled() => {
+                lanes.record_cancelled();
+                false
+            },
+            () = handle_cluster_command(&config, &mut state, command) => false,
+        };
+        drop(inflight_permit);
         drop(active_permit);
+        if shutdown_during_command {
+            break;
+        }
     }
     while let Some(queued) = queue.try_pop() {
+        lanes.record_shutdown_rejected();
         queued.command.reject(ProxyError::Transport {
             message: "proxy cluster command execution stopped during shutdown".to_owned(),
         });
     }
-    let shutdown_deadline = cluster_shutdown_deadline(&shutdown_context, config.shutdown_timeout());
-    for (producer_group, producer) in &mut state.send_producers {
+    shutdown_cluster_state(&config, &mut state, &shutdown_context).await;
+    lanes.retire(&registration);
+}
+
+async fn shutdown_cluster_state(
+    config: &ClusterConfig,
+    state: &mut ClusterWorkerState,
+    shutdown_context: &ChildServiceContext,
+) {
+    let shutdown_deadline = cluster_shutdown_deadline(shutdown_context, config.shutdown_timeout());
+    for (producer_group, mut producer) in state.send_producers.drain() {
         if tokio::time::timeout(shutdown_deadline.remaining(), producer.shutdown())
             .await
             .is_err()
@@ -607,30 +757,25 @@ pub(super) async fn run_cluster_lane(
 }
 
 async fn run_cluster_execution_owner(
-    config: ClusterConfig,
     client_runtime: Arc<ClientRuntime>,
-    queues: Vec<BudgetedQueue<QueuedClusterCommand>>,
-    mut completed_receiver: mpsc::Receiver<()>,
-    cancellation: tokio_util::sync::CancellationToken,
+    lanes: Arc<ClusterExecutionLanes>,
+    cancellation: CancellationToken,
     shutdown_context: ChildServiceContext,
 ) {
     cancellation.cancelled().await;
-    for queue in &queues {
-        queue.close();
-    }
-    let shutdown_deadline = cluster_shutdown_deadline(&shutdown_context, config.shutdown_timeout());
-    for lane in 0..CLUSTER_EXECUTION_LANE_COUNT {
-        match tokio::time::timeout(shutdown_deadline.remaining(), completed_receiver.recv()).await {
-            Ok(Some(())) => {}
-            Ok(None) => break,
-            Err(_) => {
-                tracing::warn!(
-                    lane,
-                    "proxy cluster execution lane shutdown exceeded the shared deadline"
-                );
-                break;
-            }
-        }
+    lanes.close();
+    let shutdown_deadline = shutdown_context
+        .task_group()
+        .shutdown_deadline()
+        .unwrap_or_else(|| ShutdownDeadline::after(Duration::from_secs(5)));
+    if !lanes.wait_for_lane_tasks(shutdown_deadline).await {
+        let snapshot = lanes.snapshot();
+        tracing::warn!(
+            active_lane_tasks = snapshot.active_lane_tasks,
+            active_keys = snapshot.active_keys,
+            current_inflight = snapshot.current_inflight,
+            "proxy cluster keyed lanes exceeded the shared shutdown deadline"
+        );
     }
     let _ = client_runtime.shutdown_until(shutdown_deadline).await;
 }
@@ -643,10 +788,62 @@ fn cluster_queue_timeout(deadline: Duration) -> ProxyError {
     .into()
 }
 
+fn cluster_command_timeout(deadline: Duration) -> ProxyError {
+    RocketMQError::Timeout {
+        operation: "proxy cluster command",
+        timeout_ms: deadline.as_millis().clamp(1, u128::from(u64::MAX)) as u64,
+    }
+    .into()
+}
+
+fn cluster_shutdown_error() -> ProxyError {
+    ProxyError::Transport {
+        message: "proxy cluster command execution stopped during shutdown".to_owned(),
+    }
+}
+
 fn cluster_shutdown_deadline(context: &ChildServiceContext, configured_timeout: Duration) -> ShutdownDeadline {
     let configured = ShutdownDeadline::after(configured_timeout);
     match context.task_group().shutdown_deadline() {
         Some(parent) if parent.instant() <= configured.instant() => parent,
         Some(_) | None => configured,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dropping_an_unpolled_lane_future_releases_registration_and_task_count() {
+        let lanes =
+            Arc::new(ClusterExecutionLanes::new(ClusterExecutionPolicy::default()).expect("valid execution policy"));
+        let config = ClusterConfig::default();
+        let (reply, mut receiver) = oneshot::channel();
+        let registration = lanes
+            .enqueue(
+                ClusterCommand::ReadinessCheck { reply },
+                CancellationToken::new(),
+                &config,
+            )
+            .expect("command admission")
+            .expect("first key creates a lane");
+
+        lanes.lane_task_started();
+        let guard = LaneTaskGuard {
+            lanes: lanes.clone(),
+            registration,
+        };
+        let unpolled = async move {
+            let _guard = guard;
+            std::future::pending::<()>().await;
+        };
+        drop(unpolled);
+
+        let diagnostics = lanes.snapshot();
+        assert_eq!(diagnostics.active_lane_tasks, 0);
+        assert_eq!(diagnostics.active_keys, 0);
+        assert_eq!(diagnostics.queued_and_active, 0);
+        assert!(receiver.try_recv().expect("queued command is rejected").is_err());
     }
 }

@@ -17,6 +17,25 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde::Serialize;
 
+/// Low-cardinality runtime state for the bounded Cluster command executor.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ClusterExecutionDiagnostics {
+    pub active_keys: usize,
+    pub active_lane_tasks: usize,
+    pub queued_and_active: usize,
+    pub retained_bytes: usize,
+    pub oldest_queued_age_ms: Option<u64>,
+    pub current_inflight: usize,
+    pub max_inflight: usize,
+    pub admitted: u64,
+    pub rejected: u64,
+    pub timed_out: u64,
+    pub cancelled: u64,
+    pub shutdown_rejected: u64,
+    pub closed: bool,
+}
+
 /// Configuration owned by the Client-backed cluster adapter.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
@@ -31,6 +50,12 @@ pub struct ClusterConfig {
     pub route_cache_ttl_ms: u64,
     pub metadata_cache_ttl_ms: u64,
     pub shutdown_timeout_ms: u64,
+    pub command_queue_capacity: usize,
+    pub command_queue_max_bytes: usize,
+    pub command_queue_max_age_ms: u64,
+    pub io_max_inflight: usize,
+    pub control_reserve: usize,
+    pub execution_lane_idle_timeout_ms: u64,
 }
 
 impl Default for ClusterConfig {
@@ -46,6 +71,12 @@ impl Default for ClusterConfig {
             route_cache_ttl_ms: 5_000,
             metadata_cache_ttl_ms: 5_000,
             shutdown_timeout_ms: 5_000,
+            command_queue_capacity: 1_024,
+            command_queue_max_bytes: 64 * 1024 * 1024,
+            command_queue_max_age_ms: 30_000,
+            io_max_inflight: 16,
+            control_reserve: 2,
+            execution_lane_idle_timeout_ms: 30_000,
         }
     }
 }
@@ -61,5 +92,13 @@ impl ClusterConfig {
 
     pub fn shutdown_timeout(&self) -> Duration {
         Duration::from_millis(self.shutdown_timeout_ms)
+    }
+
+    pub fn command_queue_max_age(&self) -> Duration {
+        Duration::from_millis(self.command_queue_max_age_ms)
+    }
+
+    pub fn execution_lane_idle_timeout(&self) -> Duration {
+        Duration::from_millis(self.execution_lane_idle_timeout_ms)
     }
 }

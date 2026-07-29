@@ -24,9 +24,13 @@ mod message;
 pub mod remoting;
 pub mod service;
 
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+pub use cluster::bench_support;
 pub use cluster::ClusterClient;
 pub use cluster::RocketmqClusterClient;
 pub use config::ClusterConfig;
+pub use config::ClusterExecutionDiagnostics;
 pub use remoting::ClusterRemotingBackend;
 pub use service::ClusterAssignmentService;
 pub use service::ClusterConsumerService;

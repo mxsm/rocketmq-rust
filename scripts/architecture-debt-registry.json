@@ -145,6 +145,40 @@
           ]
         }
       ]
+    },
+    {
+      "id": "ARC-RUNTIME-003",
+      "class": "runtime_adapter",
+      "owner": "proxy",
+      "status": "resolved",
+      "reason": "fixed hash-sharded Cluster workers were replaced by exact keyed lanes with bounded admission and owned shutdown",
+      "adr": "rocketmq-doc/en/proxy-cluster-keyed-execution-adr.md",
+      "removal_condition": "fixed Cluster lane count and hash-routing helpers remain absent",
+      "target_release": "2.0.0",
+      "evidence": [
+        "rocketmq-proxy-cluster/src/cluster_admission.rs",
+        "rocketmq-proxy-cluster/src/cluster_behavior_tests.rs",
+        "scripts/tests/test_m08_proxy_core_contract.py"
+      ],
+      "scope_count": 0,
+      "source_checks": [
+        {
+          "pattern": "CLUSTER_EXECUTION_LANE_COUNT",
+          "max_count": 0,
+          "paths": [
+            "rocketmq-proxy-cluster/src/cluster_admission.rs",
+            "rocketmq-proxy-cluster/src/cluster_execution.rs"
+          ]
+        },
+        {
+          "pattern": "fn cluster_lane(",
+          "max_count": 0,
+          "paths": [
+            "rocketmq-proxy-cluster/src/cluster_admission.rs",
+            "rocketmq-proxy-cluster/src/cluster_execution.rs"
+          ]
+        }
+      ]
     }
   ]
 }
