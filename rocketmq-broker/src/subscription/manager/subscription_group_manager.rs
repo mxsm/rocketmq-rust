@@ -50,6 +50,22 @@ use crate::metrics::broker_metrics_manager::BrokerMetricsManager;
 pub const CHARACTER_MAX_LENGTH: usize = 255;
 pub const TOPIC_MAX_LENGTH: usize = 127;
 
+#[derive(Clone, Debug)]
+pub(crate) struct SubscriptionGroupConfigUpdate {
+    pub(crate) config: Arc<SubscriptionGroupConfig>,
+    pub(crate) data_version: DataVersion,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SubscriptionGroupConfigCasError {
+    GroupNotFound,
+    VersionConflict { expected_version: u64, actual_version: u64 },
+    VersionUnavailable,
+    VersionExhausted,
+    ValueOutOfRange,
+    NoChange,
+}
+
 #[derive(Clone)]
 pub(crate) struct SubscriptionGroupManagerConfig {
     store_path_root_dir: CheetahString,
@@ -82,6 +98,9 @@ pub(crate) struct SubscriptionGroupManager {
 
     /// Data version for tracking configuration changes
     data_version: Arc<parking_lot::RwLock<DataVersion>>,
+
+    /// Serializes configuration state and version transitions.
+    metadata_transition: Arc<parking_lot::Mutex<()>>,
 
     config: SubscriptionGroupManagerConfig,
     state_machine_version: StateMachineVersionView,
@@ -129,6 +148,7 @@ impl SubscriptionGroupManager {
             data_version: Arc::new(parking_lot::RwLock::new(
                 rocketmq_protocol::protocol::data_version_facade::new_data_version(),
             )),
+            metadata_transition: Arc::new(parking_lot::Mutex::new(())),
             config,
             state_machine_version,
             broker_metrics_manager,
@@ -340,6 +360,7 @@ impl SubscriptionGroupManager {
     }
 
     fn update_subscription_group_config_without_persist(&mut self, config: &mut SubscriptionGroupConfig) {
+        let _transition = self.metadata_transition.lock();
         let start_time = Instant::now();
         let new_attributes = self.request(config);
         let current_attributes = self.current(config.group_name());
@@ -380,7 +401,9 @@ impl SubscriptionGroupManager {
             }
         }
 
-        self.update_data_version();
+        self.data_version
+            .write()
+            .next_version_with(self.state_machine_version.get());
     }
     fn request(&self, subscription_group_config: &SubscriptionGroupConfig) -> HashMap<CheetahString, CheetahString> {
         subscription_group_config.attributes().clone()
@@ -391,12 +414,6 @@ impl SubscriptionGroupManager {
             .get(group_name)
             .map(|entry| entry.value().attributes().clone())
             .unwrap_or_default()
-    }
-
-    fn update_data_version(&self) {
-        self.data_version
-            .write()
-            .next_version_with(self.state_machine_version.get());
     }
 
     pub fn data_version(&self) -> Arc<parking_lot::RwLock<DataVersion>> {
@@ -734,16 +751,26 @@ impl SubscriptionGroupManager {
             let mut subscription_group_config_new = SubscriptionGroupConfig::default();
             subscription_group_config_new.set_group_name(group.clone());
             let arc_config = Arc::new(subscription_group_config_new.clone());
-            let pre_config = self
-                .subscription_group_table
-                .insert(group.clone(), Arc::clone(&arc_config));
-            if pre_config.is_none() {
+            let created = {
+                let _transition = self.metadata_transition.lock();
+                if let Some(existing) = self.find_subscription_group_config_inner(group) {
+                    subscription_group_config = Some(existing);
+                    false
+                } else {
+                    self.subscription_group_table
+                        .insert(group.clone(), Arc::clone(&arc_config));
+                    self.data_version
+                        .write()
+                        .next_version_with(self.state_machine_version.get());
+                    subscription_group_config = Some(arc_config);
+                    true
+                }
+            };
+            if created {
                 info!("auto create a subscription group, {:?}", subscription_group_config_new);
-                self.record_consumer_group_create_latency(start_time);
+                Self::record_consumer_group_create_latency(start_time);
+                self.persist_after_mutation("auto-create");
             }
-            self.update_data_version();
-            self.persist_after_mutation("auto-create");
-            subscription_group_config = Some(arc_config);
         }
         subscription_group_config
     }
@@ -752,6 +779,95 @@ impl SubscriptionGroupManager {
         self.subscription_group_table
             .get(group)
             .map(|entry| Arc::clone(entry.value()))
+    }
+
+    pub(crate) fn select_subscription_group_config_with_version(
+        &self,
+        group: &CheetahString,
+    ) -> Result<(Arc<SubscriptionGroupConfig>, u64), SubscriptionGroupConfigCasError> {
+        let _transition = self.metadata_transition.lock();
+        let config = self
+            .find_subscription_group_config_inner(group)
+            .ok_or(SubscriptionGroupConfigCasError::GroupNotFound)?;
+        let version = u64::try_from(self.data_version.read().counter())
+            .map_err(|_| SubscriptionGroupConfigCasError::VersionUnavailable)?;
+        Ok((config, version))
+    }
+
+    pub(crate) fn update_subscription_group_config_if_version(
+        &self,
+        group: &CheetahString,
+        expected_version: u64,
+        retry_max_times: Option<u32>,
+        retry_queue_nums: Option<u32>,
+        consume_timeout_minutes: Option<u32>,
+    ) -> Result<SubscriptionGroupConfigUpdate, SubscriptionGroupConfigCasError> {
+        if retry_max_times.is_none() && retry_queue_nums.is_none() && consume_timeout_minutes.is_none() {
+            return Err(SubscriptionGroupConfigCasError::NoChange);
+        }
+        if retry_max_times.is_some_and(|value| !(1..=16).contains(&value))
+            || retry_queue_nums.is_some_and(|value| !(1..=8).contains(&value))
+            || consume_timeout_minutes.is_some_and(|value| !(1..=1_440).contains(&value))
+        {
+            return Err(SubscriptionGroupConfigCasError::ValueOutOfRange);
+        }
+
+        let _transition = self.metadata_transition.lock();
+        let current = self
+            .find_subscription_group_config_inner(group)
+            .ok_or(SubscriptionGroupConfigCasError::GroupNotFound)?;
+        let mut data_version = self.data_version.write();
+        let counter = data_version.counter();
+        let actual_version = u64::try_from(counter).map_err(|_| SubscriptionGroupConfigCasError::VersionUnavailable)?;
+        if actual_version != expected_version {
+            return Err(SubscriptionGroupConfigCasError::VersionConflict {
+                expected_version,
+                actual_version,
+            });
+        }
+        if counter == i64::MAX {
+            return Err(SubscriptionGroupConfigCasError::VersionExhausted);
+        }
+
+        let retry_max_times = retry_max_times
+            .map(|value| i32::try_from(value).map_err(|_| SubscriptionGroupConfigCasError::ValueOutOfRange))
+            .transpose()?;
+        let retry_queue_nums = retry_queue_nums
+            .map(|value| i32::try_from(value).map_err(|_| SubscriptionGroupConfigCasError::ValueOutOfRange))
+            .transpose()?;
+        let consume_timeout_minutes = consume_timeout_minutes
+            .map(|value| i32::try_from(value).map_err(|_| SubscriptionGroupConfigCasError::ValueOutOfRange))
+            .transpose()?;
+        let changes_retry_max_times = retry_max_times.is_some_and(|value| value != current.retry_max_times());
+        let changes_retry_queue_nums = retry_queue_nums.is_some_and(|value| value != current.retry_queue_nums());
+        let changes_consume_timeout =
+            consume_timeout_minutes.is_some_and(|value| value != current.consume_timeout_minute());
+        if !changes_retry_max_times && !changes_retry_queue_nums && !changes_consume_timeout {
+            return Err(SubscriptionGroupConfigCasError::NoChange);
+        }
+
+        let mut replacement = current.as_ref().clone();
+        if let Some(value) = retry_max_times {
+            replacement.set_retry_max_times(value);
+        }
+        if let Some(value) = retry_queue_nums {
+            replacement.set_retry_queue_nums(value);
+        }
+        if let Some(value) = consume_timeout_minutes {
+            replacement.set_consume_timeout_minute(value);
+        }
+
+        let config = Arc::new(replacement);
+        self.subscription_group_table.insert(group.clone(), Arc::clone(&config));
+        data_version.next_version_with(self.state_machine_version.get());
+        let update = SubscriptionGroupConfigUpdate {
+            config,
+            data_version: data_version.clone(),
+        };
+        drop(data_version);
+        drop(_transition);
+        self.persist_after_mutation("cas-update");
+        Ok(update)
     }
 
     pub fn get_forbidden(&self, group: &CheetahString, topic: &CheetahString, forbidden_index: i32) -> bool {
@@ -778,16 +894,24 @@ impl SubscriptionGroupManager {
     /// # Returns
     /// Returns the updated config if the group exists, None otherwise
     pub fn disable_consume(&mut self, group_name: &CheetahString) -> Option<Arc<SubscriptionGroupConfig>> {
-        let result = self.subscription_group_table.get_mut(group_name).map(|mut entry| {
-            let mut new_config = (**entry.value()).clone();
-            new_config.set_consume_enable(false);
-            let arc_config = Arc::new(new_config);
-            *entry.value_mut() = Arc::clone(&arc_config);
-            arc_config
-        });
+        let result = {
+            let _transition = self.metadata_transition.lock();
+            let result = self.subscription_group_table.get_mut(group_name).map(|mut entry| {
+                let mut new_config = (**entry.value()).clone();
+                new_config.set_consume_enable(false);
+                let arc_config = Arc::new(new_config);
+                *entry.value_mut() = Arc::clone(&arc_config);
+                arc_config
+            });
+            if result.is_some() {
+                self.data_version
+                    .write()
+                    .next_version_with(self.state_machine_version.get());
+            }
+            result
+        };
 
         if result.is_some() {
-            self.update_data_version();
             info!("Disabled consume for group: {}", group_name);
         } else {
             warn!("Cannot disable consume, group not found: {}", group_name);
@@ -804,16 +928,24 @@ impl SubscriptionGroupManager {
     /// # Returns
     /// Returns the updated config if the group exists, None otherwise
     pub fn enable_consume(&mut self, group_name: &str) -> Option<Arc<SubscriptionGroupConfig>> {
-        let result = self.subscription_group_table.get_mut(group_name).map(|mut entry| {
-            let mut new_config = (**entry.value()).clone();
-            new_config.set_consume_enable(true);
-            let arc_config = Arc::new(new_config);
-            *entry.value_mut() = Arc::clone(&arc_config);
-            arc_config
-        });
+        let result = {
+            let _transition = self.metadata_transition.lock();
+            let result = self.subscription_group_table.get_mut(group_name).map(|mut entry| {
+                let mut new_config = (**entry.value()).clone();
+                new_config.set_consume_enable(true);
+                let arc_config = Arc::new(new_config);
+                *entry.value_mut() = Arc::clone(&arc_config);
+                arc_config
+            });
+            if result.is_some() {
+                self.data_version
+                    .write()
+                    .next_version_with(self.state_machine_version.get());
+            }
+            result
+        };
 
         if result.is_some() {
-            self.update_data_version();
             // Note: Java version does NOT persist here, only updates data version
             info!("Enabled consume for group: {}", group_name);
         } else {
@@ -845,12 +977,20 @@ impl SubscriptionGroupManager {
     /// # Returns
     /// Returns the deleted config if it existed, None otherwise
     pub fn delete_subscription_group_config(&mut self, group_name: &str) -> Option<Arc<SubscriptionGroupConfig>> {
-        let old = self.subscription_group_table.remove(group_name).map(|(_, v)| v);
-        self.forbidden_table.remove(group_name);
+        let old = {
+            let _transition = self.metadata_transition.lock();
+            let old = self.subscription_group_table.remove(group_name).map(|(_, v)| v);
+            self.forbidden_table.remove(group_name);
+            if old.is_some() {
+                self.data_version
+                    .write()
+                    .next_version_with(self.state_machine_version.get());
+            }
+            old
+        };
 
         if old.is_some() {
             info!("Deleted subscription group: {}", group_name);
-            self.update_data_version();
             #[cfg(feature = "rocksdb_store")]
             if let Err(error) = self.delete_group_from_rocksdb(group_name) {
                 error!(
@@ -927,30 +1067,35 @@ impl SubscriptionGroupManager {
     /// Directly sets the forbidden value, replacing any existing value.
     /// If forbidden_value <= 0, removes the group from the forbidden table.
     pub fn update_forbidden_value(&mut self, group: &CheetahString, topic: &CheetahString, forbidden_value: i32) {
-        if forbidden_value <= 0 {
-            self.forbidden_table.remove(group);
-            info!("Cleared group forbidden, {}@{}", group, topic);
-        } else {
-            let old = self
-                .forbidden_table
-                .entry(group.clone())
-                .or_default()
-                .insert(topic.clone(), forbidden_value);
-
-            if let Some(old_value) = old {
-                info!(
-                    "Set group forbidden, {}@{} old: {} new: {}",
-                    group, topic, old_value, forbidden_value
-                );
+        {
+            let _transition = self.metadata_transition.lock();
+            if forbidden_value <= 0 {
+                self.forbidden_table.remove(group);
+                info!("Cleared group forbidden, {}@{}", group, topic);
             } else {
-                info!(
-                    "Set group forbidden, {}@{} old: 0 new: {}",
-                    group, topic, forbidden_value
-                );
+                let old = self
+                    .forbidden_table
+                    .entry(group.clone())
+                    .or_default()
+                    .insert(topic.clone(), forbidden_value);
+
+                if let Some(old_value) = old {
+                    info!(
+                        "Set group forbidden, {}@{} old: {} new: {}",
+                        group, topic, old_value, forbidden_value
+                    );
+                } else {
+                    info!(
+                        "Set group forbidden, {}@{} old: 0 new: {}",
+                        group, topic, forbidden_value
+                    );
+                }
             }
+            self.data_version
+                .write()
+                .next_version_with(self.state_machine_version.get());
         }
 
-        self.update_data_version();
         self.persist_after_mutation("forbidden-state");
     }
 
@@ -1403,6 +1548,70 @@ mod tests {
         assert!(config.consume_from_min_enable());
         assert_eq!(config.retry_max_times(), 16);
         assert_eq!(config.retry_queue_nums(), 1);
+    }
+
+    #[test]
+    fn subscription_group_cas_changes_only_retry_fields_and_rejects_stale_versions() {
+        use crate::config::broker_config::BrokerConfig;
+        use rocketmq_store::MessageStoreConfig;
+
+        let temp_dir = tempfile::TempDir::new().expect("temp dir should be created");
+        let root = CheetahString::from_string(temp_dir.path().to_string_lossy().to_string());
+        let broker_config = BrokerConfig {
+            store_path_root_dir: root.clone(),
+            ..BrokerConfig::default()
+        };
+        let message_store_config = MessageStoreConfig {
+            store_path_root_dir: root,
+            ..MessageStoreConfig::default()
+        };
+        let manager_config = SubscriptionGroupManagerConfig::from_configs(&broker_config, &message_store_config);
+        let mut manager = SubscriptionGroupManager::new(manager_config, StateMachineVersionView::default());
+        let group = CheetahString::from_static_str("SRE_CAS_GROUP");
+        let mut config = SubscriptionGroupConfig::new(group.clone());
+        config.set_consume_enable(false);
+        config.set_consume_broadcast_enable(false);
+        manager.update_subscription_group_config(&mut config);
+
+        let (before, version) = manager
+            .select_subscription_group_config_with_version(&group)
+            .expect("versioned Subscription Group state");
+        let update = manager
+            .update_subscription_group_config_if_version(&group, version, Some(8), Some(4), Some(30))
+            .expect("matching version must commit");
+        let committed_version = u64::try_from(update.data_version.counter()).expect("non-negative version");
+        assert_eq!(committed_version, version + 1);
+        assert_eq!(update.config.retry_max_times(), 8);
+        assert_eq!(update.config.retry_queue_nums(), 4);
+        assert_eq!(update.config.consume_timeout_minute(), 30);
+        assert_eq!(update.config.consume_enable(), before.consume_enable());
+        assert_eq!(
+            update.config.consume_broadcast_enable(),
+            before.consume_broadcast_enable()
+        );
+        assert_eq!(update.config.group_sys_flag(), before.group_sys_flag());
+
+        assert_eq!(
+            manager
+                .update_subscription_group_config_if_version(&group, version, Some(7), None, None)
+                .expect_err("stale version must fail"),
+            SubscriptionGroupConfigCasError::VersionConflict {
+                expected_version: version,
+                actual_version: committed_version,
+            }
+        );
+        assert_eq!(
+            manager
+                .update_subscription_group_config_if_version(&group, committed_version, Some(8), Some(4), Some(30),)
+                .expect_err("no-op patch must fail"),
+            SubscriptionGroupConfigCasError::NoChange
+        );
+        assert_eq!(
+            manager
+                .update_subscription_group_config_if_version(&group, committed_version, Some(17), None, None,)
+                .expect_err("out-of-range patch must fail"),
+            SubscriptionGroupConfigCasError::ValueOutOfRange
+        );
     }
 
     #[test]
