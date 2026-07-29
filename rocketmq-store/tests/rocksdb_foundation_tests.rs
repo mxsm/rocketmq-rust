@@ -830,6 +830,7 @@ fn message_rocksdb_storage_queries_index_offsets_by_java_hour_prefix() {
         .write_records_for_index(&[
             IndexRocksDbRecord::normal_key("TopicA", "KeyA", "UniqA", first, 100),
             IndexRocksDbRecord::normal_key("TopicA", "KeyA", "UniqB", second, 200),
+            IndexRocksDbRecord::normal_key("TopicA", "KeyA", "UniqB2", second, 200),
             IndexRocksDbRecord::normal_key("TopicA", "KeyA", "UniqC", filtered, 300),
             IndexRocksDbRecord::normal_key("TopicA", "Other", "UniqD", second, 400),
             IndexRocksDbRecord::unique_key("TopicA", "UniqB", second, 200),

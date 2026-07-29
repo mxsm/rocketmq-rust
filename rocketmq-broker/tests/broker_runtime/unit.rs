@@ -5458,11 +5458,8 @@ async fn three_controller_two_broker_controller_mode_bootstrap() {
         );
     }
 
-    let ((), (), ()) = tokio::join!(
-        broker_a.shutdown(),
-        broker_b.shutdown(),
-        shutdown_controller_cluster(&controllers)
-    );
+    let ((), ()) = tokio::join!(broker_a.shutdown(), broker_b.shutdown());
+    shutdown_controller_cluster(&controllers).await;
     let _ = std::fs::remove_dir_all(root);
 }
 

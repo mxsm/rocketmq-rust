@@ -84,7 +84,8 @@ async-trait = "0.1"
 rocksdb = { workspace = true, optional = true }
 
 [build-dependencies]
-tonic-prost-build = "0.14.6"
+protoc-bin-vendored = "=3.2.0"
+tonic-prost-build   = "0.14.6"
 
 [dev-dependencies]
 criterion          = { version = "0.8", features = ["async_tokio"] }

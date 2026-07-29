@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "head": "a4c71a710086e8ca5079dc1db7a585a283cfcfca",
+  "head": "922c9b04dbcdac5a50b502a075f476116ceec146",
   "cargo_metadata_command": "cargo metadata --format-version 1 --no-deps",
-  "metadata_sha256": "3a9b687015667879554c591c486abc78591f64dac8bb8a9bf67727714b9b3e77",
+  "metadata_sha256": "177ad7c25abbcf964ddd5b7e05524776bd17979bef9d060963babbcfc090d536",
   "rustc_version": "rustc 1.95.0 (59807616e 2026-04-14)",
   "cargo_version": "cargo 1.95.0 (f2d3ce0bd 2026-03-21)",
   "generated_output_path": "target/architecture-refactor/P1-03/cargo-metadata.normalized.json",

@@ -78,6 +78,17 @@ The chart defaults are local validation fixtures. The reconciler replaces the
 complete release identity and every image reference from the validated
 candidate; operators must not deploy the fixture values directly.
 
+## Dynamic fault evidence
+
+The static policy check validates only the fault contract and committed fixture
+shape. Release evidence requires the `Kubernetes architecture fault matrix`
+workflow to run from `workflow_dispatch` or its weekly schedule with
+digest-pinned baseline, candidate, and collector images plus the required
+runtime and driver Secrets. The dynamic job executes the Kind or K3d fault
+driver, preserves the per-scenario reports, and uploads an artifact whose name
+contains the tested commit SHA. A skipped dynamic job or a fixture-only report
+is not release evidence.
+
 To update `base/manifest.yaml`, render the production profile as UTF-8 and
 replace the file only after the local lint and schema checks pass. The committed
 base remains a non-deployable local rendering fixture. A deployable render must

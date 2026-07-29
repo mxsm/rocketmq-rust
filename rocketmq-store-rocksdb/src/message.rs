@@ -133,6 +133,7 @@ impl MessageRocksDbStorage {
         }
         let hours = index_hours(begin_time, end_time)?;
         let mut offsets = Vec::with_capacity(max_num);
+        let mut seen_offsets = HashSet::with_capacity(max_num);
         for hour in hours {
             let prefix = IndexRocksDbKey::query_prefix(topic, index_type, key, hour)?;
             let items = self.store.prefix_scan(&RocksDbScanOptions {
@@ -148,7 +149,11 @@ impl MessageRocksDbStorage {
                 if item.key.len() < 8 {
                     return Err(codec_error("index key is too short to contain physical offset"));
                 }
-                offsets.push(decode_i64(&item.key[item.key.len() - 8..])?);
+                let offset = decode_i64(&item.key[item.key.len() - 8..])?;
+                if !seen_offsets.insert(offset) {
+                    continue;
+                }
+                offsets.push(offset);
                 if offsets.len() >= max_num {
                     return Ok(offsets);
                 }
