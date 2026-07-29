@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod assets;
+mod onboarding;
 mod regional;
 mod scope;
 mod support;
