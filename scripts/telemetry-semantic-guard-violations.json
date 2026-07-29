@@ -42,7 +42,7 @@
       "operation": "delete",
       "path": [
         "signals",
-        158,
+        160,
         "sampling",
         "max_per_second"
       ],
@@ -53,7 +53,7 @@
       "operation": "set",
       "path": [
         "signals",
-        158,
+        160,
         "deprecation"
       ],
       "value": {
