@@ -152,11 +152,11 @@ pub(crate) struct FinOpsReportQuery {
     pub(crate) limit: u16,
 }
 
-pub(crate) const fn bounded_limit(limit: u16) -> i64 {
+pub(crate) fn bounded_limit(limit: u16) -> i64 {
     i64::from(limit.clamp(1, 200))
 }
 
-pub(crate) const fn bounded_report_limit(limit: u16) -> i64 {
+pub(crate) fn bounded_report_limit(limit: u16) -> i64 {
     i64::from(limit.clamp(1, 500))
 }
 
