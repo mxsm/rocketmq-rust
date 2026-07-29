@@ -118,11 +118,7 @@ impl DrService {
             .await
     }
 
-    pub(crate) async fn plans(
-        &self,
-        auth: &AuthContext,
-        query: &DrPlanQuery,
-    ) -> Result<DrPlanPage, ControlPlaneError> {
+    pub(crate) async fn plans(&self, auth: &AuthContext, query: &DrPlanQuery) -> Result<DrPlanPage, ControlPlaneError> {
         require_read(auth)?;
         require_cluster(auth, query.cluster_id)?;
         let (items, truncated) = self.repository.list_plans(auth.tenant_id, query).await?;
