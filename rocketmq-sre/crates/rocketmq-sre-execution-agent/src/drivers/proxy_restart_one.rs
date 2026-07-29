@@ -38,7 +38,9 @@ use super::ProxyRestartRestoreOutcome;
 use super::ProxyRestartState;
 use crate::ExecutionAgentError;
 
-const DRAIN_TIMEOUT_SECONDS: u32 = 300;
+// Keep the mutation deadline below the Agent, Executor, and Control Plane
+// request deadlines so an outer transport cannot cancel an in-flight restart.
+const DRAIN_TIMEOUT_SECONDS: u32 = 120;
 
 /// Exact parameters accepted by `proxy.restart_one.v1`.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
