@@ -35,6 +35,7 @@ use rocketmq_protocol::protocol::header::get_consume_stats_request_header::GetCo
 use rocketmq_protocol::protocol::header::query_topic_consume_by_who_request_header::QueryTopicConsumeByWhoRequestHeader;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::route_facade::BrokerDataExt;
+use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 
 use super::default_mq_admin_ext::DefaultMQAdminExt;
 
@@ -54,6 +55,14 @@ pub struct BrokerConfigAllowlisted {
 pub struct TopicConfigVersioned {
     pub version: u64,
     pub config: TopicConfig,
+}
+
+/// Subscription Group configuration paired with the Broker's monotonic
+/// metadata version.
+#[derive(Clone, Debug)]
+pub struct SubscriptionGroupConfigVersioned {
+    pub version: u64,
+    pub config: SubscriptionGroupConfig,
 }
 
 #[allow(async_fn_in_trait)]
@@ -101,6 +110,14 @@ pub trait MQAdminReadExt: Send {
         broker_addr: CheetahString,
         topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<TopicConfigVersioned>;
+
+    /// Reads one Broker's Subscription Group configuration and metadata
+    /// version atomically.
+    async fn subscription_group_config_with_version(
+        &self,
+        broker_addr: CheetahString,
+        group: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<SubscriptionGroupConfigVersioned>;
 
     async fn examine_consumer_connection_info(
         &self,
@@ -262,6 +279,17 @@ impl MQAdminReadExt for DefaultMQAdminExt {
         self.inner()
             .mq_client_api()?
             .get_topic_config_with_version(&broker_addr, topic, self.inner().remoting_timeout_millis()?)
+            .await
+    }
+
+    async fn subscription_group_config_with_version(
+        &self,
+        broker_addr: CheetahString,
+        group: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<SubscriptionGroupConfigVersioned> {
+        self.inner()
+            .mq_client_api()?
+            .get_subscription_group_config_with_version(&broker_addr, group, self.inner().remoting_timeout_millis()?)
             .await
     }
 
