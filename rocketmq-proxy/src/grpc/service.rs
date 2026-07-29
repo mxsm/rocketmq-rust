@@ -77,13 +77,19 @@ const DEFAULT_CONSUMER_CUSTOMIZED_BACKOFF_MS: [u64; 18] = telemetry::DEFAULT_CON
 struct RequestObservation {
     context: ProxyContext,
     started_at: std::time::Instant,
-    span: Span,
+    rpc_span: Span,
+    forward: Option<ForwardObservation>,
     _drain_admission: rocketmq_proxy_core::ProxyDrainAdmission,
+}
+
+struct ForwardObservation {
+    started_at: std::time::Instant,
+    span: Span,
 }
 
 impl RequestObservation {
     fn new(context: ProxyContext, drain_admission: rocketmq_proxy_core::ProxyDrainAdmission) -> Self {
-        let span = info_span!(
+        let rpc_span = info_span!(
             rocketmq_observability::trace::span_names::PROXY_RPC,
             rpc = context.rpc_name(),
             request_id = %context.request_id(),
@@ -92,9 +98,17 @@ impl RequestObservation {
         Self {
             context,
             started_at: std::time::Instant::now(),
-            span,
+            rpc_span,
+            forward: None,
             _drain_admission: drain_admission,
         }
+    }
+
+    fn begin_forward(&mut self) {
+        self.forward = Some(ForwardObservation {
+            started_at: std::time::Instant::now(),
+            span: rocketmq_observability::trace::proxy::forward_span(&self.rpc_span, self.context.rpc_name()),
+        });
     }
 
     fn record_principal(&mut self, principal: Option<&AuthenticatedPrincipal>) {
@@ -108,11 +122,23 @@ impl RequestObservation {
     }
 
     fn span(&self) -> Span {
-        self.span.clone()
+        self.forward
+            .as_ref()
+            .map_or_else(|| self.rpc_span.clone(), |forward| forward.span.clone())
+    }
+
+    fn rpc_span(&self) -> Span {
+        self.rpc_span.clone()
     }
 
     fn elapsed(&self) -> Duration {
         self.started_at.elapsed()
+    }
+
+    fn forward(&self) -> Option<(&Span, Duration)> {
+        self.forward
+            .as_ref()
+            .map(|forward| (&forward.span, forward.started_at.elapsed()))
     }
 }
 
@@ -275,9 +301,13 @@ impl<P> ProxyGrpcService<P> {
     }
 
     async fn finish_observation(&self, observation: &RequestObservation, outcome: &ProxyRequestOutcome) {
-        observation.span.record("result", outcome.metric_result());
+        observation.rpc_span.record("result", outcome.metric_result());
         self.metrics
             .record_request_completed(observation.context().rpc_name(), outcome, observation.elapsed());
+        if let Some((span, elapsed)) = observation.forward() {
+            rocketmq_observability::trace::proxy::record_outcome(span, proxy_span_outcome(outcome));
+            self.metrics.record_forward_completed(elapsed);
+        }
         self.hooks
             .after_request(observation.context(), outcome)
             .instrument(observation.span())
@@ -334,7 +364,10 @@ impl<P> ProxyGrpcService<P> {
             }
         };
         let mut observation = self.begin_observation(context.clone(), drain_admission).await;
-        let principal = match self.authenticate_request(&mut context, &request).await {
+        let principal = match self
+            .authenticate_request(observation.rpc_span(), &mut context, &request)
+            .await
+        {
             Ok(principal) => principal,
             Err(error) => {
                 return if ProxyStatusMapper::should_use_tonic_status(&error) {
@@ -350,6 +383,7 @@ impl<P> ProxyGrpcService<P> {
             }
         };
         observation.record_principal(principal.as_ref());
+        observation.begin_forward();
         Ok((observation, context, principal, request.into_inner()))
     }
 
@@ -384,7 +418,10 @@ impl<P> ProxyGrpcService<P> {
             }
         };
         let mut observation = self.begin_observation(context.clone(), drain_admission).await;
-        let principal = match self.authenticate_request(&mut context, &request).await {
+        let principal = match self
+            .authenticate_request(observation.rpc_span(), &mut context, &request)
+            .await
+        {
             Ok(principal) => principal,
             Err(error) => {
                 return if ProxyStatusMapper::should_use_tonic_status(&error) {
@@ -400,24 +437,42 @@ impl<P> ProxyGrpcService<P> {
             }
         };
         observation.record_principal(principal.as_ref());
+        observation.begin_forward();
         Ok((observation, context, principal, request.into_inner()))
     }
 
     async fn authenticate_request<T: 'static>(
         &self,
+        parent: Span,
         context: &mut ProxyContext,
         request: &Request<T>,
     ) -> ProxyResult<Option<AuthenticatedPrincipal>> {
-        let principal = match self.auth_runtime.as_ref() {
-            Some(auth_runtime) if auth_runtime.enabled() => {
-                auth_runtime.authenticate_request(context.rpc_name(), request).await?
+        let span = rocketmq_observability::trace::proxy::auth_span(&parent, context.rpc_name());
+        let authentication_enabled = self
+            .auth_runtime
+            .as_ref()
+            .is_some_and(|auth_runtime| auth_runtime.enabled());
+        let result = async {
+            let principal = match self.auth_runtime.as_ref() {
+                Some(auth_runtime) if auth_runtime.enabled() => {
+                    auth_runtime.authenticate_request(context.rpc_name(), request).await?
+                }
+                _ => None,
+            };
+            if let Some(principal) = principal.as_ref() {
+                context.set_authenticated_principal(principal.clone());
             }
-            _ => None,
-        };
-        if let Some(principal) = principal.as_ref() {
-            context.set_authenticated_principal(principal.clone());
+            Ok(principal)
         }
-        Ok(principal)
+        .instrument(span.clone())
+        .await;
+        let outcome = match &result {
+            Ok(_) if authentication_enabled => rocketmq_observability::trace::proxy::ProxySpanOutcome::Success,
+            Ok(_) => rocketmq_observability::trace::proxy::ProxySpanOutcome::Bypassed,
+            Err(_) => rocketmq_observability::trace::proxy::ProxySpanOutcome::Denied,
+        };
+        rocketmq_observability::trace::proxy::record_outcome(&span, outcome);
+        result
     }
 
     async fn authorize_contexts(
@@ -786,6 +841,32 @@ where
                     ))
                 }),
             None => Self::telemetry_status(ProxyStatusMapper::ok()),
+        }
+    }
+}
+
+fn receive_message_stream_status(response: &v2::ReceiveMessageResponse) -> Option<&v2::Status> {
+    match response.content.as_ref() {
+        Some(v2::receive_message_response::Content::Status(status)) => Some(status),
+        _ => None,
+    }
+}
+
+fn pull_message_stream_status(response: &v2::PullMessageResponse) -> Option<&v2::Status> {
+    match response.content.as_ref() {
+        Some(v2::pull_message_response::Content::Status(status)) => Some(status),
+        _ => None,
+    }
+}
+
+fn proxy_span_outcome(outcome: &ProxyRequestOutcome) -> rocketmq_observability::trace::proxy::ProxySpanOutcome {
+    match outcome {
+        ProxyRequestOutcome::Payload(status) if status.is_ok() => {
+            rocketmq_observability::trace::proxy::ProxySpanOutcome::Success
+        }
+        ProxyRequestOutcome::Payload(_) => rocketmq_observability::trace::proxy::ProxySpanOutcome::PayloadFailure,
+        ProxyRequestOutcome::Transport { .. } => {
+            rocketmq_observability::trace::proxy::ProxySpanOutcome::TransportFailure
         }
     }
 }
@@ -2539,7 +2620,7 @@ mod tests {
             .context("Telemetry", &auth_request)
             .expect("context should be constructed");
         let principal = service
-            .authenticate_request(&mut context, &auth_request)
+            .authenticate_request(tracing::Span::none(), &mut context, &auth_request)
             .await
             .expect("authentication should succeed");
         assert_eq!(
