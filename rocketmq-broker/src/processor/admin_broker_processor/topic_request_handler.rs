@@ -35,6 +35,8 @@ use rocketmq_protocol::protocol::header::get_topic_config_request_header::GetTop
 use rocketmq_protocol::protocol::header::get_topic_stats_request_header::GetTopicStatsRequestHeader;
 use rocketmq_protocol::protocol::header::query_topic_consume_by_who_request_header::QueryTopicConsumeByWhoRequestHeader;
 use rocketmq_protocol::protocol::header::query_topics_by_consumer_request_header::QueryTopicsByConsumerRequestHeader;
+use rocketmq_protocol::protocol::header::update_topic_config_cas_request_header::UpdateTopicConfigCasRequestHeader;
+use rocketmq_protocol::protocol::header::update_topic_config_cas_response_header::UpdateTopicConfigCasResponseHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::static_topic::topic_config_and_queue_mapping::TopicConfigAndQueueMapping;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
@@ -49,6 +51,7 @@ use tracing::info;
 use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
 use crate::failover::escape_bridge::MessageStoreUnavailable;
 use crate::processor::admin_broker_processor::broker_config_request_handler::BrokerConfigRequestHandler;
+use crate::topic::manager::topic_config_manager::TopicConfigCasError;
 
 fn decode_topic_queue_mapping_detail(body: &[u8]) -> Result<TopicQueueMappingDetail, String> {
     match serde_json::from_slice::<TopicQueueMappingDetail>(body) {
@@ -218,6 +221,170 @@ impl TopicRequestHandler {
             .await?;
 
         Ok(Some(response.set_code(ResponseCode::Success)))
+    }
+
+    pub async fn update_topic_config_cas<MS: MessageStore>(
+        &self,
+        broker_config_request_handler: &BrokerConfigRequestHandler<MS>,
+        channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        _request_code: RequestCode,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let broker_runtime_inner = broker_config_request_handler.broker_runtime_inner();
+        let response = RemotingCommand::create_response_command().set_opaque(request.opaque());
+        let request_header = match request.decode_command_custom_header::<UpdateTopicConfigCasRequestHeader>() {
+            Ok(header) => header,
+            Err(_) => {
+                return Ok(Some(response.set_code(ResponseCode::InvalidParameter).set_remark(
+                    "topic, expectedVersion, and a valid allowlisted patch are required",
+                )));
+            }
+        };
+        info!(
+            "Broker receive version-checked Topic patch for topic={}, caller address={}",
+            request_header.topic,
+            channel.remote_address()
+        );
+
+        let topic = request_header.topic;
+        let validation = TopicValidator::validate_topic(topic.as_str());
+        if !validation.valid() {
+            return Ok(Some(
+                response
+                    .set_code(ResponseCode::InvalidParameter)
+                    .set_remark(validation.remark().clone()),
+            ));
+        }
+        if broker_runtime_inner
+            .broker_config()
+            .validate_system_topic_when_update_topic
+            && TopicValidator::is_system_topic(topic.as_str())
+        {
+            return Ok(Some(response.set_code(ResponseCode::InvalidParameter).set_remark(
+                "system Topic configuration is not eligible for supervised patching",
+            )));
+        }
+        if broker_runtime_inner
+            .topic_queue_mapping_manager()
+            .get_topic_queue_mapping(topic.as_str())
+            .is_some()
+        {
+            return Ok(Some(response.set_code(ResponseCode::InvalidParameter).set_remark(
+                "static Topic configuration is not eligible for supervised patching",
+            )));
+        }
+        if request_header.read_queue_nums.is_none()
+            && request_header.write_queue_nums.is_none()
+            && request_header.order.is_none()
+        {
+            return Ok(Some(response.set_code(ResponseCode::InvalidParameter).set_remark(
+                "Topic configuration patch must contain at least one allowlisted field",
+            )));
+        }
+
+        let read_queue_nums = match request_header.read_queue_nums {
+            Some(value) if (1..=128).contains(&value) => Some(value as u32),
+            Some(_) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::InvalidParameter)
+                        .set_remark("readQueueNums must be between 1 and 128"),
+                ));
+            }
+            None => None,
+        };
+        let write_queue_nums = match request_header.write_queue_nums {
+            Some(value) if (1..=128).contains(&value) => Some(value as u32),
+            Some(_) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::InvalidParameter)
+                        .set_remark("writeQueueNums must be between 1 and 128"),
+                ));
+            }
+            None => None,
+        };
+
+        let update = match broker_runtime_inner
+            .topic_config_manager()
+            .update_topic_config_if_version(
+                &topic,
+                request_header.expected_version,
+                read_queue_nums,
+                write_queue_nums,
+                request_header.order,
+                broker_runtime_inner.topic_config_state_machine_version(),
+            ) {
+            Ok(update) => update,
+            Err(TopicConfigCasError::TopicNotFound) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::TopicNotExist)
+                        .set_remark("Topic configuration does not exist on this Broker"),
+                ));
+            }
+            Err(TopicConfigCasError::VersionConflict {
+                expected_version,
+                actual_version,
+            }) => {
+                return Ok(Some(
+                    response
+                        .set_command_custom_header(UpdateTopicConfigCasResponseHeader {
+                            topic_version: actual_version,
+                        })
+                        .set_code(ResponseCode::InvalidParameter)
+                        .set_remark(format!(
+                            "Topic configuration version conflict: expected={expected_version}, \
+                             actual={actual_version}"
+                        )),
+                ));
+            }
+            Err(TopicConfigCasError::NoChange) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::InvalidParameter)
+                        .set_remark("Topic configuration patch has no effect"),
+                ));
+            }
+            Err(TopicConfigCasError::VersionUnavailable) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::SystemError)
+                        .set_remark("Topic configuration version is unavailable"),
+                ));
+            }
+            Err(TopicConfigCasError::VersionExhausted) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::SystemError)
+                        .set_remark("Topic configuration version is exhausted"),
+                ));
+            }
+        };
+        let topic_version = match u64::try_from(update.data_version.counter()) {
+            Ok(version) => version,
+            Err(_) => {
+                broker_config_request_handler
+                    .persist_and_register_topic_updates(vec![update.topic_config], update.data_version)
+                    .await?;
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::SystemError)
+                        .set_remark("Topic configuration version is unavailable"),
+                ));
+            }
+        };
+        broker_config_request_handler
+            .persist_and_register_topic_updates(vec![update.topic_config], update.data_version)
+            .await?;
+
+        Ok(Some(
+            response
+                .set_command_custom_header(UpdateTopicConfigCasResponseHeader { topic_version })
+                .set_code(ResponseCode::Success)
+                .set_remark(format!("Topic configuration patch committed, version={topic_version}")),
+        ))
     }
 
     pub async fn update_and_create_static_topic<MS: MessageStore>(
@@ -609,14 +776,33 @@ impl TopicRequestHandler {
         let mut response = RemotingCommand::create_response_command();
         let request_header = request.decode_command_custom_header::<GetTopicConfigRequestHeader>()?;
         let topic = &request_header.topic;
-        let topic_config = broker_runtime_inner.topic_config_manager().select_topic_config(topic);
-        if topic_config.is_none() {
-            return Ok(Some(
-                response
-                    .set_code(ResponseCode::TopicNotExist)
-                    .set_remark(format!("No topic in this broker. topic: {topic}")),
-            ));
-        }
+        let (topic_config, topic_version) = match broker_runtime_inner
+            .topic_config_manager()
+            .select_topic_config_with_version(topic)
+        {
+            Ok(snapshot) => snapshot,
+            Err(TopicConfigCasError::TopicNotFound) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::TopicNotExist)
+                        .set_remark(format!("No topic in this broker. topic: {topic}")),
+                ));
+            }
+            Err(TopicConfigCasError::VersionUnavailable | TopicConfigCasError::VersionExhausted) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::SystemError)
+                        .set_remark("Topic configuration version is unavailable"),
+                ));
+            }
+            Err(TopicConfigCasError::VersionConflict { .. } | TopicConfigCasError::NoChange) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::SystemError)
+                        .set_remark("Topic configuration snapshot is unavailable"),
+                ));
+            }
+        };
         let mut topic_queue_mapping_detail: Option<TopicQueueMappingDetail> = None;
         if let Some(value) = request_header.topic_request_header.as_ref() {
             if let Some(lo) = value.get_lo() {
@@ -629,9 +815,10 @@ impl TopicRequestHandler {
                 }
             }
         }
-        let topic_config = (*topic_config.unwrap()).clone();
+        let topic_config = (*topic_config).clone();
         let topic_config_and_queue_mapping = TopicConfigAndQueueMapping::new(topic_config, topic_queue_mapping_detail);
         response.set_body_mut_ref(topic_config_and_queue_mapping.encode()?);
+        response.set_command_custom_header_ref(UpdateTopicConfigCasResponseHeader { topic_version });
         Ok(Some(response))
     }
 
@@ -737,10 +924,14 @@ mod tests {
 
     use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
+    use rocketmq_model::common::config::TopicConfig;
     use rocketmq_model::common::mix_all::METADATA_SCOPE_GLOBAL;
     use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::code::response_code::ResponseCode;
     use rocketmq_protocol::protocol::header::create_topic_request_header::CreateTopicRequestHeader;
+    use rocketmq_protocol::protocol::header::get_topic_config_request_header::GetTopicConfigRequestHeader;
+    use rocketmq_protocol::protocol::header::update_topic_config_cas_request_header::UpdateTopicConfigCasRequestHeader;
+    use rocketmq_protocol::protocol::header::update_topic_config_cas_response_header::UpdateTopicConfigCasResponseHeader;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
     use rocketmq_protocol::protocol::RemotingSerializable;
@@ -897,6 +1088,129 @@ mod tests {
             .get_topic_queue_mapping("static-topic")
             .expect("mapping detail should be persisted");
         assert_eq!(mapping.topic_queue_mapping_info.topic.as_deref(), Some("static-topic"));
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn topic_config_cas_commits_once_rejects_stale_and_reports_version() {
+        let runtime = new_test_runtime("topic-cas").await;
+        let admin = runtime.admin_runtime_for_test();
+        let handler = TopicRequestHandler::new();
+        let broker_config_request_handler = BrokerConfigRequestHandler::new(admin.clone());
+        let topic = CheetahString::from_static_str("topic-cas");
+        let mut initial = TopicConfig::with_queues(topic.clone(), 2, 3);
+        initial.perm = 4;
+        initial.topic_sys_flag = 17;
+        initial.attributes.insert("retained".into(), "value".into());
+        admin.topic_config_manager().put_topic_config(initial.clone());
+
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::UpdateTopicConfigCas,
+            UpdateTopicConfigCasRequestHeader {
+                topic: topic.clone(),
+                expected_version: 0,
+                read_queue_nums: Some(5),
+                write_queue_nums: Some(7),
+                order: Some(true),
+            },
+        );
+        request.make_custom_header_to_net();
+        let channel = create_test_channel().await;
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let response = handler
+            .update_topic_config_cas(
+                &broker_config_request_handler,
+                channel,
+                ctx,
+                RequestCode::UpdateTopicConfigCas,
+                &mut request,
+            )
+            .await
+            .expect("Topic CAS should run")
+            .expect("Topic CAS should return a response");
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        let response_header = response
+            .read_custom_header_ref::<UpdateTopicConfigCasResponseHeader>()
+            .expect("success response should carry the committed version");
+        assert_eq!(response_header.topic_version, 1);
+        let current = admin
+            .topic_config_manager()
+            .select_topic_config(&topic)
+            .expect("Topic should remain available");
+        assert_eq!(current.read_queue_nums, 5);
+        assert_eq!(current.write_queue_nums, 7);
+        assert!(current.order);
+        assert_eq!(current.perm, initial.perm);
+        assert_eq!(current.topic_sys_flag, initial.topic_sys_flag);
+        assert_eq!(current.attributes, initial.attributes);
+
+        let mut stale_request = RemotingCommand::create_request_command(
+            RequestCode::UpdateTopicConfigCas,
+            UpdateTopicConfigCasRequestHeader {
+                topic: topic.clone(),
+                expected_version: 0,
+                read_queue_nums: Some(9),
+                write_queue_nums: None,
+                order: None,
+            },
+        );
+        stale_request.make_custom_header_to_net();
+        let channel = create_test_channel().await;
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let stale_response = handler
+            .update_topic_config_cas(
+                &broker_config_request_handler,
+                channel,
+                ctx,
+                RequestCode::UpdateTopicConfigCas,
+                &mut stale_request,
+            )
+            .await
+            .expect("stale Topic CAS should return normally")
+            .expect("stale Topic CAS should return a response");
+        assert_eq!(
+            ResponseCode::from(stale_response.code()),
+            ResponseCode::InvalidParameter
+        );
+        assert_eq!(
+            stale_response
+                .read_custom_header_ref::<UpdateTopicConfigCasResponseHeader>()
+                .expect("conflict should carry current version")
+                .topic_version,
+            1
+        );
+        assert_eq!(
+            admin
+                .topic_config_manager()
+                .select_topic_config(&topic)
+                .expect("Topic should remain available")
+                .read_queue_nums,
+            5
+        );
+
+        let mut get_request = RemotingCommand::create_request_command(
+            RequestCode::GetTopicConfig,
+            GetTopicConfigRequestHeader {
+                topic: topic.clone(),
+                topic_request_header: None,
+            },
+        );
+        get_request.make_custom_header_to_net();
+        let channel = create_test_channel().await;
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let get_response = handler
+            .get_topic_config(&admin, channel, ctx, RequestCode::GetTopicConfig, &mut get_request)
+            .await
+            .expect("get Topic config should run")
+            .expect("get Topic config should return a response");
+        assert_eq!(
+            get_response
+                .read_custom_header_ref::<UpdateTopicConfigCasResponseHeader>()
+                .expect("Topic query should carry the current version")
+                .topic_version,
+            1
+        );
 
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
