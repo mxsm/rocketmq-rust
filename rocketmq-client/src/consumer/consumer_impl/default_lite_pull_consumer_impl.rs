@@ -3071,17 +3071,15 @@ impl MQConsumerInner for DefaultLitePullConsumerImpl {
     async fn is_subscribe_topic_need_update(&self, topic: &str) -> bool {
         let subscription_inner = self.rebalance_impl.get_subscription_inner();
 
-        for entry in subscription_inner.iter() {
-            if entry.key().as_str() == topic {
-                let contains = self
-                    .rebalance_impl
-                    .rebalance_impl_inner
-                    .topic_subscribe_info_table
-                    .read()
-                    .await
-                    .contains_key(entry.key());
-                return !contains;
-            }
+        if subscription_inner.contains_key(topic) {
+            let contains = self
+                .rebalance_impl
+                .rebalance_impl_inner
+                .topic_subscribe_info_table
+                .read()
+                .await
+                .contains_key(topic);
+            return !contains;
         }
         false
     }
