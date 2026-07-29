@@ -25,3 +25,5 @@ pub const CONTROLLER_ELECTION: &str = "RocketMQ CONTROLLER ELECTION";
 pub const MCP_TOOL: &str = "RocketMQ MCP TOOL";
 pub const MCP_RESOURCE: &str = "RocketMQ MCP RESOURCE";
 pub const PROXY_RPC: &str = "rocketmq_proxy.rpc";
+pub const PROXY_FORWARD: &str = "RocketMQ PROXY FORWARD";
+pub const PROXY_AUTH: &str = "RocketMQ PROXY AUTH";
