@@ -1,0 +1,88 @@
+{
+  "$defs": {
+    "GovernanceArtifactId": {
+      "description": "Stable identifier for one governed logical artifact.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "GovernanceObjectKind": {
+      "description": "Closed set of artifacts governed by the lifecycle center.",
+      "enum": [
+        "data_policy",
+        "evidence_policy",
+        "prompt",
+        "knowledge",
+        "model_profile",
+        "provider_profile",
+        "diagnostic_pack",
+        "policy_bundle",
+        "action_descriptor",
+        "runbook",
+        "integration_adapter"
+      ],
+      "type": "string"
+    },
+    "GovernanceVersionId": {
+      "description": "Stable identifier for an immutable governed artifact version.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Stable logical artifact head.",
+  "properties": {
+    "created_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "current_version_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/GovernanceVersionId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "id": {
+      "$ref": "#/$defs/GovernanceArtifactId"
+    },
+    "kind": {
+      "$ref": "#/$defs/GovernanceObjectKind"
+    },
+    "logical_key": {
+      "type": "string"
+    },
+    "owner": {
+      "type": "string"
+    },
+    "reviewer": {
+      "type": "string"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "tenant_id",
+    "kind",
+    "logical_key",
+    "owner",
+    "reviewer",
+    "created_at",
+    "updated_at"
+  ],
+  "title": "GovernanceArtifact",
+  "type": "object"
+}
