@@ -84,6 +84,29 @@ The `local-openai-compatible` profile passed all Provider smoke checks and was
 operator-transitioned from `quarantined` back to `certified` before the final
 run.
 
+## Repeatability check
+
+On 2026-07-30, a follow-up operator run used the README command from the
+repository root without changing the cluster configuration:
+
+```powershell
+.\rocketmq-sre\scripts\phase01-kind-smoke.ps1 `
+  -ClusterName rocketmq-sre-phase00 `
+  -SkipPhase00Parity
+```
+
+It returned:
+
+```text
+PHASE01_LIVE_SMOKE_OK target=Kind read_only=true model_assisted=true diagnostic_packs=8 mutation_calls=0 executor_calls=0 total_lag=10
+PHASE01_KIND_E2E_OK cluster=rocketmq-sre-phase00 read_only=true
+```
+
+The same validation pass completed a clean UI dependency install, lint, all 71
+UI tests, and the production build. The Rust workspace format check, Clippy,
+workspace tests, and the 12-test Provider contract suite also passed after
+synchronizing the committed generated schemas with the public contracts.
+
 ## Scope statement
 
 This record proves the Phase 01 read-only AI SRE baseline on a local Kind test
