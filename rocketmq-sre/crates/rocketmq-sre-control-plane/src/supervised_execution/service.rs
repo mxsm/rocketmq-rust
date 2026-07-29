@@ -77,6 +77,7 @@ use super::signing::GrantSigner;
 use crate::ControlPlaneError;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
+use crate::governance::GovernanceAdmissionGuard;
 use crate::models::ModelGatewayService;
 use crate::workflow::WorkflowService;
 use crate::workflow::WorkflowStreamEvent;
@@ -99,6 +100,7 @@ type Clock = Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>;
 pub(crate) struct SupervisedExecutionService {
     repository: PostgresRepository,
     catalog: Arc<ActionCatalog>,
+    governance: GovernanceAdmissionGuard,
     policy: Arc<PolicyEvaluator>,
     signer: GrantSigner,
     model_gateway: ModelGatewayService,
@@ -177,9 +179,11 @@ impl SupervisedExecutionService {
         executor: ExecutorSubmissionClient,
         clock: Clock,
     ) -> Result<Self, ControlPlaneError> {
+        let governance = GovernanceAdmissionGuard::new(repository.clone(), signing_key.as_ref())?;
         Ok(Self {
             repository,
             catalog: Arc::new(ActionCatalog::embedded()?),
+            governance,
             policy: Arc::new(PolicyEvaluator::embedded()?),
             signer: GrantSigner::new(signing_key)?,
             model_gateway,
