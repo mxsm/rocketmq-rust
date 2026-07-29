@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashSet;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering as AtomicOrdering;
@@ -38,7 +37,7 @@ const DETECTOR_SCAN_INTERVAL: Duration = Duration::from_secs(3);
 
 pub struct LatencyFaultToleranceImpl<R, S> {
     service_context: ChildServiceContext,
-    fault_item_table: DashMap<CheetahString, FaultItem>,
+    fault_item_table: DashMap<CheetahString, Arc<FaultItem>>,
     detect_timeout: AtomicU32,
     detect_interval: AtomicU32,
     start_detector_enable: AtomicBool,
@@ -190,7 +189,7 @@ where
         let entry = self
             .fault_item_table
             .entry(name.clone())
-            .or_insert_with(|| FaultItem::new(name.clone()));
+            .or_insert_with(|| Arc::new(FaultItem::new(name.clone())));
 
         entry.set_current_latency(current_latency);
         entry.update_not_available_duration(not_available_duration);
@@ -275,23 +274,31 @@ where
         let (Some(resolver), Some(service_detector)) = (resolver, service_detector) else {
             return;
         };
-        let mut remove_set = HashSet::new();
+        let mut remove_set = Vec::new();
 
-        for entry in self.fault_item_table.iter() {
-            let (name, fault_item) = (entry.key(), entry.value());
-            if current_millis() as i64 - (fault_item.check_stamp.load(std::sync::atomic::Ordering::Relaxed) as i64) < 0
-            {
-                continue;
-            }
-            fault_item.check_stamp.store(
-                current_millis() + detect_interval as u64,
-                std::sync::atomic::Ordering::Release,
-            );
+        let detection_targets = self
+            .fault_item_table
+            .iter()
+            .filter_map(|entry| {
+                let fault_item = entry.value();
+                if current_millis() as i64 - (fault_item.check_stamp.load(std::sync::atomic::Ordering::Relaxed) as i64)
+                    < 0
+                {
+                    return None;
+                }
+                let next_check_stamp = current_millis() + detect_interval as u64;
+                fault_item
+                    .check_stamp
+                    .store(next_check_stamp, std::sync::atomic::Ordering::Release);
+                Some((entry.key().clone(), fault_item.name.clone(), Arc::clone(fault_item)))
+            })
+            .collect::<Vec<_>>();
 
-            let broker_addr = match resolver.resolve(fault_item.name.as_ref()).await {
+        for (name, resolve_name, fault_item) in detection_targets {
+            let broker_addr = match resolver.resolve(&resolve_name).await {
                 Some(addr) => addr,
                 None => {
-                    remove_set.insert(name.clone());
+                    remove_set.push((name, fault_item));
                     continue;
                 }
             };
@@ -300,14 +307,23 @@ where
                 .detect(broker_addr.as_str(), detect_timeout as u64)
                 .await;
 
-            if service_ok && !fault_item.is_reachable() {
-                info!("{} is reachable now, then it can be used.", name);
-                fault_item.set_reachable(true);
+            if service_ok {
+                let Some(current) = self.fault_item_table.get(&name) else {
+                    continue;
+                };
+                if !Arc::ptr_eq(current.value(), &fault_item) {
+                    continue;
+                }
+                if !current.is_reachable() {
+                    info!("{} is reachable now, then it can be used.", name);
+                    current.set_reachable(true);
+                }
             }
         }
 
-        for name in remove_set {
-            self.fault_item_table.remove(&name);
+        for (name, fault_item) in remove_set {
+            self.fault_item_table
+                .remove_if(&name, |_, current| Arc::ptr_eq(current, &fault_item));
         }
     }
 
@@ -642,6 +658,19 @@ mod tests {
         }
     }
 
+    struct BlockingResolver {
+        entered: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+    }
+
+    impl Resolver for BlockingResolver {
+        async fn resolve(&self, _name: &CheetahString) -> Option<CheetahString> {
+            self.entered.notify_one();
+            self.release.notified().await;
+            Some(CheetahString::from_static_str("127.0.0.1:10911"))
+        }
+    }
+
     struct RecordingServiceDetector {
         timeout_millis: Arc<AtomicU64>,
     }
@@ -685,6 +714,53 @@ mod tests {
         assert!(detector.is_reachable(&broker));
         assert_eq!(timeout_millis.load(std::sync::atomic::Ordering::Acquire), 321);
         assert_eq!(detector.detector_config_for_test(), (12_345, 321));
+    }
+
+    #[tokio::test]
+    async fn blocked_detector_resolution_does_not_retain_the_fault_registry_shard() {
+        let detector = Arc::new(LatencyFaultToleranceImpl::<BlockingResolver, NoopServiceDetector>::new(
+            test_context(),
+        ));
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        detector.set_resolver(BlockingResolver {
+            entered: entered.clone(),
+            release: release.clone(),
+        });
+        detector.set_service_detector(NoopServiceDetector);
+        let broker = CheetahString::from_static_str("broker-a");
+        detector.update_fault_item(broker.clone(), 10, 0, false).await;
+
+        let round_detector = detector.clone();
+        let round = tokio::spawn(async move {
+            round_detector.detect_by_one_round().await;
+        });
+        entered.notified().await;
+
+        let mutation_detector = detector.clone();
+        let mutation_broker = broker.clone();
+        let (mutation_done, mutation_receiver) = tokio::sync::oneshot::channel();
+        let mutation = std::thread::spawn(move || {
+            let replacement = FaultItem::new(mutation_broker.clone());
+            replacement.set_reachable(false);
+            mutation_detector
+                .fault_item_table
+                .insert(mutation_broker, Arc::new(replacement));
+            let _ = mutation_done.send(());
+        });
+        let mutation_progress = tokio::time::timeout(Duration::from_millis(250), mutation_receiver).await;
+
+        release.notify_one();
+        round.await.expect("detector round should finish");
+        mutation.join().expect("fault registry mutation should finish");
+        assert!(
+            mutation_progress.is_ok(),
+            "same-key registry mutation must not wait for blocked resolver I/O"
+        );
+        assert!(
+            !detector.is_reachable(&broker),
+            "a stale detector result must not overwrite the replacement fault item"
+        );
     }
 
     #[test]

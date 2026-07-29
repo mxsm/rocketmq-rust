@@ -1303,8 +1303,8 @@ impl MQClientInstance {
     }
 
     pub async fn persist_all_consumer_offset(&self) {
-        for entry in self.consumer_table.iter() {
-            entry.value().persist_consumer_offset().await;
+        for (_, consumer) in self.consumer_snapshot() {
+            consumer.persist_consumer_offset().await;
         }
     }
 
@@ -1695,29 +1695,12 @@ impl MQClientInstance {
         // Compute fingerprint for current heartbeat
         let current_fingerprint = heartbeat_data_with_sub.compute_heartbeat_fingerprint();
 
-        // Send to all brokers
-        for broker_entry in self.broker_addr_table.iter() {
-            let (broker_name, broker_addrs) = broker_entry.pair();
-            if broker_addrs.is_empty() {
-                continue;
-            }
-
-            for (id, addr) in broker_addrs.iter() {
-                if addr.is_empty() {
-                    continue;
-                }
-                // Skip non-master brokers for consumer-only clients
-                if consumer_empty && *id != mix_all::MASTER_ID {
-                    continue;
-                }
-
-                // Clone heartbeat data for this broker
-                let mut heartbeat_data = heartbeat_data_with_sub.clone();
-                heartbeat_data.heartbeat_fingerprint = current_fingerprint;
-
-                self.send_heartbeat_to_broker_v2(*id, broker_name, addr, heartbeat_data)
-                    .await;
-            }
+        // Send to all brokers after releasing every route-table shard.
+        for (id, broker_name, addr) in self.broker_address_snapshot(consumer_empty) {
+            let mut heartbeat_data = heartbeat_data_with_sub.clone();
+            heartbeat_data.heartbeat_fingerprint = current_fingerprint;
+            self.send_heartbeat_to_broker_v2(id, &broker_name, &addr, heartbeat_data)
+                .await;
         }
 
         true
@@ -1741,32 +1724,10 @@ impl MQClientInstance {
             return false;
         }
 
-        // Collect broker list without holding lock during task execution
-        let broker_list: Vec<(u64, CheetahString, CheetahString)> = {
-            if self.broker_addr_table.is_empty() {
-                return false;
-            }
-
-            let mut list = Vec::new();
-            for broker_entry in self.broker_addr_table.iter() {
-                let (broker_name, broker_addrs) = broker_entry.pair();
-                if broker_addrs.is_empty() {
-                    continue;
-                }
-
-                for (id, addr) in broker_addrs.iter() {
-                    if addr.is_empty() {
-                        continue;
-                    }
-                    // Skip non-master brokers for consumer-only clients
-                    if consumer_empty && *id != mix_all::MASTER_ID {
-                        continue;
-                    }
-                    list.push((*id, broker_name.clone(), addr.clone()));
-                }
-            }
-            list
-        };
+        if self.broker_addr_table.is_empty() {
+            return false;
+        }
+        let broker_list = self.broker_address_snapshot(consumer_empty);
 
         if broker_list.is_empty() {
             return false;
@@ -1876,21 +1837,9 @@ impl MQClientInstance {
         if self.broker_addr_table.is_empty() {
             return false;
         }
-        for broker_entry in self.broker_addr_table.iter() {
-            let (broker_name, broker_addrs) = broker_entry.pair();
-            if broker_addrs.is_empty() {
-                continue;
-            }
-            for (id, addr) in broker_addrs.iter() {
-                if addr.is_empty() {
-                    continue;
-                }
-                if consumer_empty && *id != mix_all::MASTER_ID {
-                    continue;
-                }
-                self.send_heartbeat_to_broker_inner(*id, broker_name, addr, &heartbeat_data)
-                    .await;
-            }
+        for (id, broker_name, addr) in self.broker_address_snapshot(consumer_empty) {
+            self.send_heartbeat_to_broker_inner(id, &broker_name, &addr, &heartbeat_data)
+                .await;
         }
 
         true
@@ -2092,6 +2041,28 @@ impl MQClientInstance {
         heartbeat_data
     }
 
+    fn consumer_snapshot(&self) -> Vec<(CheetahString, MQConsumerInnerImpl)> {
+        self.consumer_table
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect()
+    }
+
+    fn broker_address_snapshot(&self, master_only: bool) -> Vec<(u64, CheetahString, CheetahString)> {
+        self.broker_addr_table
+            .iter()
+            .flat_map(|entry| {
+                let broker_name = entry.key().clone();
+                entry
+                    .value()
+                    .iter()
+                    .filter(move |(id, addr)| !addr.is_empty() && (!master_only || **id == mix_all::MASTER_ID))
+                    .map(move |(id, addr)| (*id, broker_name.clone(), addr.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
     pub async fn register_consumer(&self, group: &CheetahString, consumer: MQConsumerInnerImpl) -> bool {
         if self.consumer_table.contains_key(group) {
             warn!("the consumer group[{}] exist already.", group);
@@ -2102,8 +2073,8 @@ impl MQClientInstance {
     }
 
     pub async fn check_client_in_broker(&self) -> rocketmq_error::RocketMQResult<()> {
-        for entry in self.consumer_table.iter() {
-            let subscription_inner = entry.value().subscriptions();
+        for (consumer_group, consumer) in self.consumer_snapshot() {
+            let subscription_inner = consumer.subscriptions();
             if subscription_inner.is_empty() {
                 return Ok(());
             }
@@ -2119,7 +2090,7 @@ impl MQClientInstance {
                     match mq_client_api_impl
                         .check_client_in_broker(
                             addr.as_str(),
-                            entry.key().as_str(),
+                            consumer_group.as_str(),
                             self.client_id.as_str(),
                             subscription_data,
                             self.client_config.mq_client_api_timeout,
@@ -2151,8 +2122,8 @@ impl MQClientInstance {
 
     pub async fn do_rebalance(&self) -> RocketMQResult<bool> {
         let mut balanced = true;
-        for entry in self.consumer_table.iter() {
-            match entry.value().try_rebalance().await {
+        for (consumer_group, consumer) in self.consumer_snapshot() {
+            match consumer.try_rebalance().await {
                 Ok(result) => {
                     if !result {
                         balanced = false;
@@ -2161,7 +2132,7 @@ impl MQClientInstance {
                 Err(e) => {
                     error!(
                         "doRebalance for consumer group [{}] exception:{}",
-                        entry.key(),
+                        consumer_group,
                         e.to_string()
                     );
                     balanced = false;
@@ -2408,29 +2379,26 @@ impl MQClientInstance {
             );
             return;
         };
-        for broker_entry in self.broker_addr_table.iter() {
-            let (broker_name, broker_addrs) = broker_entry.pair();
-            for (id, addr) in broker_addrs.iter() {
-                if let Err(err) = mq_client_api_impl
-                    .unregister_client(
-                        addr,
-                        self.client_id.clone(),
-                        producer_group.clone(),
-                        consumer_group.clone(),
-                        self.client_config.mq_client_api_timeout,
-                    )
-                    .await
-                {
-                    warn!(
-                        "unregister client[Producer: {:?} Consumer: {:?}] from broker[{} {} {}] failed: {}",
-                        producer_group, consumer_group, broker_name, id, addr, err
-                    );
-                } else {
-                    info!(
-                        "unregister client[Producer: {:?} Consumer: {:?}] from broker[{} {} {}] success",
-                        producer_group, consumer_group, broker_name, id, addr,
-                    );
-                }
+        for (id, broker_name, addr) in self.broker_address_snapshot(false) {
+            if let Err(err) = mq_client_api_impl
+                .unregister_client(
+                    &addr,
+                    self.client_id.clone(),
+                    producer_group.clone(),
+                    consumer_group.clone(),
+                    self.client_config.mq_client_api_timeout,
+                )
+                .await
+            {
+                warn!(
+                    "unregister client[Producer: {:?} Consumer: {:?}] from broker[{} {} {}] failed: {}",
+                    producer_group, consumer_group, broker_name, id, addr, err
+                );
+            } else {
+                info!(
+                    "unregister client[Producer: {:?} Consumer: {:?}] from broker[{} {} {}] success",
+                    producer_group, consumer_group, broker_name, id, addr,
+                );
             }
         }
     }
@@ -2499,9 +2467,12 @@ impl MQClientInstance {
         consumer_group: &CheetahString,
         broker_name: Option<CheetahString>,
     ) -> Option<ConsumeMessageDirectlyResult> {
-        let consumer_inner = self.consumer_table.get(consumer_group);
-        if let Some(entry) = consumer_inner {
-            return entry.value().consume_message_directly(message, broker_name).await;
+        let consumer = self
+            .consumer_table
+            .get(consumer_group)
+            .map(|entry| entry.value().clone());
+        if let Some(consumer) = consumer {
+            return consumer.consume_message_directly(message, broker_name).await;
         }
 
         None
