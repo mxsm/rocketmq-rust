@@ -171,10 +171,11 @@ class PublicApiCompatibilityTests(unittest.TestCase):
         self.assertIn("feature=24/24", evidence)
         self.assertIn("wire=6/6", evidence)
         self.assertIn("storage=10/10", evidence)
-        self.assertIn("additive: 0", evidence)
+        self.assertIn("additive: 1", evidence)
         self.assertIn("deprecated: 0", evidence)
-        self.assertIn("breaking: 1", evidence)
+        self.assertIn("breaking: 2", evidence)
         self.assertIn("ClientRuntime::new", evidence)
+        self.assertIn("ClusterConfig", evidence)
         self.assertIn("repository owner explicitly approved", evidence)
 
 

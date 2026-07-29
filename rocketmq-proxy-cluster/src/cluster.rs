@@ -117,11 +117,17 @@ use rocketmq_runtime::ChildServiceContext;
 use rocketmq_security_api::OutboundSigner;
 
 use crate::config::ClusterConfig;
+use crate::config::ClusterExecutionDiagnostics;
 use crate::message::message_ext_to_core;
 use crate::message::message_from_core;
 
 #[path = "cluster_admission.rs"]
 mod cluster_admission;
+
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+#[path = "cluster_bench_support.rs"]
+pub mod bench_support;
 
 #[async_trait]
 pub trait ClusterClient: Send + Sync {
@@ -795,6 +801,11 @@ impl RocketmqClusterClient {
         })
     }
 
+    /// Returns a low-cardinality snapshot of bounded command execution.
+    pub fn execution_diagnostics(&self) -> ClusterExecutionDiagnostics {
+        self.executor.lanes.snapshot()
+    }
+
     pub(crate) async fn lock_batch_mq(&self, request: LockBatchRequestBody) -> ProxyResult<LockBatchResponseBody> {
         self.executor.lock_batch_mq(request).await
     }
@@ -957,21 +968,9 @@ impl ClusterClient for RocketmqClusterClient {
 mod cluster_execution;
 
 #[cfg(test)]
-use cluster_admission::cluster_lane;
-#[cfg(test)]
-use cluster_admission::cluster_lane_domain_id;
-#[cfg(test)]
 use cluster_admission::ClusterExecutionLanes;
 #[cfg(test)]
 use cluster_admission::ClusterExecutionPolicy;
-#[cfg(test)]
-use cluster_admission::QueuedClusterCommand;
-#[cfg(test)]
-use cluster_admission::CLUSTER_COMMAND_BYTE_CAPACITY;
-#[cfg(test)]
-use cluster_admission::CLUSTER_COMMAND_CAPACITY;
-#[cfg(test)]
-use cluster_admission::CLUSTER_EXECUTION_LANE_COUNT;
 #[cfg(test)]
 use cluster_execution::run_cluster_lane;
 use cluster_execution::ClusterCommand;
@@ -2755,6 +2754,7 @@ mod tests {
     use std::collections::HashMap;
     use std::collections::HashSet;
     use std::mem::size_of;
+    use std::sync::Arc;
     use std::time::Duration;
     use std::time::Instant;
 
@@ -2774,10 +2774,6 @@ mod tests {
     use rocketmq_proxy_core::SendMessageEntry;
     use rocketmq_proxy_core::SendMessageRequest;
     use rocketmq_proxy_core::UpdateOffsetRequest;
-    use rocketmq_runtime::BudgetLimit;
-    use rocketmq_runtime::BudgetedQueue;
-    use rocketmq_runtime::FullPolicy;
-    use rocketmq_runtime::ResourceBudgetTree;
     use tokio::sync::oneshot;
     use tokio_util::sync::CancellationToken;
 
@@ -2797,12 +2793,8 @@ mod tests {
     use super::ClusterExecutionPolicy;
     use super::ClusterTaskExecutor;
     use super::ClusterWorkerState;
-    use super::QueuedClusterCommand;
     use super::RocketmqClusterClient;
     use super::TelemetryHandle;
-    use super::CLUSTER_COMMAND_BYTE_CAPACITY;
-    use super::CLUSTER_COMMAND_CAPACITY;
-    use super::CLUSTER_EXECUTION_LANE_COUNT;
     use crate::config::ClusterConfig;
     use rocketmq_client_rust::proxy_adapter_compat::MessageQueue;
     use rocketmq_proxy_core::ProxyError;
@@ -2962,19 +2954,41 @@ mod tests {
 
     #[test]
     fn cluster_command_admission_rejects_count_and_byte_saturation() {
+        let config = ClusterConfig::default();
         let count_lanes = ClusterExecutionLanes::new(ClusterExecutionPolicy {
-            capacity_count: 1,
+            capacity_count: 2,
             capacity_bytes: 4 * 1024,
-            default_queue_deadline: Duration::from_secs(1),
+            max_queue_age: Duration::from_secs(1),
+            io_max_inflight: 2,
+            control_reserve: 1,
+            lane_idle_timeout: Duration::from_secs(1),
         })
         .expect("count budget");
         let (first_reply, _first_receiver) = oneshot::channel();
         count_lanes
-            .enqueue(ClusterCommand::ReadinessCheck { reply: first_reply })
+            .enqueue(
+                ClusterCommand::QueryRoute {
+                    topic: ResourceIdentity::new("", "TopicA"),
+                    reply: first_reply,
+                },
+                CancellationToken::new(),
+                &config,
+            )
             .expect("first command is admitted");
+        assert!(
+            count_lanes.snapshot().oldest_queued_age_ms.is_some(),
+            "diagnostics expose the oldest retained command age"
+        );
         let (second_reply, _second_receiver) = oneshot::channel();
         let count_error = count_lanes
-            .enqueue(ClusterCommand::ReadinessCheck { reply: second_reply })
+            .enqueue(
+                ClusterCommand::QueryRoute {
+                    topic: ResourceIdentity::new("", "TopicA"),
+                    reply: second_reply,
+                },
+                CancellationToken::new(),
+                &config,
+            )
             .expect_err("second command exceeds the global count budget");
         assert!(matches!(
             count_error,
@@ -2987,25 +3001,32 @@ mod tests {
         let byte_lanes = ClusterExecutionLanes::new(ClusterExecutionPolicy {
             capacity_count: 2,
             capacity_bytes: size_of::<ClusterCommand>() + 8,
-            default_queue_deadline: Duration::from_secs(1),
+            max_queue_age: Duration::from_secs(1),
+            io_max_inflight: 2,
+            control_reserve: 1,
+            lane_idle_timeout: Duration::from_secs(1),
         })
         .expect("byte budget");
         let (reply, _receiver) = oneshot::channel();
         let byte_error = byte_lanes
-            .enqueue(ClusterCommand::SendMessage {
-                request: SendMessageRequest {
-                    messages: vec![SendMessageEntry {
-                        topic: ResourceIdentity::new("", "TopicA"),
-                        client_message_id: "message-a".to_owned(),
-                        message: ProxyMessage::new("TopicA", vec![7_u8; 32]),
-                        queue_id: None,
-                    }],
-                    timeout: None,
+            .enqueue(
+                ClusterCommand::SendMessage {
+                    request: SendMessageRequest {
+                        messages: vec![SendMessageEntry {
+                            topic: ResourceIdentity::new("", "TopicA"),
+                            client_message_id: "message-a".to_owned(),
+                            message: ProxyMessage::new("TopicA", vec![7_u8; 32]),
+                            queue_id: None,
+                        }],
+                        timeout: None,
+                    },
+                    client_id: Some("client-a".to_owned()),
+                    request_id: "request-a".to_owned(),
+                    reply,
                 },
-                client_id: Some("client-a".to_owned()),
-                request_id: "request-a".to_owned(),
-                reply,
-            })
+                CancellationToken::new(),
+                &config,
+            )
             .expect_err("retained payload exceeds the global byte budget");
         assert!(matches!(
             byte_error,
@@ -3014,6 +3035,41 @@ mod tests {
             }
         ));
         assert_eq!(byte_lanes.root_budget.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn cluster_execution_config_rejects_invalid_capacity_reserve_and_timeouts() {
+        let cases = [
+            ClusterConfig {
+                command_queue_capacity: 1,
+                control_reserve: 1,
+                ..Default::default()
+            },
+            ClusterConfig {
+                io_max_inflight: 1,
+                control_reserve: 1,
+                ..Default::default()
+            },
+            ClusterConfig {
+                control_reserve: 0,
+                ..Default::default()
+            },
+            ClusterConfig {
+                command_queue_max_age_ms: 0,
+                ..Default::default()
+            },
+            ClusterConfig {
+                execution_lane_idle_timeout_ms: 0,
+                ..Default::default()
+            },
+        ];
+
+        for config in cases {
+            let result = ClusterExecutionLanes::new(ClusterExecutionPolicy::from_config(&config));
+            assert!(result.is_err(), "invalid execution config must fail closed");
+            let error = result.err().expect("invalid config returns an error");
+            assert!(matches!(error, ProxyError::Transport { .. }));
+        }
     }
 
     #[test]
@@ -3063,41 +3119,53 @@ mod tests {
             reply: offset_reply,
         };
 
-        assert_eq!(pull.lane(), ack.lane());
-        assert_eq!(pull.lane(), update_offset.lane());
+        let config = ClusterConfig::default();
+        assert_eq!(pull.ordering_key(&config), ack.ordering_key(&config));
+        assert_eq!(pull.ordering_key(&config), update_offset.ordering_key(&config));
     }
 
     #[tokio::test]
     async fn expired_queued_command_is_rejected_before_client_io() {
         let service = super::test_service_context("proxy-cluster-expiry");
-        let budget = ResourceBudgetTree::new(
-            "proxy-cluster-expiry",
-            BudgetLimit::new(1, 4 * 1024, FullPolicy::Reject),
-        )
-        .expect("expiry budget");
-        let queue = BudgetedQueue::new(budget.root());
+        let config = ClusterConfig::default();
+        let lanes = Arc::new(
+            ClusterExecutionLanes::new(ClusterExecutionPolicy {
+                capacity_count: 2,
+                capacity_bytes: 4 * 1024,
+                max_queue_age: Duration::from_millis(1),
+                io_max_inflight: 2,
+                control_reserve: 1,
+                lane_idle_timeout: Duration::from_secs(1),
+            })
+            .expect("expiry lanes"),
+        );
         let (reply, receiver) = oneshot::channel();
-        let command = ClusterCommand::ReadinessCheck { reply };
-        queue
-            .try_push_data(
-                QueuedClusterCommand {
-                    command,
-                    enqueued_at: Instant::now()
-                        .checked_sub(Duration::from_millis(10))
-                        .expect("test instant supports subtraction"),
-                    deadline: Duration::from_millis(1),
-                },
-                size_of::<ClusterCommand>(),
+        let registration = lanes
+            .enqueue(
+                ClusterCommand::ReadinessCheck { reply },
+                CancellationToken::new(),
+                &config,
             )
+            .expect("expired command admission")
+            .expect("first key creates a lane");
+        let mut queued = registration.queue.try_pop().expect("admitted command");
+        queued.enqueued_at = Instant::now()
+            .checked_sub(Duration::from_millis(10))
+            .expect("test instant supports subtraction");
+        queued.queue_deadline = Duration::from_millis(1);
+        registration
+            .queue
+            .try_push_control(queued, size_of::<ClusterCommand>())
             .expect("expired command enters the queue");
-        queue.close();
+        registration.queue.close();
 
         run_cluster_lane(
-            ClusterConfig::default(),
+            config,
             ClusterWorkerState::new(),
-            queue,
+            registration,
             CancellationToken::new(),
             service,
+            lanes,
         )
         .await;
         let error = receiver
@@ -3120,15 +3188,20 @@ mod tests {
         let service = runtime.service_context("proxy-cluster-test.queue");
         let executor = ClusterTaskExecutor::new(ClusterConfig::default(), None, &service, TelemetryHandle::noop())
             .expect("managed executor builds");
+        let config = ClusterConfig::default();
         assert_eq!(
             executor.lanes.root_budget.limit().capacity.count,
-            CLUSTER_COMMAND_CAPACITY
+            config.command_queue_capacity
         );
         assert_eq!(
             executor.lanes.root_budget.limit().capacity.bytes,
-            CLUSTER_COMMAND_BYTE_CAPACITY
+            config.command_queue_max_bytes
         );
-        assert_eq!(executor.lanes.snapshots().len(), CLUSTER_EXECUTION_LANE_COUNT);
+        assert_eq!(
+            executor.lanes.root_budget.limit().control_reserve.count,
+            config.control_reserve
+        );
+        assert_eq!(executor.lanes.snapshot().active_keys, 0);
         let report = service.task_group().shutdown(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
     }

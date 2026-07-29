@@ -14,6 +14,7 @@ Release boundary: `2.0.0`.
 | `ARC-PANIC-001` | `panic` | `architecture-maintainers` | `active` | 938 | production panic-surface inventory reaches zero | `scripts/rust-hygiene-baseline.json`<br>`scripts/rust_hygiene_guard.py` |
 | `ARC-RUNTIME-001` | `runtime_adapter` | `runtime-maintainers` | `active` | 28 | runtime audit reports zero current-runtime-adapter and task-group-root identities | `scripts/runtime-audit-baseline.json`<br>`scripts/runtime-audit.ps1` |
 | `ARC-RUNTIME-002` | `runtime_adapter` | `runtime-maintainers` | `resolved` | 0 | the ClientRuntime::new API remains absent | `rocketmq-client/src/runtime.rs` |
+| `ARC-RUNTIME-003` | `runtime_adapter` | `proxy` | `resolved` | 0 | fixed Cluster lane count and hash-routing helpers remain absent | `rocketmq-proxy-cluster/src/cluster_admission.rs`<br>`rocketmq-proxy-cluster/src/cluster_behavior_tests.rs`<br>`scripts/tests/test_m08_proxy_core_contract.py` |
 | `ARC-TRAIT-001` | `trait` | `architecture-maintainers` | `active` | 660 | all migrate-on-touch trait identities are resolved or accepted as final design | `scripts/trait-policy-baseline.json`<br>`scripts/trait_policy_guard.py` |
 
 Removed internal crates, facade re-exports, old module paths, and historical migration

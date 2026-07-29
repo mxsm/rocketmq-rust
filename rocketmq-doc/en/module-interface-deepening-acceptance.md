@@ -278,3 +278,30 @@ public `RuntimeHandle`, and detached task spawning.
   registration behavior have focused tests.
 - Phase 3 owns long-running soak, failure-matrix, and production evidence work;
   those are intentionally not Phase 2 merge prerequisites.
+
+## Proxy Cluster execution ownership
+
+The [Proxy Cluster keyed execution ADR](proxy-cluster-keyed-execution-adr.md)
+is accepted. The fixed sixteen-lane hash worker has been removed. Exact
+structural ordering keys now select dynamically owned lanes, so the same key is
+FIFO without serializing unrelated keys through hash collisions.
+
+| Command family | Class | Ordering owner |
+|---|---|---|
+| Readiness | Control | Singleton readiness key with reserved queue and I/O capacity |
+| Route and topic metadata | Data | Topic or topic/group key |
+| Send, recall, end transaction | Data | Effective producer-group key and exclusive mutable producer |
+| Pull, receive, ack, invisible time, consumer offset | Data | Consumer group/topic key |
+| Queue offset query | Data | Exact queue target |
+| Lock and unlock | Data | Consumer group/client key |
+
+Count, retained bytes, maximum queue age, request deadline, global inflight
+work, and control reserve are validated configuration. Caller drop, timeout,
+cancellation, and shutdown all cancel the owned command future and release its
+permits. Runtime diagnostics expose retained age and other aggregates only; no
+topic, group, request ID, payload, or credential becomes a metric label.
+
+The `cluster_executor` Criterion target measures same-key FIFO admission and
+high-cardinality exact-key admission/retirement as an algorithm regression
+signal. It is explicitly separate from the target-hardware mixed workload
+profile and does not claim production throughput.

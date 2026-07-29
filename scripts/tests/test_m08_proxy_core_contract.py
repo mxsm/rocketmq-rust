@@ -36,6 +36,49 @@ class ProxyCoreContractTests(unittest.TestCase):
         result = run_dependency_guard("target")
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
+    def test_cluster_execution_uses_exact_managed_keys_and_reserved_control_capacity(self) -> None:
+        admission = (
+            ROOT / "rocketmq-proxy-cluster/src/cluster_admission.rs"
+        ).read_text(encoding="utf-8")
+        execution = (
+            ROOT / "rocketmq-proxy-cluster/src/cluster_execution.rs"
+        ).read_text(encoding="utf-8")
+        config = (ROOT / "rocketmq-proxy-cluster/src/config.rs").read_text(
+            encoding="utf-8"
+        )
+
+        for token in (
+            "HashMap<ClusterOrderingKey, RegisteredLane>",
+            "with_control_reserve",
+            "data_inflight",
+            "wait_for_lane_tasks",
+            "generation",
+        ):
+            self.assertIn(token, admission)
+        for token in (
+            'spawn_service("proxy.cluster.keyed-lane"',
+            "CommandCancellationGuard",
+            "LaneTaskGuard",
+            "cluster_shutdown_error",
+        ):
+            self.assertIn(token, execution)
+        for field in (
+            "command_queue_capacity",
+            "command_queue_max_bytes",
+            "command_queue_max_age_ms",
+            "io_max_inflight",
+            "control_reserve",
+            "execution_lane_idle_timeout_ms",
+        ):
+            self.assertIn(field, config)
+
+        combined = admission + execution
+        self.assertNotIn("CLUSTER_EXECUTION_LANE_COUNT", combined)
+        self.assertNotIn("fn cluster_lane(", combined)
+        self.assertTrue(
+            (ROOT / "rocketmq-doc/en/proxy-cluster-keyed-execution-adr.md").is_file()
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

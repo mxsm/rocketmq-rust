@@ -12,10 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::hash::DefaultHasher;
-use std::hash::Hash;
-use std::hash::Hasher;
+use std::collections::HashMap;
 use std::mem::size_of;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -25,80 +29,193 @@ use rocketmq_proxy_core::MessageQueueTarget;
 use rocketmq_proxy_core::ProxyError;
 use rocketmq_proxy_core::ProxyResult;
 use rocketmq_proxy_core::ResourceIdentity;
+use rocketmq_runtime::BudgetCapacity;
 use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::BudgetedQueue;
 use rocketmq_runtime::FullPolicy;
 use rocketmq_runtime::QueuePushErrorKind;
-#[cfg(test)]
-use rocketmq_runtime::QueueSnapshot;
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::ResourceBudgetTree;
+use tokio::sync::Notify;
+use tokio::sync::OwnedSemaphorePermit;
+use tokio::sync::Semaphore;
+use tokio_util::sync::CancellationToken;
 
+use super::build_proxy_producer_group;
 use super::ClusterCommand;
+use crate::config::ClusterConfig;
+use crate::config::ClusterExecutionDiagnostics;
 
-pub(super) const CLUSTER_COMMAND_CAPACITY: usize = 1024;
-pub(super) const CLUSTER_COMMAND_BYTE_CAPACITY: usize = 64 * 1024 * 1024;
-pub(super) const CLUSTER_EXECUTION_LANE_COUNT: usize = 16;
-const CLUSTER_LANES_PER_CLASS: usize = 4;
-const CLUSTER_DEFAULT_QUEUE_DEADLINE: Duration = Duration::from_secs(30);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ClusterCommandClass {
+    Control,
+    Data,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(super) struct ClusterOrderingKey {
+    domain: &'static str,
+    components: Arc<[String]>,
+}
+
+impl ClusterOrderingKey {
+    fn new(domain: &'static str, components: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            domain,
+            components: components.into_iter().collect(),
+        }
+    }
+
+    fn singleton(domain: &'static str) -> Self {
+        Self::new(domain, [])
+    }
+}
+
+#[derive(Clone)]
+struct RegisteredLane {
+    generation: u64,
+    queue: BudgetedQueue<QueuedClusterCommand>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct ClusterLaneRegistration {
+    pub(super) key: ClusterOrderingKey,
+    pub(super) generation: u64,
+    pub(super) queue: BudgetedQueue<QueuedClusterCommand>,
+}
+
+#[derive(Default)]
+struct ClusterExecutionCounters {
+    current_inflight: AtomicUsize,
+    max_inflight: AtomicUsize,
+    admitted: AtomicU64,
+    rejected: AtomicU64,
+    timed_out: AtomicU64,
+    cancelled: AtomicU64,
+    shutdown_rejected: AtomicU64,
+}
 
 pub(super) struct ClusterExecutionLanes {
-    pub(super) queues: Box<[BudgetedQueue<QueuedClusterCommand>]>,
+    registry: Mutex<HashMap<ClusterOrderingKey, RegisteredLane>>,
     pub(super) root_budget: ResourceBudget,
-    default_queue_deadline: Duration,
+    policy: ClusterExecutionPolicy,
+    next_generation: AtomicU64,
+    closed: AtomicBool,
+    total_inflight: Arc<Semaphore>,
+    data_inflight: Arc<Semaphore>,
+    counters: Arc<ClusterExecutionCounters>,
+    active_lane_tasks: AtomicUsize,
+    lane_tasks_idle: Notify,
 }
 
 impl ClusterExecutionLanes {
     pub(super) fn new(policy: ClusterExecutionPolicy) -> ProxyResult<Self> {
-        let tree = ResourceBudgetTree::new(
-            "proxy-cluster-commands",
-            BudgetLimit::new(policy.capacity_count, policy.capacity_bytes, FullPolicy::Reject),
-        )
-        .map_err(|error| ProxyError::Transport {
+        policy.validate()?;
+        let control_bytes = policy.control_reserve_bytes();
+        let limit = BudgetLimit::new(policy.capacity_count, policy.capacity_bytes, FullPolicy::Reject)
+            .with_control_reserve(BudgetCapacity::new(policy.control_reserve, control_bytes));
+        let tree = ResourceBudgetTree::new("proxy-cluster-commands", limit).map_err(|error| ProxyError::Transport {
             message: format!("invalid proxy cluster command budget: {error}"),
         })?;
         let root_budget = tree.root();
-        let queues = (0..CLUSTER_EXECUTION_LANE_COUNT)
-            .map(|lane| {
-                root_budget
-                    .child(
-                        format!("lane-{lane}"),
-                        BudgetLimit::new(policy.capacity_count, policy.capacity_bytes, FullPolicy::Reject),
-                    )
-                    .map(BudgetedQueue::new)
-                    .map_err(|error| ProxyError::Transport {
-                        message: format!("invalid proxy cluster command lane budget: {error}"),
-                    })
-            })
-            .collect::<ProxyResult<Vec<_>>>()?
-            .into_boxed_slice();
         Ok(Self {
-            queues,
+            registry: Mutex::new(HashMap::new()),
             root_budget,
-            default_queue_deadline: policy.default_queue_deadline,
+            policy,
+            next_generation: AtomicU64::new(1),
+            closed: AtomicBool::new(false),
+            total_inflight: Arc::new(Semaphore::new(policy.io_max_inflight)),
+            data_inflight: Arc::new(Semaphore::new(policy.io_max_inflight - policy.control_reserve)),
+            counters: Arc::new(ClusterExecutionCounters::default()),
+            active_lane_tasks: AtomicUsize::new(0),
+            lane_tasks_idle: Notify::new(),
         })
     }
 
-    pub(super) fn enqueue(&self, command: ClusterCommand) -> ProxyResult<()> {
-        let lane = command.lane();
+    pub(super) fn enqueue(
+        &self,
+        command: ClusterCommand,
+        cancellation: CancellationToken,
+        config: &ClusterConfig,
+    ) -> ProxyResult<Option<ClusterLaneRegistration>> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(cluster_execution_unavailable());
+        }
+        let key = command.ordering_key(config);
+        let class = command.class();
         let retained_bytes = command.retained_bytes();
-        let deadline = command
+        let queue_deadline = command
             .queue_deadline()
-            .unwrap_or(self.default_queue_deadline)
+            .unwrap_or(self.policy.max_queue_age)
+            .min(self.policy.max_queue_age)
             .max(Duration::from_millis(1));
         let queued = QueuedClusterCommand {
             command,
             enqueued_at: Instant::now(),
-            deadline,
+            queue_deadline,
+            cancellation,
+            class,
         };
-        match self.queues[lane].try_push_data(queued, retained_bytes) {
-            Ok(_) => Ok(()),
+
+        let mut registry = self.registry.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.closed.load(Ordering::Acquire) {
+            return Err(cluster_execution_unavailable());
+        }
+        let (registered, created) = match registry.get(&key) {
+            Some(registered) => (registered.clone(), false),
+            None => {
+                let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
+                let queue = self
+                    .root_budget
+                    .child(
+                        format!("key-{generation}"),
+                        BudgetLimit::new(
+                            self.policy.capacity_count,
+                            self.policy.capacity_bytes,
+                            FullPolicy::Reject,
+                        )
+                        .with_control_reserve(BudgetCapacity::new(
+                            self.policy.control_reserve,
+                            self.policy.control_reserve_bytes(),
+                        )),
+                    )
+                    .map(BudgetedQueue::new)
+                    .map_err(|error| ProxyError::Transport {
+                        message: format!("invalid proxy cluster keyed lane budget: {error}"),
+                    })?;
+                let registered = RegisteredLane { generation, queue };
+                registry.insert(key.clone(), registered.clone());
+                (registered, true)
+            }
+        };
+
+        let push_result = match class {
+            ClusterCommandClass::Control => registered.queue.try_push_control(queued, retained_bytes),
+            ClusterCommandClass::Data => registered.queue.try_push_data(queued, retained_bytes),
+        };
+        match push_result {
+            Ok(_) => {
+                self.counters.admitted.fetch_add(1, Ordering::Relaxed);
+                if created {
+                    Ok(Some(ClusterLaneRegistration {
+                        key,
+                        generation: registered.generation,
+                        queue: registered.queue,
+                    }))
+                } else {
+                    Ok(None)
+                }
+            }
             Err(error) => {
                 let kind = error.kind().clone();
-                let snapshot = self.queues[lane].snapshot();
+                if created {
+                    registry.remove(&key);
+                    registered.queue.close();
+                }
+                self.counters.rejected.fetch_add(1, Ordering::Relaxed);
+                let snapshot = registered.queue.snapshot();
                 let root_snapshot = self.root_budget.snapshot();
                 tracing::warn!(
-                    lane,
                     depth = snapshot.depth,
                     retained_bytes = snapshot.retained_bytes,
                     oldest_age_ms = snapshot.oldest_age.map(|age| age.as_millis() as u64),
@@ -119,96 +236,326 @@ impl ClusterExecutionLanes {
         }
     }
 
-    pub(super) fn queue_clones(&self) -> Vec<BudgetedQueue<QueuedClusterCommand>> {
-        self.queues.to_vec()
+    pub(super) fn retire(&self, registration: &ClusterLaneRegistration) -> bool {
+        let mut registry = self.registry.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let should_remove = registry.get(&registration.key).is_some_and(|registered| {
+            registered.generation == registration.generation
+                && registered.queue.is_same_queue(&registration.queue)
+                && registered.queue.is_empty()
+        });
+        if should_remove {
+            registry.remove(&registration.key);
+            registration.queue.close();
+        }
+        should_remove
     }
 
-    #[cfg(test)]
-    pub(super) fn snapshots(&self) -> Vec<QueueSnapshot> {
-        self.queues.iter().map(BudgetedQueue::snapshot).collect()
+    pub(super) fn reject_failed_lane(&self, registration: &ClusterLaneRegistration, message: &str) {
+        let mut registry = self.registry.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if registry
+            .get(&registration.key)
+            .is_some_and(|registered| registered.generation == registration.generation)
+        {
+            registry.remove(&registration.key);
+        }
+        registration.queue.close();
+        while let Some(queued) = registration.queue.try_pop() {
+            queued.command.reject(ProxyError::Transport {
+                message: message.to_owned(),
+            });
+        }
+    }
+
+    pub(super) fn close(&self) {
+        if self.closed.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let registry = self.registry.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        for registered in registry.values() {
+            registered.queue.close();
+        }
+    }
+
+    pub(super) fn snapshot(&self) -> ClusterExecutionDiagnostics {
+        let budget = self.root_budget.snapshot();
+        let registry = self.registry.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let active_keys = registry.len();
+        let oldest_queued_age_ms = registry
+            .values()
+            .filter_map(|registered| registered.queue.snapshot().oldest_age)
+            .map(|age| age.as_millis().min(u128::from(u64::MAX)) as u64)
+            .max();
+        ClusterExecutionDiagnostics {
+            active_keys,
+            active_lane_tasks: self.active_lane_tasks.load(Ordering::Acquire),
+            queued_and_active: budget.current_count,
+            retained_bytes: budget.current_bytes,
+            oldest_queued_age_ms,
+            current_inflight: self.counters.current_inflight.load(Ordering::Relaxed),
+            max_inflight: self.counters.max_inflight.load(Ordering::Relaxed),
+            admitted: self.counters.admitted.load(Ordering::Relaxed),
+            rejected: self.counters.rejected.load(Ordering::Relaxed),
+            timed_out: self.counters.timed_out.load(Ordering::Relaxed),
+            cancelled: self.counters.cancelled.load(Ordering::Relaxed),
+            shutdown_rejected: self.counters.shutdown_rejected.load(Ordering::Relaxed),
+            closed: self.closed.load(Ordering::Acquire),
+        }
+    }
+
+    pub(super) async fn acquire_inflight(&self, class: ClusterCommandClass) -> ClusterInflightPermit {
+        let data = match class {
+            ClusterCommandClass::Control => None,
+            ClusterCommandClass::Data => Some(
+                self.data_inflight
+                    .clone()
+                    .acquire_owned()
+                    .await
+                    .expect("proxy cluster data semaphore remains open"),
+            ),
+        };
+        let total = self
+            .total_inflight
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("proxy cluster total semaphore remains open");
+        let current = self.counters.current_inflight.fetch_add(1, Ordering::AcqRel) + 1;
+        self.counters.max_inflight.fetch_max(current, Ordering::Relaxed);
+        ClusterInflightPermit {
+            _data: data,
+            _total: total,
+            counters: self.counters.clone(),
+        }
+    }
+
+    pub(super) fn record_timeout(&self) {
+        self.counters.timed_out.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn record_cancelled(&self) {
+        self.counters.cancelled.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn record_shutdown_rejected(&self) {
+        self.counters.shutdown_rejected.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn lane_task_started(&self) {
+        self.active_lane_tasks.fetch_add(1, Ordering::AcqRel);
+    }
+
+    pub(super) fn lane_task_finished(&self) {
+        if self.active_lane_tasks.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.lane_tasks_idle.notify_waiters();
+        }
+    }
+
+    pub(super) async fn wait_for_lane_tasks(&self, deadline: rocketmq_runtime::ShutdownDeadline) -> bool {
+        loop {
+            let idle = self.lane_tasks_idle.notified();
+            if self.active_lane_tasks.load(Ordering::Acquire) == 0 {
+                return true;
+            }
+            if tokio::time::timeout(deadline.remaining(), idle).await.is_err() {
+                return self.active_lane_tasks.load(Ordering::Acquire) == 0;
+            }
+        }
+    }
+
+    pub(super) const fn idle_timeout(&self) -> Duration {
+        self.policy.lane_idle_timeout
     }
 }
 
 impl Drop for ClusterExecutionLanes {
     fn drop(&mut self) {
-        for queue in &self.queues {
-            queue.close();
-        }
+        self.close();
     }
 }
 
-#[derive(Clone, Copy)]
+pub(super) struct ClusterInflightPermit {
+    _data: Option<OwnedSemaphorePermit>,
+    _total: OwnedSemaphorePermit,
+    counters: Arc<ClusterExecutionCounters>,
+}
+
+impl Drop for ClusterInflightPermit {
+    fn drop(&mut self) {
+        self.counters.current_inflight.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 pub(super) struct ClusterExecutionPolicy {
     pub(super) capacity_count: usize,
     pub(super) capacity_bytes: usize,
-    pub(super) default_queue_deadline: Duration,
+    pub(super) max_queue_age: Duration,
+    pub(super) io_max_inflight: usize,
+    pub(super) control_reserve: usize,
+    pub(super) lane_idle_timeout: Duration,
 }
 
 impl Default for ClusterExecutionPolicy {
     fn default() -> Self {
+        Self::from_config(&ClusterConfig::default())
+    }
+}
+
+impl ClusterExecutionPolicy {
+    pub(super) fn from_config(config: &ClusterConfig) -> Self {
         Self {
-            capacity_count: CLUSTER_COMMAND_CAPACITY,
-            capacity_bytes: CLUSTER_COMMAND_BYTE_CAPACITY,
-            default_queue_deadline: CLUSTER_DEFAULT_QUEUE_DEADLINE,
+            capacity_count: config.command_queue_capacity,
+            capacity_bytes: config.command_queue_max_bytes,
+            max_queue_age: config.command_queue_max_age(),
+            io_max_inflight: config.io_max_inflight,
+            control_reserve: config.control_reserve,
+            lane_idle_timeout: config.execution_lane_idle_timeout(),
         }
+    }
+
+    fn validate(self) -> ProxyResult<()> {
+        if self.capacity_count <= self.control_reserve {
+            return Err(invalid_execution_policy(
+                "command_queue_capacity must be greater than control_reserve",
+            ));
+        }
+        if self.io_max_inflight <= self.control_reserve {
+            return Err(invalid_execution_policy(
+                "io_max_inflight must be greater than control_reserve",
+            ));
+        }
+        if self.control_reserve == 0 {
+            return Err(invalid_execution_policy("control_reserve must be greater than zero"));
+        }
+        if self.max_queue_age.is_zero() {
+            return Err(invalid_execution_policy(
+                "command_queue_max_age_ms must be greater than zero",
+            ));
+        }
+        if self.lane_idle_timeout.is_zero() {
+            return Err(invalid_execution_policy(
+                "execution_lane_idle_timeout_ms must be greater than zero",
+            ));
+        }
+        let control_bytes = self.control_reserve_bytes();
+        if control_bytes >= self.capacity_bytes {
+            return Err(invalid_execution_policy(
+                "command_queue_max_bytes must leave capacity for data commands",
+            ));
+        }
+        Ok(())
+    }
+
+    fn control_reserve_bytes(self) -> usize {
+        let proportional = self
+            .capacity_bytes
+            .saturating_mul(self.control_reserve)
+            .checked_div(self.capacity_count)
+            .unwrap_or(0);
+        proportional.max(size_of::<ClusterCommand>())
     }
 }
 
 pub(super) struct QueuedClusterCommand {
     pub(super) command: ClusterCommand,
     pub(super) enqueued_at: Instant,
-    pub(super) deadline: Duration,
+    pub(super) queue_deadline: Duration,
+    pub(super) cancellation: CancellationToken,
+    pub(super) class: ClusterCommandClass,
 }
 
 impl ClusterCommand {
-    pub(super) fn lane(&self) -> usize {
+    pub(super) fn class(&self) -> ClusterCommandClass {
         match self {
-            Self::ReadinessCheck { .. } => cluster_lane(0, &"readiness"),
-            Self::QueryRoute { topic, .. } | Self::QueryTopicMessageType { topic, .. } => cluster_lane(0, topic),
-            Self::QueryAssignment { topic, group, .. } | Self::QuerySubscriptionGroup { topic, group, .. } => {
-                cluster_lane(0, &(topic, group))
+            Self::ReadinessCheck { .. } => ClusterCommandClass::Control,
+            _ => ClusterCommandClass::Data,
+        }
+    }
+
+    pub(super) fn ordering_key(&self, config: &ClusterConfig) -> ClusterOrderingKey {
+        match self {
+            Self::ReadinessCheck { .. } => ClusterOrderingKey::singleton("readiness"),
+            Self::QueryRoute { topic, .. } | Self::QueryTopicMessageType { topic, .. } => {
+                resource_ordering_key("topic", [topic])
             }
-            Self::QueryUser { username, .. } => cluster_lane(0, username),
-            Self::QueryAcl { subject, .. } => cluster_lane(0, subject),
+            Self::QueryAssignment { topic, group, .. } | Self::QuerySubscriptionGroup { topic, group, .. } => {
+                resource_ordering_key("topic-group", [topic, group])
+            }
+            Self::QueryUser { username, .. } => ClusterOrderingKey::new("user", [username.clone()]),
+            Self::QueryAcl { subject, .. } => ClusterOrderingKey::new("acl", [subject.clone()]),
             Self::SendMessage {
                 client_id, request_id, ..
-            }
-            | Self::RecallMessage {
+            } => ClusterOrderingKey::new(
+                "producer",
+                [build_proxy_producer_group(
+                    config,
+                    client_id.as_deref(),
+                    request_id.as_str(),
+                )],
+            ),
+            Self::RecallMessage {
                 client_id, request_id, ..
-            } => cluster_lane(1, &client_id.as_deref().unwrap_or(request_id.as_str())),
+            } => ClusterOrderingKey::new(
+                "producer",
+                [build_proxy_producer_group(
+                    config,
+                    client_id.as_deref(),
+                    request_id.as_str(),
+                )],
+            ),
             Self::EndTransaction {
                 request,
                 client_id,
                 request_id,
                 ..
-            } => cluster_lane(
-                1,
-                &client_id
-                    .as_deref()
-                    .or(request.producer_group.as_deref())
-                    .unwrap_or(request_id.as_str()),
+            } => ClusterOrderingKey::new(
+                "producer",
+                [request
+                    .producer_group
+                    .clone()
+                    .unwrap_or_else(|| build_proxy_producer_group(config, client_id.as_deref(), request_id.as_str()))],
             ),
-            Self::ReceiveMessage { request, .. } => cluster_lane(2, &(&request.group, &request.target.topic)),
-            Self::PullMessage { request, .. } => cluster_lane(2, &(&request.group, &request.target.topic)),
-            Self::AckMessage { request, .. } => cluster_lane(2, &(&request.group, &request.topic)),
-            Self::ForwardMessageToDeadLetterQueue { request, .. } => cluster_lane(2, &(&request.group, &request.topic)),
-            Self::ChangeInvisibleDuration { request, .. } => cluster_lane(2, &(&request.group, &request.topic)),
-            Self::UpdateOffset { request, .. } => cluster_lane(2, &(&request.group, &request.target.topic)),
-            Self::GetOffset { request, .. } => cluster_lane(2, &(&request.group, &request.target.topic)),
-            Self::QueryOffset { request, .. } => cluster_lane(2, &request.target.topic),
-            Self::LockBatchMq { request, .. } => cluster_lane(
-                3,
-                &(
-                    request.consumer_group.as_deref().unwrap_or_default(),
-                    request.client_id.as_deref().unwrap_or_default(),
-                ),
+            Self::ReceiveMessage { request, .. } => {
+                resource_ordering_key("consumer", [&request.group, &request.target.topic])
+            }
+            Self::PullMessage { request, .. } => {
+                resource_ordering_key("consumer", [&request.group, &request.target.topic])
+            }
+            Self::AckMessage { request, .. } => resource_ordering_key("consumer", [&request.group, &request.topic]),
+            Self::ForwardMessageToDeadLetterQueue { request, .. } => {
+                resource_ordering_key("consumer", [&request.group, &request.topic])
+            }
+            Self::ChangeInvisibleDuration { request, .. } => {
+                resource_ordering_key("consumer", [&request.group, &request.topic])
+            }
+            Self::UpdateOffset { request, .. } => {
+                resource_ordering_key("consumer", [&request.group, &request.target.topic])
+            }
+            Self::GetOffset { request, .. } => {
+                resource_ordering_key("consumer", [&request.group, &request.target.topic])
+            }
+            Self::QueryOffset { request, .. } => target_ordering_key("queue-offset", None, &request.target),
+            Self::LockBatchMq { request, .. } => ClusterOrderingKey::new(
+                "consumer-lock",
+                [
+                    request
+                        .consumer_group
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_default(),
+                    request.client_id.as_ref().map(ToString::to_string).unwrap_or_default(),
+                ],
             ),
-            Self::UnlockBatchMq { request, .. } => cluster_lane(
-                3,
-                &(
-                    request.consumer_group.as_deref().unwrap_or_default(),
-                    request.client_id.as_deref().unwrap_or_default(),
-                ),
+            Self::UnlockBatchMq { request, .. } => ClusterOrderingKey::new(
+                "consumer-lock",
+                [
+                    request
+                        .consumer_group
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_default(),
+                    request.client_id.as_ref().map(ToString::to_string).unwrap_or_default(),
+                ],
             ),
         }
     }
@@ -465,16 +812,44 @@ impl ClusterCommand {
     }
 }
 
-pub(super) fn cluster_lane(class: usize, key: &impl Hash) -> usize {
-    let mut hasher = DefaultHasher::new();
-    key.hash(&mut hasher);
-    class * CLUSTER_LANES_PER_CLASS + (hasher.finish() as usize % CLUSTER_LANES_PER_CLASS)
+fn resource_ordering_key<'a>(
+    domain: &'static str,
+    identities: impl IntoIterator<Item = &'a ResourceIdentity>,
+) -> ClusterOrderingKey {
+    let components = identities
+        .into_iter()
+        .flat_map(|identity| [identity.namespace().to_owned(), identity.name().to_owned()]);
+    ClusterOrderingKey::new(domain, components)
 }
 
-pub(super) fn cluster_lane_domain_id(base_domain_id: u64, lane: usize) -> u64 {
-    base_domain_id
-        .wrapping_mul(CLUSTER_EXECUTION_LANE_COUNT as u64)
-        .wrapping_add(lane as u64 + 1)
+fn target_ordering_key(
+    domain: &'static str,
+    group: Option<&ResourceIdentity>,
+    target: &MessageQueueTarget,
+) -> ClusterOrderingKey {
+    let mut components = Vec::with_capacity(8);
+    if let Some(group) = group {
+        components.push(group.namespace().to_owned());
+        components.push(group.name().to_owned());
+    }
+    components.push(target.topic.namespace().to_owned());
+    components.push(target.topic.name().to_owned());
+    components.push(target.queue_id.to_string());
+    components.push(target.broker_name.clone().unwrap_or_default());
+    components.push(target.broker_addr.clone().unwrap_or_default());
+    ClusterOrderingKey::new(domain, components)
+}
+
+fn invalid_execution_policy(message: &str) -> ProxyError {
+    ProxyError::Transport {
+        message: format!("invalid proxy cluster execution policy: {message}"),
+    }
+}
+
+fn cluster_execution_unavailable() -> ProxyError {
+    ProxyError::Transport {
+        message: "proxy cluster command execution is unavailable".to_owned(),
+    }
 }
 
 fn resource_identity_bytes(identity: &ResourceIdentity) -> usize {

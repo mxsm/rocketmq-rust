@@ -62,7 +62,7 @@
     {
       "kind": "async_trait",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 126,
+      "line": 132,
       "item": "trait ClusterClient",
       "owner": "proxy-cluster",
       "decision": "migrate-on-touch"
@@ -70,7 +70,7 @@
     {
       "kind": "async_trait",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 217,
+      "line": 223,
       "item": "trait ClusterClientIo",
       "owner": "proxy-cluster",
       "decision": "migrate-on-touch"
@@ -78,7 +78,7 @@
     {
       "kind": "async_trait",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 426,
+      "line": 432,
       "item": "impl ClusterClientIo",
       "owner": "proxy-cluster",
       "decision": "migrate-on-touch"
@@ -86,7 +86,7 @@
     {
       "kind": "async_trait",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 660,
+      "line": 666,
       "item": "trait ClusterProducerIo",
       "owner": "proxy-cluster",
       "decision": "migrate-on-touch"
@@ -94,7 +94,7 @@
     {
       "kind": "async_trait",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 692,
+      "line": 698,
       "item": "impl ClusterProducerIo",
       "owner": "proxy-cluster",
       "decision": "migrate-on-touch"
@@ -102,7 +102,7 @@
     {
       "kind": "async_trait",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 807,
+      "line": 818,
       "item": "impl ClusterClient",
       "owner": "proxy-cluster",
       "decision": "migrate-on-touch"
@@ -110,7 +110,7 @@
     {
       "kind": "async_trait",
       "path": "rocketmq-proxy-cluster/src/cluster_behavior_tests.rs",
-      "line": 163,
+      "line": 173,
       "item": "impl ClusterClientIo",
       "owner": "proxy-cluster",
       "decision": "migrate-on-touch"
@@ -118,7 +118,7 @@
     {
       "kind": "async_trait",
       "path": "rocketmq-proxy-cluster/src/cluster_behavior_tests.rs",
-      "line": 478,
+      "line": 499,
       "item": "impl ClusterProducerIo",
       "owner": "proxy-cluster",
       "decision": "migrate-on-touch"
@@ -3662,7 +3662,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 133,
+      "line": 139,
       "item": "trait ClusterClient::readiness_check",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3670,7 +3670,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 137,
+      "line": 143,
       "item": "trait ClusterClient::query_route",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3678,7 +3678,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 139,
+      "line": 145,
       "item": "trait ClusterClient::query_assignment",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3686,7 +3686,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 146,
+      "line": 152,
       "item": "trait ClusterClient::query_topic_message_type",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3694,7 +3694,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 148,
+      "line": 154,
       "item": "trait ClusterClient::query_subscription_group",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3702,7 +3702,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 154,
+      "line": 160,
       "item": "trait ClusterClient::query_user",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3710,7 +3710,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 158,
+      "line": 164,
       "item": "trait ClusterClient::query_acl",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3718,7 +3718,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 162,
+      "line": 168,
       "item": "trait ClusterClient::send_message",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3726,7 +3726,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 168,
+      "line": 174,
       "item": "trait ClusterClient::recall_message",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3734,7 +3734,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 174,
+      "line": 180,
       "item": "trait ClusterClient::receive_message",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3742,7 +3742,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 180,
+      "line": 186,
       "item": "trait ClusterClient::pull_message",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3750,7 +3750,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 182,
+      "line": 188,
       "item": "trait ClusterClient::ack_message",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3758,7 +3758,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 188,
+      "line": 194,
       "item": "trait ClusterClient::forward_message_to_dead_letter_queue",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3766,7 +3766,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 194,
+      "line": 200,
       "item": "trait ClusterClient::change_invisible_duration",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3774,7 +3774,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 200,
+      "line": 206,
       "item": "trait ClusterClient::update_offset",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3782,7 +3782,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 206,
+      "line": 212,
       "item": "trait ClusterClient::get_offset",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3790,7 +3790,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 208,
+      "line": 214,
       "item": "trait ClusterClient::query_offset",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3798,7 +3798,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 210,
+      "line": 216,
       "item": "trait ClusterClient::end_transaction",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3806,7 +3806,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 219,
+      "line": 225,
       "item": "trait ClusterClientIo::start",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3814,7 +3814,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 221,
+      "line": 227,
       "item": "trait ClusterClientIo::shutdown",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3822,7 +3822,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 223,
+      "line": 229,
       "item": "trait ClusterClientIo::topic_route",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3830,7 +3830,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 225,
+      "line": 231,
       "item": "trait ClusterClientIo::lock_batch_mq",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3838,7 +3838,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 232,
+      "line": 238,
       "item": "trait ClusterClientIo::unlock_batch_mq",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3846,7 +3846,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 243,
+      "line": 249,
       "item": "trait ClusterClientIo::query_assignment",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3854,7 +3854,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 254,
+      "line": 260,
       "item": "trait ClusterClientIo::pop_message",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3862,7 +3862,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 262,
+      "line": 268,
       "item": "trait ClusterClientIo::ack_message",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3870,7 +3870,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 269,
+      "line": 275,
       "item": "trait ClusterClientIo::change_invisible_time",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3878,7 +3878,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 277,
+      "line": 283,
       "item": "trait ClusterClientIo::end_transaction",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3886,7 +3886,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 285,
+      "line": 291,
       "item": "trait ClusterClientIo::find_subscribe_broker_addr",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3894,7 +3894,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 292,
+      "line": 298,
       "item": "trait ClusterClientIo::refresh_topic_route",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3902,7 +3902,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 294,
+      "line": 300,
       "item": "trait ClusterClientIo::broker_name_for_queue",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3910,7 +3910,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 296,
+      "line": 302,
       "item": "trait ClusterClientIo::pull_outcome_from_broker",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3918,7 +3918,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 304,
+      "line": 310,
       "item": "trait ClusterClientIo::consumer_send_message_back",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3926,7 +3926,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 315,
+      "line": 321,
       "item": "trait ClusterClientIo::update_consumer_offset",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3934,7 +3934,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 322,
+      "line": 328,
       "item": "trait ClusterClientIo::query_consumer_offset",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3942,7 +3942,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 329,
+      "line": 335,
       "item": "trait ClusterClientIo::min_offset",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3950,7 +3950,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 336,
+      "line": 342,
       "item": "trait ClusterClientIo::max_offset",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3958,7 +3958,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 343,
+      "line": 349,
       "item": "trait ClusterClientIo::search_offset",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3966,7 +3966,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 352,
+      "line": 358,
       "item": "trait ClusterClientIo::topic_config",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3974,7 +3974,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 359,
+      "line": 365,
       "item": "trait ClusterClientIo::subscription_group_config",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3982,7 +3982,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 366,
+      "line": 372,
       "item": "trait ClusterClientIo::broker_cluster_info",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3990,7 +3990,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 368,
+      "line": 374,
       "item": "trait ClusterClientIo::user",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -3998,7 +3998,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 375,
+      "line": 381,
       "item": "trait ClusterClientIo::acl",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -4006,7 +4006,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 670,
+      "line": 676,
       "item": "trait ClusterProducerIo::start",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -4014,7 +4014,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 672,
+      "line": 678,
       "item": "trait ClusterProducerIo::shutdown",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -4022,7 +4022,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 674,
+      "line": 680,
       "item": "trait ClusterProducerIo::recall_message",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -4030,7 +4030,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 680,
+      "line": 686,
       "item": "trait ClusterProducerIo::fetch_publish_message_queues",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -4038,7 +4038,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 682,
+      "line": 688,
       "item": "trait ClusterProducerIo::send",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
@@ -4046,7 +4046,7 @@
     {
       "kind": "native_async",
       "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "line": 684,
+      "line": 690,
       "item": "trait ClusterProducerIo::send_to_queue",
       "owner": "proxy-cluster",
       "decision": "preferred-static-dispatch"
