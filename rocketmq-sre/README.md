@@ -156,7 +156,29 @@ See:
 - [Phase 03 Plan, Policy, Approval, and Audit](docs/phase03-plan-policy-approval.md)
 - [Phase 03 heterogeneous Critic](docs/phase03-heterogeneous-critic.md)
 - [Phase 05 OpenAPI, SDK, and CLI](docs/phase05-openapi-sdk-cli.md)
+- [Phase 05 enterprise validation record](docs/phase05-enterprise-validation-record.md)
+- [Phase 05 operations guide](docs/phase05-operations-guide.md)
+- [Phase 05 extension guide](docs/phase05-extension-guide.md)
+- [Phase 5 new-engineer handoff checklist](docs/phase05-handoff-checklist.md)
 - [Local stack](deploy/dev/README.md)
+
+## Phase 05 enterprise acceptance
+
+The reproducible Phase 05 acceptance combines a 100-cluster/two-region
+PostgreSQL scale scenario, current/N-1 component compatibility, enterprise
+integration idempotency, regional Fleet release orchestration, an isolated
+Control Plane database restore, and a bounded Kind Broker rebuild exercise:
+
+```powershell
+.\scripts\phase05-enterprise-smoke.ps1 `
+  -Kubeconfig G:\rocketmq-sre-phase2-temp\kind-access\rocketmq-sre-phase00.kubeconfig
+```
+
+The smoke writes a redacted machine-readable result outside the repository.
+The committed validation record states the exact tested boundary: the Kind
+exercise proves component rebuild and live send/consume/query recovery, but
+the development Broker uses `emptyDir`, so it does not claim historical
+message restoration.
 
 ## Kind acceptance
 
