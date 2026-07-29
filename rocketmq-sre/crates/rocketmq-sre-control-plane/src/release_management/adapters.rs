@@ -76,6 +76,9 @@ impl IntegrationOutboxWorker {
             IntegrationAdapterKind::ChatOpsWebhook | IntegrationAdapterKind::Pager | IntegrationAdapterKind::Email => {
                 Err("adapter_boundary_mismatch")
             }
+            IntegrationAdapterKind::MockCmdb
+            | IntegrationAdapterKind::MockGitOps
+            | IntegrationAdapterKind::SignedReleaseWebhook => Err("inbound_only_adapter"),
         }
     }
 
