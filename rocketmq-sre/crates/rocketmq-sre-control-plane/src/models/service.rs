@@ -1814,6 +1814,7 @@ mod tests {
     use std::time::SystemTime;
     use std::time::UNIX_EPOCH;
 
+    use rocketmq_sre_contracts::ModelProfileId;
     use rocketmq_sre_model_gateway::SecretReference;
     use rocketmq_sre_model_gateway::TransportFuture;
     use rocketmq_sre_model_gateway::TransportRequest;
