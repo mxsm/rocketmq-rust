@@ -136,6 +136,7 @@ fn ready_pod() -> Pod {
                 last_probe_time: None,
                 last_transition_time: None,
                 message: None,
+                observed_generation: None,
                 reason: None,
                 status: "True".to_owned(),
                 type_: "Ready".to_owned(),
