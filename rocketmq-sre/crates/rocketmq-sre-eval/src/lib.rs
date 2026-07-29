@@ -73,6 +73,11 @@ use rocketmq_sre_contracts::ExecutionTransition;
 use rocketmq_sre_contracts::ExecutorLease;
 use rocketmq_sre_contracts::ExternalApprovalInput;
 use rocketmq_sre_contracts::FenceAck;
+use rocketmq_sre_contracts::FinOpsAllocationPolicy;
+use rocketmq_sre_contracts::FinOpsBudget;
+use rocketmq_sre_contracts::FinOpsBudgetDecision;
+use rocketmq_sre_contracts::FinOpsCostEntry;
+use rocketmq_sre_contracts::FinOpsReport;
 use rocketmq_sre_contracts::FleetHealthReport;
 use rocketmq_sre_contracts::GrantVerification;
 use rocketmq_sre_contracts::GovernanceAdmission;
@@ -657,6 +662,26 @@ fn generated_schemas() -> Result<Vec<(&'static str, serde_json::Value)>, EvalErr
             serde_json::to_value(schema_for!(GovernanceEvent))?,
         ),
         (
+            "finops-cost-entry.schema.json",
+            serde_json::to_value(schema_for!(FinOpsCostEntry))?,
+        ),
+        (
+            "finops-budget.schema.json",
+            serde_json::to_value(schema_for!(FinOpsBudget))?,
+        ),
+        (
+            "finops-budget-decision.schema.json",
+            serde_json::to_value(schema_for!(FinOpsBudgetDecision))?,
+        ),
+        (
+            "finops-allocation-policy.schema.json",
+            serde_json::to_value(schema_for!(FinOpsAllocationPolicy))?,
+        ),
+        (
+            "finops-report.schema.json",
+            serde_json::to_value(schema_for!(FinOpsReport))?,
+        ),
+        (
             "notification-delivery.schema.json",
             serde_json::to_value(schema_for!(NotificationDelivery))?,
         ),
@@ -1016,6 +1041,26 @@ signals:
             (
                 "governance-event.schema.json",
                 include_str!("../../../schemas/governance-event.schema.json"),
+            ),
+            (
+                "finops-cost-entry.schema.json",
+                include_str!("../../../schemas/finops-cost-entry.schema.json"),
+            ),
+            (
+                "finops-budget.schema.json",
+                include_str!("../../../schemas/finops-budget.schema.json"),
+            ),
+            (
+                "finops-budget-decision.schema.json",
+                include_str!("../../../schemas/finops-budget-decision.schema.json"),
+            ),
+            (
+                "finops-allocation-policy.schema.json",
+                include_str!("../../../schemas/finops-allocation-policy.schema.json"),
+            ),
+            (
+                "finops-report.schema.json",
+                include_str!("../../../schemas/finops-report.schema.json"),
             ),
             (
                 "notification-delivery.schema.json",
