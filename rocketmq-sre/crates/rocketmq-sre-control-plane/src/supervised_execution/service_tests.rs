@@ -26,6 +26,7 @@ use rocketmq_sre_contracts::CoverageStatus;
 use rocketmq_sre_contracts::DiagnosisRevisionId;
 use rocketmq_sre_contracts::EvidenceContent;
 use rocketmq_sre_contracts::EvidenceExposure;
+use rocketmq_sre_contracts::EvidenceId;
 use rocketmq_sre_contracts::EvidenceQuery;
 use rocketmq_sre_contracts::IncidentId;
 use rocketmq_sre_contracts::PlanStatus;
@@ -355,6 +356,83 @@ async fn postgres_plan_policy_approval_audit_and_quarantine_are_fail_closed() {
         panic!("R3 must never create an ActionPlan");
     };
     assert!(!runbook.execution_supported);
+}
+
+#[tokio::test]
+#[ignore = "requires ROCKETMQ_SRE_TEST_DATABASE_URL pointing to Docker PostgreSQL"]
+async fn postgres_latest_evidence_uses_collection_order_when_observation_times_tie() {
+    let Some(database_url) = std::env::var("ROCKETMQ_SRE_TEST_DATABASE_URL").ok() else {
+        return;
+    };
+    let repository = PostgresRepository::connect(&database_url, 5).await.expect("repository");
+    let fixture = seed_fixture(&repository).await;
+    let auth = auth(fixture.tenant_id, fixture.cluster_id, "operator-a", &["operator"]);
+    let resource = format!("deployment/default/same-second-{}", Uuid::new_v4());
+    let observed_at = (Utc::now() - Duration::minutes(1))
+        .with_nanosecond(0)
+        .expect("whole-second timestamp");
+    let random_bits = Uuid::new_v4().as_u128();
+    let first_id = EvidenceId::from_uuid(Uuid::from_u128(random_bits | (1_u128 << 127)));
+    let second_id = EvidenceId::from_uuid(Uuid::from_u128(random_bits & !(1_u128 << 127)));
+    assert!(
+        first_id > second_id,
+        "fixture must make UUID ordering oppose collection order"
+    );
+
+    let mut persisted_ids = Vec::new();
+    for (evidence_id, revision) in [(first_id, 1_u8), (second_id, 2_u8)] {
+        let mut evidence = rocketmq_sre_contracts::EvidenceSnapshot::capture(
+            EvidenceQuery {
+                query_id: QueryId::new(),
+                correlation_id: CorrelationId::new(),
+                tenant_id: fixture.tenant_id,
+                cluster_id: fixture.cluster_id,
+                source: "same-second-regression".to_owned(),
+                resource: resource.clone(),
+                time_range: TimeRange::new(observed_at, observed_at).expect("time range"),
+            },
+            SchemaVersion::new("rocketmq-sre.evidence", 1, 0),
+            observed_at,
+            EvidenceContent::Inline(json!({ "revision": revision })),
+        )
+        .expect("same-second evidence");
+        evidence.evidence_id = evidence_id;
+        evidence.freshness_seconds = 600;
+        evidence.coverage = CoverageStatus::Available;
+        evidence.sensitivity = Sensitivity::Internal;
+        evidence.exposure = EvidenceExposure::Synthetic;
+        let persisted = repository
+            .persist_evidence(
+                &auth,
+                &evidence,
+                None,
+                Some(fixture.incident_id),
+                &evidence.content_hash,
+            )
+            .await
+            .expect("persist same-second evidence");
+        persisted_ids.push(persisted.evidence_id);
+    }
+    assert_eq!(persisted_ids, vec![first_id, second_id]);
+    sqlx::query(
+        "UPDATE evidence_snapshots
+         SET collected_at = CASE WHEN id = $1 THEN $3 ELSE $4 END
+         WHERE id IN ($1, $2)",
+    )
+    .bind(first_id.as_uuid())
+    .bind(second_id.as_uuid())
+    .bind(observed_at + Duration::seconds(1))
+    .bind(observed_at + Duration::seconds(2))
+    .execute(&repository.pool)
+    .await
+    .expect("set deterministic collection order");
+
+    let latest = repository
+        .latest_cluster_source_evidence(&auth, fixture.cluster_id, "same-second-regression", &resource)
+        .await
+        .expect("query latest evidence")
+        .expect("latest evidence");
+    assert_eq!(latest.evidence_id, second_id);
 }
 
 #[tokio::test]
