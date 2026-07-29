@@ -145,6 +145,43 @@ class FaultMatrixGuardTests(unittest.TestCase):
         result = self.run_guard("--policy-only", expect_success=False)
         self.assertIn("commitlog_offset_preserved", result.stderr)
 
+    def test_deliberate_fault_causality_regressions_are_rejected(self) -> None:
+        runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
+        source = runner.read_text(encoding="utf-8")
+
+        runner.write_text(
+            source.replace(
+                "eviction_api_used = $null -ne $evictionReplacementProxyPod",
+                "eviction_api_used = $true",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        result = self.run_guard("--policy-only", expect_success=False)
+        self.assertIn("evictionReplacementProxyPod", result.stderr)
+
+        runner.write_text(
+            source.replace(
+                "stateless_pod_rescheduled = $null -ne $replacementProxyPod",
+                "stateless_pod_rescheduled = $true",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        result = self.run_guard("--policy-only", expect_success=False)
+        self.assertIn("replacementProxyPod", result.stderr)
+
+        runner.write_text(
+            source.replace(
+                "leader_changed = $leaderAfterOrdinal -ne $leaderBeforeOrdinal",
+                "leader_changed = $leaderAfter.Output -ne $leaderBefore.Output",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        result = self.run_guard("--policy-only", expect_success=False)
+        self.assertIn("leaderAfterOrdinal", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

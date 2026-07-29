@@ -239,6 +239,13 @@ function Get-ControllerMetadata {
     Invoke-FaultDriver -SecretName 'rocketmq-fault-driver-baseline' -Arguments @('controller', 'getControllerMetaData', '-a', $address)
 }
 
+function Get-ControllerLeaderOrdinal {
+    param([Parameter(Mandatory)][object]$Metadata)
+    $match = [regex]::Match($Metadata.Output, 'rocketmq-controller-(\d+)')
+    Assert-True $match.Success 'Controller metadata must identify leader ordinal'
+    [int]$match.Groups[1].Value
+}
+
 function Invoke-FaultDriver {
     param(
         [Parameter(Mandatory)][string]$SecretName,
@@ -404,6 +411,7 @@ nodes:
     Assert-True ($nodes.Count -eq 4) 'fault cluster must contain exactly four nodes'
     $workers = @($nodes | Where-Object { -not $_.metadata.labels.'node-role.kubernetes.io/control-plane' })
     Assert-True ($workers.Count -eq 3) 'fault cluster must contain exactly three workers'
+    $workerNames = @($workers | ForEach-Object { $_.metadata.name })
 
     Invoke-Native docker @('build', '--file', (Join-Path $Root 'docker/Dockerfile.base'), '--target', 'fault-driver', '--tag', $FaultDriverImage, $Root) | Out-Null
     if ($Backend -eq 'kind') {
@@ -491,18 +499,44 @@ spec: { selector: { app: otel-collector }, ports: [{ name: otlp, port: 4317, tar
         rollback_status = $afterRollback.Output; pvc_uids = $pvcAfterUpgrade
     })
 
-    $evictionNode = ($workers | Select-Object -First 1).metadata.name
+    $proxyPodsBeforeEviction = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'app.kubernetes.io/component=proxy', '-o', 'json')).Output | ConvertFrom-Json).items
+    $evictionProxyPod = $proxyPodsBeforeEviction |
+        Where-Object {
+            $workerNames -contains $_.spec.nodeName -and
+            $null -eq $_.metadata.deletionTimestamp -and
+            @($_.status.conditions | Where-Object { $_.type -eq 'Ready' -and $_.status -eq 'True' }).Count -eq 1
+        } |
+        Select-Object -First 1
+    Assert-True ($null -ne $evictionProxyPod) 'a ready Proxy pod must exist before node eviction'
+    $evictionNode = $evictionProxyPod.spec.nodeName
+    $evictionProxyUid = $evictionProxyPod.metadata.uid
+    $proxyUidsBeforeEviction = @($proxyPodsBeforeEviction | ForEach-Object { $_.metadata.uid })
     $drain = Invoke-Native kubectl @('drain', $evictionNode, '--pod-selector=app.kubernetes.io/component=proxy', '--ignore-daemonsets', '--delete-emptydir-data', '--timeout=180s')
     Wait-Workloads
+    $proxyPodsAfterEviction = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'app.kubernetes.io/component=proxy', '-o', 'json')).Output | ConvertFrom-Json).items
+    $evictionReplacementProxyPod = $proxyPodsAfterEviction |
+        Where-Object {
+            $proxyUidsBeforeEviction -notcontains $_.metadata.uid -and
+            $_.spec.nodeName -ne $evictionNode -and
+            $null -eq $_.metadata.deletionTimestamp -and
+            @($_.status.conditions | Where-Object { $_.type -eq 'Ready' -and $_.status -eq 'True' }).Count -eq 1
+        } |
+        Select-Object -First 1
     $afterEviction = Query-AcknowledgedMessage $ack.Id
     $pdb = (Invoke-Native kubectl @('-n', $Namespace, 'get', 'pdb', '-o', 'wide')).Output
     Invoke-Native kubectl @('uncordon', $evictionNode) | Out-Null
     $nodeStatus = (Invoke-Native kubectl @('get', 'node', $evictionNode, '-o', 'json')).Output
     Complete-Scenario 'node_eviction' ([ordered]@{
-        eviction_api_used = $drain.Output -match 'drain'; pdb_respected = $pdb -match 'rocketmq-proxy'
+        eviction_api_used = $null -ne $evictionReplacementProxyPod; pdb_respected = $pdb -match 'rocketmq-proxy'
         acknowledged_message_visible = $true; pvc_uid_set_preserved = $InitialPvcUids -eq (Get-PvcUidSet)
         node_uncordoned = $nodeStatus -notmatch 'Unschedulable.*true'
-    }) ([ordered]@{ drain_output = $drain.Output; pdb_status = $pdb; message_after = $afterEviction.Output; pvc_uids = Get-PvcUidSet; node_status = $nodeStatus })
+    }) ([ordered]@{
+        drain_output = "deletedUid=$evictionProxyUid replacementUid=$($evictionReplacementProxyPod.metadata.uid)`n$($drain.Output)"
+        pdb_status = $pdb
+        message_after = $afterEviction.Output
+        pvc_uids = Get-PvcUidSet
+        node_status = $nodeStatus
+    })
 
     $collectorDown = Invoke-Native kubectl @('-n', 'observability', 'scale', 'deployment/otel-collector', '--replicas=0')
     $outageStart = [Diagnostics.Stopwatch]::StartNew()
@@ -517,32 +551,75 @@ spec: { selector: { app: otel-collector }, ports: [{ name: otlp, port: 4317, tar
         collector_recovered = $collectorRecovery.ExitCode -eq 0; slo_budget_satisfied = $outageStart.Elapsed.TotalSeconds -lt 30
     }) ([ordered]@{ collector_scale = $collectorDown.Output; message_during_outage = $duringOutage.Output; telemetry_metrics = $telemetryLogs; collector_recovery = $collectorRecovery.Output; slo_report = "message query seconds=$($outageStart.Elapsed.TotalSeconds) budget=30" })
 
-    $pressureNode = ($workers | Select-Object -Last 1).metadata.name
+    $proxyPodsBeforePressure = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'app.kubernetes.io/component=proxy', '-o', 'json')).Output | ConvertFrom-Json).items
+    $pressureProxyPod = $proxyPodsBeforePressure |
+        Where-Object {
+            $workerNames -contains $_.spec.nodeName -and
+            $null -eq $_.metadata.deletionTimestamp -and
+            @($_.status.conditions | Where-Object { $_.type -eq 'Ready' -and $_.status -eq 'True' }).Count -eq 1
+        } |
+        Select-Object -First 1
+    Assert-True ($null -ne $pressureProxyPod) 'a ready Proxy pod must exist before disk-pressure injection'
+    $pressureNode = $pressureProxyPod.spec.nodeName
+    $pressureProxyUid = $pressureProxyPod.metadata.uid
+    $proxyUidsBeforePressure = @($proxyPodsBeforePressure | ForEach-Object { $_.metadata.uid })
     $taint = Invoke-Native kubectl @('taint', 'node', $pressureNode, 'node.kubernetes.io/disk-pressure=true:NoSchedule', '--overwrite')
-    $proxyPod = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'app.kubernetes.io/component=proxy', '-o', 'json')).Output | ConvertFrom-Json).items | Where-Object { $_.spec.nodeName -eq $pressureNode } | Select-Object -First 1
-    if ($proxyPod) { Invoke-Native kubectl @('-n', $Namespace, 'delete', 'pod', $proxyPod.metadata.name, '--wait=false') | Out-Null }
+    Invoke-Native kubectl @('-n', $Namespace, 'delete', 'pod', $pressureProxyPod.metadata.name, '--wait=false') | Out-Null
     Wait-Workloads
+    $proxyPodsAfterPressure = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'app.kubernetes.io/component=proxy', '-o', 'json')).Output | ConvertFrom-Json).items
+    $replacementProxyPod = $proxyPodsAfterPressure |
+        Where-Object {
+            $proxyUidsBeforePressure -notcontains $_.metadata.uid -and
+            $_.spec.nodeName -ne $pressureNode -and
+            $null -eq $_.metadata.deletionTimestamp -and
+            @($_.status.conditions | Where-Object { $_.type -eq 'Ready' -and $_.status -eq 'True' }).Count -eq 1
+        } |
+        Select-Object -First 1
     $podPlacement = (Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'app.kubernetes.io/component=proxy', '-o', 'wide')).Output
     $afterPressure = Query-AcknowledgedMessage $ack.Id
     Invoke-Native kubectl @('taint', 'node', $pressureNode, 'node.kubernetes.io/disk-pressure:NoSchedule-') | Out-Null
     $pressureStatus = (Invoke-Native kubectl @('get', 'node', $pressureNode, '-o', 'json')).Output
     Complete-Scenario 'disk_pressure' ([ordered]@{
-        disk_pressure_taint_observed = $taint.Output -match 'tainted'; stateless_pod_rescheduled = $podPlacement -notmatch "$pressureNode.*Terminating"
+        disk_pressure_taint_observed = $taint.Output -match 'tainted'
+        stateless_pod_rescheduled = $null -ne $replacementProxyPod
         acknowledged_message_visible = $true; pvc_uid_set_preserved = $InitialPvcUids -eq (Get-PvcUidSet); taint_removed = $pressureStatus -notmatch 'node.kubernetes.io/disk-pressure'
-    }) ([ordered]@{ taint_status = $taint.Output; pod_reschedule = $podPlacement; message_after = $afterPressure.Output; pvc_uids = Get-PvcUidSet; node_status = $pressureStatus })
+    }) ([ordered]@{
+        taint_status = $taint.Output
+        pod_reschedule = "deletedUid=$pressureProxyUid replacementUid=$($replacementProxyPod.metadata.uid)`n$podPlacement"
+        message_after = $afterPressure.Output
+        pvc_uids = Get-PvcUidSet
+        node_status = $pressureStatus
+    })
 
     $leaderBefore = Get-ControllerMetadata
-    $leaderPodMatch = [regex]::Match($leaderBefore.Output, 'rocketmq-controller-(\d+)')
-    Assert-True $leaderPodMatch.Success 'Controller metadata must identify leader ordinal'
-    $leaderPod = "rocketmq-controller-$($leaderPodMatch.Groups[1].Value)"
+    $leaderBeforeOrdinal = Get-ControllerLeaderOrdinal $leaderBefore
+    $leaderPod = "rocketmq-controller-$leaderBeforeOrdinal"
     Invoke-Native kubectl @('-n', $Namespace, 'delete', 'pod', $leaderPod, '--wait=false') | Out-Null
+    $leaderAfter = $null
+    $leaderAfterOrdinal = $leaderBeforeOrdinal
+    $leaderElectionDeadline = [DateTimeOffset]::UtcNow.AddSeconds(180)
+    do {
+        try {
+            $candidateMetadata = Get-ControllerMetadata
+            $candidateOrdinal = Get-ControllerLeaderOrdinal $candidateMetadata
+            if ($candidateOrdinal -ne $leaderBeforeOrdinal) {
+                $leaderAfter = $candidateMetadata
+                $leaderAfterOrdinal = $candidateOrdinal
+            }
+        } catch {
+            # Controller metadata can be temporarily unavailable during election.
+        }
+        if ($null -eq $leaderAfter) {
+            Start-Sleep -Seconds 5
+        }
+    } while ($null -eq $leaderAfter -and [DateTimeOffset]::UtcNow -lt $leaderElectionDeadline)
+    Assert-True ($null -ne $leaderAfter) 'Controller must elect a different leader ordinal before the deadline'
     Invoke-Native kubectl @('-n', $Namespace, 'rollout', 'status', 'statefulset/rocketmq-controller', '--timeout=180s') | Out-Null
-    $leaderAfter = Get-ControllerMetadata
     $controllerStatus = (Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'app.kubernetes.io/component=controller', '-o', 'wide')).Output
     $controllerState = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'statefulset/rocketmq-controller', '-o', 'json')).Output | ConvertFrom-Json).status
     $afterLeader = Query-AcknowledgedMessage $ack.Id
     Complete-Scenario 'controller_leader_failure' ([ordered]@{
-        leader_changed = $leaderAfter.Output -ne $leaderBefore.Output; controller_quorum_preserved = $controllerState.readyReplicas -ge 2
+        leader_changed = $leaderAfterOrdinal -ne $leaderBeforeOrdinal; controller_quorum_preserved = $controllerState.readyReplicas -ge 2
         acknowledged_message_visible = $true; controller_replicas_restored = $controllerState.readyReplicas -eq 3
     }) ([ordered]@{ leader_before = $leaderBefore.Output; leader_after = $leaderAfter.Output; quorum_status = $controllerStatus; message_after = $afterLeader.Output; controller_status = $controllerStatus })
 

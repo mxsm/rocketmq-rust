@@ -212,6 +212,14 @@ def validate_sources(guard: Guard) -> None:
         "queue_offset_preserved",
         "commitlog_offset_preserved",
         "pvc_uid_set_preserved",
+        "$evictionProxyUid",
+        "$proxyUidsBeforeEviction -notcontains",
+        "eviction_api_used = $null -ne $evictionReplacementProxyPod",
+        "$pressureProxyUid",
+        "$proxyUidsBeforePressure -notcontains",
+        "stateless_pod_rescheduled = $null -ne $replacementProxyPod",
+        "Get-ControllerLeaderOrdinal",
+        "leader_changed = $leaderAfterOrdinal -ne $leaderBeforeOrdinal",
     ):
         guard.require(marker in runner, f"fault runner contract marker missing: {marker}")
     guard.require("Mode -eq \"Validate\"" in runner, "runner must provide a non-dynamic Validate mode")
