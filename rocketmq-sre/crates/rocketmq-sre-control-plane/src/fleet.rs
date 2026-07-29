@@ -18,6 +18,8 @@ mod repository;
 mod service;
 
 #[cfg(test)]
+mod repository_scale_tests;
+#[cfg(test)]
 mod repository_tests;
 
 pub(crate) use api::routes;
