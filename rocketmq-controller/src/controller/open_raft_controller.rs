@@ -897,6 +897,15 @@ impl Controller for OpenRaftController {
                     return;
                 }
 
+                let heartbeat_ages = node
+                    .store()
+                    .state_machine
+                    .replicas_info_manager()
+                    .heartbeat_age_samples_at(now_millis);
+                for age_millis in heartbeat_ages {
+                    rocketmq_observability::metrics::controller::record_heartbeat_age(age_millis);
+                }
+
                 let scan_span = rocketmq_observability::trace::controller::heartbeat_scan_span();
                 match Self::scan_not_active_broker_once(node.clone(), now_millis)
                     .instrument(scan_span.clone())
