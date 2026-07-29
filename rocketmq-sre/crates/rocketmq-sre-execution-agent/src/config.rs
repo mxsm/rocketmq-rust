@@ -98,6 +98,8 @@ pub struct ExecutionAgentConfig {
     pub(crate) logger_ttl_enabled: bool,
     pub(crate) proxy_scale_out_enabled: bool,
     pub(crate) proxy_scale_targets: BTreeSet<String>,
+    pub(crate) telemetry_collector_restart_enabled: bool,
+    pub(crate) telemetry_collector_restart_targets: BTreeSet<String>,
     pub(crate) proxy_restart: Option<ProxyRestartDriverConfig>,
     pub(crate) broker_admin: Option<BrokerAdminDriverConfig>,
 }
@@ -137,6 +139,13 @@ impl ExecutionAgentConfig {
         let proxy_scale_out_enabled = parse_env("ROCKETMQ_SRE_AGENT_ENABLE_PROXY_SCALE_OUT", false)?;
         let proxy_scale_targets = if proxy_scale_out_enabled {
             parse_kubernetes_targets(&required("ROCKETMQ_SRE_AGENT_PROXY_SCALE_TARGETS")?)?
+        } else {
+            BTreeSet::new()
+        };
+        let telemetry_collector_restart_enabled =
+            parse_env("ROCKETMQ_SRE_AGENT_ENABLE_TELEMETRY_COLLECTOR_RESTART", false)?;
+        let telemetry_collector_restart_targets = if telemetry_collector_restart_enabled {
+            parse_kubernetes_targets(&required("ROCKETMQ_SRE_AGENT_TELEMETRY_COLLECTOR_RESTART_TARGETS")?)?
         } else {
             BTreeSet::new()
         };
@@ -181,6 +190,8 @@ impl ExecutionAgentConfig {
             logger_ttl_enabled,
             proxy_scale_out_enabled,
             proxy_scale_targets,
+            telemetry_collector_restart_enabled,
+            telemetry_collector_restart_targets,
             proxy_restart,
             broker_admin,
         })
@@ -211,6 +222,14 @@ impl Debug for ExecutionAgentConfig {
             .field("logger_ttl_enabled", &self.logger_ttl_enabled)
             .field("proxy_scale_out_enabled", &self.proxy_scale_out_enabled)
             .field("proxy_scale_target_count", &self.proxy_scale_targets.len())
+            .field(
+                "telemetry_collector_restart_enabled",
+                &self.telemetry_collector_restart_enabled,
+            )
+            .field(
+                "telemetry_collector_restart_target_count",
+                &self.telemetry_collector_restart_targets.len(),
+            )
             .field("proxy_restart", &self.proxy_restart)
             .field("broker_admin", &self.broker_admin)
             .finish()
@@ -437,6 +456,8 @@ mod tests {
             logger_ttl_enabled: false,
             proxy_scale_out_enabled: false,
             proxy_scale_targets: BTreeSet::new(),
+            telemetry_collector_restart_enabled: false,
+            telemetry_collector_restart_targets: BTreeSet::new(),
             proxy_restart: None,
             broker_admin: None,
         };
