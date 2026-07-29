@@ -627,7 +627,7 @@ fn occurrence_sequence(
     let digest = Sha256::digest(material.as_bytes());
     let mut bytes = [0_u8; 8];
     bytes.copy_from_slice(&digest[..8]);
-    u64::from_be_bytes(bytes)
+    u64::from_be_bytes(bytes) & (i64::MAX as u64)
 }
 
 fn deterministic_uuid(material: &str) -> Uuid {
@@ -746,6 +746,24 @@ mod tests {
         assert_eq!(first.id, retry.id);
         assert_eq!(first.sequence, retry.sequence);
         assert_eq!(first.fingerprint, retry.fingerprint);
+    }
+
+    #[test]
+    fn derived_alertmanager_sequences_fit_postgres_bigint() {
+        let start = chrono::DateTime::parse_from_rfc3339("2026-07-30T00:00:00Z")
+            .expect("fixed timestamp")
+            .with_timezone(&Utc);
+        for offset in 0..128 {
+            let starts_at = start + chrono::TimeDelta::seconds(offset);
+            for status in [AlertStatus::Firing, AlertStatus::Resolved] {
+                let ends_at = (status == AlertStatus::Resolved).then_some(starts_at + chrono::TimeDelta::seconds(30));
+                let sequence = occurrence_sequence(status, starts_at, ends_at);
+                assert!(
+                    i64::try_from(sequence).is_ok(),
+                    "derived sequence {sequence} must fit BIGINT"
+                );
+            }
+        }
     }
 
     #[test]
