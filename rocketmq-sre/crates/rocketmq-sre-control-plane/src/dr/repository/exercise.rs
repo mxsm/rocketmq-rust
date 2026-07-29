@@ -22,8 +22,6 @@ use rocketmq_sre_contracts::DrExerciseState;
 use rocketmq_sre_contracts::DrFinding;
 use rocketmq_sre_contracts::RecoveryCheckpoint;
 use rocketmq_sre_contracts::TenantId;
-use sqlx::Row;
-
 use super::DrRepository;
 use super::support::action_item_from_row;
 use super::support::action_item_status_name;
@@ -41,7 +39,10 @@ use crate::dr::model::DrExerciseQuery;
 use crate::dr::model::bounded_limit;
 
 impl DrRepository {
-    pub(super) async fn create_exercise(&self, exercise: &DrExercise) -> Result<DrExercise, ControlPlaneError> {
+    pub(in crate::dr) async fn create_exercise(
+        &self,
+        exercise: &DrExercise,
+    ) -> Result<DrExercise, ControlPlaneError> {
         let row = sqlx::query(
             "INSERT INTO dr_exercises (
                 id, plan_id, tenant_id, region_id, cluster_id, exercise_mode,
@@ -73,7 +74,7 @@ impl DrRepository {
         exercise_from_row(&row)
     }
 
-    pub(super) async fn get_exercise(
+    pub(in crate::dr) async fn get_exercise(
         &self,
         tenant_id: TenantId,
         id: DrExerciseId,
@@ -87,7 +88,7 @@ impl DrRepository {
         exercise_from_row(&row)
     }
 
-    pub(super) async fn list_exercises(
+    pub(in crate::dr) async fn list_exercises(
         &self,
         tenant_id: TenantId,
         query: &DrExerciseQuery,
@@ -117,7 +118,7 @@ impl DrRepository {
             .map(|items| (items, truncated))
     }
 
-    pub(super) async fn transition_exercise(
+    pub(in crate::dr) async fn transition_exercise(
         &self,
         current: &DrExercise,
         next_state: DrExerciseState,
@@ -176,7 +177,7 @@ impl DrRepository {
         exercise_from_row(&row)
     }
 
-    pub(super) async fn record_checkpoint(
+    pub(in crate::dr) async fn record_checkpoint(
         &self,
         checkpoint: &RecoveryCheckpoint,
     ) -> Result<RecoveryCheckpoint, ControlPlaneError> {
@@ -235,7 +236,7 @@ impl DrRepository {
         checkpoint_from_row(&row)
     }
 
-    pub(super) async fn list_checkpoints(
+    pub(in crate::dr) async fn list_checkpoints(
         &self,
         tenant_id: TenantId,
         exercise_id: DrExerciseId,
@@ -254,7 +255,7 @@ impl DrRepository {
         rows.into_iter().map(|row| checkpoint_from_row(&row)).collect()
     }
 
-    pub(super) async fn find_finding_by_code(
+    pub(in crate::dr) async fn find_finding_by_code(
         &self,
         tenant_id: TenantId,
         exercise_id: DrExerciseId,
@@ -277,7 +278,7 @@ impl DrRepository {
         .transpose()
     }
 
-    pub(super) async fn create_finding_and_action(
+    pub(in crate::dr) async fn create_finding_and_action(
         &self,
         finding: &DrFinding,
         action: &DrActionItem,
@@ -328,7 +329,7 @@ impl DrRepository {
         Ok((finding.clone(), action_item_from_row(&action_row)?))
     }
 
-    pub(super) async fn list_findings(
+    pub(in crate::dr) async fn list_findings(
         &self,
         tenant_id: TenantId,
         exercise_id: DrExerciseId,
@@ -347,7 +348,7 @@ impl DrRepository {
         rows.into_iter().map(|row| finding_from_row(&row)).collect()
     }
 
-    pub(super) async fn list_action_items(
+    pub(in crate::dr) async fn list_action_items(
         &self,
         tenant_id: TenantId,
         query: &DrActionItemQuery,
@@ -377,7 +378,7 @@ impl DrRepository {
             .map(|items| (items, truncated))
     }
 
-    pub(super) async fn get_action_item(
+    pub(in crate::dr) async fn get_action_item(
         &self,
         tenant_id: TenantId,
         id: DrActionItemId,
@@ -391,7 +392,7 @@ impl DrRepository {
         action_item_from_row(&row)
     }
 
-    pub(super) async fn update_action_item(
+    pub(in crate::dr) async fn update_action_item(
         &self,
         current: &DrActionItem,
         next: &DrActionItem,
@@ -453,25 +454,6 @@ impl DrRepository {
         action_item_from_row(&row)
     }
 
-    pub(super) async fn unresolved_finding_count(
-        &self,
-        tenant_id: TenantId,
-        exercise_id: DrExerciseId,
-    ) -> Result<u64, ControlPlaneError> {
-        let count = sqlx::query(
-            "SELECT COUNT(*) AS count
-             FROM dr_findings
-             WHERE tenant_id = $1 AND exercise_id = $2 AND finding_status <> 'resolved'",
-        )
-        .bind(tenant_id.as_uuid())
-        .bind(exercise_id.as_uuid())
-        .fetch_one(&self.pool)
-        .await?
-        .try_get::<i64, _>("count")?;
-        u64::try_from(count).map_err(|_| {
-            ControlPlaneError::validation("invalid_persisted_dr_state", "unresolved finding count is negative")
-        })
-    }
 }
 
 fn i64_value(value: u64, name: &str) -> Result<i64, ControlPlaneError> {
