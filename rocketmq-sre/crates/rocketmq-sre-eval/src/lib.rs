@@ -626,10 +626,7 @@ fn generated_schemas() -> Result<Vec<(&'static str, serde_json::Value)>, EvalErr
             "recovery-checkpoint.schema.json",
             serde_json::to_value(schema_for!(RecoveryCheckpoint))?,
         ),
-        (
-            "dr-finding.schema.json",
-            serde_json::to_value(schema_for!(DrFinding))?,
-        ),
+        ("dr-finding.schema.json", serde_json::to_value(schema_for!(DrFinding))?),
         (
             "dr-action-item.schema.json",
             serde_json::to_value(schema_for!(DrActionItem))?,
