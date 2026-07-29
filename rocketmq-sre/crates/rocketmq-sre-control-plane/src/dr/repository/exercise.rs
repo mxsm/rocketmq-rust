@@ -41,10 +41,7 @@ use crate::dr::model::DrExerciseQuery;
 use crate::dr::model::bounded_limit;
 
 impl DrRepository {
-    pub(super) async fn create_exercise(
-        &self,
-        exercise: &DrExercise,
-    ) -> Result<DrExercise, ControlPlaneError> {
+    pub(super) async fn create_exercise(&self, exercise: &DrExercise) -> Result<DrExercise, ControlPlaneError> {
         let row = sqlx::query(
             "INSERT INTO dr_exercises (
                 id, plan_id, tenant_id, region_id, cluster_id, exercise_mode,
@@ -200,19 +197,34 @@ impl DrRepository {
         .bind(checkpoint.id.as_uuid())
         .bind(checkpoint.exercise_id.as_uuid())
         .bind(i32::try_from(checkpoint.sequence).map_err(|_| {
-            ControlPlaneError::validation("invalid_recovery_checkpoint", "checkpoint sequence exceeds the supported range")
+            ControlPlaneError::validation(
+                "invalid_recovery_checkpoint",
+                "checkpoint sequence exceeds the supported range",
+            )
         })?)
         .bind(&checkpoint.key)
         .bind(&checkpoint.title)
         .bind(checkpoint_status_name(checkpoint.status))
-        .bind(i64_value(checkpoint.expected_duration_seconds, "expected checkpoint duration")?)
-        .bind(optional_i64(checkpoint.actual_duration_seconds, "actual checkpoint duration")?)
+        .bind(i64_value(
+            checkpoint.expected_duration_seconds,
+            "expected checkpoint duration",
+        )?)
+        .bind(optional_i64(
+            checkpoint.actual_duration_seconds,
+            "actual checkpoint duration",
+        )?)
         .bind(optional_i64(checkpoint.observed_rpo_seconds, "observed RPO")?)
         .bind(checkpoint.manual_confirmation_required)
         .bind(&checkpoint.confirmed_by)
         .bind(checkpoint.cleanup_required)
         .bind(checkpoint.cleanup_complete)
-        .bind(checkpoint.evidence_ids.iter().map(|id| id.as_uuid()).collect::<Vec<_>>())
+        .bind(
+            checkpoint
+                .evidence_ids
+                .iter()
+                .map(|id| id.as_uuid())
+                .collect::<Vec<_>>(),
+        )
         .bind(&checkpoint.finding_codes)
         .bind(&checkpoint.note)
         .bind(checkpoint.started_at)
@@ -464,10 +476,7 @@ impl DrRepository {
 
 fn i64_value(value: u64, name: &str) -> Result<i64, ControlPlaneError> {
     i64::try_from(value).map_err(|_| {
-        ControlPlaneError::validation(
-            "invalid_dr_measurement",
-            format!("{name} exceeds the supported range"),
-        )
+        ControlPlaneError::validation("invalid_dr_measurement", format!("{name} exceeds the supported range"))
     })
 }
 
