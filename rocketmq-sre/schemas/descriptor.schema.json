@@ -318,6 +318,15 @@
       ],
       "type": "string"
     },
+    "IntegrationDataClass": {
+      "description": "Data classification declared by an enterprise integration descriptor.",
+      "enum": [
+        "aggregated_metadata",
+        "operational_metadata",
+        "restricted_metadata"
+      ],
+      "type": "string"
+    },
     "IntegrationDescriptor": {
       "description": "Extension contract for an external system integration.",
       "properties": {
@@ -340,6 +349,26 @@
         },
         "integration_kind": {
           "type": "string"
+        },
+        "interfaces": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/IntegrationSpiCapability"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "operational": {
+          "$ref": "#/$defs/IntegrationOperationalPolicy",
+          "default": {
+            "data_class": "aggregated_metadata",
+            "health_check_interval_seconds": 300,
+            "max_attempts": 5,
+            "rate_limit_per_minute": 60,
+            "required_scopes": [],
+            "secret_required": true,
+            "timeout_seconds": 8
+          }
         },
         "outbound": {
           "type": "boolean"
@@ -379,6 +408,71 @@
         "outbound"
       ],
       "type": "object"
+    },
+    "IntegrationOperationalPolicy": {
+      "additionalProperties": false,
+      "description": "Bounded retry and health policy attached to one adapter descriptor.",
+      "properties": {
+        "data_class": {
+          "$ref": "#/$defs/IntegrationDataClass",
+          "default": "aggregated_metadata"
+        },
+        "health_check_interval_seconds": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_attempts": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rate_limit_per_minute": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "required_scopes": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "secret_required": {
+          "type": "boolean"
+        },
+        "timeout_seconds": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "rate_limit_per_minute",
+        "timeout_seconds",
+        "max_attempts",
+        "health_check_interval_seconds",
+        "secret_required"
+      ],
+      "type": "object"
+    },
+    "IntegrationSpiCapability": {
+      "description": "Process-isolated integration capabilities exposed by the SPI registry.",
+      "enum": [
+        "inbound_event",
+        "outbound_notification",
+        "ticketing",
+        "on_call",
+        "cmdb",
+        "desired_state",
+        "release_event",
+        "external_policy"
+      ],
+      "type": "string"
     },
     "ProviderDescriptor": {
       "description": "Model provider capabilities without provider SDK coupling.",
