@@ -95,6 +95,7 @@ use support::isolated_pool;
 use support::seed_fixture;
 use support::seed_logger_fixture;
 use support::seed_proxy_restart_fixture;
+use support::seed_telemetry_collector_restart_fixture;
 
 type TestFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ExecutorError>> + Send + 'a>>;
 
@@ -552,6 +553,19 @@ async fn proxy_restart_autonomous_execution_uses_dynamic_safety_and_succeeds() {
     cleanup_schema(&run.pool, &run.schema).await;
 }
 
+#[tokio::test]
+#[ignore = "requires ROCKETMQ_SRE_TEST_DATABASE_URL pointing to Docker PostgreSQL"]
+async fn telemetry_collector_restart_autonomous_execution_uses_dynamic_safety_and_succeeds() {
+    let signals = [signal(0, true), signal(1, true), signal(2, true), signal(602, true)];
+    let run = run_execution_for_action(&signals, true, ExecutionAction::TelemetryCollectorRestartOne).await;
+
+    assert_eq!(run.state, ExecutionState::Succeeded);
+    assert_eq!(run.dynamic_safety_calls, 1);
+    assert_eq!(run.dispatches, vec![false]);
+    assert_eq!(run.compensation_intents, 0);
+    cleanup_schema(&run.pool, &run.schema).await;
+}
+
 struct ExecutionRun {
     pool: PgPool,
     schema: String,
@@ -588,7 +602,8 @@ async fn run_execution_for_action(signals: &[Signal], autonomous: bool, action: 
         ExecutionAction::ProxyScaleOutOne => seed_fixture(&pool).await,
         ExecutionAction::ObservabilityLoggerLevelTtl => seed_logger_fixture(&pool).await,
         ExecutionAction::ProxyRestartOne => seed_proxy_restart_fixture(&pool).await,
-        _ => panic!("the executor integration flow supports only the three Wave 1 R1 scenarios under test"),
+        ExecutionAction::TelemetryCollectorRestartOne => seed_telemetry_collector_restart_fixture(&pool).await,
+        _ => panic!("the executor integration flow supports only the qualified R1 scenarios under test"),
     };
     if autonomous {
         fixture.request.approvals.clear();
@@ -601,7 +616,10 @@ async fn run_execution_for_action(signals: &[Signal], autonomous: bool, action: 
             include_str!("../../../config/actions/observability.logger_level_ttl.v1.yaml")
         }
         ExecutionAction::ProxyRestartOne => include_str!("../../../config/actions/proxy.restart_one.v1.yaml"),
-        _ => panic!("the executor integration flow supports only the three Wave 1 R1 descriptors under test"),
+        ExecutionAction::TelemetryCollectorRestartOne => {
+            include_str!("../../../config/actions/telemetry.collector.restart_one.v1.yaml")
+        }
+        _ => panic!("the executor integration flow supports only the qualified R1 descriptors under test"),
     };
     let mut descriptor: rocketmq_sre_contracts::ActionDescriptor =
         serde_yaml::from_str(descriptor_yaml).expect("R1 action descriptor");
