@@ -20,6 +20,7 @@
 
 use cheetah_string::CheetahString;
 use rand::seq::IndexedRandom;
+use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::mix_all;
 use rocketmq_protocol::protocol::admin::consume_stats::ConsumeStats;
 use rocketmq_protocol::protocol::body::broker_body::cluster_info::ClusterInfo;
@@ -46,6 +47,13 @@ pub struct BrokerConfigAllowlisted {
     pub pull_message_thread_pool_nums: Option<u32>,
     pub flush_delay_offset_interval_ms: Option<u64>,
     pub max_client_event_count: Option<i32>,
+}
+
+/// Topic configuration paired with the Broker's monotonic metadata version.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TopicConfigVersioned {
+    pub version: u64,
+    pub config: TopicConfig,
 }
 
 #[allow(async_fn_in_trait)]
@@ -86,6 +94,13 @@ pub trait MQAdminReadExt: Send {
         &self,
         topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<Option<TopicRouteData>>;
+
+    /// Reads one Broker's Topic configuration and metadata version atomically.
+    async fn topic_config_with_version(
+        &self,
+        broker_addr: CheetahString,
+        topic: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<TopicConfigVersioned>;
 
     async fn examine_consumer_connection_info(
         &self,
@@ -236,6 +251,17 @@ impl MQAdminReadExt for DefaultMQAdminExt {
         self.inner()
             .mq_client_api()?
             .get_topic_route_info_from_name_server(&topic, self.inner().remoting_timeout_millis()?)
+            .await
+    }
+
+    async fn topic_config_with_version(
+        &self,
+        broker_addr: CheetahString,
+        topic: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<TopicConfigVersioned> {
+        self.inner()
+            .mq_client_api()?
+            .get_topic_config_with_version(&broker_addr, topic, self.inner().remoting_timeout_millis()?)
             .await
     }
 
