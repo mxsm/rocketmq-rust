@@ -20,10 +20,13 @@ use rocketmq_sre_contracts::ClusterId;
 use rocketmq_sre_contracts::ComplianceFindingState;
 use rocketmq_sre_contracts::ComplianceSeverity;
 use rocketmq_sre_contracts::DataResidencyClass;
+use rocketmq_sre_contracts::FleetAccessProfile;
 use rocketmq_sre_contracts::FleetAssetIndex;
 use rocketmq_sre_contracts::FleetEnvironment;
 use rocketmq_sre_contracts::FleetId;
 use rocketmq_sre_contracts::FleetInspectionState;
+use rocketmq_sre_contracts::FleetQuotaResource;
+use rocketmq_sre_contracts::FleetQuotaWorkKind;
 use rocketmq_sre_contracts::QuotaLimits;
 use rocketmq_sre_contracts::RegionId;
 use rocketmq_sre_contracts::RegionalEndpoint;
@@ -35,6 +38,10 @@ use super::model::ComplianceFindingQuery;
 use super::model::CreateFleetInspectionRequest;
 use super::model::CreateQuotaPolicyRequest;
 use super::model::EvaluateComplianceRequest;
+use super::model::EvaluateFleetQuotaRequest;
+use super::model::FleetOffboardRequest;
+use super::model::FleetOnboardingRequest;
+use super::model::FleetQuotaDecisionQuery;
 use super::model::FleetScopeQuery;
 use super::model::RegionalRouteMode;
 use super::model::RegionalRouteRequest;
@@ -310,6 +317,109 @@ async fn postgres_fleet_scope_routing_compliance_and_inspection_are_bounded() {
             .map(|item| item.id),
         Some(inspection.id)
     );
+
+    let onboarding = FleetOnboardingRequest {
+        cluster_id: fixture.cluster_a,
+        fleet_id: fixture.fleet_id,
+        region_id: fixture.region_a,
+        environment: FleetEnvironment::Test,
+        owner: "fleet-repository-test".to_owned(),
+        residency_tags: BTreeSet::from(["region-local".to_owned()]),
+        requested_access: FleetAccessProfile::Supervised,
+        connector_tls_verified: true,
+        oauth_scopes: BTreeSet::from(["rocketmq:read".to_owned(), "rocketmq:diagnose".to_owned()]),
+        required_capabilities: BTreeSet::from(["rocketmq_get_cluster_overview".to_owned()]),
+        required_data_sources: BTreeSet::from(["broker_runtime".to_owned(), "controller_quorum".to_owned()]),
+    };
+    let assessed = service
+        .assess_onboarding(&auth, &onboarding)
+        .await
+        .expect("Fleet onboarding assessment");
+    assert!(assessed.assessment.eligible);
+    assert_eq!(assessed.assessment.effective_access, FleetAccessProfile::ReadOnly);
+    assert_eq!(
+        assessed.assessment.signal_gaps,
+        BTreeSet::from(["controller_quorum".to_owned()])
+    );
+    assert!(assessed.registration.is_none());
+    let registered = service
+        .onboard_cluster(&auth, &onboarding)
+        .await
+        .expect("Fleet registration");
+    assert_eq!(
+        registered.registration.as_ref().map(|item| item.state),
+        Some(rocketmq_sre_contracts::ClusterRegistrationState::ReadOnlyDegraded)
+    );
+
+    let excessive = service
+        .assess_onboarding(
+            &auth,
+            &FleetOnboardingRequest {
+                oauth_scopes: BTreeSet::from(["rocketmq:admin".to_owned()]),
+                ..onboarding
+            },
+        )
+        .await
+        .expect("overprivileged assessment");
+    assert!(!excessive.assessment.eligible);
+    assert_eq!(
+        excessive.assessment.excessive_scopes,
+        BTreeSet::from(["rocketmq:admin".to_owned()])
+    );
+
+    let background = service
+        .evaluate_quota(
+            &auth,
+            &EvaluateFleetQuotaRequest {
+                cluster_id: None,
+                work_kind: FleetQuotaWorkKind::Inspection,
+                resource: FleetQuotaResource::ConcurrentInspection,
+                amount: 2,
+            },
+        )
+        .await
+        .expect("background quota decision");
+    assert!(!background.decision.allowed);
+    assert_eq!(background.decision.reason, "limit_exceeded");
+    let rollback = service
+        .evaluate_quota(
+            &auth,
+            &EvaluateFleetQuotaRequest {
+                cluster_id: None,
+                work_kind: FleetQuotaWorkKind::Rollback,
+                resource: FleetQuotaResource::ConcurrentInspection,
+                amount: 2,
+            },
+        )
+        .await
+        .expect("reserved rollback quota");
+    assert!(rollback.decision.allowed);
+    assert_eq!(rollback.decision.reason, "safety_critical_reserved_capacity");
+    let decisions = service
+        .quota_decisions(
+            &auth,
+            &FleetQuotaDecisionQuery {
+                allowed: Some(false),
+                limit: 20,
+                ..FleetQuotaDecisionQuery::default()
+            },
+        )
+        .await
+        .expect("quota decision history");
+    assert!(decisions.items.iter().any(|item| item.id == background.decision.id));
+
+    let retired = service
+        .offboard_cluster(
+            &auth,
+            fixture.cluster_b,
+            &FleetOffboardRequest {
+                reason: "Fleet test offboarding".to_owned(),
+                correlation_id: None,
+            },
+        )
+        .await
+        .expect("bounded Fleet offboarding");
+    assert_eq!(retired.state, rocketmq_sre_contracts::ClusterRegistrationState::Retired);
 }
 
 #[derive(Clone, Copy)]
@@ -399,6 +509,36 @@ async fn seed_fixture(repository: &PostgresRepository) -> FleetFixture {
         .execute(&repository.pool)
         .await
         .expect("cluster registration fixture");
+        sqlx::query(
+            "INSERT INTO cluster_capability_snapshots (
+                id, cluster_id, manifest_digest, tool_surface_digest,
+                protocol_version, schema_version, mutation_supported,
+                manifest, data_sources, observed_at
+             ) VALUES (
+                $1, $2, $3, $4, '2025-11-25', 'rocketmq-mcp.v2', FALSE,
+                $5, $6, NOW()
+             )",
+        )
+        .bind(uuid::Uuid::new_v4())
+        .bind(cluster_id.as_uuid())
+        .bind(digest(if cluster_id == fixture.cluster_a { '1' } else { '2' }))
+        .bind(digest('3'))
+        .bind(serde_json::json!({
+            "tool_surface_digest": digest('3'),
+            "tools": [{
+                "name": "rocketmq_get_cluster_overview",
+                "read_only": true,
+                "mutates_cluster": false
+            }]
+        }))
+        .bind(serde_json::json!([{
+            "id": "broker_runtime",
+            "availability": "queryable",
+            "freshness_ms": 1_000
+        }]))
+        .execute(&repository.pool)
+        .await
+        .expect("capability fixture");
     }
     fixture
 }
