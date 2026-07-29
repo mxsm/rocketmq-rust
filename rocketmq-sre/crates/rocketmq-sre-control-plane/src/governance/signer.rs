@@ -42,20 +42,14 @@ impl GovernanceSigner {
             ));
         }
         let digest = Sha256::digest(key);
-        let short_digest = digest[..8]
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
+        let short_digest = digest[..8].iter().map(|byte| format!("{byte:02x}")).collect::<String>();
         Ok(Self {
             key: Arc::from(key),
             key_id: Arc::from(format!("governance-{short_digest}")),
         })
     }
 
-    pub(super) fn sign(
-        &self,
-        payload: &GovernanceSignaturePayload,
-    ) -> Result<GovernanceSignature, ControlPlaneError> {
+    pub(super) fn sign(&self, payload: &GovernanceSignaturePayload) -> Result<GovernanceSignature, ControlPlaneError> {
         let encoded = serde_jcs::to_vec(payload)
             .map_err(|_| ControlPlaneError::configuration("governance signature payload cannot be encoded"))?;
         let mut mac = Hmac::<Sha256>::new_from_slice(&self.key)
