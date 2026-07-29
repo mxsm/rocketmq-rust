@@ -84,7 +84,7 @@ const MAX_DATABASE_I64: u64 = 9_223_372_036_854_775_807;
 
 #[derive(Clone)]
 pub(crate) struct FleetService {
-    repository: FleetRepository,
+    pub(super) repository: FleetRepository,
     cluster_repository: PostgresRepository,
 }
 
