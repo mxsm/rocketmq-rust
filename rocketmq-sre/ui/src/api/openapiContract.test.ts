@@ -1,15 +1,28 @@
-import specification from "../../../openapi/rocketmq-sre-phase03.openapi.json";
+import specification from "../../../openapi/rocketmq-sre-phase05.openapi.json";
 
-describe("checked-in Phase 3 OpenAPI", () => {
-  it("keeps every mutation human-approved, typed, and bounded", () => {
+describe("checked-in Phase 5 OpenAPI", () => {
+  it("keeps autonomy typed, risk-bounded, and fail-closed", () => {
     expect(
       specification["x-rocketmq-cluster-mutation-supported"],
     ).toBe(true);
     expect(specification["x-rocketmq-effective-access"]).toBe(
-      "human_approved_supervised",
+      "bounded_autonomy_with_supervised_r2",
     );
-    expect(specification["x-rocketmq-unattended-mutation-supported"]).toBe(
-      false,
+    expect(specification["x-rocketmq-bounded-r1-autonomy-supported"]).toBe(
+      true,
+    );
+    expect(specification["x-rocketmq-r2-supervision-required"]).toBe(true);
+    expect(specification["x-rocketmq-r3-agent-reachable"]).toBe(false);
+    expect(
+      specification[
+        "x-rocketmq-unattended-arbitrary-mutation-supported"
+      ],
+    ).toBe(false);
+    expect(
+      specification["x-rocketmq-production-dr-cutover-supported"],
+    ).toBe(false);
+    expect(specification["x-rocketmq-cli-boundary"]).toBe(
+      "read_only_with_typed_plan_drafts",
     );
     expect(specification["x-rocketmq-arbitrary-mutation-supported"]).toBe(
       false,
@@ -27,7 +40,7 @@ describe("checked-in Phase 3 OpenAPI", () => {
   });
 
   it("publishes typed Phase 2 and supervised Phase 3 contracts", () => {
-    expect(specification["x-rocketmq-sre-phase"]).toBe(3);
+    expect(specification["x-rocketmq-sre-phase"]).toBe(5);
     expect(specification["x-rocketmq-phase2-contracts"]).toContain(
       "PostmortemRevision",
     );
@@ -87,6 +100,56 @@ describe("checked-in Phase 3 OpenAPI", () => {
     expect(
       specification.paths["/v1/resource-quarantines/{id}/clear"]?.post,
     ).toBeDefined();
+  });
+
+  it("publishes scoped enterprise Fleet, DR, governance, and FinOps contracts", () => {
+    expect(specification.paths["/v1/fleet/overview"]?.get).toBeDefined();
+    expect(specification.paths["/v1/fleet/assets"]?.get).toBeDefined();
+    expect(specification.paths["/v1/fleet/compliance"]?.get).toBeDefined();
+    expect(specification.paths["/v1/fleet/inspections"]?.get).toBeDefined();
+    expect(specification.paths["/v1/dr/plans"]?.get).toBeDefined();
+    expect(specification.paths["/v1/dr/exercises"]?.get).toBeDefined();
+    expect(
+      specification.paths["/v1/governance/artifacts"]?.get,
+    ).toBeDefined();
+    expect(
+      specification.paths["/v1/governance/compliance"]?.get,
+    ).toBeDefined();
+    expect(specification.paths["/v1/finops/report"]?.get).toBeDefined();
+
+    expect(
+      specification.paths["/v1/fleet/overview"].get.security,
+    ).toEqual([{ oidc: ["rocketmq:read"] }]);
+    expect(
+      specification.paths["/v1/fleet/onboarding/register"].post.security,
+    ).toEqual([{ oidc: ["rocketmq:fleet:manage"] }]);
+    expect(
+      specification.paths["/v1/dr/exercises"].post.security,
+    ).toEqual([{ oidc: ["rocketmq:dr:manage"] }]);
+    expect(
+      specification.paths["/v1/governance/versions/{id}/transition"].post
+        .security,
+    ).toEqual([{ oidc: ["rocketmq:governance:manage"] }]);
+    expect(
+      specification.paths["/v1/finops/budgets/evaluate"].post.security,
+    ).toEqual([{ oidc: ["rocketmq:finops:manage"] }]);
+
+    expect(
+      specification.components.schemas.DrExerciseMode.enum,
+    ).toEqual(["readiness", "tabletop", "supervised_test"]);
+    expect(
+      specification.components.schemas.GovernanceObjectKind.enum,
+    ).toContain("action_descriptor");
+    expect(
+      specification.components.schemas.FinOpsWorkClass.enum,
+    ).toEqual(
+      expect.arrayContaining([
+        "safety_check",
+        "audit",
+        "verification",
+        "rollback",
+      ]),
+    );
   });
 
   it("publishes bounded model lifecycle and smoke operations", () => {
