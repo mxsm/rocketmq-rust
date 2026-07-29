@@ -258,6 +258,7 @@ def audit_foundation(
         findings.append("runtime stage must not resolve mutable packages")
     for fragment in (
         "FROM builder-base AS service-builder",
+        "FROM builder-base AS mcp-builder",
         "FROM runtime-base AS service-runtime",
         "FROM runtime-base-smoke AS container-contract-default",
         'VOLUME ["/var/lib/rocketmq"]',
@@ -295,9 +296,10 @@ def audit_foundation(
             continue
         section = match.group(1)
         binary = contract["binary"]
+        builder = "mcp-builder" if service_name == "mcp" else "service-builder"
         ports = " ".join(str(port) for port in contract["ports"])
         required_service_fragments = [
-            f"COPY --from=service-builder --chmod=0555 /opt/rocketmq-binaries/{binary} /usr/local/bin/{binary}",
+            f"COPY --from={builder} --chmod=0555 /opt/rocketmq-binaries/{binary} /usr/local/bin/{binary}",
             f'io.rocketmq.image.role="{service_name}"',
             f'io.rocketmq.service.binary="{binary}"',
             f'io.rocketmq.service.config-path="{contract["config_path"]}"',
