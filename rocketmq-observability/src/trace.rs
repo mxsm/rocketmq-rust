@@ -18,6 +18,7 @@ pub mod controller;
 pub mod hooks;
 pub mod mcp;
 pub mod namesrv;
+pub mod proxy;
 pub mod remoting;
 pub mod span_names;
 pub mod store;
