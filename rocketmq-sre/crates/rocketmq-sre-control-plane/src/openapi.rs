@@ -16,12 +16,12 @@ use std::sync::LazyLock;
 
 use serde_json::Value;
 
-const PHASE_THREE_OPENAPI: &str = include_str!("../../../openapi/rocketmq-sre-phase03.openapi.json");
+const PHASE_FIVE_OPENAPI: &str = include_str!("../../../openapi/rocketmq-sre-phase05.openapi.json");
 
 static DOCUMENT: LazyLock<Value> = LazyLock::new(|| {
     // Invariant: the checked-in document is parsed by this module's tests and
     // by the UI type-generation contract before it can be accepted.
-    serde_json::from_str(PHASE_THREE_OPENAPI).expect("the checked-in Phase 03 OpenAPI document must be valid JSON")
+    serde_json::from_str(PHASE_FIVE_OPENAPI).expect("the checked-in Phase 05 OpenAPI document must be valid JSON")
 });
 
 pub(crate) fn document() -> Value {
@@ -78,7 +78,41 @@ mod tests {
         "/v1/evidence/{id}/content",
         "/v1/executions",
         "/v1/executions/{id}",
+        "/v1/dr/action-items",
+        "/v1/dr/action-items/{id}",
+        "/v1/dr/exercises",
+        "/v1/dr/exercises/{id}/checkpoints",
+        "/v1/dr/exercises/{id}/findings",
+        "/v1/dr/exercises/{id}/state",
+        "/v1/dr/plans",
+        "/v1/dr/plans/{id}/backup-assets",
+        "/v1/finops/allocation-policy",
+        "/v1/finops/budgets",
+        "/v1/finops/budgets/evaluate",
+        "/v1/finops/ledger",
+        "/v1/finops/report",
+        "/v1/fleet/assets",
+        "/v1/fleet/clusters",
+        "/v1/fleet/clusters/{id}/offboard",
+        "/v1/fleet/compliance",
         "/v1/fleet/health",
+        "/v1/fleet/inspections",
+        "/v1/fleet/inspections/{id}/progress",
+        "/v1/fleet/onboarding/assess",
+        "/v1/fleet/onboarding/register",
+        "/v1/fleet/overview",
+        "/v1/fleet/quotas",
+        "/v1/fleet/quotas/decisions",
+        "/v1/fleet/quotas/evaluate",
+        "/v1/fleet/regional-endpoints",
+        "/v1/fleet/regional-route",
+        "/v1/governance/admissions/evaluate",
+        "/v1/governance/artifacts",
+        "/v1/governance/artifacts/{id}/versions",
+        "/v1/governance/audit/export",
+        "/v1/governance/compliance",
+        "/v1/governance/versions/{id}/impacts",
+        "/v1/governance/versions/{id}/transition",
         "/v1/incidents",
         "/v1/incidents/{id}",
         "/v1/incidents/{id}/diagnose",
@@ -152,7 +186,7 @@ mod tests {
     ];
 
     #[test]
-    fn checked_in_document_preserves_the_phase_one_public_surface() {
+    fn checked_in_document_preserves_the_public_surface_through_phase_five() {
         let document = document();
         let paths = document["paths"].as_object().expect("OpenAPI paths must be an object");
         let actual = paths.keys().map(String::as_str).collect::<BTreeSet<_>>();
@@ -194,19 +228,84 @@ mod tests {
     }
 
     #[test]
-    fn document_freezes_the_human_approved_typed_mutation_boundary() {
+    fn document_freezes_the_bounded_enterprise_mutation_boundary() {
         let document = document();
         assert_eq!(document["openapi"], "3.1.0");
-        assert_eq!(document["x-rocketmq-effective-access"], "human_approved_supervised");
+        assert_eq!(
+            document["x-rocketmq-effective-access"],
+            "bounded_autonomy_with_supervised_r2"
+        );
         assert_eq!(document["x-rocketmq-cluster-mutation-supported"], true);
-        assert_eq!(document["x-rocketmq-unattended-mutation-supported"], false);
-        assert_eq!(document["x-rocketmq-arbitrary-mutation-supported"], false);
-        assert_eq!(document["x-rocketmq-sre-phase"], 3);
+        assert_eq!(document["x-rocketmq-bounded-r1-autonomy-supported"], true);
+        assert_eq!(document["x-rocketmq-r2-supervision-required"], true);
+        assert_eq!(document["x-rocketmq-r3-agent-reachable"], false);
+        assert_eq!(document["x-rocketmq-unattended-arbitrary-mutation-supported"], false);
+        assert_eq!(document["x-rocketmq-production-dr-cutover-supported"], false);
+        assert_eq!(document["x-rocketmq-sre-phase"], 5);
 
         let encoded = serde_json::to_string(&document).expect("OpenAPI JSON");
-        for forbidden in ["\"delete\":", "/apply", "/reset", "/truncate", "arbitrary_patch"] {
+        for forbidden in [
+            "\"delete\":",
+            "/apply",
+            "/reset",
+            "/truncate",
+            "arbitrary_patch",
+            "raw_shell",
+        ] {
             assert!(!encoded.contains(forbidden), "forbidden OpenAPI surface: {forbidden}");
         }
+    }
+
+    #[test]
+    fn document_contains_the_phase_five_enterprise_contracts() {
+        let document = document();
+        let schemas = document["components"]["schemas"]
+            .as_object()
+            .expect("OpenAPI schemas must be an object");
+        for required in [
+            "FleetOverview",
+            "ClusterRegistrationPage",
+            "FleetAssetPage",
+            "ComplianceFindingPage",
+            "FleetInspectionPage",
+            "DrPlanPage",
+            "DrExercisePage",
+            "DrActionItemPage",
+            "GovernanceArtifactPage",
+            "GovernanceVersionPage",
+            "GovernanceComplianceReport",
+            "FinOpsLedgerPage",
+            "FinOpsBudgetPage",
+            "FinOpsBudgetDecisionView",
+            "FinOpsReport",
+        ] {
+            assert!(schemas.contains_key(required), "missing Phase 5 schema {required}");
+        }
+
+        assert_eq!(
+            document["paths"]["/v1/fleet/overview"]["get"]["security"][0]["oidc"],
+            serde_json::json!(["rocketmq:read"])
+        );
+        assert_eq!(
+            document["paths"]["/v1/fleet/onboarding/register"]["post"]["security"][0]["oidc"],
+            serde_json::json!(["rocketmq:fleet:manage"])
+        );
+        assert_eq!(
+            document["paths"]["/v1/dr/exercises"]["post"]["security"][0]["oidc"],
+            serde_json::json!(["rocketmq:dr:manage"])
+        );
+        assert_eq!(
+            document["paths"]["/v1/governance/versions/{id}/transition"]["post"]["security"][0]["oidc"],
+            serde_json::json!(["rocketmq:governance:manage"])
+        );
+        assert_eq!(
+            document["paths"]["/v1/finops/budgets/evaluate"]["post"]["security"][0]["oidc"],
+            serde_json::json!(["rocketmq:finops:manage"])
+        );
+        assert_eq!(
+            schemas["DrExerciseMode"]["enum"],
+            serde_json::json!(["readiness", "tabletop", "supervised_test"])
+        );
     }
 
     #[test]
