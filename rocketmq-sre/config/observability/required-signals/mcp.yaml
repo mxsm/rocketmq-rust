@@ -25,8 +25,9 @@ signals:
     source_symbol: MCP_REQUESTS_TOTAL
     registry_reference: rocketmq_mcp_requests_total
     signal_type: metric
-    status: existing
+    status: queryable
     query: sum by (operation_kind, operation, result) (rate(rocketmq_mcp_requests_total[5m]))
+    query_resource: metrics/rocketmq_mcp_requests_total
     freshness_seconds: 60
     expected_attributes: [operation_kind, operation, result]
     sensitivity: operational
@@ -38,8 +39,9 @@ signals:
     source_symbol: MCP_REQUEST_LATENCY
     registry_reference: rocketmq_mcp_request_latency
     signal_type: metric
-    status: existing
-    query: histogram_quantile(0.99, sum by (operation_kind, operation, le) (rate(rocketmq_mcp_request_latency_bucket[5m])))
+    status: queryable
+    query: histogram_quantile(0.99, sum by (operation_kind, operation, le) (rate(rocketmq_mcp_request_latency_milliseconds_bucket[5m])))
+    query_resource: metrics/rocketmq_mcp_request_latency_milliseconds_count
     freshness_seconds: 60
     expected_attributes: [operation_kind, operation]
     sensitivity: operational
@@ -51,8 +53,9 @@ signals:
     source_symbol: MCP_ERRORS_TOTAL
     registry_reference: rocketmq_mcp_errors_total
     signal_type: metric
-    status: existing
+    status: queryable
     query: sum by (operation_kind, operation, result) (rate(rocketmq_mcp_errors_total[5m]))
+    query_resource: metrics/rocketmq_mcp_errors_total
     freshness_seconds: 60
     expected_attributes: [operation_kind, operation, result]
     sensitivity: operational
@@ -64,12 +67,12 @@ signals:
     source_symbol: MCP_TOOL
     registry_reference: RocketMQ MCP TOOL
     signal_type: span
-    status: existing
+    status: queryable
     query: '{ resource.service.name = "rocketmq-mcp" && name = "RocketMQ MCP TOOL" }'
     freshness_seconds: 300
     expected_attributes: [operation, result]
     sensitivity: operational
-    missing_behavior: not_production_verified
+    missing_behavior: missing
     evidence_field: mcp.tool_trace
   - requirement_id: mcp.resource_span
     purpose: Correlate bounded Resource read outcomes without exposing resource URIs or caller input.
@@ -77,12 +80,12 @@ signals:
     source_symbol: MCP_RESOURCE
     registry_reference: RocketMQ MCP RESOURCE
     signal_type: span
-    status: existing
+    status: queryable
     query: '{ resource.service.name = "rocketmq-mcp" && name = "RocketMQ MCP RESOURCE" }'
     freshness_seconds: 300
     expected_attributes: [operation, result]
     sensitivity: operational
-    missing_behavior: not_production_verified
+    missing_behavior: missing
     evidence_field: mcp.resource_trace
   - requirement_id: mcp.cache_operations
     purpose: Explain MCP query cache hits, misses, bypasses, evictions, invalidations, and coalescing.
@@ -90,8 +93,9 @@ signals:
     source_symbol: MCP_CACHE_OPERATIONS_TOTAL
     registry_reference: rocketmq_mcp_cache_operations_total
     signal_type: metric
-    status: existing
+    status: queryable
     query: sum by (result) (rate(rocketmq_mcp_cache_operations_total[5m]))
+    query_resource: metrics/rocketmq_mcp_cache_operations_total
     freshness_seconds: 60
     expected_attributes: [result]
     sensitivity: operational
@@ -103,8 +107,9 @@ signals:
     source_symbol: MCP_RATE_LIMIT_TOTAL
     registry_reference: rocketmq_mcp_rate_limit_total
     signal_type: metric
-    status: existing
+    status: queryable
     query: sum by (result) (rate(rocketmq_mcp_rate_limit_total[5m]))
+    query_resource: metrics/rocketmq_mcp_rate_limit_total
     freshness_seconds: 60
     expected_attributes: [result]
     sensitivity: operational
@@ -116,8 +121,9 @@ signals:
     source_symbol: MCP_AUDIT_BACKLOG
     registry_reference: rocketmq_mcp_audit_backlog
     signal_type: metric
-    status: existing
+    status: queryable
     query: max(rocketmq_mcp_audit_backlog)
+    query_resource: metrics/rocketmq_mcp_audit_backlog
     freshness_seconds: 60
     expected_attributes: []
     sensitivity: operational
@@ -129,8 +135,9 @@ signals:
     source_symbol: MCP_AUDIT_DROPPED_TOTAL
     registry_reference: rocketmq_mcp_audit_dropped_total
     signal_type: metric
-    status: existing
+    status: queryable
     query: sum by (reason) (rate(rocketmq_mcp_audit_dropped_total[5m]))
+    query_resource: metrics/rocketmq_mcp_audit_dropped_total
     freshness_seconds: 60
     expected_attributes: [reason]
     sensitivity: operational
@@ -142,8 +149,9 @@ signals:
     source_symbol: MCP_AUDIT_FAILURES_TOTAL
     registry_reference: rocketmq_mcp_audit_failures_total
     signal_type: metric
-    status: existing
+    status: queryable
     query: sum by (reason) (rate(rocketmq_mcp_audit_failures_total[5m]))
+    query_resource: metrics/rocketmq_mcp_audit_failures_total
     freshness_seconds: 60
     expected_attributes: [reason]
     sensitivity: operational
