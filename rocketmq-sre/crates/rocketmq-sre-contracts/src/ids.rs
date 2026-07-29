@@ -99,6 +99,17 @@ uuid_id!(
     FleetQuotaDecisionId,
     "Stable identifier for one persisted Fleet quota decision."
 );
+uuid_id!(DrPlanId, "Stable identifier for a versioned disaster-recovery plan.");
+uuid_id!(DrExerciseId, "Stable identifier for a disaster-recovery exercise.");
+uuid_id!(
+    RecoveryCheckpointId,
+    "Stable identifier for one immutable disaster-recovery checkpoint observation."
+);
+uuid_id!(DrFindingId, "Stable identifier for a disaster-recovery finding.");
+uuid_id!(
+    DrActionItemId,
+    "Stable identifier for an action item created from a disaster-recovery finding."
+);
 uuid_id!(ConversationId, "Stable identifier for an operator conversation.");
 uuid_id!(InvestigationId, "Stable identifier for a multi-step investigation.");
 uuid_id!(TimelineEventId, "Stable identifier for a workflow timeline event.");
