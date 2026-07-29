@@ -14,7 +14,6 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::RwLock as StdRwLock;
@@ -54,6 +53,9 @@ const QUERY_ASSIGNMENT_TIMEOUT: u64 = 3000;
 
 /// Maps each assigned [`MessageQueue`] to its push-mode [`ProcessQueue`].
 type ProcessQueueTable = Arc<RwLock<HashMap<MessageQueue, Arc<ProcessQueue>>>>;
+
+/// Groups a revision-scoped process-queue snapshot by Broker name.
+type BrokerProcessQueueTable = HashMap<CheetahString, HashMap<MessageQueue, Arc<ProcessQueue>>>;
 
 /// Maps each assigned [`MessageQueue`] to its pop-mode [`PopProcessQueue`].
 type PopProcessQueueTable = Arc<RwLock<HashMap<MessageQueue, Arc<PopProcessQueue>>>>;
@@ -243,6 +245,17 @@ where
                 None
             }
         }
+    }
+
+    async fn remove_process_queue_if_current(&self, mq: &MessageQueue, expected: &Arc<ProcessQueue>) -> bool {
+        let mut process_queue_table = self.process_queue_table.write().await;
+        let is_current = process_queue_table
+            .get(mq)
+            .is_some_and(|current| Arc::ptr_eq(current, expected));
+        if is_current {
+            process_queue_table.remove(mq);
+        }
+        is_current
     }
 
     #[inline]
@@ -597,21 +610,20 @@ where
             }
         }
 
-        {
-            if !remove_queue_map.is_empty() {
-                let mut process_queue_table = self.process_queue_table.write().await;
-                // Remove unassigned push queues from the process queue table.
+        if !remove_queue_map.is_empty() {
+            if let Some(sub_rebalance) = self.upgrade_sub_rebalance("updateMessageQueueAssignment") {
+                // Offset persistence and Broker unlocks can block. Run them without the global
+                // process-queue table lock, then remove only the queue instance that was audited.
                 for (mq, pq) in remove_queue_map {
-                    if let Some(sub_rebalance) = self.upgrade_sub_rebalance("updateMessageQueueAssignment") {
-                        if sub_rebalance.remove_unnecessary_message_queue(&mq, &pq).await {
-                            process_queue_table.remove(&mq);
-                            changed = true;
-                            info!(
-                                "doRebalance, {:?}, remove unnecessary mq, {}",
-                                consumer_group,
-                                mq.topic_str()
-                            );
-                        }
+                    if sub_rebalance.remove_unnecessary_message_queue(&mq, &pq).await
+                        && self.remove_process_queue_if_current(&mq, &pq).await
+                    {
+                        changed = true;
+                        info!(
+                            "doRebalance, {:?}, remove unnecessary mq, {}",
+                            consumer_group,
+                            mq.topic_str()
+                        );
                     }
                 }
             }
@@ -650,7 +662,10 @@ where
                 // Remove unassigned pop queues from the pop process queue table.
                 for (mq, pq) in remove_queue_map {
                     if let Some(sub_rebalance) = self.upgrade_sub_rebalance("updateMessageQueueAssignment") {
-                        if sub_rebalance.remove_unnecessary_pop_message_queue(&mq, &pq) {
+                        let is_current = pop_process_queue_table
+                            .get(&mq)
+                            .is_some_and(|current| Arc::ptr_eq(current, &pq));
+                        if is_current && sub_rebalance.remove_unnecessary_pop_message_queue(&mq, &pq) {
                             pop_process_queue_table.remove(&mq);
                             changed = true;
                             info!(
@@ -685,19 +700,11 @@ where
                 vec![]
             };
 
-            // Acquire broker-side locks for orderly queues before taking the write lock,
-            // preventing network I/O while the write lock is held.
+            // Acquire broker-side locks without holding the process-queue table.
             let mut successfully_locked = HashSet::new();
             if is_order && !queues_need_lock.is_empty() {
-                // Snapshot the process queue table under the read lock; the lock is
-                // released before broker communication occurs.
-                let process_queue_table = {
-                    let table = self.process_queue_table.read().await;
-                    table.clone()
-                };
-
                 for mq in &queues_need_lock {
-                    if self.lock_with(mq, &process_queue_table).await {
+                    if self.lock_with(mq, None).await {
                         successfully_locked.insert(mq.clone());
                     } else {
                         warn!(
@@ -710,51 +717,56 @@ where
                 }
             }
 
-            // Insert new queues under the write lock; no network calls are made while the lock is held.
-            let process_queue_table_clone = self.process_queue_table.clone();
-            let mut process_queue_table = process_queue_table_clone.write().await;
-            for (mq, assignment) in mq2push_assignment {
-                if !process_queue_table.contains_key(mq) {
-                    // Check if lock succeeded (for ordered consumption)
-                    if is_order && !successfully_locked.contains(mq) {
-                        warn!(
-                            "doRebalance, {:?}, skip adding mq because lock failed, {}",
-                            consumer_group,
-                            mq.topic_str()
-                        );
-                        continue;
-                    }
+            for mq in mq2push_assignment.into_keys() {
+                let already_present = self.process_queue_table.read().await.contains_key(mq);
+                if already_present {
+                    continue;
+                }
+                if is_order && !successfully_locked.contains(mq) {
+                    warn!(
+                        "doRebalance, {:?}, skip adding mq because lock failed, {}",
+                        consumer_group,
+                        mq.topic_str()
+                    );
+                    continue;
+                }
 
-                    sub_rebalance_impl.remove_dirty_offset(mq).await;
-                    let pq = Arc::new(sub_rebalance_impl.create_process_queue());
-                    pq.set_locked(true);
-                    let Ok(next_offset) = sub_rebalance_impl.compute_pull_from_where_with_exception(mq).await else {
-                        continue;
-                    };
-                    if next_offset >= 0 {
-                        if process_queue_table.insert(mq.clone(), pq.clone()).is_none() {
-                            info!("doRebalance, {:?}, add a new mq, {}", consumer_group, mq.topic_str());
-                            pull_request_list.push(PullRequest::new(
-                                consumer_group.clone(),
-                                mq.clone(),
-                                pq,
-                                next_offset,
-                            ));
-                            changed = true;
-                        } else {
-                            info!(
-                                "doRebalance, {:?}, mq already exists, {}",
-                                consumer_group,
-                                mq.topic_str()
-                            );
-                        }
+                // Offset-store operations may perform I/O. Prepare the queue without a table
+                // guard, then use a short conditional insert to resolve concurrent rebalances.
+                sub_rebalance_impl.remove_dirty_offset(mq).await;
+                let pq = Arc::new(sub_rebalance_impl.create_process_queue());
+                pq.set_locked(true);
+                let Ok(next_offset) = sub_rebalance_impl.compute_pull_from_where_with_exception(mq).await else {
+                    continue;
+                };
+                if next_offset < 0 {
+                    warn!(
+                        "doRebalance, {:?}, add new mq failed, {}",
+                        consumer_group,
+                        mq.topic_str()
+                    );
+                    continue;
+                }
+
+                let inserted = {
+                    let mut process_queue_table = self.process_queue_table.write().await;
+                    if process_queue_table.contains_key(mq) {
+                        false
                     } else {
-                        warn!(
-                            "doRebalance, {:?}, add new mq failed, {}",
-                            consumer_group,
-                            mq.topic_str()
-                        );
+                        process_queue_table.insert(mq.clone(), pq.clone());
+                        true
                     }
+                };
+                if inserted {
+                    info!("doRebalance, {:?}, add a new mq, {}", consumer_group, mq.topic_str());
+                    pull_request_list.push(PullRequest::new(consumer_group.clone(), mq.clone(), pq, next_offset));
+                    changed = true;
+                } else {
+                    info!(
+                        "doRebalance, {:?}, mq already exists, {}",
+                        consumer_group,
+                        mq.topic_str()
+                    );
                 }
             }
 
@@ -772,7 +784,7 @@ where
             if let Some(rebalance_impl) = self.upgrade_sub_rebalance("updateMessageQueueAssignment") {
                 let mut pop_request_list = Vec::new();
                 let mut pop_process_queue_table = self.pop_process_queue_table.write().await;
-                for (mq, assignment) in mq2pop_assignment {
+                for mq in mq2pop_assignment.into_keys() {
                     if !pop_process_queue_table.contains_key(mq) {
                         let pq = rebalance_impl.create_pop_process_queue();
                         let pre = pop_process_queue_table.insert(mq.clone(), Arc::new(pq.clone()));
@@ -792,6 +804,7 @@ where
                         }
                     }
                 }
+                drop(pop_process_queue_table);
                 rebalance_impl.dispatch_pop_pull_request(pop_request_list, 500).await;
             }
         }
@@ -837,21 +850,20 @@ where
             }
         }
 
-        {
-            if !remove_queue_map.is_empty() {
-                let mut process_queue_table = process_queue_table_cloned.write().await;
-                // Remove unassigned queues from the process queue table.
+        if !remove_queue_map.is_empty() {
+            if let Some(sub_rebalance) = self.upgrade_sub_rebalance("updateProcessQueueTableInRebalance") {
+                // The callback may persist offsets, wait for the consume lock, and issue an
+                // unlock RPC. Commit its result only if this exact queue instance is still current.
                 for (mq, pq) in remove_queue_map {
-                    if let Some(sub_rebalance) = self.upgrade_sub_rebalance("updateProcessQueueTableInRebalance") {
-                        if sub_rebalance.remove_unnecessary_message_queue(&mq, &pq).await {
-                            process_queue_table.remove(&mq);
-                            changed = true;
-                            info!(
-                                "doRebalance, {:?}, remove unnecessary mq, {}",
-                                consumer_group,
-                                mq.topic_str()
-                            );
-                        }
+                    if sub_rebalance.remove_unnecessary_message_queue(&mq, &pq).await
+                        && self.remove_process_queue_if_current(&mq, &pq).await
+                    {
+                        changed = true;
+                        info!(
+                            "doRebalance, {:?}, remove unnecessary mq, {}",
+                            consumer_group,
+                            mq.topic_str()
+                        );
                     }
                 }
             }
@@ -879,9 +891,8 @@ where
         // preventing network I/O while the write lock is held.
         let mut successfully_locked = HashSet::new();
         if is_order && !queues_need_lock.is_empty() {
-            let process_queue_table = process_queue_table_cloned.read().await;
             for mq in &queues_need_lock {
-                if self.lock_with(mq, &process_queue_table).await {
+                if self.lock_with(mq, None).await {
                     successfully_locked.insert(mq.clone());
                 } else {
                     warn!(
@@ -894,62 +905,65 @@ where
             }
         }
 
-        // Insert new queues under the write lock; no network calls are made while the lock is held.
-        let mut process_queue_table = process_queue_table_cloned.write().await;
         for mq in mq_set {
-            let should_insert = match process_queue_table.get(mq) {
-                Some(pq) if pq.is_dropped() => {
-                    process_queue_table.remove(mq);
-                    true
-                }
-                Some(_) => false,
-                None => true,
+            let should_prepare = {
+                let process_queue_table = process_queue_table_cloned.read().await;
+                !process_queue_table.contains_key(mq)
             };
-            if should_insert {
-                // Check if lock succeeded (for ordered consumption)
-                if is_order && !successfully_locked.contains(mq) {
-                    warn!(
-                        "doRebalance, {:?}, skip adding mq because lock failed, {}",
+            if !should_prepare {
+                continue;
+            }
+            if is_order && !successfully_locked.contains(mq) {
+                warn!(
+                    "doRebalance, {:?}, skip adding mq because lock failed, {}",
+                    consumer_group,
+                    mq.topic_str()
+                );
+                continue;
+            }
+
+            sub_rebalance_impl.remove_dirty_offset(mq).await;
+            let pq = Arc::new(sub_rebalance_impl.create_process_queue());
+            pq.set_locked(true);
+            let next_offset = match sub_rebalance_impl.compute_pull_from_where_with_exception(mq).await {
+                Ok(next_offset) => next_offset,
+                Err(error) => {
+                    info!(
+                        "doRebalance, {:?}, compute offset failed, {}, error={}",
                         consumer_group,
-                        mq.topic_str()
+                        mq.topic_str(),
+                        error
                     );
                     continue;
                 }
+            };
+            if next_offset < 0 {
+                warn!(
+                    "doRebalance, {:?}, add new mq failed, {}",
+                    consumer_group,
+                    mq.topic_str()
+                );
+                continue;
+            }
 
-                sub_rebalance_impl.remove_dirty_offset(mq).await;
-                let pq = Arc::new(sub_rebalance_impl.create_process_queue());
-                pq.set_locked(true);
-                let next_offset = match sub_rebalance_impl.compute_pull_from_where_with_exception(mq).await {
-                    Ok(next_offset) => next_offset,
-                    Err(error) => {
-                        info!(
-                            "doRebalance, {:?}, compute offset failed, {}, error={}",
-                            consumer_group,
-                            mq.topic_str(),
-                            error
-                        );
-                        continue;
-                    }
-                };
-                if next_offset >= 0 {
-                    if process_queue_table.insert(mq.clone(), pq.clone()).is_none() {
-                        info!("doRebalance, {:?}, add a new mq, {}", consumer_group, mq.topic_str());
-                        pull_request_list.push(PullRequest::new(consumer_group.clone(), mq.clone(), pq, next_offset));
-                        changed = true;
-                    } else {
-                        info!(
-                            "doRebalance, {:?}, mq already exists, {}",
-                            consumer_group,
-                            mq.topic_str()
-                        );
-                    }
-                } else {
-                    warn!(
-                        "doRebalance, {:?}, add new mq failed, {}",
-                        consumer_group,
-                        mq.topic_str()
-                    );
+            let inserted = {
+                let mut process_queue_table = process_queue_table_cloned.write().await;
+                let can_insert = !process_queue_table.contains_key(mq);
+                if can_insert {
+                    process_queue_table.insert(mq.clone(), pq.clone());
                 }
+                can_insert
+            };
+            if inserted {
+                info!("doRebalance, {:?}, add a new mq, {}", consumer_group, mq.topic_str());
+                pull_request_list.push(PullRequest::new(consumer_group.clone(), mq.clone(), pq, next_offset));
+                changed = true;
+            } else {
+                info!(
+                    "doRebalance, {:?}, mq already exists, {}",
+                    consumer_group,
+                    mq.topic_str()
+                );
             }
         }
 
@@ -1014,9 +1028,10 @@ where
                     );
                     return true;
                 };
-                let topic_sub_cloned = self.topic_subscribe_info_table.clone();
-                let topic_subscribe_info_table_inner = topic_sub_cloned.read().await;
-                let mq_set = topic_subscribe_info_table_inner.get(topic);
+                let mq_set = {
+                    let topic_subscribe_info_table = self.topic_subscribe_info_table.read().await;
+                    topic_subscribe_info_table.get(topic).cloned()
+                };
                 if mq_set.is_none() && !topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
                     if let Some(sub_rebalance_impl) = self.upgrade_sub_rebalance("rebalanceByTopic") {
                         sub_rebalance_impl
@@ -1090,7 +1105,7 @@ where
 
                         if let Some(sub_rebalance_impl) = self.upgrade_sub_rebalance("rebalanceByTopic") {
                             sub_rebalance_impl
-                                .message_queue_changed(topic, mq_set, &allocate_result_set)
+                                .message_queue_changed(topic, &mq_set, &allocate_result_set)
                                 .await;
                         }
                     }
@@ -1103,33 +1118,31 @@ where
 
     pub async fn get_working_message_queue(&self, topic: &str) -> HashSet<MessageQueue> {
         let mut queue_set = HashSet::new();
-        let process_queue_table = self.process_queue_table.read().await;
-        for (mq, pq) in process_queue_table.iter() {
-            if mq.topic_str() == topic && !pq.is_dropped() {
-                queue_set.insert(mq.clone());
+        {
+            let process_queue_table = self.process_queue_table.read().await;
+            for (mq, pq) in process_queue_table.iter() {
+                if mq.topic_str() == topic && !pq.is_dropped() {
+                    queue_set.insert(mq.clone());
+                }
             }
         }
-        let pop_process_queue_table = self.pop_process_queue_table.read().await;
-        for (mq, pq) in pop_process_queue_table.iter() {
-            if mq.topic_str() == topic && !pq.is_dropped() {
-                queue_set.insert(mq.clone());
+        {
+            let pop_process_queue_table = self.pop_process_queue_table.read().await;
+            for (mq, pq) in pop_process_queue_table.iter() {
+                if mq.topic_str() == topic && !pq.is_dropped() {
+                    queue_set.insert(mq.clone());
+                }
             }
         }
         queue_set
     }
 
     pub async fn lock(&self, mq: &MessageQueue) -> bool {
-        let process_queue_table_ = self.process_queue_table.clone();
-        let process_queue_table = process_queue_table_.read().await;
-        let table = process_queue_table.deref();
-        self.lock_with(mq, table).await
+        let expected = self.process_queue_table.read().await.get(mq).cloned();
+        self.lock_with(mq, expected.as_ref()).await
     }
 
-    pub async fn lock_with(
-        &self,
-        mq: &MessageQueue,
-        process_queue_table: &HashMap<MessageQueue, Arc<ProcessQueue>>,
-    ) -> bool {
+    pub async fn lock_with(&self, mq: &MessageQueue, expected: Option<&Arc<ProcessQueue>>) -> bool {
         let Some(consumer_group) = self.consumer_group_ref("lockWith") else {
             return false;
         };
@@ -1157,13 +1170,21 @@ where
                 .await;
             match result {
                 Ok(locked_mq) => {
-                    for mq in &locked_mq {
-                        if let Some(pq) = process_queue_table.get(mq) {
-                            pq.set_locked(true);
-                            pq.set_last_lock_timestamp(current_millis());
+                    let lock_ok = locked_mq.contains(mq);
+                    if lock_ok {
+                        if let Some(expected) = expected {
+                            let is_current = self
+                                .process_queue_table
+                                .read()
+                                .await
+                                .get(mq)
+                                .is_some_and(|current| Arc::ptr_eq(current, expected));
+                            if is_current {
+                                expected.set_locked(true);
+                                expected.set_last_lock_timestamp(current_millis());
+                            }
                         }
                     }
-                    let lock_ok = locked_mq.contains(mq);
                     info!("message queue lock {}, {:?} {}", lock_ok, consumer_group, mq);
                     lock_ok
                 }
@@ -1198,6 +1219,7 @@ where
                     if mqs.is_empty() {
                         return;
                     }
+                    let mq_set = mqs.keys().cloned().collect();
                     let find_broker_result = client_instance
                         .find_broker_address_in_subscribe(&broker_name, mix_all::MASTER_ID, true)
                         .await;
@@ -1205,7 +1227,7 @@ where
                         let request_body = LockBatchRequestBody {
                             consumer_group: Some(consumer_group.to_owned()),
                             client_id: Some(client_instance.client_id.clone()),
-                            mq_set: mqs.clone(),
+                            mq_set,
                             ..Default::default()
                         };
                         let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.load_full() else {
@@ -1221,19 +1243,22 @@ where
                         match result {
                             Ok(lock_okmqset) => {
                                 let process_queue_table = process_queue_table.read().await;
-                                for mq in &mqs {
-                                    if let Some(pq) = process_queue_table.get(mq) {
+                                for (mq, expected) in &mqs {
+                                    let is_current = process_queue_table
+                                        .get(mq)
+                                        .is_some_and(|current| Arc::ptr_eq(current, expected));
+                                    if is_current {
                                         if lock_okmqset.contains(mq) {
-                                            if pq.is_locked() {
+                                            if expected.is_locked() {
                                                 info!(
                                                     "the message queue locked OK, Group: {:?} {}",
                                                     consumer_group, mq
                                                 );
                                             }
-                                            pq.set_locked(true);
-                                            pq.set_last_lock_timestamp(current_millis());
+                                            expected.set_locked(true);
+                                            expected.set_last_lock_timestamp(current_millis());
                                         } else {
-                                            pq.set_locked(false);
+                                            expected.set_locked(false);
                                             warn!(
                                                 "the message queue locked Failed, Group: {:?} {}",
                                                 consumer_group, mq
@@ -1271,10 +1296,11 @@ where
                 .find_broker_address_in_subscribe(&broker_name, mix_all::MASTER_ID, true)
                 .await;
             if let Some(find_broker_result) = find_broker_result {
+                let mq_set = mqs.keys().cloned().collect();
                 let request_body = UnlockBatchRequestBody {
                     consumer_group: Some(consumer_group.clone()),
                     client_id: Some(client.client_id.clone()),
-                    mq_set: mqs.clone(),
+                    mq_set,
                     ..Default::default()
                 };
                 let Some(mq_client_api_impl) = client.mq_client_api_impl.load_full() else {
@@ -1290,9 +1316,12 @@ where
                 match result {
                     Ok(_) => {
                         let process_queue_table = self.process_queue_table.read().await;
-                        for mq in &mqs {
-                            if let Some(pq) = process_queue_table.get(mq) {
-                                pq.set_locked(false);
+                        for (mq, expected) in &mqs {
+                            let is_current = process_queue_table
+                                .get(mq)
+                                .is_some_and(|current| Arc::ptr_eq(current, expected));
+                            if is_current {
+                                expected.set_locked(false);
                                 info!("the message queue unlock OK, Group: {:?} {}", consumer_group, mq);
                             }
                         }
@@ -1305,16 +1334,14 @@ where
         }
     }
 
-    async fn build_process_queue_table_by_broker_name(
-        &self,
-    ) -> HashMap<CheetahString /* brokerName */, HashSet<MessageQueue>> {
+    async fn build_process_queue_table_by_broker_name(&self) -> BrokerProcessQueueTable {
         // Collect a snapshot under the read lock (no async calls while holding the lock).
-        let snapshot: Vec<MessageQueue> = {
+        let snapshot: Vec<(MessageQueue, Arc<ProcessQueue>)> = {
             let process_queue_table = self.process_queue_table.read().await;
             process_queue_table
                 .iter()
                 .filter(|(_, pq)| !pq.is_dropped())
-                .map(|(mq, _)| mq.clone())
+                .map(|(mq, process_queue)| (mq.clone(), process_queue.clone()))
                 .collect()
         };
         // Resolve broker names outside the lock to avoid holding it during async I/O.
@@ -1323,11 +1350,15 @@ where
             return HashMap::new();
         };
         let mut result = HashMap::new();
-        for mq in snapshot {
+        for (mq, process_queue) in snapshot {
             let broker_name = client.get_broker_name_from_message_queue(&mq).await;
-            let entry = result.entry(broker_name).or_insert_with(HashSet::new);
-            entry.insert(mq);
+            let entry = result.entry(broker_name).or_insert_with(HashMap::new);
+            entry.insert(mq, process_queue);
         }
         result
     }
 }
+
+#[cfg(test)]
+#[path = "rebalance_impl_test.rs"]
+mod tests;

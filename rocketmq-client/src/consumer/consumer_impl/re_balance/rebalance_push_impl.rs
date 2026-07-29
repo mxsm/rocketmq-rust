@@ -175,6 +175,8 @@ impl RebalancePushImpl {
 
 const UNLOCK_BATCH_MQ_TIMEOUT_MS: u64 = 1_000;
 
+type BrokerProcessQueueTable = HashMap<CheetahString, HashMap<MessageQueue, Arc<ProcessQueue>>>;
+
 impl Rebalance for RebalancePushImpl {
     async fn message_queue_changed(
         &self,
@@ -606,22 +608,26 @@ impl Rebalance for RebalancePushImpl {
 async fn build_process_queue_table_by_broker_name(
     process_queue_table: &Arc<RwLock<HashMap<MessageQueue, Arc<ProcessQueue>>>>,
     client: &Arc<MQClientInstance>,
-) -> HashMap<CheetahString, HashSet<MessageQueue>> {
+) -> BrokerProcessQueueTable {
+    let queues: Vec<(MessageQueue, Arc<ProcessQueue>)> = {
+        let process_queue_table = process_queue_table.read().await;
+        process_queue_table
+            .iter()
+            .filter(|(_, process_queue)| !process_queue.is_dropped())
+            .map(|(mq, process_queue)| (mq.clone(), process_queue.clone()))
+            .collect()
+    };
     let mut result = HashMap::new();
-    let process_queue_table_read = process_queue_table.read().await;
-    for (mq, pq) in process_queue_table_read.iter() {
-        if pq.is_dropped() {
-            continue;
-        }
-        let broker_name = client.get_broker_name_from_message_queue(mq).await;
-        let entry = result.entry(broker_name).or_insert_with(HashSet::new);
-        entry.insert(mq.clone());
+    for (mq, process_queue) in queues {
+        let broker_name = client.get_broker_name_from_message_queue(&mq).await;
+        let entry = result.entry(broker_name).or_insert_with(HashMap::new);
+        entry.insert(mq, process_queue);
     }
     result
 }
 
 async fn lock_all_impl(
-    broker_mqs: HashMap<CheetahString, HashSet<MessageQueue>>,
+    broker_mqs: BrokerProcessQueueTable,
     process_queue_table: Arc<RwLock<HashMap<MessageQueue, Arc<ProcessQueue>>>>,
     consumer_group: Option<CheetahString>,
     client_instance: Arc<MQClientInstance>,
@@ -638,6 +644,7 @@ async fn lock_all_impl(
                 if mqs.is_empty() {
                     return;
                 }
+                let mq_set = mqs.keys().cloned().collect();
                 let find_broker_result = client_instance
                     .find_broker_address_in_subscribe(&broker_name, mix_all::MASTER_ID, true)
                     .await;
@@ -645,7 +652,7 @@ async fn lock_all_impl(
                     let request_body = LockBatchRequestBody {
                         consumer_group: consumer_group.clone(),
                         client_id: Some(client_instance.client_id.clone()),
-                        mq_set: mqs.clone(),
+                        mq_set,
                         ..Default::default()
                     };
                     let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.load_full() else {
@@ -661,16 +668,19 @@ async fn lock_all_impl(
                     match result {
                         Ok(lock_okmqset) => {
                             let process_queue_table = process_queue_table.read().await;
-                            for mq in &mqs {
-                                if let Some(pq) = process_queue_table.get(mq) {
+                            for (mq, expected) in &mqs {
+                                let is_current = process_queue_table
+                                    .get(mq)
+                                    .is_some_and(|current| Arc::ptr_eq(current, expected));
+                                if is_current {
                                     if lock_okmqset.contains(mq) {
-                                        if !pq.is_locked() {
+                                        if !expected.is_locked() {
                                             info!("the message queue locked OK, Group: {:?} {}", consumer_group, mq);
                                         }
-                                        pq.set_locked(true);
-                                        pq.set_last_lock_timestamp(current_millis());
+                                        expected.set_locked(true);
+                                        expected.set_last_lock_timestamp(current_millis());
                                     } else {
-                                        pq.set_locked(false);
+                                        expected.set_locked(false);
                                         warn!("the message queue locked Failed, Group: {:?} {}", consumer_group, mq);
                                     }
                                 }
@@ -693,7 +703,7 @@ async fn lock_all_impl(
 }
 
 async fn unlock_all_impl(
-    broker_mqs: HashMap<CheetahString, HashSet<MessageQueue>>,
+    broker_mqs: BrokerProcessQueueTable,
     process_queue_table: Arc<RwLock<HashMap<MessageQueue, Arc<ProcessQueue>>>>,
     consumer_group: Option<CheetahString>,
     client_instance: Arc<MQClientInstance>,
@@ -709,6 +719,7 @@ async fn unlock_all_impl(
                 if mqs.is_empty() {
                     return;
                 }
+                let mq_set = mqs.keys().cloned().collect();
                 let find_broker_result = client_instance
                     .find_broker_address_in_subscribe(&broker_name, mix_all::MASTER_ID, true)
                     .await;
@@ -716,7 +727,7 @@ async fn unlock_all_impl(
                     let request_body = UnlockBatchRequestBody {
                         consumer_group: consumer_group.clone(),
                         client_id: Some(client_instance.client_id.clone()),
-                        mq_set: mqs.clone(),
+                        mq_set,
                         ..Default::default()
                     };
                     let Some(mq_client_api_impl) = client_instance.mq_client_api_impl.load_full() else {
@@ -732,9 +743,12 @@ async fn unlock_all_impl(
                     match result {
                         Ok(_) => {
                             let process_queue_table = process_queue_table.read().await;
-                            for mq in &mqs {
-                                if let Some(pq) = process_queue_table.get(mq) {
-                                    pq.set_locked(false);
+                            for (mq, expected) in &mqs {
+                                let is_current = process_queue_table
+                                    .get(mq)
+                                    .is_some_and(|current| Arc::ptr_eq(current, expected));
+                                if is_current {
+                                    expected.set_locked(false);
                                     info!("the message queue unlock OK, Group: {:?} {}", consumer_group, mq);
                                 }
                             }
