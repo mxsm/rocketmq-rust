@@ -348,6 +348,10 @@ mod tests {
             integration_kind: "mock_itsm".to_owned(),
             inbound: true,
             outbound: true,
+            interfaces: std::collections::BTreeSet::from([
+                rocketmq_sre_contracts::IntegrationSpiCapability::InboundEvent,
+                rocketmq_sre_contracts::IntegrationSpiCapability::Ticketing,
+            ]),
             operational: rocketmq_sre_contracts::IntegrationOperationalPolicy {
                 secret_required: false,
                 ..rocketmq_sre_contracts::IntegrationOperationalPolicy::default()
