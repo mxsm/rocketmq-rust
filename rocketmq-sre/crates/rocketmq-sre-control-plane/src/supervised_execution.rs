@@ -22,6 +22,8 @@ mod service;
 pub(crate) mod signing;
 
 #[cfg(test)]
+mod credential_rotation_e2e_tests;
+#[cfg(test)]
 mod critic_tests;
 #[cfg(test)]
 mod proxy_restart_e2e_tests;
