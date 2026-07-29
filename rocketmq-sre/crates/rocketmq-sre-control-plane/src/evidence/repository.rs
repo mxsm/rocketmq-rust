@@ -205,7 +205,7 @@ impl PostgresRepository {
              WHERE e.tenant_id = $1 AND e.cluster_id = $2
                AND e.source = $3 AND e.resource = $4
                AND (e.expires_at IS NULL OR e.expires_at > NOW())
-             ORDER BY e.observed_at DESC, e.id DESC
+             ORDER BY e.observed_at DESC, e.collected_at DESC, e.id DESC
              LIMIT 1"
         ))
         .bind(auth.tenant_id.as_uuid())
