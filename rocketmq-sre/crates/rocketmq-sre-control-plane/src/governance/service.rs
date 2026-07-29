@@ -308,10 +308,7 @@ impl GovernanceService {
         require_read(auth)?;
         require_cluster(auth, query.cluster_id)?;
         self.repository.get_version(auth.tenant_id, version_id).await?;
-        let (items, truncated) = self
-            .repository
-            .list_impacts(auth.tenant_id, version_id, query)
-            .await?;
+        let (items, truncated) = self.repository.list_impacts(auth.tenant_id, version_id, query).await?;
         Ok(GovernanceImpactPage {
             schema_version: GOVERNANCE_API_SCHEMA_VERSION,
             items,
@@ -359,10 +356,7 @@ impl GovernanceService {
         self.repository.audit_export(auth.tenant_id, query).await
     }
 
-    pub(crate) async fn compliance(
-        &self,
-        auth: &AuthContext,
-    ) -> Result<GovernanceComplianceReport, ControlPlaneError> {
+    pub(crate) async fn compliance(&self, auth: &AuthContext) -> Result<GovernanceComplianceReport, ControlPlaneError> {
         require_read(auth)?;
         self.repository.compliance_report(auth.tenant_id, Utc::now()).await
     }
