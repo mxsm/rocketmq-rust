@@ -70,10 +70,7 @@ pub(crate) struct ProductionProxyImageCanaryClient {
 }
 
 impl ProductionProxyImageCanaryClient {
-    pub(crate) async fn start(
-        allowed_targets: BTreeSet<String>,
-        pool: PgPool,
-    ) -> Result<Self, ExecutionAgentError> {
+    pub(crate) async fn start(allowed_targets: BTreeSet<String>, pool: PgPool) -> Result<Self, ExecutionAgentError> {
         if allowed_targets.is_empty()
             || allowed_targets.iter().any(|target| {
                 target
@@ -114,11 +111,7 @@ impl ProductionProxyImageCanaryClient {
             .map_err(|_| ExecutionAgentError::DriverFailed)
     }
 
-    async fn canary(
-        &self,
-        namespace: &str,
-        workload: &str,
-    ) -> Result<Option<Deployment>, ExecutionAgentError> {
+    async fn canary(&self, namespace: &str, workload: &str) -> Result<Option<Deployment>, ExecutionAgentError> {
         let name = self.canary_name(namespace, workload)?;
         Api::<Deployment>::namespaced(self.client.clone(), namespace)
             .get_opt(&name)
@@ -212,9 +205,7 @@ impl ProductionProxyImageCanaryClient {
             namespace: row
                 .try_get("namespace")
                 .map_err(|_| ExecutionAgentError::DriverFailed)?,
-            workload: row
-                .try_get("workload")
-                .map_err(|_| ExecutionAgentError::DriverFailed)?,
+            workload: row.try_get("workload").map_err(|_| ExecutionAgentError::DriverFailed)?,
             container: row
                 .try_get("container_name")
                 .map_err(|_| ExecutionAgentError::DriverFailed)?,
@@ -330,17 +321,17 @@ impl ProductionProxyImageCanaryClient {
         annotations.insert(OPERATION_ANNOTATION.to_owned(), request.operation_id.clone());
         annotations.insert(EXECUTION_ANNOTATION.to_owned(), request.execution_id.to_string());
         annotations.insert(PLAN_STEP_ANNOTATION.to_owned(), request.plan_step_id.to_string());
-        annotations.insert(BASE_GENERATION_ANNOTATION.to_owned(), request.expected_generation.to_string());
+        annotations.insert(
+            BASE_GENERATION_ANNOTATION.to_owned(),
+            request.expected_generation.to_string(),
+        );
         annotations.insert(ORIGINAL_REPLICAS_ANNOTATION.to_owned(), original_replicas.to_string());
         annotations.insert(PREVIOUS_IMAGE_ANNOTATION.to_owned(), previous_image.to_owned());
         annotations.insert(IMAGE_DIGEST_ANNOTATION.to_owned(), request.image_digest.clone());
 
         let spec = canary.spec.as_mut().ok_or(ExecutionAgentError::DriverFailed)?;
         spec.replicas = Some(1);
-        let selector = spec
-            .selector
-            .match_labels
-            .get_or_insert_with(BTreeMap::new);
+        let selector = spec.selector.match_labels.get_or_insert_with(BTreeMap::new);
         selector.insert(CANARY_LABEL.to_owned(), operation_label.clone());
         let template_metadata = spec.template.metadata.get_or_insert_with(Default::default);
         template_metadata
@@ -468,13 +459,7 @@ impl ProxyImageCanaryClient for ProductionProxyImageCanaryClient {
                 }
                 return Err(ExecutionAgentError::DriverFailed);
             }
-            let canary = self.build_canary(
-                &main,
-                request,
-                &previous_image,
-                &target_image,
-                original_replicas,
-            )?;
+            let canary = self.build_canary(&main, request, &previous_image, &target_image, original_replicas)?;
             let created = Api::<Deployment>::namespaced(self.client.clone(), &request.namespace)
                 .create(&PostParams::default(), &canary)
                 .await
@@ -517,11 +502,7 @@ impl ProxyImageCanaryClient for ProductionProxyImageCanaryClient {
             {
                 return Err(ExecutionAgentError::DriverFailed);
             }
-            let uid = canary
-                .metadata
-                .uid
-                .clone()
-                .ok_or(ExecutionAgentError::DriverFailed)?;
+            let uid = canary.metadata.uid.clone().ok_or(ExecutionAgentError::DriverFailed)?;
             Api::<Deployment>::namespaced(self.client.clone(), &request.namespace)
                 .delete(
                     &canary_name,
@@ -598,7 +579,11 @@ fn container_image(deployment: &Deployment, container_name: &str) -> Result<Stri
         .spec
         .as_ref()
         .and_then(|spec| spec.template.spec.as_ref())
-        .and_then(|spec| spec.containers.iter().find(|container| container.name == container_name))
+        .and_then(|spec| {
+            spec.containers
+                .iter()
+                .find(|container| container.name == container_name)
+        })
         .and_then(|container| container.image.clone())
         .filter(|image| !image.is_empty() && image.len() <= 512)
         .ok_or(ExecutionAgentError::DriverFailed)
@@ -615,7 +600,10 @@ fn image_repository(image: &str) -> Option<&str> {
 }
 
 fn image_digest(image: &str) -> Option<&str> {
-    image.split_once('@').map(|(_, digest)| digest).filter(|digest| valid_digest(digest))
+    image
+        .split_once('@')
+        .map(|(_, digest)| digest)
+        .filter(|digest| valid_digest(digest))
 }
 
 fn valid_digest(value: &str) -> bool {
