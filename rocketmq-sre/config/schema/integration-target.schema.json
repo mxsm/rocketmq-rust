@@ -12,7 +12,10 @@
         "signed_webhook_itsm",
         "chat_ops_webhook",
         "pager",
-        "email"
+        "email",
+        "mock_cmdb",
+        "mock_git_ops",
+        "signed_release_webhook"
       ],
       "type": "string"
     },
