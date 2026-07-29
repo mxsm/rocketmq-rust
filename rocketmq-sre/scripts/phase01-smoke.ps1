@@ -673,7 +673,6 @@ function Assert-PersistedPackRecord(
         }
         Write-Host "Validated $ExpectedPackId as explicitly partial with persisted missing_required_evidence: $($missing -join ', ')"
     }
-    $null = $script:acceptedPackIds.Add($ExpectedPackId)
 }
 
 function Invoke-BoundedInspection(
@@ -710,19 +709,20 @@ WHERE tenant_id = '$tenantId'
     }
 
     $records = @(Get-InspectionPackRecords "$($view.run.id)")
-    if ($records.Count -ne $ExpectedPackIds.Count) {
-        throw "Inspection $($view.run.id) persisted $($records.Count) packs; expected $($ExpectedPackIds.Count)."
+    if ($records.Count -lt $ExpectedPackIds.Count) {
+        throw "Inspection $($view.run.id) persisted $($records.Count) packs; expected at least $($ExpectedPackIds.Count)."
     }
     foreach ($record in $records) {
-        if ($ExpectedPackIds -notcontains $record.pack_id) {
-            throw "Inspection $($view.run.id) persisted unexpected pack $($record.pack_id)."
-        }
         Assert-PersistedPackRecord $record $record.pack_id "$($view.run.id)"
     }
     foreach ($expectedPackId in $ExpectedPackIds) {
         if (@($records | Where-Object { $_.pack_id -eq $expectedPackId }).Count -ne 1) {
             throw "Inspection $($view.run.id) did not persist exactly one $expectedPackId record."
         }
+        # Later phases can add read-only packs to a template. Validate every
+        # persisted pack above, while keeping the Phase 01 acceptance set
+        # scoped to the original eight Wave A packs.
+        $null = $script:acceptedPackIds.Add($expectedPackId)
     }
     return [pscustomobject]@{
         View = $view
