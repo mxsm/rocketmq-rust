@@ -71,6 +71,32 @@ pub enum TopicConfigPatchOutcome {
     VersionConflict { expected_version: u64, actual_version: u64 },
 }
 
+/// Closed Subscription Group fields accepted by the supervised version-CAS
+/// operation.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SubscriptionGroupConfigPatch {
+    pub retry_max_times: Option<u32>,
+    pub retry_queue_nums: Option<u32>,
+    pub consume_timeout_minutes: Option<u32>,
+}
+
+impl SubscriptionGroupConfigPatch {
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.retry_max_times.is_none() && self.retry_queue_nums.is_none() && self.consume_timeout_minutes.is_none()
+    }
+}
+
+/// Result of one version-checked Subscription Group configuration patch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SubscriptionGroupConfigPatchOutcome {
+    /// The patch was committed as the version immediately after precheck.
+    Applied { previous_version: u64, version: u64 },
+    /// Subscription Group metadata changed after precheck; callers must stop
+    /// and re-plan.
+    VersionConflict { expected_version: u64, actual_version: u64 },
+}
+
 /// Explicit RocketMQ mutation capability.
 ///
 /// The legacy mixed administration API remains available only through
@@ -113,6 +139,17 @@ pub trait MQAdminMutationExt: Send {
         expected_version: u64,
         patch: TopicConfigPatch,
     ) -> rocketmq_error::RocketMQResult<TopicConfigPatchOutcome>;
+
+    /// Changes only the three fields in [`SubscriptionGroupConfigPatch`] when
+    /// the Broker's current Subscription Group metadata version still matches
+    /// `expected_version`.
+    async fn patch_subscription_group_config_if_version(
+        &self,
+        broker_addr: CheetahString,
+        group: CheetahString,
+        expected_version: u64,
+        patch: SubscriptionGroupConfigPatch,
+    ) -> rocketmq_error::RocketMQResult<SubscriptionGroupConfigPatchOutcome>;
 
     /// Applies one bounded Broker logger override with an automatic TTL.
     ///
@@ -311,6 +348,23 @@ impl MQAdminMutationExt for DefaultMQAdminExt {
     ) -> rocketmq_error::RocketMQResult<TopicConfigPatchOutcome> {
         MQAdminMutationExt::patch_topic_config_if_version(self.inner(), broker_addr, topic, expected_version, patch)
             .await
+    }
+
+    async fn patch_subscription_group_config_if_version(
+        &self,
+        broker_addr: CheetahString,
+        group: CheetahString,
+        expected_version: u64,
+        patch: SubscriptionGroupConfigPatch,
+    ) -> rocketmq_error::RocketMQResult<SubscriptionGroupConfigPatchOutcome> {
+        MQAdminMutationExt::patch_subscription_group_config_if_version(
+            self.inner(),
+            broker_addr,
+            group,
+            expected_version,
+            patch,
+        )
+        .await
     }
 
     async fn set_broker_log_filter_ttl(
