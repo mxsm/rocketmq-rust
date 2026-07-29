@@ -16,7 +16,9 @@ use std::collections::BTreeSet;
 
 use rocketmq_sre_contracts::DescriptorStatus;
 use rocketmq_sre_contracts::IntegrationAdapterKind;
+use rocketmq_sre_contracts::IntegrationDataClass;
 use rocketmq_sre_contracts::IntegrationDescriptor;
+use rocketmq_sre_contracts::IntegrationOperationalPolicy;
 use rocketmq_sre_contracts::SchemaVersion;
 use serde_json::json;
 
@@ -59,6 +61,31 @@ pub(super) fn descriptor_for(kind: IntegrationAdapterKind) -> IntegrationDescrip
             true,
             vec!["integration:notification-outbox", "integration:email"],
         ),
+        IntegrationAdapterKind::MockCmdb => (
+            "rocketmq-sre.integration.mock-cmdb.v1",
+            "mock_cmdb",
+            true,
+            false,
+            vec!["integration:cmdb", "integration:signed-ingress"],
+        ),
+        IntegrationAdapterKind::MockGitOps => (
+            "rocketmq-sre.integration.mock-gitops.v1",
+            "mock_gitops",
+            true,
+            false,
+            vec!["integration:gitops", "integration:signed-ingress"],
+        ),
+        IntegrationAdapterKind::SignedReleaseWebhook => (
+            "rocketmq-sre.integration.signed-release-webhook.v1",
+            "signed_release_webhook",
+            true,
+            false,
+            vec![
+                "integration:cicd",
+                "integration:signed-ingress",
+                "automation:upgrade-readiness",
+            ],
+        ),
     };
     IntegrationDescriptor {
         id: id.to_owned(),
@@ -93,7 +120,49 @@ pub(super) fn descriptor_for(kind: IntegrationAdapterKind) -> IntegrationDescrip
         integration_kind: integration_kind.to_owned(),
         inbound,
         outbound,
+        operational: operational_policy(kind),
     }
+}
+
+fn operational_policy(kind: IntegrationAdapterKind) -> IntegrationOperationalPolicy {
+    IntegrationOperationalPolicy {
+        required_scopes: required_scopes(kind),
+        data_class: match kind {
+            IntegrationAdapterKind::SignedWebhookItsm => IntegrationDataClass::RestrictedMetadata,
+            IntegrationAdapterKind::MockItsm
+            | IntegrationAdapterKind::ChatOpsWebhook
+            | IntegrationAdapterKind::Pager
+            | IntegrationAdapterKind::Email
+            | IntegrationAdapterKind::MockCmdb
+            | IntegrationAdapterKind::MockGitOps
+            | IntegrationAdapterKind::SignedReleaseWebhook => IntegrationDataClass::OperationalMetadata,
+        },
+        rate_limit_per_minute: if matches!(
+            kind,
+            IntegrationAdapterKind::MockCmdb | IntegrationAdapterKind::MockGitOps
+        ) {
+            30
+        } else {
+            120
+        },
+        timeout_seconds: 8,
+        max_attempts: 5,
+        health_check_interval_seconds: 300,
+        secret_required: kind != IntegrationAdapterKind::MockItsm,
+    }
+}
+
+fn required_scopes(kind: IntegrationAdapterKind) -> BTreeSet<String> {
+    let scope = match kind {
+        IntegrationAdapterKind::MockItsm | IntegrationAdapterKind::SignedWebhookItsm => "rocketmq:integration:itsm",
+        IntegrationAdapterKind::ChatOpsWebhook | IntegrationAdapterKind::Pager | IntegrationAdapterKind::Email => {
+            "rocketmq:integration:notify"
+        }
+        IntegrationAdapterKind::MockCmdb => "rocketmq:integration:cmdb",
+        IntegrationAdapterKind::MockGitOps => "rocketmq:integration:gitops",
+        IntegrationAdapterKind::SignedReleaseWebhook => "rocketmq:integration:cicd",
+    };
+    BTreeSet::from([scope.to_owned()])
 }
 
 pub(super) fn resolve_descriptor(
@@ -117,19 +186,19 @@ mod tests {
             IntegrationAdapterKind::ChatOpsWebhook,
             IntegrationAdapterKind::Pager,
             IntegrationAdapterKind::Email,
+            IntegrationAdapterKind::MockCmdb,
+            IntegrationAdapterKind::MockGitOps,
+            IntegrationAdapterKind::SignedReleaseWebhook,
         ] {
             let descriptor = descriptor_for(kind);
             assert_eq!(descriptor.version, DESCRIPTOR_VERSION);
             assert!(descriptor.required_capabilities.iter().any(|capability| {
-                capability == "integration:outbox" || capability == "integration:notification-outbox"
+                capability == "integration:outbox"
+                    || capability == "integration:notification-outbox"
+                    || capability == "integration:signed-ingress"
             }));
-            assert_eq!(
-                descriptor.inbound,
-                matches!(
-                    kind,
-                    IntegrationAdapterKind::MockItsm | IntegrationAdapterKind::SignedWebhookItsm
-                )
-            );
+            assert!(descriptor.operational.rate_limit_per_minute > 0);
+            assert!(!descriptor.operational.required_scopes.is_empty());
         }
     }
 }
