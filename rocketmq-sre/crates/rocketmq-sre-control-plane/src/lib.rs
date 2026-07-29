@@ -30,6 +30,7 @@ mod change_management;
 mod config;
 mod connector_channel;
 mod coverage;
+mod dr;
 mod error;
 mod evidence;
 mod execution_authority;
