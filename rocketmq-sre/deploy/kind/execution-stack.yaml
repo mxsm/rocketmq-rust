@@ -164,6 +164,8 @@ spec:
             - {name: ROCKETMQ_SRE_AGENT_PROXY_SCALE_TARGETS, value: "rocketmq-system/rocketmq-proxy"}
             - {name: ROCKETMQ_SRE_AGENT_ENABLE_PROXY_RESTART, value: "true"}
             - {name: ROCKETMQ_SRE_AGENT_PROXY_RESTART_TARGETS, value: "rocketmq-system/rocketmq-proxy=8080"}
+            - {name: ROCKETMQ_SRE_AGENT_ENABLE_TELEMETRY_COLLECTOR_RESTART, value: "true"}
+            - {name: ROCKETMQ_SRE_AGENT_TELEMETRY_COLLECTOR_RESTART_TARGETS, value: "observability/otel-collector"}
             - {name: ROCKETMQ_SRE_AGENT_VERIFICATION_URL, value: "http://sre-control-plane:8090"}
             - {name: ROCKETMQ_SRE_AGENT_TENANT_ID, value: "00000000-0000-4000-8000-000000000002"}
             - {name: ROCKETMQ_SRE_AGENT_CLUSTER_ID, value: "00000000-0000-4000-8000-000000000001"}
