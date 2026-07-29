@@ -29,6 +29,14 @@ from a different normalized model family, with exact primary/Critic invocation
 lineage and fallback identity. Target-side execution remains fail closed unless
 the dedicated Executor, Execution Agent, action descriptor, policy, approval,
 lease/fence, and a typed driver are all explicitly enabled.
+Phase 05 adds enterprise Fleet, regional routing, onboarding quotas, asset and
+compliance indexes, bounded Fleet inspections, representative enterprise
+integrations, release escort, DR Center, governed artifact lifecycles, FinOps,
+and the desktop enterprise operations UI. The canonical Phase 05 OpenAPI,
+read-only Rust and TypeScript clients, and `rocketmq-sre` operator CLI share the
+same fixed status/cluster/incident/inspection/plan read boundary. The CLI can
+validate local-only Plan and Runbook drafts, but cannot submit, approve, or
+execute them.
 
 ## Workspace boundaries
 
@@ -37,7 +45,7 @@ consume MCP through Streamable HTTP and translate validated wire responses into
 canonical Evidence contracts. The Executor and Execution Agent are compiled as
 disabled libraries and cannot mutate a target cluster.
 
-The nine crates are:
+The eleven crates are:
 
 - `rocketmq-sre-contracts`: versioned wire and persistence contracts.
 - `rocketmq-sre-core`: incident coordination and extension registry.
@@ -50,6 +58,10 @@ The nine crates are:
   fencing and opt-in target adapters.
 - `rocketmq-sre-probe`: bounded synthetic probe identity and validation.
 - `rocketmq-sre-eval`: schema and coverage validation utilities.
+- `rocketmq-sre-client`: bounded read-only Rust client for status, cluster,
+  incident, inspection, plan, and OpenAPI queries.
+- `rocketmq-sre-cli`: fixed read-only operator commands plus local-only typed
+  Plan and Runbook draft validation.
 
 ## Development
 
@@ -60,8 +72,12 @@ cargo test --locked --workspace --all-features
 cargo run --locked -p rocketmq-sre-eval --bin schema-export -- schemas
 cargo run --locked -p rocketmq-sre-eval --bin phase3-schema-export
 node scripts/generate_phase3_openapi.mjs
+node scripts/generate_phase5_openapi.mjs
 npm --prefix ui run generate:api
 npm --prefix ui run check:api
+npm ci --prefix sdk/typescript
+npm test --prefix sdk/typescript
+cargo run --locked -p rocketmq-sre-cli -- --help
 ```
 
 The workspace uses Rust 2024's modern source layout: `foo.rs` owns child
@@ -104,9 +120,11 @@ Validate the deployment contract with:
 ```
 
 The ordinary RocketMQ Dashboard and the AI SRE UI are deliberately separate.
-The SRE UI only consumes read-only onboarding, capability, Evidence, coverage,
-runtime, and observability APIs. It contains no execution or resource mutation
-entry point. Phase 01 targets a full-screen desktop workspace at 1280×720,
+The AI SRE workspace owns incidents, inspections, typed plans, supervised
+execution tracking, Fleet, release, DR, governance, integration, and FinOps
+workflows. It never reuses Dashboard sessions or raw mutation APIs; ordinary
+resource pages cooperate through scoped read-only context and deep links.
+The UI targets a full-screen desktop workspace at 1280×720,
 1440×900, and 1920×1080. Narrow layouts remain non-breaking, but dedicated
 mobile interaction design is intentionally deferred.
 
@@ -137,6 +155,7 @@ See:
 - [Phase 03 PostgreSQL recovery](docs/phase03-postgres-recovery.md)
 - [Phase 03 Plan, Policy, Approval, and Audit](docs/phase03-plan-policy-approval.md)
 - [Phase 03 heterogeneous Critic](docs/phase03-heterogeneous-critic.md)
+- [Phase 05 OpenAPI, SDK, and CLI](docs/phase05-openapi-sdk-cli.md)
 - [Local stack](deploy/dev/README.md)
 
 ## Kind acceptance
