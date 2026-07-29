@@ -20,13 +20,13 @@ semantic_registry_owners:
         exposure: metrics_observable_local
   - owner: controller
     component_surface: Controller
-    exposure: implemented_local
-    backlog: expose bounded controller diagnostics through an authenticated read-only resource
+    exposure: queryable
+    backlog: production-verify controller Required Signals freshness and exporter recovery alerts
     notable_sources:
       - name: controller_metrics
         source_path: rocketmq-observability/src/metrics/controller.rs
         source_symbol: ControllerMetrics
-        exposure: metrics_observable_local
+        exposure: queryable
   - owner: mcp
     component_surface: MCP
     exposure: queryable
