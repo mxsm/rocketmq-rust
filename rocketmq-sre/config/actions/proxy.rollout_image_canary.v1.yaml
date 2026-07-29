@@ -25,7 +25,7 @@ parameter_schema:
 status: active
 deprecation: null
 risk: r2
-execution_supported: false
+execution_supported: true
 preconditions:
   - valid_heterogeneous_critic
   - image_reference_is_digest_only
