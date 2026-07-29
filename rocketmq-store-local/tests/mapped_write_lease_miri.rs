@@ -14,12 +14,15 @@
 
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
 
 use rocketmq_store_local::mapped_file::MappedFileError;
 use rocketmq_store_local::mapped_file::MappedFileResult;
 use rocketmq_store_local::mapped_file::MappedWriteLease;
+use rocketmq_store_local::transfer::segment::SegmentLease;
+use rocketmq_store_local::transfer::segment::TransferCacheState;
 
 /// Safe heap-backed owner used to exercise the production write-lease interface
 /// under Miri without relying on operating-system memory mapping support.
@@ -164,4 +167,18 @@ fn tail_reservation_is_bounded_by_remaining_capacity() {
     let tail = owner.reserve_write(8).expect("tail safe lease reservation");
     assert_eq!(tail.start_position(), 6);
     assert_eq!(tail.capacity(), 2);
+}
+
+#[test]
+fn owning_read_segment_survives_source_owner_drop_and_slices_safely() {
+    let owner: Arc<[u8]> = Arc::from(&b"miri-owned-read"[..]);
+    let bytes = bytes::Bytes::from_owner(Arc::clone(&owner));
+    let lease = SegmentLease::from_bytes(17, 3, bytes, TransferCacheState::Hot);
+    drop(owner);
+
+    let leased = lease.as_bytes().expect("owning bytes");
+    assert_eq!(&leased[..], b"miri-owned-read");
+    assert_eq!(leased.slice(5..10).as_ref(), b"owned");
+    drop(lease);
+    assert_eq!(&leased[..], b"miri-owned-read");
 }

@@ -203,3 +203,96 @@ impl Drop for SegmentLease {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io::Read;
+    use std::io::Seek;
+    use std::io::SeekFrom;
+
+    use cheetah_string::CheetahString;
+
+    use super::*;
+    use crate::mapped_file::kernel::ReferenceResource;
+
+    fn mapped_file() -> (tempfile::TempDir, Arc<NativeDefaultMappedFile>) {
+        let directory = tempfile::tempdir().expect("temporary mapped-file directory");
+        let path = directory.path().join("00000000000000000000");
+        let mapped_file =
+            NativeDefaultMappedFile::try_new(CheetahString::from(path.to_string_lossy().into_owned()), 64)
+                .expect("mapped file");
+        (directory, Arc::new(mapped_file))
+    }
+
+    fn selected_lease(mapped_file: &Arc<NativeDefaultMappedFile>, len: usize) -> SegmentLease {
+        let mut selected = mapped_file.select_mapped_buffer(0, len as i32).expect("selected bytes");
+        assert!(selected.try_attach_mapped_file(Arc::clone(mapped_file)));
+        SegmentLease::from_select_result(0, selected).expect("owning segment lease")
+    }
+
+    fn read_file_range(range: &FileRange) -> Vec<u8> {
+        let mut file = range.file.try_clone().expect("clone range file");
+        file.seek(SeekFrom::Start(range.position)).expect("seek range");
+        let mut bytes = vec![0; range.len];
+        file.read_exact(&mut bytes).expect("read range");
+        bytes
+    }
+
+    #[test]
+    fn copy_lease_and_file_range_have_identical_bytes() {
+        let (_directory, mapped_file) = mapped_file();
+        let payload = b"owning-segment";
+        assert!(mapped_file.append_message_bytes(payload));
+        let copied = mapped_file
+            .get_bytes_readable_checked(0, payload.len())
+            .expect("copied bytes");
+        let lease = selected_lease(&mapped_file, payload.len());
+        let leased = lease.as_bytes().expect("leased fallback bytes");
+        let ranged = read_file_range(&lease.as_file_range().expect("file range"));
+
+        assert_eq!(&copied[..], payload);
+        assert_eq!(&leased[..], payload);
+        assert_eq!(&ranged[..], payload);
+    }
+
+    #[test]
+    fn published_segment_is_immutable_while_later_bytes_are_appended() {
+        let (_directory, mapped_file) = mapped_file();
+        assert!(mapped_file.append_message_bytes(b"published"));
+        let lease = selected_lease(&mapped_file, 9);
+
+        assert!(mapped_file.append_message_bytes(b"-tail"));
+
+        assert_eq!(lease.as_bytes().as_deref(), Some(&b"published"[..]));
+        assert_eq!(
+            read_file_range(&lease.as_file_range().expect("file range")),
+            b"published"
+        );
+    }
+
+    #[test]
+    fn lease_drop_releases_exactly_one_mapped_file_hold() {
+        let (_directory, mapped_file) = mapped_file();
+        assert!(mapped_file.append_message_bytes(b"lease"));
+        let baseline = ReferenceResource::get_ref_count(mapped_file.as_ref());
+
+        let lease = selected_lease(&mapped_file, 5);
+        assert_eq!(ReferenceResource::get_ref_count(mapped_file.as_ref()), baseline + 1);
+
+        drop(lease);
+        assert_eq!(ReferenceResource::get_ref_count(mapped_file.as_ref()), baseline);
+    }
+
+    #[test]
+    fn live_lease_fences_destroy_until_drop() {
+        let (_directory, mapped_file) = mapped_file();
+        assert!(mapped_file.append_message_bytes(b"fenced"));
+        let lease = selected_lease(&mapped_file, 6);
+
+        assert!(!mapped_file.destroy(1_000));
+        assert!(!ReferenceResource::is_cleanup_over(mapped_file.as_ref()));
+
+        drop(lease);
+        assert!(ReferenceResource::is_cleanup_over(mapped_file.as_ref()));
+    }
+}

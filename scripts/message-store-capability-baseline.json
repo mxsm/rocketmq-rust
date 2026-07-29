@@ -1,0 +1,523 @@
+{
+  "schema_version": 1,
+  "trait_path": "rocketmq-store/src/base/message_store.rs",
+  "report_path": "rocketmq-doc/en/message-store-capability-migration.md",
+  "max_trait_methods": 126,
+  "allowed_methods": [
+    "load",
+    "start",
+    "init",
+    "shutdown_gracefully",
+    "shutdown",
+    "destroy",
+    "put_message",
+    "put_messages",
+    "get_message",
+    "get_message_with_size_limit",
+    "get_max_offset_in_queue",
+    "get_max_offset_in_queue_committed",
+    "get_min_offset_in_queue",
+    "get_timer_message_store",
+    "set_timer_message_store",
+    "get_commit_log_offset_in_queue",
+    "get_offset_in_queue_by_time",
+    "get_offset_in_queue_by_time_with_boundary",
+    "get_offset_in_queue_by_time_async",
+    "get_offset_in_queue_by_time_with_boundary_async",
+    "look_message_by_offset",
+    "look_message_by_offset_with_size",
+    "select_one_message_by_offset",
+    "select_one_message_by_offset_with_size",
+    "get_running_data_info",
+    "get_timing_message_count",
+    "get_runtime_info",
+    "get_max_phy_offset",
+    "get_min_phy_offset",
+    "get_earliest_message_time",
+    "get_earliest_message_time_store",
+    "get_message_store_timestamp",
+    "get_message_store_timestamp_async",
+    "get_message_total_in_queue",
+    "get_commit_log_data",
+    "get_bulk_commit_log_data",
+    "append_to_commit_log",
+    "execute_delete_files_manually",
+    "query_message",
+    "update_ha_master_address",
+    "update_master_address",
+    "slave_fall_behind_much",
+    "now",
+    "delete_topics",
+    "clean_unused_topic",
+    "clean_expired_consumer_queue",
+    "check_in_mem_by_consume_offset",
+    "check_in_store_by_consume_offset",
+    "dispatch_behind_bytes",
+    "flush",
+    "try_flush",
+    "get_flushed_where",
+    "reset_write_offset",
+    "get_confirm_offset",
+    "set_confirm_offset",
+    "is_os_page_cache_busy",
+    "put_message_preflight",
+    "sync_flush_runtime_info",
+    "health_snapshot",
+    "lock_time_millis",
+    "is_transient_store_pool_deficient",
+    "get_dispatcher_list",
+    "add_dispatcher",
+    "add_first_dispatcher",
+    "get_consume_queue",
+    "find_consume_queue",
+    "get_broker_stats_manager",
+    "on_commit_log_append",
+    "on_commit_log_dispatch",
+    "finish_commit_log_dispatch",
+    "get_message_store_config",
+    "current_broker_role",
+    "data_read_ahead_enabled",
+    "get_store_stats_service",
+    "get_store_checkpoint",
+    "get_store_checkpoint_arc",
+    "get_system_clock",
+    "get_commit_log",
+    "get_commit_log_mut",
+    "set_commitlog_read_mode",
+    "get_running_flags",
+    "get_running_flags_arc",
+    "get_transient_store_pool",
+    "get_allocate_mapped_file_service",
+    "truncate_dirty_logic_files",
+    "unlock_mapped_file",
+    "get_queue_store",
+    "is_sync_disk_flush",
+    "is_sync_master",
+    "assign_offset",
+    "increase_offset",
+    "get_master_store_in_process",
+    "set_master_store_in_process",
+    "get_data",
+    "set_alive_replica_num_in_group",
+    "get_alive_replica_num_in_group",
+    "sync_controller_sync_state_set",
+    "wakeup_ha_client",
+    "get_master_flushed_offset",
+    "get_broker_init_max_offset",
+    "set_master_flushed_offset",
+    "set_broker_init_max_offset",
+    "sync_broker_role",
+    "calc_delta_checksum",
+    "truncate_files",
+    "is_offset_aligned",
+    "get_put_message_hook_list",
+    "set_send_message_back_hook",
+    "get_send_message_back_hook",
+    "get_last_file_from_offset",
+    "get_last_mapped_file",
+    "set_physical_offset",
+    "is_mapped_files_empty",
+    "get_state_machine_version",
+    "state_machine_version_view",
+    "check_message_and_return_size",
+    "remain_transient_store_buffer_numbs",
+    "remain_how_many_data_to_commit",
+    "remain_how_many_data_to_flush",
+    "is_shutdown",
+    "estimate_message_count",
+    "recover_topic_queue_table",
+    "notify_message_arrive_if_necessary",
+    "set_put_message_hook",
+    "get_ha_service",
+    "get_ha_runtime_info"
+  ],
+  "max_broker_used_methods": 80,
+  "max_broker_direct_paths": 64,
+  "max_broker_direct_occurrences": 419,
+  "broker_allowlist": [
+    {
+      "path": "rocketmq-broker/src/broker/broker_admin_runtime.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/broker/broker_control_plane/bootstrap.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/broker/broker_control_plane.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/broker/broker_pre_online_capability/service.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/broker/broker_pre_online_capability.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/broker/broker_registration_runtime.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/broker_runtime/composition.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/broker_runtime/data_plane.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/broker_runtime/lifecycle.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/broker_runtime.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/client/net/broker_to_client.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/failover/escape_bridge.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/failover/escape_bridge_capability.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/hook/schedule_message_hook.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/lifecycle/components.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/lite/lite_lifecycle_manager.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/long_polling/long_polling_service/pull_request_hold_service.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/long_polling/notify_message_arriving_listener.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/offset/manager/consumer_offset_manager.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/ack_message_processor.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/admin_broker_processor/batch_mq_handler.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/admin_broker_processor/broker_config_request_handler.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/admin_broker_processor/broker_epoch_cache_handler.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/admin_broker_processor/consumer_request_handler.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/admin_broker_processor/get_broker_ha_status_handler.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/admin_broker_processor/message_related_handler.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/admin_broker_processor/notify_broker_role_change_handler.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/admin_broker_processor/notify_min_broker_id_handler.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/admin_broker_processor/offset_request_handler.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/admin_broker_processor/reset_master_flusg_offset_handler.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/admin_broker_processor/subscription_group_handler.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/admin_broker_processor/topic_request_handler.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/admin_broker_processor/update_broker_ha_handler.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/admin_broker_processor.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/change_invisible_time_processor.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/client_manage_processor.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/consumer_manage_processor.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/default_pull_message_result_handler.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/end_transaction_processor.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/lite_manager_processor.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/lite_subscription_ctl_processor.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/notification_processor.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/peek_message_processor.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/pop_lite_message_processor.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/pop_message_processor/capability.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/pop_message_processor.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/processor_service/pop_buffer_merge_service.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/processor_service/pop_revive_service.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/pull_message_processor/capability.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/pull_message_processor.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/query_message_processor.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/recall_message_processor.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/reply_message_processor.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/send_message_processor/capability.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor/send_message_processor.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/processor.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/schedule/schedule_message_service.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/slave/slave_synchronize.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/transaction/queue/default_transactional_message_service.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/transaction/queue/transaction_message_store.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/transaction/queue/transaction_topic_registration.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/transaction/queue/transactional_message_bridge.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/transaction/queue/transactional_op_batch_service.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    },
+    {
+      "path": "rocketmq-broker/src/transaction/transactional_message_check_service.rs",
+      "owner": "broker-store-migration",
+      "reason": "Existing Broker compatibility consumer pending its narrow capability port.",
+      "removal_condition": "Remove when this module receives only its use-case capability or becomes a composition-only owner."
+    }
+  ]
+}

@@ -21,6 +21,7 @@ mod grpc_server;
 mod log_store;
 mod network;
 mod node;
+mod persistence;
 mod state_machine;
 pub mod storage;
 

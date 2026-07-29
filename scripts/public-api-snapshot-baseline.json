@@ -40,7 +40,7 @@
       "crate_version": "1.0.0",
       "public_path_count": 141,
       "public_path_sha256": "3e490d57062179eb47dd885e66a51c5578f3a4e5fe1d2df8322c1a9190f9e532",
-      "rustdoc_json_sha256": "8854ed347c6403a3e9f5dd64bef5be5b8ab96f5f08dcce6280a02749975cd5bc",
+      "rustdoc_json_sha256": "7e7638a7f162b4833278841ae5cf4770e836f050e3edeca1e7ddfb2e211a8c22",
       "target": "rocketmq_controller"
     },
     "rocketmq-dashboard-common": {
@@ -89,7 +89,7 @@
       "crate_version": "1.0.0",
       "public_path_count": 54,
       "public_path_sha256": "9ad7966dc674f910b4f4f8936df7cc779ead6ca313698e613998c4d3bdfab029",
-      "rustdoc_json_sha256": "221e371e322c9f2edfabad2a20e720d085902a8a7bc75bad7bb5bf6a13b70e3a",
+      "rustdoc_json_sha256": "5ed3b67770d52cd3097c3b542aaeebfd623f1b35dbc395f7574c7f54107d7729",
       "target": "rocketmq_namesrv"
     },
     "rocketmq-observability": {
@@ -159,7 +159,7 @@
       "crate_version": "1.0.0",
       "public_path_count": 145,
       "public_path_sha256": "913c88cfef6196822d0d5d8d2aa982425f27a275790d968fa76adb72dc32368e",
-      "rustdoc_json_sha256": "ea8b375924aa244916c06057a6daa225b91ebfe762a75416ec73e4ba84f3abd9",
+      "rustdoc_json_sha256": "90513ff978c450d1887180766b6359760d47f1afec222de60c5253e1c47e2357",
       "target": "rocketmq_store_api"
     },
     "rocketmq-store-inspect": {
@@ -173,7 +173,7 @@
       "crate_version": "1.0.0",
       "public_path_count": 874,
       "public_path_sha256": "1a02d666ae6cccd0c0f4a7eb64b704485a7215335e84e36d81809946e9e3ec76",
-      "rustdoc_json_sha256": "6ded8c34a502ada05080f200ad837f87f6299a85df90f9466b05cc0a1a1b17b2",
+      "rustdoc_json_sha256": "c8ca3e5f2b2e17ad579adaefddb1bc8b6e39c8848001038899a569dcffba686c",
       "target": "rocketmq_store_local"
     },
     "rocketmq-store-rocksdb": {
@@ -199,7 +199,7 @@
     }
   },
   "schema_version": 1,
-  "source_commit": "4795a93227f28b9ec6f0bbfcbd770d0c8101bdcc",
+  "source_commit": "d4e876f80cb29e294f633e86ad0f6d83bb39ebe4",
   "toolchain": {
     "cargo": "cargo 1.98.0-nightly (a335d47ff 2026-06-26)",
     "rustc": "rustc 1.98.0-nightly (c397dae80 2026-07-02)",

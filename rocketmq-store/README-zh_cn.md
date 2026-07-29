@@ -180,7 +180,7 @@ rocketmq-store/
   src/stats/                broker 和 store statistics
   src/tieredstore.rs        可选 tiered-store dispatcher adapter
   tests/                    recovery、HA、RocksDB、timer 和 performance tests
-  benches/                  CommitLog、mapped buffer、delivery、zero-copy、RocksDB benches
+  benches/                  CommitLog、mapped buffer、delivery、transfer、RocksDB benches
 ```
 
 ## 开发

@@ -116,31 +116,19 @@ fn bench_batch_write(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark reads (copy vs zero-copy)
+/// Benchmark owning copied reads
 fn bench_read(c: &mut Criterion) {
-    let mut group = c.benchmark_group("read");
+    let mut group = c.benchmark_group("copied_read");
 
     for size in [1024, 4096, 16384, 65536].iter() {
         group.throughput(Throughput::Bytes(*size as u64));
 
-        // Copy read
-        group.bench_with_input(BenchmarkId::new("copy", size), size, |b, &size| {
+        group.bench_with_input(BenchmarkId::new("bytes_copy", size), size, |b, &size| {
             let (_file, mmap) = create_test_mmap(1024 * 1024);
             let buffer = MappedBuffer::new(mmap, 0, 1024 * 1024).unwrap();
 
             b.iter(|| {
-                let data = buffer.read(0..size).unwrap();
-                black_box(data);
-            });
-        });
-
-        // Zero-copy read
-        group.bench_with_input(BenchmarkId::new("zero_copy", size), size, |b, &size| {
-            let (_file, mmap) = create_test_mmap(1024 * 1024);
-            let buffer = MappedBuffer::new(mmap, 0, 1024 * 1024).unwrap();
-
-            b.iter(|| {
-                let data = buffer.read_zero_copy(0..size).unwrap();
+                let data = buffer.read_copy(0..size).unwrap();
                 black_box(data);
             });
         });

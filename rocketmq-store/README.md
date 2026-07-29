@@ -215,7 +215,7 @@ rocketmq-store/
   src/stats/                broker and store statistics
   src/tieredstore.rs        optional tiered-store dispatcher adapter
   tests/                    recovery, HA, RocksDB, timer, and performance tests
-  benches/                  CommitLog, mapped buffer, delivery, zero-copy, RocksDB benches
+  benches/                  CommitLog, mapped buffer, delivery, transfer, RocksDB benches
 ```
 
 ## Development

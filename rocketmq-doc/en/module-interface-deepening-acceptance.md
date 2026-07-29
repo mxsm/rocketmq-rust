@@ -4,8 +4,9 @@
 
 Phase 2 deepens the existing Security, Store, Client, Transport, Controller, and
 Proxy modules. It adds no workspace crate, does not change RocketMQ wire fields
-or persisted checkpoint layouts, and keeps compatibility facades for one
-release cycle.
+or persisted checkpoint layouts. Compatibility facades remain only where a
+real consumer still needs them; obsolete internal source contracts are removed
+without wrappers.
 
 The dependency direction after this phase is:
 
@@ -99,6 +100,46 @@ Posix and Memory implementations, with the existing generic injection seam for
 custom providers. A registry will be reconsidered only when a third approved
 production provider requires runtime selection; hypothetical S3/OSS support is
 not enough to trigger it.
+
+The accepted
+[MessageStore capability migration ADR](message-store-capability-migration-adr.md)
+now freezes the aggregate facade mechanically. The token-derived baseline has
+126 real methods; five declarations in comments explain the older approximate
+count of 131. Broker production code calls 62 facade methods, below the current
+release threshold of 80. Sixty-four remaining production paths and 419
+identifier sites are non-growing and every path has an owner, reason, and
+deletion condition. The generated
+[migration board](message-store-capability-migration.md) records each method,
+caller, execution lane, error shape, target capability, and migration order.
+
+## Controller typed persistence
+
+The accepted
+[Controller typed persistence ADR](controller-typed-persistence-adr.md)
+centralizes V1 keys and compact JSON in `openraft::persistence`. `LogStore` and
+`StateMachine` no longer contain raw persistence key literals, backend
+batch/sync calls, or persistence decoders. Domain repositories preserve the
+existing atomic write grouping and publish memory only after sync.
+
+Golden tests freeze every key and representative vote, log, membership,
+snapshot metadata, and snapshot payload bytes. Opening V1 data does not
+rewrite it. No V2 representation is needed, so no schema migration runs in
+this change; a future V2 requires a separate accepted decision and
+mixed-version/interruption/rollback evidence.
+
+## Owning read path
+
+The accepted [owning read segment ADR](owning-read-segment-adr.md) removes the
+copying `read_zero_copy` API and unsupported speed claim. `MappedBuffer`
+exposes only the accurate `read_copy` operation. Owning `MessageReadLease` and
+`SegmentLease` paths retain their owners; mapped transfer selections move one
+hold into the lease and release it exactly once.
+
+Copy, lease, and file-range bytes are identical. A live lease prevents mapped
+file destruction until drop, later appends do not mutate a published segment,
+and Linux sendfile and owning vectored fallback emit the same frame. Loom
+models hold/drop fencing and Miri exercises owning read and mapped write
+contracts.
 
 ## Producer capabilities and legacy mapping
 

@@ -38,7 +38,7 @@ use super::MappedFileResult;
 ///
 /// - Read operations acquire shared lock (no contention with other readers)
 /// - Write operations acquire exclusive lock (blocks all other operations)
-/// - Zero-copy reads return `Bytes` views into the mmap region
+/// - Read results own a copy and never borrow the mutable mmap region
 ///
 /// # Examples
 ///
@@ -50,8 +50,8 @@ use super::MappedFileResult;
 /// // Write data
 /// buffer.write(0, b"Hello, World!")?;
 ///
-/// // Zero-copy read
-/// let data = buffer.read_zero_copy(0..13)?;
+/// // Owning copied read
+/// let data = buffer.read_copy(0..13)?;
 /// assert_eq!(&data[..], b"Hello, World!");
 /// ```
 #[derive(Debug, Clone)]
@@ -134,7 +134,7 @@ impl MappedBuffer {
         Ok(())
     }
 
-    /// Reads data from the specified range as a copy.
+    /// Reads data from the specified range into owning bytes.
     ///
     /// # Arguments
     ///
@@ -150,8 +150,10 @@ impl MappedBuffer {
     ///
     /// # Performance
     ///
-    /// This method copies data. For zero-copy reads, use `read_zero_copy()`.
-    pub fn read(&self, range: Range<usize>) -> MappedFileResult<Bytes> {
+    /// This method performs one allocation and copy. Use the mapped-file
+    /// selection and transfer APIs when an owning lease or file range is
+    /// required.
+    pub fn read_copy(&self, range: Range<usize>) -> MappedFileResult<Bytes> {
         if range.end > self.len {
             return Err(MappedFileError::out_of_bounds(
                 self.offset + range.start,
@@ -165,84 +167,6 @@ impl MappedBuffer {
         let end = self.offset + range.end;
 
         Ok(Bytes::copy_from_slice(&mmap[start..end]))
-    }
-
-    /// Reads data from the specified range with zero-copy.
-    ///
-    /// Returns a `Bytes` view into the mmap region without copying data.
-    /// The returned `Bytes` keeps a reference to the underlying mmap.
-    ///
-    /// # Arguments
-    ///
-    /// * `range` - Range to read (relative to buffer start)
-    ///
-    /// # Returns
-    ///
-    /// A zero-copy `Bytes` view
-    ///
-    /// # Errors
-    ///
-    /// Returns `MappedFileError::OutOfBounds` if range exceeds buffer bounds
-    ///
-    /// # Safety
-    ///
-    /// The returned `Bytes` holds a read lock reference. Avoid holding
-    /// many Bytes instances simultaneously to prevent lock contention.
-    ///
-    /// # Performance
-    ///
-    /// ~3-5x faster than `read()` for large ranges (>4KB).
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// // Zero-copy read
-    /// let data = buffer.read_zero_copy(0..1024)?;
-    /// process_message(&data);
-    /// // Lock released when `data` drops
-    /// ```
-    pub fn read_zero_copy(&self, range: Range<usize>) -> MappedFileResult<Bytes> {
-        if range.end > self.len {
-            return Err(MappedFileError::out_of_bounds(
-                self.offset + range.start,
-                range.len(),
-                (self.offset + self.len) as u64,
-            ));
-        }
-
-        let mmap = self.mmap.read();
-        let start = self.offset + range.start;
-        let end = self.offset + range.end;
-        let size = end - start;
-
-        // Performance optimization based on size:
-        // - Small reads (< 8KB): Stay in L1/L2 cache, simple copy is fastest
-        // - Medium reads (8-64KB): Benefit from aligned vectorized access
-        // - Large reads (> 64KB): Already optimized by memcpy
-
-        let slice = &mmap[start..end];
-
-        // For medium-sized reads, ensure proper alignment to avoid cache line splits
-        // Check if the start address is aligned to 64-byte (typical cache line)
-        let is_aligned = (slice.as_ptr() as usize).is_multiple_of(64);
-
-        if (8192..=65536).contains(&size) && is_aligned {
-            // Medium to large aligned reads: Use optimized copy with hint
-            // This avoids Bytes overhead while maintaining good performance
-            let mut vec = vec![0u8; size];
-
-            // SAFETY: Both slices are valid for `size` bytes, and the fresh `vec` cannot overlap
-            // the mapped source region.
-            unsafe {
-                // Use ptr::copy_nonoverlapping for aligned, non-temporal access
-                std::ptr::copy_nonoverlapping(slice.as_ptr(), vec.as_mut_ptr(), size);
-            }
-
-            Ok(Bytes::from(vec))
-        } else {
-            // Small or unaligned reads: Standard copy
-            Ok(Bytes::copy_from_slice(slice))
-        }
     }
 
     /// Batch writes multiple data slices with single lock acquisition.
@@ -411,7 +335,7 @@ mod tests {
         let buffer = MappedBuffer::new(mmap, 0, 1024).unwrap();
 
         buffer.write(0, b"Hello, World!").unwrap();
-        let data = buffer.read(0..13).unwrap();
+        let data = buffer.read_copy(0..13).unwrap();
 
         assert_eq!(&data[..], b"Hello, World!");
     }
@@ -435,20 +359,33 @@ mod tests {
         let total = buffer.batch_write(writes).unwrap();
         assert_eq!(total, 16);
 
-        let data = buffer.read(0..16).unwrap();
+        let data = buffer.read_copy(0..16).unwrap();
         assert_eq!(&data[0..6], b"Header");
         assert_eq!(&data[6..10], b"Body");
         assert_eq!(&data[10..16], b"Footer");
     }
 
     #[test]
-    fn test_zero_copy_read() {
-        let mmap = create_test_mmap(1024);
-        let buffer = MappedBuffer::new(mmap, 0, 1024).unwrap();
+    fn copied_reads_cover_alignment_boundaries_and_large_ranges() {
+        let mmap = create_test_mmap(256 * 1024);
+        let buffer = MappedBuffer::new(Arc::clone(&mmap), 0, 256 * 1024).unwrap();
+        let expected = (0..256 * 1024).map(|index| (index % 251) as u8).collect::<Vec<_>>();
+        buffer.write(0, &expected).unwrap();
 
-        buffer.write(0, b"Zero Copy Test").unwrap();
-        let data = buffer.read_zero_copy(0..14).unwrap();
+        for range in [0..1, 0..64, 1..65, 63..8193, 64..65_600, 1_023..200_000] {
+            let data = buffer.read_copy(range.clone()).unwrap();
+            assert_eq!(&data[..], &expected[range]);
+        }
 
-        assert_eq!(&data[..], b"Zero Copy Test");
+        let source_range = {
+            let source = mmap.read();
+            let range = source.as_ptr_range();
+            range.start as usize..range.end as usize
+        };
+        let copied = buffer.read_copy(64..65_600).unwrap();
+        assert!(
+            !source_range.contains(&(copied.as_ptr() as usize)),
+            "owning copied bytes must not alias the mutable mmap"
+        );
     }
 }

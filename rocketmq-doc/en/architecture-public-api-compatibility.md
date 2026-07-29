@@ -15,7 +15,7 @@ paths removed by the architecture migration.
     `RuntimeConfig::with_max_blocking_threads`, and per-session Transport
     writer diagnostics)
   - deprecated: 0
-  - breaking: 3
+  - breaking: 4
     - `ClientRuntime::new` removed; callers use fallible
       `ClientRuntime::try_new`
     - `ClusterConfig` gained mandatory bounded-execution fields for Rust
@@ -24,6 +24,10 @@ paths removed by the architecture migration.
     - Dashboard admin operations changed their receiver from `&mut self` to
       `&self`; implementations and callers adopt the concurrent session
       capability instead of retaining the obsolete mutable RPC contract
+    - `MappedBuffer::read` and the copying
+      `MappedBuffer::read_zero_copy` were replaced by the accurately named
+      `MappedBuffer::read_copy`; the unsupported zero-copy claim and unsafe
+      copy branch were deleted
 
 The package count is derived from `cargo metadata`; the guard rejects a
 baseline that is missing a current library target or retains a removed one.
@@ -36,6 +40,9 @@ The same authority explicitly approved the `ClusterConfig` source-shape change:
 the obsolete fixed-lane execution contract is not retained.
 It also approved the Dashboard receiver cleanup and typed blocking-profile
 additions; neither changes RocketMQ wire, storage, or recovery contracts.
+The same source-compatibility decision applies to the mapped-buffer read
+cleanup: old internal names are not retained when they misstate allocation and
+ownership.
 
 ## Compatibility matrix
 
