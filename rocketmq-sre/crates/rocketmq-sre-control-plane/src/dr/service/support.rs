@@ -103,7 +103,10 @@ pub(super) fn validate_checkpoint(
             "checkpoint note exceeds 2048 bytes",
         ));
     }
-    if request.completed_at.is_some_and(|completed| completed < request.started_at) {
+    if request
+        .completed_at
+        .is_some_and(|completed| completed < request.started_at)
+    {
         return Err(ControlPlaneError::validation(
             "invalid_recovery_checkpoint",
             "checkpoint completion precedes its start",
@@ -186,20 +189,16 @@ pub(super) fn action_item_transition_allowed(current: ActionItemStatus, next: Ac
                     | ActionItemStatus::InProgress
                     | ActionItemStatus::Blocked
                     | ActionItemStatus::Cancelled
-            )
-                | (
-                    ActionItemStatus::Assigned,
-                    ActionItemStatus::InProgress | ActionItemStatus::Blocked | ActionItemStatus::Cancelled
-                )
-                | (
-                    ActionItemStatus::InProgress,
-                    ActionItemStatus::Blocked | ActionItemStatus::Completed | ActionItemStatus::Cancelled
-                )
-                | (
-                    ActionItemStatus::Blocked,
-                    ActionItemStatus::InProgress | ActionItemStatus::Cancelled
-                )
-                | (ActionItemStatus::Completed, ActionItemStatus::Reopened)
+            ) | (
+                ActionItemStatus::Assigned,
+                ActionItemStatus::InProgress | ActionItemStatus::Blocked | ActionItemStatus::Cancelled
+            ) | (
+                ActionItemStatus::InProgress,
+                ActionItemStatus::Blocked | ActionItemStatus::Completed | ActionItemStatus::Cancelled
+            ) | (
+                ActionItemStatus::Blocked,
+                ActionItemStatus::InProgress | ActionItemStatus::Cancelled
+            ) | (ActionItemStatus::Completed, ActionItemStatus::Reopened)
                 | (
                     ActionItemStatus::Reopened,
                     ActionItemStatus::InProgress | ActionItemStatus::Completed | ActionItemStatus::Cancelled
@@ -234,10 +233,7 @@ pub(super) fn require_operator(auth: &AuthContext) -> Result<(), ControlPlaneErr
     }
 }
 
-pub(super) fn require_cluster(
-    auth: &AuthContext,
-    cluster_id: Option<ClusterId>,
-) -> Result<(), ControlPlaneError> {
+pub(super) fn require_cluster(auth: &AuthContext, cluster_id: Option<ClusterId>) -> Result<(), ControlPlaneError> {
     if cluster_id.is_none_or(|cluster_id| auth.clusters.contains(&cluster_id)) {
         Ok(())
     } else {
@@ -259,9 +255,7 @@ pub(super) fn validate_text(name: &str, value: &str, max: usize) -> Result<(), C
     Ok(())
 }
 
-pub(super) fn bound_evidence(
-    evidence_ids: &[rocketmq_sre_contracts::EvidenceId],
-) -> Result<(), ControlPlaneError> {
+pub(super) fn bound_evidence(evidence_ids: &[rocketmq_sre_contracts::EvidenceId]) -> Result<(), ControlPlaneError> {
     if evidence_ids.len() > MAX_EVIDENCE_IDS {
         return Err(ControlPlaneError::validation(
             "invalid_dr_request",
