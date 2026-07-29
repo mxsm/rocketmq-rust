@@ -257,6 +257,46 @@ export interface GovernanceArtifactPage {
   truncated: boolean;
 }
 
+export interface GovernanceVersion {
+  id: string;
+  artifact_id: string;
+  tenant_id: string;
+  version: string;
+  content_digest: string;
+  signature?: {
+    algorithm: string;
+    key_id: string;
+    value: string;
+  };
+  state:
+    | "draft"
+    | "review"
+    | "active"
+    | "deprecated"
+    | "quarantined"
+    | "retired";
+  applicable_components: string[];
+  applicable_version_range: string;
+  dependencies: Array<{
+    kind: GovernanceObjectKind;
+    logical_key: string;
+    version: string;
+  }>;
+  review_due_at: string;
+  expires_at?: string;
+  replacement_version_id?: string;
+  rollback_version_id?: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GovernanceVersionPage {
+  schema_version: string;
+  items: GovernanceVersion[];
+  truncated: boolean;
+}
+
 export interface GovernanceCompliance {
   schema_version: string;
   state_counts: Record<string, number>;
