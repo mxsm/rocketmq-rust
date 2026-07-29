@@ -80,15 +80,8 @@ impl GovernanceAdmissionGuard {
                 Err(error) => return Err(error),
             }
         }
-        self.evaluate_versions(
-            tenant_id,
-            cluster_id,
-            access_path,
-            versions,
-            initial_reasons,
-            now,
-        )
-        .await
+        self.evaluate_versions(tenant_id, cluster_id, access_path, versions, initial_reasons, now)
+            .await
     }
 
     pub(crate) async fn ensure_high_privilege_overrides(
@@ -262,12 +255,7 @@ impl GovernanceAdmissionGuard {
             .await
     }
 
-    fn assess_high_privilege(
-        &self,
-        version: &GovernanceVersion,
-        now: DateTime<Utc>,
-        reasons: &mut BTreeSet<String>,
-    ) {
+    fn assess_high_privilege(&self, version: &GovernanceVersion, now: DateTime<Utc>, reasons: &mut BTreeSet<String>) {
         if version.state != GovernanceLifecycleState::Active {
             reasons.insert(state_reason(version.state).to_owned());
         }
