@@ -51,11 +51,13 @@ use crate::ProxyRestartOneHandler;
 use crate::ProxyScaleOutOneHandler;
 use crate::ReconcileEffectRequest;
 use crate::ReconcileEffectResponse;
+use crate::SubscriptionGroupPatchHandler;
 use crate::TelemetryCollectorRestartOneHandler;
 use crate::TopicConfigPatchHandler;
 use crate::drivers::ProductionBrokerConfigPatchClient;
 use crate::drivers::ProductionProxyRestartClient;
 use crate::drivers::ProductionProxyScaleClient;
+use crate::drivers::ProductionSubscriptionGroupPatchClient;
 use crate::drivers::ProductionTelemetryCollectorRestartClient;
 use crate::drivers::ProductionTopicConfigPatchClient;
 
@@ -150,6 +152,19 @@ pub async fn run(
     } else {
         None
     };
+    let subscription_group_driver = if config.subscription_group_patch_enabled {
+        let driver_config = config.broker_admin.as_ref().ok_or(ExecutionAgentError::Configuration)?;
+        Some(Arc::new(
+            ProductionSubscriptionGroupPatchClient::start(
+                driver_config,
+                pool.clone(),
+                service_context.child("subscription-group-config-driver"),
+            )
+            .await?,
+        ))
+    } else {
+        None
+    };
     let proxy_scale_driver = if config.proxy_scale_out_enabled {
         Some(Arc::new(
             ProductionProxyScaleClient::start(config.proxy_scale_targets.clone()).await?,
@@ -198,6 +213,12 @@ pub async fn run(
         registry.register_admin(
             ExecutionAction::TopicConfigPatchAllowlisted,
             TopicConfigPatchHandler::new(Arc::clone(driver)),
+        )?;
+    }
+    if let Some(driver) = &subscription_group_driver {
+        registry.register_admin(
+            ExecutionAction::SubscriptionGroupPatchAllowlisted,
+            SubscriptionGroupPatchHandler::new(Arc::clone(driver)),
         )?;
     }
     if let Some(driver) = proxy_scale_driver {
@@ -256,6 +277,9 @@ pub async fn run(
         driver.shutdown().await;
     }
     if let Some(driver) = topic_driver {
+        driver.shutdown().await;
+    }
+    if let Some(driver) = subscription_group_driver {
         driver.shutdown().await;
     }
     if let Some(driver) = proxy_restart_driver {
