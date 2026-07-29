@@ -254,6 +254,21 @@ async fn ensure_kind_cluster(
     cluster_id: rocketmq_sre_contracts::ClusterId,
 ) {
     sqlx::query(
+        "INSERT INTO fleet_tenants (id, fleet_id, name, owner_name)
+         VALUES (
+            $1,
+            '00000000-0000-4000-8000-000000000005'::UUID,
+            $2,
+            'phase3-credential-e2e'
+         )
+         ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(tenant_id.as_uuid())
+    .bind(format!("phase3-credential-kind-{tenant_id}"))
+    .execute(&repository.pool)
+    .await
+    .expect("self-contained Kind tenant fixture");
+    sqlx::query(
         "INSERT INTO clusters (
             id, tenant_id, external_cluster_key, environment, region,
             rocketmq_version, deployment_mode, owner_name,
