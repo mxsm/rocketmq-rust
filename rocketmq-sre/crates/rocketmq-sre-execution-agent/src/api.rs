@@ -39,6 +39,7 @@ use crate::AgentEffectStore;
 use crate::AgentReadRequest;
 use crate::AgentReadResult;
 use crate::BrokerConfigPatchHandler;
+use crate::CredentialRotationHandler;
 use crate::DispatchBarrier;
 use crate::ExecutionAgent;
 use crate::ExecutionAgentCapabilities;
@@ -56,6 +57,7 @@ use crate::SubscriptionGroupPatchHandler;
 use crate::TelemetryCollectorRestartOneHandler;
 use crate::TopicConfigPatchHandler;
 use crate::drivers::ProductionBrokerConfigPatchClient;
+use crate::drivers::ProductionCredentialRotationClient;
 use crate::drivers::ProductionProxyImageCanaryClient;
 use crate::drivers::ProductionProxyRestartClient;
 use crate::drivers::ProductionProxyScaleClient;
@@ -181,6 +183,17 @@ pub async fn run(
     } else {
         None
     };
+    let credential_rotation_driver = match &config.credential_rotation {
+        Some(driver_config) => Some(Arc::new(
+            ProductionCredentialRotationClient::start(
+                driver_config,
+                pool.clone(),
+                service_context.child("credential-rotation-driver"),
+            )
+            .await?,
+        )),
+        None => None,
+    };
     let telemetry_collector_restart_driver = if config.telemetry_collector_restart_enabled {
         Some(Arc::new(
             ProductionTelemetryCollectorRestartClient::start(config.telemetry_collector_restart_targets.clone())
@@ -237,6 +250,12 @@ pub async fn run(
         registry.register_kubernetes(
             ExecutionAction::ProxyRolloutImageCanary,
             ProxyImageCanaryHandler::new(driver),
+        )?;
+    }
+    if let Some(driver) = credential_rotation_driver {
+        registry.register_config(
+            ExecutionAction::SecurityCredentialRotateOverlap,
+            CredentialRotationHandler::new(driver),
         )?;
     }
     if let Some(driver) = &proxy_restart_driver {
