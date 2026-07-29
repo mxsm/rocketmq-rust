@@ -107,6 +107,12 @@ pub use crate::admin::MQAdminExtInnerImpl;
 pub use crate::admin::MQAdminMutationExt;
 #[cfg(feature = "admin-read")]
 pub use crate::admin::MQAdminReadExt;
+#[cfg(feature = "admin-mutation")]
+pub use crate::admin::TopicConfigPatch;
+#[cfg(feature = "admin-mutation")]
+pub use crate::admin::TopicConfigPatchOutcome;
+#[cfg(feature = "admin-mutation")]
+pub use crate::admin::TopicConfigVersioned;
 pub use crate::base::client_config::ClientConfig;
 pub use crate::base::query_result::QueryResult;
 pub use crate::base::MQAdmin;
