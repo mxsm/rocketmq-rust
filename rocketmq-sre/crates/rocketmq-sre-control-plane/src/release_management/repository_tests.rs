@@ -29,6 +29,7 @@ use rocketmq_sre_contracts::EnterpriseIntegrationEvent;
 use rocketmq_sre_contracts::EnterpriseIntegrationEventId;
 use rocketmq_sre_contracts::EnterpriseIntegrationEventKind;
 use rocketmq_sre_contracts::EnterpriseIntegrationPayload;
+use rocketmq_sre_contracts::GitOpsSnapshot;
 use rocketmq_sre_contracts::INTEGRATION_DELIVERY_SCHEMA_VERSION;
 use rocketmq_sre_contracts::IncidentId;
 use rocketmq_sre_contracts::IntegrationAdapterKind;
@@ -40,6 +41,7 @@ use rocketmq_sre_contracts::IntegrationHealth;
 use rocketmq_sre_contracts::IntegrationHealthStatus;
 use rocketmq_sre_contracts::IntegrationTarget;
 use rocketmq_sre_contracts::IntegrationTargetId;
+use rocketmq_sre_contracts::NotificationTargetId;
 use rocketmq_sre_contracts::ReleaseId;
 use rocketmq_sre_contracts::ReleaseObservation;
 use rocketmq_sre_contracts::ReleaseObservationPhase;
@@ -87,21 +89,54 @@ async fn postgres_release_and_integration_records_are_durable_idempotent_and_app
         )
         .await
         .expect("integration target");
+    let chatops_target = notification_integration_target(
+        &repository,
+        &fixture,
+        now,
+        IntegrationAdapterKind::ChatOpsWebhook,
+        "signed_webhook",
+    )
+    .await;
+    let pager_target =
+        notification_integration_target(&repository, &fixture, now, IntegrationAdapterKind::Pager, "pager").await;
+    for notification_target in [&chatops_target, &pager_target] {
+        repository
+            .insert_integration_target(
+                notification_target,
+                &audit(
+                    &fixture,
+                    correlation_id,
+                    AuditEventKind::IntegrationTargetRegistered,
+                    "integration_target",
+                    notification_target.target.id.to_string(),
+                    "RepositoryTestNotificationTargetRegistered",
+                    now,
+                ),
+            )
+            .await
+            .expect("notification-backed integration target");
+    }
     let workflow = release_workflow(&fixture, correlation_id, now);
-    let delivery = integration_delivery(&fixture, &target, &workflow, now);
-    let queued = QueuedIntegrationDelivery {
-        target: target.clone(),
-        audit: audit(
-            &fixture,
-            correlation_id,
-            AuditEventKind::IntegrationDeliveryQueued,
-            "integration_delivery",
-            delivery.id.to_string(),
-            "RepositoryTestIntegrationDeliveryQueued",
-            now,
-        ),
-        delivery: delivery.clone(),
-    };
+    let queued = [&target, &chatops_target, &pager_target]
+        .into_iter()
+        .map(|delivery_target| {
+            let delivery = integration_delivery(&fixture, delivery_target, &workflow, now);
+            QueuedIntegrationDelivery {
+                target: delivery_target.clone(),
+                audit: audit(
+                    &fixture,
+                    correlation_id,
+                    AuditEventKind::IntegrationDeliveryQueued,
+                    "integration_delivery",
+                    delivery.id.to_string(),
+                    "RepositoryTestIntegrationDeliveryQueued",
+                    now,
+                ),
+                delivery,
+            }
+        })
+        .collect::<Vec<_>>();
+    let delivery = queued[0].delivery.clone();
     repository
         .insert_release_workflow(
             &workflow,
@@ -115,7 +150,7 @@ async fn postgres_release_and_integration_records_are_durable_idempotent_and_app
                 "RepositoryTestReleaseCreated",
                 now,
             ),
-            &[queued],
+            &queued,
         )
         .await
         .expect("release workflow");
@@ -139,14 +174,60 @@ async fn postgres_release_and_integration_records_are_durable_idempotent_and_app
             .next_attempt_at
             .is_some_and(|next_attempt| next_attempt >= delivery.created_at)
     );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*)
+             FROM notification_outbox
+             WHERE tenant_id = $1 AND cluster_id = $2 AND incident_id = $3",
+        )
+        .bind(fixture.tenant_id.as_uuid())
+        .bind(fixture.cluster_id.as_uuid())
+        .bind(fixture.incident_id.as_uuid())
+        .fetch_one(&repository.pool)
+        .await
+        .expect("notification outbox count"),
+        2
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT target.channel
+             FROM notification_outbox outbox
+             JOIN notification_targets target ON target.id = outbox.target_id
+             WHERE outbox.tenant_id = $1 AND outbox.cluster_id = $2
+             ORDER BY target.channel",
+        )
+        .bind(fixture.tenant_id.as_uuid())
+        .bind(fixture.cluster_id.as_uuid())
+        .fetch_all(&repository.pool)
+        .await
+        .expect("notification outbox channels"),
+        vec!["pager".to_owned(), "signed_webhook".to_owned()]
+    );
     let claims = repository.claim_integration_deliveries(32).await.expect("claim outbox");
     let claim = claims
         .into_iter()
         .find(|claim| claim.delivery.id == delivery.id)
         .expect("release delivery claim");
+    sqlx::query(
+        "UPDATE integration_outbox
+         SET claimed_at = NOW() - INTERVAL '3 minutes'
+         WHERE id = $1 AND status = 'delivering'",
+    )
+    .bind(delivery.id.as_uuid())
+    .execute(&repository.pool)
+    .await
+    .expect("stale worker claim fixture");
+    let recovered_claim = repository
+        .claim_integration_deliveries(32)
+        .await
+        .expect("recover stale outbox claim")
+        .into_iter()
+        .find(|recovered| recovered.delivery.id == delivery.id)
+        .expect("recovered release delivery claim");
+    assert_ne!(recovered_claim.claim_token, claim.claim_token);
     repository
         .finish_integration_delivery(
-            &claim,
+            &recovered_claim,
             Ok(AdapterDeliveryReceipt {
                 external_ticket_key: Some(format!("CHG-{}", workflow.id)),
             }),
@@ -448,6 +529,75 @@ async fn postgres_enterprise_integration_events_are_signed_scoped_and_idempotent
         .expect("enterprise event history");
     assert_eq!(events, vec![event]);
 
+    let gitops_target = IntegrationTargetView {
+        target: IntegrationTarget {
+            id: IntegrationTargetId::new(),
+            tenant_id: fixture.tenant_id,
+            cluster_id: Some(fixture.cluster_id),
+            descriptor_id: "rocketmq-sre.integration.mock-gitops.v1".to_owned(),
+            descriptor_version: "1.0.0".to_owned(),
+            name: format!("GitOps repository test {}", Uuid::new_v4()),
+            adapter_kind: IntegrationAdapterKind::MockGitOps,
+            endpoint: "https://gitops.example.test/events".to_owned(),
+            secret_reference: Some("env:ROCKETMQ_SRE_GITOPS_TEST_SECRET".to_owned()),
+            enabled: true,
+            inbound_approval: false,
+            outbound_events: BTreeSet::new(),
+            created_at: now,
+            updated_at: now,
+        },
+        notification_target_id: None,
+    };
+    repository
+        .insert_integration_target(
+            &gitops_target,
+            &audit(
+                &fixture,
+                CorrelationId::new(),
+                AuditEventKind::IntegrationTargetRegistered,
+                "integration_target",
+                gitops_target.target.id.to_string(),
+                "EnterpriseRepositoryGitOpsTargetRegistered",
+                now,
+            ),
+        )
+        .await
+        .expect("GitOps target");
+    let gitops_event = EnterpriseIntegrationEvent {
+        schema_version: ENTERPRISE_INTEGRATION_EVENT_SCHEMA_VERSION.to_owned(),
+        id: EnterpriseIntegrationEventId::new(),
+        target_id: gitops_target.target.id,
+        tenant_id: fixture.tenant_id,
+        cluster_id: fixture.cluster_id,
+        event_kind: EnterpriseIntegrationEventKind::GitOpsSnapshot,
+        external_event_id: format!("gitops-event-{}", Uuid::new_v4()),
+        source_version: "1.0.0".to_owned(),
+        payload_digest: unique_digest(),
+        payload: EnterpriseIntegrationPayload::GitOps(GitOpsSnapshot {
+            cluster_id: fixture.cluster_id,
+            repository_ref: "rocketmq/platform-config".to_owned(),
+            commit_sha: "a".repeat(40),
+            desired_image_digest: Some(digest('a')),
+            configuration_digest: Some(digest('b')),
+            feature_digest: Some(digest('c')),
+            rollout_link: Some("https://gitops.example.test/rollouts/phase5".to_owned()),
+        }),
+        signature_verified: true,
+        occurred_at: now,
+        received_at: now,
+    };
+    let (_, duplicate, _) = repository
+        .store_enterprise_integration_event(&gitops_event, &format!("gitops-nonce-{}", Uuid::new_v4()))
+        .await
+        .expect("GitOps event");
+    assert!(!duplicate);
+    let (persisted_gitops, duplicate, _) = repository
+        .store_enterprise_integration_event(&gitops_event, &format!("gitops-retry-{}", Uuid::new_v4()))
+        .await
+        .expect("idempotent GitOps event");
+    assert_eq!(persisted_gitops, gitops_event);
+    assert!(duplicate);
+
     let health = IntegrationHealth {
         target_id: target.target.id,
         status: IntegrationHealthStatus::Healthy,
@@ -711,6 +861,60 @@ fn integration_target(fixture: &Fixture, now: chrono::DateTime<Utc>) -> Integrat
             updated_at: now,
         },
         notification_target_id: None,
+    }
+}
+
+async fn notification_integration_target(
+    repository: &PostgresRepository,
+    fixture: &Fixture,
+    now: chrono::DateTime<Utc>,
+    adapter_kind: IntegrationAdapterKind,
+    channel: &str,
+) -> IntegrationTargetView {
+    let notification_target_id = NotificationTargetId::new();
+    let (adapter_name, descriptor_id) = match adapter_kind {
+        IntegrationAdapterKind::ChatOpsWebhook => ("chatops", "rocketmq-sre.integration.chatops-webhook.v1"),
+        IntegrationAdapterKind::Pager => ("pager", "rocketmq-sre.integration.pager.v1"),
+        _ => panic!("test helper only accepts notification-backed representative adapters"),
+    };
+    let endpoint = format!("https://{adapter_name}.example.test/events");
+    let secret_reference = format!("env:ROCKETMQ_SRE_{}_TEST_SECRET", adapter_name.to_ascii_uppercase());
+    sqlx::query(
+        "INSERT INTO notification_targets (
+            id, tenant_id, cluster_id, name, channel, endpoint,
+            secret_reference, enabled, created_at, updated_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE, $8, $8)",
+    )
+    .bind(notification_target_id.as_uuid())
+    .bind(fixture.tenant_id.as_uuid())
+    .bind(fixture.cluster_id.as_uuid())
+    .bind(format!("Phase 5 {adapter_name} {}", Uuid::new_v4()))
+    .bind(channel)
+    .bind(&endpoint)
+    .bind(&secret_reference)
+    .bind(now)
+    .execute(&repository.pool)
+    .await
+    .expect("notification target fixture");
+
+    IntegrationTargetView {
+        target: IntegrationTarget {
+            id: IntegrationTargetId::new(),
+            tenant_id: fixture.tenant_id,
+            cluster_id: Some(fixture.cluster_id),
+            descriptor_id: descriptor_id.to_owned(),
+            descriptor_version: "1.0.0".to_owned(),
+            name: format!("Phase 5 {adapter_name} integration {}", Uuid::new_v4()),
+            adapter_kind,
+            endpoint,
+            secret_reference: Some(secret_reference),
+            enabled: true,
+            inbound_approval: false,
+            outbound_events: BTreeSet::from([IntegrationEventKind::ReleaseStarted]),
+            created_at: now,
+            updated_at: now,
+        },
+        notification_target_id: Some(notification_target_id),
     }
 }
 
