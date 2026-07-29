@@ -12,16 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_sre_contracts::ActionItemStatus;
-use rocketmq_sre_contracts::ClusterId;
-use rocketmq_sre_contracts::DrActionItem;
-use rocketmq_sre_contracts::DrActionItemId;
-use rocketmq_sre_contracts::DrExercise;
-use rocketmq_sre_contracts::DrExerciseId;
-use rocketmq_sre_contracts::DrExerciseState;
-use rocketmq_sre_contracts::DrFinding;
-use rocketmq_sre_contracts::RecoveryCheckpoint;
-use rocketmq_sre_contracts::TenantId;
 use super::DrRepository;
 use super::support::action_item_from_row;
 use super::support::action_item_status_name;
@@ -37,12 +27,19 @@ use crate::ControlPlaneError;
 use crate::dr::model::DrActionItemQuery;
 use crate::dr::model::DrExerciseQuery;
 use crate::dr::model::bounded_limit;
+use rocketmq_sre_contracts::ActionItemStatus;
+use rocketmq_sre_contracts::ClusterId;
+use rocketmq_sre_contracts::DrActionItem;
+use rocketmq_sre_contracts::DrActionItemId;
+use rocketmq_sre_contracts::DrExercise;
+use rocketmq_sre_contracts::DrExerciseId;
+use rocketmq_sre_contracts::DrExerciseState;
+use rocketmq_sre_contracts::DrFinding;
+use rocketmq_sre_contracts::RecoveryCheckpoint;
+use rocketmq_sre_contracts::TenantId;
 
 impl DrRepository {
-    pub(in crate::dr) async fn create_exercise(
-        &self,
-        exercise: &DrExercise,
-    ) -> Result<DrExercise, ControlPlaneError> {
+    pub(in crate::dr) async fn create_exercise(&self, exercise: &DrExercise) -> Result<DrExercise, ControlPlaneError> {
         let row = sqlx::query(
             "INSERT INTO dr_exercises (
                 id, plan_id, tenant_id, region_id, cluster_id, exercise_mode,
@@ -453,7 +450,6 @@ impl DrRepository {
         transaction.commit().await?;
         action_item_from_row(&row)
     }
-
 }
 
 fn i64_value(value: u64, name: &str) -> Result<i64, ControlPlaneError> {
