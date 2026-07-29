@@ -246,6 +246,9 @@ mod tests {
                 ExecutionAction::ProxyRestartOne,
                 ExecutionAction::BrokerConfigPatchAllowlisted,
                 ExecutionAction::TopicConfigPatchAllowlisted,
+                ExecutionAction::SubscriptionGroupPatchAllowlisted,
+                ExecutionAction::ProxyRolloutImageCanary,
+                ExecutionAction::SecurityCredentialRotateOverlap,
                 ExecutionAction::TelemetryCollectorRestartOne,
             ]
         );
