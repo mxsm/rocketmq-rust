@@ -1,0 +1,4 @@
+self-hosted-runner:
+  labels:
+    - rocketmq-architecture-evidence
+    - rocketmq-benchmark

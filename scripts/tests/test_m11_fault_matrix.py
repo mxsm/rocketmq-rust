@@ -43,6 +43,10 @@ class FaultMatrixGuardTests(unittest.TestCase):
             self.root / "scripts" / "kind-architecture-refactor-e2e.ps1",
         )
         shutil.copy2(
+            REPO_ROOT / "scripts" / "new-m11-evidence-secrets.ps1",
+            self.root / "scripts" / "new-m11-evidence-secrets.ps1",
+        )
+        shutil.copy2(
             REPO_ROOT / "scripts" / "tests" / "test_m11_fault_matrix.py",
             self.root / "scripts" / "tests" / "test_m11_fault_matrix.py",
         )
@@ -144,6 +148,22 @@ class FaultMatrixGuardTests(unittest.TestCase):
         runner.write_text(source.replace("commitlog_offset_preserved", "offset_not_checked"), encoding="utf-8")
         result = self.run_guard("--policy-only", expect_success=False)
         self.assertIn("commitlog_offset_preserved", result.stderr)
+
+    def test_dynamic_input_and_registry_regressions_are_rejected(self) -> None:
+        workflow = self.root / ".github" / "workflows" / "kubernetes-fault-matrix.yml"
+        source = workflow.read_text(encoding="utf-8")
+        workflow.write_text(source.replace("  packages: read\n", "", 1), encoding="utf-8")
+        result = self.run_guard("--policy-only", expect_success=False)
+        self.assertIn("contents/package reads", result.stderr)
+
+        runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
+        runner_source = runner.read_text(encoding="utf-8")
+        runner.write_text(
+            runner_source.replace("Invoke-Native docker @('pull', $image)", "docker pull skipped", 1),
+            encoding="utf-8",
+        )
+        result = self.run_guard("--policy-only", expect_success=False)
+        self.assertIn("docker @('pull', $image)", result.stderr)
 
     def test_deliberate_fault_causality_regressions_are_rejected(self) -> None:
         runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"

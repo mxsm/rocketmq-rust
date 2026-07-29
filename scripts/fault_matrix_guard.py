@@ -191,6 +191,7 @@ def validate_policy(guard: Guard, policy: dict[str, Any]) -> None:
 
 def validate_sources(guard: Guard) -> None:
     runner = guard.read("scripts/kind-architecture-refactor-e2e.ps1")
+    secret_generator = guard.read("scripts/new-m11-evidence-secrets.ps1")
     workflow = guard.read(".github/workflows/kubernetes-fault-matrix.yml")
     dockerfile = guard.read("docker/Dockerfile.base")
     tests = guard.read("scripts/tests/test_m11_fault_matrix.py")
@@ -220,6 +221,9 @@ def validate_sources(guard: Guard) -> None:
         "stateless_pod_rescheduled = $null -ne $replacementProxyPod",
         "Get-ControllerLeaderOrdinal",
         "leader_changed = $leaderAfterOrdinal -ne $leaderBeforeOrdinal",
+        "Invoke-Native docker @('pull', $image)",
+        "Invoke-Native kind (@('load', 'docker-image') + $clusterImages",
+        "Invoke-Native k3d (@('image', 'import') + $clusterImages",
     ):
         guard.require(marker in runner, f"fault runner contract marker missing: {marker}")
     guard.require("Mode -eq \"Validate\"" in runner, "runner must provide a non-dynamic Validate mode")
@@ -230,7 +234,32 @@ def validate_sources(guard: Guard) -> None:
     guard.require("fault_matrix_guard.py" in workflow, "fault workflow must execute evidence guard")
     guard.require("kind-architecture-refactor-e2e.ps1" in workflow, "fault workflow must execute the real runner")
     guard.require("workflow_dispatch:" in workflow, "fault workflow must support explicit dynamic dispatch")
-    guard.require("permissions:\n  contents: read" in workflow, "fault workflow must retain contents:read only")
+    guard.require(
+        "permissions:\n  contents: read\n  packages: read" in workflow,
+        "fault workflow must retain least-privilege contents/package reads",
+    )
+    guard.require("docker login ghcr.io" in workflow, "fault workflow must authenticate immutable GHCR pulls")
+    guard.require(
+        "new-m11-evidence-secrets.ps1" in workflow,
+        "fault workflow must generate isolated run-scoped evidence credentials",
+    )
+    guard.require(
+        "M11_RUNTIME_SECRET_MANIFEST_B64" not in workflow
+        and "M11_ROTATED_RUNTIME_SECRET_MANIFEST_B64" not in workflow,
+        "fault workflow must not depend on repository-stored test secret manifests",
+    )
+    guard.require(
+        "Remove-Item -LiteralPath $inputDirectory -Recurse -Force" in workflow
+        and "docker logout ghcr.io" in workflow,
+        "fault workflow must remove run-scoped credentials and registry sessions",
+    )
+    for marker in (
+        "[Security.Cryptography.RandomNumberGenerator]::Create",
+        "M11_EPHEMERAL_SECRET_MANIFESTS_OK",
+        "rocketmq-fault-driver-baseline",
+        "rocketmq-fault-driver-rotated",
+    ):
+        guard.require(marker in secret_generator, f"evidence secret generator marker missing: {marker}")
     guard.require("test_m11_fault_matrix" in workflow and "deliberate" in tests, "deliberate-violation tests missing")
     guard.require("dynamic" in readme.lower() and "fault" in readme.lower(), "Kubernetes README must document dynamic fault evidence")
 
