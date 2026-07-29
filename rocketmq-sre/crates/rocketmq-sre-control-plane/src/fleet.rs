@@ -14,6 +14,7 @@
 
 mod api;
 mod model;
+mod releases;
 mod repository;
 mod service;
 
