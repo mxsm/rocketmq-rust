@@ -308,6 +308,10 @@ pub fn parse_process_args(arguments: impl IntoIterator<Item = OsString>) -> Resu
                 "--token is forbidden; use --token-env to avoid process-list exposure".to_owned(),
             ));
         }
+        if command.is_none() && matches!(value.as_str(), "--help" | "-h") {
+            command = Some("--help".to_owned());
+            continue;
+        }
         if command.is_none() && value.starts_with('-') {
             globals.push(OsString::from(&value));
             if matches!(value.as_str(), "--url" | "--token-env" | "--allow-cluster") {
@@ -618,6 +622,12 @@ mod tests {
         let rendered = error.to_string();
         assert!(rendered.contains("--token is forbidden"));
         assert!(!rendered.contains("super-secret"));
+    }
+
+    #[test]
+    fn help_flag_is_routed_once_without_a_command_operand() {
+        let invocation = parse_process_args(os(&["--help"])).expect("help");
+        assert_eq!(invocation.command, Command::Help);
     }
 
     #[test]
