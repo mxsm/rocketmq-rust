@@ -1831,6 +1831,14 @@ function Get-SchedulerDisposition {
         }
     }
 
+    if ($path -eq "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/production_proxy_image_canary_tests.rs") {
+        return [pscustomobject]@{
+            Disposition = "sre-proxy-canary-test-fixture-poll"
+            ActionRequired = $false
+            Reason = "Allowed test-only Kubernetes canary readiness polling with a fixed iteration bound; no production task or scheduler is created."
+        }
+    }
+
     return [pscustomobject]@{
         Disposition = "unclassified-follow-up"
         ActionRequired = $true
