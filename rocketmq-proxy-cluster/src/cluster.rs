@@ -22,6 +22,7 @@ use async_trait::async_trait;
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::proxy_adapter_compat::client_config_for_managed_domain;
 use rocketmq_client_rust::proxy_adapter_compat::current_millis;
+#[cfg(test)]
 use rocketmq_client_rust::proxy_adapter_compat::rpc_hook_from_outbound_signer;
 use rocketmq_client_rust::proxy_adapter_compat::BoundaryType;
 use rocketmq_client_rust::proxy_adapter_compat::BrokerDataExt;
@@ -45,6 +46,7 @@ use rocketmq_client_rust::AckResult;
 use rocketmq_client_rust::AckStatus;
 use rocketmq_client_rust::ClientConfig as RocketmqClientConfig;
 use rocketmq_client_rust::ClientRuntime;
+#[cfg(test)]
 use rocketmq_client_rust::ClientRuntimeConfig;
 use rocketmq_client_rust::DefaultMQProducer;
 use rocketmq_client_rust::PopResult;
@@ -112,16 +114,14 @@ use rocketmq_proxy_core::TransactionSource;
 use rocketmq_proxy_core::UpdateOffsetPlan;
 use rocketmq_proxy_core::UpdateOffsetRequest;
 use rocketmq_runtime::ChildServiceContext;
-use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_security_api::OutboundSigner;
-use tokio::sync::mpsc;
-use tokio::sync::oneshot;
 
 use crate::config::ClusterConfig;
 use crate::message::message_ext_to_core;
 use crate::message::message_from_core;
 
-const CLUSTER_COMMAND_CAPACITY: usize = 1024;
+#[path = "cluster_admission.rs"]
+mod cluster_admission;
 
 #[async_trait]
 pub trait ClusterClient: Send + Sync {
@@ -953,110 +953,29 @@ impl ClusterClient for RocketmqClusterClient {
     }
 }
 
-#[derive(Clone)]
-struct ClusterTaskExecutor {
-    sender: mpsc::Sender<ClusterCommand>,
-}
+#[path = "cluster_execution.rs"]
+mod cluster_execution;
 
-enum ClusterCommand {
-    ReadinessCheck {
-        reply: oneshot::Sender<ProxyResult<()>>,
-    },
-    QueryRoute {
-        topic: ResourceIdentity,
-        reply: oneshot::Sender<ProxyResult<TopicRouteData>>,
-    },
-    QueryAssignment {
-        topic: ResourceIdentity,
-        group: ResourceIdentity,
-        client_id: String,
-        reply: oneshot::Sender<ProxyResult<Option<Vec<MessageQueueAssignment>>>>,
-    },
-    QueryTopicMessageType {
-        topic: ResourceIdentity,
-        reply: oneshot::Sender<ProxyResult<ProxyTopicMessageType>>,
-    },
-    QuerySubscriptionGroup {
-        topic: ResourceIdentity,
-        group: ResourceIdentity,
-        reply: oneshot::Sender<ProxyResult<Option<SubscriptionGroupMetadata>>>,
-    },
-    QueryUser {
-        username: String,
-        reply: oneshot::Sender<ProxyResult<Option<UserInfo>>>,
-    },
-    QueryAcl {
-        subject: String,
-        reply: oneshot::Sender<ProxyResult<Option<AclInfo>>>,
-    },
-    SendMessage {
-        request: SendMessageRequest,
-        client_id: Option<String>,
-        request_id: String,
-        reply: oneshot::Sender<ProxyResult<Vec<SendMessageResultEntry>>>,
-    },
-    RecallMessage {
-        request: RecallMessageRequest,
-        client_id: Option<String>,
-        request_id: String,
-        reply: oneshot::Sender<ProxyResult<RecallMessagePlan>>,
-    },
-    ReceiveMessage {
-        request: ReceiveMessageRequest,
-        deadline: Option<Duration>,
-        reply: oneshot::Sender<ProxyResult<ReceiveMessagePlan>>,
-    },
-    PullMessage {
-        request: PullMessageRequest,
-        deadline: Option<Duration>,
-        reply: oneshot::Sender<ProxyResult<PullMessagePlan>>,
-    },
-    AckMessage {
-        request: AckMessageRequest,
-        deadline: Option<Duration>,
-        reply: oneshot::Sender<ProxyResult<Vec<AckMessageResultEntry>>>,
-    },
-    ForwardMessageToDeadLetterQueue {
-        request: ForwardMessageToDeadLetterQueueRequest,
-        deadline: Option<Duration>,
-        reply: oneshot::Sender<ProxyResult<ForwardMessageToDeadLetterQueuePlan>>,
-    },
-    ChangeInvisibleDuration {
-        request: ChangeInvisibleDurationRequest,
-        deadline: Option<Duration>,
-        reply: oneshot::Sender<ProxyResult<ChangeInvisibleDurationPlan>>,
-    },
-    UpdateOffset {
-        request: UpdateOffsetRequest,
-        deadline: Option<Duration>,
-        reply: oneshot::Sender<ProxyResult<UpdateOffsetPlan>>,
-    },
-    GetOffset {
-        request: GetOffsetRequest,
-        deadline: Option<Duration>,
-        reply: oneshot::Sender<ProxyResult<GetOffsetPlan>>,
-    },
-    QueryOffset {
-        request: QueryOffsetRequest,
-        deadline: Option<Duration>,
-        reply: oneshot::Sender<ProxyResult<QueryOffsetPlan>>,
-    },
-    EndTransaction {
-        request: EndTransactionRequest,
-        client_id: Option<String>,
-        request_id: String,
-        deadline: Option<Duration>,
-        reply: oneshot::Sender<ProxyResult<EndTransactionPlan>>,
-    },
-    LockBatchMq {
-        request: LockBatchRequestBody,
-        reply: oneshot::Sender<ProxyResult<LockBatchResponseBody>>,
-    },
-    UnlockBatchMq {
-        request: UnlockBatchRequestBody,
-        reply: oneshot::Sender<ProxyResult<()>>,
-    },
-}
+#[cfg(test)]
+use cluster_admission::cluster_lane;
+#[cfg(test)]
+use cluster_admission::cluster_lane_domain_id;
+#[cfg(test)]
+use cluster_admission::ClusterExecutionLanes;
+#[cfg(test)]
+use cluster_admission::ClusterExecutionPolicy;
+#[cfg(test)]
+use cluster_admission::QueuedClusterCommand;
+#[cfg(test)]
+use cluster_admission::CLUSTER_COMMAND_BYTE_CAPACITY;
+#[cfg(test)]
+use cluster_admission::CLUSTER_COMMAND_CAPACITY;
+#[cfg(test)]
+use cluster_admission::CLUSTER_EXECUTION_LANE_COUNT;
+#[cfg(test)]
+use cluster_execution::run_cluster_lane;
+use cluster_execution::ClusterCommand;
+use cluster_execution::ClusterTaskExecutor;
 
 #[derive(Clone)]
 struct CachedValue<T> {
@@ -1078,20 +997,34 @@ impl<T> CachedValue<T> {
 }
 
 #[cfg(test)]
-fn test_client_runtime() -> Arc<ClientRuntime> {
-    static OWNER: std::sync::LazyLock<rocketmq_runtime::RuntimeOwner> = std::sync::LazyLock::new(|| {
+mod cluster_test_runtime {
+    use super::*;
+
+    static TEST_RUNTIME_OWNER: std::sync::LazyLock<rocketmq_runtime::RuntimeOwner> = std::sync::LazyLock::new(|| {
         rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig {
             thread_name: "rocketmq-proxy-cluster-test".to_string(),
             ..Default::default()
         })
         .expect("proxy cluster test runtime should start")
     });
-    ClientRuntime::new(
-        OWNER.root_context().child("client"),
-        ClientRuntimeConfig::default(),
-        TelemetryHandle::noop(),
-    )
+
+    pub(super) fn client_runtime() -> Arc<ClientRuntime> {
+        ClientRuntime::new(
+            TEST_RUNTIME_OWNER.root_context().child("client"),
+            ClientRuntimeConfig::default(),
+            TelemetryHandle::noop(),
+        )
+    }
+
+    pub(super) fn service_context(scope: &'static str) -> ChildServiceContext {
+        TEST_RUNTIME_OWNER.root_context().child(scope)
+    }
 }
+
+#[cfg(test)]
+use cluster_test_runtime::client_runtime as test_client_runtime;
+#[cfg(test)]
+use cluster_test_runtime::service_context as test_service_context;
 
 struct ClusterWorkerState {
     client_runtime: Arc<ClientRuntime>,
@@ -1114,14 +1047,31 @@ impl ClusterWorkerState {
         Self::with_rpc_hook(test_client_runtime(), 0, None)
     }
 
+    #[cfg(test)]
     fn with_rpc_hook(client_runtime: Arc<ClientRuntime>, domain_id: u64, rpc_hook: Option<Arc<ClientRpcHook>>) -> Self {
+        Self::with_factories(
+            client_runtime,
+            domain_id,
+            rpc_hook,
+            Arc::new(DefaultClusterClientFactory),
+            Arc::new(DefaultClusterProducerFactory),
+        )
+    }
+
+    fn with_factories(
+        client_runtime: Arc<ClientRuntime>,
+        domain_id: u64,
+        rpc_hook: Option<Arc<ClientRpcHook>>,
+        client_factory: Arc<dyn ClusterClientFactory>,
+        producer_factory: Arc<dyn ClusterProducerFactory>,
+    ) -> Self {
         Self {
             client_runtime,
             domain_id,
             rpc_hook,
             client: None,
-            client_factory: Arc::new(DefaultClusterClientFactory),
-            producer_factory: Arc::new(DefaultClusterProducerFactory),
+            client_factory,
+            producer_factory,
             send_producers: HashMap::new(),
             route_cache: HashMap::new(),
             topic_message_type_cache: HashMap::new(),
@@ -1150,20 +1100,7 @@ impl ClusterWorkerState {
         client_factory: Arc<dyn ClusterClientFactory>,
         producer_factory: Arc<dyn ClusterProducerFactory>,
     ) -> Self {
-        Self {
-            client_runtime,
-            domain_id,
-            rpc_hook,
-            client: None,
-            client_factory,
-            producer_factory,
-            send_producers: HashMap::new(),
-            route_cache: HashMap::new(),
-            topic_message_type_cache: HashMap::new(),
-            subscription_group_cache: HashMap::new(),
-            user_cache: HashMap::new(),
-            acl_cache: HashMap::new(),
-        }
+        Self::with_factories(client_runtime, domain_id, rpc_hook, client_factory, producer_factory)
     }
 
     fn rpc_hook(&self) -> Option<Arc<ClientRpcHook>> {
@@ -1259,336 +1196,6 @@ impl ClusterWorkerState {
     fn cache_acl(&mut self, subject: impl Into<String>, acl: Option<AclInfo>, ttl: Duration) {
         cache_value(&mut self.acl_cache, subject.into(), acl, ttl);
     }
-}
-
-impl ClusterTaskExecutor {
-    fn new(
-        config: ClusterConfig,
-        signer: Option<Arc<dyn OutboundSigner>>,
-        service_context: &ChildServiceContext,
-        telemetry_handle: TelemetryHandle,
-    ) -> ProxyResult<Self> {
-        let rpc_hook = signer.map(rpc_hook_from_outbound_signer);
-        Self::new_with_rpc_hook(config, rpc_hook, service_context, telemetry_handle)
-    }
-
-    fn new_with_rpc_hook(
-        config: ClusterConfig,
-        rpc_hook: Option<Arc<ClientRpcHook>>,
-        service_context: &ChildServiceContext,
-        telemetry_handle: TelemetryHandle,
-    ) -> ProxyResult<Self> {
-        let (sender, receiver) = mpsc::channel(CLUSTER_COMMAND_CAPACITY);
-        let worker_context = service_context.child("command-worker");
-        let shutdown_context = service_context.clone();
-        let client_runtime = ClientRuntime::new(
-            worker_context.child("client-runtime"),
-            ClientRuntimeConfig::default(),
-            telemetry_handle,
-        );
-        let cancellation = worker_context.task_group().cancellation_token();
-        let domain_id = worker_context.task_group().id().as_u64();
-        worker_context
-            .spawn_service("proxy.cluster.worker", async move {
-                run_cluster_worker(
-                    config,
-                    client_runtime,
-                    domain_id,
-                    rpc_hook,
-                    receiver,
-                    cancellation,
-                    shutdown_context,
-                )
-                .await;
-            })
-            .map_err(|error| ProxyError::Transport {
-                message: format!("failed to spawn proxy cluster worker: {error}"),
-            })?;
-        Ok(Self { sender })
-    }
-
-    async fn readiness_check(&self) -> ProxyResult<()> {
-        self.execute(|reply| ClusterCommand::ReadinessCheck { reply }).await
-    }
-
-    async fn query_route(&self, topic: ResourceIdentity) -> ProxyResult<TopicRouteData> {
-        self.execute(|reply| ClusterCommand::QueryRoute { topic, reply }).await
-    }
-
-    async fn query_assignment(
-        &self,
-        topic: ResourceIdentity,
-        group: ResourceIdentity,
-        client_id: String,
-    ) -> ProxyResult<Option<Vec<MessageQueueAssignment>>> {
-        self.execute(|reply| ClusterCommand::QueryAssignment {
-            topic,
-            group,
-            client_id,
-            reply,
-        })
-        .await
-    }
-
-    async fn query_topic_message_type(&self, topic: ResourceIdentity) -> ProxyResult<ProxyTopicMessageType> {
-        self.execute(|reply| ClusterCommand::QueryTopicMessageType { topic, reply })
-            .await
-    }
-
-    async fn query_subscription_group(
-        &self,
-        topic: ResourceIdentity,
-        group: ResourceIdentity,
-    ) -> ProxyResult<Option<SubscriptionGroupMetadata>> {
-        self.execute(|reply| ClusterCommand::QuerySubscriptionGroup { topic, group, reply })
-            .await
-    }
-
-    async fn query_user(&self, username: String) -> ProxyResult<Option<UserInfo>> {
-        self.execute(|reply| ClusterCommand::QueryUser { username, reply })
-            .await
-    }
-
-    async fn query_acl(&self, subject: String) -> ProxyResult<Option<AclInfo>> {
-        self.execute(|reply| ClusterCommand::QueryAcl { subject, reply }).await
-    }
-
-    async fn send_message(
-        &self,
-        request: SendMessageRequest,
-        client_id: Option<String>,
-        request_id: String,
-    ) -> ProxyResult<Vec<SendMessageResultEntry>> {
-        self.execute(|reply| ClusterCommand::SendMessage {
-            request,
-            client_id,
-            request_id,
-            reply,
-        })
-        .await
-    }
-
-    async fn recall_message(
-        &self,
-        request: RecallMessageRequest,
-        client_id: Option<String>,
-        request_id: String,
-    ) -> ProxyResult<RecallMessagePlan> {
-        self.execute(|reply| ClusterCommand::RecallMessage {
-            request,
-            client_id,
-            request_id,
-            reply,
-        })
-        .await
-    }
-
-    async fn receive_message(
-        &self,
-        request: ReceiveMessageRequest,
-        deadline: Option<Duration>,
-    ) -> ProxyResult<ReceiveMessagePlan> {
-        self.execute(|reply| ClusterCommand::ReceiveMessage {
-            request,
-            deadline,
-            reply,
-        })
-        .await
-    }
-
-    async fn pull_message(
-        &self,
-        request: PullMessageRequest,
-        deadline: Option<Duration>,
-    ) -> ProxyResult<PullMessagePlan> {
-        self.execute(|reply| ClusterCommand::PullMessage {
-            request,
-            deadline,
-            reply,
-        })
-        .await
-    }
-
-    async fn ack_message(
-        &self,
-        request: AckMessageRequest,
-        deadline: Option<Duration>,
-    ) -> ProxyResult<Vec<AckMessageResultEntry>> {
-        self.execute(|reply| ClusterCommand::AckMessage {
-            request,
-            deadline,
-            reply,
-        })
-        .await
-    }
-
-    async fn forward_message_to_dead_letter_queue(
-        &self,
-        request: ForwardMessageToDeadLetterQueueRequest,
-        deadline: Option<Duration>,
-    ) -> ProxyResult<ForwardMessageToDeadLetterQueuePlan> {
-        self.execute(|reply| ClusterCommand::ForwardMessageToDeadLetterQueue {
-            request,
-            deadline,
-            reply,
-        })
-        .await
-    }
-
-    async fn change_invisible_duration(
-        &self,
-        request: ChangeInvisibleDurationRequest,
-        deadline: Option<Duration>,
-    ) -> ProxyResult<ChangeInvisibleDurationPlan> {
-        self.execute(|reply| ClusterCommand::ChangeInvisibleDuration {
-            request,
-            deadline,
-            reply,
-        })
-        .await
-    }
-
-    async fn update_offset(
-        &self,
-        request: UpdateOffsetRequest,
-        deadline: Option<Duration>,
-    ) -> ProxyResult<UpdateOffsetPlan> {
-        self.execute(|reply| ClusterCommand::UpdateOffset {
-            request,
-            deadline,
-            reply,
-        })
-        .await
-    }
-
-    async fn get_offset(&self, request: GetOffsetRequest, deadline: Option<Duration>) -> ProxyResult<GetOffsetPlan> {
-        self.execute(|reply| ClusterCommand::GetOffset {
-            request,
-            deadline,
-            reply,
-        })
-        .await
-    }
-
-    async fn query_offset(
-        &self,
-        request: QueryOffsetRequest,
-        deadline: Option<Duration>,
-    ) -> ProxyResult<QueryOffsetPlan> {
-        self.execute(|reply| ClusterCommand::QueryOffset {
-            request,
-            deadline,
-            reply,
-        })
-        .await
-    }
-
-    async fn end_transaction(
-        &self,
-        request: EndTransactionRequest,
-        client_id: Option<String>,
-        request_id: String,
-        deadline: Option<Duration>,
-    ) -> ProxyResult<EndTransactionPlan> {
-        self.execute(|reply| ClusterCommand::EndTransaction {
-            request,
-            client_id,
-            request_id,
-            deadline,
-            reply,
-        })
-        .await
-    }
-
-    async fn lock_batch_mq(&self, request: LockBatchRequestBody) -> ProxyResult<LockBatchResponseBody> {
-        self.execute(|reply| ClusterCommand::LockBatchMq { request, reply })
-            .await
-    }
-
-    async fn unlock_batch_mq(&self, request: UnlockBatchRequestBody) -> ProxyResult<()> {
-        self.execute(|reply| ClusterCommand::UnlockBatchMq { request, reply })
-            .await
-    }
-
-    async fn execute<T>(
-        &self,
-        command: impl FnOnce(oneshot::Sender<ProxyResult<T>>) -> ClusterCommand,
-    ) -> ProxyResult<T>
-    where
-        T: Send + 'static,
-    {
-        let (reply, receiver) = oneshot::channel();
-        self.sender
-            .send(command(reply))
-            .await
-            .map_err(|_| ProxyError::Transport {
-                message: "proxy cluster worker task is unavailable".to_owned(),
-            })?;
-        receiver.await.map_err(|_| ProxyError::Transport {
-            message: "proxy cluster worker dropped response".to_owned(),
-        })?
-    }
-}
-
-async fn run_cluster_worker(
-    config: ClusterConfig,
-    client_runtime: Arc<ClientRuntime>,
-    domain_id: u64,
-    rpc_hook: Option<Arc<ClientRpcHook>>,
-    receiver: mpsc::Receiver<ClusterCommand>,
-    cancellation: tokio_util::sync::CancellationToken,
-    shutdown_context: ChildServiceContext,
-) {
-    let state = ClusterWorkerState::with_rpc_hook(client_runtime, domain_id, rpc_hook);
-    run_cluster_worker_with_state(config, state, receiver, cancellation, Some(shutdown_context)).await;
-}
-
-async fn run_cluster_worker_with_state(
-    config: ClusterConfig,
-    mut state: ClusterWorkerState,
-    mut receiver: mpsc::Receiver<ClusterCommand>,
-    cancellation: tokio_util::sync::CancellationToken,
-    shutdown_context: Option<ChildServiceContext>,
-) {
-    loop {
-        tokio::select! {
-            biased;
-            () = cancellation.cancelled() => break,
-            command = receiver.recv() => match command {
-                Some(command) => {
-                    tokio::select! {
-                        biased;
-                        () = cancellation.cancelled() => break,
-                        () = handle_cluster_command(&config, &mut state, command) => {}
-                    }
-                }
-                None => break,
-            },
-        }
-    }
-    let shutdown_deadline = shutdown_context
-        .and_then(|context| context.task_group().shutdown_deadline())
-        .unwrap_or_else(|| ShutdownDeadline::after(config.shutdown_timeout()));
-    for (producer_group, producer) in &mut state.send_producers {
-        if tokio::time::timeout(shutdown_deadline.remaining(), producer.shutdown())
-            .await
-            .is_err()
-        {
-            tracing::warn!(
-                producer_group,
-                "proxy cluster producer shutdown exceeded the shared deadline"
-            );
-        }
-    }
-    if let Some(client) = state.client.take() {
-        if tokio::time::timeout(shutdown_deadline.remaining(), client.shutdown())
-            .await
-            .is_err()
-        {
-            tracing::warn!("proxy cluster Client shutdown exceeded the shared deadline");
-        }
-    }
-    let _ = state.client_runtime.shutdown_until(shutdown_deadline).await;
 }
 
 fn cluster_client_config(config: &ClusterConfig) -> RocketmqClientConfig {
@@ -3146,32 +2753,55 @@ fn convert_subscription_group(group_config: SubscriptionGroupConfig) -> Subscrip
 mod tests {
     use std::collections::HashMap;
     use std::collections::HashSet;
+    use std::mem::size_of;
     use std::time::Duration;
     use std::time::Instant;
 
     use cheetah_string::CheetahString;
     use rocketmq_client_rust::proxy_adapter_compat::TopicMessageType;
+    use rocketmq_error::RocketMQError;
     use rocketmq_protocol::protocol::body::broker_body::cluster_info::ClusterInfo;
     use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
     use rocketmq_protocol::protocol::route::route_data_view::QueueData;
     use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
     use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+    use rocketmq_proxy_core::AckMessageRequest;
+    use rocketmq_proxy_core::MessageQueueTarget;
+    use rocketmq_proxy_core::ProxyMessage;
+    use rocketmq_proxy_core::PullMessageRequest;
+    use rocketmq_proxy_core::ResourceIdentity;
+    use rocketmq_proxy_core::SendMessageEntry;
+    use rocketmq_proxy_core::SendMessageRequest;
+    use rocketmq_proxy_core::UpdateOffsetRequest;
+    use rocketmq_runtime::BudgetLimit;
+    use rocketmq_runtime::BudgetedQueue;
+    use rocketmq_runtime::FullPolicy;
+    use rocketmq_runtime::ResourceBudgetTree;
+    use tokio::sync::oneshot;
+    use tokio_util::sync::CancellationToken;
 
     use super::build_send_producer;
     use super::cluster_client_config;
     use super::cluster_info_has_registered_broker;
     use super::convert_subscription_group;
     use super::convert_topic_message_type;
+    use super::run_cluster_lane;
     use super::select_auth_metadata_broker_addr;
     use super::select_master_broker_addr;
     use super::single_broker_and_topic;
     use super::test_client_runtime;
     use super::CachedValue;
+    use super::ClusterCommand;
+    use super::ClusterExecutionLanes;
+    use super::ClusterExecutionPolicy;
     use super::ClusterTaskExecutor;
     use super::ClusterWorkerState;
+    use super::QueuedClusterCommand;
     use super::RocketmqClusterClient;
     use super::TelemetryHandle;
+    use super::CLUSTER_COMMAND_BYTE_CAPACITY;
     use super::CLUSTER_COMMAND_CAPACITY;
+    use super::CLUSTER_EXECUTION_LANE_COUNT;
     use crate::config::ClusterConfig;
     use rocketmq_client_rust::proxy_adapter_compat::MessageQueue;
     use rocketmq_proxy_core::ProxyError;
@@ -3329,6 +2959,159 @@ mod tests {
         assert!(matches!(error, ProxyError::InvalidMetadata { message } if message.contains("single topic")));
     }
 
+    #[test]
+    fn cluster_command_admission_rejects_count_and_byte_saturation() {
+        let count_lanes = ClusterExecutionLanes::new(ClusterExecutionPolicy {
+            capacity_count: 1,
+            capacity_bytes: 4 * 1024,
+            default_queue_deadline: Duration::from_secs(1),
+        })
+        .expect("count budget");
+        let (first_reply, _first_receiver) = oneshot::channel();
+        count_lanes
+            .enqueue(ClusterCommand::ReadinessCheck { reply: first_reply })
+            .expect("first command is admitted");
+        let (second_reply, _second_receiver) = oneshot::channel();
+        let count_error = count_lanes
+            .enqueue(ClusterCommand::ReadinessCheck { reply: second_reply })
+            .expect_err("second command exceeds the global count budget");
+        assert!(matches!(
+            count_error,
+            ProxyError::TooManyRequests {
+                resource: "proxy-cluster-command-queue"
+            }
+        ));
+        assert_eq!(count_lanes.root_budget.snapshot().current_count, 1);
+
+        let byte_lanes = ClusterExecutionLanes::new(ClusterExecutionPolicy {
+            capacity_count: 2,
+            capacity_bytes: size_of::<ClusterCommand>() + 8,
+            default_queue_deadline: Duration::from_secs(1),
+        })
+        .expect("byte budget");
+        let (reply, _receiver) = oneshot::channel();
+        let byte_error = byte_lanes
+            .enqueue(ClusterCommand::SendMessage {
+                request: SendMessageRequest {
+                    messages: vec![SendMessageEntry {
+                        topic: ResourceIdentity::new("", "TopicA"),
+                        client_message_id: "message-a".to_owned(),
+                        message: ProxyMessage::new("TopicA", vec![7_u8; 32]),
+                        queue_id: None,
+                    }],
+                    timeout: None,
+                },
+                client_id: Some("client-a".to_owned()),
+                request_id: "request-a".to_owned(),
+                reply,
+            })
+            .expect_err("retained payload exceeds the global byte budget");
+        assert!(matches!(
+            byte_error,
+            ProxyError::TooManyRequests {
+                resource: "proxy-cluster-command-queue"
+            }
+        ));
+        assert_eq!(byte_lanes.root_budget.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn related_consumer_commands_share_a_fifo_lane() {
+        let group = ResourceIdentity::new("tenant-a", "GroupA");
+        let topic = ResourceIdentity::new("tenant-a", "TopicA");
+        let target = MessageQueueTarget {
+            topic: topic.clone(),
+            queue_id: 0,
+            broker_name: Some("broker-a".to_owned()),
+            broker_addr: Some("127.0.0.1:10911".to_owned()),
+        };
+        let (pull_reply, _pull_receiver) = oneshot::channel();
+        let pull = ClusterCommand::PullMessage {
+            request: PullMessageRequest {
+                group: group.clone(),
+                target: target.clone(),
+                offset: 0,
+                batch_size: 1,
+                filter_expression: rocketmq_proxy_core::ConsumerFilterExpression {
+                    expression_type: "TAG".to_owned(),
+                    expression: "*".to_owned(),
+                },
+                long_polling_timeout: Duration::from_secs(1),
+            },
+            deadline: Some(Duration::from_secs(2)),
+            reply: pull_reply,
+        };
+        let (ack_reply, _ack_receiver) = oneshot::channel();
+        let ack = ClusterCommand::AckMessage {
+            request: AckMessageRequest {
+                group: group.clone(),
+                topic,
+                entries: Vec::new(),
+            },
+            deadline: Some(Duration::from_secs(2)),
+            reply: ack_reply,
+        };
+        let (offset_reply, _offset_receiver) = oneshot::channel();
+        let update_offset = ClusterCommand::UpdateOffset {
+            request: UpdateOffsetRequest {
+                group,
+                target,
+                offset: 1,
+            },
+            deadline: Some(Duration::from_secs(2)),
+            reply: offset_reply,
+        };
+
+        assert_eq!(pull.lane(), ack.lane());
+        assert_eq!(pull.lane(), update_offset.lane());
+    }
+
+    #[tokio::test]
+    async fn expired_queued_command_is_rejected_before_client_io() {
+        let service = super::test_service_context("proxy-cluster-expiry");
+        let budget = ResourceBudgetTree::new(
+            "proxy-cluster-expiry",
+            BudgetLimit::new(1, 4 * 1024, FullPolicy::Reject),
+        )
+        .expect("expiry budget");
+        let queue = BudgetedQueue::new(budget.root());
+        let (reply, receiver) = oneshot::channel();
+        let command = ClusterCommand::ReadinessCheck { reply };
+        queue
+            .try_push_data(
+                QueuedClusterCommand {
+                    command,
+                    enqueued_at: Instant::now()
+                        .checked_sub(Duration::from_millis(10))
+                        .expect("test instant supports subtraction"),
+                    deadline: Duration::from_millis(1),
+                },
+                size_of::<ClusterCommand>(),
+            )
+            .expect("expired command enters the queue");
+        queue.close();
+
+        run_cluster_lane(
+            ClusterConfig::default(),
+            ClusterWorkerState::new(),
+            queue,
+            CancellationToken::new(),
+            service,
+        )
+        .await;
+        let error = receiver
+            .await
+            .expect("expiry response")
+            .expect_err("expired command must not execute");
+        assert!(matches!(
+            error,
+            ProxyError::RocketMQ(RocketMQError::Timeout {
+                operation: "proxy cluster command queue",
+                timeout_ms: 1
+            })
+        ));
+    }
+
     #[tokio::test]
     async fn cluster_command_queue_is_bounded() {
         let runtime =
@@ -3336,7 +3119,15 @@ mod tests {
         let service = runtime.service_context("proxy-cluster-test.queue");
         let executor = ClusterTaskExecutor::new(ClusterConfig::default(), None, &service, TelemetryHandle::noop())
             .expect("managed executor builds");
-        assert_eq!(executor.sender.max_capacity(), CLUSTER_COMMAND_CAPACITY);
+        assert_eq!(
+            executor.lanes.root_budget.limit().capacity.count,
+            CLUSTER_COMMAND_CAPACITY
+        );
+        assert_eq!(
+            executor.lanes.root_budget.limit().capacity.bytes,
+            CLUSTER_COMMAND_BYTE_CAPACITY
+        );
+        assert_eq!(executor.lanes.snapshots().len(), CLUSTER_EXECUTION_LANE_COUNT);
         let report = service.task_group().shutdown(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
     }
