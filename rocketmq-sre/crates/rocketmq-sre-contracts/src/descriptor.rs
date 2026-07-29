@@ -163,6 +163,8 @@ pub struct IntegrationDescriptor {
     pub integration_kind: String,
     pub inbound: bool,
     pub outbound: bool,
+    #[serde(default)]
+    pub operational: crate::IntegrationOperationalPolicy,
 }
 
 /// All Phase 00 descriptor types in one versioned registry value.
