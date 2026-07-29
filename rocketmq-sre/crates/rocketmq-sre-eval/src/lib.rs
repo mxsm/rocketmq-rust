@@ -949,6 +949,30 @@ signals:
                 include_str!("../../../schemas/dr-readiness-report.schema.json"),
             ),
             (
+                "dr-plan.schema.json",
+                include_str!("../../../schemas/dr-plan.schema.json"),
+            ),
+            (
+                "dr-backup-asset.schema.json",
+                include_str!("../../../schemas/dr-backup-asset.schema.json"),
+            ),
+            (
+                "dr-exercise.schema.json",
+                include_str!("../../../schemas/dr-exercise.schema.json"),
+            ),
+            (
+                "recovery-checkpoint.schema.json",
+                include_str!("../../../schemas/recovery-checkpoint.schema.json"),
+            ),
+            (
+                "dr-finding.schema.json",
+                include_str!("../../../schemas/dr-finding.schema.json"),
+            ),
+            (
+                "dr-action-item.schema.json",
+                include_str!("../../../schemas/dr-action-item.schema.json"),
+            ),
+            (
                 "notification-delivery.schema.json",
                 include_str!("../../../schemas/notification-delivery.schema.json"),
             ),
