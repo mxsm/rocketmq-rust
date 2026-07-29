@@ -140,6 +140,21 @@ proves the real Connector/MCP/RocketMQ Evidence path and durable product
 workflow, while Shadow supplies normal/fault/missing coverage for every Wave A
 pack.
 
+Run the Phase 02 operator-loop acceptance against the current Kind stack:
+
+```powershell
+.\scripts\phase02-operator-loop-smoke.ps1 -Target Kind
+```
+
+The smoke creates and runs a deterministic inspection, promotes its
+recommendation to an Incident, ingests an independent Alertmanager event,
+performs model-assisted diagnosis, queries forecasts, runs a read-only
+traffic-growth simulation, verifies exactly-once sanitized notification
+delivery, and persists a draft Postmortem with queryable Action Items. Its
+reserved local Email notification fixture is enabled only for the run and is
+disabled again in `finally`; it never contacts an external notification
+service.
+
 See:
 
 - [Project boundaries](docs/decisions/0001-project-boundaries.md)
