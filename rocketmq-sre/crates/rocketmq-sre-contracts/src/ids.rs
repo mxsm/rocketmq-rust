@@ -76,6 +76,17 @@ uuid_id!(QueryId, "Stable identifier for an evidence query.");
 uuid_id!(CorrelationId, "Identifier propagated across one logical SRE operation.");
 uuid_id!(ClusterId, "Internal identifier for an onboarded cluster.");
 uuid_id!(TenantId, "Stable tenant boundary identifier.");
+uuid_id!(FleetId, "Stable identifier for an enterprise RocketMQ fleet.");
+uuid_id!(RegionId, "Stable identifier for a data-residency region.");
+uuid_id!(QuotaPolicyId, "Stable identifier for a versioned Fleet quota policy.");
+uuid_id!(
+    ComplianceFindingId,
+    "Stable identifier for an immutable Fleet compliance finding."
+);
+uuid_id!(
+    FleetInspectionRunId,
+    "Stable identifier for a bounded multi-cluster inspection run."
+);
 uuid_id!(ConversationId, "Stable identifier for an operator conversation.");
 uuid_id!(InvestigationId, "Stable identifier for a multi-step investigation.");
 uuid_id!(TimelineEventId, "Stable identifier for a workflow timeline event.");
