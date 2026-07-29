@@ -69,7 +69,9 @@ use crate::core::security::AdminCredentials;
 use crate::core::topic::GetTopicRouteRequest;
 use crate::core::topic::ListTopicsRequest;
 use crate::core::topic::ListTopicsResult;
+use crate::core::topic::QueryTopicConfigCasRequest;
 use crate::core::topic::TopicBroker;
+use crate::core::topic::TopicConfigCasState;
 use crate::core::topic::TopicQueryAdmin;
 use crate::core::topic::TopicQueue;
 use crate::core::topic::TopicRoute;
@@ -737,6 +739,29 @@ impl TopicQueryAdmin for ReadAdminSession {
                 "read_topic_config",
                 "query is not enabled by the Phase 00 read adapter",
             ))
+        })
+    }
+
+    fn query_config_cas_state<'a>(
+        &'a mut self,
+        request: &'a QueryTopicConfigCasRequest,
+    ) -> AdminFuture<'a, TopicConfigCasState> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            let state = self
+                .inner
+                .topic_config_with_version(
+                    CheetahString::from(request.broker_addr.as_str()),
+                    CheetahString::from(request.topic.as_str()),
+                )
+                .await
+                .map_err(|error| backend_error("query_topic_config_cas_state", error))?;
+            Ok(TopicConfigCasState {
+                version: state.version,
+                read_queue_nums: state.config.read_queue_nums,
+                write_queue_nums: state.config.write_queue_nums,
+                order: state.config.order,
+            })
         })
     }
 
