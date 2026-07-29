@@ -370,6 +370,9 @@ where
         backend_context: Option<ChildServiceContext>,
         service_context: ChildServiceContext,
     ) -> Self {
+        #[cfg(feature = "observability")]
+        crate::observability::init_observability_metrics(&config, &session_registry);
+
         let config = Arc::new(config);
         let processor_ref = Arc::clone(&processor);
         let sessions = session_registry.clone();
