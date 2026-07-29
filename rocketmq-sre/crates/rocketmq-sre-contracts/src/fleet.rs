@@ -24,6 +24,8 @@ use crate::ComplianceFindingId;
 use crate::EvidenceId;
 use crate::FleetId;
 use crate::FleetInspectionRunId;
+use crate::FleetOnboardingAssessmentId;
+use crate::FleetQuotaDecisionId;
 use crate::QuotaPolicyId;
 use crate::RegionId;
 use crate::SreTimestamp;
@@ -80,6 +82,87 @@ pub enum DataResidencyClass {
     RegionLocal,
     AggregatedMetadata,
     ExportAllowed,
+}
+
+/// Maximum access profile requested during Fleet onboarding.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FleetAccessProfile {
+    ReadOnly,
+    Supervised,
+    BoundedAutonomy,
+}
+
+/// Immutable result of validating one Fleet onboarding request.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FleetOnboardingAssessment {
+    pub id: FleetOnboardingAssessmentId,
+    pub fleet_id: FleetId,
+    pub tenant_id: TenantId,
+    pub region_id: RegionId,
+    pub cluster_id: ClusterId,
+    pub requested_access: FleetAccessProfile,
+    pub effective_access: FleetAccessProfile,
+    pub connector_tls_verified: bool,
+    pub schema_compatible: bool,
+    #[serde(default)]
+    pub missing_capabilities: BTreeSet<String>,
+    #[serde(default)]
+    pub signal_gaps: BTreeSet<String>,
+    #[serde(default)]
+    pub excessive_scopes: BTreeSet<String>,
+    #[serde(default)]
+    pub incompatibilities: BTreeSet<String>,
+    pub eligible: bool,
+    pub observed_at: SreTimestamp,
+}
+
+/// Work category used to derive quota priority server-side.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FleetQuotaWorkKind {
+    ActiveIncident,
+    Verification,
+    Rollback,
+    Audit,
+    InteractiveQuery,
+    Workflow,
+    Inspection,
+    ModelExplanation,
+    Notification,
+    AutomaticAction,
+}
+
+/// Quota meter selected for one Fleet operation.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FleetQuotaResource {
+    Query,
+    ModelToken,
+    ConcurrentWorkflow,
+    ConcurrentInspection,
+    EvidenceByte,
+    Notification,
+    AutomaticAction,
+}
+
+/// Durable allow/deny result with stable, non-sensitive reason.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FleetQuotaDecisionRecord {
+    pub id: FleetQuotaDecisionId,
+    pub policy_id: QuotaPolicyId,
+    pub tenant_id: TenantId,
+    pub cluster_id: Option<ClusterId>,
+    pub work_kind: FleetQuotaWorkKind,
+    pub resource: FleetQuotaResource,
+    pub amount: u64,
+    pub allowed: bool,
+    pub reason: String,
+    pub observed: u64,
+    pub limit: u64,
+    pub occurred_at: SreTimestamp,
 }
 
 /// Enterprise grouping of one or more RocketMQ tenants.
