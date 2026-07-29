@@ -164,6 +164,8 @@ pub struct IntegrationDescriptor {
     pub inbound: bool,
     pub outbound: bool,
     #[serde(default)]
+    pub interfaces: BTreeSet<crate::IntegrationSpiCapability>,
+    #[serde(default)]
     pub operational: crate::IntegrationOperationalPolicy,
 }
 
