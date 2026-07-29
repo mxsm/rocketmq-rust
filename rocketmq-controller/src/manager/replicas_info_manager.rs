@@ -886,6 +886,20 @@ impl ReplicasInfoManager {
         inactive_brokers
     }
 
+    /// Returns deterministic heartbeat-age samples without exposing broker identity.
+    ///
+    /// A timestamp observed ahead of the supplied clock is reported as age zero.
+    /// The caller owns export cadence; this method only snapshots replicated state.
+    pub fn heartbeat_age_samples_at(&self, observed_at_millis: u64) -> Vec<u64> {
+        let mut ages = self
+            .broker_live_table
+            .iter()
+            .map(|entry| observed_at_millis.saturating_sub(entry.value().last_update_timestamp))
+            .collect::<Vec<_>>();
+        ages.sort_unstable();
+        ages
+    }
+
     pub fn is_broker_active_at(
         &self,
         cluster_name: &str,
@@ -1292,5 +1306,29 @@ mod tests {
             ControllerError::InvalidRequest(message)
                 if message.contains("ApplyBrokerId") && message.contains("ApplyBrokerIdEvent")
         ));
+    }
+
+    #[test]
+    fn heartbeat_age_samples_are_deterministic_and_identity_free() {
+        let config = ControllerConfigReader::new(ControllerConfig::new_node(1, "127.0.0.1:9876".parse().unwrap()));
+        let manager = ReplicasInfoManager::new(config);
+
+        for (broker_id, last_update_timestamp) in [(1, 900), (2, 750), (3, 1_100)] {
+            let live_info = BrokerLiveInfoSnapshot {
+                cluster_name: "test-cluster".to_owned(),
+                broker_name: format!("broker-{broker_id}"),
+                broker_addr: format!("127.0.0.1:{}", 10_910 + broker_id),
+                broker_id,
+                last_update_timestamp,
+                heartbeat_timeout_millis: 3_000,
+                epoch: 1,
+                max_offset: 100,
+                confirm_offset: 90,
+                election_priority: None,
+            };
+            manager.on_broker_heartbeat(live_info.identity(), live_info);
+        }
+
+        assert_eq!(manager.heartbeat_age_samples_at(1_000), vec![0, 100, 250]);
     }
 }
