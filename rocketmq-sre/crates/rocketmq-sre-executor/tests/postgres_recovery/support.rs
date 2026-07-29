@@ -300,7 +300,7 @@ fn action_plan(
                     "telemetry_export_success_ratio".to_owned(),
                     "telemetry_queue_utilization".to_owned(),
                 ],
-                stable_window_seconds: 600,
+                stable_window_seconds: 180,
                 max_wait_seconds: 900,
             },
             CompensationSpec {
