@@ -250,7 +250,7 @@ fn parse_exercise_id(value: &str) -> Result<DrExerciseId, ControlPlaneError> {
 }
 
 fn parse_action_item_id(value: &str) -> Result<DrActionItemId, ControlPlaneError> {
-    value.parse().map_err(|_| {
-        ControlPlaneError::validation("invalid_dr_action_item_id", "DR action item ID must be a UUID")
-    })
+    value
+        .parse()
+        .map_err(|_| ControlPlaneError::validation("invalid_dr_action_item_id", "DR action item ID must be a UUID"))
 }
