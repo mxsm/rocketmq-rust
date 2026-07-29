@@ -1488,10 +1488,7 @@ mod tests {
                 .len(),
             16
         );
-        assert_eq!(
-            documents.coverage_matrix["selected"]["status"],
-            "missing_instrumentation"
-        );
+        assert_eq!(documents.coverage_matrix["selected"]["status"], "queryable");
         assert_eq!(
             documents.coverage_matrix["packs"]
                 .as_array()
