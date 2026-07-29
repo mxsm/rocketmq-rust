@@ -18,6 +18,8 @@ mod support;
 
 use sqlx::PgPool;
 
+pub(super) use registry::human_event;
+
 #[derive(Clone)]
 pub(super) struct GovernanceRepository {
     pub(super) pool: PgPool,
