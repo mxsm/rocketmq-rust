@@ -167,6 +167,9 @@ spec:
             - {name: ROCKETMQ_SRE_AGENT_PROXY_SCALE_TARGETS, value: "rocketmq-system/rocketmq-proxy"}
             - {name: ROCKETMQ_SRE_AGENT_ENABLE_PROXY_IMAGE_CANARY, value: "true"}
             - {name: ROCKETMQ_SRE_AGENT_PROXY_IMAGE_CANARY_TARGETS, value: "rocketmq-system/rocketmq-proxy"}
+            - {name: ROCKETMQ_SRE_AGENT_ENABLE_CREDENTIAL_ROTATION, value: "true"}
+            - name: ROCKETMQ_SRE_AGENT_CREDENTIAL_ROTATION_TARGETS
+              value: "broker-admin=rocketmq-sre/broker-admin-credential-selector|rocketmq-broker.rocketmq-system.svc.cluster.local:10911|SRE_PROBE_CREDENTIAL_ROTATION"
             - {name: ROCKETMQ_SRE_AGENT_ENABLE_PROXY_RESTART, value: "true"}
             - {name: ROCKETMQ_SRE_AGENT_PROXY_RESTART_TARGETS, value: "rocketmq-system/rocketmq-proxy=8080"}
             - {name: ROCKETMQ_SRE_AGENT_ENABLE_TELEMETRY_COLLECTOR_RESTART, value: "true"}
