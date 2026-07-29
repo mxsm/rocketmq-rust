@@ -16,6 +16,7 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::fmt::Debug;
 use std::fmt::Formatter;
+use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -80,6 +81,36 @@ impl Debug for ProxyRestartDriverConfig {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CredentialRotationTarget {
+    pub(crate) namespace: String,
+    pub(crate) selector_name: String,
+    pub(crate) broker_addr: String,
+    pub(crate) validation_probe_topic: String,
+}
+
+#[derive(Clone)]
+pub(crate) struct CredentialRotationDriverConfig {
+    pub(crate) targets: BTreeMap<String, CredentialRotationTarget>,
+    pub(crate) namesrv_addr: String,
+    pub(crate) use_tls: bool,
+    pub(crate) request_timeout: Duration,
+    pub(crate) shutdown_timeout: Duration,
+}
+
+impl Debug for CredentialRotationDriverConfig {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CredentialRotationDriverConfig")
+            .field("target_count", &self.targets.len())
+            .field("namesrv_addr", &self.namesrv_addr)
+            .field("use_tls", &self.use_tls)
+            .field("request_timeout", &self.request_timeout)
+            .field("shutdown_timeout", &self.shutdown_timeout)
+            .finish()
+    }
+}
+
 /// Explicit process configuration with redacted workload credentials.
 #[derive(Clone)]
 pub struct ExecutionAgentConfig {
@@ -102,6 +133,7 @@ pub struct ExecutionAgentConfig {
     pub(crate) proxy_scale_targets: BTreeSet<String>,
     pub(crate) proxy_image_canary_enabled: bool,
     pub(crate) proxy_image_canary_targets: BTreeSet<String>,
+    pub(crate) credential_rotation: Option<CredentialRotationDriverConfig>,
     pub(crate) telemetry_collector_restart_enabled: bool,
     pub(crate) telemetry_collector_restart_targets: BTreeSet<String>,
     pub(crate) proxy_restart: Option<ProxyRestartDriverConfig>,
@@ -153,6 +185,20 @@ impl ExecutionAgentConfig {
             parse_kubernetes_targets(&required("ROCKETMQ_SRE_AGENT_PROXY_IMAGE_CANARY_TARGETS")?)?
         } else {
             BTreeSet::new()
+        };
+        let credential_rotation_enabled = parse_env("ROCKETMQ_SRE_AGENT_ENABLE_CREDENTIAL_ROTATION", false)?;
+        let credential_rotation = if credential_rotation_enabled {
+            Some(CredentialRotationDriverConfig {
+                targets: parse_credential_rotation_targets(&required(
+                    "ROCKETMQ_SRE_AGENT_CREDENTIAL_ROTATION_TARGETS",
+                )?)?,
+                namesrv_addr: required("ROCKETMQ_SRE_AGENT_NAMESRV_ADDR")?,
+                use_tls: parse_env("ROCKETMQ_SRE_AGENT_BROKER_ADMIN_USE_TLS", true)?,
+                request_timeout: duration_env("ROCKETMQ_SRE_AGENT_BROKER_ADMIN_TIMEOUT_SECONDS", 10)?,
+                shutdown_timeout,
+            })
+        } else {
+            None
         };
         let telemetry_collector_restart_enabled =
             parse_env("ROCKETMQ_SRE_AGENT_ENABLE_TELEMETRY_COLLECTOR_RESTART", false)?;
@@ -210,6 +256,7 @@ impl ExecutionAgentConfig {
             proxy_scale_targets,
             proxy_image_canary_enabled,
             proxy_image_canary_targets,
+            credential_rotation,
             telemetry_collector_restart_enabled,
             telemetry_collector_restart_targets,
             proxy_restart,
@@ -252,6 +299,7 @@ impl Debug for ExecutionAgentConfig {
                 "proxy_image_canary_target_count",
                 &self.proxy_image_canary_targets.len(),
             )
+            .field("credential_rotation", &self.credential_rotation)
             .field(
                 "telemetry_collector_restart_enabled",
                 &self.telemetry_collector_restart_enabled,
@@ -408,6 +456,77 @@ fn parse_proxy_restart_targets(value: &str) -> Result<BTreeMap<String, u16>, Exe
     }
 }
 
+fn parse_credential_rotation_targets(
+    value: &str,
+) -> Result<BTreeMap<String, CredentialRotationTarget>, ExecutionAgentError> {
+    let targets = value
+        .split(',')
+        .map(str::trim)
+        .filter(|target| !target.is_empty())
+        .map(|target| {
+            let (credential_set, definition) = target.split_once('=').ok_or(ExecutionAgentError::Configuration)?;
+            if !bounded_identifier(credential_set, 128) {
+                return Err(ExecutionAgentError::Configuration);
+            }
+            let fields = definition.split('|').collect::<Vec<_>>();
+            let [selector, broker_addr, validation_probe_topic] = fields.as_slice() else {
+                return Err(ExecutionAgentError::Configuration);
+            };
+            let selector = parse_kubernetes_targets(selector)?;
+            let selector = selector.into_iter().next().ok_or(ExecutionAgentError::Configuration)?;
+            let (namespace, selector_name) = selector.split_once('/').ok_or(ExecutionAgentError::Configuration)?;
+            if !valid_broker_addr(broker_addr) || !valid_probe_topic(validation_probe_topic) {
+                return Err(ExecutionAgentError::Configuration);
+            }
+            Ok((
+                credential_set.to_owned(),
+                CredentialRotationTarget {
+                    namespace: namespace.to_owned(),
+                    selector_name: selector_name.to_owned(),
+                    broker_addr: (*broker_addr).to_owned(),
+                    validation_probe_topic: (*validation_probe_topic).to_owned(),
+                },
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
+    if targets.is_empty() {
+        Err(ExecutionAgentError::Configuration)
+    } else {
+        Ok(targets)
+    }
+}
+
+fn bounded_identifier(value: &str, maximum: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= maximum
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        && value
+            .as_bytes()
+            .first()
+            .zip(value.as_bytes().last())
+            .is_some_and(|(first, last)| first.is_ascii_alphanumeric() && last.is_ascii_alphanumeric())
+}
+
+fn valid_broker_addr(value: &str) -> bool {
+    let Some((host, port)) = value.rsplit_once(':') else {
+        return false;
+    };
+    !host.is_empty()
+        && host.len() <= 253
+        && (host.parse::<IpAddr>().is_ok() || dns_name(host))
+        && port.parse::<u16>().ok().is_some_and(|port| port != 0)
+}
+
+fn valid_probe_topic(value: &str) -> bool {
+    value.starts_with("SRE_PROBE_")
+        && value.len() <= 255
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
 fn dns_name(value: &str) -> bool {
     value.split('.').all(|label| {
         !label.is_empty()
@@ -490,6 +609,7 @@ mod tests {
             proxy_scale_targets: BTreeSet::new(),
             proxy_image_canary_enabled: false,
             proxy_image_canary_targets: BTreeSet::new(),
+            credential_rotation: None,
             telemetry_collector_restart_enabled: false,
             telemetry_collector_restart_targets: BTreeSet::new(),
             proxy_restart: None,
@@ -579,6 +699,36 @@ mod tests {
             "rocketmq-system/rocketmq-proxy=http://proxy:8080",
         ] {
             assert!(parse_proxy_restart_targets(invalid).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn credential_rotation_targets_bind_selector_broker_and_probe_topic() {
+        assert_eq!(
+            parse_credential_rotation_targets(
+                "broker-admin=rocketmq-sre/broker-admin-selector|broker.rocketmq-system:10911|\
+                 SRE_PROBE_CREDENTIAL_ROTATION",
+            )
+            .expect("credential target allowlist"),
+            BTreeMap::from([(
+                "broker-admin".to_owned(),
+                CredentialRotationTarget {
+                    namespace: "rocketmq-sre".to_owned(),
+                    selector_name: "broker-admin-selector".to_owned(),
+                    broker_addr: "broker.rocketmq-system:10911".to_owned(),
+                    validation_probe_topic: "SRE_PROBE_CREDENTIAL_ROTATION".to_owned(),
+                },
+            )])
+        );
+        for invalid in [
+            "",
+            "*=rocketmq-sre/selector|broker:10911|SRE_PROBE_TOPIC",
+            "set=rocketmq-sre/selector|broker|SRE_PROBE_TOPIC",
+            "set=rocketmq-sre/selector|broker:0|SRE_PROBE_TOPIC",
+            "set=rocketmq-sre/selector|broker:10911|business-topic",
+            "set=rocketmq-sre/selector|broker:10911|SRE_PROBE_TOPIC|extra",
+        ] {
+            assert!(parse_credential_rotation_targets(invalid).is_err(), "{invalid}");
         }
     }
 }
