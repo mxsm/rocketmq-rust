@@ -576,6 +576,7 @@ where
             "tempo" => {
                 self.tempo
                     .query(
+                        external_cluster,
                         &query.resource,
                         query.time_range.start,
                         query.time_range.end,
