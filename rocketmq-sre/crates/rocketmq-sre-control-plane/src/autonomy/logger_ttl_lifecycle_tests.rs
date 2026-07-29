@@ -70,6 +70,7 @@ enum R1ActionScenario {
     LoggerTtl,
     ProxyScaleOut,
     ProxyRestartOne,
+    TelemetryCollectorRestartOne,
 }
 
 impl R1ActionScenario {
@@ -78,6 +79,7 @@ impl R1ActionScenario {
             Self::LoggerTtl => ExecutionAction::ObservabilityLoggerLevelTtl,
             Self::ProxyScaleOut => ExecutionAction::ProxyScaleOutOne,
             Self::ProxyRestartOne => ExecutionAction::ProxyRestartOne,
+            Self::TelemetryCollectorRestartOne => ExecutionAction::TelemetryCollectorRestartOne,
         }
     }
 
@@ -86,6 +88,7 @@ impl R1ActionScenario {
             Self::LoggerTtl => "runtime-diagnostics",
             Self::ProxyScaleOut => "proxy-connectivity",
             Self::ProxyRestartOne => "proxy-drain-readiness",
+            Self::TelemetryCollectorRestartOne => "telemetry-recovery",
         }
     }
 
@@ -94,6 +97,7 @@ impl R1ActionScenario {
             Self::LoggerTtl => 30,
             Self::ProxyScaleOut => 120,
             Self::ProxyRestartOne => 180,
+            Self::TelemetryCollectorRestartOne => 600,
         }
     }
 
@@ -102,6 +106,7 @@ impl R1ActionScenario {
             Self::LoggerTtl => "logger_qualification",
             Self::ProxyScaleOut => "proxy_capacity_qualification",
             Self::ProxyRestartOne => "proxy_restart_qualification",
+            Self::TelemetryCollectorRestartOne => "telemetry_recovery_qualification",
         }
     }
 
@@ -110,6 +115,7 @@ impl R1ActionScenario {
             Self::LoggerTtl => "broker/test",
             Self::ProxyScaleOut => "deployment/rocketmq-system/rocketmq-proxy",
             Self::ProxyRestartOne => "pod/rocketmq-system/rocketmq-proxy-qualification",
+            Self::TelemetryCollectorRestartOne => "pod/observability/otel-collector-qualification",
         }
     }
 }
@@ -130,6 +136,12 @@ async fn proxy_scale_qualifies_through_shadow_supervised_and_autonomous() {
 #[ignore = "requires ROCKETMQ_SRE_TEST_DATABASE_URL pointing to Docker PostgreSQL"]
 async fn proxy_restart_qualifies_through_shadow_supervised_and_autonomous() {
     qualify_r1_action_through_autonomy(R1ActionScenario::ProxyRestartOne).await;
+}
+
+#[tokio::test]
+#[ignore = "requires ROCKETMQ_SRE_TEST_DATABASE_URL pointing to Docker PostgreSQL"]
+async fn telemetry_collector_restart_qualifies_through_shadow_supervised_and_autonomous() {
+    qualify_r1_action_through_autonomy(R1ActionScenario::TelemetryCollectorRestartOne).await;
 }
 
 async fn qualify_r1_action_through_autonomy(scenario: R1ActionScenario) {
@@ -598,6 +610,34 @@ fn action_plan(fixture: &Fixture, created_at: DateTime<Utc>, scenario: R1ActionS
                     "readiness_state".to_owned(),
                     "routing_state".to_owned(),
                 ],
+                timeout_seconds: 300,
+            },
+        ),
+        R1ActionScenario::TelemetryCollectorRestartOne => (
+            "pod/observability/otel-collector-qualification",
+            serde_json::json!({
+                "namespace": "observability",
+                "pod": "otel-collector-qualification",
+                "expected_uid": "00000000-0000-4000-8000-000000000002",
+                "pipeline": "combined"
+            }),
+            ImpactScope::SingleInstance,
+            VerificationSpec {
+                resource_conditions: vec![
+                    "replacement_uid_observed".to_owned(),
+                    "collector_ready".to_owned(),
+                    "exporter_connected".to_owned(),
+                ],
+                technical_slis: vec![
+                    "telemetry_export_success_ratio".to_owned(),
+                    "telemetry_queue_utilization".to_owned(),
+                ],
+                stable_window_seconds: scenario.stable_window_seconds() as u64,
+                max_wait_seconds: 900,
+            },
+            CompensationSpec {
+                mode: CompensationMode::ManualTakeover,
+                required_before_fields: vec!["expected_uid".to_owned(), "pipeline_health".to_owned()],
                 timeout_seconds: 300,
             },
         ),
