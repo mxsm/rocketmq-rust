@@ -1,0 +1,118 @@
+{
+  "$defs": {
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "FleetReleaseId": {
+      "description": "Stable identifier for one multi-cluster Fleet release.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "FleetReleaseTargetState": {
+      "description": "State of one cluster inside a Fleet release.",
+      "enum": [
+        "pending",
+        "readiness_checking",
+        "ready",
+        "ineligible",
+        "canary_running",
+        "batch_running",
+        "paused",
+        "rolling_back",
+        "rolled_back",
+        "completed",
+        "skipped",
+        "failed"
+      ],
+      "type": "string"
+    },
+    "RegionId": {
+      "description": "Stable identifier for a data-residency region.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ReleaseId": {
+      "description": "Stable identifier for one supervised release workflow.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Per-cluster projection linked to an independently approved release workflow.",
+  "properties": {
+    "batch_sequence": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "canary": {
+      "type": "boolean"
+    },
+    "cluster_id": {
+      "$ref": "#/$defs/ClusterId"
+    },
+    "fleet_release_id": {
+      "$ref": "#/$defs/FleetReleaseId"
+    },
+    "readiness_reason_codes": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "region_id": {
+      "$ref": "#/$defs/RegionId"
+    },
+    "regression_detected": {
+      "type": "boolean"
+    },
+    "release_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReleaseId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "sanitized_outcome": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "state": {
+      "$ref": "#/$defs/FleetReleaseTargetState"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "type": "string"
+    }
+  },
+  "required": [
+    "fleet_release_id",
+    "tenant_id",
+    "cluster_id",
+    "region_id",
+    "batch_sequence",
+    "canary",
+    "state",
+    "readiness_reason_codes",
+    "regression_detected",
+    "updated_at"
+  ],
+  "title": "FleetReleaseTarget",
+  "type": "object"
+}
