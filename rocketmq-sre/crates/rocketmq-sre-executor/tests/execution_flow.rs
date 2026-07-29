@@ -556,7 +556,7 @@ async fn proxy_restart_autonomous_execution_uses_dynamic_safety_and_succeeds() {
 #[tokio::test]
 #[ignore = "requires ROCKETMQ_SRE_TEST_DATABASE_URL pointing to Docker PostgreSQL"]
 async fn telemetry_collector_restart_autonomous_execution_uses_dynamic_safety_and_succeeds() {
-    let signals = [signal(0, true), signal(1, true), signal(2, true), signal(602, true)];
+    let signals = [signal(0, true), signal(1, true), signal(2, true), signal(182, true)];
     let run = run_execution_for_action(&signals, true, ExecutionAction::TelemetryCollectorRestartOne).await;
 
     assert_eq!(run.state, ExecutionState::Succeeded);
