@@ -394,8 +394,7 @@ impl DrService {
             .list_checkpoints(auth.tenant_id, exercise_id)
             .await?
             .into_iter()
-            .filter(|checkpoint| checkpoint.sequence == request.sequence)
-            .next_back();
+            .rfind(|checkpoint| checkpoint.sequence == request.sequence);
         if let Some(prior) = prior {
             validate_checkpoint_transition(prior.status, request.status)?;
         }
