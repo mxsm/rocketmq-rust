@@ -47,6 +47,37 @@ pub enum BrokerConfigPatchOutcome {
     },
 }
 
+/// Topic configuration paired with the Broker's monotonic metadata version.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TopicConfigVersioned {
+    pub version: u64,
+    pub config: TopicConfig,
+}
+
+/// Closed Topic fields accepted by the supervised version-CAS operation.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct TopicConfigPatch {
+    pub read_queue_nums: Option<u32>,
+    pub write_queue_nums: Option<u32>,
+    pub order: Option<bool>,
+}
+
+impl TopicConfigPatch {
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.read_queue_nums.is_none() && self.write_queue_nums.is_none() && self.order.is_none()
+    }
+}
+
+/// Result of one version-checked Topic configuration patch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TopicConfigPatchOutcome {
+    /// The patch was committed as the version immediately after precheck.
+    Applied { previous_version: u64, version: u64 },
+    /// Topic metadata changed after precheck; callers must stop and re-plan.
+    VersionConflict { expected_version: u64, actual_version: u64 },
+}
+
 /// Explicit RocketMQ mutation capability.
 ///
 /// The legacy mixed administration API remains available only through
@@ -79,6 +110,23 @@ pub trait MQAdminMutationExt: Send {
         expected_generation: u64,
         properties: HashMap<CheetahString, CheetahString>,
     ) -> rocketmq_error::RocketMQResult<BrokerConfigPatchOutcome>;
+
+    /// Reads one Broker's Topic config and metadata version atomically.
+    async fn topic_config_with_version(
+        &self,
+        broker_addr: CheetahString,
+        topic: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<TopicConfigVersioned>;
+
+    /// Changes only the three fields in [`TopicConfigPatch`] when the Broker's
+    /// current Topic metadata version still matches `expected_version`.
+    async fn patch_topic_config_if_version(
+        &self,
+        broker_addr: CheetahString,
+        topic: CheetahString,
+        expected_version: u64,
+        patch: TopicConfigPatch,
+    ) -> rocketmq_error::RocketMQResult<TopicConfigPatchOutcome>;
 
     /// Applies one bounded Broker logger override with an automatic TTL.
     ///
@@ -266,6 +314,25 @@ impl MQAdminMutationExt for DefaultMQAdminExt {
             properties,
         )
         .await
+    }
+
+    async fn topic_config_with_version(
+        &self,
+        broker_addr: CheetahString,
+        topic: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<TopicConfigVersioned> {
+        MQAdminMutationExt::topic_config_with_version(self.inner(), broker_addr, topic).await
+    }
+
+    async fn patch_topic_config_if_version(
+        &self,
+        broker_addr: CheetahString,
+        topic: CheetahString,
+        expected_version: u64,
+        patch: TopicConfigPatch,
+    ) -> rocketmq_error::RocketMQResult<TopicConfigPatchOutcome> {
+        MQAdminMutationExt::patch_topic_config_if_version(self.inner(), broker_addr, topic, expected_version, patch)
+            .await
     }
 
     async fn set_broker_log_filter_ttl(
