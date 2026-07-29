@@ -69,7 +69,10 @@ impl GovernanceLifecycleState {
         matches!(
             (self, next),
             (Self::Draft, Self::Review | Self::Retired)
-                | (Self::Review, Self::Draft | Self::Active | Self::Quarantined | Self::Retired)
+                | (
+                    Self::Review,
+                    Self::Draft | Self::Active | Self::Quarantined | Self::Retired
+                )
                 | (Self::Active, Self::Deprecated | Self::Quarantined)
                 | (Self::Deprecated, Self::Review | Self::Quarantined | Self::Retired)
                 | (Self::Quarantined, Self::Review | Self::Retired)
