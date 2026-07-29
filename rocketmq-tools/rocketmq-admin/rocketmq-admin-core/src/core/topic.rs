@@ -219,6 +219,90 @@ pub struct TopicMutationOutcome {
     pub target_count: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueryTopicConfigCasRequest {
+    pub broker_addr: String,
+    pub topic: String,
+}
+
+impl QueryTopicConfigCasRequest {
+    pub fn try_new(broker_addr: impl Into<String>, topic: impl Into<String>) -> AdminResult<Self> {
+        Ok(Self {
+            broker_addr: required("broker_addr", broker_addr)?,
+            topic: required("topic", topic)?,
+        })
+    }
+}
+
+/// Closed Topic state returned for a supervised version-CAS precheck.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TopicConfigCasState {
+    pub version: u64,
+    pub read_queue_nums: u32,
+    pub write_queue_nums: u32,
+    pub order: bool,
+}
+
+/// Closed Topic fields supported by supervised execution.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TopicConfigCasPatch {
+    pub read_queue_nums: Option<u32>,
+    pub write_queue_nums: Option<u32>,
+    pub order: Option<bool>,
+}
+
+impl TopicConfigCasPatch {
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.read_queue_nums.is_none() && self.write_queue_nums.is_none() && self.order.is_none()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PatchTopicConfigRequest {
+    pub broker_addr: String,
+    pub topic: String,
+    pub expected_version: u64,
+    pub patch: TopicConfigCasPatch,
+}
+
+impl PatchTopicConfigRequest {
+    pub fn try_new(
+        broker_addr: impl Into<String>,
+        topic: impl Into<String>,
+        expected_version: u64,
+        patch: TopicConfigCasPatch,
+    ) -> AdminResult<Self> {
+        if patch.is_empty() {
+            return Err(crate::core::AdminError::invalid_argument("patch", "must not be empty"));
+        }
+        for (field, value) in [
+            ("read_queue_nums", patch.read_queue_nums),
+            ("write_queue_nums", patch.write_queue_nums),
+        ] {
+            if value.is_some_and(|value| !(1..=128).contains(&value)) {
+                return Err(crate::core::AdminError::invalid_argument(
+                    field,
+                    "must be between 1 and 128",
+                ));
+            }
+        }
+        Ok(Self {
+            broker_addr: required("broker_addr", broker_addr)?,
+            topic: required("topic", topic)?,
+            expected_version,
+            patch,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PatchTopicConfigOutcome {
+    Applied { previous_version: u64, version: u64 },
+    VersionConflict { expected_version: u64, actual_version: u64 },
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TopicConsumerInfo {
     pub consumer_group: String,
@@ -310,6 +394,30 @@ pub trait TopicQueryAdmin: Send {
 
 /// Topic mutations require the explicit mutation adapter feature.
 pub trait TopicMutationAdmin: Send {
+    fn query_config_cas_state<'a>(
+        &'a mut self,
+        _request: &'a QueryTopicConfigCasRequest,
+    ) -> AdminFuture<'a, TopicConfigCasState> {
+        Box::pin(async {
+            Err(crate::core::AdminError::backend(
+                "query_topic_config_cas_state",
+                "Topic config CAS is not implemented by this adapter",
+            ))
+        })
+    }
+
+    fn patch_config_if_version<'a>(
+        &'a mut self,
+        _request: &'a PatchTopicConfigRequest,
+    ) -> AdminFuture<'a, PatchTopicConfigOutcome> {
+        Box::pin(async {
+            Err(crate::core::AdminError::backend(
+                "patch_topic_config_if_version",
+                "Topic config CAS is not implemented by this adapter",
+            ))
+        })
+    }
+
     fn upsert_topic<'a>(&'a mut self, request: &'a UpsertTopicRequest) -> AdminFuture<'a, TopicMutationOutcome>;
     fn delete_topic<'a>(&'a mut self, request: &'a DeleteTopicAdminRequest) -> AdminFuture<'a, TopicMutationOutcome>;
     fn reset_topic_consumer_offset<'a>(
@@ -361,5 +469,41 @@ impl<T: TopicAdmin + ?Sized> TopicMutationAdmin for T {
     }
     fn send_topic_test_message<'a>(&'a mut self, request: &'a TopicSendRequest) -> AdminFuture<'a, TopicSendResult> {
         TopicAdmin::send_topic_test_message(self, request)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PatchTopicConfigRequest;
+    use super::TopicConfigCasPatch;
+
+    #[test]
+    fn topic_config_cas_request_accepts_only_a_non_empty_bounded_patch() {
+        let valid = PatchTopicConfigRequest::try_new(
+            "127.0.0.1:10911",
+            "orders",
+            7,
+            TopicConfigCasPatch {
+                read_queue_nums: Some(8),
+                write_queue_nums: None,
+                order: Some(true),
+            },
+        )
+        .expect("bounded patch");
+        assert_eq!(valid.expected_version, 7);
+
+        assert!(
+            PatchTopicConfigRequest::try_new("127.0.0.1:10911", "orders", 7, TopicConfigCasPatch::default(),).is_err()
+        );
+        assert!(PatchTopicConfigRequest::try_new(
+            "127.0.0.1:10911",
+            "orders",
+            7,
+            TopicConfigCasPatch {
+                read_queue_nums: Some(129),
+                ..Default::default()
+            },
+        )
+        .is_err());
     }
 }
