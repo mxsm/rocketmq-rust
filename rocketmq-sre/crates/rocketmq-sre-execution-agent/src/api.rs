@@ -52,10 +52,12 @@ use crate::ProxyScaleOutOneHandler;
 use crate::ReconcileEffectRequest;
 use crate::ReconcileEffectResponse;
 use crate::TelemetryCollectorRestartOneHandler;
+use crate::TopicConfigPatchHandler;
 use crate::drivers::ProductionBrokerConfigPatchClient;
 use crate::drivers::ProductionProxyRestartClient;
 use crate::drivers::ProductionProxyScaleClient;
 use crate::drivers::ProductionTelemetryCollectorRestartClient;
+use crate::drivers::ProductionTopicConfigPatchClient;
 
 #[derive(Clone)]
 struct AppState {
@@ -122,16 +124,31 @@ pub async fn run(
         .connect(&config.database_url)
         .await
         .map_err(crate::AgentStoreError::Database)?;
-    let broker_driver = match &config.broker_admin {
-        Some(driver_config) => Some(Arc::new(
+    let broker_driver = if config.broker_config_patch_enabled || config.logger_ttl_enabled {
+        let driver_config = config.broker_admin.as_ref().ok_or(ExecutionAgentError::Configuration)?;
+        Some(Arc::new(
             ProductionBrokerConfigPatchClient::start(
                 driver_config,
                 pool.clone(),
                 service_context.child("broker-config-driver"),
             )
             .await?,
-        )),
-        None => None,
+        ))
+    } else {
+        None
+    };
+    let topic_driver = if config.topic_config_patch_enabled {
+        let driver_config = config.broker_admin.as_ref().ok_or(ExecutionAgentError::Configuration)?;
+        Some(Arc::new(
+            ProductionTopicConfigPatchClient::start(
+                driver_config,
+                pool.clone(),
+                service_context.child("topic-config-driver"),
+            )
+            .await?,
+        ))
+    } else {
+        None
     };
     let proxy_scale_driver = if config.proxy_scale_out_enabled {
         Some(Arc::new(
@@ -176,6 +193,12 @@ pub async fn run(
                 LoggerLevelTtlHandler::new(Arc::clone(driver)),
             )?;
         }
+    }
+    if let Some(driver) = &topic_driver {
+        registry.register_admin(
+            ExecutionAction::TopicConfigPatchAllowlisted,
+            TopicConfigPatchHandler::new(Arc::clone(driver)),
+        )?;
     }
     if let Some(driver) = proxy_scale_driver {
         registry.register_kubernetes(ExecutionAction::ProxyScaleOutOne, ProxyScaleOutOneHandler::new(driver))?;
@@ -230,6 +253,9 @@ pub async fn run(
     })
     .await;
     if let Some(driver) = broker_driver {
+        driver.shutdown().await;
+    }
+    if let Some(driver) = topic_driver {
         driver.shutdown().await;
     }
     if let Some(driver) = proxy_restart_driver {
