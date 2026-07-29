@@ -33,6 +33,8 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PROFILES = ROOT / "scripts" / "architecture-performance-profiles.json"
 DEFAULT_EXCEPTIONS = ROOT / "scripts" / "architecture-performance-exceptions.json"
+DEFAULT_WORKFLOW = ROOT / ".github" / "workflows" / "architecture-performance-evidence.yml"
+APPROVED_BASELINE_COMMIT = "7c952cdcd1ce625604de9c54975a201d7b1b755b"
 REQUIRED_PROFILE_IDS = {
     "local-append",
     "sync-flush",
@@ -58,6 +60,53 @@ REQUIRED_SIDECAR_PROTOCOL = {
 }
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+def validate_workflow_contract(workflow: str) -> list[str]:
+    findings: list[str] = []
+    required_fragments = {
+        "approved baseline input": "baseline_ref:",
+        "candidate input": "candidate_ref:",
+        "immutable approved baseline": f"default: {APPROVED_BASELINE_COMMIT}",
+        "baseline checkout": "ref: ${{ env.BASELINE_REF }}\n          path: baseline",
+        "candidate checkout": "ref: ${{ env.CANDIDATE_REF }}\n          path: candidate",
+        "baseline commit binding": "BASELINE_COMMIT=$(git -C baseline rev-parse HEAD)",
+        "candidate commit binding": "CANDIDATE_COMMIT=$(git -C candidate rev-parse HEAD)",
+        "different commit assertion": 'test "$BASELINE_COMMIT" != "$CANDIDATE_COMMIT"',
+        "fixed Rust toolchain": "RUSTUP_TOOLCHAIN: 1.95.0",
+        "baseline measurement": "python baseline/scripts/architecture_performance_sidecar.py",
+        "candidate measurement": "python candidate/scripts/architecture_performance_sidecar.py",
+        "baseline report discovery": (
+            "find baseline/target/architecture-refactor/M10/performance "
+            "-name measurement-report.json"
+        ),
+        "candidate report discovery": (
+            "find candidate/target/architecture-refactor/M10/performance "
+            "-name measurement-report.json"
+        ),
+        "mandatory comparison": "python candidate/scripts/architecture_performance_guard.py",
+        "baseline evidence upload": "baseline/target/architecture-refactor/M10",
+        "candidate evidence upload": "candidate/target/architecture-refactor/M10",
+    }
+    for contract, fragment in required_fragments.items():
+        if fragment not in workflow:
+            findings.append(f"performance workflow is missing {contract}")
+    if "APPROVED_BASELINE_REPORT" in workflow:
+        findings.append("performance workflow must not depend on an external baseline report path")
+    comparison_marker = "- name: Compare approved baseline with candidate"
+    comparison_start = workflow.find(comparison_marker)
+    if comparison_start < 0:
+        findings.append("performance workflow is missing the mandatory comparison step")
+    else:
+        next_step = workflow.find("\n      - name:", comparison_start + len(comparison_marker))
+        comparison_step = workflow[comparison_start : next_step if next_step >= 0 else None]
+        if "\n        if:" in comparison_step:
+            findings.append("performance baseline/candidate comparison must not be conditional")
+        if '--baseline "$BASELINE_REPORT"' not in comparison_step:
+            findings.append("performance comparison does not consume the measured baseline")
+        if '--candidate "$CANDIDATE_REPORT"' not in comparison_step:
+            findings.append("performance comparison does not consume the measured candidate")
+    return findings
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -731,6 +780,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.validate_profiles:
         findings = validate_profile_policy(policy)
+        try:
+            workflow = DEFAULT_WORKFLOW.read_text(encoding="utf-8")
+        except OSError as error:
+            findings.append(f"cannot read performance workflow: {error}")
+        else:
+            findings.extend(validate_workflow_contract(workflow))
         exceptions = active_exception_map(exception_document, datetime.now(timezone.utc), findings)
         if not findings:
             validate_exception_contracts(policy, exceptions, findings)
