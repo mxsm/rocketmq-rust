@@ -1,0 +1,107 @@
+# Copyright 2026 The RocketMQ Rust Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+schema_version: rocketmq.sre.self-degradation-policy.v1
+owner: messaging-ai-sre
+default_decision: deny_new_mutation
+rocketmq_data_plane:
+  dependency_on_ai_sre: none
+  failure_effect: none
+
+dependency_failures:
+  - dependency: control-plane
+    read_only_diagnosis: unavailable
+    new_mutation: denied
+    in_flight_verification: continue_if_executor_journal_available
+    automatic_response: alert
+
+  - dependency: connector
+    read_only_diagnosis: rules_only_or_stale_evidence_rejected
+    new_mutation: denied_when_required_evidence_is_unavailable
+    in_flight_verification: continue_only_with_fresh_independent_evidence
+    automatic_response: restart_one_stateless_connector
+
+  - dependency: provider-adapter
+    read_only_diagnosis: fallback_then_rules_only
+    new_mutation: denied_without_required_critic
+    in_flight_verification: deterministic_verification_only
+    automatic_response: restart_one_stateless_provider_adapter
+
+  - dependency: postgresql
+    read_only_diagnosis: unavailable
+    new_mutation: denied
+    in_flight_verification: stop_new_steps_and_reconcile_after_recovery
+    automatic_response: alert_and_freeze
+
+  - dependency: executor
+    read_only_diagnosis: available
+    new_mutation: denied
+    in_flight_verification: reconcile_from_journal_after_recovery
+    automatic_response: alert_and_freeze
+
+  - dependency: execution-agent
+    read_only_diagnosis: available
+    new_mutation: denied
+    in_flight_verification: mark_unknown_if_effect_cannot_be_proven
+    automatic_response: alert_and_freeze
+
+  - dependency: lease-or-fence
+    read_only_diagnosis: available
+    new_mutation: denied
+    in_flight_verification: no_new_positive_step
+    automatic_response: alert_and_freeze
+
+  - dependency: audit-persistence
+    read_only_diagnosis: available
+    new_mutation: denied
+    in_flight_verification: no_new_positive_step
+    automatic_response: alert_and_freeze
+
+  - dependency: outbox
+    read_only_diagnosis: available
+    new_mutation: denied_when_notification_is_required
+    in_flight_verification: continue_and_preserve_pending_delivery
+    automatic_response: alert
+
+automatic_recovery_allowlist:
+  - action: restart_one_stateless_connector
+    maximum_targets: 1
+    requires_ready_replacement: true
+    mutation_scope: sre_control_plane_only
+  - action: restart_one_stateless_provider_adapter
+    maximum_targets: 1
+    requires_ready_replacement: true
+    mutation_scope: sre_control_plane_only
+  - action: trigger_read_only_diagnosis
+    maximum_targets: 1
+    requires_ready_replacement: false
+    mutation_scope: none
+
+automatic_recovery_denylist:
+  - restart_or_failover_postgresql
+  - restart_executor
+  - restart_execution_agent
+  - clear_quarantine
+  - advance_or_override_fence
+  - discard_unknown_effect
+  - bypass_audit
+  - mutate_rocketmq_resource
+  - execute_shell_or_raw_request
+
+manual_recovery_invariants:
+  - unknown_effects_must_be_reconciled_before_unfreeze
+  - quarantines_require_audited_manual_clear
+  - lease_epoch_must_be_monotonic
+  - paused_autonomy_can_resume_only_to_shadow_or_supervised
+  - no_recovery_path_can_bypass_before_after_evidence
