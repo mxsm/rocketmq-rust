@@ -67,10 +67,19 @@ pub(crate) struct TopicConfigManager {
     rocksdb_config_manager: Option<Arc<RocksDbBrokerConfigManager>>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct TopicConfigUpdate {
     pub(crate) topic_config: Arc<TopicConfig>,
     pub(crate) data_version: DataVersion,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TopicConfigCasError {
+    TopicNotFound,
+    VersionConflict { expected_version: u64, actual_version: u64 },
+    VersionUnavailable,
+    VersionExhausted,
+    NoChange,
 }
 
 pub(crate) struct TopicConfigCreation {
@@ -279,6 +288,20 @@ impl TopicConfigManager {
     #[inline]
     pub fn select_topic_config(&self, topic: &CheetahString) -> Option<Arc<TopicConfig>> {
         self.topic_config_snapshot.load().get(topic).cloned()
+    }
+
+    pub(crate) fn select_topic_config_with_version(
+        &self,
+        topic: &CheetahString,
+    ) -> Result<(Arc<TopicConfig>, u64), TopicConfigCasError> {
+        let data_version = self.metadata_transition.lock();
+        let topic_config = self
+            .topic_config_table
+            .get(topic)
+            .map(|entry| entry.value().clone())
+            .ok_or(TopicConfigCasError::TopicNotFound)?;
+        let version = u64::try_from(data_version.counter()).map_err(|_| TopicConfigCasError::VersionUnavailable)?;
+        Ok((topic_config, version))
     }
 
     fn rebuild_topic_config_snapshot_locked(&self) {
@@ -624,6 +647,57 @@ impl TopicConfigManager {
             self.record_topic_create_latency(start_time);
         }
         update
+    }
+
+    pub(crate) fn update_topic_config_if_version(
+        &self,
+        topic: &CheetahString,
+        expected_version: u64,
+        read_queue_nums: Option<u32>,
+        write_queue_nums: Option<u32>,
+        order: Option<bool>,
+        state_machine_version: i64,
+    ) -> Result<TopicConfigUpdate, TopicConfigCasError> {
+        let mut data_version = self.metadata_transition.lock();
+        let current = self
+            .topic_config_table
+            .get(topic)
+            .map(|entry| entry.value().as_ref().clone())
+            .ok_or(TopicConfigCasError::TopicNotFound)?;
+        let counter = data_version.counter();
+        let actual_version = u64::try_from(counter).map_err(|_| TopicConfigCasError::VersionUnavailable)?;
+        if actual_version != expected_version {
+            return Err(TopicConfigCasError::VersionConflict {
+                expected_version,
+                actual_version,
+            });
+        }
+        if counter == i64::MAX {
+            return Err(TopicConfigCasError::VersionExhausted);
+        }
+
+        let mut replacement = current.clone();
+        if let Some(value) = read_queue_nums {
+            replacement.read_queue_nums = value;
+        }
+        if let Some(value) = write_queue_nums {
+            replacement.write_queue_nums = value;
+        }
+        if let Some(value) = order {
+            replacement.order = value;
+        }
+        if replacement == current {
+            return Err(TopicConfigCasError::NoChange);
+        }
+
+        let topic_config = Arc::new(replacement);
+        self.topic_config_table.insert(topic.clone(), topic_config.clone());
+        data_version.next_version_with(state_machine_version);
+        self.rebuild_topic_config_snapshot_locked();
+        Ok(TopicConfigUpdate {
+            topic_config,
+            data_version: data_version.clone(),
+        })
     }
 
     fn apply_topic_attributes_locked(&self, topic_config: &mut TopicConfig) {
@@ -1237,6 +1311,7 @@ mod tests {
     use rocketmq_store::MessageStoreConfig;
     use tempfile::TempDir;
 
+    use crate::topic::manager::topic_config_manager::TopicConfigCasError;
     use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
     fn test_topic_config_manager() -> (TempDir, TopicConfigManager) {
@@ -1359,6 +1434,70 @@ mod tests {
         assert!(Arc::ptr_eq(&second.topic_config, &second_reader));
         assert_eq!(manager.data_version(), second.data_version);
         assert_eq!(second.data_version.counter(), 2);
+    }
+
+    #[test]
+    fn topic_config_cas_preserves_unlisted_fields_and_rejects_stale_writes() {
+        let (_temp_dir, manager) = test_topic_config_manager();
+        let topic = CheetahString::from_static_str("CasTopic");
+        let mut initial = TopicConfig::with_queues(topic.clone(), 2, 3);
+        initial.perm = 4;
+        initial.topic_sys_flag = 17;
+        initial.attributes.insert("message.type".into(), "FIFO".into());
+        manager.put_topic_config(initial.clone());
+        let expected_version = 0;
+
+        let updated = manager
+            .update_topic_config_if_version(&topic, expected_version, Some(5), Some(7), Some(true), 0)
+            .expect("matching version should update");
+        let updated_version = u64::try_from(updated.data_version.counter()).expect("non-negative version");
+        assert_eq!(updated_version, expected_version + 1);
+        assert_eq!(updated.topic_config.read_queue_nums, 5);
+        assert_eq!(updated.topic_config.write_queue_nums, 7);
+        assert!(updated.topic_config.order);
+        assert_eq!(updated.topic_config.perm, initial.perm);
+        assert_eq!(updated.topic_config.topic_filter_type, initial.topic_filter_type);
+        assert_eq!(updated.topic_config.topic_sys_flag, initial.topic_sys_flag);
+        assert_eq!(updated.topic_config.attributes, initial.attributes);
+
+        let stale = manager
+            .update_topic_config_if_version(&topic, expected_version, Some(9), None, None, 0)
+            .expect_err("stale version must not overwrite");
+        assert_eq!(
+            stale,
+            TopicConfigCasError::VersionConflict {
+                expected_version,
+                actual_version: updated_version,
+            }
+        );
+        let (after_stale, observed_version) = manager
+            .select_topic_config_with_version(&topic)
+            .expect("topic should remain readable");
+        assert_eq!(observed_version, updated_version);
+        assert_eq!(after_stale.as_ref(), updated.topic_config.as_ref());
+    }
+
+    #[test]
+    fn topic_config_cas_rejects_missing_and_no_effect_updates() {
+        let (_temp_dir, manager) = test_topic_config_manager();
+        let missing = CheetahString::from_static_str("MissingCasTopic");
+        assert_eq!(
+            manager
+                .update_topic_config_if_version(&missing, 0, Some(2), None, None, 0)
+                .expect_err("missing topic must not be created"),
+            TopicConfigCasError::TopicNotFound
+        );
+
+        let topic = CheetahString::from_static_str("NoEffectCasTopic");
+        let created = manager.update_topic_config(TopicConfig::with_queues(topic.clone(), 4, 6), 0);
+        let version = u64::try_from(created.data_version.counter()).expect("non-negative version");
+        assert_eq!(
+            manager
+                .update_topic_config_if_version(&topic, version, Some(4), None, None, 0)
+                .expect_err("no-effect patch must not advance the version"),
+            TopicConfigCasError::NoChange
+        );
+        assert_eq!(manager.data_version().counter(), created.data_version.counter());
     }
 
     #[test]
