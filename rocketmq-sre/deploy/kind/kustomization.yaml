@@ -12,6 +12,7 @@ resources:
   - control-plane-network-policy.yaml
   - execution-stack.yaml
   - execution-rbac.yaml
+  - execution-observability-rbac.yaml
   - execution-network-policy.yaml
 
 configMapGenerator:
