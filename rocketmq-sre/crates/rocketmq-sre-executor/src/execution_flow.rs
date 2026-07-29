@@ -811,6 +811,7 @@ fn compensation_requires_manual_takeover(outcome_code: &str) -> bool {
         "broker_config_rollback_generation_conflict"
             | "topic_config_rollback_version_conflict"
             | "proxy_restart_manual_takeover_required"
+            | "telemetry_collector_manual_takeover_required"
     )
 }
 
@@ -829,5 +830,28 @@ const fn verification_phase_reason(phase: VerificationPhase) -> &'static str {
         VerificationPhase::During => "verification_during_captured",
         VerificationPhase::Post => "verification_post_captured",
         VerificationPhase::RollbackPost => "verification_rollback_post_captured",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compensation_requires_manual_takeover;
+
+    #[test]
+    fn typed_compensation_outcomes_enter_manual_takeover() {
+        for outcome in [
+            "broker_config_rollback_generation_conflict",
+            "topic_config_rollback_version_conflict",
+            "proxy_restart_manual_takeover_required",
+            "telemetry_collector_manual_takeover_required",
+        ] {
+            assert!(
+                compensation_requires_manual_takeover(outcome),
+                "{outcome} must quarantine the resource and require manual takeover"
+            );
+        }
+        assert!(!compensation_requires_manual_takeover(
+            "telemetry_collector_restart_verified"
+        ));
     }
 }
