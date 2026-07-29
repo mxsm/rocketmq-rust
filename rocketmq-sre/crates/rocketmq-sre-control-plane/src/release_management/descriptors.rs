@@ -19,6 +19,7 @@ use rocketmq_sre_contracts::IntegrationAdapterKind;
 use rocketmq_sre_contracts::IntegrationDataClass;
 use rocketmq_sre_contracts::IntegrationDescriptor;
 use rocketmq_sre_contracts::IntegrationOperationalPolicy;
+use rocketmq_sre_contracts::IntegrationSpiCapability;
 use rocketmq_sre_contracts::SchemaVersion;
 use serde_json::json;
 
@@ -120,7 +121,29 @@ pub(super) fn descriptor_for(kind: IntegrationAdapterKind) -> IntegrationDescrip
         integration_kind: integration_kind.to_owned(),
         inbound,
         outbound,
+        interfaces: spi_interfaces(kind),
         operational: operational_policy(kind),
+    }
+}
+
+fn spi_interfaces(kind: IntegrationAdapterKind) -> BTreeSet<IntegrationSpiCapability> {
+    use IntegrationSpiCapability as Capability;
+
+    match kind {
+        IntegrationAdapterKind::MockItsm | IntegrationAdapterKind::SignedWebhookItsm => BTreeSet::from([
+            Capability::InboundEvent,
+            Capability::Ticketing,
+            Capability::OutboundNotification,
+        ]),
+        IntegrationAdapterKind::ChatOpsWebhook | IntegrationAdapterKind::Email => {
+            BTreeSet::from([Capability::OutboundNotification])
+        }
+        IntegrationAdapterKind::Pager => BTreeSet::from([Capability::OutboundNotification, Capability::OnCall]),
+        IntegrationAdapterKind::MockCmdb => BTreeSet::from([Capability::InboundEvent, Capability::Cmdb]),
+        IntegrationAdapterKind::MockGitOps => BTreeSet::from([Capability::InboundEvent, Capability::DesiredState]),
+        IntegrationAdapterKind::SignedReleaseWebhook => {
+            BTreeSet::from([Capability::InboundEvent, Capability::ReleaseEvent])
+        }
     }
 }
 
