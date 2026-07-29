@@ -1554,15 +1554,17 @@ mod tests {
         let repository = PostgresRepository::from_pool(pool);
         let documents = CapabilityDocuments::embedded().expect("capability documents");
         let internal_token = Arc::<str>::from("test-internal-token");
+        let grant_signing_key = Arc::<str>::from("test-grant-signing-key-at-least-32-bytes");
+        let agent_ack_verification_key = Arc::<str>::from("test-agent-ack-verification-key-at-least-32-bytes");
         let auth = AuthService::development(internal_token.clone());
         let model_gateway = ModelGatewayService::disabled(repository.clone());
         let workflow = WorkflowService::new(repository.clone(), WorkflowEventBus::new(16));
         let routers = build_routers_with_auth(
             repository,
             documents,
-            internal_token.clone(),
-            internal_token.clone(),
             internal_token,
+            grant_signing_key,
+            agent_ack_verification_key,
             crate::supervised_execution::ExecutorSubmissionClient::disabled(),
             auth,
             EvidenceBlobStore::in_memory(64 * 1024),
