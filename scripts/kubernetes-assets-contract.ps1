@@ -144,28 +144,19 @@ $helm = Install-PinnedTool (Get-ToolSpec "helm")
 $kustomize = Install-PinnedTool (Get-ToolSpec "kustomize")
 $kubeconform = Install-PinnedTool (Get-ToolSpec "kubeconform")
 $chart = Join-Path $repoRoot $policy.helm_chart
-$secureValues = Join-Path $repoRoot $policy.helm_secure_values
+$productionValues = Join-Path $chart ("values-" + $policy.profiles.production + ".yaml")
 $baseManifest = Join-Path $repoRoot "distribution/kubernetes/base/manifest.yaml"
 $secureOverlay = Join-Path $repoRoot $policy.kustomize_secure_overlay
-$helmRenderedPath = Join-Path $artifactsRoot "helm-secure.yaml"
-$kustomizeRenderedPath = Join-Path $artifactsRoot "kustomize-secure.yaml"
+$helmRenderedPath = Join-Path $artifactsRoot "helm-production.yaml"
+$kustomizeRenderedPath = Join-Path $artifactsRoot "kustomize-production.yaml"
 
-$savedErrorActionPreference = $ErrorActionPreference
-$ErrorActionPreference = "Continue"
-$defaultOutput = & $helm template rocketmq $chart --namespace rocketmq 2>&1 | Out-String
-$defaultExitCode = $LASTEXITCODE
-$ErrorActionPreference = $savedErrorActionPreference
-if ($defaultExitCode -eq 0 -or $defaultOutput -notmatch "(inject a verified signed digest|Controller peer Service IP)") {
-    throw "default Helm values must fail closed on unpublished image digests"
+Invoke-Checked "helm lint production profile" {
+    & $helm lint $chart --namespace rocketmq --values $productionValues --strict
 }
 
-Invoke-Checked "helm lint secure values" {
-    & $helm lint $chart --namespace rocketmq --values $secureValues --strict
-}
-
-$helmOutput = & $helm template rocketmq $chart --namespace rocketmq --values $secureValues 2>&1 | Out-String
+$helmOutput = & $helm template rocketmq $chart --namespace rocketmq --values $productionValues 2>&1 | Out-String
 if ($LASTEXITCODE -ne 0) {
-    throw "helm template secure values failed:`n$helmOutput"
+    throw "helm template production profile failed:`n$helmOutput"
 }
 $helmText = Normalize-Text $helmOutput
 [System.IO.File]::WriteAllText($helmRenderedPath, $helmText, [System.Text.UTF8Encoding]::new($false))

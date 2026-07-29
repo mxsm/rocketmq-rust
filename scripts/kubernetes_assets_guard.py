@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Reject drift between the M11-10 Helm, Kustomize, lifecycle, and container contracts."""
+"""Reject drift between the P0-04 Helm, Kustomize, lifecycle, and container contracts."""
 
 from __future__ import annotations
 
@@ -26,23 +26,17 @@ from pathlib import Path
 from typing import Any
 
 
-PLACEHOLDER_DIGEST = "sha256:" + "0" * 64
-FIXTURE_DIGESTS = {
-    "broker": "sha256:" + "1" * 64,
-    "namesrv": "sha256:" + "2" * 64,
-    "controller": "sha256:" + "3" * 64,
-    "proxy": "sha256:" + "4" * 64,
-    "mcp": "sha256:" + "5" * 64,
-}
+EXPECTED_RESOURCE_COUNT = 44
+LOCAL_IMAGE_TAG = "local"
 CONTROLLER_SERVICE_IPS = ("10.96.0.201", "10.96.0.202", "10.96.0.203")
 EXPECTED_SERVICES: dict[str, dict[str, Any]] = {
     "broker": {
         "kind": "StatefulSet",
-        "replicas": 1,
+        "replicas": 3,
         "ports": [8088, 10911, 10912],
         "config": "/etc/rocketmq/broker.toml",
         "data": "/var/lib/rocketmq/broker",
-        "pdb": 1,
+        "pdb": 2,
         "storage": "100Gi",
         "resources": ("1000m", "2Gi", "4000m", "8Gi"),
     },
@@ -200,7 +194,7 @@ def require_valid_toml(guard: Guard, label: str, document: Document, key: str) -
 
 def require_security_bootstrap_environment(guard: Guard, label: str, text: str) -> None:
     for name, value in SECURITY_BOOTSTRAP_ENVIRONMENT:
-        pattern = rf"name:\s*{re.escape(name)}\s*,\s*value:\s*[\"']?{re.escape(value)}[\"']?"
+        pattern = rf"name:\s*{re.escape(name)}(?:\s*,)?\s*value:\s*[\"']?{re.escape(value)}[\"']?"
         guard.require(
             re.search(pattern, text) is not None,
             f"{label}: missing explicit security bootstrap environment {name}={value}",
@@ -209,17 +203,23 @@ def require_security_bootstrap_environment(guard: Guard, label: str, text: str) 
 
 def validate_exact_policy(guard: Guard, policy: dict[str, Any], container_policy: dict[str, Any]) -> None:
     guard.require(policy.get("schema_version") == 1, "deployment policy schema_version must remain 1")
-    guard.require(policy.get("milestone") == "M11-10", "deployment policy milestone must remain M11-10")
+    guard.require(policy.get("milestone") == "P0-04", "deployment policy milestone must remain P0-04")
     guard.require(policy.get("kubernetes_version") == "1.32.0", "Kubernetes schema baseline must remain 1.32.0")
+    guard.require(
+        policy.get("profiles") == {"development": "dev-single", "production": "production-controller-ha"},
+        "deployment profiles drifted",
+    )
     image = policy.get("image", {})
     guard.require(
-        image.get("repository_prefix") == "ghcr.io/mxsm/rocketmq-rust",
-        "deployment image repository prefix drifted",
-    )
-    guard.require(image.get("unpublished_placeholder") == PLACEHOLDER_DIGEST, "unpublished digest sentinel drifted")
-    guard.require(
-        image.get("secure_values_are_non_publishable_fixtures") is True,
-        "secure rendering digest fixtures must remain explicitly non-publishable",
+        image
+        == {
+            "mode": "local",
+            "repository_prefix": "rocketmq-rust",
+            "tag": LOCAL_IMAGE_TAG,
+            "pull_policy": "Never",
+            "remote_push_enabled": False,
+        },
+        "local-only deployment image policy drifted",
     )
     security = policy.get("security", {})
     expected_security = {
@@ -277,7 +277,7 @@ def validate_exact_policy(guard: Guard, policy: dict[str, Any], container_policy
         guard.require(actual.get("data_path") == expected["data"], f"{service} data path drifted")
         guard.require(actual.get("pdb", {}).get("min_available") == expected["pdb"], f"{service} PDB drifted")
         guard.require(
-            actual.get("repository") == f"ghcr.io/mxsm/rocketmq-rust/{service}",
+            actual.get("repository") == f"rocketmq-rust/{service}",
             f"{service} image repository drifted",
         )
         request_cpu, request_memory, limit_cpu, limit_memory = expected["resources"]
@@ -298,7 +298,10 @@ def validate_exact_policy(guard: Guard, policy: dict[str, Any], container_policy
             guard.require(persistence.get("size") == expected["storage"], f"{service} storage budget drifted")
             guard.require(persistence.get("storage_class_required") is True, f"{service} storage class must be explicit")
             guard.require(persistence.get("retention") == "Retain", f"{service} PVC retention must remain Retain")
-        guard.require(container.get("ports") == expected["ports"], f"{service} deployment/container port drift")
+        guard.require(
+            container.get("ports") == [5557, *expected["ports"]],
+            f"{service} deployment/container port drift",
+        )
         guard.require(container.get("config_path") == expected["config"], f"{service} deployment/container config drift")
         guard.require(container.get("data_path") == expected["data"], f"{service} deployment/container data drift")
     guard.require(services.get("controller", {}).get("quorum") == 2, "Controller quorum must remain two of three")
@@ -309,6 +312,10 @@ def validate_exact_policy(guard: Guard, policy: dict[str, Any], container_policy
     guard.require(
         services.get("controller", {}).get("auto_initialize_cluster") is True,
         "Controller three-member bootstrap must remain explicit",
+    )
+    guard.require(
+        services.get("controller", {}).get("storage_backend") == "RocksDB",
+        "Controller production storage backend must remain RocksDB",
     )
     guard.require(
         services.get("controller", {}).get("peer_service_ips_required") == 3,
@@ -329,29 +336,17 @@ def validate_exact_policy(guard: Guard, policy: dict[str, Any], container_policy
         guard.require(actual.get("version") == version, f"{name} version drifted")
         guard.require(actual.get("linux_amd64_sha256") == linux_sha, f"{name} Linux checksum drifted")
         guard.require(actual.get("windows_amd64_sha256") == windows_sha, f"{name} Windows checksum drifted")
-    guard.require(
-        policy.get("workflow")
-        == {
-            "path": ".github/workflows/kubernetes-assets-ci.yml",
-            "actions": {
-                "actions/checkout": "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
-                "actions/upload-artifact": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
-            },
-        },
-        "Kubernetes asset workflow/action pin contract drifted",
-    )
-
-
 def validate_source_assets(guard: Guard) -> None:
     policy = guard.load_json("distribution/kubernetes/deployment-policy.json")
     container_policy = guard.load_json("docker/container-policy.json")
     validate_exact_policy(guard, policy, container_policy)
 
     required = [
+        ".gitattributes",
         "distribution/helm/rocketmq-rust/Chart.yaml",
         "distribution/helm/rocketmq-rust/values.yaml",
         "distribution/helm/rocketmq-rust/values.schema.json",
-        "distribution/helm/rocketmq-rust/ci/secure-values.yaml",
+        "distribution/helm/rocketmq-rust/values-production-controller-ha.yaml",
         "distribution/helm/rocketmq-rust/templates/_helpers.tpl",
         "distribution/helm/rocketmq-rust/templates/configmaps.yaml",
         "distribution/helm/rocketmq-rust/templates/workloads.yaml",
@@ -366,6 +361,11 @@ def validate_source_assets(guard: Guard) -> None:
     for relative in required:
         guard.read(relative)
 
+    attributes = guard.read(".gitattributes")
+    guard.require(
+        "distribution/helm/rocketmq-rust/files/maintenance-policy.json text eol=lf" in attributes,
+        "embedded maintenance policy must retain canonical LF bytes on every host",
+    )
     contract_script = guard.read("scripts/kubernetes-assets-contract.ps1")
     guard.require("$hostIsWindows" in contract_script, "asset contract must use a script-owned host platform flag")
     guard.require(
@@ -401,16 +401,31 @@ def validate_source_assets(guard: Guard) -> None:
     guard.require("rocketmq-default-deny" in chart_sources, "default-deny NetworkPolicy missing")
     guard.require("secretProviderClass" in chart_sources and "existingSecret" in chart_sources, "external secret references missing")
     guard.require("helm.sh/resource-policy: keep" in chart_sources, "MCP audit PVC must be retained on Helm rollback")
-    guard.require("Controller peer Service IP is an unpublished documentation sentinel" in chart_sources, "Controller Service IP sentinel must fail closed")
+    guard.require(
+        "production-controller-ha requires one unique Controller peer Service IP per Controller replica" in chart_sources,
+        "Controller peer Service IP cardinality must fail closed",
+    )
 
     values = guard.read("distribution/helm/rocketmq-rust/values.yaml")
-    secure_values = guard.read("distribution/helm/rocketmq-rust/ci/secure-values.yaml")
-    guard.require(values.count(PLACEHOLDER_DIGEST) == 5, "default Helm values must contain five fail-closed digest sentinels")
-    guard.require(secure_values.count("non-publishable") == 1, "secure Helm fixtures must be labeled non-publishable")
-    for service, digest in FIXTURE_DIGESTS.items():
-        guard.require(digest in secure_values, f"secure Helm fixture digest missing for {service}")
+    production_values = guard.read("distribution/helm/rocketmq-rust/values-production-controller-ha.yaml")
+    guard.require(
+        "Local rendering fixture" in production_values,
+        "production Helm values must remain explicitly labeled as a local rendering fixture",
+    )
+    guard.require(
+        "deploymentProfile: production-controller-ha" in production_values,
+        "production Helm profile selection drifted",
+    )
+    for service in EXPECTED_SERVICES:
+        repository = f"repository: rocketmq-rust/{service}"
+        guard.require(repository in values, f"default Helm local repository missing for {service}")
+        guard.require(repository in production_values, f"production Helm local repository missing for {service}")
+    for label, source in (("default Helm values", values), ("production Helm values", production_values)):
+        guard.require(source.count("tag: local") == 5, f"{label} must define five local image tags")
+        guard.require(source.count('digest: ""') == 5, f"{label} must leave five optional image digests empty")
+        guard.require(source.count("pullPolicy: Never") == 5, f"{label} must disable remote image pulls")
     for address in CONTROLLER_SERVICE_IPS:
-        guard.require(address in secure_values, f"secure Helm Controller Service IP fixture missing: {address}")
+        guard.require(address in production_values, f"production Helm Controller Service IP fixture missing: {address}")
 
     schema = guard.load_json("distribution/helm/rocketmq-rust/values.schema.json")
     guard.require(schema.get("additionalProperties") is False, "Helm values schema must reject unknown top-level fields")
@@ -420,13 +435,19 @@ def validate_source_assets(guard: Guard) -> None:
 
     base_kustomization = guard.read("distribution/kubernetes/base/kustomization.yaml")
     secure_overlay = guard.read("distribution/kubernetes/overlays/secure/kustomization.yaml")
-    guard.require(base_kustomization.count(PLACEHOLDER_DIGEST) == 5, "Kustomize base must fail closed with five sentinels")
-    guard.require(secure_overlay.count("non-publishable") == 1, "secure Kustomize fixture must be labeled non-publishable")
-    for service, digest in FIXTURE_DIGESTS.items():
-        guard.require(digest in secure_overlay, f"secure Kustomize fixture digest missing for {service}")
+    guard.require(
+        "Keep the hardened overlay on images loaded into the local cluster." in secure_overlay,
+        "secure Kustomize overlay must document its local-image boundary",
+    )
+    for label, source in (("Kustomize base", base_kustomization), ("secure Kustomize overlay", secure_overlay)):
+        for service in EXPECTED_SERVICES:
+            repository = f"rocketmq-rust/{service}"
+            guard.require(source.count(repository) == 2, f"{label} local repository drifted for {service}")
+        guard.require(source.count("newTag: local") == 5, f"{label} must retain five local image tags")
+        guard.require("newDigest:" not in source, f"{label} must not mix remote digests into the local fixture")
 
     generated = guard.read("distribution/kubernetes/base/manifest.yaml")
-    validate_render(guard, "generated Kustomize base", generated, FIXTURE_DIGESTS)
+    validate_render(guard, "generated Kustomize base", generated)
 
     workflow = guard.read(".github/workflows/kubernetes-assets-ci.yml")
     for pin in (
@@ -440,12 +461,14 @@ def validate_source_assets(guard: Guard) -> None:
     guard.require("test_m11_service_lifecycle" in workflow, "workflow must execute lifecycle violation tests")
 
 
-def validate_workload(guard: Guard, label: str, document: Document, service: str, expected: dict[str, Any], digest: str) -> None:
+def validate_workload(guard: Guard, label: str, document: Document, service: str, expected: dict[str, Any], image: str) -> None:
     text = document.text
     require_security_bootstrap_environment(guard, f"{label}: {service}", text)
     guard.require(re.search(rf"(?m)^  replicas:\s*{expected['replicas']}\s*$", text) is not None, f"{label}: {service} replicas drifted")
-    expected_image = f"ghcr.io/mxsm/rocketmq-rust/{service}@{digest}"
-    guard.require(expected_image in text, f"{label}: {service} immutable image missing")
+    expected_image = f"rocketmq-rust/{service}:{LOCAL_IMAGE_TAG}"
+    guard.require(image == expected_image, f"{label}: {service} local fixture image drifted")
+    guard.require(expected_image in text, f"{label}: {service} local fixture image missing")
+    guard.require("imagePullPolicy: Never" in text, f"{label}: {service} must never pull the local fixture image")
     guard.require(expected["config"] in text, f"{label}: {service} config mount drifted")
     guard.require(expected["data"] in text, f"{label}: {service} data mount drifted")
     for port in expected["ports"]:
@@ -465,9 +488,13 @@ def validate_workload(guard: Guard, label: str, document: Document, service: str
         "- ALL",
         "mountPath: /var/run/secrets/rocketmq",
         "OTEL_EXPORTER_OTLP_ENDPOINT",
-        "topologyKey: kubernetes.io/hostname",
     ):
         guard.require(snippet in text, f"{label}: {service} missing security/topology contract {snippet}")
+    if expected["replicas"] > 1:
+        guard.require(
+            "topologyKey: kubernetes.io/hostname" in text,
+            f"{label}: {service} missing host topology contract",
+        )
     for field in FORBIDDEN_PROBE_FIELDS:
         guard.require(field not in text, f"{label}: {service} contains forbidden probe field {field}")
     for snippet in (
@@ -519,25 +546,25 @@ def validate_workload(guard: Guard, label: str, document: Document, service: str
         )
 
 
-def validate_render(guard: Guard, label: str, text: str, expected_digests: dict[str, str] | None = None) -> dict[str, Any]:
+def validate_render(guard: Guard, label: str, text: str) -> dict[str, Any]:
     documents = split_documents(text)
-    guard.require(len(documents) == 37, f"{label}: expected 37 Kubernetes resources, found {len(documents)}")
+    guard.require(
+        len(documents) == EXPECTED_RESOURCE_COUNT,
+        f"{label}: expected {EXPECTED_RESOURCE_COUNT} Kubernetes resources, found {len(documents)}",
+    )
     for forbidden in ("kind: Secret", "stringData:", "hostPath:", "privileged: true", "allowPrivilegeEscalation: true"):
         guard.require(forbidden not in text, f"{label}: forbidden field {forbidden}")
     for field in FORBIDDEN_PROBE_FIELDS:
         guard.require(field not in text, f"{label}: forbidden lifecycle probe field {field}")
 
     image_matches = re.findall(
-        r"(?m)^\s*image:\s*[\"']?(ghcr\.io/mxsm/rocketmq-rust/(broker|namesrv|controller|proxy|mcp)@"
-        r"(sha256:[0-9a-f]{64}))[\"']?\s*$",
+        r"(?m)^\s*image:\s*[\"']?(rocketmq-rust/(broker|namesrv|controller|proxy|mcp):local)[\"']?\s*$",
         text,
     )
-    guard.require(len(image_matches) == 5, f"{label}: expected exactly five digest-only workload images")
-    observed_digests = {service: digest for _, service, digest in image_matches}
-    guard.require(set(observed_digests) == set(EXPECTED_SERVICES), f"{label}: workload image owners drifted")
-    guard.require(PLACEHOLDER_DIGEST not in observed_digests.values(), f"{label}: unpublished placeholder digest rendered")
-    if expected_digests is not None:
-        guard.require(observed_digests == expected_digests, f"{label}: secure fixture digests drifted")
+    guard.require(len(image_matches) == 5, f"{label}: expected exactly five local fixture workload images")
+    observed_images = {service: image for image, service in image_matches}
+    guard.require(set(observed_images) == set(EXPECTED_SERVICES), f"{label}: workload image owners drifted")
+    guard.require(text.count("imagePullPolicy: Never") == 5, f"{label}: local fixture pull policy drifted")
 
     summary: dict[str, Any] = {}
     for service, expected in EXPECTED_SERVICES.items():
@@ -545,8 +572,8 @@ def validate_render(guard: Guard, label: str, text: str, expected_digests: dict[
         guard.require(document is not None, f"{label}: missing unique {expected['kind']} rocketmq-{service}")
         if document is None:
             continue
-        digest = observed_digests.get(service, "")
-        validate_workload(guard, label, document, service, expected, digest)
+        image = observed_images.get(service, "")
+        validate_workload(guard, label, document, service, expected, image)
         pdb = find_document(documents, "PodDisruptionBudget", f"rocketmq-{service}")
         guard.require(pdb is not None, f"{label}: {service} PDB missing")
         if pdb is not None:
@@ -554,7 +581,7 @@ def validate_render(guard: Guard, label: str, text: str, expected_digests: dict[
                 re.search(rf"(?m)^  minAvailable:\s*{expected['pdb']}\s*$", pdb.text) is not None,
                 f"{label}: {service} PDB quorum drifted",
             )
-        summary[service] = (expected["kind"], expected["replicas"], digest, expected["pdb"])
+        summary[service] = (expected["kind"], expected["replicas"], image, expected["pdb"])
 
     namespace = find_document(documents, "Namespace", "rocketmq")
     guard.require(namespace is not None, f"{label}: managed restricted Namespace missing")
@@ -598,7 +625,13 @@ def validate_render(guard: Guard, label: str, text: str, expected_digests: dict[
                 guard.require("statefulset.kubernetes.io/pod-name:" in peer_service.text, f"{label}: Controller Service selector drifted")
             require_valid_toml(guard, label, controller_config, f"controller-{ordinal}.toml")
 
-    for service in ("broker", "namesrv", "proxy"):
+    broker_config = find_document(documents, "ConfigMap", "rocketmq-broker-config")
+    guard.require(broker_config is not None, f"{label}: broker config map missing")
+    if broker_config is not None:
+        for ordinal in range(EXPECTED_SERVICES["broker"]["replicas"]):
+            require_valid_toml(guard, label, broker_config, f"rocketmq-broker-{ordinal}.toml")
+
+    for service in ("namesrv", "proxy"):
         config = find_document(documents, "ConfigMap", f"rocketmq-{service}-config")
         guard.require(config is not None, f"{label}: {service} config map missing")
         if config is not None:
@@ -637,13 +670,14 @@ def validate_render(guard: Guard, label: str, text: str, expected_digests: dict[
     network_policy_names = {document.name for document in documents if document.kind == "NetworkPolicy"}
     expected_network_policies = {
         "rocketmq-default-deny",
-        "rocketmq-intra-cluster",
         "rocketmq-dns-egress",
         "rocketmq-otel-egress",
-        "rocketmq-broker-client-ingress",
-        "rocketmq-proxy-client-ingress",
-        "rocketmq-mcp-client-ingress",
-        "rocketmq-mcp-jwks-egress",
+        "rocketmq-controller",
+        "rocketmq-broker",
+        "rocketmq-namesrv",
+        "rocketmq-proxy",
+        "rocketmq-mcp",
+        "rocketmq-metrics-scrape",
     }
     guard.require(network_policy_names == expected_network_policies, f"{label}: NetworkPolicy set drifted")
     return summary
@@ -669,13 +703,11 @@ def main() -> int:
             guard,
             "Helm render",
             args.helm_rendered.read_text(encoding="utf-8"),
-            FIXTURE_DIGESTS,
         )
         kustomize_summary = validate_render(
             guard,
             "Kustomize render",
             args.kustomize_rendered.read_text(encoding="utf-8"),
-            FIXTURE_DIGESTS,
         )
         guard.require(helm_summary == kustomize_summary, "Helm and Kustomize service contracts diverged")
 
@@ -683,7 +715,7 @@ def main() -> int:
         for error in guard.errors:
             print(f"KUBERNETES_ASSETS_GUARD_ERROR: {error}", file=sys.stderr)
         return 1
-    print("KUBERNETES_ASSETS_GUARD_OK services=5 helm=1 kustomize=1 milestone=M11-10")
+    print("KUBERNETES_ASSETS_GUARD_OK services=5 helm=1 kustomize=1 milestone=P0-04")
     return 0
 
 
