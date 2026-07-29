@@ -179,7 +179,16 @@ impl RequiredSignalsSource {
                         shared.spans = Some(normalize_read(
                             "tempo",
                             tempo
-                                .query(trace_resource, start, end, max_rows, max_bytes, deadline, cancel)
+                                .query(
+                                    external_cluster,
+                                    trace_resource,
+                                    start,
+                                    end,
+                                    max_rows,
+                                    max_bytes,
+                                    deadline,
+                                    cancel,
+                                )
                                 .await,
                         )?);
                     }
