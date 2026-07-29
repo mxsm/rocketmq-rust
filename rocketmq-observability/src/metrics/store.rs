@@ -40,6 +40,14 @@ pub use crate::semantic::metrics::STORE_TRANSFER_ENGINE_TOTAL;
 pub use crate::semantic::metrics::STORE_TRANSFER_FALLBACK_TOTAL;
 pub use crate::semantic::metrics::STORE_TRANSFER_PARTIAL_WRITE_TOTAL;
 
+#[cfg(feature = "otel-metrics")]
+use std::sync::Arc;
+#[cfg(feature = "otel-metrics")]
+use std::sync::OnceLock;
+
+#[cfg(feature = "otel-metrics")]
+static STORE_METRICS: OnceLock<StoreMetrics> = OnceLock::new();
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct StoreObservableValues {
     pub storage_size_bytes: i64,
@@ -48,9 +56,41 @@ pub struct StoreObservableValues {
     pub message_reserve_time_millis: i64,
 }
 
-/// Cloneable Store recorder bound to one explicit telemetry runtime.
-#[derive(Clone)]
-pub struct StoreMetricsRecorder {
+#[cfg(feature = "otel-metrics")]
+pub fn init_global(meter: &opentelemetry::metrics::Meter) -> bool {
+    STORE_METRICS.set(StoreMetrics::new(meter)).is_ok()
+}
+
+#[cfg(feature = "otel-metrics")]
+pub fn init_global_with_observables<F>(meter: &opentelemetry::metrics::Meter, source: F) -> bool
+where
+    F: Fn() -> StoreObservableValues + Send + Sync + 'static,
+{
+    STORE_METRICS
+        .set(StoreMetrics::new_with_observables(meter, source))
+        .is_ok()
+}
+
+#[cfg(feature = "otel-metrics")]
+pub fn init_global_with_observables_and_replication_lag<F, H>(
+    meter: &opentelemetry::metrics::Meter,
+    source: F,
+    replication_lag_source: H,
+) -> bool
+where
+    F: Fn() -> StoreObservableValues + Send + Sync + 'static,
+    H: Fn() -> Option<u64> + Send + Sync + 'static,
+{
+    STORE_METRICS
+        .set(StoreMetrics::new_with_observables_and_replication_lag(
+            meter,
+            source,
+            replication_lag_source,
+        ))
+        .is_ok()
+}
+
+pub fn record_append_latency(latency_ms: u64) {
     #[cfg(feature = "otel-metrics")]
     telemetry: crate::TelemetryRecorder,
     #[cfg(feature = "otel-metrics")]
@@ -487,7 +527,7 @@ pub struct StoreMetrics {
     transfer_fallback_total: opentelemetry::metrics::Counter<u64>,
     transfer_partial_write_total: opentelemetry::metrics::Counter<u64>,
     linux_sendfile_bytes_total: opentelemetry::metrics::Counter<u64>,
-    ha_replication_lag_bytes: opentelemetry::metrics::Gauge<u64>,
+    ha_replication_lag_bytes: Option<opentelemetry::metrics::Gauge<u64>>,
     ha_ack_latency_millis: opentelemetry::metrics::Histogram<u64>,
     linux_mlock_bytes: opentelemetry::metrics::Gauge<u64>,
     linux_mlock_attempt_total: opentelemetry::metrics::Counter<u64>,
@@ -503,7 +543,11 @@ pub struct StoreMetrics {
 
 #[cfg(feature = "otel-metrics")]
 impl StoreMetrics {
-    pub(crate) fn new(meter: &opentelemetry::metrics::Meter) -> Self {
+    pub fn new(meter: &opentelemetry::metrics::Meter) -> Self {
+        Self::new_with_ha_recording(meter, true)
+    }
+
+    fn new_with_ha_recording(meter: &opentelemetry::metrics::Meter, record_ha_replication_lag: bool) -> Self {
         let append_latency = meter
             .u64_histogram(STORE_APPEND_LATENCY)
             .with_description("Store commit log append latency")
@@ -570,11 +614,13 @@ impl StoreMetrics {
             .with_unit("By")
             .build();
 
-        let ha_replication_lag_bytes = meter
-            .u64_gauge(STORE_HA_REPLICATION_LAG_BYTES)
-            .with_description("HA replication lag in bytes")
-            .with_unit("By")
-            .build();
+        let ha_replication_lag_bytes = record_ha_replication_lag.then(|| {
+            meter
+                .u64_gauge(STORE_HA_REPLICATION_LAG_BYTES)
+                .with_description("HA replication lag in bytes")
+                .with_unit("By")
+                .build()
+        });
 
         let ha_ack_latency_millis = meter
             .u64_histogram(STORE_HA_ACK_LATENCY_MILLIS)
@@ -675,62 +721,33 @@ impl StoreMetrics {
         F: Fn() -> StoreObservableValues + Send + Sync + 'static,
     {
         let metrics = Self::new(meter);
-        Self::register_observables(meter, source);
+        register_store_observables(meter, Arc::new(source));
         metrics
     }
 
-    pub(crate) fn register_observables<F>(meter: &opentelemetry::metrics::Meter, source: F)
+    pub fn new_with_observables_and_replication_lag<F, H>(
+        meter: &opentelemetry::metrics::Meter,
+        source: F,
+        replication_lag_source: H,
+    ) -> Self
     where
         F: Fn() -> StoreObservableValues + Send + Sync + 'static,
+        H: Fn() -> Option<u64> + Send + Sync + 'static,
     {
-        let source = std::sync::Arc::new(source);
-
-        let storage_size_source = source.clone();
-        let _storage_size = meter
-            .i64_observable_gauge(STORAGE_SIZE)
-            .with_description("Broker storage size")
-            .with_unit("bytes")
+        let metrics = Self::new_with_ha_recording(meter, false);
+        register_store_observables(meter, Arc::new(source));
+        let _ha_replication_lag = meter
+            .u64_observable_gauge(STORE_HA_REPLICATION_LAG_BYTES)
+            .with_description("HA replication lag in bytes")
+            .with_unit("By")
             .with_callback(move |observer| {
-                let values = storage_size_source();
-                let attrs = store_attributes();
-                observer.observe(values.storage_size_bytes.max(0), &attrs);
+                let Some(replication_lag_bytes) = replication_lag_source() else {
+                    return;
+                };
+                observer.observe(replication_lag_bytes, &store_attributes());
             })
             .build();
-
-        let flush_behind_source = source.clone();
-        let _flush_behind = meter
-            .i64_observable_gauge(STORAGE_FLUSH_BEHIND_BYTES)
-            .with_description("Broker flush behind bytes")
-            .with_unit("bytes")
-            .with_callback(move |observer| {
-                let values = flush_behind_source();
-                let attrs = store_attributes();
-                observer.observe(values.flush_behind_bytes.max(0), &attrs);
-            })
-            .build();
-
-        let dispatch_behind_source = source.clone();
-        let _dispatch_behind = meter
-            .i64_observable_gauge(STORAGE_DISPATCH_BEHIND_BYTES)
-            .with_description("Broker dispatch behind bytes")
-            .with_unit("bytes")
-            .with_callback(move |observer| {
-                let values = dispatch_behind_source();
-                let attrs = store_attributes();
-                observer.observe(values.dispatch_behind_bytes.max(0), &attrs);
-            })
-            .build();
-
-        let _message_reserve_time = meter
-            .i64_observable_gauge(STORAGE_MESSAGE_RESERVE_TIME)
-            .with_description("Broker message reserve time")
-            .with_unit("milliseconds")
-            .with_callback(move |observer| {
-                let values = source();
-                let attrs = store_attributes();
-                observer.observe(values.message_reserve_time_millis.max(0), &attrs);
-            })
-            .build();
+        metrics
     }
 
     #[inline]
@@ -790,7 +807,9 @@ impl StoreMetrics {
 
     #[inline]
     pub fn record_ha_replication_lag_bytes(&self, bytes: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.ha_replication_lag_bytes.record(bytes, attributes);
+        if let Some(ha_replication_lag_bytes) = &self.ha_replication_lag_bytes {
+            ha_replication_lag_bytes.record(bytes, attributes);
+        }
     }
 
     #[inline]
@@ -847,6 +866,55 @@ impl StoreMetrics {
     pub fn record_commitlog_segment_lease_active(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
         self.commitlog_segment_lease_active.record(count, attributes);
     }
+}
+
+#[cfg(feature = "otel-metrics")]
+fn register_store_observables<F>(meter: &opentelemetry::metrics::Meter, source: Arc<F>)
+where
+    F: Fn() -> StoreObservableValues + Send + Sync + 'static,
+{
+    let storage_size_source = source.clone();
+    let _storage_size = meter
+        .i64_observable_gauge(STORAGE_SIZE)
+        .with_description("Broker storage size")
+        .with_unit("bytes")
+        .with_callback(move |observer| {
+            let values = storage_size_source();
+            observer.observe(values.storage_size_bytes.max(0), &store_attributes());
+        })
+        .build();
+
+    let flush_behind_source = source.clone();
+    let _flush_behind = meter
+        .i64_observable_gauge(STORAGE_FLUSH_BEHIND_BYTES)
+        .with_description("Broker flush behind bytes")
+        .with_unit("bytes")
+        .with_callback(move |observer| {
+            let values = flush_behind_source();
+            observer.observe(values.flush_behind_bytes.max(0), &store_attributes());
+        })
+        .build();
+
+    let dispatch_behind_source = source.clone();
+    let _dispatch_behind = meter
+        .i64_observable_gauge(STORAGE_DISPATCH_BEHIND_BYTES)
+        .with_description("Broker dispatch behind bytes")
+        .with_unit("bytes")
+        .with_callback(move |observer| {
+            let values = dispatch_behind_source();
+            observer.observe(values.dispatch_behind_bytes.max(0), &store_attributes());
+        })
+        .build();
+
+    let _message_reserve_time = meter
+        .i64_observable_gauge(STORAGE_MESSAGE_RESERVE_TIME)
+        .with_description("Broker message reserve time")
+        .with_unit("milliseconds")
+        .with_callback(move |observer| {
+            let values = source();
+            observer.observe(values.message_reserve_time_millis.max(0), &store_attributes());
+        })
+        .build();
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -941,6 +1009,7 @@ mod tests {
         let metrics = StoreMetrics::new(&meter);
         let attrs = [opentelemetry::KeyValue::new("store", "commitlog")];
 
+        assert!(metrics.ha_replication_lag_bytes.is_some());
         metrics.record_append_latency(5, &attrs);
         metrics.record_flush_latency(7, &attrs);
         metrics.record_dispatch_latency(9, &attrs);
@@ -984,6 +1053,17 @@ mod tests {
         });
 
         metrics.record_delay_message_latency(1, &[]);
+    }
+
+    #[test]
+    fn store_metrics_registers_replication_lag_as_observable_only() {
+        let provider = SdkMeterProvider::builder().build();
+        let meter = provider.meter("store-replication-lag-observable-test");
+        let metrics =
+            StoreMetrics::new_with_observables_and_replication_lag(&meter, StoreObservableValues::default, || Some(64));
+
+        assert!(metrics.ha_replication_lag_bytes.is_none());
+        metrics.record_ha_replication_lag_bytes(32, &[]);
     }
 
     #[test]
