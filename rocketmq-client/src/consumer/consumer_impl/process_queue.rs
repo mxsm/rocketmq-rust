@@ -351,8 +351,7 @@ mod tests {
     use super::ProcessQueue;
 
     fn make_msg(offset: i64, body_size: usize) -> ArcMut<MessageExt> {
-        let mut msg = MessageExt::default();
-        msg.queue_offset = offset;
+        let mut msg = MessageExt{ queue_offset: offset, .. MessageExt::default()};
         msg.message.body = Some(Bytes::from(vec![0u8; body_size]));
         ArcMut::new(msg)
     }
@@ -410,7 +409,7 @@ mod tests {
         put_msgs(&pq, &[0, 1, 2, 3, 4], 4).await;
         assert_eq!(pq.msg_count(), 5);
 
-        let to_remove: Vec<ArcMut<MessageExt>> = vec![0, 1, 2].iter().map(|&o| make_msg(o, 4)).collect();
+        let to_remove: Vec<ArcMut<MessageExt>> = [0, 1, 2].iter().map(|&o| make_msg(o, 4)).collect();
         pq.remove_message(&to_remove).await;
 
         let tree = pq.msg_tree_map.read().await;

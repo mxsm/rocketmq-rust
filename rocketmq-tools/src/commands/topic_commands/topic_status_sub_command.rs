@@ -54,7 +54,7 @@ impl CommandExecute for TopicStatusSubCommand {
                             .examine_topic_stats(topic.into(), addr)
                             .await?
                             .get_offset_table();
-                        total_offset_table.extend(offset_table.into_iter());
+                        total_offset_table.extend(offset_table);
                     }
                     topic_stats_table.set_offset_table(total_offset_table);
                 }

@@ -240,7 +240,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
             // Pre-allocate task_handles vector for all delay levels + persist task
             let mut task_handles = Vec::with_capacity(this.delay_level_table.len() * 2 + 1);
 
-            for (level, _time_delay) in this.delay_level_table.iter() {
+            for level in this.delay_level_table.keys() {
                 let offset = { this.offset_table.get(level).map_or(0, |key_value| *key_value.value()) };
 
                 // Spawn async delivery handler task
