@@ -30,6 +30,47 @@ use crate::dr::model::DrPlanQuery;
 use crate::dr::model::bounded_limit;
 
 impl DrRepository {
+    pub(super) async fn scope_exists(
+        &self,
+        tenant_id: TenantId,
+        fleet_id: rocketmq_sre_contracts::FleetId,
+        region_id: rocketmq_sre_contracts::RegionId,
+        cluster_id: Option<ClusterId>,
+    ) -> Result<bool, ControlPlaneError> {
+        let row = sqlx::query(
+            "SELECT EXISTS (
+                SELECT 1
+                FROM fleet_tenants tenant
+                JOIN fleet_regions region
+                  ON region.fleet_id = tenant.fleet_id
+                WHERE tenant.id = $1
+                  AND tenant.fleet_id = $2
+                  AND tenant.active
+                  AND region.id = $3
+                  AND region.active
+                  AND (
+                      $4::UUID IS NULL
+                      OR EXISTS (
+                          SELECT 1
+                          FROM fleet_cluster_registrations registration
+                          WHERE registration.cluster_id = $4
+                            AND registration.fleet_id = tenant.fleet_id
+                            AND registration.tenant_id = tenant.id
+                            AND registration.region_id = region.id
+                            AND registration.lifecycle_state IN ('active', 'read_only_degraded')
+                      )
+                  )
+             ) AS present",
+        )
+        .bind(tenant_id.as_uuid())
+        .bind(fleet_id.as_uuid())
+        .bind(region_id.as_uuid())
+        .bind(cluster_id.map(ClusterId::as_uuid))
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.try_get("present")?)
+    }
+
     pub(super) async fn create_plan(&self, plan: &DrPlan) -> Result<DrPlan, ControlPlaneError> {
         let checkpoint_definitions = serde_json::to_value(&plan.checkpoints)
             .map_err(|_| ControlPlaneError::validation("invalid_dr_plan", "checkpoint definitions are invalid"))?;
