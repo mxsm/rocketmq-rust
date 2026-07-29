@@ -168,7 +168,7 @@ fn same_cost_identity(left: &FinOpsCostEntry, right: &FinOpsCostEntry) -> bool {
         && left.error_count == right.error_count
         && left.quantity_millis == right.quantity_millis
         && left.cost_micros == right.cost_micros
-        && left.occurred_at == right.occurred_at
+        && left.occurred_at.timestamp_micros() == right.occurred_at.timestamp_micros()
 }
 
 fn stored(value: u64, field: &str) -> Result<i64, ControlPlaneError> {
