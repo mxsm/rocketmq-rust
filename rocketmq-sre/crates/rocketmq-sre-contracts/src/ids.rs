@@ -100,7 +100,10 @@ uuid_id!(
     "Stable identifier for one persisted Fleet quota decision."
 );
 uuid_id!(DrPlanId, "Stable identifier for a versioned disaster-recovery plan.");
-uuid_id!(DrBackupAssetId, "Stable identifier for one disaster-recovery backup asset.");
+uuid_id!(
+    DrBackupAssetId,
+    "Stable identifier for one disaster-recovery backup asset."
+);
 uuid_id!(DrExerciseId, "Stable identifier for a disaster-recovery exercise.");
 uuid_id!(
     RecoveryCheckpointId,
