@@ -63,14 +63,16 @@ function Invoke-BoundedProbe([string]$Phase) {
     if ($LASTEXITCODE -ne 0) {
         throw "Unable to clear the prior bounded probe before '$Phase'."
     }
-    Invoke-Native kubectl @('apply', '-f', $probeManifest) "$Phase bounded probe creation"
+    Invoke-Native kubectl @(
+        'apply', '-f', $probeManifest
+    ) "$Phase bounded probe creation" | Out-Host
     Invoke-Native kubectl @(
         '-n', $rocketmqNamespace,
         'wait',
         '--for=condition=complete',
         '--timeout=180s',
         "job/$probeJob"
-    ) "$Phase bounded probe completion"
+    ) "$Phase bounded probe completion" | Out-Host
     $probeOutput = & kubectl -n $rocketmqNamespace logs "job/$probeJob" -c bounded-probe
     if ($LASTEXITCODE -ne 0) {
         throw "Unable to read the '$Phase' bounded probe."
