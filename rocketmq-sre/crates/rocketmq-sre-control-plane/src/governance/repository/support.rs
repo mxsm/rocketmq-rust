@@ -16,9 +16,9 @@ use std::collections::BTreeSet;
 
 use rocketmq_sre_contracts::ClusterId;
 use rocketmq_sre_contracts::GovernanceAccessPath;
+use rocketmq_sre_contracts::GovernanceActorKind;
 use rocketmq_sre_contracts::GovernanceAdmission;
 use rocketmq_sre_contracts::GovernanceAdmissionId;
-use rocketmq_sre_contracts::GovernanceActorKind;
 use rocketmq_sre_contracts::GovernanceArtifact;
 use rocketmq_sre_contracts::GovernanceArtifactId;
 use rocketmq_sre_contracts::GovernanceDependency;
@@ -88,7 +88,10 @@ pub(super) fn version_from_row(row: &PgRow) -> Result<GovernanceVersion, Control
         })?,
         applicable_version_range: row.try_get("applicable_version_range")?,
         dependencies: serde_json::from_value(row.try_get("dependencies")?).map_err(|_| {
-            ControlPlaneError::validation("invalid_persisted_governance_state", "governance dependencies are invalid")
+            ControlPlaneError::validation(
+                "invalid_persisted_governance_state",
+                "governance dependencies are invalid",
+            )
         })?,
         review_due_at: row.try_get("review_due_at")?,
         expires_at: row.try_get("expires_at")?,
