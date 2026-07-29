@@ -28,7 +28,6 @@ use crate::finops::model::bounded_report_limit;
 
 pub(in crate::finops) struct FinOpsReportData {
     pub(in crate::finops) rows: Vec<FinOpsShowbackRow>,
-    pub(in crate::finops) total_cost_micros: u64,
     pub(in crate::finops) entries: u64,
     pub(in crate::finops) entries_missing_cost: u64,
     pub(in crate::finops) successful_outcomes: u64,
@@ -132,7 +131,6 @@ impl FinOpsRepository {
         .await?;
         let truncated = i64::try_from(rows.len()).unwrap_or(i64::MAX) > limit;
         let mut report_rows = Vec::new();
-        let mut total_cost_micros = 0_u64;
         let mut entries = 0_u64;
         let mut entries_missing_cost = 0_u64;
         for row in rows.into_iter().take(usize::try_from(limit).unwrap_or(500)) {
@@ -141,7 +139,6 @@ impl FinOpsRepository {
             let cost = unsigned(row.try_get("cost_micros")?, "report cost")?;
             let row_entries = unsigned(row.try_get("entries")?, "report entries")?;
             let missing = unsigned(row.try_get("entries_missing_cost")?, "report entries missing cost")?;
-            total_cost_micros = total_cost_micros.saturating_add(cost);
             entries = entries.saturating_add(row_entries);
             entries_missing_cost = entries_missing_cost.saturating_add(missing);
             report_rows.push(FinOpsShowbackRow {
@@ -164,7 +161,6 @@ impl FinOpsRepository {
         }
         Ok(FinOpsReportData {
             rows: report_rows,
-            total_cost_micros,
             entries,
             entries_missing_cost,
             successful_outcomes,
