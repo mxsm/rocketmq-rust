@@ -43,6 +43,7 @@ use rocketmq_sre_contracts::IntegrationTargetId;
 use rocketmq_sre_contracts::ReleaseId;
 use rocketmq_sre_contracts::ReleaseObservation;
 use rocketmq_sre_contracts::ReleaseObservationPhase;
+use rocketmq_sre_contracts::ReleasePipelineEvent;
 use rocketmq_sre_contracts::ReleaseReport;
 use rocketmq_sre_contracts::ReleaseReportId;
 use rocketmq_sre_contracts::ReleaseStatus;
@@ -468,6 +469,77 @@ async fn postgres_enterprise_integration_events_are_signed_scoped_and_idempotent
             .expect("latest integration health"),
         health
     );
+
+    let release_target = IntegrationTargetView {
+        target: IntegrationTarget {
+            id: IntegrationTargetId::new(),
+            tenant_id: fixture.tenant_id,
+            cluster_id: Some(fixture.cluster_id),
+            descriptor_id: "rocketmq-sre.integration.signed-release-webhook.v1".to_owned(),
+            descriptor_version: "1.0.0".to_owned(),
+            name: format!("CI repository test {}", Uuid::new_v4()),
+            adapter_kind: IntegrationAdapterKind::SignedReleaseWebhook,
+            endpoint: "https://ci.example.test/events".to_owned(),
+            secret_reference: Some("env:ROCKETMQ_SRE_CI_TEST_SECRET".to_owned()),
+            enabled: true,
+            inbound_approval: false,
+            outbound_events: BTreeSet::new(),
+            created_at: now,
+            updated_at: now,
+        },
+        notification_target_id: None,
+    };
+    repository
+        .insert_integration_target(
+            &release_target,
+            &audit(
+                &fixture,
+                CorrelationId::new(),
+                AuditEventKind::IntegrationTargetRegistered,
+                "integration_target",
+                release_target.target.id.to_string(),
+                "EnterpriseRepositoryReleaseTargetRegistered",
+                now,
+            ),
+        )
+        .await
+        .expect("CI/CD target");
+    let release_event = EnterpriseIntegrationEvent {
+        schema_version: ENTERPRISE_INTEGRATION_EVENT_SCHEMA_VERSION.to_owned(),
+        id: EnterpriseIntegrationEventId::new(),
+        target_id: release_target.target.id,
+        tenant_id: fixture.tenant_id,
+        cluster_id: fixture.cluster_id,
+        event_kind: EnterpriseIntegrationEventKind::ReleaseStarted,
+        external_event_id: format!("release-event-{}", Uuid::new_v4()),
+        source_version: "1.0.0".to_owned(),
+        payload_digest: unique_digest(),
+        payload: EnterpriseIntegrationPayload::Release(ReleasePipelineEvent {
+            cluster_id: fixture.cluster_id,
+            release_ref: format!("release-{}", Uuid::new_v4()),
+            change_id: format!("change-{}", Uuid::new_v4()),
+            artifact_digest: unique_digest(),
+            target_version: "5.3.2".to_owned(),
+        }),
+        signature_verified: true,
+        occurred_at: now,
+        received_at: now,
+    };
+    repository
+        .store_enterprise_integration_event(&release_event, &format!("release-nonce-{}", Uuid::new_v4()))
+        .await
+        .expect("CI/CD release event");
+    let followup_id = Uuid::new_v4();
+    repository
+        .record_enterprise_followup(fixture.tenant_id, release_event.id, followup_id)
+        .await
+        .expect("read-only readiness follow-up");
+    let (_, duplicate, persisted_followup) = repository
+        .store_enterprise_integration_event(&release_event, &format!("release-retry-{}", Uuid::new_v4()))
+        .await
+        .expect("idempotent CI/CD release event");
+    assert!(duplicate);
+    assert_eq!(persisted_followup, Some(followup_id));
 }
 
 #[derive(Clone)]
