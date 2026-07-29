@@ -17,4 +17,7 @@ mod model;
 mod repository;
 mod service;
 
+#[cfg(test)]
+mod repository_tests;
+
 pub(super) use api::routes;
