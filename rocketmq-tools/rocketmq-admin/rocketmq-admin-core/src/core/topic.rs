@@ -388,12 +388,6 @@ pub trait TopicQueryAdmin: Send {
     fn get_topic_current_stats(&mut self) -> AdminFuture<'_, TopicCurrentStats>;
     fn get_topic_stats<'a>(&'a mut self, topic: &'a str) -> AdminFuture<'a, TopicStats>;
     fn get_topic_config<'a>(&'a mut self, request: &'a GetTopicConfigRequest) -> AdminFuture<'a, TopicConfigDetail>;
-    fn get_topic_consumer_groups<'a>(&'a mut self, topic: &'a str) -> AdminFuture<'a, TopicConsumerGroups>;
-    fn get_topic_consumers<'a>(&'a mut self, topic: &'a str) -> AdminFuture<'a, TopicConsumers>;
-}
-
-/// Topic mutations require the explicit mutation adapter feature.
-pub trait TopicMutationAdmin: Send {
     fn query_config_cas_state<'a>(
         &'a mut self,
         _request: &'a QueryTopicConfigCasRequest,
@@ -401,11 +395,16 @@ pub trait TopicMutationAdmin: Send {
         Box::pin(async {
             Err(crate::core::AdminError::backend(
                 "query_topic_config_cas_state",
-                "Topic config CAS is not implemented by this adapter",
+                "Topic config CAS state is not implemented by this adapter",
             ))
         })
     }
+    fn get_topic_consumer_groups<'a>(&'a mut self, topic: &'a str) -> AdminFuture<'a, TopicConsumerGroups>;
+    fn get_topic_consumers<'a>(&'a mut self, topic: &'a str) -> AdminFuture<'a, TopicConsumers>;
+}
 
+/// Topic mutations require the explicit mutation adapter feature.
+pub trait TopicMutationAdmin: Send {
     fn patch_config_if_version<'a>(
         &'a mut self,
         _request: &'a PatchTopicConfigRequest,
