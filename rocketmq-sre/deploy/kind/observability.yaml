@@ -12,10 +12,15 @@ data:
           http: {endpoint: 0.0.0.0:4318}
     processors:
       memory_limiter: {check_interval: 1s, limit_mib: 256, spike_limit_mib: 64}
+      resource/cluster:
+        attributes:
+          - {key: rocketmq.cluster, value: rocketmq-rust, action: upsert}
       batch: {timeout: 1s, send_batch_size: 256}
     exporters:
       debug: {verbosity: basic}
-      prometheus: {endpoint: 0.0.0.0:9464, namespace: rocketmq}
+      prometheus:
+        endpoint: 0.0.0.0:9464
+        resource_to_telemetry_conversion: {enabled: true}
       otlp/tempo:
         endpoint: tempo:4317
         tls: {insecure: true}
@@ -28,15 +33,15 @@ data:
       pipelines:
         metrics:
           receivers: [otlp]
-          processors: [memory_limiter, batch]
+          processors: [memory_limiter, resource/cluster, batch]
           exporters: [prometheus, debug]
         traces:
           receivers: [otlp]
-          processors: [memory_limiter, batch]
+          processors: [memory_limiter, resource/cluster, batch]
           exporters: [otlp/tempo, debug]
         logs:
           receivers: [otlp]
-          processors: [memory_limiter, batch]
+          processors: [memory_limiter, resource/cluster, batch]
           exporters: [otlphttp/loki, debug]
 ---
 apiVersion: apps/v1
@@ -179,6 +184,13 @@ data:
     limits_config:
       allow_structured_metadata: true
       volume_enabled: true
+      otlp_config:
+        resource_attributes:
+          attributes_config:
+            - action: index_label
+              attributes:
+                - service.name
+                - rocketmq.cluster
 ---
 apiVersion: apps/v1
 kind: Deployment
