@@ -116,8 +116,14 @@ spec:
 
     - name: rocketmq-sre-self-model
       rules:
+        - record: model_error_ratio
+          expr: sum(rate(rocketmq_sre_model_errors_total[10m])) / clamp_min(sum(rate(rocketmq_sre_model_requests_total[10m])), 1)
+
+        - record: model_cost_microusd
+          expr: sum(increase(rocketmq_sre_model_cost_microusd_total[1h]))
+
         - alert: RocketMQSREModelErrorRatioHigh
-          expr: sum(rate(rocketmq_sre_model_errors_total[10m])) / clamp_min(sum(rate(rocketmq_sre_model_requests_total[10m])), 1) > 0.2
+          expr: model_error_ratio > 0.2
           for: 10m
           labels:
             severity: warning
@@ -127,7 +133,7 @@ spec:
             safety_response: fallback_then_rules_only
 
         - alert: RocketMQSREModelCostBudgetExceeded
-          expr: sum(increase(rocketmq_sre_model_cost_microusd_total[1h])) > model_hourly_budget_microusd
+          expr: model_cost_microusd > model_hourly_budget_microusd
           for: 5m
           labels:
             severity: warning
