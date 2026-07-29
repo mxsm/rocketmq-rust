@@ -14,7 +14,10 @@
       "target_release": "2.0.0",
       "evidence": [
         "scripts/architecture-dependency-baseline.json",
-        "scripts/architecture_dependency_guard.py"
+        "scripts/architecture_dependency_guard.py",
+        "scripts/message-store-capability-baseline.json",
+        "scripts/message_store_capability_guard.py",
+        "rocketmq-doc/en/message-store-capability-migration.md"
       ],
       "scope_count": 1
     },
@@ -104,7 +107,9 @@
       "target_release": "2.0.0",
       "evidence": [
         "scripts/architecture-dependency-policy.json",
-        "scripts/architecture-dependency-baseline.json"
+        "scripts/architecture-dependency-baseline.json",
+        "scripts/message-store-capability-baseline.json",
+        "rocketmq-doc/en/message-store-capability-migration-adr.md"
       ],
       "scope_count": 1
     },

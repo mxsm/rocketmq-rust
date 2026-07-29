@@ -86,3 +86,48 @@ fn concurrent_write_leases_publish_contiguous_non_overlapping_ranges() {
         assert!(state.bytes == *b"AABB" || state.bytes == *b"BBAA");
     });
 }
+
+struct ReadLease {
+    holds: Arc<AtomicUsize>,
+}
+
+impl ReadLease {
+    fn acquire(holds: Arc<AtomicUsize>) -> Self {
+        holds.fetch_add(1, Ordering::AcqRel);
+        Self { holds }
+    }
+}
+
+impl Drop for ReadLease {
+    fn drop(&mut self) {
+        let previous = self.holds.fetch_sub(1, Ordering::AcqRel);
+        assert!(previous > 0, "a read lease must release exactly one hold");
+    }
+}
+
+#[test]
+fn destroy_observes_every_live_read_lease_before_recycle() {
+    loom::model(|| {
+        let holds = Arc::new(AtomicUsize::new(0));
+        let recycling = Arc::new(AtomicUsize::new(0));
+        let lease = ReadLease::acquire(Arc::clone(&holds));
+
+        let destroy_holds = Arc::clone(&holds);
+        let destroy_recycling = Arc::clone(&recycling);
+        let destroy = thread::spawn(move || {
+            if destroy_holds.load(Ordering::Acquire) == 0 {
+                destroy_recycling.store(1, Ordering::Release);
+            }
+        });
+
+        assert_eq!(recycling.load(Ordering::Acquire), 0);
+        drop(lease);
+        destroy.join().expect("destroy");
+        if recycling.load(Ordering::Acquire) == 0 {
+            assert_eq!(holds.load(Ordering::Acquire), 0);
+            recycling.store(1, Ordering::Release);
+        }
+        assert_eq!(recycling.load(Ordering::Acquire), 1);
+        assert_eq!(holds.load(Ordering::Acquire), 0);
+    });
+}

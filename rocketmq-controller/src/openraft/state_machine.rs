@@ -26,10 +26,13 @@ use rocketmq_model::utils::crc32_utils::crc32;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::controller::get_next_broker_id_response_header::GetNextBrokerIdResponseHeader;
 use rocketmq_protocol::protocol::header::controller::get_replica_info_response_header::GetReplicaInfoResponseHeader;
-use serde::de::DeserializeOwned;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 
+use super::persistence::decode_v1;
+use super::persistence::encode_v1;
+use super::persistence::RaftRecordKey;
+use super::persistence::RaftStateRepository;
 use crate::config::ControllerConfigReader;
 use crate::event::controller_result::ControllerResult;
 use crate::manager::replicas_info_manager::ReplicasInfoManager;
@@ -44,26 +47,10 @@ use crate::typ::SnapshotMeta;
 use crate::typ::StoredMembership;
 use crate::typ::TypeConfig;
 
-const SNAPSHOT_META_KEY: &str = "openraft/state_machine/current_snapshot_meta";
-const SNAPSHOT_DATA_KEY: &str = "openraft/state_machine/current_snapshot_data";
-const REPLICAS_INFO_MANAGER_STATE_KEY: &str = "openraft/state_machine/replicas_info_manager";
-const LAST_APPLIED_KEY: &str = "openraft/state_machine/last_applied";
-const LAST_MEMBERSHIP_KEY: &str = "openraft/state_machine/last_membership";
 const SNAPSHOT_FORMAT_VERSION: u16 = 1;
 
 fn storage_error(error: impl std::fmt::Display) -> std::io::Error {
     std::io::Error::other(error.to_string())
-}
-
-async fn load_json<T: DeserializeOwned>(
-    backend: &SharedStorageBackend,
-    key: &str,
-) -> Result<Option<T>, std::io::Error> {
-    let Some(bytes) = backend.get(key).await.map_err(storage_error)? else {
-        return Ok(None);
-    };
-
-    serde_json::from_slice(&bytes).map(Some).map_err(storage_error)
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -121,23 +108,18 @@ impl SnapshotData {
     }
 
     fn calculate_checksum(&self) -> Result<u32, std::io::Error> {
-        serde_json::to_vec(&(
-            self.format_version,
-            &self.replicas_info_manager_state,
-            self.last_applied,
-            &self.last_membership,
-            &self.snapshot_id,
-        ))
+        encode_v1(
+            RaftRecordKey::SnapshotData,
+            &(
+                self.format_version,
+                &self.replicas_info_manager_state,
+                self.last_applied,
+                &self.last_membership,
+                &self.snapshot_id,
+            ),
+        )
         .map(|bytes| crc32(&bytes))
-        .map_err(storage_error)
     }
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct PersistedSnapshotMeta {
-    last_log_id: Option<LogId>,
-    last_membership: StoredMembership,
-    snapshot_id: String,
 }
 
 #[derive(Clone)]
@@ -202,7 +184,7 @@ pub struct StateMachine {
     last_applied: Arc<RwLock<Option<LogId>>>,
     last_membership: Arc<RwLock<StoredMembership>>,
     current_snapshot: Arc<RwLock<Option<CurrentSnapshot>>>,
-    backend: Option<SharedStorageBackend>,
+    repository: Option<RaftStateRepository>,
     /// Serializes durable state transitions and snapshot capture/installation.
     state_lock: Arc<Mutex<()>>,
 }
@@ -215,79 +197,43 @@ impl StateMachine {
             last_applied: Arc::new(RwLock::new(None)),
             last_membership: Arc::new(RwLock::new(StoredMembership::default())),
             current_snapshot: Arc::new(RwLock::new(None)),
-            backend: None,
+            repository: None,
             state_lock: Arc::new(Mutex::new(())),
         }
     }
 
     pub async fn open(config: ControllerConfigReader, backend: SharedStorageBackend) -> Result<Self, std::io::Error> {
-        let replicas_state = backend
-            .get(REPLICAS_INFO_MANAGER_STATE_KEY)
-            .await
-            .map_err(storage_error)?;
-        let last_applied_bytes = backend.get(LAST_APPLIED_KEY).await.map_err(storage_error)?;
-        let last_membership_bytes = backend.get(LAST_MEMBERSHIP_KEY).await.map_err(storage_error)?;
-        let (replicas_state, last_applied, last_membership) =
-            match (replicas_state, last_applied_bytes, last_membership_bytes) {
-                (None, None, None) => (None, None, StoredMembership::default()),
-                (Some(state), Some(last_applied), Some(last_membership)) => (
-                    Some(state),
-                    serde_json::from_slice(&last_applied).map_err(storage_error)?,
-                    serde_json::from_slice(&last_membership).map_err(storage_error)?,
-                ),
-                _ => {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "Controller state, last-applied index, and membership must be committed together",
-                    ));
-                }
-            };
+        let repository = RaftStateRepository::new(backend);
+        let loaded = repository.load().await?;
         let replicas_info_manager = Arc::new(ReplicasInfoManager::new(config.clone()));
-        if let Some(state) = replicas_state {
+        if let Some(state) = loaded.replicas_info_manager_state {
             replicas_info_manager.deserialize_from(&state).map_err(storage_error)?;
         }
         let state_machine = Self {
             replicas_info_manager: Arc::new(ArcSwap::from(replicas_info_manager)),
             config,
-            last_applied: Arc::new(RwLock::new(last_applied)),
-            last_membership: Arc::new(RwLock::new(last_membership)),
+            last_applied: Arc::new(RwLock::new(loaded.last_applied)),
+            last_membership: Arc::new(RwLock::new(loaded.last_membership)),
             current_snapshot: Arc::new(RwLock::new(None)),
-            backend: Some(backend.clone()),
+            repository: Some(repository),
             state_lock: Arc::new(Mutex::new(())),
         };
 
-        match (
-            load_json::<PersistedSnapshotMeta>(&backend, SNAPSHOT_META_KEY).await?,
-            backend.get(SNAPSHOT_DATA_KEY).await.map_err(storage_error)?,
-        ) {
-            (Some(meta), Some(data)) => {
-                let snapshot_data = validate_snapshot_bytes(&data)?;
-                let snapshot_membership = snapshot_data.last_membership.unwrap_or_default();
-                if snapshot_data.last_applied != meta.last_log_id
-                    || snapshot_membership != meta.last_membership
-                    || snapshot_data.snapshot_id != meta.snapshot_id
-                {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "Persisted controller snapshot metadata does not match its checksummed payload",
-                    ));
-                }
-                *state_machine.current_snapshot.write().await = Some(CurrentSnapshot {
-                    meta: SnapshotMeta {
-                        last_log_id: meta.last_log_id,
-                        last_membership: meta.last_membership,
-                        snapshot_id: meta.snapshot_id,
-                    },
-                    data,
-                });
-            }
-            (None, None) => {}
-            _ => {
+        if let Some(snapshot) = loaded.current_snapshot {
+            let data = snapshot.data;
+            let meta = snapshot.meta;
+            let snapshot_data = validate_snapshot_bytes(&data)?;
+            let snapshot_membership = snapshot_data.last_membership.unwrap_or_default();
+            if snapshot_data.last_applied != meta.last_log_id
+                || snapshot_membership != meta.last_membership
+                || snapshot_data.snapshot_id != meta.snapshot_id
+            {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    "Controller snapshot metadata and payload must be committed together",
+                    "Persisted controller snapshot metadata does not match its checksummed payload",
                 ));
             }
+            *state_machine.current_snapshot.write().await = Some(CurrentSnapshot { meta, data });
         }
 
         Ok(state_machine)
@@ -491,56 +437,21 @@ impl StateMachine {
         last_applied: Option<LogId>,
         last_membership: &StoredMembership,
     ) -> Result<(), std::io::Error> {
-        let Some(backend) = &self.backend else {
+        let Some(repository) = &self.repository else {
             return Ok(());
         };
 
-        backend
-            .write_batch(
-                vec![
-                    (REPLICAS_INFO_MANAGER_STATE_KEY.to_string(), replicas_info_manager_state),
-                    (
-                        LAST_APPLIED_KEY.to_string(),
-                        serde_json::to_vec(&last_applied).map_err(storage_error)?,
-                    ),
-                    (
-                        LAST_MEMBERSHIP_KEY.to_string(),
-                        serde_json::to_vec(last_membership).map_err(storage_error)?,
-                    ),
-                ],
-                Vec::new(),
-            )
+        repository
+            .persist_state(replicas_info_manager_state, last_applied, last_membership)
             .await
-            .map_err(storage_error)?;
-        backend.sync().await.map_err(storage_error)?;
-        Ok(())
     }
 
     async fn persist_snapshot(&self, snapshot: &CurrentSnapshot) -> Result<(), std::io::Error> {
-        let Some(backend) = &self.backend else {
+        let Some(repository) = &self.repository else {
             return Ok(());
         };
 
-        let persisted_meta = PersistedSnapshotMeta {
-            last_log_id: snapshot.meta.last_log_id,
-            last_membership: snapshot.meta.last_membership.clone(),
-            snapshot_id: snapshot.meta.snapshot_id.clone(),
-        };
-        backend
-            .write_batch(
-                vec![
-                    (
-                        SNAPSHOT_META_KEY.to_string(),
-                        serde_json::to_vec(&persisted_meta).map_err(storage_error)?,
-                    ),
-                    (SNAPSHOT_DATA_KEY.to_string(), snapshot.data.clone()),
-                ],
-                Vec::new(),
-            )
-            .await
-            .map_err(storage_error)?;
-        backend.sync().await.map_err(storage_error)?;
-        Ok(())
+        repository.persist_snapshot(&snapshot.meta, &snapshot.data).await
     }
 
     async fn persist_snapshot_install(
@@ -548,41 +459,19 @@ impl StateMachine {
         data: &SnapshotData,
         current_snapshot: &CurrentSnapshot,
     ) -> Result<(), std::io::Error> {
-        let Some(backend) = &self.backend else {
+        let Some(repository) = &self.repository else {
             return Ok(());
         };
-        let persisted_meta = PersistedSnapshotMeta {
-            last_log_id: current_snapshot.meta.last_log_id,
-            last_membership: current_snapshot.meta.last_membership.clone(),
-            snapshot_id: current_snapshot.meta.snapshot_id.clone(),
-        };
         let last_membership = data.last_membership.clone().unwrap_or_default();
-        backend
-            .write_batch(
-                vec![
-                    (
-                        REPLICAS_INFO_MANAGER_STATE_KEY.to_string(),
-                        data.replicas_info_manager_state.clone(),
-                    ),
-                    (
-                        LAST_APPLIED_KEY.to_string(),
-                        serde_json::to_vec(&data.last_applied).map_err(storage_error)?,
-                    ),
-                    (
-                        LAST_MEMBERSHIP_KEY.to_string(),
-                        serde_json::to_vec(&last_membership).map_err(storage_error)?,
-                    ),
-                    (
-                        SNAPSHOT_META_KEY.to_string(),
-                        serde_json::to_vec(&persisted_meta).map_err(storage_error)?,
-                    ),
-                    (SNAPSHOT_DATA_KEY.to_string(), current_snapshot.data.clone()),
-                ],
-                Vec::new(),
+        repository
+            .persist_snapshot_install(
+                &data.replicas_info_manager_state,
+                data.last_applied,
+                &last_membership,
+                &current_snapshot.meta,
+                &current_snapshot.data,
             )
             .await
-            .map_err(storage_error)?;
-        backend.sync().await.map_err(storage_error)
     }
 }
 
@@ -597,12 +486,7 @@ fn validate_snapshot_bytes(bytes: &[u8]) -> Result<SnapshotData, std::io::Error>
             ),
         ));
     }
-    let data: SnapshotData = serde_json::from_slice(bytes).map_err(|error| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("Failed to deserialize snapshot: {error}"),
-        )
-    })?;
+    let data: SnapshotData = decode_v1(RaftRecordKey::SnapshotData, bytes)?;
     data.validate()?;
     Ok(data)
 }
@@ -647,8 +531,7 @@ impl RaftSnapshotBuilder<TypeConfig> for StateMachine {
         let last_applied = data.last_applied;
         let last_membership = data.last_membership.clone().unwrap_or_default();
         let snapshot_id = data.snapshot_id.clone();
-        let snapshot_data = serde_json::to_vec(&data)
-            .map_err(|error| std::io::Error::other(format!("Failed to serialize snapshot: {}", error)))?;
+        let snapshot_data = encode_v1(RaftRecordKey::SnapshotData, &data)?;
         if snapshot_data.len() > SNAPSHOT_MAX_BYTES {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -898,6 +781,18 @@ mod tests {
         assert!(!state_machine
             .replicas_info_manager()
             .is_broker_active_at("test-cluster", "broker-a", 1, 4_001));
+    }
+
+    #[test]
+    fn snapshot_v1_bytes_are_deterministic_and_unchanged() {
+        let snapshot = SnapshotData::new(vec![1, 2], None, StoredMembership::default()).expect("snapshot fixture");
+
+        let bytes = encode_v1(RaftRecordKey::SnapshotData, &snapshot).expect("encode snapshot fixture");
+
+        assert_eq!(
+            String::from_utf8(bytes).expect("UTF-8 snapshot"),
+            r#"{"replicas_info_manager_state":[1,2],"last_applied":null,"last_membership":{"log_id":null,"membership":{"configs":[],"nodes":{}}},"snapshot_id":"snapshot-0","format_version":1,"checksum":775474328}"#
+        );
     }
 
     #[test]

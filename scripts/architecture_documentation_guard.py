@@ -293,7 +293,7 @@ def validate_python_tests(root: Path, policy: dict[str, Any]) -> list[Finding]:
     if not isinstance(config, dict) or set(config) != {"expected_count", "ci", "entries"}:
         return [Finding("test-inventory-schema", normalized(POLICY_RELATIVE), "unexpected python_tests schema")]
     entries = config["entries"]
-    if not isinstance(entries, list) or config["expected_count"] != 49 or len(entries) != config["expected_count"]:
+    if not isinstance(entries, list) or config["expected_count"] != 50 or len(entries) != config["expected_count"]:
         findings.append(
             Finding(
                 "test-inventory-count",

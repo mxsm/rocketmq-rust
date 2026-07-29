@@ -37,6 +37,30 @@ traits do not expose `anyhow::Result`.
 convenient default. Avoid supertraits that force unrelated implementations
 to acquire runtime, transport, or storage capabilities.
 
+## Capability migration facades
+
+A broad historical trait may remain temporarily when multiple production
+consumers cannot move atomically, but it is a frozen migration facade:
+
+- derive its method inventory from parsed or token-balanced source rather than
+  a handwritten count;
+- reject new methods and new consumer dependencies;
+- assign every remaining consumer an owner, reason, and deletion condition;
+- permit removals without deprecated wrappers when the contract is internal;
+- place new behavior in one narrow capability with only the operations the use
+  case needs;
+- do not combine narrow traits into an equivalent mandatory supertrait.
+
+Backend conformance applies only to capabilities a backend claims to
+implement. Unsupported optional behavior is explicit and must not be
+represented by panic or a default no-op. Capability request/result types own
+durability, cancellation, deadline, and typed-error semantics so adapters do
+not infer them from a broad implementation type.
+
+Run `python scripts/message_store_capability_guard.py` when Store or Broker
+capability boundaries change. Its generated migration board is reviewed
+together with the code.
+
 ## Inventory and ownership
 
 Run `python scripts/trait_policy_guard.py` to compare production macro,

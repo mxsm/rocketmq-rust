@@ -140,7 +140,7 @@ class ArchitectureDocumentationGuardTest(unittest.TestCase):
             policy = {
                 "root": {"workflow": ".github/workflows/ci.yml"},
                 "python_tests": {
-                    "expected_count": 49,
+                    "expected_count": 50,
                     "ci": {
                         "guards": "python scripts/run_architecture_tests.py --tier pr_static",
                         "contracts": "python scripts/run_architecture_tests.py --tier milestone_contract "

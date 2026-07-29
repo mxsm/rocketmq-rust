@@ -16,6 +16,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -45,6 +46,7 @@ use rocketmq_controller::Vote;
 struct FaultInjectingBackend {
     data: RwLock<HashMap<String, Vec<u8>>>,
     reject_batch: AtomicBool,
+    batch_writes: AtomicUsize,
 }
 
 impl FaultInjectingBackend {
@@ -52,6 +54,7 @@ impl FaultInjectingBackend {
         Self {
             data: RwLock::new(HashMap::new()),
             reject_batch: AtomicBool::new(true),
+            batch_writes: AtomicUsize::new(0),
         }
     }
 }
@@ -102,6 +105,7 @@ impl StorageBackend for FaultInjectingBackend {
     }
 
     async fn write_batch(&self, puts: Vec<(String, Vec<u8>)>, deletes: Vec<String>) -> Result<()> {
+        self.batch_writes.fetch_add(1, Ordering::AcqRel);
         if self.reject_batch.load(Ordering::Acquire) {
             return Err(ControllerError::StorageError("injected batch failure".to_string()));
         }
@@ -136,6 +140,35 @@ impl StorageBackend for FaultInjectingBackend {
             backend_info: "fault-injecting".to_string(),
         })
     }
+}
+
+#[tokio::test]
+async fn opening_v1_records_does_not_rewrite_them() {
+    let backend = Arc::new(FaultInjectingBackend::default());
+    let mut state_machine = StateMachine::open(test_config(), backend.clone())
+        .await
+        .expect("open empty state machine");
+    let stream = futures::stream::iter([Ok::<_, std::io::Error>((broker_id_entry(1), None))]);
+    RaftStateMachine::apply(&mut state_machine, stream)
+        .await
+        .expect("persist V1 state");
+    let writes_after_state_commit = backend.batch_writes.load(Ordering::Acquire);
+    let bytes_before_reopen = backend.data.read().clone();
+
+    let reopened = StateMachine::open(test_config(), backend.clone())
+        .await
+        .expect("reopen V1 state machine");
+
+    assert_eq!(backend.batch_writes.load(Ordering::Acquire), writes_after_state_commit);
+    assert_eq!(*backend.data.read(), bytes_before_reopen);
+    assert_eq!(
+        reopened
+            .read_view()
+            .get_next_broker_id("fault-cluster", "broker-a")
+            .response()
+            .and_then(|header| header.next_broker_id),
+        Some(2)
+    );
 }
 
 fn test_config() -> ControllerConfigReader {

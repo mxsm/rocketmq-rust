@@ -173,12 +173,14 @@ class PublicApiCompatibilityTests(unittest.TestCase):
         self.assertIn("storage=10/10", evidence)
         self.assertIn("additive: 4", evidence)
         self.assertIn("deprecated: 0", evidence)
-        self.assertIn("breaking: 3", evidence)
+        self.assertIn("breaking: 4", evidence)
         self.assertIn("ClientRuntime::new", evidence)
         self.assertIn("ClusterConfig", evidence)
         self.assertIn("Dashboard admin operations", evidence)
         self.assertIn("RuntimeConfig::for_parallelism", evidence)
         self.assertIn("writer diagnostics", evidence)
+        self.assertIn("MappedBuffer::read_zero_copy", evidence)
+        self.assertIn("MappedBuffer::read_copy", evidence)
         self.assertIn("repository owner explicitly approved", evidence)
 
 

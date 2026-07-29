@@ -16,6 +16,17 @@ use std::error::Error as StdError;
 use std::future::Future;
 
 /// Message read capability with implementation-owned request and output values.
+///
+/// A consumer generic over this capability cannot access lifecycle or
+/// administration operations that were not injected:
+///
+/// ```compile_fail
+/// use rocketmq_store_api::MessageReader;
+///
+/// fn read_only<R: MessageReader>(reader: &mut R) {
+///     reader.execute_admin(());
+/// }
+/// ```
 pub trait MessageReader: Send + Sync {
     type Request: Send;
     type Output: Send;
