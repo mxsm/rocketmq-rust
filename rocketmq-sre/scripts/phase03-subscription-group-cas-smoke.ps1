@@ -8,9 +8,9 @@ param(
     [string]$CargoHome = 'G:\rocketmq-sre-phase1-cargo-home',
     [string]$TemporaryRoot = 'G:\rocketmq-sre-phase2-temp',
     [ValidateRange(1024, 65535)]
-    [int]$NameServerPort = 39876,
+    [int]$NameServerPort = 52876,
     [ValidateRange(1026, 65535)]
-    [int]$BrokerPort = 40911
+    [int]$BrokerPort = 54911
 )
 
 $ErrorActionPreference = 'Stop'
