@@ -1,0 +1,138 @@
+{
+  "$defs": {
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "FinOpsBudgetId": {
+      "description": "Stable identifier for a versioned FinOps budget.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "FinOpsDecisionId": {
+      "description": "Stable identifier for one immutable FinOps budget decision.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "FinOpsDegradation": {
+      "description": "Allowed degradation when a budget is under pressure.",
+      "enum": [
+        "none",
+        "prefer_lower_cost_model",
+        "reduce_sampling",
+        "defer_low_priority",
+        "deny_low_priority"
+      ],
+      "type": "string"
+    },
+    "FinOpsWorkClass": {
+      "description": "Work classification used to preserve safety and recovery under cost pressure.",
+      "enum": [
+        "safety_check",
+        "audit",
+        "verification",
+        "rollback",
+        "active_incident",
+        "interactive",
+        "background"
+      ],
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Immutable outcome of one budget evaluation.",
+  "properties": {
+    "allowed": {
+      "type": "boolean"
+    },
+    "budget_id": {
+      "$ref": "#/$defs/FinOpsBudgetId"
+    },
+    "cluster_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ClusterId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "degradation": {
+      "$ref": "#/$defs/FinOpsDegradation"
+    },
+    "evaluated_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "hard_limit_micros": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "id": {
+      "$ref": "#/$defs/FinOpsDecisionId"
+    },
+    "observed_cost_micros": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "projected_cost_micros": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "protected_controls": {
+      "items": {
+        "$ref": "#/$defs/FinOpsWorkClass"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "reason_code": {
+      "type": "string"
+    },
+    "requested_cost_micros": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "soft_limit_micros": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    },
+    "work_class": {
+      "$ref": "#/$defs/FinOpsWorkClass"
+    }
+  },
+  "required": [
+    "id",
+    "tenant_id",
+    "budget_id",
+    "work_class",
+    "requested_cost_micros",
+    "observed_cost_micros",
+    "projected_cost_micros",
+    "soft_limit_micros",
+    "hard_limit_micros",
+    "allowed",
+    "degradation",
+    "reason_code",
+    "protected_controls",
+    "evaluated_at"
+  ],
+  "title": "FinOpsBudgetDecision",
+  "type": "object"
+}
