@@ -21,6 +21,7 @@ use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::routing::get;
 use axum::routing::post;
+use rocketmq_sre_contracts::ClusterRegistration;
 use rocketmq_sre_contracts::FleetAssetIndex;
 use rocketmq_sre_contracts::FleetInspectionRun;
 use rocketmq_sre_contracts::FleetInspectionRunId;
@@ -33,10 +34,17 @@ use super::model::ComplianceFindingQuery;
 use super::model::CreateFleetInspectionRequest;
 use super::model::CreateQuotaPolicyRequest;
 use super::model::EvaluateComplianceRequest;
+use super::model::EvaluateFleetQuotaRequest;
 use super::model::FleetAssetPage;
 use super::model::FleetInspectionPage;
 use super::model::FleetInspectionQuery;
+use super::model::FleetOffboardRequest;
+use super::model::FleetOnboardingRequest;
+use super::model::FleetOnboardingView;
 use super::model::FleetOverview;
+use super::model::FleetQuotaDecisionPage;
+use super::model::FleetQuotaDecisionQuery;
+use super::model::FleetQuotaDecisionView;
 use super::model::FleetScopeQuery;
 use super::model::QuotaPolicyQuery;
 use super::model::QuotaPolicyView;
@@ -57,6 +65,18 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/v1/fleet/overview", get(overview))
         .route("/v1/fleet/clusters", get(registrations))
         .route(
+            "/v1/fleet/onboarding/assess",
+            post(assess_onboarding).layer(DefaultBodyLimit::max(128 * 1024)),
+        )
+        .route(
+            "/v1/fleet/onboarding/register",
+            post(onboard_cluster).layer(DefaultBodyLimit::max(128 * 1024)),
+        )
+        .route(
+            "/v1/fleet/clusters/{id}/offboard",
+            post(offboard_cluster).layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route(
             "/v1/fleet/quotas",
             post(create_quota_policy)
                 .get(quota_policy)
@@ -68,6 +88,11 @@ pub(crate) fn routes() -> Router<AppState> {
                 .get(endpoints)
                 .layer(DefaultBodyLimit::max(128 * 1024)),
         )
+        .route(
+            "/v1/fleet/quotas/evaluate",
+            post(evaluate_quota).layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route("/v1/fleet/quotas/decisions", get(quota_decisions))
         .route(
             "/v1/fleet/regional-route",
             post(route).layer(DefaultBodyLimit::max(64 * 1024)),
@@ -94,6 +119,39 @@ pub(crate) fn routes() -> Router<AppState> {
             "/v1/fleet/inspections/{id}/progress",
             post(update_inspection).layer(DefaultBodyLimit::max(16 * 1024)),
         )
+}
+
+async fn assess_onboarding(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<FleetOnboardingRequest>,
+) -> Result<Json<FleetOnboardingView>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
+    state.fleet.assess_onboarding(&auth, &request).await.map(Json)
+}
+
+async fn onboard_cluster(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<FleetOnboardingRequest>,
+) -> Result<Json<FleetOnboardingView>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
+    state.fleet.onboard_cluster(&auth, &request).await.map(Json)
+}
+
+async fn offboard_cluster(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(request): Json<FleetOffboardRequest>,
+) -> Result<Json<ClusterRegistration>, ControlPlaneError> {
+    let cluster_id = parse_cluster_id(&id)?;
+    let auth = state.auth.authorize(&headers, Some(cluster_id)).await?;
+    state
+        .fleet
+        .offboard_cluster(&auth, cluster_id, &request)
+        .await
+        .map(Json)
 }
 
 async fn overview(State(state): State<AppState>, headers: HeaderMap) -> Result<Json<FleetOverview>, ControlPlaneError> {
@@ -126,6 +184,24 @@ async fn quota_policy(
 ) -> Result<Json<QuotaPolicyView>, ControlPlaneError> {
     let auth = state.auth.authorize(&headers, query.cluster_id).await?;
     state.fleet.quota_policy(&auth, query.cluster_id).await.map(Json)
+}
+
+async fn evaluate_quota(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<EvaluateFleetQuotaRequest>,
+) -> Result<Json<FleetQuotaDecisionView>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, request.cluster_id).await?;
+    state.fleet.evaluate_quota(&auth, &request).await.map(Json)
+}
+
+async fn quota_decisions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<FleetQuotaDecisionQuery>,
+) -> Result<Json<FleetQuotaDecisionPage>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, query.cluster_id).await?;
+    state.fleet.quota_decisions(&auth, &query).await.map(Json)
 }
 
 async fn register_endpoint(
@@ -227,4 +303,10 @@ fn parse_inspection_id(value: &str) -> Result<FleetInspectionRunId, ControlPlane
     value
         .parse()
         .map_err(|_| ControlPlaneError::validation("invalid_request", "Fleet inspection identifier must be a UUID"))
+}
+
+fn parse_cluster_id(value: &str) -> Result<rocketmq_sre_contracts::ClusterId, ControlPlaneError> {
+    value
+        .parse()
+        .map_err(|_| ControlPlaneError::validation("invalid_request", "cluster identifier must be a UUID"))
 }
