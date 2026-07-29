@@ -205,9 +205,7 @@ impl FinOpsBudgetDecision {
         if !Self::required_protected_controls().is_subset(&self.protected_controls) {
             return Err("FinOps decision omitted a protected safety control");
         }
-        if self.work_class.is_cost_protected()
-            && (!self.allowed || self.degradation != FinOpsDegradation::None)
-        {
+        if self.work_class.is_cost_protected() && (!self.allowed || self.degradation != FinOpsDegradation::None) {
             return Err("FinOps decision weakened a protected safety path");
         }
         Ok(())
