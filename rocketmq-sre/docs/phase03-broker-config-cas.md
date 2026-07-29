@@ -60,3 +60,26 @@ one successful commit, rejection of a stale generation without state change,
 and compatibility of the legacy headerless update. Client and Admin Core
 feature checks prove the new capability is available in a
 `mutation-client-adapter` build.
+
+## Local acceptance record
+
+The production adapter was accepted on 2026-07-29 with a real loopback
+NameServer and Broker, Docker PostgreSQL, and build artifacts isolated on
+`G:`:
+
+```powershell
+.\rocketmq-sre\scripts\phase03-broker-cas-smoke.ps1
+```
+
+The bounded smoke completed with
+`PHASE03_BROKER_CAS_SMOKE_OK generation_advanced=true stale_rejected=true
+rollback_advanced=true`. It proved one forward CAS, one stale-generation
+rejection with no overwrite, and one inverse CAS using the latest generation.
+
+The PostgreSQL Critic tests additionally proved that the R2 plan cannot be
+approved without a durable heterogeneous Critic record, that a DeepSeek
+failure can fall back to Kimi while preserving the model lineage, and that a
+same-family alias cannot unlock approval. The shipped descriptor therefore
+advertises supervised execution support. It remains R2: autonomous
+authorization is rejected by the Executor registry, and a distinct approver
+with cluster scope is still required.
