@@ -131,11 +131,7 @@ impl DrRepository {
         plan_from_row(&row)
     }
 
-    pub(in crate::dr) async fn get_plan(
-        &self,
-        tenant_id: TenantId,
-        id: DrPlanId,
-    ) -> Result<DrPlan, ControlPlaneError> {
+    pub(in crate::dr) async fn get_plan(&self, tenant_id: TenantId, id: DrPlanId) -> Result<DrPlan, ControlPlaneError> {
         let row = sqlx::query("SELECT * FROM dr_plans WHERE tenant_id = $1 AND id = $2")
             .bind(tenant_id.as_uuid())
             .bind(id.as_uuid())
