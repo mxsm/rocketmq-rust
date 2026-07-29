@@ -22,13 +22,19 @@ use rocketmq_sre_contracts::ClusterRegistration;
 use rocketmq_sre_contracts::ComplianceFinding;
 use rocketmq_sre_contracts::ComplianceFindingState;
 use rocketmq_sre_contracts::ComplianceSeverity;
+use rocketmq_sre_contracts::CorrelationId;
 use rocketmq_sre_contracts::DataResidencyClass;
 use rocketmq_sre_contracts::EvidenceId;
 use rocketmq_sre_contracts::Fleet;
+use rocketmq_sre_contracts::FleetAccessProfile;
 use rocketmq_sre_contracts::FleetAssetIndex;
 use rocketmq_sre_contracts::FleetEnvironment;
 use rocketmq_sre_contracts::FleetId;
 use rocketmq_sre_contracts::FleetInspectionRun;
+use rocketmq_sre_contracts::FleetOnboardingAssessment;
+use rocketmq_sre_contracts::FleetQuotaDecisionRecord;
+use rocketmq_sre_contracts::FleetQuotaResource;
+use rocketmq_sre_contracts::FleetQuotaWorkKind;
 use rocketmq_sre_contracts::FleetRegion;
 use rocketmq_sre_contracts::FleetTenant;
 use rocketmq_sre_contracts::QuotaLimits;
@@ -77,6 +83,40 @@ pub(crate) struct ClusterRegistrationPage {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct FleetOnboardingRequest {
+    pub(crate) cluster_id: ClusterId,
+    pub(crate) fleet_id: FleetId,
+    pub(crate) region_id: RegionId,
+    pub(crate) environment: FleetEnvironment,
+    pub(crate) owner: String,
+    #[serde(default)]
+    pub(crate) residency_tags: BTreeSet<String>,
+    pub(crate) requested_access: FleetAccessProfile,
+    pub(crate) connector_tls_verified: bool,
+    #[serde(default)]
+    pub(crate) oauth_scopes: BTreeSet<String>,
+    #[serde(default)]
+    pub(crate) required_capabilities: BTreeSet<String>,
+    #[serde(default)]
+    pub(crate) required_data_sources: BTreeSet<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct FleetOnboardingView {
+    pub(crate) schema_version: &'static str,
+    pub(crate) assessment: FleetOnboardingAssessment,
+    pub(crate) registration: Option<ClusterRegistration>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FleetOffboardRequest {
+    pub(crate) reason: String,
+    pub(crate) correlation_id: Option<CorrelationId>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct CreateQuotaPolicyRequest {
     pub(crate) fleet_id: FleetId,
     pub(crate) region_id: Option<RegionId>,
@@ -96,6 +136,37 @@ pub(crate) struct QuotaPolicyView {
 #[serde(deny_unknown_fields)]
 pub(crate) struct QuotaPolicyQuery {
     pub(crate) cluster_id: Option<ClusterId>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EvaluateFleetQuotaRequest {
+    pub(crate) cluster_id: Option<ClusterId>,
+    pub(crate) work_kind: FleetQuotaWorkKind,
+    pub(crate) resource: FleetQuotaResource,
+    pub(crate) amount: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct FleetQuotaDecisionView {
+    pub(crate) schema_version: &'static str,
+    pub(crate) decision: FleetQuotaDecisionRecord,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FleetQuotaDecisionQuery {
+    pub(crate) cluster_id: Option<ClusterId>,
+    pub(crate) allowed: Option<bool>,
+    #[serde(default = "default_limit")]
+    pub(crate) limit: u16,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct FleetQuotaDecisionPage {
+    pub(crate) schema_version: &'static str,
+    pub(crate) items: Vec<FleetQuotaDecisionRecord>,
+    pub(crate) truncated: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
