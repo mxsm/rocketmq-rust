@@ -262,10 +262,7 @@ impl FinOpsRepository {
         policy: &FinOpsAllocationPolicy,
     ) -> Result<FinOpsAllocationPolicy, ControlPlaneError> {
         let keys = serde_json::to_value(&policy.allocation_keys).map_err(|_| {
-            ControlPlaneError::validation(
-                "invalid_finops_allocation",
-                "FinOps allocation keys cannot be encoded",
-            )
+            ControlPlaneError::validation("invalid_finops_allocation", "FinOps allocation keys cannot be encoded")
         })?;
         let mut transaction = self.pool.begin().await?;
         sqlx::query("UPDATE finops_allocation_policies SET active = FALSE WHERE tenant_id = $1 AND active")
