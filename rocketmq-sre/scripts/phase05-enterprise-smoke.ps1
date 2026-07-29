@@ -81,7 +81,7 @@ function Invoke-ExactPostgresTest([string]$TestName, [string]$Capability) {
         '--',
         '--ignored',
         '--exact'
-    ) $Capability
+    ) $Capability | Out-Host
     $stopwatch.Stop()
     [ordered]@{
         test = $TestName
