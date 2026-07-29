@@ -201,9 +201,9 @@ where
                     ReconcileEffectState::Unknown => "telemetry_collector_restart_unknown",
                 }
                 .to_owned(),
-                sanitized_summary:
-                    "Collector replacement, readiness, exporter connection, queue, and data-plane isolation were reconciled"
-                        .to_owned(),
+                sanitized_summary: "Collector replacement, readiness, exporter connection, queue, and data-plane \
+                                    isolation were reconciled"
+                    .to_owned(),
                 observed_at: Utc::now(),
             })
         })
