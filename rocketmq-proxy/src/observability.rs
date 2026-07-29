@@ -32,6 +32,16 @@ use crate::proto::v2;
 use crate::session::ClientSessionRegistry;
 use crate::status::ProxyPayloadStatus;
 
+#[cfg(feature = "observability")]
+pub(crate) fn init_observability_metrics(config: &ProxyConfig, sessions: &ClientSessionRegistry) {
+    let sessions = sessions.clone();
+    let _ = rocketmq_observability::metrics::proxy::init_global_with_runtime_observers(
+        proxy_up_attributes(config),
+        move || u64::try_from(sessions.len()).unwrap_or(u64::MAX),
+    );
+}
+
+#[cfg(feature = "observability")]
 fn proxy_up_attributes(config: &ProxyConfig) -> rocketmq_observability::metrics::proxy::ProxyUpAttributes {
     let (cluster, node_id) = match config.mode {
         #[cfg(feature = "cluster-mode")]
@@ -197,6 +207,11 @@ impl ProxyMetrics {
     pub fn record_forward_latency(&self, elapsed: std::time::Duration) {
         self.otel
             .record_forward_latency(elapsed.as_millis().clamp(0, u128::from(u64::MAX)) as u64);
+    }
+
+    pub fn record_forward_completed(&self, elapsed: std::time::Duration) {
+        let elapsed_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
+        rocketmq_observability::metrics::proxy::record_forward_latency(elapsed_ms);
     }
 
     pub fn snapshot(
