@@ -13,6 +13,7 @@ import type {
   FleetRegion,
   GovernanceArtifact,
   GovernanceObjectKind,
+  GovernanceVersionPage,
 } from "./enterpriseTypes";
 
 export interface EnterpriseQuery {
@@ -114,6 +115,97 @@ export async function loadEnterpriseSnapshot(
     governanceCompliance,
     finops,
   };
+}
+
+export async function loadGovernanceVersions(
+  artifactId: string,
+  auth: ApiRequestContext | undefined,
+  demoMode: boolean,
+  signal?: AbortSignal,
+): Promise<GovernanceVersionPage> {
+  if (demoMode) {
+    const artifact = enterpriseDemoSnapshot().governanceArtifacts.items.find(
+      (item) => item.id === artifactId,
+    );
+    if (!artifact) {
+      return {
+        schema_version: "rocketmq-sre.governance-api.v1",
+        items: [],
+        truncated: false,
+      };
+    }
+    const index =
+      enterpriseDemoSnapshot().governanceArtifacts.items.indexOf(artifact);
+    const states = [
+      "active",
+      "active",
+      "review",
+      "deprecated",
+      "quarantined",
+    ] as const;
+    const state = states[index % states.length];
+    return {
+      schema_version: "rocketmq-sre.governance-api.v1",
+      items: [
+        {
+          id:
+            artifact.current_version_id ??
+            stableId("governance-version", index + 1),
+          artifact_id: artifact.id,
+          tenant_id: artifact.tenant_id,
+          version: `${1 + (index % 3)}.${index % 5}.0`,
+          content_digest: `sha256:${String(index + 11).padStart(64, "f")}`,
+          signature:
+            state === "review"
+              ? undefined
+              : {
+                  algorithm: "ed25519",
+                  key_id: "governance-signing-2026-q3",
+                  value: `sig:${String(index + 1).padStart(48, "a")}`,
+                },
+          state,
+          applicable_components: [
+            index % 2 === 0 ? "broker" : "control-plane",
+          ],
+          applicable_version_range: ">=1.95,<2.0",
+          dependencies:
+            index > 1
+              ? [
+                  {
+                    kind: "evidence_policy",
+                    logical_key: "evidence_policy.enterprise.v1",
+                    version: "1.2.0",
+                  },
+                ]
+              : [],
+          review_due_at:
+            index === 7
+              ? "2026-07-20T00:00:00.000Z"
+              : "2026-10-30T00:00:00.000Z",
+          expires_at:
+            state === "deprecated"
+              ? "2026-08-31T00:00:00.000Z"
+              : undefined,
+          rollback_version_id:
+            index % 2 === 0
+              ? stableId("governance-version-rollback", index + 1)
+              : undefined,
+          created_by: "governance.operator",
+          created_at: "2026-06-01T00:00:00.000Z",
+          updated_at: artifact.updated_at,
+        },
+      ],
+      truncated: false,
+    };
+  }
+
+  return apiRequest<GovernanceVersionPage>(
+    apiQuery(
+      `/v1/governance/artifacts/${encodeURIComponent(artifactId)}/versions`,
+      { limit: "200" },
+    ),
+    { auth, signal },
+  );
 }
 
 let cachedDemo: EnterpriseSnapshot | undefined;
