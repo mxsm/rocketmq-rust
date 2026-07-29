@@ -3622,6 +3622,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "rocketmq-sre-client"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "reqwest 0.13.4",
+ "rocketmq-sre-contracts",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "rocketmq-sre-connector"
 version = "0.1.0"
 dependencies = [
