@@ -81,11 +81,7 @@ where
             let mut reasons = validate_parameters(&parameters);
             let state = self
                 .client
-                .telemetry_collector_restart_state(
-                    &parameters.namespace,
-                    &parameters.pod,
-                    &parameters.pipeline,
-                )
+                .telemetry_collector_restart_state(&parameters.namespace, &parameters.pod, &parameters.pipeline)
                 .await?;
             if state.pod_uid != parameters.expected_uid {
                 reasons.push("collector_pod_uid_changed".to_owned());
@@ -122,10 +118,7 @@ where
                         "replacement_uid_observed".to_owned(),
                         state.replacement_ready && state.pod_uid != parameters.expected_uid,
                     ),
-                    (
-                        "collector_ready".to_owned(),
-                        state.pod_ready && state.deployment_ready,
-                    ),
+                    ("collector_ready".to_owned(), state.pod_ready && state.deployment_ready),
                     ("exporter_connected".to_owned(), state.exporter_connected),
                 ]
                 .into_iter()
@@ -175,11 +168,7 @@ where
             validate_for_mutation(&parameters)?;
             let state = self
                 .client
-                .telemetry_collector_restart_state(
-                    &parameters.namespace,
-                    &parameters.pod,
-                    &parameters.pipeline,
-                )
+                .telemetry_collector_restart_state(&parameters.namespace, &parameters.pod, &parameters.pipeline)
                 .await?;
             let effect_state = if state.pod_uid != parameters.expected_uid
                 && state.replacement_ready
@@ -228,8 +217,8 @@ where
             Ok(DriverDispatchOutcome {
                 operation_id: operation_id.to_owned(),
                 outcome_code: "telemetry_collector_manual_takeover_required".to_owned(),
-                sanitized_summary:
-                    "a completed Collector replacement cannot be reversed; manual takeover is required".to_owned(),
+                sanitized_summary: "a completed Collector replacement cannot be reversed; manual takeover is required"
+                    .to_owned(),
             })
         })
     }
@@ -260,10 +249,7 @@ fn validate_parameters(parameters: &TelemetryCollectorRestartOneParameters) -> V
     if parameters.expected_uid.is_empty() || parameters.expected_uid.len() > 128 {
         reasons.push("collector_expected_uid_invalid".to_owned());
     }
-    if !matches!(
-        parameters.pipeline.as_str(),
-        "metrics" | "logs" | "traces" | "combined"
-    ) {
+    if !matches!(parameters.pipeline.as_str(), "metrics" | "logs" | "traces" | "combined") {
         reasons.push("collector_pipeline_invalid".to_owned());
     }
     reasons
