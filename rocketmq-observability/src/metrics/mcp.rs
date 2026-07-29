@@ -19,6 +19,13 @@
 
 use std::time::Duration;
 
+#[cfg(feature = "otel-metrics")]
+use std::sync::atomic::AtomicU64;
+#[cfg(feature = "otel-metrics")]
+use std::sync::atomic::Ordering;
+#[cfg(feature = "otel-metrics")]
+use std::sync::Arc;
+
 pub use crate::semantic::metrics::MCP_AUDIT_BACKLOG;
 pub use crate::semantic::metrics::MCP_AUDIT_DROPPED_TOTAL;
 pub use crate::semantic::metrics::MCP_AUDIT_FAILURES_TOTAL;
@@ -160,6 +167,9 @@ pub enum McpAuditDropReason {
 }
 
 impl McpAuditDropReason {
+    #[cfg(feature = "otel-metrics")]
+    const ALL: [Self; 4] = [Self::Oversized, Self::CountCapacity, Self::ByteCapacity, Self::Closed];
+
     #[cfg(any(feature = "otel-metrics", test))]
     const fn as_str(self) -> &'static str {
         match self {
@@ -167,6 +177,16 @@ impl McpAuditDropReason {
             Self::CountCapacity => "count_capacity",
             Self::ByteCapacity => "byte_capacity",
             Self::Closed => "closed",
+        }
+    }
+
+    #[cfg(feature = "otel-metrics")]
+    const fn index(self) -> usize {
+        match self {
+            Self::Oversized => 0,
+            Self::CountCapacity => 1,
+            Self::ByteCapacity => 2,
+            Self::Closed => 3,
         }
     }
 }
@@ -179,11 +199,22 @@ pub enum McpAuditFailureKind {
 }
 
 impl McpAuditFailureKind {
+    #[cfg(feature = "otel-metrics")]
+    const ALL: [Self; 2] = [Self::Sink, Self::Flush];
+
     #[cfg(any(feature = "otel-metrics", test))]
     const fn as_str(self) -> &'static str {
         match self {
             Self::Sink => "sink",
             Self::Flush => "flush",
+        }
+    }
+
+    #[cfg(feature = "otel-metrics")]
+    const fn index(self) -> usize {
+        match self {
+            Self::Sink => 0,
+            Self::Flush => 1,
         }
     }
 }
@@ -241,13 +272,7 @@ pub fn record_audit_backlog(records: u64) {
 /// Records one dropped audit record.
 pub fn record_audit_drop(reason: McpAuditDropReason) {
     #[cfg(feature = "otel-metrics")]
-    global_metrics().audit_dropped_total.add(
-        1,
-        &[opentelemetry::KeyValue::new(
-            crate::semantic::labels::REASON,
-            reason.as_str(),
-        )],
-    );
+    global_metrics().record_audit_drop(reason);
 
     #[cfg(not(feature = "otel-metrics"))]
     let _ = reason;
@@ -256,13 +281,7 @@ pub fn record_audit_drop(reason: McpAuditDropReason) {
 /// Records one audit sink or flush failure.
 pub fn record_audit_failure(kind: McpAuditFailureKind) {
     #[cfg(feature = "otel-metrics")]
-    global_metrics().audit_failures_total.add(
-        1,
-        &[opentelemetry::KeyValue::new(
-            crate::semantic::labels::REASON,
-            kind.as_str(),
-        )],
-    );
+    global_metrics().record_audit_failure(kind);
 
     #[cfg(not(feature = "otel-metrics"))]
     let _ = kind;
@@ -276,13 +295,51 @@ struct McpMetrics {
     cache_operations_total: opentelemetry::metrics::Counter<u64>,
     rate_limit_total: opentelemetry::metrics::Counter<u64>,
     audit_backlog: opentelemetry::metrics::Gauge<u64>,
-    audit_dropped_total: opentelemetry::metrics::Counter<u64>,
-    audit_failures_total: opentelemetry::metrics::Counter<u64>,
+    audit_dropped: Arc<[AtomicU64; 4]>,
+    _audit_dropped_total: opentelemetry::metrics::ObservableCounter<u64>,
+    audit_failures: Arc<[AtomicU64; 2]>,
+    _audit_failures_total: opentelemetry::metrics::ObservableCounter<u64>,
 }
 
 #[cfg(feature = "otel-metrics")]
 impl McpMetrics {
     fn new(meter: &opentelemetry::metrics::Meter) -> Self {
+        let audit_dropped = Arc::new(std::array::from_fn(|_| AtomicU64::new(0)));
+        let observed_audit_dropped = Arc::clone(&audit_dropped);
+        let audit_dropped_total = meter
+            .u64_observable_counter(MCP_AUDIT_DROPPED_TOTAL)
+            .with_description("MCP audit records dropped before persistence")
+            .with_unit("{record}")
+            .with_callback(move |observer| {
+                for reason in McpAuditDropReason::ALL {
+                    observer.observe(
+                        observed_audit_dropped[reason.index()].load(Ordering::Relaxed),
+                        &[opentelemetry::KeyValue::new(
+                            crate::semantic::labels::REASON,
+                            reason.as_str(),
+                        )],
+                    );
+                }
+            })
+            .build();
+        let audit_failures = Arc::new(std::array::from_fn(|_| AtomicU64::new(0)));
+        let observed_audit_failures = Arc::clone(&audit_failures);
+        let audit_failures_total = meter
+            .u64_observable_counter(MCP_AUDIT_FAILURES_TOTAL)
+            .with_description("MCP audit sink and flush failures")
+            .with_unit("{failure}")
+            .with_callback(move |observer| {
+                for kind in McpAuditFailureKind::ALL {
+                    observer.observe(
+                        observed_audit_failures[kind.index()].load(Ordering::Relaxed),
+                        &[opentelemetry::KeyValue::new(
+                            crate::semantic::labels::REASON,
+                            kind.as_str(),
+                        )],
+                    );
+                }
+            })
+            .build();
         let metrics = Self {
             requests_total: meter
                 .u64_counter(MCP_REQUESTS_TOTAL)
@@ -314,16 +371,10 @@ impl McpMetrics {
                 .with_description("MCP audit records waiting to be persisted")
                 .with_unit("{record}")
                 .build(),
-            audit_dropped_total: meter
-                .u64_counter(MCP_AUDIT_DROPPED_TOTAL)
-                .with_description("MCP audit records dropped before persistence")
-                .with_unit("{record}")
-                .build(),
-            audit_failures_total: meter
-                .u64_counter(MCP_AUDIT_FAILURES_TOTAL)
-                .with_description("MCP audit sink and flush failures")
-                .with_unit("{failure}")
-                .build(),
+            audit_dropped,
+            _audit_dropped_total: audit_dropped_total,
+            audit_failures,
+            _audit_failures_total: audit_failures_total,
         };
         metrics.initialize_audit_health_series();
         metrics
@@ -331,29 +382,6 @@ impl McpMetrics {
 
     fn initialize_audit_health_series(&self) {
         self.audit_backlog.record(0, &[]);
-        for reason in [
-            McpAuditDropReason::Oversized,
-            McpAuditDropReason::CountCapacity,
-            McpAuditDropReason::ByteCapacity,
-            McpAuditDropReason::Closed,
-        ] {
-            self.audit_dropped_total.add(
-                0,
-                &[opentelemetry::KeyValue::new(
-                    crate::semantic::labels::REASON,
-                    reason.as_str(),
-                )],
-            );
-        }
-        for kind in [McpAuditFailureKind::Sink, McpAuditFailureKind::Flush] {
-            self.audit_failures_total.add(
-                0,
-                &[opentelemetry::KeyValue::new(
-                    crate::semantic::labels::REASON,
-                    kind.as_str(),
-                )],
-            );
-        }
     }
 
     fn record_operation(
@@ -405,6 +433,14 @@ impl McpMetrics {
                 outcome.as_str(),
             )],
         );
+    }
+
+    fn record_audit_drop(&self, reason: McpAuditDropReason) {
+        self.audit_dropped[reason.index()].fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_audit_failure(&self, kind: McpAuditFailureKind) {
+        self.audit_failures[kind.index()].fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -470,5 +506,16 @@ mod tests {
         );
         metrics.record_cache_event(McpCacheEvent::Miss);
         metrics.record_rate_limit(McpRateLimitOutcome::Rejected);
+        metrics.record_audit_drop(McpAuditDropReason::ByteCapacity);
+        metrics.record_audit_failure(McpAuditFailureKind::Flush);
+
+        assert_eq!(
+            metrics.audit_dropped[McpAuditDropReason::ByteCapacity.index()].load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            metrics.audit_failures[McpAuditFailureKind::Flush.index()].load(Ordering::Relaxed),
+            1
+        );
     }
 }
