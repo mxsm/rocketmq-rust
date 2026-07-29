@@ -66,18 +66,18 @@ impl LokiSource {
             .base_url
             .as_ref()
             .ok_or_else(|| ConnectorError::source("Loki source is not configured"))?;
-        require_label(&self.label_allowlist, "cluster")?;
-        require_label(&self.label_allowlist, "component")?;
+        require_label(&self.label_allowlist, "rocketmq_cluster")?;
+        require_label(&self.label_allowlist, "service_name")?;
         validate_identifier(cluster, "cluster")?;
-        let component = resource
+        let service_name = resource
             .strip_prefix("logs/")
             .or_else(|| resource.strip_prefix("loki/"))
             .unwrap_or(resource);
-        validate_identifier(component, "component")?;
+        validate_identifier(service_name, "service name")?;
         let endpoint = base_url
             .join("loki/api/v1/query_range")
             .map_err(|_| ConnectorError::configuration("Loki query URL cannot be constructed"))?;
-        let expression = format!(r#"{{cluster="{cluster}",component="{component}"}}"#);
+        let expression = log_selector(cluster, service_name);
         let request = self.client.get(endpoint).query(&[
             ("query", expression),
             (
@@ -114,5 +114,22 @@ impl LokiSource {
         let mut output = SourceOutput::available(value, end);
         output.sensitivity = rocketmq_sre_contracts::Sensitivity::Confidential;
         Ok(output)
+    }
+}
+
+fn log_selector(cluster: &str, service_name: &str) -> String {
+    format!(r#"{{rocketmq_cluster="{cluster}",service_name="{service_name}"}}"#)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::log_selector;
+
+    #[test]
+    fn selector_requires_both_cluster_and_fixed_service_identity() {
+        assert_eq!(
+            log_selector("cluster-a", "rocketmq-namesrv"),
+            r#"{rocketmq_cluster="cluster-a",service_name="rocketmq-namesrv"}"#
+        );
     }
 }
