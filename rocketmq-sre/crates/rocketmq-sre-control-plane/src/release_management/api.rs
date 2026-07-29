@@ -21,17 +21,31 @@ use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::routing::get;
 use axum::routing::post;
+use chrono::Utc;
+use rocketmq_sre_contracts::AUTOMATION_SCHEMA_VERSION;
+use rocketmq_sre_contracts::AutomationBudget;
+use rocketmq_sre_contracts::AutomationRunId;
 use rocketmq_sre_contracts::CorrelationId;
+use rocketmq_sre_contracts::EnterpriseIntegrationEventKind;
+use rocketmq_sre_contracts::IntegrationDeliveryId;
 use rocketmq_sre_contracts::IntegrationDescriptor;
 use rocketmq_sre_contracts::IntegrationTargetId;
+use rocketmq_sre_contracts::PreventiveAutomationRequest;
+use rocketmq_sre_contracts::PreventiveRiskFamily;
 use rocketmq_sre_contracts::ReleaseId;
 
 use super::model::CompleteRollbackRequest;
 use super::model::CreateReleaseRequest;
+use super::model::EnterpriseEventListQuery;
+use super::model::EnterpriseEventPage;
+use super::model::EnterpriseIngressAuthorization;
+use super::model::EnterpriseIngressRequest;
+use super::model::EnterpriseIngressView;
 use super::model::ExternalApprovalRequest;
 use super::model::ExternalApprovalView;
 use super::model::IntegrationDeliveryListQuery;
 use super::model::IntegrationDeliveryPage;
+use super::model::IntegrationHealthView;
 use super::model::IntegrationTargetListQuery;
 use super::model::IntegrationTargetPage;
 use super::model::IntegrationTargetView;
@@ -45,10 +59,17 @@ use super::model::ReleaseListQuery;
 use super::model::ReleasePage;
 use super::model::ReleasePreparationView;
 use super::model::ReleaseTransitionRequest;
+use super::model::ReplayIntegrationDeliveryRequest;
+use super::model::ReplayIntegrationDeliveryView;
+use super::model::RotateIntegrationSecretRequest;
 use super::model::SetIntegrationTargetStateRequest;
 use crate::ControlPlaneError;
 use crate::api::AppState;
 use crate::observability::CORRELATION_ID_HEADER;
+
+const ENTERPRISE_EVENT_TIMESTAMP_HEADER: &str = "x-rocketmq-sre-event-timestamp";
+const ENTERPRISE_EVENT_NONCE_HEADER: &str = "x-rocketmq-sre-event-nonce";
+const ENTERPRISE_EVENT_SIGNATURE_HEADER: &str = "x-rocketmq-sre-signature";
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
@@ -61,10 +82,29 @@ pub(crate) fn routes() -> Router<AppState> {
         )
         .route("/v1/integrations/targets/{id}", get(get_integration_target))
         .route(
+            "/v1/integrations/targets/{id}/events",
+            post(ingest_enterprise_event)
+                .get(list_enterprise_events)
+                .layer(DefaultBodyLimit::max(128 * 1024)),
+        )
+        .route(
+            "/v1/integrations/targets/{id}/config-test",
+            post(test_integration_config),
+        )
+        .route("/v1/integrations/targets/{id}/health", get(get_integration_health))
+        .route(
             "/v1/integrations/targets/{id}/state",
             post(set_integration_target_state).layer(DefaultBodyLimit::max(8 * 1024)),
         )
+        .route(
+            "/v1/integrations/targets/{id}/secret-reference/rotate",
+            post(rotate_integration_secret).layer(DefaultBodyLimit::max(8 * 1024)),
+        )
         .route("/v1/integrations/deliveries", get(list_integration_deliveries))
+        .route(
+            "/v1/integrations/deliveries/{id}/replay",
+            post(replay_integration_delivery).layer(DefaultBodyLimit::max(8 * 1024)),
+        )
         .route(
             "/v1/integrations/approvals/external",
             post(apply_external_approval).layer(DefaultBodyLimit::max(32 * 1024)),
@@ -159,6 +199,99 @@ async fn get_integration_target(
         .map(Json)
 }
 
+async fn ingest_enterprise_event(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(request): Json<EnterpriseIngressRequest>,
+) -> Result<Json<EnterpriseIngressView>, ControlPlaneError> {
+    let cluster_id = request.payload.cluster_id();
+    let auth = state.auth.authorize(&headers, Some(cluster_id)).await?;
+    let target_id = parse_target_id(&id)?;
+    let authorization = enterprise_authorization(&headers)?;
+    let mut view = state
+        .release_management
+        .ingest_enterprise_event(&auth, target_id, &authorization, &request)
+        .await?;
+    if view.followup_id.is_none()
+        && matches!(
+            view.event.event_kind,
+            EnterpriseIntegrationEventKind::ReleaseStarted
+                | EnterpriseIntegrationEventKind::ReleaseCanary
+                | EnterpriseIntegrationEventKind::ReleasePromoted
+        )
+    {
+        let run = state
+            .preventive_automation
+            .submit(
+                &auth,
+                &PreventiveAutomationRequest {
+                    schema_version: AUTOMATION_SCHEMA_VERSION.to_owned(),
+                    id: AutomationRunId::new(),
+                    tenant_id: auth.tenant_id,
+                    cluster_id,
+                    correlation_id: correlation_id(&headers),
+                    risk_family: PreventiveRiskFamily::Upgrade,
+                    idempotency_key: format!("cicd-readiness:{}", view.event.id),
+                    budget: AutomationBudget {
+                        max_model_calls: 0,
+                        max_output_bytes: 64 * 1_024,
+                        timeout_seconds: 120,
+                    },
+                    requested_by: auth.subject.clone(),
+                    requested_at: Utc::now(),
+                },
+            )
+            .await?;
+        state
+            .release_management
+            .record_enterprise_followup(&auth, view.event.id, run.id.as_uuid())
+            .await?;
+        view.followup_id = Some(run.id.as_uuid());
+    }
+    Ok(Json(view))
+}
+
+async fn list_enterprise_events(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(query): Query<EnterpriseEventListQuery>,
+) -> Result<Json<EnterpriseEventPage>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, None).await?;
+    state
+        .release_management
+        .enterprise_events(&auth, parse_target_id(&id)?, &query)
+        .await
+        .map(Json)
+}
+
+async fn test_integration_config(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<IntegrationHealthView>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, None).await?;
+    state
+        .release_management
+        .test_integration_config(&auth, parse_target_id(&id)?)
+        .await
+        .map(Json)
+}
+
+async fn get_integration_health(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<IntegrationHealthView>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, None).await?;
+    state
+        .release_management
+        .integration_health(&auth, parse_target_id(&id)?)
+        .await
+        .map(Json)
+}
+
 async fn set_integration_target_state(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -173,6 +306,20 @@ async fn set_integration_target_state(
         .map(Json)
 }
 
+async fn rotate_integration_secret(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(request): Json<RotateIntegrationSecretRequest>,
+) -> Result<Json<IntegrationTargetView>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, None).await?;
+    state
+        .release_management
+        .rotate_integration_secret(&auth, parse_target_id(&id)?, &request, correlation_id(&headers))
+        .await
+        .map(Json)
+}
+
 async fn list_integration_deliveries(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -182,6 +329,20 @@ async fn list_integration_deliveries(
     state
         .release_management
         .integration_deliveries(&auth, &query)
+        .await
+        .map(Json)
+}
+
+async fn replay_integration_delivery(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(request): Json<ReplayIntegrationDeliveryRequest>,
+) -> Result<Json<ReplayIntegrationDeliveryView>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, None).await?;
+    state
+        .release_management
+        .replay_integration_delivery(&auth, parse_delivery_id(&id)?, &request, correlation_id(&headers))
         .await
         .map(Json)
 }
@@ -401,6 +562,12 @@ fn parse_target_id(value: &str) -> Result<IntegrationTargetId, ControlPlaneError
         .map_err(|_| ControlPlaneError::validation("invalid_request", "integration target identifier must be a UUID"))
 }
 
+fn parse_delivery_id(value: &str) -> Result<IntegrationDeliveryId, ControlPlaneError> {
+    value
+        .parse()
+        .map_err(|_| ControlPlaneError::validation("invalid_request", "integration delivery identifier must be a UUID"))
+}
+
 fn parse_release_id(value: &str) -> Result<ReleaseId, ControlPlaneError> {
     value
         .parse()
@@ -413,4 +580,26 @@ fn correlation_id(headers: &HeaderMap) -> CorrelationId {
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse().ok())
         .unwrap_or_default()
+}
+
+fn enterprise_authorization(headers: &HeaderMap) -> Result<EnterpriseIngressAuthorization, ControlPlaneError> {
+    Ok(EnterpriseIngressAuthorization {
+        timestamp: required_header(headers, ENTERPRISE_EVENT_TIMESTAMP_HEADER)?,
+        nonce: required_header(headers, ENTERPRISE_EVENT_NONCE_HEADER)?,
+        signature: required_header(headers, ENTERPRISE_EVENT_SIGNATURE_HEADER)?,
+    })
+}
+
+fn required_header(headers: &HeaderMap, name: &'static str) -> Result<String, ControlPlaneError> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.trim().is_empty() && value.len() <= 512)
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            ControlPlaneError::validation(
+                "integration_signature_invalid",
+                "signed integration headers are required",
+            )
+        })
 }
