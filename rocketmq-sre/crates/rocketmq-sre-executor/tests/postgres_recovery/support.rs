@@ -126,6 +126,10 @@ pub(crate) async fn seed_logger_fixture(pool: &PgPool) -> Fixture {
     seed_fixture_for_action(pool, ExecutionAction::ObservabilityLoggerLevelTtl).await
 }
 
+pub(crate) async fn seed_proxy_restart_fixture(pool: &PgPool) -> Fixture {
+    seed_fixture_for_action(pool, ExecutionAction::ProxyRestartOne).await
+}
+
 async fn seed_fixture_for_action(pool: &PgPool, action: ExecutionAction) -> Fixture {
     sqlx::raw_sql(include_str!("../../../../deploy/dev/postgres/phase3-seed.sql"))
         .execute(pool)
@@ -237,7 +241,31 @@ fn action_plan(
                 timeout_seconds: 60,
             },
         ),
-        _ => panic!("the executor integration fixture supports only the two R1 scenarios under test"),
+        ExecutionAction::ProxyRestartOne => (
+            "pod/rocketmq-system/rocketmq-proxy-qualification".to_owned(),
+            json!({
+                "namespace": "rocketmq-system",
+                "pod": "rocketmq-proxy-qualification",
+                "expected_uid": "00000000-0000-4000-8000-000000000001"
+            }),
+            ImpactScope::SingleInstance,
+            VerificationSpec {
+                resource_conditions: vec!["replacement_ready".to_owned(), "accepting_and_routed".to_owned()],
+                technical_slis: vec!["proxy_error_ratio".to_owned(), "synthetic_message_path".to_owned()],
+                stable_window_seconds: 180,
+                max_wait_seconds: 1_200,
+            },
+            CompensationSpec {
+                mode: CompensationMode::ManualTakeover,
+                required_before_fields: vec![
+                    "admission_state".to_owned(),
+                    "readiness_state".to_owned(),
+                    "routing_state".to_owned(),
+                ],
+                timeout_seconds: 300,
+            },
+        ),
+        _ => panic!("the executor integration fixture supports only the three Wave 1 R1 scenarios under test"),
     };
     let draft = ActionPlanDraft {
         id: rocketmq_sre_contracts::ActionPlanId::new(),
