@@ -330,6 +330,12 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .update_and_create_subscription_group(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
+            RequestCode::UpdateSubscriptionGroupConfigCas => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
+                self.subscription_group_handler
+                    .update_subscription_group_config_cas(broker_runtime_inner, channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::UpdateAndCreateSubscriptionGroupList => {
                 let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner_mut();
                 self.subscription_group_handler
