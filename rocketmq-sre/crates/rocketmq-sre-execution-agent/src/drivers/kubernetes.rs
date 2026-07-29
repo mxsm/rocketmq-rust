@@ -189,6 +189,56 @@ pub trait ProxyImageCanaryClient: Send + Sync {
     fn restore_proxy_image<'a>(&'a self, request: &'a ProxyImageCanaryRestore) -> DriverFuture<'a, ()>;
 }
 
+/// Sanitized state for one allowlisted OpenTelemetry Collector restart.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct TelemetryCollectorRestartState {
+    pub pod_uid: String,
+    pub pod_ready: bool,
+    pub deployment_ready: bool,
+    pub replacement_ready: bool,
+    pub exporter_connected: bool,
+    pub queue_healthy: bool,
+    pub data_plane_unaffected: bool,
+    pub active_pod: String,
+    pub last_operation_id: Option<String>,
+    pub last_execution_id: Option<String>,
+    pub last_plan_step_id: Option<String>,
+}
+
+/// Closed restart request for exactly one allowlisted Collector pod UID.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TelemetryCollectorRestartOneWrite {
+    pub namespace: String,
+    pub pod: String,
+    pub expected_uid: String,
+    pub pipeline: String,
+    pub operation_id: String,
+    pub execution_id: ExecutionId,
+    pub plan_step_id: PlanStepId,
+}
+
+/// Exact Kubernetes operation available to
+/// `telemetry.collector.restart_one.v1`.
+///
+/// Implementations must bind the request to one allowlisted Deployment and
+/// current pod UID, change only the pod-template restart annotations, and
+/// observe a Ready replacement. Force deletion, configuration changes,
+/// exporter credentials, and multi-workload mutations are outside this
+/// boundary.
+pub trait TelemetryCollectorRestartClient: Send + Sync {
+    fn telemetry_collector_restart_state<'a>(
+        &'a self,
+        namespace: &'a str,
+        pod: &'a str,
+        pipeline: &'a str,
+    ) -> DriverFuture<'a, TelemetryCollectorRestartState>;
+
+    fn restart_one_telemetry_collector<'a>(
+        &'a self,
+        request: &'a TelemetryCollectorRestartOneWrite,
+    ) -> DriverFuture<'a, ()>;
+}
+
 /// Typed Kubernetes scale/restart/rollout adapter.
 ///
 /// Implementations use concrete Kubernetes API types and never accept an
