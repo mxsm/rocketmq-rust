@@ -23,6 +23,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use thiserror::Error;
+use uuid::Uuid;
 
 use crate::ProbePlan;
 use crate::cleanup::ProbeCleanupResult;
@@ -155,6 +156,9 @@ impl ProbeDriverError {
     reason = "the probe driver is not dyn compatible and owns its lifecycle"
 )]
 pub trait ProbeDriver {
+    /// Binds the consumer observation to this invocation's message-key prefix.
+    fn set_expected_key_prefix(&mut self, _key_prefix: &str) {}
+
     async fn start_consumer(&mut self, plan: &ProbePlan, mode: ProbeConsumerMode) -> Result<(), ProbeDriverError>;
 
     async fn send(
@@ -229,7 +233,7 @@ where
     D: ProbeDriver,
 {
     let started_at = Utc::now();
-    let trace_id = format!("probe-{}", plan.run_id.simple());
+    let trace_id = format!("probe-{}", Uuid::new_v4().simple());
     let mut stages = Vec::new();
     let mut budget = ProbeBudget::from_plan(plan);
     let batch = ProbeMessageBatch {
@@ -253,6 +257,7 @@ where
                 ProbeBudgetError::Duration => "duration_budget_exceeded",
             })
         })?;
+        driver.set_expected_key_prefix(&batch.key_prefix);
 
         record_stage(
             &mut stages,
@@ -334,9 +339,14 @@ mod tests {
         consumer_modes: Vec<ProbeConsumerMode>,
         cleanup_calls: usize,
         fail_send: bool,
+        expected_key_prefix: Option<String>,
     }
 
     impl ProbeDriver for FixtureDriver {
+        fn set_expected_key_prefix(&mut self, key_prefix: &str) {
+            self.expected_key_prefix = Some(key_prefix.to_owned());
+        }
+
         async fn start_consumer(&mut self, _plan: &ProbePlan, mode: ProbeConsumerMode) -> Result<(), ProbeDriverError> {
             self.consumer_modes.push(mode);
             Ok(())
@@ -395,7 +405,16 @@ mod tests {
             assert_eq!(driver.cleanup_calls, 1);
             assert_eq!(driver.send_modes, vec![scenario.modes().0]);
             assert_eq!(driver.consumer_modes, vec![scenario.modes().1]);
+            assert_eq!(driver.expected_key_prefix.as_deref(), Some(result.trace_id.as_str()));
         }
+    }
+
+    #[tokio::test]
+    async fn each_invocation_uses_a_unique_trace_key_prefix() {
+        let first = run_scenario(&mut FixtureDriver::default(), &plan(), ProbeScenario::SendConsumeAck).await;
+        let second = run_scenario(&mut FixtureDriver::default(), &plan(), ProbeScenario::SendConsumeAck).await;
+
+        assert_ne!(first.trace_id, second.trace_id);
     }
 
     #[test]
