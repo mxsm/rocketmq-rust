@@ -287,6 +287,7 @@ pub use integration::IntegrationEventKind;
 pub use integration::IntegrationHealth;
 pub use integration::IntegrationHealthStatus;
 pub use integration::IntegrationOperationalPolicy;
+pub use integration::IntegrationSpiCapability;
 pub use integration::IntegrationTarget;
 pub use integration::ItsmTicketLink;
 pub use integration::ReleasePipelineEvent;
