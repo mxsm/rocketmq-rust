@@ -713,7 +713,19 @@ WHERE tenant_id = '$tenantId'
         throw "Inspection $($view.run.id) persisted $($records.Count) packs; expected at least $($ExpectedPackIds.Count)."
     }
     foreach ($record in $records) {
-        Assert-PersistedPackRecord $record $record.pack_id "$($view.run.id)"
+        if (
+            [string]::IsNullOrWhiteSpace("$($record.id)") `
+                -or [string]::IsNullOrWhiteSpace("$($record.pack_id)") `
+                -or [string]::IsNullOrWhiteSpace("$($record.pack_version)") `
+                -or $null -eq $record.output `
+                -or [string]::IsNullOrWhiteSpace("$($record.started_at)") `
+                -or [string]::IsNullOrWhiteSpace("$($record.completed_at)")
+        ) {
+            throw "Inspection $($view.run.id) persisted an incomplete expanded pack record."
+        }
+        if ($ExpectedPackIds -contains $record.pack_id) {
+            Assert-PersistedPackRecord $record $record.pack_id "$($view.run.id)"
+        }
     }
     foreach ($expectedPackId in $ExpectedPackIds) {
         if (@($records | Where-Object { $_.pack_id -eq $expectedPackId }).Count -ne 1) {
