@@ -76,6 +76,21 @@ fn pod_address_and_readiness_are_typed_and_fail_closed() {
 }
 
 #[test]
+fn replacement_timestamp_accepts_kubernetes_second_precision() {
+    let created = "2026-07-29T00:04:27Z"
+        .parse::<k8s_openapi::jiff::Timestamp>()
+        .expect("Kubernetes timestamp");
+    assert!(replacement_started_at_or_after(
+        &created,
+        "2026-07-29T00:04:27.446678561+00:00"
+    ));
+    assert!(!replacement_started_at_or_after(
+        &created,
+        "2026-07-29T00:04:28.000000000+00:00"
+    ));
+}
+
+#[test]
 fn deployment_selector_supports_exact_kubernetes_operators() {
     let labels = BTreeMap::from([
         ("app".to_owned(), "proxy".to_owned()),
