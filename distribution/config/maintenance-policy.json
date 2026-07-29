@@ -28,9 +28,7 @@
   "role_grants": [
     {
       "role": "release_operator",
-      "capabilities": [
-        "release_checkpoint"
-      ]
+      "capabilities": ["release_checkpoint"]
     }
   ]
 }

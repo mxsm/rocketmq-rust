@@ -94,11 +94,12 @@ impl McpApp {
     ) -> Result<Self, crate::error::McpError> {
         let guard = Guard::new(config.security.clone(), config.audit.clone(), &config.clusters)
             .map_err(|error| crate::error::McpError::InvalidConfig(error.to_string()))?;
-        let client_runtime = ClientRuntime::new(
+        let client_runtime = ClientRuntime::try_new(
             service_context.child("rocketmq-mcp-client"),
             ClientRuntimeConfig::default(),
             telemetry_handle,
-        );
+        )
+        .map_err(|error| crate::error::McpError::infrastructure("initialize MCP client runtime", error))?;
         let query = Arc::new(QueryFacade::new(config.clone(), client_runtime.clone()).with_visibility_class("local"));
         Ok(Self {
             config,

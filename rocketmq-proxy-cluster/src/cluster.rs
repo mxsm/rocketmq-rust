@@ -1009,11 +1009,12 @@ mod cluster_test_runtime {
     });
 
     pub(super) fn client_runtime() -> Arc<ClientRuntime> {
-        ClientRuntime::new(
+        ClientRuntime::try_new(
             TEST_RUNTIME_OWNER.root_context().child("client"),
             ClientRuntimeConfig::default(),
             TelemetryHandle::noop(),
         )
+        .expect("proxy cluster test client runtime should be valid")
     }
 
     pub(super) fn service_context(scope: &'static str) -> ChildServiceContext {

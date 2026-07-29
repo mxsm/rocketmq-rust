@@ -26,11 +26,9 @@ ROOT = Path(__file__).resolve().parents[2]
 BASELINE = ROOT / "scripts" / "public-api-snapshot-baseline.json"
 EVIDENCE = (
     ROOT
-    / "docs"
-    / "plans"
-    / "architecture-refactor-migration"
-    / "phase-2-core-boundaries"
-    / "09-public-api-feature-wire-storage-evidence.md"
+    / "rocketmq-doc"
+    / "en"
+    / "architecture-public-api-compatibility.md"
 )
 
 
@@ -59,7 +57,7 @@ class PublicApiCompatibilityTests(unittest.TestCase):
 
         self.assertEqual(1, baseline["schema_version"])
         self.assertEqual("default", baseline["feature_profile"])
-        self.assertEqual(31, len(targets))
+        self.assertGreater(len(targets), 0)
         self.assertEqual({package for package, _ in targets}, set(baseline["packages"]))
         self.assertEqual(40, len(baseline["source_commit"]))
         for package in baseline["packages"].values():
@@ -88,7 +86,7 @@ class PublicApiCompatibilityTests(unittest.TestCase):
         removed = {**baseline, "packages": {}}
         self.assertEqual("breaking", PUBLIC_API.compare_snapshots(baseline, removed)[0]["classification"])
 
-    def test_r0_features_and_next_major_boundary_are_exact(self) -> None:
+    def test_current_feature_boundaries_are_exact(self) -> None:
         protocol = manifest("rocketmq-protocol")["features"]
         transport = manifest("rocketmq-transport")["features"]
         admin = manifest("rocketmq-tools/rocketmq-admin/rocketmq-admin-core")["features"]
@@ -96,11 +94,25 @@ class PublicApiCompatibilityTests(unittest.TestCase):
 
         self.assertEqual([], protocol["default"])
         self.assertEqual(["tls"], transport["default"])
-        self.assertEqual(["legacy-common-compat"], admin["default"])
-        self.assertEqual([], proxy["default"])
-        self.assertEqual({"default", "observability", "tieredstore"}, set(proxy))
-        for future_feature in ("cluster-mode", "local-mode", "compat-all-modes"):
-            self.assertNotIn(future_feature, proxy)
+        self.assertEqual([], admin["default"])
+        self.assertEqual(["cluster-mode", "local-mode"], proxy["default"])
+        self.assertEqual(
+            {
+                "default",
+                "cluster-mode",
+                "local-mode",
+                "observability",
+                "metrics-prometheus",
+                "otel-traces",
+                "otel-logs",
+                "otlp-traces",
+                "otlp-logs",
+                "production-observability",
+                "production",
+                "tieredstore",
+            },
+            set(proxy),
+        )
 
     def test_frozen_matrix_covers_all_required_profiles_and_goldens(self) -> None:
         entries = {entry.id: entry for entry in MATRIX.MATRIX}
@@ -129,31 +141,41 @@ class PublicApiCompatibilityTests(unittest.TestCase):
             "transport-observability",
             "admin-no-default",
             "admin-client-adapter",
-            "admin-default-legacy",
+            "admin-default",
             "proxy-no-default",
-            "proxy-default-r0",
+            "proxy-default-modes",
             "proxy-observability",
             "proxy-tiered",
-            "common-protocol-codec",
-            "remoting-wire",
+            "protocol-message-codec",
+            "protocol-remoting-wire-golden",
+            "transport-protocol-compatibility",
             "local-cq-20-byte",
             "local-index-codec",
-            "store-commitlog-facade",
+            "proxy-grpc-ingress",
+            "store-capability-conformance",
+            "store-local-components",
+            "store-public-api-contract",
             "rocksdb-foundation",
             "rocksdb-semantics",
         ):
             self.assertIn(required, entries)
 
-    def test_evidence_records_zero_api_diff_and_human_signoff(self) -> None:
+    def test_evidence_records_current_snapshot_and_approved_breaking_cleanup(self) -> None:
         evidence = EVIDENCE.read_text(encoding="utf-8")
 
-        self.assertIn("31", evidence)
+        targets = PUBLIC_API.workspace_library_targets()
+
+        self.assertIn(f"library_targets={len(targets)}", evidence)
         self.assertIn("differences=0", evidence)
         self.assertIn("40/40", evidence)
-        self.assertIn("56/82", evidence)
+        self.assertIn("feature=24/24", evidence)
+        self.assertIn("wire=6/6", evidence)
+        self.assertIn("storage=10/10", evidence)
         self.assertIn("additive: 0", evidence)
         self.assertIn("deprecated: 0", evidence)
-        self.assertIn("breaking: 0", evidence)
+        self.assertIn("breaking: 1", evidence)
+        self.assertIn("ClientRuntime::new", evidence)
+        self.assertIn("repository owner explicitly approved", evidence)
 
 
 if __name__ == "__main__":

@@ -34,11 +34,11 @@ fn main() -> anyhow::Result<()> {
     bootstrap.observability.node_id = "web-backend".to_string();
     bootstrap.observability.subscriber_install_policy = rocketmq_observability::SubscriberInstallPolicy::Required;
     let telemetry_guard = rocketmq_observability::install_global_with_filter(&bootstrap, resolved_filter.clone())?;
-    let client_runtime = ClientRuntime::new(
+    let client_runtime = ClientRuntime::try_new(
         owner.root_context().child("rocketmq-admin-client"),
         ClientRuntimeConfig::default(),
         telemetry_guard.handle(),
-    );
+    )?;
     tracing::info!(
         service = "rocketmq-dashboard-web-backend",
         effective_filter = resolved_filter.filter(),

@@ -84,21 +84,6 @@ pub struct ClientRuntime {
 }
 
 impl ClientRuntime {
-    /// Creates a client runtime below a sealed application child context.
-    ///
-    /// # Panics
-    ///
-    /// Panics when the configured process memory limit or managed-memory
-    /// fraction is invalid. Production composition should use
-    /// [`Self::try_new`].
-    pub fn new(
-        service_context: ChildServiceContext,
-        config: ClientRuntimeConfig,
-        telemetry_handle: TelemetryHandle,
-    ) -> Arc<Self> {
-        Self::try_new(service_context, config, telemetry_handle).expect("client runtime resource budget must be valid")
-    }
-
     /// Creates a client runtime with one shared process-derived resource root.
     pub fn try_new(
         service_context: ChildServiceContext,
@@ -229,11 +214,12 @@ static TEST_RUNTIME_OWNER: std::sync::LazyLock<rocketmq_runtime::RuntimeOwner> =
 
 #[cfg(test)]
 pub(crate) fn test_client_runtime(scope: &'static str) -> Arc<ClientRuntime> {
-    ClientRuntime::new(
+    ClientRuntime::try_new(
         TEST_RUNTIME_OWNER.root_context().child(scope),
         ClientRuntimeConfig::default(),
         TelemetryHandle::noop(),
     )
+    .expect("client unit-test runtime should be valid")
 }
 
 #[cfg(test)]

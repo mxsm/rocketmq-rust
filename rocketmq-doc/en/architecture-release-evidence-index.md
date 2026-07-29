@@ -45,6 +45,20 @@ commit SHA; this document does not claim that a scheduled or release run succeed
 | `rocketmq-tieredstore` | `rocketmq-tieredstore` |
 | `rocketmq-transport` | `rocketmq-transport` |
 
+## Current implementation baseline
+
+- Baseline ID: `architecture-implementation-2026-07-29-v1`.
+- Generator: `python scripts/architecture_implementation_baseline.py`.
+- Local artifact: `target/architecture-optimization/baseline/current/baseline.json` (generated, not committed).
+- Historical review input: `8e01ee9ac0bfbd14528939160cd7c2b2fb6d01e4`.
+- Planning snapshot input: `071fb7dfc835f828a79eabdfca1225c14123a093`.
+- Distinction: The historical review and planning snapshot remain planning inputs; this manifest records the current implementation worktree independently.
+
+The manifest records the current commit, dirty state, normalized Cargo metadata, toolchains,
+hardware/filesystem facts, project routes, commands, and evidence checksums. A dirty manifest
+is explicitly ineligible as a clean release candidate. Later performance and fault artifacts
+must reference this baseline ID or a deliberately versioned successor.
+
 ## Standalone Cargo validation matrix
 
 | Project | Owner | Toolchain | Manifest | Required commands | Workflow |
@@ -149,6 +163,19 @@ The still-public `MessageStore` and producer facades retain real downstream valu
 forwarders. Their next deletion review is the next approved major release. `RuntimeContext` remains
 document-hidden for tests and migration harnesses; production composition roots use `RuntimeOwner`
 and inject `ChildServiceContext`/`TaskGroup` capabilities.
+
+## Python architecture test inventory
+
+- Inventoried test modules: 49.
+- Guard runner: `python scripts/run_architecture_tests.py --tier pr_static`.
+- Contract runner: `python scripts/run_architecture_tests.py --tier milestone_contract --tier phase_contract --tier dynamic_fixture`.
+
+| Tier | Modules |
+|---|---:|
+| `pr_static` | 12 |
+| `milestone_contract` | 26 |
+| `phase_contract` | 4 |
+| `dynamic_fixture` | 7 |
 
 ## Evidence workflows and artifact identities
 

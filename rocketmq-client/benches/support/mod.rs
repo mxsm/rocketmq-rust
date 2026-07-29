@@ -38,11 +38,12 @@ impl BenchClientRuntime {
             ..Default::default()
         })
         .expect("benchmark runtime owner should start");
-        let client_runtime = ClientRuntime::new(
+        let client_runtime = ClientRuntime::try_new(
             owner.root_context().child("client"),
             ClientRuntimeConfig::default(),
             TelemetryHandle::noop(),
-        );
+        )
+        .expect("benchmark client runtime should be valid");
         Self { owner, client_runtime }
     }
 

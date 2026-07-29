@@ -527,12 +527,12 @@
         "rocketmq-store-rocksdb",
         "rocketmq-tieredstore"
       ],
-      "remove_by": "M09"
+      "remove_by": "2.0.0"
     },
     {
       "facade": "rocketmq-proxy",
       "canonical_packages": ["rocketmq-proxy-core", "rocketmq-proxy-cluster", "rocketmq-proxy-local"],
-      "remove_by": "M09"
+      "remove_by": "2.0.0"
     }
   ],
   "compatibility_manifest_policy": {

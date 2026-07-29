@@ -210,6 +210,7 @@ def validate_schema(policy: dict[str, Any]) -> list[Finding]:
     required = {
         "schema_version",
         "toolchains",
+        "implementation_baseline",
         "root",
         "standalone",
         "node_projects",
@@ -218,6 +219,7 @@ def validate_schema(policy: dict[str, Any]) -> list[Finding]:
         "critical_action_pins",
         "critical_workflows",
         "evidence_artifacts",
+        "python_tests",
         "generated_document",
     }
     if set(policy) != required or policy.get("schema_version") != 1:
@@ -225,6 +227,156 @@ def validate_schema(policy: dict[str, Any]) -> list[Finding]:
     standalone = policy.get("standalone", [])
     if not isinstance(standalone, list) or len(standalone) != 5:
         findings.append(Finding("standalone-count", normalized(POLICY_RELATIVE), "exactly five Cargo roots required"))
+    return findings
+
+
+def validate_implementation_baseline(root: Path, policy: dict[str, Any]) -> list[Finding]:
+    baseline = policy.get("implementation_baseline")
+    expected_fields = {
+        "id",
+        "generator",
+        "output",
+        "historical_review_commit",
+        "planning_snapshot_commit",
+        "historical_difference",
+        "commands",
+        "required_evidence",
+    }
+    if not isinstance(baseline, dict) or set(baseline) != expected_fields:
+        return [
+            Finding(
+                "implementation-baseline-schema",
+                normalized(POLICY_RELATIVE),
+                "unexpected implementation_baseline schema",
+            )
+        ]
+    findings: list[Finding] = []
+    if not re.fullmatch(r"architecture-implementation-\d{4}-\d{2}-\d{2}-v\d+", baseline["id"]):
+        findings.append(
+            Finding("implementation-baseline-id", normalized(POLICY_RELATIVE), "baseline id is not versioned")
+        )
+    for field in ("historical_review_commit", "planning_snapshot_commit"):
+        if not re.fullmatch(r"[0-9a-f]{40}", baseline[field]):
+            findings.append(Finding("implementation-baseline-commit", normalized(POLICY_RELATIVE), field))
+    for field in ("generator", "output"):
+        path = Path(baseline[field])
+        if path.is_absolute() or ".." in path.parts:
+            findings.append(Finding("implementation-baseline-path", normalized(POLICY_RELATIVE), field))
+    if not (root / baseline["generator"]).is_file():
+        findings.append(
+            Finding("implementation-baseline-generator", baseline["generator"], "generator is missing")
+        )
+    if not isinstance(baseline["commands"], list) or not baseline["commands"]:
+        findings.append(
+            Finding("implementation-baseline-commands", normalized(POLICY_RELATIVE), "commands are required")
+        )
+    evidence = baseline["required_evidence"]
+    if (
+        not isinstance(evidence, list)
+        or not evidence
+        or len(evidence) != len(set(evidence))
+        or any(Path(path).is_absolute() or ".." in Path(path).parts for path in evidence)
+    ):
+        findings.append(
+            Finding(
+                "implementation-baseline-evidence",
+                normalized(POLICY_RELATIVE),
+                "evidence paths must be unique repository-relative paths",
+            )
+        )
+    return findings
+
+
+def validate_python_tests(root: Path, policy: dict[str, Any]) -> list[Finding]:
+    findings: list[Finding] = []
+    config = policy["python_tests"]
+    if not isinstance(config, dict) or set(config) != {"expected_count", "ci", "entries"}:
+        return [Finding("test-inventory-schema", normalized(POLICY_RELATIVE), "unexpected python_tests schema")]
+    entries = config["entries"]
+    if not isinstance(entries, list) or config["expected_count"] != 49 or len(entries) != config["expected_count"]:
+        findings.append(
+            Finding(
+                "test-inventory-count",
+                normalized(POLICY_RELATIVE),
+                f"expected={config['expected_count']} entries={len(entries) if isinstance(entries, list) else 'invalid'}",
+            )
+        )
+        return findings
+
+    expected_fields = {
+        "path",
+        "owner",
+        "tier",
+        "trigger_paths",
+        "command",
+        "estimated_seconds",
+        "platform",
+        "fixture_policy",
+    }
+    tiers = {"pr_static", "milestone_contract", "phase_contract", "dynamic_fixture"}
+    platforms = {"any", "powershell"}
+    fixtures = {"none", "repository-fixtures", "temporary-only"}
+    inventory_paths: set[str] = set()
+    for index, entry in enumerate(entries):
+        label = f"{normalized(POLICY_RELATIVE)}#python_tests.entries[{index}]"
+        if not isinstance(entry, dict) or set(entry) != expected_fields:
+            findings.append(Finding("test-inventory-schema", label, "unexpected entry fields"))
+            continue
+        path = entry["path"]
+        if (
+            not isinstance(path, str)
+            or "\\" in path
+            or not path.startswith("scripts/tests/test_")
+            or not path.endswith(".py")
+        ):
+            findings.append(Finding("test-inventory-path", label, str(path)))
+            continue
+        if path in inventory_paths:
+            findings.append(Finding("test-inventory-duplicate", path, "duplicate path"))
+        inventory_paths.add(path)
+        if not (root / path).is_file():
+            findings.append(Finding("test-inventory-extra", path, "file is missing"))
+        module = path.removesuffix(".py").replace("/", ".")
+        expected_command = f"python -m unittest {module} -v"
+        if entry["command"] != expected_command:
+            findings.append(Finding("test-inventory-command", path, expected_command))
+        if not isinstance(entry["owner"], str) or not entry["owner"]:
+            findings.append(Finding("test-inventory-owner", path, "owner is required"))
+        if entry["tier"] not in tiers:
+            findings.append(Finding("test-inventory-tier", path, str(entry["tier"])))
+        if entry["platform"] not in platforms:
+            findings.append(Finding("test-inventory-platform", path, str(entry["platform"])))
+        if entry["fixture_policy"] not in fixtures:
+            findings.append(Finding("test-inventory-fixture", path, str(entry["fixture_policy"])))
+        if not isinstance(entry["estimated_seconds"], int) or entry["estimated_seconds"] <= 0:
+            findings.append(Finding("test-inventory-duration", path, str(entry["estimated_seconds"])))
+        if (
+            not isinstance(entry["trigger_paths"], list)
+            or not entry["trigger_paths"]
+            or not all(isinstance(value, str) and value for value in entry["trigger_paths"])
+        ):
+            findings.append(Finding("test-inventory-trigger", path, "trigger_paths must be non-empty"))
+
+    discovered = {
+        normalized(path.relative_to(root))
+        for path in (root / "scripts/tests").glob("test_*.py")
+    }
+    for path in sorted(discovered - inventory_paths):
+        findings.append(Finding("test-inventory-missing", path, "test file is not inventoried"))
+    for path in sorted(inventory_paths - discovered):
+        findings.append(Finding("test-inventory-extra", path, "inventory file is not discovered"))
+
+    ci = config["ci"]
+    if not isinstance(ci, dict) or set(ci) != {"guards", "contracts"}:
+        findings.append(Finding("test-inventory-ci", normalized(POLICY_RELATIVE), "unexpected ci schema"))
+    else:
+        workflow_path = policy["root"]["workflow"]
+        workflow = (root / workflow_path).read_text(encoding="utf-8")
+        for command in ci.values():
+            if command not in workflow:
+                findings.append(Finding("test-inventory-ci", workflow_path, f"missing {command}"))
+        if 'test_*guard.py' in workflow:
+            findings.append(Finding("test-inventory-ci", workflow_path, "obsolete guard-only discovery remains"))
     return findings
 
 
@@ -413,8 +565,8 @@ def render_document(policy: dict[str, Any], facts: Facts) -> str:
         "This index binds architecture validation, compatibility retirement, and production evidence to the",
         "current repository facts. Workflow artifacts are evidence only when their name includes the tested",
         "commit SHA; this document does not claim that a scheduled or release run succeeded.",
-        "",
-        "## Toolchain and root workspace",
+            "",
+            "## Toolchain and root workspace",
         "",
         f"- Formal Rust toolchain and MSRV: `{facts.formal_toolchain}`.",
         f"- Root workspace packages: {len(facts.root_packages)}.",
@@ -425,6 +577,25 @@ def render_document(policy: dict[str, Any], facts: Facts) -> str:
         "|---|---|",
     ]
     lines.extend(f"| `{package.name}` | `{package.path}` |" for package in facts.root_packages)
+    baseline = policy["implementation_baseline"]
+    lines.extend(
+        [
+            "",
+            "## Current implementation baseline",
+            "",
+            f"- Baseline ID: `{baseline['id']}`.",
+            f"- Generator: `python {baseline['generator']}`.",
+            f"- Local artifact: `{baseline['output']}` (generated, not committed).",
+            f"- Historical review input: `{baseline['historical_review_commit']}`.",
+            f"- Planning snapshot input: `{baseline['planning_snapshot_commit']}`.",
+            f"- Distinction: {baseline['historical_difference']}",
+            "",
+            "The manifest records the current commit, dirty state, normalized Cargo metadata, toolchains,",
+            "hardware/filesystem facts, project routes, commands, and evidence checksums. A dirty manifest",
+            "is explicitly ineligible as a clean release candidate. Later performance and fault artifacts",
+            "must reference this baseline ID or a deliberately versioned successor.",
+        ]
+    )
     lines.extend(
         [
             "",
@@ -490,6 +661,22 @@ def render_document(policy: dict[str, Any], facts: Facts) -> str:
             "document-hidden for tests and migration harnesses; production composition roots use `RuntimeOwner`",
             "and inject `ChildServiceContext`/`TaskGroup` capabilities.",
             "",
+            "## Python architecture test inventory",
+            "",
+            f"- Inventoried test modules: {len(policy['python_tests']['entries'])}.",
+            f"- Guard runner: `{policy['python_tests']['ci']['guards']}`.",
+            f"- Contract runner: `{policy['python_tests']['ci']['contracts']}`.",
+            "",
+            "| Tier | Modules |",
+            "|---|---:|",
+        ]
+    )
+    for tier in ("pr_static", "milestone_contract", "phase_contract", "dynamic_fixture"):
+        count = sum(entry["tier"] == tier for entry in policy["python_tests"]["entries"])
+        lines.append(f"| `{tier}` | {count} |")
+    lines.extend(
+        [
+            "",
             "## Evidence workflows and artifact identities",
             "",
             "| Evidence | Workflow | Artifact identity |",
@@ -529,6 +716,8 @@ def render_document(policy: dict[str, Any], facts: Facts) -> str:
 
 def validate(root: Path, policy: dict[str, Any], facts: Facts) -> list[Finding]:
     findings = validate_schema(policy)
+    findings.extend(validate_implementation_baseline(root, policy))
+    findings.extend(validate_python_tests(root, policy))
     findings.extend(validate_toolchains(root, policy, facts))
     findings.extend(validate_routes(root, policy, facts))
     findings.extend(validate_tokio(policy, facts))

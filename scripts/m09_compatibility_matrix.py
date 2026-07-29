@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Run the frozen M09 public-feature, wire, and storage compatibility matrix."""
+"""Run the frozen public-feature, wire, and storage compatibility matrix."""
 
 from __future__ import annotations
 
@@ -103,9 +103,9 @@ MATRIX = (
         "feature",
         ("cargo", "check", "-p", "rocketmq-admin-core", "--no-default-features", "--features", "client-adapter"),
     ),
-    MatrixEntry("admin-default-legacy", "feature", ("cargo", "test", "-p", "rocketmq-admin-core")),
+    MatrixEntry("admin-default", "feature", ("cargo", "test", "-p", "rocketmq-admin-core")),
     MatrixEntry("proxy-no-default", "feature", ("cargo", "check", "-p", "rocketmq-proxy", "--no-default-features")),
-    MatrixEntry("proxy-default-r0", "feature", ("cargo", "test", "-p", "rocketmq-proxy")),
+    MatrixEntry("proxy-default-modes", "feature", ("cargo", "test", "-p", "rocketmq-proxy")),
     MatrixEntry(
         "proxy-observability",
         "feature",
@@ -118,34 +118,34 @@ MATRIX = (
     ),
     MatrixEntry("proxy-all-features", "feature", ("cargo", "check", "-p", "rocketmq-proxy", "--all-features")),
     MatrixEntry(
-        "common-protocol-codec",
+        "protocol-message-codec",
         "wire",
-        ("cargo", "test", "-p", "rocketmq-common", "--test", "protocol_message_codec_compatibility"),
+        ("cargo", "test", "-p", "rocketmq-protocol", "--test", "message_codec_compatibility"),
     ),
     MatrixEntry(
-        "remoting-extraction",
+        "protocol-remoting-defaults",
         "wire",
-        ("cargo", "test", "-p", "rocketmq-remoting", "--test", "protocol_extraction_compatibility"),
+        ("cargo", "test", "-p", "rocketmq-protocol", "--test", "remoting_command_defaults"),
     ),
     MatrixEntry(
-        "remoting-wire",
+        "protocol-remoting-wire-golden",
         "wire",
-        ("cargo", "test", "-p", "rocketmq-remoting", "--test", "protocol_compatibility_tests"),
+        ("cargo", "test", "-p", "rocketmq-protocol", "--test", "remoting_wire_golden"),
     ),
     MatrixEntry(
-        "remoting-legacy-facades",
+        "transport-protocol-compatibility",
         "wire",
-        ("cargo", "test", "-p", "rocketmq-remoting", "--test", "m04_compatibility_facades"),
+        ("cargo", "test", "-p", "rocketmq-transport", "--test", "protocol_compatibility"),
     ),
     MatrixEntry(
-        "proxy-canonical-legacy",
+        "proxy-grpc-ingress",
         "wire",
-        ("cargo", "test", "-p", "rocketmq-proxy", "--test", "core_compatibility"),
+        ("cargo", "test", "-p", "rocketmq-proxy", "--test", "grpc_ingress"),
     ),
     MatrixEntry(
-        "runtime-canonical-legacy",
+        "runtime-lifecycle-contract",
         "wire",
-        ("cargo", "test", "-p", "rocketmq-rust", "--test", "runtime_compatibility"),
+        ("cargo", "test", "-p", "rocketmq-runtime", "--test", "runtime_model"),
     ),
     MatrixEntry(
         "local-cq-20-byte",
@@ -158,19 +158,19 @@ MATRIX = (
         ("cargo", "test", "-p", "rocketmq-store-local", "--test", "index_codec"),
     ),
     MatrixEntry(
-        "store-local-record-facade",
+        "store-capability-conformance",
         "storage",
-        ("cargo", "test", "-p", "rocketmq-store", "--test", "m06_store_local_record_compatibility"),
+        ("cargo", "test", "-p", "rocketmq-store", "--test", "capability_conformance_tests"),
     ),
     MatrixEntry(
-        "store-local-facade",
+        "store-local-components",
         "storage",
-        ("cargo", "test", "-p", "rocketmq-store", "--test", "m06_store_local_compatibility"),
+        ("cargo", "test", "-p", "rocketmq-store", "--test", "local_store_component_contract"),
     ),
     MatrixEntry(
-        "store-commitlog-facade",
+        "store-public-api-contract",
         "storage",
-        ("cargo", "test", "-p", "rocketmq-store", "--test", "m06_store_local_commitlog_compatibility"),
+        ("cargo", "test", "-p", "rocketmq-store", "--test", "public_api_contract"),
     ),
     MatrixEntry(
         "store-commitlog-fail-closed",

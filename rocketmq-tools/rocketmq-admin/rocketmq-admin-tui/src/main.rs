@@ -34,11 +34,12 @@ const ENTRYPOINT_MAX_BLOCKING_THREADS: usize = 64;
 
 fn main() -> anyhow::Result<()> {
     let owner = RuntimeOwner::new(admin_tui_runtime_config()).context("failed to build rocketmq-admin-tui runtime")?;
-    let client_runtime = ClientRuntime::new(
+    let client_runtime = ClientRuntime::try_new(
         owner.root_context().child("rocketmq-admin-client"),
         ClientRuntimeConfig::default(),
         TelemetryHandle::noop(),
-    );
+    )
+    .context("failed to initialize rocketmq-admin-tui client runtime")?;
     let run_result = owner.block_on(async {
         let run_result = run(client_runtime.clone()).await;
         let report = client_runtime.shutdown().await;

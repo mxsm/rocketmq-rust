@@ -18,6 +18,8 @@ use rocketmq_admin_cli::rocketmq_cli::RocketMQCli;
 use rocketmq_admin_core::client_adapter::ClientRuntime;
 use rocketmq_admin_core::client_adapter::ClientRuntimeConfig;
 use rocketmq_admin_core::client_adapter::TelemetryHandle;
+use rocketmq_error::RocketMQError;
+use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::mq_version::CURRENT_VERSION;
 use rocketmq_protocol::protocol::remoting_command_facade::initialize_remoting_version;
 use rocketmq_runtime::RuntimeConfig;
@@ -26,45 +28,60 @@ use rocketmq_runtime::RuntimeOwner;
 const CLI_RUNTIME_STACK_SIZE: usize = 16 * 1024 * 1024;
 
 fn main() {
-    let handle = std::thread::Builder::new()
+    let handle = match std::thread::Builder::new()
         .name("rocketmq-admin-cli-main".to_string())
         .stack_size(CLI_RUNTIME_STACK_SIZE)
-        .spawn(|| {
-            let owner =
-                RuntimeOwner::new(admin_cli_runtime_config()).expect("failed to build rocketmq-admin-cli runtime");
-            let client_runtime = ClientRuntime::new(
-                owner.root_context().child("rocketmq-admin-client"),
-                ClientRuntimeConfig::default(),
-                TelemetryHandle::noop(),
-            );
-            let exit_code = owner.block_on(async_main(client_runtime.clone()));
-            let client_report = owner.block_on(client_runtime.shutdown());
-            if !client_report.is_healthy() {
-                tracing::warn!(
-                    report = %client_report.to_json(),
-                    "rocketmq-admin client runtime shutdown report is unhealthy"
-                );
-            }
-            let report = owner
-                .shutdown_runtime_blocking()
-                .expect("failed to shutdown rocketmq-admin-cli runtime");
-            if !report.is_healthy() {
-                tracing::warn!(
-                    report = %report.to_json(),
-                    "rocketmq-admin-cli runtime shutdown report is unhealthy"
-                );
-            }
-            exit_code
-        })
-        .expect("failed to spawn rocketmq-admin-cli main thread");
+        .spawn(run_cli_main_thread)
+    {
+        Ok(handle) => handle,
+        Err(error) => {
+            eprintln!("failed to spawn rocketmq-admin-cli main thread: {error}");
+            std::process::exit(1);
+        }
+    };
 
     let exit_code = match handle.join() {
-        Ok(exit_code) => exit_code,
-        Err(payload) => std::panic::resume_unwind(payload),
+        Ok(Ok(exit_code)) => exit_code,
+        Ok(Err(error)) => {
+            eprintln!("failed to initialize or shut down rocketmq-admin-cli: {error}");
+            1
+        }
+        Err(_) => {
+            eprintln!("rocketmq-admin-cli main thread terminated unexpectedly");
+            1
+        }
     };
     if exit_code != 0 {
         std::process::exit(exit_code);
     }
+}
+
+fn run_cli_main_thread() -> RocketMQResult<i32> {
+    let owner = RuntimeOwner::new(admin_cli_runtime_config())
+        .map_err(|source| RocketMQError::internal("build rocketmq-admin-cli runtime", source))?;
+    let client_runtime = ClientRuntime::try_new(
+        owner.root_context().child("rocketmq-admin-client"),
+        ClientRuntimeConfig::default(),
+        TelemetryHandle::noop(),
+    )?;
+    let exit_code = owner.block_on(async_main(client_runtime.clone()));
+    let client_report = owner.block_on(client_runtime.shutdown());
+    if !client_report.is_healthy() {
+        tracing::warn!(
+            report = %client_report.to_json(),
+            "rocketmq-admin client runtime shutdown report is unhealthy"
+        );
+    }
+    let report = owner
+        .shutdown_runtime_blocking()
+        .map_err(|source| RocketMQError::internal("shut down rocketmq-admin-cli runtime", source))?;
+    if !report.is_healthy() {
+        tracing::warn!(
+            report = %report.to_json(),
+            "rocketmq-admin-cli runtime shutdown report is unhealthy"
+        );
+    }
+    Ok(exit_code)
 }
 
 fn admin_cli_runtime_config() -> RuntimeConfig {

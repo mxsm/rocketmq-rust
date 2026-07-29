@@ -1068,11 +1068,12 @@ mod tests {
             })
             .expect("MCP query test runtime should start")
         });
-        let client_runtime = rocketmq_admin_core::client_adapter::ClientRuntime::new(
+        let client_runtime = rocketmq_admin_core::client_adapter::ClientRuntime::try_new(
             OWNER.root_context().child("client"),
             rocketmq_admin_core::client_adapter::ClientRuntimeConfig::default(),
             rocketmq_admin_core::client_adapter::TelemetryHandle::noop(),
-        );
+        )
+        .expect("MCP query test client runtime should be valid");
         let _: QueryFacade<AdminCoreSessionFactory> = QueryFacade::new(example_config(), client_runtime);
     }
 

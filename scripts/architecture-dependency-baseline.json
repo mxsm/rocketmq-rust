@@ -47,10 +47,11 @@
       "path": "rocketmq-broker/Cargo.toml",
       "alias": "rocketmq_store",
       "count": 1,
+      "debt_id": "ARC-COMP-001",
       "owner": "broker",
       "reason": "approved store composition facade",
-      "remove_by": "long-term",
-      "adr": "docs/architecture-refactor-design.md#54-目标依赖-dag"
+      "remove_by": "2.0.0",
+      "adr": "rocketmq-doc/en/architecture-debt-governance-adr.md"
     },
     {
       "rule": "compatibility-manifest-burn-down",
@@ -60,10 +61,11 @@
       "path": "rocketmq-tools/rocketmq-store-inspect/Cargo.toml",
       "alias": "rocketmq_store",
       "count": 1,
+      "debt_id": "ARC-COMP-002",
       "owner": "store-tools",
       "reason": "approved store inspection facade",
-      "remove_by": "long-term",
-      "adr": "docs/architecture-refactor-design.md#54-目标依赖-dag"
+      "remove_by": "2.0.0",
+      "adr": "rocketmq-doc/en/architecture-debt-governance-adr.md"
     }
   ],
   "source_exceptions": []

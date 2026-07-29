@@ -116,11 +116,12 @@ pub(crate) fn test_client_runtime() -> Arc<ClientRuntime> {
             .expect("dashboard Tauri test runtime should start")
     });
 
-    ClientRuntime::new(
+    ClientRuntime::try_new(
         OWNER.root_context().child("client"),
         ClientRuntimeConfig::default(),
         TelemetryHandle::noop(),
     )
+    .expect("dashboard Tauri test client runtime should be valid")
 }
 
 #[cfg(test)]
