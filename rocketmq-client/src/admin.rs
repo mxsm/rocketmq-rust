@@ -33,6 +33,12 @@ pub use mq_admin_ext_inner::MQAdminExtInner;
 pub use mq_admin_mutation_ext::BrokerConfigPatchOutcome;
 #[cfg(feature = "admin-mutation")]
 pub use mq_admin_mutation_ext::MQAdminMutationExt;
+#[cfg(feature = "admin-mutation")]
+pub use mq_admin_mutation_ext::TopicConfigPatch;
+#[cfg(feature = "admin-mutation")]
+pub use mq_admin_mutation_ext::TopicConfigPatchOutcome;
+#[cfg(feature = "admin-mutation")]
+pub use mq_admin_mutation_ext::TopicConfigVersioned;
 #[cfg(feature = "admin-read")]
 pub use mq_admin_read_ext::BrokerConfigAllowlisted;
 #[cfg(feature = "admin-read")]
