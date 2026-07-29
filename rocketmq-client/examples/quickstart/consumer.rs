@@ -53,7 +53,7 @@ impl MessageListenerConcurrently for MyMessageListener {
     fn consume_message(
         &self,
         msgs: &[&MessageExt],
-        _context: &ConsumeConcurrentlyContext,
+        _context: &mut ConsumeConcurrentlyContext,
     ) -> RocketMQResult<ConsumeConcurrentlyStatus> {
         for msg in msgs {
             info!("Receive message: {:?}", msg);

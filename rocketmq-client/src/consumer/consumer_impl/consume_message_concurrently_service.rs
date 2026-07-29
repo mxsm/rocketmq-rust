@@ -100,22 +100,33 @@ impl ConsumeMessageConcurrentlyService {
         if consume_request.msgs.is_empty() {
             return;
         }
-        let mut ack_index = context.ack_index;
-        match status {
+        let msgs_len = consume_request.msgs.len() as i32;
+        let ack_index = match status {
             ConsumeConcurrentlyStatus::ConsumeSuccess => {
-                if ack_index >= consume_request.msgs.len() as i32 {
-                    ack_index = consume_request.msgs.len() as i32 - 1;
+                match context.ack_index {
+                    None => msgs_len - 1,
+                    Some(idx) => idx.clamp(-1, msgs_len - 1),
                 }
             }
             ConsumeConcurrentlyStatus::ReconsumeLater => {
-                ack_index = -1;
+                match context.ack_index {
+                    None => -1,
+                    Some(idx) => idx.clamp(-1, msgs_len - 1),
+                }
             }
-        }
+        };
 
         match self.consumer_config.message_model {
             MessageModel::Broadcasting => {
-                for i in ((ack_index + 1) as usize)..consume_request.msgs.len() {
-                    warn!("BROADCASTING, the message consume failed, drop it");
+                let pending_start = (ack_index + 1) as usize;
+                if pending_start < consume_request.msgs.len() {
+                    let pending = consume_request.msgs.split_off(pending_start);
+                    self.submit_consume_request_later(
+                        pending,
+                        this,
+                        consume_request.process_queue.clone(),
+                        consume_request.message_queue.clone(),
+                    );
                 }
             }
             MessageModel::Clustering => {
@@ -227,7 +238,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
         msg.broker_name = broker_name.unwrap_or_default();
         let mq = MessageQueue::from_parts(msg.topic().clone(), msg.broker_name.clone(), msg.queue_id());
         let mut msgs = vec![ArcMut::new(msg)];
-        let context = ConsumeConcurrentlyContext::new(mq);
+        let mut context = ConsumeConcurrentlyContext::new(mq);
         self.default_mqpush_consumer_impl
             .as_ref()
             .unwrap()
@@ -238,7 +249,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
 
         let status = self.message_listener.consume_message(
             &msgs.iter().map(|msg| msg.as_ref()).collect::<Vec<&MessageExt>>(),
-            &context,
+            &mut context,
         );
         let mut result = ConsumeMessageDirectlyResult::default();
         result.set_order(false);
@@ -336,11 +347,7 @@ impl ConsumeRequest {
             );
             return;
         }
-        let context = ConsumeConcurrentlyContext {
-            message_queue: self.message_queue.clone(),
-            delay_level_when_next_consume: 0,
-            ack_index: i32::MAX,
-        };
+        let mut context = ConsumeConcurrentlyContext::new(self.message_queue.clone());
 
         let mut default_mqpush_consumer_impl = self.default_mqpush_consumer_impl.as_ref().unwrap().clone();
         let consumer_group = self.consumer_group.clone();
@@ -380,7 +387,7 @@ impl ConsumeRequest {
                 default_mqpush_consumer_impl.execute_hook_before(&mut consume_message_context);
             }
             let vec = self.msgs.iter().map(|msg| msg.as_ref()).collect::<Vec<&MessageExt>>();
-            match self.message_listener.consume_message(&vec, &context) {
+            match self.message_listener.consume_message(&vec, &mut context) {
                 Ok(value) => {
                     status = Some(value);
                 }
