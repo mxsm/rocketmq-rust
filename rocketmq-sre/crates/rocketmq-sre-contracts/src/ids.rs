@@ -87,6 +87,18 @@ uuid_id!(
     FleetInspectionRunId,
     "Stable identifier for a bounded multi-cluster inspection run."
 );
+uuid_id!(
+    EnterpriseIntegrationEventId,
+    "Stable identifier for a signed enterprise integration event."
+);
+uuid_id!(
+    FleetOnboardingAssessmentId,
+    "Stable identifier for an immutable Fleet onboarding assessment."
+);
+uuid_id!(
+    FleetQuotaDecisionId,
+    "Stable identifier for one persisted Fleet quota decision."
+);
 uuid_id!(ConversationId, "Stable identifier for an operator conversation.");
 uuid_id!(InvestigationId, "Stable identifier for a multi-step investigation.");
 uuid_id!(TimelineEventId, "Stable identifier for a workflow timeline event.");
