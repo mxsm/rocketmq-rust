@@ -122,10 +122,18 @@ pub(crate) async fn seed_fixture(pool: &PgPool) -> Fixture {
     seed_fixture_for_action(pool, ExecutionAction::ProxyScaleOutOne).await
 }
 
+#[allow(
+    dead_code,
+    reason = "shared support is compiled into integration targets that do not exercise the logger scenario"
+)]
 pub(crate) async fn seed_logger_fixture(pool: &PgPool) -> Fixture {
     seed_fixture_for_action(pool, ExecutionAction::ObservabilityLoggerLevelTtl).await
 }
 
+#[allow(
+    dead_code,
+    reason = "shared support is compiled into integration targets that do not exercise the Proxy restart scenario"
+)]
 pub(crate) async fn seed_proxy_restart_fixture(pool: &PgPool) -> Fixture {
     seed_fixture_for_action(pool, ExecutionAction::ProxyRestartOne).await
 }
