@@ -102,9 +102,7 @@ impl ProductionCredentialRotationClient {
         if config.targets.is_empty() {
             return Err(ExecutionAgentError::Configuration);
         }
-        let mut kubernetes_config = Config::infer()
-            .await
-            .map_err(|_| ExecutionAgentError::Configuration)?;
+        let mut kubernetes_config = Config::infer().await.map_err(|_| ExecutionAgentError::Configuration)?;
         kubernetes_config.proxy_url = None;
         let _ = rustls::crypto::ring::default_provider().install_default();
         let client = Client::try_from(kubernetes_config).map_err(|_| ExecutionAgentError::Configuration)?;
@@ -200,8 +198,7 @@ impl ProductionCredentialRotationClient {
             .get(SECURITY_TOKEN_DATA)
             .map(|value| bounded_utf8(value.0.as_slice(), 16 * 1024))
             .transpose()?;
-        AdminCredentials::try_new(access_key, secret_key, security_token)
-            .map_err(|_| ExecutionAgentError::DriverFailed)
+        AdminCredentials::try_new(access_key, secret_key, security_token).map_err(|_| ExecutionAgentError::DriverFailed)
     }
 
     async fn replace_selector(
@@ -215,11 +212,8 @@ impl ProductionCredentialRotationClient {
             .map_err(|_| ExecutionAgentError::DriverFailed)?;
         parse_selector(
             replaced,
-            annotation(
-                &selector.metadata.annotations,
-                CREDENTIAL_SET_ANNOTATION,
-            )
-            .ok_or(ExecutionAgentError::DriverFailed)?,
+            annotation(&selector.metadata.annotations, CREDENTIAL_SET_ANNOTATION)
+                .ok_or(ExecutionAgentError::DriverFailed)?,
         )
     }
 
@@ -230,39 +224,21 @@ impl ProductionCredentialRotationClient {
         let target = self.target(credential_set)?;
         let state = self.selector_state(credential_set).await?;
         let candidate_healthy = self
-            .probe(
-                credential_set,
-                &state.active_version,
-                &state.active_secret_ref,
-                target,
-            )
+            .probe(credential_set, &state.active_version, &state.active_secret_ref, target)
             .await?;
-        let retiring_healthy = match (
-            state.retiring_version.as_deref(),
-            state.retiring_secret_ref.as_deref(),
-        ) {
-            (Some(version), Some(reference)) => {
-                self.probe(credential_set, version, reference, target).await?
-            }
+        let retiring_healthy = match (state.retiring_version.as_deref(), state.retiring_secret_ref.as_deref()) {
+            (Some(version), Some(reference)) => self.probe(credential_set, version, reference, target).await?,
             (None, None) => true,
             _ => return Err(ExecutionAgentError::DriverFailed),
         };
-        Ok((
-            state,
-            candidate_healthy && retiring_healthy,
-            candidate_healthy,
-        ))
+        Ok((state, candidate_healthy && retiring_healthy, candidate_healthy))
     }
 }
 
 impl CredentialRotationClient for ProductionCredentialRotationClient {
-    fn credential_rotation_state<'a>(
-        &'a self,
-        credential_set: &'a str,
-    ) -> DriverFuture<'a, CredentialRotationState> {
+    fn credential_rotation_state<'a>(&'a self, credential_set: &'a str) -> DriverFuture<'a, CredentialRotationState> {
         Box::pin(async move {
-            let (state, all_active_healthy, candidate_healthy) =
-                self.state_with_probes(credential_set).await?;
+            let (state, all_active_healthy, candidate_healthy) = self.state_with_probes(credential_set).await?;
             Ok(CredentialRotationState {
                 active_version: state.active_version,
                 retiring_version: state.retiring_version,
@@ -276,10 +252,7 @@ impl CredentialRotationClient for ProductionCredentialRotationClient {
         })
     }
 
-    fn begin_credential_overlap<'a>(
-        &'a self,
-        request: &'a CredentialOverlapWrite,
-    ) -> DriverFuture<'a, ()> {
+    fn begin_credential_overlap<'a>(&'a self, request: &'a CredentialOverlapWrite) -> DriverFuture<'a, ()> {
         Box::pin(async move {
             let target = self.target(&request.credential_set)?;
             if request.validation_probe_topic != target.validation_probe_topic {
@@ -348,42 +321,25 @@ impl CredentialRotationClient for ProductionCredentialRotationClient {
                 .persist_before(request.execution_id, request.plan_step_id, &before, Utc::now())
                 .await?;
             let overlap_deadline = Utc::now()
-                .checked_add_signed(chrono::Duration::seconds(i64::from(
-                    request.overlap_seconds,
-                )))
+                .checked_add_signed(chrono::Duration::seconds(i64::from(request.overlap_seconds)))
                 .ok_or(ExecutionAgentError::DriverFailed)?;
             let mut selector = state.resource;
             let annotations = selector.metadata.annotations.get_or_insert_with(BTreeMap::new);
-            annotations.insert(
-                ACTIVE_VERSION_ANNOTATION.to_owned(),
-                request.candidate_version.clone(),
-            );
+            annotations.insert(ACTIVE_VERSION_ANNOTATION.to_owned(), request.candidate_version.clone());
             annotations.insert(
                 ACTIVE_SECRET_REF_ANNOTATION.to_owned(),
                 request.candidate_secret_ref.clone(),
             );
-            annotations.insert(
-                RETIRING_VERSION_ANNOTATION.to_owned(),
-                request.active_version.clone(),
-            );
-            annotations.insert(
-                RETIRING_SECRET_REF_ANNOTATION.to_owned(),
-                state.active_secret_ref,
-            );
+            annotations.insert(RETIRING_VERSION_ANNOTATION.to_owned(), request.active_version.clone());
+            annotations.insert(RETIRING_SECRET_REF_ANNOTATION.to_owned(), state.active_secret_ref);
             annotations.insert(
                 OVERLAP_DEADLINE_ANNOTATION.to_owned(),
                 overlap_deadline.to_rfc3339_opts(SecondsFormat::Secs, true),
             );
             annotations.insert(PROBE_HEALTHY_ANNOTATION.to_owned(), "true".to_owned());
             annotations.insert(OPERATION_ANNOTATION.to_owned(), request.operation_id.clone());
-            annotations.insert(
-                EXECUTION_ANNOTATION.to_owned(),
-                request.execution_id.to_string(),
-            );
-            annotations.insert(
-                PLAN_STEP_ANNOTATION.to_owned(),
-                request.plan_step_id.to_string(),
-            );
+            annotations.insert(EXECUTION_ANNOTATION.to_owned(), request.execution_id.to_string());
+            annotations.insert(PLAN_STEP_ANNOTATION.to_owned(), request.plan_step_id.to_string());
             let replaced = self.replace_selector(target, selector).await?;
             if replaced.uid != before.selector_uid
                 || replaced.active_version != request.candidate_version
@@ -414,10 +370,7 @@ impl CredentialRotationClient for ProductionCredentialRotationClient {
         })
     }
 
-    fn restore_previous_credential<'a>(
-        &'a self,
-        request: &'a CredentialOverlapRestore,
-    ) -> DriverFuture<'a, ()> {
+    fn restore_previous_credential<'a>(&'a self, request: &'a CredentialOverlapRestore) -> DriverFuture<'a, ()> {
         Box::pin(async move {
             let before = self
                 .journal
@@ -445,21 +398,17 @@ impl CredentialRotationClient for ProductionCredentialRotationClient {
             {
                 return Ok(());
             }
-            let candidate_hash = canonical_precondition_hash(&state.active_secret_ref)
-                .map_err(|_| ExecutionAgentError::DriverFailed)?;
+            let candidate_hash =
+                canonical_precondition_hash(&state.active_secret_ref).map_err(|_| ExecutionAgentError::DriverFailed)?;
             let execution_id = request.execution_id.to_string();
             let plan_step_id = request.plan_step_id.to_string();
             if state.active_version != before.candidate_version
-                || state.retiring_version.as_deref()
-                    != Some(before.previous_active_version.as_str())
-                || state.retiring_secret_ref.as_deref()
-                    != Some(before.previous_active_secret_ref.as_str())
+                || state.retiring_version.as_deref() != Some(before.previous_active_version.as_str())
+                || state.retiring_secret_ref.as_deref() != Some(before.previous_active_secret_ref.as_str())
                 || state.last_operation_id.as_deref() != Some(before.operation_id.as_str())
                 || candidate_hash != before.candidate_secret_ref_hash
-                || annotation(&state.resource.metadata.annotations, EXECUTION_ANNOTATION)
-                    != Some(execution_id.as_str())
-                || annotation(&state.resource.metadata.annotations, PLAN_STEP_ANNOTATION)
-                    != Some(plan_step_id.as_str())
+                || annotation(&state.resource.metadata.annotations, EXECUTION_ANNOTATION) != Some(execution_id.as_str())
+                || annotation(&state.resource.metadata.annotations, PLAN_STEP_ANNOTATION) != Some(plan_step_id.as_str())
             {
                 return Err(ExecutionAgentError::DriverFailed);
             }
@@ -536,11 +485,7 @@ fn parse_secret_reference(value: &str) -> Result<KubernetesSecretReference, Exec
     let (namespace, name) = path
         .split_once('/')
         .filter(|(namespace, name)| {
-            !namespace.is_empty()
-                && !name.is_empty()
-                && !name.contains('/')
-                && dns_name(namespace)
-                && dns_name(name)
+            !namespace.is_empty() && !name.is_empty() && !name.contains('/') && dns_name(namespace) && dns_name(name)
         })
         .ok_or(ExecutionAgentError::InvalidRequest)?;
     Ok(KubernetesSecretReference {
@@ -549,20 +494,13 @@ fn parse_secret_reference(value: &str) -> Result<KubernetesSecretReference, Exec
     })
 }
 
-fn parse_selector(
-    selector: ConfigMap,
-    credential_set: &str,
-) -> Result<SelectorState, ExecutionAgentError> {
+fn parse_selector(selector: ConfigMap, credential_set: &str) -> Result<SelectorState, ExecutionAgentError> {
     let annotations = selector
         .metadata
         .annotations
         .as_ref()
         .ok_or(ExecutionAgentError::DriverFailed)?;
-    if annotation(
-        &selector.metadata.annotations,
-        CREDENTIAL_SET_ANNOTATION,
-    ) != Some(credential_set)
-    {
+    if annotation(&selector.metadata.annotations, CREDENTIAL_SET_ANNOTATION) != Some(credential_set) {
         return Err(ExecutionAgentError::DriverFailed);
     }
     let active_version = required_annotation(annotations, ACTIVE_VERSION_ANNOTATION, 128)?;
@@ -586,10 +524,7 @@ fn parse_selector(
     if overlap_deadline.is_some() != retiring_version.is_some() {
         return Err(ExecutionAgentError::DriverFailed);
     }
-    let candidate_probe_healthy = match annotation(
-        &selector.metadata.annotations,
-        PROBE_HEALTHY_ANNOTATION,
-    ) {
+    let candidate_probe_healthy = match annotation(&selector.metadata.annotations, PROBE_HEALTHY_ANNOTATION) {
         Some("true") => true,
         Some("false") | None => false,
         Some(_) => return Err(ExecutionAgentError::DriverFailed),
@@ -664,10 +599,7 @@ fn optional_annotation(
         .transpose()
 }
 
-fn annotation<'a>(
-    annotations: &'a Option<BTreeMap<String, String>>,
-    key: &str,
-) -> Option<&'a str> {
+fn annotation<'a>(annotations: &'a Option<BTreeMap<String, String>>, key: &str) -> Option<&'a str> {
     annotations
         .as_ref()
         .and_then(|annotations| annotations.get(key))
