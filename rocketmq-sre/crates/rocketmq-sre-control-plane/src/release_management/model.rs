@@ -21,6 +21,9 @@ use rocketmq_sre_contracts::ApprovalRecord;
 use rocketmq_sre_contracts::AuditEvent;
 use rocketmq_sre_contracts::ClusterId;
 use rocketmq_sre_contracts::CorrelationId;
+use rocketmq_sre_contracts::EnterpriseIntegrationEvent;
+use rocketmq_sre_contracts::EnterpriseIntegrationEventKind;
+use rocketmq_sre_contracts::EnterpriseIntegrationPayload;
 use rocketmq_sre_contracts::EvidenceId;
 use rocketmq_sre_contracts::ExecutionId;
 use rocketmq_sre_contracts::ExternalApprovalInput;
@@ -28,6 +31,7 @@ use rocketmq_sre_contracts::IncidentId;
 use rocketmq_sre_contracts::IntegrationAdapterKind;
 use rocketmq_sre_contracts::IntegrationDelivery;
 use rocketmq_sre_contracts::IntegrationEventKind;
+use rocketmq_sre_contracts::IntegrationHealth;
 use rocketmq_sre_contracts::IntegrationTarget;
 use rocketmq_sre_contracts::IntegrationTargetId;
 use rocketmq_sre_contracts::NotificationTargetId;
@@ -45,6 +49,50 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 use uuid::Uuid;
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct EnterpriseIngressRequest {
+    pub(super) event_kind: EnterpriseIntegrationEventKind,
+    pub(super) external_event_id: String,
+    pub(super) source_version: String,
+    pub(super) occurred_at: DateTime<Utc>,
+    pub(super) payload: EnterpriseIntegrationPayload,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct EnterpriseIngressAuthorization {
+    pub(super) timestamp: String,
+    pub(super) nonce: String,
+    pub(super) signature: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(super) struct EnterpriseIngressView {
+    pub(super) schema_version: &'static str,
+    pub(super) event: EnterpriseIntegrationEvent,
+    pub(super) duplicate: bool,
+    pub(super) followup_id: Option<Uuid>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub(super) struct EnterpriseEventListQuery {
+    pub(super) event_kind: Option<EnterpriseIntegrationEventKind>,
+    pub(super) limit: Option<u32>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(super) struct EnterpriseEventPage {
+    pub(super) schema_version: &'static str,
+    pub(super) items: Vec<EnterpriseIntegrationEvent>,
+    pub(super) partial: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(super) struct IntegrationHealthView {
+    pub(super) schema_version: &'static str,
+    pub(super) health: IntegrationHealth,
+}
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -73,6 +121,24 @@ const fn default_enabled() -> bool {
 #[serde(deny_unknown_fields)]
 pub(super) struct SetIntegrationTargetStateRequest {
     pub(super) enabled: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RotateIntegrationSecretRequest {
+    pub(super) secret_reference: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ReplayIntegrationDeliveryRequest {
+    pub(super) reason: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(super) struct ReplayIntegrationDeliveryView {
+    pub(super) schema_version: &'static str,
+    pub(super) delivery: IntegrationDelivery,
 }
 
 #[derive(Clone, Debug, Deserialize)]
