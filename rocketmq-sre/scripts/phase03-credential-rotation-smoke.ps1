@@ -246,7 +246,8 @@ if (-not $runRoot.StartsWith($expectedTemporaryRoot, [StringComparison]::Ordinal
 $namesrvData = Join-Path $runRoot 'namesrv'
 $brokerData = Join-Path $runRoot 'broker'
 $authData = Join-Path $brokerData 'auth'
-New-Item -ItemType Directory -Force -Path $namesrvData, $brokerData, $authData | Out-Null
+$runtimeBin = Join-Path $runRoot 'bin'
+New-Item -ItemType Directory -Force -Path $namesrvData, $brokerData, $authData, $runtimeBin | Out-Null
 
 $readAccessKey = 'phase03-credential-reader'
 $readSecretKey = New-TestSecret
@@ -365,13 +366,30 @@ try {
         '--bin', 'rocketmq-admin-cli'
     ) 'RocketMQ credential-rotation test-cluster build'
 
-    $namesrvBinary = Join-Path $ClusterTargetDir 'debug/rocketmq-namesrv-rust.exe'
-    $brokerBinary = Join-Path $ClusterTargetDir 'debug/rocketmq-broker-rust.exe'
-    $adminBinary = Join-Path $ClusterTargetDir 'debug/rocketmq-admin-cli.exe'
-    foreach ($binary in @($namesrvBinary, $brokerBinary, $adminBinary)) {
+    $builtNamesrvBinary = Join-Path $ClusterTargetDir 'debug/rocketmq-namesrv-rust.exe'
+    $builtBrokerBinary = Join-Path $ClusterTargetDir 'debug/rocketmq-broker-rust.exe'
+    $builtAdminBinary = Join-Path $ClusterTargetDir 'debug/rocketmq-admin-cli.exe'
+    foreach ($binary in @($builtNamesrvBinary, $builtBrokerBinary, $builtAdminBinary)) {
         if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) {
             throw "Expected credential-rotation smoke binary is missing: $binary"
         }
+    }
+    $namesrvBinary = Join-Path $runtimeBin 'rocketmq-namesrv-rust.exe'
+    $brokerBinary = Join-Path $runtimeBin 'rocketmq-broker-rust.exe'
+    $adminBinary = Join-Path $runtimeBin 'rocketmq-admin-cli.exe'
+    Copy-Item -LiteralPath $builtNamesrvBinary -Destination $namesrvBinary
+    Copy-Item -LiteralPath $builtBrokerBinary -Destination $brokerBinary
+    Copy-Item -LiteralPath $builtAdminBinary -Destination $adminBinary
+    Invoke-Native cargo @(
+        '+1.95.0', 'clean',
+        '--manifest-path', (Join-Path $repositoryRoot 'Cargo.toml'),
+        '--target-dir', $ClusterTargetDir
+    ) 'credential test-cluster build cleanup'
+    $targetDrive = Get-PSDrive -Name (
+        [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($ClusterTargetDir)).Substring(0, 1)
+    )
+    if (($targetDrive.Free / 1GB) -lt 15) {
+        throw 'Test-cluster build cleanup left less than 15 GiB free on the target drive.'
     }
 
     $env:ROCKETMQ_SECURITY_PROFILE = 'development-insecure-loopback'
