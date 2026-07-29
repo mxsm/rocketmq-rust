@@ -245,6 +245,7 @@ mod tests {
                 ExecutionAction::ProxyScaleOutOne,
                 ExecutionAction::ProxyRestartOne,
                 ExecutionAction::BrokerConfigPatchAllowlisted,
+                ExecutionAction::TopicConfigPatchAllowlisted,
                 ExecutionAction::TelemetryCollectorRestartOne,
             ]
         );
