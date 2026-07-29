@@ -42,6 +42,7 @@ use rocketmq_sre_probe::ProbeIdentity;
 use rocketmq_sre_probe::ProbePlan;
 use rocketmq_sre_probe::evidence::capture_probe_evidence;
 use rocketmq_sre_probe::load_probe_acl_config;
+use rocketmq_sre_probe::scenario::ProbeRunStatus;
 use rocketmq_sre_probe::scenario::ProbeScenario;
 use rocketmq_sre_probe::scenario::run_scenario;
 use thiserror::Error;
@@ -100,6 +101,8 @@ enum ProbeRunError {
     InvalidIdentity(#[from] rocketmq_sre_probe::ProbeIdentityError),
     #[error("probe Evidence could not be captured")]
     Evidence(#[from] rocketmq_sre_probe::evidence::ProbeEvidenceError),
+    #[error("probe scenario did not satisfy its bounded success contract")]
+    ScenarioFailed,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -149,6 +152,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let runtime_shutdown = runtime_owner.shutdown_runtime_blocking();
 
     let operation_result = operation_result?;
+    let scenario_succeeded = operation_result.scenario_succeeded;
     let mut cleanup_partial = operation_result.cleanup_partial;
     if let Some(evidence) = operation_result.evidence {
         println!("{}", serde_json::to_string(&evidence)?);
@@ -175,6 +179,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         "probe_result command={} cleanup_partial={cleanup_partial}",
         command.as_str()
     );
+    if !scenario_succeeded {
+        return Err(ProbeRunError::ScenarioFailed.into());
+    }
     Ok(())
 }
 
@@ -266,6 +273,7 @@ where
 struct CommandResult {
     cleanup_partial: bool,
     evidence: Option<rocketmq_sre_contracts::EvidenceSnapshot>,
+    scenario_succeeded: bool,
 }
 
 async fn run_command(
@@ -312,6 +320,7 @@ async fn run_command(
             Ok(CommandResult {
                 cleanup_partial: result.cleanup.partial,
                 evidence: Some(evidence),
+                scenario_succeeded: result.status == ProbeRunStatus::Succeeded,
             })
         }
     }
@@ -321,6 +330,7 @@ const fn legacy_result(cleanup_partial: bool) -> CommandResult {
     CommandResult {
         cleanup_partial,
         evidence: None,
+        scenario_succeeded: true,
     }
 }
 
