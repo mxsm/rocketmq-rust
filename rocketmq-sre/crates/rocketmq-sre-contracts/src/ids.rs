@@ -77,6 +77,7 @@ uuid_id!(CorrelationId, "Identifier propagated across one logical SRE operation.
 uuid_id!(ClusterId, "Internal identifier for an onboarded cluster.");
 uuid_id!(TenantId, "Stable tenant boundary identifier.");
 uuid_id!(FleetId, "Stable identifier for an enterprise RocketMQ fleet.");
+uuid_id!(FleetReleaseId, "Stable identifier for one multi-cluster Fleet release.");
 uuid_id!(RegionId, "Stable identifier for a data-residency region.");
 uuid_id!(QuotaPolicyId, "Stable identifier for a versioned Fleet quota policy.");
 uuid_id!(
