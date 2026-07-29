@@ -166,18 +166,28 @@ cargo build --locked --release --package rocketmq-broker --features otlp-metrics
 cargo build --locked --release --package rocketmq-namesrv --features otlp-metrics,otlp-traces,otlp-logs --bin rocketmq-namesrv-rust
 cargo build --locked --release --package rocketmq-controller --features metrics-otlp,otlp-traces,otlp-logs --bin rocketmq-controller-rust
 cargo build --locked --release --package rocketmq-proxy --features otlp-metrics,otlp-traces,otlp-logs --bin rocketmq-proxy-rust
-export CARGO_TARGET_DIR=/workspace/target
-cargo build --manifest-path rocketmq-tools/rocketmq-mcp/Cargo.toml --locked --release --package rocketmq-mcp --features streamable-http,otlp --bin rocketmq-mcp
 install -d /opt/rocketmq-binaries
 for binary in \
     rocketmq-broker-rust \
     rocketmq-namesrv-rust \
     rocketmq-controller-rust \
-    rocketmq-proxy-rust \
-    rocketmq-mcp
+    rocketmq-proxy-rust
 do
     install -m 0555 "/workspace/target/release/${binary}" "/opt/rocketmq-binaries/${binary}"
 done
+EOF
+
+FROM builder-base AS mcp-builder
+
+COPY . .
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/workspace/target,sharing=locked <<EOF
+set -eux
+export CARGO_TARGET_DIR=/workspace/target
+cargo build --manifest-path rocketmq-tools/rocketmq-mcp/Cargo.toml --locked --release --package rocketmq-mcp --features streamable-http,otlp --bin rocketmq-mcp
+install -D -m 0555 /workspace/target/release/rocketmq-mcp /opt/rocketmq-binaries/rocketmq-mcp
 EOF
 
 FROM runtime-base AS service-runtime
@@ -305,7 +315,7 @@ CMD ["--config", "/etc/rocketmq/proxy.toml"]
 
 FROM service-runtime AS mcp
 
-COPY --from=service-builder --chmod=0555 /opt/rocketmq-binaries/rocketmq-mcp /usr/local/bin/rocketmq-mcp
+COPY --from=mcp-builder --chmod=0555 /opt/rocketmq-binaries/rocketmq-mcp /usr/local/bin/rocketmq-mcp
 
 LABEL org.opencontainers.image.title="RocketMQ Rust MCP" \
     io.rocketmq.image.role="mcp" \
