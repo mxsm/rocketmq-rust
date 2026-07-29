@@ -22,6 +22,8 @@ use std::sync::Arc;
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::BrokerConfigPatchOutcome as ClientBrokerConfigPatchOutcome;
 use rocketmq_client_rust::MQAdminMutationExt;
+use rocketmq_client_rust::SubscriptionGroupConfigPatch as ClientSubscriptionGroupConfigPatch;
+use rocketmq_client_rust::SubscriptionGroupConfigPatchOutcome as ClientSubscriptionGroupConfigPatchOutcome;
 use rocketmq_client_rust::TopicConfigPatch as ClientTopicConfigPatch;
 use rocketmq_client_rust::TopicConfigPatchOutcome as ClientTopicConfigPatchOutcome;
 use rocketmq_error::RocketMQError;
@@ -452,6 +454,52 @@ impl TopicMutationAdmin for MutationAdminSession {
 }
 
 impl ConsumerMutationAdmin for MutationAdminSession {
+    fn patch_config_if_version<'a>(
+        &'a mut self,
+        request: &'a consumer::PatchSubscriptionGroupConfigRequest,
+    ) -> AdminFuture<'a, consumer::PatchSubscriptionGroupConfigOutcome> {
+        Box::pin(async move {
+            self.inner.ensure_open()?;
+            let request = consumer::PatchSubscriptionGroupConfigRequest::try_new(
+                &request.broker_addr,
+                &request.group,
+                request.expected_version,
+                request.patch,
+            )?;
+            let outcome = self
+                .inner
+                .inner
+                .patch_subscription_group_config_if_version(
+                    CheetahString::from(request.broker_addr),
+                    CheetahString::from(request.group),
+                    request.expected_version,
+                    ClientSubscriptionGroupConfigPatch {
+                        retry_max_times: request.patch.retry_max_times,
+                        retry_queue_nums: request.patch.retry_queue_nums,
+                        consume_timeout_minutes: request.patch.consume_timeout_minutes,
+                    },
+                )
+                .await
+                .map_err(|error| backend_error("patch_subscription_group_config_if_version", error))?;
+            Ok(match outcome {
+                ClientSubscriptionGroupConfigPatchOutcome::Applied {
+                    previous_version,
+                    version,
+                } => consumer::PatchSubscriptionGroupConfigOutcome::Applied {
+                    previous_version,
+                    version,
+                },
+                ClientSubscriptionGroupConfigPatchOutcome::VersionConflict {
+                    expected_version,
+                    actual_version,
+                } => consumer::PatchSubscriptionGroupConfigOutcome::VersionConflict {
+                    expected_version,
+                    actual_version,
+                },
+            })
+        })
+    }
+
     fn upsert_dashboard_consumer_group<'a>(
         &'a mut self,
         request: &'a DashboardConsumerUpsertRequest,
