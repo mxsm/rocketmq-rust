@@ -37,6 +37,7 @@ mod execution_authority;
 mod execution_verification;
 mod fleet;
 mod forecast;
+mod governance;
 mod inspection;
 mod knowledge;
 mod model;
