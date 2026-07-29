@@ -59,6 +59,7 @@ services:
     replicas: 3
     replicaGroupName: rocketmq-broker
     autoCreateTopicEnable: false
+    logFilterReloadEnabled: false
     image:
       repository: rocketmq-rust/broker
       tag: local
