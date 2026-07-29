@@ -115,7 +115,7 @@ impl RegisterBrokerBody {
         bytes_mut.put_i32(topic_number as i32);
 
         // Write topic configs one by one (align with Java: iterate entries)
-        for topic_config in topic_config_table.values()  {
+        for topic_config in topic_config_table.values() {
             let topic_config_str = topic_config.encode();
             let topic_config_bytes = topic_config_str.as_bytes();
             bytes_mut.put_i32(topic_config_bytes.len() as i32);

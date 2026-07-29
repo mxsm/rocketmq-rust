@@ -5,10 +5,10 @@ pub struct ConsumeConcurrentlyContext {
     pub(crate) delay_level_when_next_consume: i32,
     /// Explicit acknowledgement index set by the listener.
     ///
-    /// - `None` means the listener did not set an explicit index; the final
-    ///   status determines behaviour (`ConsumeSuccess` ⇒ ack all, `ReconsumeLater` ⇒ ack none).
-    /// - `Some(n)` means indices `0..=n` were successfully handled. The value is
-    ///   clamped to `[−1, msgs.len() − 1]` before use; `−1` means ack nothing.
+    /// - `None` means the listener did not set an explicit index; the final status determines
+    ///   behaviour (`ConsumeSuccess` ⇒ ack all, `ReconsumeLater` ⇒ ack none).
+    /// - `Some(n)` means indices `0..=n` were successfully handled. The value is clamped to `[−1,
+    ///   msgs.len() − 1]` before use; `−1` means ack nothing.
     pub(crate) ack_index: Option<i32>,
 }
 

@@ -102,18 +102,14 @@ impl ConsumeMessageConcurrentlyService {
         }
         let msgs_len = consume_request.msgs.len() as i32;
         let ack_index = match status {
-            ConsumeConcurrentlyStatus::ConsumeSuccess => {
-                match context.ack_index {
-                    None => msgs_len - 1,
-                    Some(idx) => idx.clamp(-1, msgs_len - 1),
-                }
-            }
-            ConsumeConcurrentlyStatus::ReconsumeLater => {
-                match context.ack_index {
-                    None => -1,
-                    Some(idx) => idx.clamp(-1, msgs_len - 1),
-                }
-            }
+            ConsumeConcurrentlyStatus::ConsumeSuccess => match context.ack_index {
+                None => msgs_len - 1,
+                Some(idx) => idx.clamp(-1, msgs_len - 1),
+            },
+            ConsumeConcurrentlyStatus::ReconsumeLater => match context.ack_index {
+                None => -1,
+                Some(idx) => idx.clamp(-1, msgs_len - 1),
+            },
         };
 
         match self.consumer_config.message_model {
@@ -128,8 +124,8 @@ impl ConsumeMessageConcurrentlyService {
                         let attempts = msg.reconsume_times() as u32;
                         if attempts >= max_retries {
                             warn!(
-                                "BROADCASTING terminal failure: topic={} queueOffset={} msgId={} \
-                                 retryCnt={}, dropping message",
+                                "BROADCASTING terminal failure: topic={} queueOffset={} msgId={} retryCnt={}, \
+                                 dropping message",
                                 msg.get_topic(),
                                 msg.queue_offset,
                                 msg.msg_id,

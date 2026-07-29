@@ -351,7 +351,10 @@ mod tests {
     use super::ProcessQueue;
 
     fn make_msg(offset: i64, body_size: usize) -> ArcMut<MessageExt> {
-        let mut msg = MessageExt{ queue_offset: offset, .. MessageExt::default()};
+        let mut msg = MessageExt {
+            queue_offset: offset,
+            ..MessageExt::default()
+        };
         msg.message.body = Some(Bytes::from(vec![0u8; body_size]));
         ArcMut::new(msg)
     }

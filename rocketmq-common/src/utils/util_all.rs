@@ -207,13 +207,13 @@ pub fn bytes_to_string(src: &[u8]) -> String {
 }
 
 pub fn write_int(buffer: &mut [char], pos: usize, value: i32) {
-    for (current_pos, move_bits) in (pos..).zip((0..=28).rev().step_by(4)){
+    for (current_pos, move_bits) in (pos..).zip((0..=28).rev().step_by(4)) {
         buffer[current_pos] = HEX_ARRAY[((value >> move_bits) & 0xF) as usize];
     }
 }
 
 pub fn write_short(buffer: &mut [char], pos: usize, value: i16) {
-    for (current_pos, move_bits) in (pos..).zip((0..=12).rev().step_by(4)){
+    for (current_pos, move_bits) in (pos..).zip((0..=12).rev().step_by(4)) {
         buffer[current_pos] = HEX_ARRAY[((value >> move_bits) & 0xF) as usize];
     }
 }

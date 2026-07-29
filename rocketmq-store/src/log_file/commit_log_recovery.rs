@@ -146,7 +146,7 @@ impl<'a> BatchMessageIterator<'a> {
                         Some((msg_bytes, absolute_offset, msg_size))
                     } else {
                         None
-                    }
+                    };
                 } else {
                     // Refill buffer and retry
                     if !self.refill_buffer() {

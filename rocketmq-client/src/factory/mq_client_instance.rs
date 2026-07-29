@@ -481,7 +481,7 @@ impl MQClientInstance {
 
         {
             let consumer_table = self.consumer_table.read().await;
-            for value in consumer_table.values()  {
+            for value in consumer_table.values() {
                 value.subscriptions().iter().for_each(|sub| {
                     topic_list.insert(sub.topic.clone());
                 });
@@ -601,15 +601,13 @@ impl MQClientInstance {
                 .unwrap()
                 .get_topic_route_info_from_name_server(topic, self.client_config.mq_client_api_timeout)
                 .await
-                .unwrap_or_else(
-                    |err| {
-                        warn!(
-                            "getTopicRouteInfoFromNameServer failed, topic: {}, err: {:?}",
-                            topic, err
-                        );
-                        None
-                    },
-                )
+                .unwrap_or_else(|err| {
+                    warn!(
+                        "getTopicRouteInfoFromNameServer failed, topic: {}, err: {:?}",
+                        topic, err
+                    );
+                    None
+                })
         };
         if let Some(mut topic_route_data) = topic_route_data {
             let mut topic_route_table = self.topic_route_table.write().await;
@@ -647,7 +645,7 @@ impl MQClientInstance {
                     let mut publish_info = topic_route_data2topic_publish_info(topic, &mut topic_route_data);
                     publish_info.have_topic_router_info = true;
                     let mut producer_table = self.producer_table.write().await;
-                    for value in producer_table.values_mut(){
+                    for value in producer_table.values_mut() {
                         value.update_topic_publish_info(topic.to_string(), Some(publish_info.clone()));
                     }
                 }
@@ -702,7 +700,7 @@ impl MQClientInstance {
 
     pub async fn persist_all_consumer_offset(&mut self) {
         let consumer_table = self.consumer_table.read().await;
-        for value in consumer_table.values()  {
+        for value in consumer_table.values() {
             value.persist_consumer_offset().await;
         }
     }
@@ -924,8 +922,8 @@ impl MQClientInstance {
     async fn is_broker_in_name_server(&self, broker_name: &str) -> bool {
         let broker_addr_table = self.topic_route_table.read().await;
         for value in broker_addr_table.values() {
-            for bd in value.broker_datas.iter()  {
-                for value in bd.broker_addrs().values(){
+            for bd in value.broker_datas.iter() {
+                for value in bd.broker_addrs().values() {
                     if value.as_str() == broker_name {
                         return true;
                     }
@@ -942,7 +940,7 @@ impl MQClientInstance {
         };
 
         let consumer_table = self.consumer_table.read().await;
-        for value in consumer_table.values()  {
+        for value in consumer_table.values() {
             let mut consumer_data = ConsumerData {
                 group_name: value.group_name(),
                 consume_type: value.consume_type(),
@@ -960,7 +958,7 @@ impl MQClientInstance {
         }
         drop(consumer_table);
         let producer_table = self.producer_table.read().await;
-        for group_name in producer_table.keys()  {
+        for group_name in producer_table.keys() {
             let producer_data = ProducerData {
                 group_name: group_name.clone(),
             };

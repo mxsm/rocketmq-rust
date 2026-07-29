@@ -434,25 +434,16 @@ impl MQClientAPIImpl {
                     ResponseCode::Success => {
                         let body = result.take_body();
                         if let Some(body_inner) = body {
-                            let route_data = TopicRouteData::decode(body_inner.as_ref())
-                                .or_else(|first_err| {
-                                    let mut normalized =
-                                        String::from_utf8_lossy(body_inner.as_ref()).to_string();
-                                    for i in 0..=9 {
-                                        let key = i.to_string();
-                                        normalized = normalized
-                                            .replace(
-                                                &format!("{{{}:", key),
-                                                &format!("{{\"{}\":", key),
-                                            )
-                                            .replace(
-                                                &format!(",{}:", key),
-                                                &format!(",\"{}\":", key),
-                                            );
-                                    }
-                                    TopicRouteData::decode(normalized.as_bytes())
-                                        .map_err(|_| first_err)
-                                })?;
+                            let route_data = TopicRouteData::decode(body_inner.as_ref()).or_else(|first_err| {
+                                let mut normalized = String::from_utf8_lossy(body_inner.as_ref()).to_string();
+                                for i in 0..=9 {
+                                    let key = i.to_string();
+                                    normalized = normalized
+                                        .replace(&format!("{{{}:", key), &format!("{{\"{}\":", key))
+                                        .replace(&format!(",{}:", key), &format!(",\"{}\":", key));
+                                }
+                                TopicRouteData::decode(normalized.as_bytes()).map_err(|_| first_err)
+                            })?;
                             return Ok(Some(route_data));
                         }
                     }

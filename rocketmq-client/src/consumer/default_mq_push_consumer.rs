@@ -12,10 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_common::common::message::message_ext::MessageExt;
@@ -26,6 +22,10 @@ use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_rust::ArcMut;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 use tokio::runtime::Handle;
 
 use crate::base::client_config::ClientConfig;

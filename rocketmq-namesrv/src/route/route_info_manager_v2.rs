@@ -174,7 +174,7 @@ impl RouteInfoManagerV2 {
     /// Find broker name by broker address
     fn find_broker_name_by_addr(broker_addr_table: &BrokerAddrTable, broker_addr: &str) -> Option<String> {
         for (broker_name, broker_data) in broker_addr_table.get_all_brokers() {
-            for addr in broker_data.broker_addrs().values(){
+            for addr in broker_data.broker_addrs().values() {
                 if addr.as_str() == broker_addr {
                     return Some(broker_name.to_string());
                 }

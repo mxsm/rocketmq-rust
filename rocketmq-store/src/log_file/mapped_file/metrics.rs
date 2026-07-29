@@ -250,7 +250,7 @@ impl MappedFileMetrics {
     /// Average flush duration, or `Duration::ZERO` if no flushes occurred
     pub fn avg_flush_duration(&self) -> Duration {
         let flushes = self.total_flushes();
-        if let Some(avg_us)= self.total_flush_time_us.load(Ordering::Relaxed).checked_div(flushes) {
+        if let Some(avg_us) = self.total_flush_time_us.load(Ordering::Relaxed).checked_div(flushes) {
             Duration::from_micros(avg_us)
         } else {
             Duration::ZERO

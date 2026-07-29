@@ -699,7 +699,7 @@ impl RouteInfoManager {
 
     fn operate_write_perm_of_broker(&self, broker_name: &CheetahString, request_code: RequestCode) -> i32 {
         let mut topic_cnt = 0;
-        for qd_map in self.topic_queue_table.mut_from_ref().values_mut()  {
+        for qd_map in self.topic_queue_table.mut_from_ref().values_mut() {
             let qd = qd_map.get_mut(broker_name);
             if qd.is_none() {
                 continue;
