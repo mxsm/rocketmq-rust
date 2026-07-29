@@ -62,7 +62,7 @@ use crate::fleet::FleetService;
 mod support;
 
 impl FleetService {
-    pub(crate) async fn create_fleet_release(
+    pub(super) async fn create_fleet_release(
         &self,
         auth: &AuthContext,
         request: &CreateFleetReleaseRequest,
@@ -160,7 +160,7 @@ impl FleetService {
         })
     }
 
-    pub(crate) async fn fleet_releases(
+    pub(super) async fn fleet_releases(
         &self,
         auth: &AuthContext,
         query: &FleetReleaseQuery,
@@ -179,7 +179,7 @@ impl FleetService {
         })
     }
 
-    pub(crate) async fn fleet_release(
+    pub(super) async fn fleet_release(
         &self,
         auth: &AuthContext,
         id: FleetReleaseId,
@@ -190,7 +190,7 @@ impl FleetService {
             .await
     }
 
-    pub(crate) async fn begin_fleet_release_readiness(
+    pub(super) async fn begin_fleet_release_readiness(
         &self,
         auth: &AuthContext,
         id: FleetReleaseId,
@@ -220,7 +220,7 @@ impl FleetService {
         .await
     }
 
-    pub(crate) async fn record_fleet_target_readiness(
+    pub(super) async fn record_fleet_target_readiness(
         &self,
         auth: &AuthContext,
         id: FleetReleaseId,
@@ -311,7 +311,7 @@ impl FleetService {
         .await
     }
 
-    pub(crate) async fn start_fleet_release_batch(
+    pub(super) async fn start_fleet_release_batch(
         &self,
         auth: &AuthContext,
         id: FleetReleaseId,
@@ -418,7 +418,7 @@ impl FleetService {
         .await
     }
 
-    pub(crate) async fn record_fleet_target_outcome(
+    pub(super) async fn record_fleet_target_outcome(
         &self,
         auth: &AuthContext,
         id: FleetReleaseId,
@@ -472,7 +472,7 @@ impl FleetService {
         .await
     }
 
-    pub(crate) async fn pause_fleet_release(
+    pub(super) async fn pause_fleet_release(
         &self,
         auth: &AuthContext,
         id: FleetReleaseId,
@@ -513,7 +513,7 @@ impl FleetService {
         .await
     }
 
-    pub(crate) async fn resume_fleet_release(
+    pub(super) async fn resume_fleet_release(
         &self,
         auth: &AuthContext,
         id: FleetReleaseId,
@@ -554,7 +554,7 @@ impl FleetService {
         .await
     }
 
-    pub(crate) async fn fleet_release_report(
+    pub(super) async fn fleet_release_report(
         &self,
         auth: &AuthContext,
         id: FleetReleaseId,
