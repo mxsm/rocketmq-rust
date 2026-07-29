@@ -8,6 +8,29 @@
   gap: 16px;
 }
 
+.utility-select {
+  width: 66px;
+  height: 28px;
+  padding: 0 7px;
+  color: var(--muted-foreground);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  outline: none;
+  background: var(--secondary);
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.utility-select:hover,
+.utility-select:focus-visible {
+  color: var(--foreground);
+  border-color: #37645e;
+}
+
+.utility-timezone {
+  width: 126px;
+}
+
 .enterprise-page .page-header {
   margin-bottom: 2px;
 }
