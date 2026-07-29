@@ -30,7 +30,7 @@ use crate::dr::model::DrPlanQuery;
 use crate::dr::model::bounded_limit;
 
 impl DrRepository {
-    pub(super) async fn scope_exists(
+    pub(in crate::dr) async fn scope_exists(
         &self,
         tenant_id: TenantId,
         fleet_id: rocketmq_sre_contracts::FleetId,
@@ -71,7 +71,7 @@ impl DrRepository {
         Ok(row.try_get("present")?)
     }
 
-    pub(super) async fn create_plan(&self, plan: &DrPlan) -> Result<DrPlan, ControlPlaneError> {
+    pub(in crate::dr) async fn create_plan(&self, plan: &DrPlan) -> Result<DrPlan, ControlPlaneError> {
         let checkpoint_definitions = serde_json::to_value(&plan.checkpoints)
             .map_err(|_| ControlPlaneError::validation("invalid_dr_plan", "checkpoint definitions are invalid"))?;
         let allowed_modes = plan
@@ -131,7 +131,11 @@ impl DrRepository {
         plan_from_row(&row)
     }
 
-    pub(super) async fn get_plan(&self, tenant_id: TenantId, id: DrPlanId) -> Result<DrPlan, ControlPlaneError> {
+    pub(in crate::dr) async fn get_plan(
+        &self,
+        tenant_id: TenantId,
+        id: DrPlanId,
+    ) -> Result<DrPlan, ControlPlaneError> {
         let row = sqlx::query("SELECT * FROM dr_plans WHERE tenant_id = $1 AND id = $2")
             .bind(tenant_id.as_uuid())
             .bind(id.as_uuid())
@@ -141,7 +145,7 @@ impl DrRepository {
         plan_from_row(&row)
     }
 
-    pub(super) async fn list_plans(
+    pub(in crate::dr) async fn list_plans(
         &self,
         tenant_id: TenantId,
         query: &DrPlanQuery,
@@ -173,7 +177,7 @@ impl DrRepository {
             .map(|items| (items, truncated))
     }
 
-    pub(super) async fn upsert_backup_asset(
+    pub(in crate::dr) async fn upsert_backup_asset(
         &self,
         tenant_id: TenantId,
         asset: &DrBackupAsset,
@@ -216,7 +220,7 @@ impl DrRepository {
         backup_asset_from_row(&row)
     }
 
-    pub(super) async fn list_backup_assets(
+    pub(in crate::dr) async fn list_backup_assets(
         &self,
         tenant_id: TenantId,
         plan_id: DrPlanId,
@@ -235,7 +239,7 @@ impl DrRepository {
         rows.into_iter().map(|row| backup_asset_from_row(&row)).collect()
     }
 
-    pub(super) async fn cluster_environment(
+    pub(in crate::dr) async fn cluster_environment(
         &self,
         tenant_id: TenantId,
         cluster_id: ClusterId,
