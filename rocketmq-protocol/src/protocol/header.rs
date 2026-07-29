@@ -119,6 +119,8 @@ pub mod update_broker_config_response_header;
 pub mod update_consumer_offset_header;
 pub mod update_global_white_addrs_config_request_header;
 pub mod update_group_forbidden_request_header;
+pub mod update_topic_config_cas_request_header;
+pub mod update_topic_config_cas_response_header;
 pub mod update_user_request_header;
 pub mod view_broker_stats_data_request_header;
 pub mod view_message_request_header;
