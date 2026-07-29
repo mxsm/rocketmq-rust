@@ -1815,6 +1815,22 @@ function Get-SchedulerDisposition {
         }
     }
 
+    if ($path -eq "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/production_proxy_restart.rs") {
+        return [pscustomobject]@{
+            Disposition = "sre-bounded-proxy-restart-poll"
+            ActionRequired = $false
+            Reason = "Allowed request-local drain and replacement polling; both loops share the validated action deadline, run inline in the fenced driver request, and create no background task, thread, or scheduler."
+        }
+    }
+
+    if ($path -eq "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/production_proxy_restart_tests.rs") {
+        return [pscustomobject]@{
+            Disposition = "sre-proxy-restart-test-fixture-poll"
+            ActionRequired = $false
+            Reason = "Allowed test-only Kubernetes fixture readiness polling with a fixed iteration bound; no production task or scheduler is created."
+        }
+    }
+
     return [pscustomobject]@{
         Disposition = "unclassified-follow-up"
         ActionRequired = $true
