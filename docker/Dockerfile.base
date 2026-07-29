@@ -160,7 +160,7 @@ COPY . .
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
-    --mount=type=cache,target=/workspace/target,sharing=locked <<EOF
+    --mount=type=cache,id=rocketmq-service-target-${SOURCE_REVISION},target=/workspace/target,sharing=locked <<EOF
 set -eux
 cargo build --locked --release --package rocketmq-broker --no-default-features --features production --bin rocketmq-broker-rust
 cargo build --locked --release --package rocketmq-namesrv --no-default-features --features production --bin rocketmq-namesrv-rust

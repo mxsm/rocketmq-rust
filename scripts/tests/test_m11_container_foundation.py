@@ -113,6 +113,17 @@ class ContainerFoundationTests(unittest.TestCase):
         root = self.dockerfile.replace("USER 10001:10001", "USER 0:0")
         self.assertTrue(any("USER 10001:10001" in finding for finding in self.audit(dockerfile=root)))
 
+    def test_cross_revision_service_target_cache_is_rejected(self) -> None:
+        revision_scoped = (
+            "--mount=type=cache,id=rocketmq-service-target-${SOURCE_REVISION},"
+            "target=/workspace/target,sharing=locked"
+        )
+        shared = "--mount=type=cache,target=/workspace/target,sharing=locked"
+        dockerfile = self.dockerfile.replace(revision_scoped, shared, 1)
+        findings = self.audit(dockerfile=dockerfile)
+        self.assertTrue(any("isolated by the full source revision" in finding for finding in findings))
+        self.assertTrue(any("unscoped Cargo target cache" in finding for finding in findings))
+
     def test_unpinned_action_or_weakened_scanner_is_rejected(self) -> None:
         checkout_sha = self.policy["workflow"]["actions"]["actions/checkout"]
         workflow = self.workflow.replace(

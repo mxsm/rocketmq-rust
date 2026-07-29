@@ -265,6 +265,23 @@ def audit_foundation(
     ):
         if fragment not in dockerfile:
             findings.append(f"service Dockerfile missing: {fragment}")
+    service_builder_match = re.search(
+        r"(?ms)^FROM builder-base AS service-builder\s*(.*?)(?=^FROM |\Z)",
+        dockerfile,
+    )
+    if service_builder_match is not None:
+        service_builder = service_builder_match.group(1)
+        revision_scoped_target_cache = (
+            "--mount=type=cache,id=rocketmq-service-target-${SOURCE_REVISION},"
+            "target=/workspace/target,sharing=locked"
+        )
+        if service_builder.count(revision_scoped_target_cache) != 1:
+            findings.append("service builder target cache must be isolated by the full source revision")
+        if re.search(
+            r"--mount=type=cache,(?![^\n]*\bid=)[^\n]*\btarget=/workspace/target(?:,|\\|\s)",
+            service_builder,
+        ):
+            findings.append("service builder must not share an unscoped Cargo target cache across revisions")
     if "ROCKETMQ_COMPONENT" in dockerfile:
         findings.append("service images must not use component-selector dispatch")
     for service_name, contract in EXPECTED_SERVICES.items():
