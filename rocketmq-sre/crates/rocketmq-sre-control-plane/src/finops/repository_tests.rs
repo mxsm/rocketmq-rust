@@ -113,10 +113,7 @@ async fn postgres_finops_tracks_cost_enforces_budget_and_preserves_safety() {
         .await
         .expect("background budget decision");
     assert!(!background.decision.allowed);
-    assert_eq!(
-        background.decision.degradation,
-        FinOpsDegradation::DenyLowPriority
-    );
+    assert_eq!(background.decision.degradation, FinOpsDegradation::DenyLowPriority);
     let rollback = service
         .evaluate_budget(
             &auth,
@@ -153,11 +150,7 @@ async fn postgres_finops_tracks_cost_enforces_budget_and_preserves_safety() {
             &auth,
             &CreateFinOpsAllocationPolicyRequest {
                 mode: FinOpsAllocationMode::Chargeback,
-                allocation_keys: BTreeSet::from([
-                    "tenant".to_owned(),
-                    "cluster".to_owned(),
-                    "provider".to_owned(),
-                ]),
+                allocation_keys: BTreeSet::from(["tenant".to_owned(), "cluster".to_owned(), "provider".to_owned()]),
                 organization_confirmed: true,
                 owner: auth.subject.clone(),
             },
@@ -183,7 +176,9 @@ async fn postgres_finops_tracks_cost_enforces_budget_and_preserves_safety() {
     assert_eq!(report.entries_missing_cost, 0);
     assert_eq!(report.cost_coverage_basis_points, Some(10_000));
     assert!(report.rows.iter().any(|row| {
-        row.dimensions.get("source").is_some_and(|source| source == "model_invocation")
+        row.dimensions
+            .get("source")
+            .is_some_and(|source| source == "model_invocation")
             && row.input_tokens == 80
             && row.output_tokens == 20
             && row.cost_micros == 200
