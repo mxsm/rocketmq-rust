@@ -29,6 +29,7 @@ mod projection;
 mod prometheus;
 mod proxy_diagnostics;
 mod remoting_diagnostics;
+mod required_signals;
 mod runtime_diagnostics;
 mod tempo;
 mod topology;
@@ -72,6 +73,7 @@ use self::kubernetes::KubernetesSource;
 use self::loki::LokiSource;
 use self::mcp::McpSource;
 use self::prometheus::PrometheusSource;
+use self::required_signals::RequiredSignalsSource;
 use self::runtime_diagnostics::RuntimeDiagnosticsSource;
 use self::tempo::TempoSource;
 use self::topology::TopologySource;
@@ -82,7 +84,7 @@ use crate::EvidenceOperation;
 use crate::mcp::McpGateway;
 
 const CACHE_MAX_ENTRIES: usize = 1024;
-const SOURCE_IDS: [&str; 9] = [
+const SOURCE_IDS: [&str; 10] = [
     "rocketmq-mcp",
     "admin-query",
     "alertmanager",
@@ -91,6 +93,7 @@ const SOURCE_IDS: [&str; 9] = [
     "tempo",
     "kubernetes",
     "runtime",
+    "required-signals",
     "topology",
 ];
 
@@ -143,8 +146,9 @@ impl QueryAdmission {
     }
 }
 
-/// Read-only eight-source evidence registry with one canonical bounding, caching and
-/// missing-evidence path.
+/// Read-only evidence registry with one canonical bounding, caching and
+/// missing-evidence path, including the fixed component Required Signals
+/// composition.
 pub(crate) struct SourceManager<G> {
     config: Arc<ConnectorConfig>,
     mcp: McpSource<G>,
@@ -203,6 +207,7 @@ where
         state.insert("tempo", initial_state(tempo.configured()));
         state.insert("kubernetes", initial_state(kubernetes.configured()));
         state.insert("runtime", initial_state(true));
+        state.insert("required-signals", initial_state(true));
         state.insert("topology", initial_state(true));
         Ok(Self {
             admission: QueryAdmission::new(
@@ -594,6 +599,23 @@ where
                     .await
             }
             "runtime" => RuntimeDiagnosticsSource::query(&self.mcp, &query.resource, deadline, cancel).await,
+            "required-signals" => {
+                RequiredSignalsSource::query(
+                    &self.prometheus,
+                    &self.loki,
+                    &self.tempo,
+                    &self.mcp,
+                    external_cluster,
+                    &query.resource,
+                    query.time_range.start,
+                    query.time_range.end,
+                    self.config.source_limits.max_rows,
+                    self.config.source_limits.max_bytes,
+                    deadline,
+                    cancel,
+                )
+                .await
+            }
             "topology" => {
                 TopologySource::query(
                     &self.mcp,
@@ -733,6 +755,7 @@ fn normalize_source(source: &str) -> Result<&'static str, ConnectorError> {
         "tempo" => Ok("tempo"),
         "kubernetes" | "k8s" => Ok("kubernetes"),
         "runtime" | "runtime-diagnostics" => Ok("runtime"),
+        "required-signals" | "required_signals" | "component-signals" => Ok("required-signals"),
         "topology" => Ok("topology"),
         _ => Err(ConnectorError::new(
             ConnectorErrorCode::InvalidEvidenceQuery,
@@ -863,6 +886,7 @@ fn exposure_for_source(source: &str) -> EvidenceExposure {
         "tempo" => EvidenceExposure::TempoApi,
         "kubernetes" => EvidenceExposure::KubernetesApi,
         "runtime" => EvidenceExposure::RuntimeDiagnostics,
+        "required-signals" => EvidenceExposure::RequiredSignals,
         "topology" => EvidenceExposure::McpTool,
         _ => EvidenceExposure::Unknown,
     }
