@@ -14,11 +14,7 @@
 
 pub(crate) mod capability;
 
-use std::collections::hash_map::DefaultHasher;
 use std::future::Future;
-use std::hash::Hash;
-use std::hash::Hasher;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::OnceLock;
 
@@ -59,7 +55,6 @@ use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
 use rocketmq_transport::RpcClient;
 use rocketmq_transport::RpcClientUtils;
 use rocketmq_transport::RpcRequest;
-use tokio::sync::Mutex;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -72,27 +67,6 @@ use crate::long_polling::long_polling_service::pull_request_hold_service::PullRe
 use crate::processor::default_pull_message_result_handler::DefaultPullMessageResultHandler;
 use crate::processor::pull_message_processor::capability::PullMessageProcessorContext;
 use crate::processor::pull_message_result_handler::PullMessageResultHandler;
-
-const WAKEUP_WRITE_LOCK_SHARDS: usize = 64;
-
-fn new_wakeup_write_locks() -> Arc<Vec<Arc<Mutex<()>>>> {
-    Arc::new(
-        (0..WAKEUP_WRITE_LOCK_SHARDS)
-            .map(|_| Arc::new(Mutex::new(())))
-            .collect(),
-    )
-}
-
-fn wakeup_write_lock_index(remote_address: SocketAddr, shard_count: usize) -> usize {
-    let mut hasher = DefaultHasher::new();
-    remote_address.hash(&mut hasher);
-    (hasher.finish() as usize) % shard_count
-}
-
-fn wakeup_write_lock_for_channel(locks: &[Arc<Mutex<()>>], channel: &Channel) -> Arc<Mutex<()>> {
-    let index = wakeup_write_lock_index(channel.remote_address(), locks.len());
-    locks[index].clone()
-}
 
 fn store_read_max_msg_bytes(max_msg_bytes: Option<i32>) -> i32 {
     max_msg_bytes
@@ -121,9 +95,6 @@ fn store_read_max_msg_bytes(max_msg_bytes: Option<i32>) -> i32 {
 /// - PULL consumers are either suspended or limited to 1 message
 pub struct PullMessageProcessor<MS: MessageStore> {
     pull_message_result_handler: Arc<DefaultPullMessageResultHandler<MS>>,
-    /// Sharded write guards used only for suspended-pull wakeup responses.
-    /// Same-channel responses map to the same guard; unrelated channels can write in parallel.
-    wakeup_write_locks: Arc<Vec<Arc<Mutex<()>>>>,
     context: Arc<PullMessageProcessorContext<MS>>,
     wakeup_task_group: OnceLock<TaskGroup>,
 }
@@ -205,7 +176,6 @@ where
     ) -> Self {
         Self {
             pull_message_result_handler,
-            wakeup_write_locks: new_wakeup_write_locks(),
             context,
             wakeup_task_group: OnceLock::new(),
         }
@@ -1010,10 +980,8 @@ where
         mut request: RemotingCommand,
     ) {
         let pull_message_processor = Arc::clone(self);
-        let locks = Arc::clone(&self.wakeup_write_locks);
         let task = async move {
             let opaque = request.opaque();
-            let write_lock = wakeup_write_lock_for_channel(&locks, &channel);
             let response = pull_message_processor
                 .process_request_inner(
                     RequestCode::from(request.code()),
@@ -1026,10 +994,7 @@ where
 
             if let Ok(Some(response)) = response {
                 let command = response.set_opaque(opaque).mark_response_type();
-
-                let guard = write_lock.lock().await;
                 ctx.write_response(command).await;
-                drop(guard);
             }
         };
         spawn_wakeup_pull_task(self.wakeup_task_group.get(), task);
@@ -1092,7 +1057,6 @@ fn consumer_compensation_for_request_source(request_source: RequestSource) -> (C
 mod tests {
     use std::collections::HashMap;
     use std::collections::HashSet;
-    use std::net::SocketAddr;
     use std::path::PathBuf;
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering;
@@ -1124,9 +1088,7 @@ mod tests {
     use super::is_broadcast;
     use super::spawn_wakeup_pull_task;
     use super::store_read_max_msg_bytes;
-    use super::wakeup_write_lock_index;
     use super::PullMessageProcessor;
-    use super::WAKEUP_WRITE_LOCK_SHARDS;
     use crate::broker_runtime::BrokerRuntime;
     use crate::client::client_channel_info::ClientChannelInfo;
     use crate::client::consumer_group_info::ConsumerGroupInfo;
@@ -1357,18 +1319,6 @@ mod tests {
     }
 
     #[test]
-    fn wakeup_write_lock_index_spreads_remote_addresses() {
-        let first = wakeup_write_lock_index(SocketAddr::from(([127, 0, 0, 1], 10_000)), WAKEUP_WRITE_LOCK_SHARDS);
-        let same = wakeup_write_lock_index(SocketAddr::from(([127, 0, 0, 1], 10_000)), WAKEUP_WRITE_LOCK_SHARDS);
-        let indexes = (10_000..10_100)
-            .map(|port| wakeup_write_lock_index(SocketAddr::from(([127, 0, 0, 1], port)), WAKEUP_WRITE_LOCK_SHARDS))
-            .collect::<HashSet<_>>();
-
-        assert_eq!(first, same);
-        assert!(indexes.len() > 1);
-    }
-
-    #[test]
     fn store_read_max_msg_bytes_uses_header_or_store_default() {
         assert_eq!(store_read_max_msg_bytes(Some(4096)), 4096);
         assert_eq!(store_read_max_msg_bytes(Some(0)), MAX_PULL_MSG_SIZE);
@@ -1378,9 +1328,15 @@ mod tests {
 
     #[test]
     fn pull_processors_depend_only_on_explicit_context() {
-        let processor = include_str!("pull_message_processor.rs");
+        let processor = include_str!("pull_message_processor.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production processor source");
         let result_handler = include_str!("default_pull_message_result_handler.rs");
 
+        assert!(!processor.contains(concat!("WAKEUP_WRITE_", "LOCK_SHARDS")));
+        assert!(!processor.contains("wakeup_write_locks"));
+        assert!(processor.contains("ctx.write_response(command).await"));
         for source in [processor, result_handler] {
             assert!(!source.contains(concat!("Broker", "RuntimeInner")));
             assert!(!source.contains(concat!("Arc", "Mut")));

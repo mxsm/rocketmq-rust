@@ -49,7 +49,7 @@ fn main() -> anyhow::Result<()> {
     );
 
     let run_result = owner.block_on(async {
-        let run_result = run(config, client_runtime.clone()).await;
+        let run_result = Box::pin(run(config, client_runtime.clone())).await;
         let report = client_runtime.shutdown().await;
         report.log_if_unhealthy();
         run_result

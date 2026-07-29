@@ -30,8 +30,6 @@ use rocketmq_admin_core::client_adapter::TelemetryHandle;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 
-const ENTRYPOINT_MAX_BLOCKING_THREADS: usize = 64;
-
 fn main() -> anyhow::Result<()> {
     let owner = RuntimeOwner::new(admin_tui_runtime_config()).context("failed to build rocketmq-admin-tui runtime")?;
     let client_runtime = ClientRuntime::try_new(
@@ -71,9 +69,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn admin_tui_runtime_config() -> RuntimeConfig {
-    let mut config = RuntimeConfig::server_default("rocketmq-admin-tui");
-    config.max_blocking_threads = ENTRYPOINT_MAX_BLOCKING_THREADS;
-    config
+    RuntimeConfig::server_default("rocketmq-admin-tui")
 }
 
 async fn run(client_runtime: std::sync::Arc<ClientRuntime>) -> anyhow::Result<()> {

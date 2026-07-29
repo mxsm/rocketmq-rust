@@ -99,8 +99,8 @@ fn broker_entrypoint_uses_runtime_owner_and_service_context() {
         "{entrypoint} must use RuntimeOwner as the owned runtime boundary"
     );
     assert!(
-        source.contains("ENTRYPOINT_MAX_BLOCKING_THREADS"),
-        "{entrypoint} must preserve the explicit blocking-thread cap"
+        !source.contains("ENTRYPOINT_MAX_BLOCKING_THREADS"),
+        "{entrypoint} must derive the blocking-thread budget from RuntimeConfig"
     );
     assert!(
         source.contains("Builder::new(service_context, telemetry_guard)"),
@@ -126,8 +126,8 @@ fn namesrv_entrypoint_uses_runtime_owner_and_service_context() {
         "{entrypoint} must use RuntimeOwner as the owned runtime boundary"
     );
     assert!(
-        source.contains("ENTRYPOINT_MAX_BLOCKING_THREADS"),
-        "{entrypoint} must preserve the explicit blocking-thread cap"
+        !source.contains("ENTRYPOINT_MAX_BLOCKING_THREADS"),
+        "{entrypoint} must derive the blocking-thread budget from RuntimeConfig"
     );
     assert!(
         source.contains("Builder::new(service_context.clone(), telemetry_guard.handle())"),

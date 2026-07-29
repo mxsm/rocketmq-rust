@@ -403,7 +403,7 @@ impl MessageAdmin for AdminSession {
     }
 }
 
-async fn find_message(session: &mut AdminSession, request: &MessageLookupRequest) -> Result<MessageRecord, AdminError> {
+async fn find_message(session: &AdminSession, request: &MessageLookupRequest) -> Result<MessageRecord, AdminError> {
     session.ensure_open()?;
     let topic = require_non_empty("topic", &request.topic)?;
     let message_id = require_non_empty("messageId", &request.message_id)?;
@@ -412,7 +412,7 @@ async fn find_message(session: &mut AdminSession, request: &MessageLookupRequest
 }
 
 pub(super) async fn find_raw_message(
-    session: &mut AdminSession,
+    session: &AdminSession,
     topic: &str,
     message_id: &str,
 ) -> Result<rocketmq_model::common::message::message_ext::MessageExt, AdminError> {
@@ -461,7 +461,7 @@ pub(super) async fn find_raw_message(
 }
 
 async fn consume_directly(
-    session: &mut AdminSession,
+    session: &AdminSession,
     request: &DirectConsumeRequest,
 ) -> Result<DirectConsumeResult, AdminError> {
     session.ensure_open()?;

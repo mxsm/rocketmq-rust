@@ -41,8 +41,6 @@ use rocketmq_security_api::SecurityBootstrapOutcome;
 use rocketmq_security_api::SecurityBootstrapProfile;
 use tracing::info;
 
-const ENTRYPOINT_MAX_BLOCKING_THREADS: usize = 64;
-
 fn main() -> ProxyResult<()> {
     let owner = RuntimeOwner::new(proxy_runtime_config()).map_err(proxy_runtime_error("build proxy runtime"))?;
     let service_context = owner.root_context().child("proxy");
@@ -81,9 +79,7 @@ fn main() -> ProxyResult<()> {
 }
 
 fn proxy_runtime_config() -> RuntimeConfig {
-    let mut config = RuntimeConfig::proxy_default();
-    config.max_blocking_threads = ENTRYPOINT_MAX_BLOCKING_THREADS;
-    config
+    RuntimeConfig::proxy_default()
 }
 
 fn proxy_runtime_error(action: &'static str) -> impl FnOnce(rocketmq_runtime::RuntimeError) -> ProxyError {

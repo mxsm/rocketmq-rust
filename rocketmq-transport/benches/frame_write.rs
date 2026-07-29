@@ -12,12 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::future::Future;
 use std::hint::black_box;
 use std::io;
 use std::io::IoSlice;
+use std::net::SocketAddr;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::Context;
 use std::task::Poll;
+use std::time::Duration;
 
 use criterion::criterion_group;
 use criterion::criterion_main;
@@ -26,8 +30,16 @@ use criterion::Criterion;
 use criterion::Throughput;
 use rocketmq_protocol::protocol::encoded_frame::EncodedFrame;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_runtime::RuntimeContext;
+use rocketmq_transport::run_connected_session;
+use rocketmq_transport::AdmissionController;
+use rocketmq_transport::AdmissionLimits;
+use rocketmq_transport::Connection;
+use rocketmq_transport::ConnectionHandler;
 use rocketmq_transport::FrameWriteMode;
 use rocketmq_transport::FrameWriter;
+use rocketmq_transport::SessionHandle;
+use rocketmq_transport::TransportSecurity;
 use tokio::io::AsyncWrite;
 
 struct DiscardWriter;
@@ -109,5 +121,94 @@ fn benchmark_frame_write(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, benchmark_frame_write);
+struct RoundTripHandler;
+
+impl ConnectionHandler for RoundTripHandler {
+    fn connected(&self, _session: SessionHandle) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async {})
+    }
+
+    fn command(
+        &self,
+        session: SessionHandle,
+        request: RemotingCommand,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            let mut connection = session.connection();
+            connection
+                .send_command(RemotingCommand::create_response_command().set_opaque(request.opaque()))
+                .await
+                .expect("benchmark response");
+        })
+    }
+}
+
+fn benchmark_session_writer_round_trip(c: &mut Criterion) {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("benchmark runtime");
+    let (runtime_context, service, peer, runner) = runtime.block_on(async {
+        let runtime_context = RuntimeContext::from_current("transport-session-writer-benchmark");
+        let service = runtime_context.service_context("transport-session-writer-benchmark");
+        let (transport, peer) = tokio::io::duplex(1024 * 1024);
+        let local_addr: SocketAddr = "127.0.0.1:19101".parse().expect("local address");
+        let remote_addr: SocketAddr = "127.0.0.1:19102".parse().expect("remote address");
+        let runner = tokio::spawn(run_connected_session(
+            Connection::new_with_plaintext_stream(transport),
+            local_addr,
+            remote_addr,
+            service.task_group().clone(),
+            Arc::new(AdmissionController::new(AdmissionLimits::default())),
+            Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
+            None,
+            Duration::from_secs(30),
+            Arc::new(RoundTripHandler),
+        ));
+        (
+            runtime_context,
+            service,
+            Connection::new_with_plaintext_stream(peer),
+            runner,
+        )
+    });
+    let peer = Arc::new(tokio::sync::Mutex::new(peer));
+
+    c.bench_function("transport_session_writer/round_trip_256", |benchmark| {
+        let mut next_opaque = 1_i32;
+        benchmark.to_async(&runtime).iter(|| {
+            next_opaque = next_opaque.wrapping_add(256);
+            let start = next_opaque;
+            let peer = Arc::clone(&peer);
+            async move {
+                let mut peer = peer.lock().await;
+                for offset in 0..256 {
+                    let opaque = start.wrapping_add(offset);
+                    peer.send_command(RemotingCommand::create_remoting_command(10_100).set_opaque(opaque))
+                        .await
+                        .expect("benchmark request");
+                    let response = peer
+                        .receive_command()
+                        .await
+                        .expect("benchmark session")
+                        .expect("benchmark response decode");
+                    black_box(response);
+                }
+            }
+        });
+    });
+
+    runtime.block_on(async {
+        let peer = Arc::try_unwrap(peer)
+            .unwrap_or_else(|_| unreachable!("benchmark iterations release their peer handle"))
+            .into_inner();
+        drop(peer);
+        runner.await.expect("benchmark session runner");
+        drop(service);
+        let report = runtime_context.shutdown_tasks(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+    });
+}
+
+criterion_group!(benches, benchmark_frame_write, benchmark_session_writer_round_trip);
 criterion_main!(benches);

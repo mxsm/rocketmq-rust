@@ -14,6 +14,10 @@
 
 use std::cmp::Reverse;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -23,7 +27,9 @@ use rocketmq_admin_core::client_adapter::AdminSession;
 use rocketmq_admin_core::client_adapter::ClientRuntime;
 use rocketmq_admin_core::core::dashboard as core;
 use rocketmq_admin_core::core::dashboard::DashboardAdmin;
+use rocketmq_runtime::ChildServiceContext;
 use tokio::sync::Mutex;
+use tokio::sync::Notify;
 use tokio::sync::RwLock;
 
 use crate::error::DashboardError;
@@ -77,12 +83,25 @@ use self::mapping::*;
 pub struct DashboardAdminClient {
     config: Arc<RwLock<DashboardConfigView>>,
     client_runtime: Arc<ClientRuntime>,
-    admin_session: Arc<Mutex<Option<ManagedAdminSession>>>,
+    admin_session: Arc<Mutex<Option<Arc<ManagedAdminSession>>>>,
+    next_generation: Arc<AtomicU64>,
+    session_tasks: ChildServiceContext,
 }
 
 struct ManagedAdminSession {
-    guard: AdminGuard,
+    owner: Mutex<Option<Arc<AdminSessionOwner>>>,
     snapshot: AdminConfigSnapshot,
+    generation: u64,
+}
+
+struct AdminSessionOwner {
+    guard: Option<AdminGuard>,
+    active_leases: AtomicUsize,
+    leases_drained: Notify,
+}
+
+struct AdminSessionLease {
+    owner: Arc<AdminSessionOwner>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,19 +111,96 @@ struct AdminConfigSnapshot {
     use_tls: bool,
 }
 
+macro_rules! run_admin_rpc {
+    ($client:expr, |$admin:ident| $operation:expr) => {{
+        let managed = $client.acquire_admin_session().await?;
+        let lease = managed.lease().await?;
+        let result = {
+            let $admin = lease.session()?;
+            Box::pin($operation).await
+        };
+        drop(lease);
+        $client.ensure_current_generation(&managed).await?;
+        result
+    }};
+}
+
+impl ManagedAdminSession {
+    async fn lease(&self) -> Result<AdminSessionLease, DashboardError> {
+        let owner = self.owner.lock().await;
+        let owner = owner
+            .as_ref()
+            .ok_or_else(|| DashboardError::Internal("Admin session was already retired".to_string()))?;
+        owner.active_leases.fetch_add(1, Ordering::AcqRel);
+        Ok(AdminSessionLease {
+            owner: Arc::clone(owner),
+        })
+    }
+
+    async fn shutdown(&self) {
+        let Some(owner) = self.owner.lock().await.take() else {
+            return;
+        };
+        loop {
+            if owner.active_leases.load(Ordering::Acquire) == 0 {
+                break;
+            }
+            owner.leases_drained.notified().await;
+        }
+        match Arc::try_unwrap(owner) {
+            Ok(mut owner) => {
+                if let Some(guard) = owner.guard.take() {
+                    guard.shutdown().await;
+                }
+            }
+            Err(_) => {
+                tracing::error!("Dashboard admin session retirement retained an owner without an active lease");
+            }
+        }
+    }
+}
+
+impl AdminSessionLease {
+    fn session(&self) -> Result<&AdminSession, DashboardError> {
+        self.owner
+            .guard
+            .as_ref()
+            .map(AdminGuard::inner)
+            .ok_or_else(|| DashboardError::Internal("Admin session was not initialized".to_string()))
+    }
+}
+
+impl Drop for AdminSessionLease {
+    fn drop(&mut self) {
+        if self.owner.active_leases.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.owner.leases_drained.notify_one();
+        }
+    }
+}
+
 impl DashboardAdminClient {
     pub fn new(config: Arc<RwLock<DashboardConfigView>>, client_runtime: Arc<ClientRuntime>) -> Self {
+        let session_tasks = client_runtime.child("dashboard-admin-session");
         Self {
             config,
             client_runtime,
             admin_session: Arc::new(Mutex::new(None)),
+            next_generation: Arc::new(AtomicU64::new(1)),
+            session_tasks,
         }
     }
 
     pub async fn shutdown(&self) {
-        let mut slot = self.admin_session.lock().await;
-        if let Some(session) = slot.take() {
-            session.guard.shutdown().await;
+        let session = self.admin_session.lock().await.take();
+        if let Some(session) = session {
+            session.shutdown().await;
+        }
+        let report = self.session_tasks.task_group().shutdown(Duration::from_secs(5)).await;
+        if !report.is_healthy() {
+            tracing::warn!(
+                report = %report.to_json(),
+                "Dashboard admin session retirement did not shut down cleanly"
+            );
         }
     }
 
@@ -122,10 +218,7 @@ impl DashboardAdminClient {
             });
         }
 
-        let counts = async {
-            let mut slot = self.admin_session.lock().await;
-            self.ensure_admin_session(&mut slot).await?;
-            let admin = active_session(&mut slot)?;
+        let counts = run_admin_rpc!(self, |admin| async {
             let brokers = admin.dashboard_list_brokers().await?;
             let topics = admin.dashboard_list_topics().await?;
             let consumers = admin.dashboard_list_consumers().await.unwrap_or_default();
@@ -138,8 +231,7 @@ impl DashboardAdminClient {
                 producers.len(),
                 backlog,
             ))
-        }
-        .await;
+        });
 
         let (broker_count, topic_count, consumer_group_count, producer_count, message_backlog, system_status) =
             match counts {
@@ -177,20 +269,20 @@ impl DashboardAdminClient {
             Err(error) => return Err(error),
         };
 
-        let mut slot = self.admin_session.lock().await;
-        self.ensure_admin_session(&mut slot).await?;
-        let admin = active_session(&mut slot)?;
-        let mut top_topics = Vec::new();
-        for topic in topics.items.iter().take(20) {
-            if let Ok(stats) = admin.dashboard_topic_stats(&topic.topic).await {
-                top_topics.push(TopicCurrentMetric {
-                    topic: topic.topic.clone(),
-                    total_msg: stats.total_max_offset.saturating_sub(stats.total_min_offset),
-                    in_tps: 0.0,
-                    out_tps: 0.0,
-                });
+        let mut top_topics = run_admin_rpc!(self, |admin| async {
+            let mut top_topics = Vec::new();
+            for topic in topics.items.iter().take(20) {
+                if let Ok(stats) = admin.dashboard_topic_stats(&topic.topic).await {
+                    top_topics.push(TopicCurrentMetric {
+                        topic: topic.topic.clone(),
+                        total_msg: stats.total_max_offset.saturating_sub(stats.total_min_offset),
+                        in_tps: 0.0,
+                        out_tps: 0.0,
+                    });
+                }
             }
-        }
+            Ok::<_, DashboardError>(top_topics)
+        })?;
         top_topics.sort_by_key(|topic| Reverse(topic.total_msg));
         Ok(DashboardTopicCurrent {
             total_topics: topics.total,
@@ -199,9 +291,7 @@ impl DashboardAdminClient {
     }
 
     pub async fn list_topics(&self) -> Result<TopicListView, DashboardError> {
-        let mut slot = self.admin_session.lock().await;
-        self.ensure_admin_session(&mut slot).await?;
-        let list = active_session(&mut slot)?.dashboard_list_topics().await?;
+        let list = run_admin_rpc!(self, |admin| admin.dashboard_list_topics())?;
         let items = list.items.into_iter().map(map_topic_info).collect::<Vec<_>>();
         Ok(TopicListView {
             total: items.len(),
@@ -217,17 +307,13 @@ impl DashboardAdminClient {
 
     pub async fn topic_route(&self, topic: &str) -> Result<TopicRouteInfo, DashboardError> {
         validate_name(topic, "Topic")?;
-        let mut slot = self.admin_session.lock().await;
-        self.ensure_admin_session(&mut slot).await?;
-        let route = active_session(&mut slot)?.dashboard_topic_route(topic).await?;
+        let route = run_admin_rpc!(self, |admin| admin.dashboard_topic_route(topic))?;
         Ok(map_topic_route(route))
     }
 
     pub async fn topic_stats(&self, topic: &str) -> Result<TopicStatsInfo, DashboardError> {
         validate_name(topic, "Topic")?;
-        let mut slot = self.admin_session.lock().await;
-        self.ensure_admin_session(&mut slot).await?;
-        let stats = active_session(&mut slot)?.dashboard_topic_stats(topic).await?;
+        let stats = run_admin_rpc!(self, |admin| admin.dashboard_topic_stats(topic))?;
         Ok(TopicStatsInfo {
             topic: stats.topic,
             queue_count: stats.queue_count,
@@ -256,9 +342,7 @@ impl DashboardAdminClient {
             order: request.order.unwrap_or(false),
             message_type: request.message_type,
         };
-        let mut slot = self.admin_session.lock().await;
-        self.ensure_admin_session(&mut slot).await?;
-        let result = active_session(&mut slot)?.dashboard_upsert_topic(&request).await?;
+        let result = run_admin_rpc!(self, |admin| admin.dashboard_upsert_topic(&request))?;
         Ok(MutationResult {
             message: result.message,
         })
@@ -266,18 +350,14 @@ impl DashboardAdminClient {
 
     pub async fn delete_topic(&self, topic: &str) -> Result<MutationResult, DashboardError> {
         validate_name(topic, "Topic")?;
-        let mut slot = self.admin_session.lock().await;
-        self.ensure_admin_session(&mut slot).await?;
-        let result = active_session(&mut slot)?.dashboard_delete_topic(topic).await?;
+        let result = run_admin_rpc!(self, |admin| admin.dashboard_delete_topic(topic))?;
         Ok(MutationResult {
             message: result.message,
         })
     }
 
     pub async fn list_consumer_groups(&self) -> Result<ConsumerListView, DashboardError> {
-        let mut slot = self.admin_session.lock().await;
-        self.ensure_admin_session(&mut slot).await?;
-        let list = active_session(&mut slot)?.dashboard_list_consumers().await?;
+        let list = run_admin_rpc!(self, |admin| admin.dashboard_list_consumers())?;
         let items = list
             .items
             .into_iter()
@@ -297,9 +377,7 @@ impl DashboardAdminClient {
 
     pub async fn consumer_progress(&self, group: &str) -> Result<ConsumerProgress, DashboardError> {
         validate_name(group, "Consumer group")?;
-        let mut slot = self.admin_session.lock().await;
-        self.ensure_admin_session(&mut slot).await?;
-        let progress = active_session(&mut slot)?.dashboard_consumer_progress(group).await?;
+        let progress = run_admin_rpc!(self, |admin| admin.dashboard_consumer_progress(group))?;
         Ok(map_consumer_progress(progress))
     }
 
@@ -321,20 +399,14 @@ impl DashboardAdminClient {
             reset_timestamp: request.reset_timestamp as u64,
             force: request.force,
         };
-        let mut slot = self.admin_session.lock().await;
-        self.ensure_admin_session(&mut slot).await?;
-        let result = active_session(&mut slot)?.dashboard_reset_consumer(&request).await?;
+        let result = run_admin_rpc!(self, |admin| admin.dashboard_reset_consumer(&request))?;
         Ok(MutationResult {
             message: result.message,
         })
     }
 
     pub async fn list_producers(&self) -> Result<Vec<ProducerInfo>, DashboardError> {
-        let mut slot = self.admin_session.lock().await;
-        self.ensure_admin_session(&mut slot).await?;
-        let items = active_session(&mut slot)?
-            .dashboard_list_producers()
-            .await?
+        let items = run_admin_rpc!(self, |admin| admin.dashboard_list_producers())?
             .into_iter()
             .map(|item| ProducerInfo {
                 topic: item.topic,
@@ -352,11 +424,8 @@ impl DashboardAdminClient {
     ) -> Result<ProducerConnectionView, DashboardError> {
         validate_name(topic, "Topic")?;
         validate_name(producer_group, "Producer group")?;
-        let mut slot = self.admin_session.lock().await;
-        self.ensure_admin_session(&mut slot).await?;
-        let connections = active_session(&mut slot)?
-            .dashboard_producer_connections(topic, producer_group)
-            .await?;
+        let connections = run_admin_rpc!(self, |admin| admin
+            .dashboard_producer_connections(topic, producer_group))?;
         Ok(ProducerConnectionView {
             topic: connections.topic,
             producer_group: connections.producer_group,
@@ -374,9 +443,7 @@ impl DashboardAdminClient {
     }
 
     pub async fn list_brokers(&self) -> Result<BrokerListView, DashboardError> {
-        let mut slot = self.admin_session.lock().await;
-        self.ensure_admin_session(&mut slot).await?;
-        let list = active_session(&mut slot)?.dashboard_list_brokers().await?;
+        let list = run_admin_rpc!(self, |admin| admin.dashboard_list_brokers())?;
         let items = list.items.into_iter().map(map_broker_info).collect::<Vec<_>>();
         Ok(BrokerListView {
             total: items.len(),
@@ -387,9 +454,7 @@ impl DashboardAdminClient {
     pub async fn broker_runtime_stats(&self, broker_name: &str) -> Result<BrokerRuntimeStats, DashboardError> {
         validate_name(broker_name, "Broker")?;
         let target = broker_target(broker_name);
-        let mut slot = self.admin_session.lock().await;
-        self.ensure_admin_session(&mut slot).await?;
-        let runtime = active_session(&mut slot)?.dashboard_broker_runtime(&target).await?;
+        let runtime = run_admin_rpc!(self, |admin| admin.dashboard_broker_runtime(&target))?;
         Ok(BrokerRuntimeStats {
             broker_name: runtime.broker_name,
             address: runtime.address,
@@ -400,9 +465,7 @@ impl DashboardAdminClient {
     pub async fn broker_config(&self, broker_name: &str) -> Result<BrokerConfigView, DashboardError> {
         validate_name(broker_name, "Broker")?;
         let target = broker_target(broker_name);
-        let mut slot = self.admin_session.lock().await;
-        self.ensure_admin_session(&mut slot).await?;
-        let config = active_session(&mut slot)?.dashboard_broker_config(&target).await?;
+        let config = run_admin_rpc!(self, |admin| admin.dashboard_broker_config(&target))?;
         Ok(BrokerConfigView {
             broker_name: config.broker_name,
             address: config.address,
@@ -427,11 +490,7 @@ impl DashboardAdminClient {
             broker_addr: target.broker_addr,
             entries: request.entries,
         };
-        let mut slot = self.admin_session.lock().await;
-        self.ensure_admin_session(&mut slot).await?;
-        let result = active_session(&mut slot)?
-            .dashboard_update_broker_config(&request)
-            .await?;
+        let result = run_admin_rpc!(self, |admin| admin.dashboard_update_broker_config(&request))?;
         Ok(MutationResult {
             message: result.message,
         })
@@ -439,18 +498,14 @@ impl DashboardAdminClient {
 
     pub async fn list_acl_users(&self, query: AclQuery) -> Result<Vec<AclUserView>, DashboardError> {
         let query = map_acl_user_query(query);
-        let mut slot = self.admin_session.lock().await;
-        self.ensure_admin_session(&mut slot).await?;
-        let users = active_session(&mut slot)?.dashboard_list_acl_users(&query).await?;
+        let users = run_admin_rpc!(self, |admin| admin.dashboard_list_acl_users(&query))?;
         Ok(users.into_iter().map(map_acl_user).collect())
     }
 
     pub async fn create_acl_user(&self, request: AclUserUpsertRequest) -> Result<AclMutationResult, DashboardError> {
         let username = required_request_field(request.username.as_deref(), "username")?.to_string();
         let request = map_acl_user_request(username, request, false)?;
-        let mut slot = self.admin_session.lock().await;
-        self.ensure_admin_session(&mut slot).await?;
-        let result = active_session(&mut slot)?.dashboard_create_acl_user(&request).await?;
+        let result = run_admin_rpc!(self, |admin| admin.dashboard_create_acl_user(&request))?;
         Ok(map_acl_mutation(result))
     }
 
@@ -461,36 +516,26 @@ impl DashboardAdminClient {
     ) -> Result<AclMutationResult, DashboardError> {
         validate_name(username, "Username")?;
         let request = map_acl_user_request(username.to_string(), request, true)?;
-        let mut slot = self.admin_session.lock().await;
-        self.ensure_admin_session(&mut slot).await?;
-        let result = active_session(&mut slot)?.dashboard_update_acl_user(&request).await?;
+        let result = run_admin_rpc!(self, |admin| admin.dashboard_update_acl_user(&request))?;
         Ok(map_acl_mutation(result))
     }
 
     pub async fn delete_acl_user(&self, username: &str, query: AclQuery) -> Result<AclMutationResult, DashboardError> {
         validate_name(username, "Username")?;
         let selector = map_selector(query.cluster_name, query.broker_name);
-        let mut slot = self.admin_session.lock().await;
-        self.ensure_admin_session(&mut slot).await?;
-        let result = active_session(&mut slot)?
-            .dashboard_delete_acl_user(&selector, username)
-            .await?;
+        let result = run_admin_rpc!(self, |admin| admin.dashboard_delete_acl_user(&selector, username))?;
         Ok(map_acl_mutation(result))
     }
 
     pub async fn list_acl_policies(&self, query: AclQuery) -> Result<Vec<AclPolicyView>, DashboardError> {
         let query = map_acl_query(query);
-        let mut slot = self.admin_session.lock().await;
-        self.ensure_admin_session(&mut slot).await?;
-        let policies = active_session(&mut slot)?.dashboard_list_acl_policies(&query).await?;
+        let policies = run_admin_rpc!(self, |admin| admin.dashboard_list_acl_policies(&query))?;
         Ok(policies.into_iter().map(map_acl_policy).collect())
     }
 
     pub async fn create_acl_policy(&self, request: AclPolicyRequest) -> Result<AclMutationResult, DashboardError> {
         let request = map_acl_policy_request(request)?;
-        let mut slot = self.admin_session.lock().await;
-        self.ensure_admin_session(&mut slot).await?;
-        let result = active_session(&mut slot)?.dashboard_create_acl_policy(&request).await?;
+        let result = run_admin_rpc!(self, |admin| admin.dashboard_create_acl_policy(&request))?;
         Ok(map_acl_mutation(result))
     }
 
@@ -502,9 +547,7 @@ impl DashboardAdminClient {
         validate_name(subject, "ACL subject")?;
         request.subject = subject.to_string();
         let request = map_acl_policy_request(request)?;
-        let mut slot = self.admin_session.lock().await;
-        self.ensure_admin_session(&mut slot).await?;
-        let result = active_session(&mut slot)?.dashboard_update_acl_policy(&request).await?;
+        let result = run_admin_rpc!(self, |admin| admin.dashboard_update_acl_policy(&request))?;
         Ok(map_acl_mutation(result))
     }
 
@@ -512,11 +555,9 @@ impl DashboardAdminClient {
         validate_name(subject, "ACL subject")?;
         let resource = query.resource.unwrap_or_default();
         let selector = map_selector(query.cluster_name, query.broker_name);
-        let mut slot = self.admin_session.lock().await;
-        self.ensure_admin_session(&mut slot).await?;
-        let result = active_session(&mut slot)?
-            .dashboard_delete_acl_policy(&selector, subject, &resource)
-            .await?;
+        let result = run_admin_rpc!(self, |admin| {
+            admin.dashboard_delete_acl_policy(&selector, subject, &resource)
+        })?;
         Ok(map_acl_mutation(result))
     }
 
@@ -585,11 +626,9 @@ impl DashboardAdminClient {
             )
         })?;
         validate_name(topic, "Topic")?;
-        let mut slot = self.admin_session.lock().await;
-        self.ensure_admin_session(&mut slot).await?;
-        let trace = active_session(&mut slot)?
-            .dashboard_message_trace(topic, message_id, trace_topic)
-            .await?;
+        let trace = run_admin_rpc!(self, |admin| {
+            admin.dashboard_message_trace(topic, message_id, trace_topic)
+        })?;
         Ok(MessageTraceView {
             message_id: trace.message_id,
             trace_topic: trace.trace_topic,
@@ -611,11 +650,7 @@ impl DashboardAdminClient {
             consumer_group: request.consumer_group,
             client_id: request.client_id,
         };
-        let mut slot = self.admin_session.lock().await;
-        self.ensure_admin_session(&mut slot).await?;
-        let result = active_session(&mut slot)?
-            .dashboard_consume_message_directly(&request)
-            .await?;
+        let result = run_admin_rpc!(self, |admin| admin.dashboard_consume_message_directly(&request))?;
         Ok(MutationResult {
             message: result.message,
         })
@@ -632,9 +667,7 @@ impl DashboardAdminClient {
             page_num: query.page_num,
             page_size: query.page_size,
         };
-        let mut slot = self.admin_session.lock().await;
-        self.ensure_admin_session(&mut slot).await?;
-        let list = active_session(&mut slot)?.dashboard_query_dlq_messages(&query).await?;
+        let list = run_admin_rpc!(self, |admin| admin.dashboard_query_dlq_messages(&query))?;
         Ok(map_message_list(list))
     }
 
@@ -686,37 +719,95 @@ impl DashboardAdminClient {
     }
 
     async fn run_message_query(&self, query: &core::DashboardMessageQuery) -> Result<MessageListView, DashboardError> {
-        let mut slot = self.admin_session.lock().await;
-        self.ensure_admin_session(&mut slot).await?;
-        let list = active_session(&mut slot)?.dashboard_query_messages(query).await?;
+        let list = run_admin_rpc!(self, |admin| admin.dashboard_query_messages(query))?;
         Ok(map_message_list(list))
     }
 
-    async fn ensure_admin_session(&self, slot: &mut Option<ManagedAdminSession>) -> Result<(), DashboardError> {
-        let snapshot = self.admin_config_snapshot().await?;
-        if slot.as_ref().is_some_and(|session| session.snapshot == snapshot) {
-            return Ok(());
-        }
-        if let Some(session) = slot.take() {
-            session.guard.shutdown().await;
-        }
+    async fn acquire_admin_session(&self) -> Result<Arc<ManagedAdminSession>, DashboardError> {
+        loop {
+            let snapshot = self.admin_config_snapshot().await?;
+            if let Some(session) = self
+                .admin_session
+                .lock()
+                .await
+                .as_ref()
+                .filter(|session| session.snapshot == snapshot)
+                .cloned()
+            {
+                return Ok(session);
+            }
 
-        let guard = AdminBuilder::new(Arc::clone(&self.client_runtime))
-            .namesrv_addr(snapshot.namesrv_addr.clone())
-            .admin_group(unique_admin_group())
-            .timeout_millis(5_000)
-            .vip_channel_enabled(snapshot.use_vip_channel)
-            .use_tls(snapshot.use_tls)
-            .build_with_guard()
-            .await?;
-        tracing::info!(
-            namesrv = %snapshot.namesrv_addr,
-            use_vip_channel = snapshot.use_vip_channel,
-            use_tls = snapshot.use_tls,
-            "connected RocketMQ dashboard admin session"
-        );
-        *slot = Some(ManagedAdminSession { guard, snapshot });
-        Ok(())
+            let guard = AdminBuilder::new(Arc::clone(&self.client_runtime))
+                .namesrv_addr(snapshot.namesrv_addr.clone())
+                .admin_group(unique_admin_group())
+                .timeout_millis(5_000)
+                .vip_channel_enabled(snapshot.use_vip_channel)
+                .use_tls(snapshot.use_tls)
+                .build_with_guard()
+                .await?;
+            if self.admin_config_snapshot().await? != snapshot {
+                guard.shutdown().await;
+                continue;
+            }
+
+            let candidate = Arc::new(ManagedAdminSession {
+                owner: Mutex::new(Some(Arc::new(AdminSessionOwner {
+                    guard: Some(guard),
+                    active_leases: AtomicUsize::new(0),
+                    leases_drained: Notify::new(),
+                }))),
+                snapshot: snapshot.clone(),
+                generation: self.next_generation.fetch_add(1, Ordering::Relaxed),
+            });
+            let (selected, retired, unused_candidate) = {
+                let mut slot = self.admin_session.lock().await;
+                if let Some(current) = slot.as_ref().filter(|session| session.snapshot == snapshot).cloned() {
+                    (current, None, Some(candidate))
+                } else {
+                    let retired = slot.replace(Arc::clone(&candidate));
+                    (candidate, retired, None)
+                }
+            };
+            if let Some(unused_candidate) = unused_candidate {
+                unused_candidate.shutdown().await;
+            }
+            if let Some(retired) = retired {
+                let retirement = Arc::clone(&retired);
+                if let Err(error) =
+                    self.session_tasks
+                        .spawn_service(format!("retire-generation-{}", retired.generation), async move {
+                            retirement.shutdown().await;
+                        })
+                {
+                    tracing::warn!(
+                        generation = retired.generation,
+                        %error,
+                        "Could not schedule Dashboard admin session retirement"
+                    );
+                    retired.shutdown().await;
+                }
+            }
+            tracing::info!(
+                namesrv = %selected.snapshot.namesrv_addr,
+                use_vip_channel = selected.snapshot.use_vip_channel,
+                use_tls = selected.snapshot.use_tls,
+                generation = selected.generation,
+                "connected RocketMQ dashboard admin session"
+            );
+            return Ok(selected);
+        }
+    }
+
+    async fn ensure_current_generation(&self, session: &Arc<ManagedAdminSession>) -> Result<(), DashboardError> {
+        if self.admin_config_snapshot().await? != session.snapshot {
+            return Err(stale_session_error(session.generation));
+        }
+        let current = self.admin_session.lock().await;
+        if session_is_current(current.as_ref(), session) {
+            Ok(())
+        } else {
+            Err(stale_session_error(session.generation))
+        }
     }
 
     async fn admin_config_snapshot(&self) -> Result<AdminConfigSnapshot, DashboardError> {
@@ -733,10 +824,14 @@ impl DashboardAdminClient {
     }
 }
 
-fn active_session(slot: &mut Option<ManagedAdminSession>) -> Result<&mut AdminSession, DashboardError> {
-    slot.as_mut()
-        .map(|session| session.guard.inner_mut())
-        .ok_or_else(|| DashboardError::Internal("Admin session was not initialized".to_string()))
+fn session_is_current(current: Option<&Arc<ManagedAdminSession>>, expected: &Arc<ManagedAdminSession>) -> bool {
+    current.is_some_and(|candidate| Arc::ptr_eq(candidate, expected))
+}
+
+fn stale_session_error(generation: u64) -> DashboardError {
+    DashboardError::Config(format!(
+        "Admin session generation {generation} was replaced while the request was in flight; retry the request"
+    ))
 }
 
 fn map_acl_user(user: core::DashboardAclUser) -> AclUserView {
@@ -752,9 +847,18 @@ fn map_acl_user(user: core::DashboardAclUser) -> AclUserView {
 
 #[cfg(test)]
 mod tests {
-    use rocketmq_admin_core::core::dashboard::DashboardAclUser;
+    use std::sync::Arc;
+    use std::time::Duration;
 
+    use rocketmq_admin_core::core::dashboard::DashboardAclUser;
+    use tokio::sync::Mutex;
+    use tokio::sync::Notify;
+
+    use super::AdminConfigSnapshot;
+    use super::AdminSessionOwner;
+    use super::ManagedAdminSession;
     use super::map_acl_user;
+    use super::session_is_current;
 
     #[test]
     fn map_acl_user_does_not_expose_password() {
@@ -768,5 +872,67 @@ mod tests {
 
         assert_eq!(mapped.username, "alice");
         assert_eq!(mapped.password, None);
+    }
+
+    fn managed_session(generation: u64) -> Arc<ManagedAdminSession> {
+        Arc::new(ManagedAdminSession {
+            owner: Mutex::new(Some(Arc::new(AdminSessionOwner {
+                guard: None,
+                active_leases: std::sync::atomic::AtomicUsize::new(0),
+                leases_drained: Notify::new(),
+            }))),
+            snapshot: AdminConfigSnapshot {
+                namesrv_addr: "127.0.0.1:9876".to_string(),
+                use_vip_channel: false,
+                use_tls: false,
+            },
+            generation,
+        })
+    }
+
+    #[tokio::test]
+    async fn concurrent_rpc_leases_do_not_hold_a_session_lock() {
+        let session = managed_session(1);
+        let first = session.lease().await.expect("first RPC lease");
+
+        let second = tokio::time::timeout(Duration::from_secs(1), session.lease())
+            .await
+            .expect("a second RPC lease must not wait for the first")
+            .expect("second RPC lease");
+
+        drop(second);
+        drop(first);
+    }
+
+    #[test]
+    fn generation_fence_rejects_a_replaced_session() {
+        let old = managed_session(1);
+        let replacement = managed_session(2);
+
+        assert!(session_is_current(Some(&old), &old));
+        assert!(!session_is_current(Some(&replacement), &old));
+        assert!(!session_is_current(None, &old));
+    }
+
+    #[test]
+    fn rpc_contract_keeps_remote_awaits_outside_the_lifecycle_slot() {
+        let source = include_str!("dashboard_admin_client.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production Dashboard admin client source");
+        let macro_start = source.find("macro_rules! run_admin_rpc").expect("RPC macro");
+        let macro_end = source[macro_start..]
+            .find("impl ManagedAdminSession")
+            .map(|offset| macro_start + offset)
+            .expect("RPC macro boundary");
+        let rpc_macro = &source[macro_start..macro_end];
+
+        assert!(rpc_macro.contains("managed.lease().await"));
+        assert!(rpc_macro.contains("ensure_current_generation(&managed).await"));
+        assert!(!rpc_macro.contains("admin_session.lock().await"));
+        assert!(!rpc_macro.contains("read().await"));
+        assert!(!rpc_macro.contains("write().await"));
+        assert!(!source.contains(concat!("ensure_admin_session", "(&mut slot)")));
+        assert!(!source.contains(concat!("active_session", "(&mut slot)")));
     }
 }

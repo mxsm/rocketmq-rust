@@ -66,7 +66,6 @@ use tracing::info;
 /// # Print configuration and exit
 /// rocketmq-controller-rust --print-config-item
 /// ```
-const ENTRYPOINT_MAX_BLOCKING_THREADS: usize = 64;
 const CONTROLLER_AUTO_INITIALIZE_CLUSTER_ENV: &str = "ROCKETMQ_CONTROLLER_AUTO_INITIALIZE_CLUSTER";
 const LOGO: &str = r#"
         ______           _        _  ___  ________       ______          _     _____             _             _ _
@@ -114,9 +113,7 @@ pub fn main() -> Result<()> {
 }
 
 fn controller_runtime_config() -> RuntimeConfig {
-    let mut config = RuntimeConfig::controller_default();
-    config.max_blocking_threads = ENTRYPOINT_MAX_BLOCKING_THREADS;
-    config
+    RuntimeConfig::controller_default()
 }
 
 async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) -> Result<()> {

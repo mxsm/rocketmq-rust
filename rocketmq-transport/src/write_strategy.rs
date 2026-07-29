@@ -55,6 +55,7 @@ pub(crate) struct QueuedWrite {
     pub(crate) deadline: Option<RequestDeadline>,
     pub(crate) target: String,
     pub(crate) progress: Option<Arc<QueuedWriteProgress>>,
+    pub(crate) queue_id: Option<u64>,
 }
 
 impl QueuedWrite {
@@ -65,6 +66,7 @@ impl QueuedWrite {
         deadline: Option<RequestDeadline>,
         target: String,
         progress: Option<Arc<QueuedWriteProgress>>,
+        queue_id: u64,
     ) -> Self {
         Self {
             operation: WriterOperation::Send(payload),
@@ -73,6 +75,7 @@ impl QueuedWrite {
             deadline,
             target,
             progress,
+            queue_id: Some(queue_id),
         }
     }
 
@@ -84,6 +87,7 @@ impl QueuedWrite {
             deadline: None,
             target: String::new(),
             progress: None,
+            queue_id: None,
         }
     }
 }

@@ -68,7 +68,7 @@ use self::security::*;
 use self::topic::*;
 
 impl dashboard::DashboardAdmin for AdminSession {
-    fn dashboard_list_topics(&mut self) -> AdminFuture<'_, dashboard::DashboardTopicList> {
+    fn dashboard_list_topics(&self) -> AdminFuture<'_, dashboard::DashboardTopicList> {
         Box::pin(async move {
             self.ensure_open()?;
             let topic_list = self
@@ -93,7 +93,7 @@ impl dashboard::DashboardAdmin for AdminSession {
         })
     }
 
-    fn dashboard_topic_route<'a>(&'a mut self, topic: &'a str) -> AdminFuture<'a, dashboard::DashboardTopicRoute> {
+    fn dashboard_topic_route<'a>(&'a self, topic: &'a str) -> AdminFuture<'a, dashboard::DashboardTopicRoute> {
         Box::pin(async move {
             self.ensure_open()?;
             let route = self
@@ -106,7 +106,7 @@ impl dashboard::DashboardAdmin for AdminSession {
         })
     }
 
-    fn dashboard_topic_stats<'a>(&'a mut self, topic: &'a str) -> AdminFuture<'a, dashboard::DashboardTopicStats> {
+    fn dashboard_topic_stats<'a>(&'a self, topic: &'a str) -> AdminFuture<'a, dashboard::DashboardTopicStats> {
         Box::pin(async move {
             self.ensure_open()?;
             let stats = self
@@ -119,7 +119,7 @@ impl dashboard::DashboardAdmin for AdminSession {
     }
 
     fn dashboard_upsert_topic<'a>(
-        &'a mut self,
+        &'a self,
         request: &'a dashboard::DashboardTopicMutationRequest,
     ) -> AdminFuture<'a, dashboard::AdminMutationResult> {
         Box::pin(async move {
@@ -189,7 +189,7 @@ impl dashboard::DashboardAdmin for AdminSession {
         })
     }
 
-    fn dashboard_delete_topic<'a>(&'a mut self, topic: &'a str) -> AdminFuture<'a, dashboard::AdminMutationResult> {
+    fn dashboard_delete_topic<'a>(&'a self, topic: &'a str) -> AdminFuture<'a, dashboard::AdminMutationResult> {
         Box::pin(async move {
             self.ensure_open()?;
             let route = self
@@ -220,7 +220,7 @@ impl dashboard::DashboardAdmin for AdminSession {
         })
     }
 
-    fn dashboard_list_consumers(&mut self) -> AdminFuture<'_, dashboard::DashboardConsumerList> {
+    fn dashboard_list_consumers(&self) -> AdminFuture<'_, dashboard::DashboardConsumerList> {
         Box::pin(async move {
             self.ensure_open()?;
             let broker_addrs = broker_addresses(&self.inner).await?;
@@ -279,7 +279,7 @@ impl dashboard::DashboardAdmin for AdminSession {
     }
 
     fn dashboard_consumer_progress<'a>(
-        &'a mut self,
+        &'a self,
         group: &'a str,
     ) -> AdminFuture<'a, dashboard::DashboardConsumerProgress> {
         Box::pin(async move {
@@ -294,7 +294,7 @@ impl dashboard::DashboardAdmin for AdminSession {
     }
 
     fn dashboard_reset_consumer<'a>(
-        &'a mut self,
+        &'a self,
         request: &'a dashboard::DashboardConsumerResetRequest,
     ) -> AdminFuture<'a, dashboard::AdminMutationResult> {
         Box::pin(async move {
@@ -321,7 +321,7 @@ impl dashboard::DashboardAdmin for AdminSession {
         })
     }
 
-    fn dashboard_list_producers(&mut self) -> AdminFuture<'_, Vec<dashboard::DashboardProducerInfo>> {
+    fn dashboard_list_producers(&self) -> AdminFuture<'_, Vec<dashboard::DashboardProducerInfo>> {
         Box::pin(async move {
             self.ensure_open()?;
             let mut producer_counts: HashMap<String, usize> = HashMap::new();
@@ -350,7 +350,7 @@ impl dashboard::DashboardAdmin for AdminSession {
     }
 
     fn dashboard_producer_connections<'a>(
-        &'a mut self,
+        &'a self,
         topic: &'a str,
         producer_group: &'a str,
     ) -> AdminFuture<'a, dashboard::DashboardProducerConnections> {
@@ -365,7 +365,7 @@ impl dashboard::DashboardAdmin for AdminSession {
         })
     }
 
-    fn dashboard_list_brokers(&mut self) -> AdminFuture<'_, dashboard::DashboardBrokerList> {
+    fn dashboard_list_brokers(&self) -> AdminFuture<'_, dashboard::DashboardBrokerList> {
         Box::pin(async move {
             self.ensure_open()?;
             let cluster_info = self
@@ -435,7 +435,7 @@ impl dashboard::DashboardAdmin for AdminSession {
     }
 
     fn dashboard_broker_runtime<'a>(
-        &'a mut self,
+        &'a self,
         target: &'a dashboard::DashboardBrokerTarget,
     ) -> AdminFuture<'a, dashboard::DashboardBrokerRuntime> {
         Box::pin(async move {
@@ -458,7 +458,7 @@ impl dashboard::DashboardAdmin for AdminSession {
     }
 
     fn dashboard_broker_config<'a>(
-        &'a mut self,
+        &'a self,
         target: &'a dashboard::DashboardBrokerTarget,
     ) -> AdminFuture<'a, dashboard::DashboardBrokerConfig> {
         Box::pin(async move {
@@ -484,7 +484,7 @@ impl dashboard::DashboardAdmin for AdminSession {
     }
 
     fn dashboard_update_broker_config<'a>(
-        &'a mut self,
+        &'a self,
         request: &'a dashboard::DashboardBrokerConfigUpdateRequest,
     ) -> AdminFuture<'a, dashboard::AdminMutationResult> {
         Box::pin(async move {
@@ -510,7 +510,7 @@ impl dashboard::DashboardAdmin for AdminSession {
     }
 
     fn dashboard_list_acl_users<'a>(
-        &'a mut self,
+        &'a self,
         query: &'a dashboard::DashboardAclQuery,
     ) -> AdminFuture<'a, Vec<dashboard::DashboardAclUser>> {
         Box::pin(async move {
@@ -539,7 +539,7 @@ impl dashboard::DashboardAdmin for AdminSession {
     }
 
     fn dashboard_create_acl_user<'a>(
-        &'a mut self,
+        &'a self,
         request: &'a dashboard::DashboardAclUserMutationRequest,
     ) -> AdminFuture<'a, dashboard::AdminMutationResult> {
         Box::pin(async move {
@@ -568,7 +568,7 @@ impl dashboard::DashboardAdmin for AdminSession {
     }
 
     fn dashboard_update_acl_user<'a>(
-        &'a mut self,
+        &'a self,
         request: &'a dashboard::DashboardAclUserMutationRequest,
     ) -> AdminFuture<'a, dashboard::AdminMutationResult> {
         Box::pin(async move {
@@ -599,7 +599,7 @@ impl dashboard::DashboardAdmin for AdminSession {
     }
 
     fn dashboard_delete_acl_user<'a>(
-        &'a mut self,
+        &'a self,
         selector: &'a dashboard::TargetSelector,
         username: &'a str,
     ) -> AdminFuture<'a, dashboard::AdminMutationResult> {
@@ -621,7 +621,7 @@ impl dashboard::DashboardAdmin for AdminSession {
     }
 
     fn dashboard_list_acl_policies<'a>(
-        &'a mut self,
+        &'a self,
         query: &'a dashboard::DashboardAclQuery,
     ) -> AdminFuture<'a, Vec<dashboard::DashboardAclPolicy>> {
         Box::pin(async move {
@@ -675,7 +675,7 @@ impl dashboard::DashboardAdmin for AdminSession {
     }
 
     fn dashboard_create_acl_policy<'a>(
-        &'a mut self,
+        &'a self,
         request: &'a dashboard::DashboardAclPolicyMutationRequest,
     ) -> AdminFuture<'a, dashboard::AdminMutationResult> {
         Box::pin(async move {
@@ -700,7 +700,7 @@ impl dashboard::DashboardAdmin for AdminSession {
     }
 
     fn dashboard_update_acl_policy<'a>(
-        &'a mut self,
+        &'a self,
         request: &'a dashboard::DashboardAclPolicyMutationRequest,
     ) -> AdminFuture<'a, dashboard::AdminMutationResult> {
         Box::pin(async move {
@@ -725,7 +725,7 @@ impl dashboard::DashboardAdmin for AdminSession {
     }
 
     fn dashboard_delete_acl_policy<'a>(
-        &'a mut self,
+        &'a self,
         selector: &'a dashboard::TargetSelector,
         subject: &'a str,
         resource: &'a str,
@@ -748,21 +748,21 @@ impl dashboard::DashboardAdmin for AdminSession {
     }
 
     fn dashboard_query_messages<'a>(
-        &'a mut self,
+        &'a self,
         request: &'a dashboard::DashboardMessageQuery,
     ) -> AdminFuture<'a, dashboard::DashboardMessageList> {
         message::query(self, request)
     }
 
     fn dashboard_query_dlq_messages<'a>(
-        &'a mut self,
+        &'a self,
         request: &'a dashboard::DashboardDlqMessageQuery,
     ) -> AdminFuture<'a, dashboard::DashboardMessageList> {
         message::query_dlq(self, request)
     }
 
     fn dashboard_message_trace<'a>(
-        &'a mut self,
+        &'a self,
         topic: &'a str,
         message_id: &'a str,
         trace_topic: &'a str,
@@ -771,7 +771,7 @@ impl dashboard::DashboardAdmin for AdminSession {
     }
 
     fn dashboard_consume_message_directly<'a>(
-        &'a mut self,
+        &'a self,
         request: &'a dashboard::DashboardDirectConsumeRequest,
     ) -> AdminFuture<'a, dashboard::AdminMutationResult> {
         message::consume_directly(self, request)

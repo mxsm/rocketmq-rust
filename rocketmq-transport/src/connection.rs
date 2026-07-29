@@ -12,10 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::VecDeque;
 use std::hash::Hash;
 use std::hash::Hasher;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::sync::Mutex;
+use std::time::Duration;
+use std::time::Instant;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
@@ -50,27 +56,66 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use std::sync::Arc;
 
 pub(crate) struct SessionLifecycle {
-    gate: tokio::sync::RwLock<()>,
+    accepting: AtomicBool,
+    active_sends: AtomicUsize,
+    sends_drained: tokio::sync::Notify,
+}
+
+pub(crate) struct SessionSendLease<'a> {
+    lifecycle: &'a SessionLifecycle,
 }
 
 impl SessionLifecycle {
     pub(crate) fn new() -> Self {
         Self {
-            gate: tokio::sync::RwLock::new(()),
+            accepting: AtomicBool::new(true),
+            active_sends: AtomicUsize::new(0),
+            sends_drained: tokio::sync::Notify::new(),
         }
     }
 
-    pub(crate) async fn begin_send(&self) -> tokio::sync::RwLockReadGuard<'_, ()> {
-        self.gate.read().await
+    pub(crate) fn begin_send(&self) -> Option<SessionSendLease<'_>> {
+        if !self.accepting.load(Ordering::Acquire) {
+            return None;
+        }
+        self.active_sends.fetch_add(1, Ordering::AcqRel);
+        if self.accepting.load(Ordering::Acquire) {
+            Some(SessionSendLease { lifecycle: self })
+        } else {
+            self.finish_send();
+            None
+        }
     }
 
-    pub(crate) async fn begin_retirement(&self) -> tokio::sync::RwLockWriteGuard<'_, ()> {
-        self.gate.write().await
+    pub(crate) async fn begin_retirement(&self) {
+        self.accepting.store(false, Ordering::Release);
+        loop {
+            let drained = self.sends_drained.notified();
+            tokio::pin!(drained);
+            drained.as_mut().enable();
+            if self.active_sends.load(Ordering::Acquire) == 0 {
+                break;
+            }
+            drained.await;
+        }
+    }
+
+    fn finish_send(&self) {
+        if self.active_sends.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.sends_drained.notify_waiters();
+        }
+    }
+}
+
+impl Drop for SessionSendLease<'_> {
+    fn drop(&mut self) {
+        self.lifecycle.finish_send();
     }
 }
 
 struct QueuedConnection {
     writer: mpsc::Sender<QueuedWrite>,
+    writer_diagnostics: Arc<SessionWriterDiagnostics>,
     admission: Arc<AdmissionController>,
     scope: AdmissionScope,
     response_class: Option<AdmissionClass>,
@@ -105,6 +150,150 @@ static TRANSPORT_ENCODED_BYTES_WRITTEN: AtomicU64 = AtomicU64::new(0);
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TransportIoSnapshot {
     pub encoded_bytes_written: u64,
+}
+
+/// Low-cardinality diagnostics for one canonical session writer queue.
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, PartialEq, Eq)]
+pub struct SessionWriterSnapshot {
+    pub capacity: usize,
+    pub queued_items: usize,
+    pub queued_bytes: usize,
+    pub oldest_queue_age_millis: Option<u64>,
+    pub accepted: u64,
+    pub rejected: u64,
+    pub completed: u64,
+    pub failed: u64,
+    pub deadline_expired: u64,
+    pub last_queue_age_millis: u64,
+    pub max_queue_age_millis: u64,
+    pub last_write_latency_millis: u64,
+    pub max_write_latency_millis: u64,
+}
+
+#[derive(Debug)]
+struct WriterQueueEntry {
+    id: u64,
+    bytes: usize,
+    enqueued_at: Instant,
+}
+
+#[derive(Debug, Default)]
+struct SessionWriterDiagnosticsState {
+    next_id: u64,
+    queue: VecDeque<WriterQueueEntry>,
+    accepted: u64,
+    rejected: u64,
+    completed: u64,
+    failed: u64,
+    deadline_expired: u64,
+    last_queue_age: Duration,
+    max_queue_age: Duration,
+    last_write_latency: Duration,
+    max_write_latency: Duration,
+}
+
+#[derive(Debug)]
+pub(crate) struct SessionWriterDiagnostics {
+    capacity: usize,
+    state: Mutex<SessionWriterDiagnosticsState>,
+}
+
+impl SessionWriterDiagnostics {
+    pub(crate) fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            state: Mutex::new(SessionWriterDiagnosticsState::default()),
+        }
+    }
+
+    pub(crate) fn prepare_enqueue(&self, bytes: usize) -> u64 {
+        let mut state = self.state();
+        state.next_id = state.next_id.wrapping_add(1).max(1);
+        let id = state.next_id;
+        state.queue.push_back(WriterQueueEntry {
+            id,
+            bytes,
+            enqueued_at: Instant::now(),
+        });
+        id
+    }
+
+    pub(crate) fn record_accepted(&self) {
+        let mut state = self.state();
+        state.accepted = state.accepted.saturating_add(1);
+    }
+
+    pub(crate) fn record_rejected(&self, prepared_id: Option<u64>) {
+        let mut state = self.state();
+        if let Some(id) = prepared_id {
+            state.queue.retain(|entry| entry.id != id);
+        }
+        state.rejected = state.rejected.saturating_add(1);
+    }
+
+    pub(crate) fn start_write(&self, id: u64) -> Instant {
+        let now = Instant::now();
+        let mut state = self.state();
+        if let Some(index) = state.queue.iter().position(|entry| entry.id == id) {
+            let entry = state
+                .queue
+                .remove(index)
+                .unwrap_or_else(|| unreachable!("writer diagnostics queue index was just resolved"));
+            let queue_age = now.saturating_duration_since(entry.enqueued_at);
+            state.last_queue_age = queue_age;
+            state.max_queue_age = state.max_queue_age.max(queue_age);
+        }
+        now
+    }
+
+    pub(crate) fn finish_write(&self, started_at: Instant, succeeded: bool, deadline_expired: bool) {
+        let write_latency = started_at.elapsed();
+        let mut state = self.state();
+        state.last_write_latency = write_latency;
+        state.max_write_latency = state.max_write_latency.max(write_latency);
+        if succeeded {
+            state.completed = state.completed.saturating_add(1);
+        } else {
+            state.failed = state.failed.saturating_add(1);
+        }
+        if deadline_expired {
+            state.deadline_expired = state.deadline_expired.saturating_add(1);
+        }
+    }
+
+    pub(crate) fn snapshot(&self) -> SessionWriterSnapshot {
+        let state = self.state();
+        let now = Instant::now();
+        SessionWriterSnapshot {
+            capacity: self.capacity,
+            queued_items: state.queue.len(),
+            queued_bytes: state
+                .queue
+                .iter()
+                .fold(0_usize, |total, entry| total.saturating_add(entry.bytes)),
+            oldest_queue_age_millis: state
+                .queue
+                .front()
+                .map(|entry| duration_millis(now.saturating_duration_since(entry.enqueued_at))),
+            accepted: state.accepted,
+            rejected: state.rejected,
+            completed: state.completed,
+            failed: state.failed,
+            deadline_expired: state.deadline_expired,
+            last_queue_age_millis: duration_millis(state.last_queue_age),
+            max_queue_age_millis: duration_millis(state.max_queue_age),
+            last_write_latency_millis: duration_millis(state.last_write_latency),
+            max_write_latency_millis: duration_millis(state.max_write_latency),
+        }
+    }
+
+    fn state(&self) -> std::sync::MutexGuard<'_, SessionWriterDiagnosticsState> {
+        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+fn duration_millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 /// Returns a read-only snapshot of successful encoded transport writes.
@@ -387,6 +576,7 @@ impl Connection {
 
     pub(crate) fn new_queued(
         writer: mpsc::Sender<QueuedWrite>,
+        writer_diagnostics: Arc<SessionWriterDiagnostics>,
         admission: Arc<AdmissionController>,
         scope: AdmissionScope,
         state_tx: watch::Sender<ConnectionState>,
@@ -400,6 +590,7 @@ impl Connection {
             inbound: None,
             outbound: ConnectionWriter::Queued(QueuedConnection {
                 writer,
+                writer_diagnostics,
                 admission,
                 scope,
                 response_class,
@@ -486,15 +677,18 @@ impl Connection {
             deadline.ensure_before_send(target.clone())?;
         }
         if let Some(queued) = self.queued_writer() {
-            let _lifecycle_guard = if let Some(deadline) = deadline {
-                deadline
-                    .timeout(queued.lifecycle.begin_send())
-                    .await
-                    .map_err(|_| rocketmq_error::RocketMQError::network_deadline_exceeded_before_send(target.clone()))?
-            } else {
-                queued.lifecycle.begin_send().await
+            let _send_lease = match queued.lifecycle.begin_send() {
+                Some(lease) => lease,
+                None => {
+                    queued.writer_diagnostics.record_rejected(None);
+                    return Err(rocketmq_error::RocketMQError::network_connection_failed(
+                        target,
+                        "connection writer is retiring",
+                    ));
+                }
             };
             if self.state() == ConnectionState::Closed {
+                queued.writer_diagnostics.record_rejected(None);
                 return Err(rocketmq_error::RocketMQError::network_connection_failed(
                     target,
                     "connection is closed",
@@ -514,30 +708,41 @@ impl Connection {
             let permit = queued
                 .admission
                 .try_acquire(AdmissionResource::Queued, queued.scope, encoded_len, class)
-                .map_err(|_| rocketmq_error::RocketMQError::network_queue_full(target.clone()))?;
+                .map_err(|_| {
+                    queued.writer_diagnostics.record_rejected(None);
+                    rocketmq_error::RocketMQError::network_queue_full(target.clone())
+                })?;
             if let Some(deadline) = deadline {
                 deadline.ensure_before_send(target.clone())?;
             }
             let (completion, result) = oneshot::channel();
             let progress = deadline.map(|_| Arc::new(QueuedWriteProgress::waiting()));
-            queued
-                .writer
-                .try_send(QueuedWrite::data(
-                    payload,
-                    completion,
-                    permit,
-                    deadline,
-                    target.clone(),
-                    progress.clone(),
-                ))
-                .map_err(|error| match error {
-                    tokio::sync::mpsc::error::TrySendError::Full(_) => {
-                        rocketmq_error::RocketMQError::network_queue_full(target.clone())
-                    }
-                    tokio::sync::mpsc::error::TrySendError::Closed(_) => {
-                        rocketmq_error::RocketMQError::network_connection_failed(target.clone(), "writer queue closed")
-                    }
-                })?;
+            let queue_id = queued.writer_diagnostics.prepare_enqueue(encoded_len);
+            match queued.writer.try_send(QueuedWrite::data(
+                payload,
+                completion,
+                permit,
+                deadline,
+                target.clone(),
+                progress.clone(),
+                queue_id,
+            )) {
+                Ok(()) => queued.writer_diagnostics.record_accepted(),
+                Err(error) => {
+                    queued.writer_diagnostics.record_rejected(Some(queue_id));
+                    return Err(match error {
+                        tokio::sync::mpsc::error::TrySendError::Full(_) => {
+                            rocketmq_error::RocketMQError::network_queue_full(target.clone())
+                        }
+                        tokio::sync::mpsc::error::TrySendError::Closed(_) => {
+                            rocketmq_error::RocketMQError::network_connection_failed(
+                                target.clone(),
+                                "writer queue closed",
+                            )
+                        }
+                    });
+                }
+            }
             let outcome = if let Some(deadline) = deadline {
                 deadline.timeout(result).await.map_err(|_| {
                     if progress.as_ref().is_some_and(|progress| !progress.write_started()) {
@@ -987,5 +1192,50 @@ impl Connection {
     #[deprecated(since = "0.7.0", note = "Use `is_healthy()` or `state()` instead")]
     pub fn connection_is_ok(&self) -> bool {
         self.is_healthy()
+    }
+}
+
+#[cfg(test)]
+mod session_lifecycle_tests {
+    use std::sync::Arc;
+
+    use super::SessionLifecycle;
+
+    #[tokio::test]
+    async fn retirement_closes_admission_and_waits_for_lock_free_send_leases() {
+        let lifecycle = Arc::new(SessionLifecycle::new());
+        let lease = lifecycle.begin_send().expect("session should accept an initial send");
+        let retiring = Arc::clone(&lifecycle);
+        let (retired_tx, mut retired_rx) = tokio::sync::oneshot::channel();
+        let retirement = tokio::spawn(async move {
+            retiring.begin_retirement().await;
+            let _ = retired_tx.send(());
+        });
+
+        while lifecycle.begin_send().is_some() {
+            tokio::task::yield_now().await;
+        }
+        assert!(matches!(
+            retired_rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+
+        drop(lease);
+        retired_rx
+            .await
+            .expect("retirement should observe the final lease drop");
+        retirement.await.expect("retirement task should not panic");
+    }
+
+    #[test]
+    fn queued_send_path_does_not_restore_a_lock_guard_across_network_await() {
+        let production = include_str!("connection.rs")
+            .split("#[cfg(test)]\nmod session_lifecycle_tests")
+            .next()
+            .expect("production connection source");
+
+        assert!(!production.contains("RwLockReadGuard"));
+        assert!(!production.contains("RwLockWriteGuard"));
+        assert!(!production.contains("lifecycle.begin_send().await"));
     }
 }
