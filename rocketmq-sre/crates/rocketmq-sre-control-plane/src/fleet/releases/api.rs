@@ -38,7 +38,7 @@ use crate::api::AppState;
 
 const FLEET_RELEASE_BODY_LIMIT: usize = 256 * 1024;
 
-pub(super) fn routes() -> Router<AppState> {
+pub(in crate::fleet) fn routes() -> Router<AppState> {
     Router::new()
         .route(
             "/v1/fleet/releases",
