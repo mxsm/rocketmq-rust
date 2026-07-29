@@ -236,9 +236,35 @@ impl BrokerRuntime {
             progress.complete("topic_config");
         }
 
+        // Broker-owned scheduled tasks can hold request-scoped Store leases while executing.
+        // Cancel and join them before waiting for exclusive Store ownership; otherwise a task
+        // admitted immediately before shutdown can retain the store until the absolute deadline
+        // and prevent a same-path Broker restart from acquiring the lock file.
+        let started = Instant::now();
+        let scheduled_report = self
+            .shutdown_scheduled_tasks_with_timeout(deadline.remaining().min(SCHEDULED_TASK_SHUTDOWN_TIMEOUT))
+            .await;
+        shutdown_report.scheduled_tasks = if scheduled_report.is_healthy() {
+            BrokerShutdownComponentReport::completed("scheduled_tasks", started.elapsed())
+        } else {
+            BrokerShutdownComponentReport::unhealthy(
+                "scheduled_tasks",
+                started.elapsed(),
+                format!(
+                    "task_count={}, completed={}, aborted={}, panicked={}, timed_out={}",
+                    scheduled_report.task_count,
+                    scheduled_report.completed,
+                    scheduled_report.aborted,
+                    scheduled_report.panicked,
+                    scheduled_report.timed_out
+                ),
+            )
+        };
+        progress.complete("scheduled_tasks");
+
         // Shutdown uses one absolute deadline and this fixed phase order:
-        // reject/drain requests -> drain store-backed delivery -> flush/replicate the store ->
-        // stop remaining background work -> telemetry.
+        // reject/drain requests -> drain store-backed delivery and scheduled Store leases ->
+        // flush/replicate the store -> stop remaining background work -> telemetry.
         // Store durability therefore cannot be starved by a slow background component.
         self.detach_message_store_provider();
         while self
@@ -291,28 +317,6 @@ impl BrokerRuntime {
                 warn!(error = %error.detail(), "Broker shutdown hook did not complete cleanly");
             }
         }
-
-        let started = Instant::now();
-        let scheduled_report = self
-            .shutdown_scheduled_tasks_with_timeout(deadline.remaining().min(SCHEDULED_TASK_SHUTDOWN_TIMEOUT))
-            .await;
-        shutdown_report.scheduled_tasks = if scheduled_report.is_healthy() {
-            BrokerShutdownComponentReport::completed("scheduled_tasks", started.elapsed())
-        } else {
-            BrokerShutdownComponentReport::unhealthy(
-                "scheduled_tasks",
-                started.elapsed(),
-                format!(
-                    "task_count={}, completed={}, aborted={}, panicked={}, timed_out={}",
-                    scheduled_report.task_count,
-                    scheduled_report.completed,
-                    scheduled_report.aborted,
-                    scheduled_report.panicked,
-                    scheduled_report.timed_out
-                ),
-            )
-        };
-        progress.complete("scheduled_tasks");
 
         if let Some(broker_stats_manager) = self.composition.state.broker_stats_manager.as_ref() {
             broker_stats_manager.shutdown().await;

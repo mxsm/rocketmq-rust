@@ -704,6 +704,23 @@ fn transaction_shutdown_precedes_topic_coordinator_and_message_store() {
 }
 
 #[test]
+fn scheduled_tasks_shutdown_precedes_exclusive_message_store_shutdown() {
+    let source = include_str!("../../src/broker_runtime/lifecycle.rs");
+    let scheduled_shutdown = source
+        .find("let scheduled_report = self")
+        .expect("scheduled task shutdown should exist");
+    let store_detach = source
+        .find("self.detach_message_store_provider();")
+        .expect("message store provider detach should exist");
+    let store_shutdown = source
+        .find("let message_store_outcome =")
+        .expect("message store shutdown should exist");
+
+    assert!(scheduled_shutdown < store_detach);
+    assert!(store_detach < store_shutdown);
+}
+
+#[test]
 fn broker_basic_shutdown_report_aggregates_unhealthy_and_timed_out_components() {
     let report = BrokerBasicServiceShutdownReport {
         auth: BrokerShutdownComponentReport::completed("auth", Duration::from_millis(1)),
@@ -981,6 +998,89 @@ async fn shutdown_scheduled_tasks_waits_for_running_task_drop() {
         dropped.load(Ordering::Acquire),
         "broker scheduled shutdown should wait until aborted tasks release their running future"
     );
+}
+
+#[tokio::test]
+async fn broker_shutdown_cancels_scheduled_store_lease_before_store_lock_release() {
+    let temp_root = std::env::temp_dir().join(format!(
+        "rocketmq-rust-broker-scheduled-store-lease-{}",
+        current_millis()
+    ));
+    let broker_config = Arc::new(BrokerConfig {
+        store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+        ..BrokerConfig::default()
+    });
+    let message_store_config = Arc::new(MessageStoreConfig {
+        store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+        ..MessageStoreConfig::default()
+    });
+    let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+    assert!(runtime.initialize_metadata().await.is_ok());
+    assert!(runtime.initialize_message_store().await);
+    assert!(runtime.load_message_store_for_test().await);
+    runtime
+        .start_message_store_for_test()
+        .await
+        .expect("message store should acquire its lock file");
+
+    let store = runtime.composition.data_plane.escape_bridge_owner.store_capability();
+    let lease_started = Arc::new(AtomicBool::new(false));
+    runtime
+        .lifecycle
+        .scheduled_task_manager
+        .add_fixed_delay_task(Duration::ZERO, Duration::from_secs(60), {
+            let lease_started = Arc::clone(&lease_started);
+            move |token| {
+                let store = store.clone();
+                let lease_started = Arc::clone(&lease_started);
+                async move {
+                    let _lease = store.read_lease().expect("scheduled task should acquire a Store lease");
+                    lease_started.store(true, Ordering::Release);
+                    token.cancelled().await;
+                    Ok(())
+                }
+            }
+        })
+        .expect("scheduled Store lease task should start");
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !lease_started.load(Ordering::Acquire) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("scheduled Store lease should be active");
+
+    let report = runtime
+        .shutdown_basic_service_until(ShutdownDeadline::after(Duration::from_secs(10)))
+        .await;
+
+    assert!(
+        report.scheduled_tasks.present && report.scheduled_tasks.healthy,
+        "{report:?}"
+    );
+    assert!(
+        report.message_store.present && report.message_store.healthy,
+        "{report:?}"
+    );
+    let mut restarted = BrokerRuntime::new(
+        Arc::new(BrokerConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            ..BrokerConfig::default()
+        }),
+        Arc::new(MessageStoreConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            ..MessageStoreConfig::default()
+        }),
+    );
+    assert!(restarted.initialize_metadata().await.is_ok());
+    assert!(restarted.initialize_message_store().await);
+    assert!(restarted.load_message_store_for_test().await);
+    restarted
+        .start_message_store_for_test()
+        .await
+        .expect("shutdown Broker should release the Store lock for a same-path restart");
+    restarted.shutdown_message_store_for_test().await;
+    let _ = std::fs::remove_dir_all(temp_root);
 }
 
 #[tokio::test]
