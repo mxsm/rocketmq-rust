@@ -215,6 +215,11 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .update_and_create_topic(&self.broker_config_request_handler, channel, ctx, request_code, request)
                     .await
             }
+            RequestCode::UpdateTopicConfigCas => {
+                self.topic_request_handler
+                    .update_topic_config_cas(&self.broker_config_request_handler, channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::UpdateAndCreateTopicList => {
                 self.topic_request_handler
                     .update_and_create_topic_list(
