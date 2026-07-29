@@ -65,8 +65,8 @@ semantic_registry_owners:
         exposure: metrics_observable_local
   - owner: proxy
     component_surface: Proxy
-    exposure: implemented_local
-    backlog: add an authenticated bounded Proxy evidence adapter and production query verification
+    exposure: queryable
+    backlog: production-verify the protected Proxy metric and trace routes under sustained traffic
     notable_sources:
       - name: ProxyMetricsSnapshot
         source_path: rocketmq-proxy/src/observability.rs
