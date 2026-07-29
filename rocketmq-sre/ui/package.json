@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 3004",
-    "generate:api": "openapi-typescript ../openapi/rocketmq-sre-phase03.openapi.json -o ./src/api/generated.d.ts",
-    "check:api": "openapi-typescript ../openapi/rocketmq-sre-phase03.openapi.json -o ./src/api/generated.d.ts --check",
+    "generate:api": "openapi-typescript ../openapi/rocketmq-sre-phase05.openapi.json -o ./src/api/generated.d.ts",
+    "check:api": "openapi-typescript ../openapi/rocketmq-sre-phase05.openapi.json -o ./src/api/generated.d.ts --check",
     "lint": "eslint . --max-warnings=0",
     "test": "vitest",
     "build": "tsc && vite build",
