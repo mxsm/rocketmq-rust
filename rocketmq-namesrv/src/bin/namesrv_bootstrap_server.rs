@@ -59,8 +59,6 @@ const LOGO: &str = r#"
      |_|  \_\___/ \___|_|\_\___|\__|_|  |_|\___\_\      |_|  \_\__,_|___/\__| |_| \_|\__,_|_| |_| |_|\___| |_____/ \___|_|    \_/ \___|_|
     "#;
 
-const ENTRYPOINT_MAX_BLOCKING_THREADS: usize = 64;
-
 fn main() -> Result<()> {
     let owner = RuntimeOwner::new(namesrv_runtime_config()).context("failed to build namesrv runtime")?;
     let service_context = owner.root_context().child("rocketmq-namesrv-runtime");
@@ -96,9 +94,7 @@ fn main() -> Result<()> {
 }
 
 fn namesrv_runtime_config() -> RuntimeConfig {
-    let mut config = RuntimeConfig::namesrv_default();
-    config.max_blocking_threads = ENTRYPOINT_MAX_BLOCKING_THREADS;
-    config
+    RuntimeConfig::namesrv_default()
 }
 
 async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) -> Result<()> {

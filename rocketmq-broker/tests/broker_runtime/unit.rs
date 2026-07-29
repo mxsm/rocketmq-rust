@@ -1006,12 +1006,14 @@ async fn broker_shutdown_cancels_scheduled_store_lease_before_store_lock_release
         "rocketmq-rust-broker-scheduled-store-lease-{}",
         current_millis()
     ));
+    let ha_listen_port = allocate_broker_runtime_test_port() as usize;
     let broker_config = Arc::new(BrokerConfig {
         store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
         ..BrokerConfig::default()
     });
     let message_store_config = Arc::new(MessageStoreConfig {
         store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+        ha_listen_port,
         ..MessageStoreConfig::default()
     });
     let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
@@ -1069,6 +1071,7 @@ async fn broker_shutdown_cancels_scheduled_store_lease_before_store_lock_release
         }),
         Arc::new(MessageStoreConfig {
             store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            ha_listen_port,
             ..MessageStoreConfig::default()
         }),
     );

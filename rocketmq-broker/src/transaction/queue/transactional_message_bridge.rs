@@ -97,7 +97,7 @@ where
         offset
     }
 
-    pub async fn fetch_message_queues(&mut self, topic: &CheetahString) -> HashSet<MessageQueue> {
+    pub async fn fetch_message_queues(&self, topic: &CheetahString) -> HashSet<MessageQueue> {
         let mut message_queues = HashSet::new();
         let topic_config = self.select_topic_config(topic).await;
         if let Some(topic_config) = topic_config {
@@ -169,15 +169,15 @@ where
         }
     }
 
-    pub async fn select_topic_config(&mut self, topic: &CheetahString) -> Option<Arc<TopicConfig>> {
+    pub async fn select_topic_config(&self, topic: &CheetahString) -> Option<Arc<TopicConfig>> {
         self.topic_registration.select_or_create_send_back_topic(topic).await
     }
 
-    pub(crate) async fn select_tran_check_max_time_topic(&mut self) -> Option<Arc<TopicConfig>> {
+    pub(crate) async fn select_tran_check_max_time_topic(&self) -> Option<Arc<TopicConfig>> {
         self.topic_registration.select_or_create_check_max_time_topic().await
     }
 
-    pub async fn put_half_message(&mut self, mut message: MessageExtBrokerInner) -> PutMessageResult {
+    pub async fn put_half_message(&self, mut message: MessageExtBrokerInner) -> PutMessageResult {
         Self::parse_half_message_inner(&mut message);
         self.message_store.put_message(message).await
     }
@@ -298,7 +298,7 @@ where
         self.message_store.look_message_by_offset(offset)
     }
 
-    pub async fn write_op(&mut self, queue_id: i32, message: Message) -> bool {
+    pub async fn write_op(&self, queue_id: i32, message: Message) -> bool {
         let op_queue = {
             let mut op_queue_map = self.op_queue_map.lock().await;
             op_queue_map
@@ -311,7 +311,7 @@ where
         result.put_message_status() == PutMessageStatus::PutOk
     }
 
-    pub async fn put_message_return_result(&mut self, message_inner: MessageExtBrokerInner) -> PutMessageResult {
+    pub async fn put_message_return_result(&self, message_inner: MessageExtBrokerInner) -> PutMessageResult {
         let result = self.message_store.put_message(message_inner).await;
         if result.put_message_status() == PutMessageStatus::PutOk {
             //nothing to do
@@ -319,12 +319,12 @@ where
         result
     }
 
-    pub async fn put_message(&mut self, message_inner: MessageExtBrokerInner) -> bool {
+    pub async fn put_message(&self, message_inner: MessageExtBrokerInner) -> bool {
         let result = self.put_message_return_result(message_inner).await;
         result.put_message_status() == PutMessageStatus::PutOk
     }
 
-    pub async fn escape_message(&mut self, message_inner: MessageExtBrokerInner) -> bool {
+    pub async fn escape_message(&self, message_inner: MessageExtBrokerInner) -> bool {
         let Some(escape_bridge) = self.escape_bridge.upgrade() else {
             return false;
         };

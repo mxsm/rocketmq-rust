@@ -57,6 +57,8 @@ use crate::connection::Connection;
 use crate::connection::ConnectionId;
 use crate::connection::ConnectionState;
 use crate::connection::SessionLifecycle;
+use crate::connection::SessionWriterDiagnostics;
+use crate::connection::SessionWriterSnapshot;
 use crate::request_ordering::RequestOrdering;
 use crate::security::TransportSecurity;
 use crate::session_executor::SessionDispatchError;
@@ -88,6 +90,7 @@ pub struct SessionHandle {
     remote_addr: SocketAddr,
     connection_id: ConnectionId,
     writer: tokio::sync::mpsc::Sender<QueuedWrite>,
+    writer_diagnostics: Arc<SessionWriterDiagnostics>,
     admission: Arc<AdmissionController>,
     scope: AdmissionScope,
     state_tx: tokio::sync::watch::Sender<ConnectionState>,
@@ -116,6 +119,7 @@ impl SessionHandle {
     pub fn connection(&self) -> Connection {
         Connection::new_queued(
             self.writer.clone(),
+            self.writer_diagnostics.clone(),
             self.admission.clone(),
             self.scope,
             self.state_tx.clone(),
@@ -129,6 +133,11 @@ impl SessionHandle {
 
     pub fn task_group(&self) -> &TaskGroup {
         &self.task_group
+    }
+
+    #[must_use]
+    pub fn writer_snapshot(&self) -> SessionWriterSnapshot {
+        self.writer_diagnostics.snapshot()
     }
 
     pub(crate) fn request_executor_group(&self) -> &TaskGroup {
@@ -182,7 +191,7 @@ impl SessionHandle {
         if let Some(started) = started {
             let _ = started.send(());
         }
-        let _retirement_guard = self.lifecycle.begin_retirement().await;
+        self.lifecycle.begin_retirement().await;
         let (completion, result) = tokio::sync::oneshot::channel();
         let send_result = self.writer.send(QueuedWrite::close(completion)).await;
         if send_result.is_err() {
@@ -459,6 +468,8 @@ async fn run_framed_session<H>(
     let (state_tx, state_rx) = tokio::sync::watch::channel(ConnectionState::Healthy);
     let lifecycle = Arc::new(SessionLifecycle::new());
     let (writer, mut writes) = tokio::sync::mpsc::channel::<QueuedWrite>(SESSION_WRITER_QUEUE_CAPACITY);
+    let writer_diagnostics = Arc::new(SessionWriterDiagnostics::new(SESSION_WRITER_QUEUE_CAPACITY));
+    let writer_task_diagnostics = Arc::clone(&writer_diagnostics);
     let writer_state = state_tx.clone();
     let writer_group = task_group.clone();
     let writer_shutdown_group = writer_group.clone();
@@ -466,11 +477,16 @@ async fn run_framed_session<H>(
         while let Some(next) = writes.recv().await {
             match next.operation {
                 WriterOperation::Send(payload) => {
+                    let started_at = next
+                        .queue_id
+                        .map(|id| writer_task_diagnostics.start_write(id))
+                        .unwrap_or_else(std::time::Instant::now);
                     let completion = next.completion;
                     let deadline = next.deadline;
                     let target = next.target;
                     let progress = next.progress;
-                    let result = if deadline.is_some_and(|deadline| deadline.is_expired()) {
+                    let deadline_expired = deadline.is_some_and(|deadline| deadline.is_expired());
+                    let result = if deadline_expired {
                         Err(RocketMQError::network_deadline_exceeded_before_send(target))
                     } else {
                         if let Some(progress) = progress.as_ref() {
@@ -484,6 +500,7 @@ async fn run_framed_session<H>(
                     if result.is_ok() {
                         record_transport_write(payload.encoded_len());
                     }
+                    writer_task_diagnostics.finish_write(started_at, result.is_ok(), deadline_expired);
                     let poisoned = frame_writer.is_poisoned();
                     if poisoned {
                         let _ = writer_state.send(ConnectionState::Degraded);
@@ -494,6 +511,10 @@ async fn run_framed_session<H>(
                         writes.close();
                         let _ = frame_writer.shutdown().await;
                         while let Some(pending) = writes.recv().await {
+                            if let Some(id) = pending.queue_id {
+                                let started_at = writer_task_diagnostics.start_write(id);
+                                writer_task_diagnostics.finish_write(started_at, false, false);
+                            }
                             let target = match pending.operation {
                                 WriterOperation::Send(_) => pending.target,
                                 WriterOperation::Close => "transport-session-writer".to_string(),
@@ -526,6 +547,7 @@ async fn run_framed_session<H>(
         remote_addr,
         connection_id,
         writer: writer.clone(),
+        writer_diagnostics,
         admission: admission.clone(),
         scope,
         state_tx: state_tx.clone(),

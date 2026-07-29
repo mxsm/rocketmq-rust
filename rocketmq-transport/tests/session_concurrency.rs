@@ -19,6 +19,7 @@ use std::pin::Pin;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 
 use rocketmq_protocol::code::request_code::RequestCode;
@@ -105,6 +106,71 @@ struct SlowDataHandler {
     release: Arc<Semaphore>,
 }
 
+struct CapturingHandler {
+    connected: StdMutex<Option<tokio::sync::oneshot::Sender<SessionHandle>>>,
+}
+
+impl ConnectionHandler for CapturingHandler {
+    fn connected(&self, session: SessionHandle) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        let connected = self
+            .connected
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        Box::pin(async move {
+            if let Some(connected) = connected {
+                let _ = connected.send(session);
+            }
+        })
+    }
+
+    fn command(
+        &self,
+        session: SessionHandle,
+        request: RemotingCommand,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(send_success(session, request))
+    }
+}
+
+#[tokio::test]
+async fn session_writer_reports_bounded_queue_and_write_diagnostics() {
+    let (connected_tx, connected_rx) = tokio::sync::oneshot::channel();
+    let handler = Arc::new(CapturingHandler {
+        connected: StdMutex::new(Some(connected_tx)),
+    });
+    let (runtime, service, mut peer, runner) =
+        start_session("session-writer-diagnostics", AdmissionLimits::default(), handler).await;
+    let session = connected_rx
+        .await
+        .expect("handler should receive the session capability");
+
+    let initial = session.writer_snapshot();
+    assert!(initial.capacity > 0);
+    assert_eq!(initial.queued_items, 0);
+    assert_eq!(initial.queued_bytes, 0);
+
+    peer.send_command(RemotingCommand::create_remoting_command(RequestCode::HeartBeat).set_opaque(7))
+        .await
+        .expect("send diagnostic request");
+    let response = peer
+        .receive_command()
+        .await
+        .expect("session should remain open")
+        .expect("diagnostic response should decode");
+    assert_eq!(response.opaque(), 7);
+
+    let completed = session.writer_snapshot();
+    assert_eq!(completed.accepted, 1);
+    assert_eq!(completed.completed, 1);
+    assert_eq!(completed.failed, 0);
+    assert_eq!(completed.queued_items, 0);
+    assert_eq!(completed.queued_bytes, 0);
+    assert_eq!(completed.oldest_queue_age_millis, None);
+
+    finish_session(runtime, service, peer, runner).await;
+}
+
 impl ConnectionHandler for SlowDataHandler {
     fn connected(&self, _session: SessionHandle) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async {})
@@ -179,6 +245,56 @@ async fn reader_dispatches_control_while_a_data_request_is_running() {
     assert_eq!(data.opaque(), 1);
 
     finish_session(runtime, service, peer, runner).await;
+}
+
+#[tokio::test]
+async fn slow_session_does_not_block_an_independent_session_writer() {
+    let first_entered = Arc::new(Notify::new());
+    let first_release = Arc::new(Semaphore::new(0));
+    let first_handler = Arc::new(SlowDataHandler {
+        entered: first_entered.clone(),
+        release: first_release.clone(),
+    });
+    let second_entered = Arc::new(Notify::new());
+    let second_release = Arc::new(Semaphore::new(0));
+    let second_handler = Arc::new(SlowDataHandler {
+        entered: second_entered,
+        release: second_release,
+    });
+    let (first_runtime, first_service, mut first_peer, first_runner) =
+        start_session("session-independent-first", AdmissionLimits::default(), first_handler).await;
+    let (second_runtime, second_service, mut second_peer, second_runner) =
+        start_session("session-independent-second", AdmissionLimits::default(), second_handler).await;
+
+    first_peer
+        .send_command(RemotingCommand::create_remoting_command(RequestCode::SendMessage).set_opaque(1))
+        .await
+        .expect("send blocked request to first session");
+    tokio::time::timeout(Duration::from_secs(1), first_entered.notified())
+        .await
+        .expect("first session request should enter");
+
+    second_peer
+        .send_command(RemotingCommand::create_remoting_command(RequestCode::HeartBeat).set_opaque(2))
+        .await
+        .expect("send control request to independent session");
+    let second_response = tokio::time::timeout(Duration::from_secs(1), second_peer.receive_command())
+        .await
+        .expect("independent session writer must make progress")
+        .expect("second session should remain open")
+        .expect("second response should decode");
+    assert_eq!(second_response.opaque(), 2);
+
+    first_release.add_permits(1);
+    let first_response = first_peer
+        .receive_command()
+        .await
+        .expect("first session should remain open")
+        .expect("first response should decode");
+    assert_eq!(first_response.opaque(), 1);
+
+    finish_session(first_runtime, first_service, first_peer, first_runner).await;
+    finish_session(second_runtime, second_service, second_peer, second_runner).await;
 }
 
 struct BoundedDataHandler {

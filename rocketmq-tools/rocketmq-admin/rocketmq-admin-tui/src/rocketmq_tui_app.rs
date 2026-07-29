@@ -1,4 +1,10 @@
+use std::collections::VecDeque;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
+use std::time::Instant;
 
 use crossterm::event::Event;
 use crossterm::event::EventStream;
@@ -25,9 +31,48 @@ pub struct RocketmqTuiApp {
     admin_facade: TuiAdminFacade,
     should_quit: bool,
     state: AppState,
-    action_tx: mpsc::UnboundedSender<Action>,
-    action_rx: mpsc::UnboundedReceiver<Action>,
+    action_tx: mpsc::Sender<QueuedAction>,
+    action_rx: mpsc::Receiver<QueuedAction>,
+    action_queue_diagnostics: Arc<ActionQueueDiagnostics>,
     running_task: Option<RunningCommandTask>,
+}
+
+const ACTION_QUEUE_CAPACITY: usize = 128;
+
+#[derive(Default)]
+struct ActionQueueDiagnostics {
+    accepted: AtomicU64,
+    rejected: AtomicU64,
+    coalesced: AtomicU64,
+    queue: Mutex<ActionQueueState>,
+}
+
+#[derive(Default)]
+struct ActionQueueState {
+    next_id: u64,
+    entries: VecDeque<ActionQueueEntry>,
+}
+
+struct ActionQueueEntry {
+    id: u64,
+    bytes: usize,
+    enqueued_at: Instant,
+}
+
+struct QueuedAction {
+    id: u64,
+    action: Action,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ActionQueueSnapshot {
+    pub capacity: usize,
+    pub queued: usize,
+    pub queued_bytes: usize,
+    pub oldest_age_millis: Option<u64>,
+    pub accepted: u64,
+    pub rejected: u64,
+    pub coalesced: u64,
 }
 
 struct RunningCommandTask {
@@ -41,7 +86,7 @@ impl RocketmqTuiApp {
     }
 
     pub fn with_admin_facade(admin_facade: TuiAdminFacade) -> Self {
-        let (action_tx, action_rx) = mpsc::unbounded_channel();
+        let (action_tx, action_rx) = mpsc::channel(ACTION_QUEUE_CAPACITY);
         let state = AppState::new(admin_facade.namesrv_addr());
         Self {
             admin_facade,
@@ -49,6 +94,7 @@ impl RocketmqTuiApp {
             state,
             action_tx,
             action_rx,
+            action_queue_diagnostics: Arc::new(ActionQueueDiagnostics::default()),
             running_task: None,
         }
     }
@@ -66,6 +112,91 @@ impl RocketmqTuiApp {
         self.abort_running_task();
         self.should_quit = true;
     }
+
+    pub fn action_queue_snapshot(&self) -> ActionQueueSnapshot {
+        let (queued, queued_bytes, oldest_age_millis) = self.action_queue_diagnostics.snapshot_queue();
+        ActionQueueSnapshot {
+            capacity: self.action_tx.max_capacity(),
+            queued,
+            queued_bytes,
+            oldest_age_millis,
+            accepted: self.action_queue_diagnostics.accepted.load(Ordering::Relaxed),
+            rejected: self.action_queue_diagnostics.rejected.load(Ordering::Relaxed),
+            coalesced: self.action_queue_diagnostics.coalesced.load(Ordering::Relaxed),
+        }
+    }
+}
+
+impl ActionQueueDiagnostics {
+    fn enqueue(&self, action: Action) -> QueuedAction {
+        let mut queue = self.queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        queue.next_id = queue.next_id.wrapping_add(1).max(1);
+        let id = queue.next_id;
+        queue.entries.push_back(ActionQueueEntry {
+            id,
+            bytes: action.retained_bytes(),
+            enqueued_at: Instant::now(),
+        });
+        QueuedAction { id, action }
+    }
+
+    fn dequeue(&self, id: u64) {
+        let mut queue = self.queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(index) = queue.entries.iter().position(|entry| entry.id == id) {
+            queue.entries.remove(index);
+        }
+    }
+
+    fn snapshot_queue(&self) -> (usize, usize, Option<u64>) {
+        let queue = self.queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let now = Instant::now();
+        (
+            queue.entries.len(),
+            queue
+                .entries
+                .iter()
+                .fold(0_usize, |total, entry| total.saturating_add(entry.bytes)),
+            queue.entries.front().map(|entry| {
+                u64::try_from(now.saturating_duration_since(entry.enqueued_at).as_millis()).unwrap_or(u64::MAX)
+            }),
+        )
+    }
+}
+
+fn try_send_progress(
+    sender: &mpsc::Sender<QueuedAction>,
+    diagnostics: &ActionQueueDiagnostics,
+    execution_id: u64,
+    message: String,
+) {
+    match sender.try_reserve() {
+        Ok(permit) => {
+            permit.send(diagnostics.enqueue(Action::ProgressUpdated { execution_id, message }));
+            diagnostics.accepted.fetch_add(1, Ordering::Relaxed);
+        }
+        Err(mpsc::error::TrySendError::Full(())) => {
+            diagnostics.coalesced.fetch_add(1, Ordering::Relaxed);
+        }
+        Err(mpsc::error::TrySendError::Closed(())) => {
+            diagnostics.rejected.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+async fn send_required_action(
+    sender: &mpsc::Sender<QueuedAction>,
+    diagnostics: &ActionQueueDiagnostics,
+    action: Action,
+) {
+    match sender.reserve().await {
+        Ok(permit) => {
+            permit.send(diagnostics.enqueue(action));
+            diagnostics.accepted.fetch_add(1, Ordering::Relaxed);
+        }
+        Err(_) => {
+            diagnostics.rejected.fetch_add(1, Ordering::Relaxed);
+        }
+    }
 }
 
 impl RocketmqTuiApp {
@@ -82,9 +213,23 @@ impl RocketmqTuiApp {
                     terminal.draw(|frame| self.draw(frame))?;
                 },
                 Some(Ok(event)) = events.next() => self.handle_event(&event),
-                Some(action) = self.action_rx.recv() => self.apply_action(action),
+                Some(queued) = self.action_rx.recv() => {
+                    self.action_queue_diagnostics.dequeue(queued.id);
+                    self.apply_action(queued.action);
+                },
             }
         }
+        let queue = self.action_queue_snapshot();
+        tracing::debug!(
+            capacity = queue.capacity,
+            queued = queue.queued,
+            queued_bytes = queue.queued_bytes,
+            oldest_age_millis = queue.oldest_age_millis,
+            accepted = queue.accepted,
+            rejected = queue.rejected,
+            coalesced = queue.coalesced,
+            "RocketMQ admin TUI action queue stopped"
+        );
         Ok(())
     }
 
@@ -498,20 +643,17 @@ impl RocketmqTuiApp {
             execution_id,
             command_id: command_id.clone(),
         });
-        let _ = self.action_tx.send(Action::ProgressUpdated {
-            execution_id,
-            message: format!("started {command_id}"),
-        });
-
         let command = self.state.selected_command().clone();
         let form = self.state.form.clone();
         let facade = self.admin_facade.clone();
         let tx = self.action_tx.clone();
+        let diagnostics = Arc::clone(&self.action_queue_diagnostics);
         let progress_tx = tx.clone();
+        let progress_diagnostics = Arc::clone(&diagnostics);
         let command_id_for_task = command_id.clone();
         let command_task = tokio::task::spawn_local(async move {
             let result = execute_command_with_progress(&facade, &command, &form, move |message| {
-                let _ = progress_tx.send(Action::ProgressUpdated { execution_id, message });
+                try_send_progress(&progress_tx, &progress_diagnostics, execution_id, message);
             })
             .await;
             let action = match result {
@@ -526,7 +668,7 @@ impl RocketmqTuiApp {
                     error: error.to_string(),
                 },
             };
-            let _ = tx.send(action);
+            send_required_action(&tx, &diagnostics, action).await;
         });
         let abort_handle = command_task.abort_handle();
         drop(command_task);
@@ -614,6 +756,29 @@ mod tests {
         let app = RocketmqTuiApp::with_admin_facade(facade);
 
         assert_eq!(app.admin_facade().namesrv_addr(), Some("127.0.0.1:9876"));
+        assert_eq!(app.action_queue_snapshot().capacity, ACTION_QUEUE_CAPACITY);
+    }
+
+    #[test]
+    fn progress_bursts_are_bounded_and_coalesced() {
+        let app = RocketmqTuiApp::new(test_client_runtime());
+        for index in 0..ACTION_QUEUE_CAPACITY * 4 {
+            try_send_progress(
+                &app.action_tx,
+                &app.action_queue_diagnostics,
+                1,
+                format!("progress-{index}"),
+            );
+        }
+
+        let snapshot = app.action_queue_snapshot();
+        assert_eq!(snapshot.capacity, ACTION_QUEUE_CAPACITY);
+        assert_eq!(snapshot.queued, ACTION_QUEUE_CAPACITY);
+        assert!(snapshot.queued_bytes >= ACTION_QUEUE_CAPACITY * std::mem::size_of::<Action>());
+        assert!(snapshot.oldest_age_millis.is_some());
+        assert_eq!(snapshot.accepted, ACTION_QUEUE_CAPACITY as u64);
+        assert_eq!(snapshot.rejected, 0);
+        assert_eq!(snapshot.coalesced, (ACTION_QUEUE_CAPACITY * 3) as u64);
     }
 
     #[test]

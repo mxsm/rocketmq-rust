@@ -59,3 +59,30 @@ pub enum Action {
     HelpToggled,
     ResultCleared,
 }
+
+impl Action {
+    pub(crate) fn retained_bytes(&self) -> usize {
+        let dynamic = match self {
+            Self::SearchChanged(value) | Self::NamesrvChanged(value) | Self::CommandSelected(value) => value.len(),
+            Self::ArgChanged { name, value } => name.len().saturating_add(value.len()),
+            Self::ConfirmRequested {
+                command_id, expected, ..
+            } => command_id.len().saturating_add(expected.len()),
+            Self::CommandStarted { command_id, .. } | Self::CancelExecution { command_id, .. } => command_id.len(),
+            Self::CommandSucceeded { command_id, result, .. } => {
+                command_id.len().saturating_add(result.retained_bytes())
+            }
+            Self::CommandFailed { command_id, error, .. } => command_id.len().saturating_add(error.len()),
+            Self::ProgressUpdated { message, .. } => message.len(),
+            Self::Quit
+            | Self::FocusNext
+            | Self::FocusPrevious
+            | Self::FocusSearch
+            | Self::FocusNamesrv
+            | Self::ExecuteRequested
+            | Self::HelpToggled
+            | Self::ResultCleared => 0,
+        };
+        std::mem::size_of::<Self>().saturating_add(dynamic)
+    }
+}

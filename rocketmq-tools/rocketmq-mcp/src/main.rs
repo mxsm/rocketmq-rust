@@ -33,8 +33,6 @@ use rocketmq_security_api::SecurityBootstrapOutcome;
 use rocketmq_security_api::SecurityBootstrapProfile;
 
 const RUNTIME_TEARDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
-const ENTRYPOINT_MAX_BLOCKING_THREADS: usize = 32;
-
 fn main() -> Result<(), McpError> {
     let owner = RuntimeOwner::new(mcp_runtime_config()).map_err(|source| McpError::Infrastructure {
         operation: "create MCP runtime owner",
@@ -74,7 +72,6 @@ fn main() -> Result<(), McpError> {
 
 fn mcp_runtime_config() -> RuntimeConfig {
     let mut config = RuntimeConfig::server_default("rocketmq-mcp");
-    config.max_blocking_threads = ENTRYPOINT_MAX_BLOCKING_THREADS;
     config.shutdown_timeout = RUNTIME_TEARDOWN_TIMEOUT;
     config
 }
@@ -228,6 +225,7 @@ async fn serve_streamable_http(app: McpApp, lifecycle: ServiceLifecycle) -> Resu
 mod tests {
     use super::mcp_runtime_config;
     use super::validate_mcp_security;
+    use super::RuntimeConfig;
     use super::TransportKind;
     use rocketmq_security_api::SecurityBootstrap;
     use rocketmq_security_api::SecurityBootstrapConfig;
@@ -287,7 +285,10 @@ mod tests {
         let config = mcp_runtime_config();
 
         assert_eq!(config.thread_name, "rocketmq-mcp");
-        assert_eq!(config.max_blocking_threads, super::ENTRYPOINT_MAX_BLOCKING_THREADS);
+        assert_eq!(
+            config.max_blocking_threads,
+            RuntimeConfig::server_default("comparison").max_blocking_threads
+        );
         assert_eq!(config.shutdown_timeout, super::RUNTIME_TEARDOWN_TIMEOUT);
         assert!(config.blocking_lane_policies.storage_io.max_queue_depth > 0);
         assert!(config.blocking_lane_policies.metadata_io.max_queue_depth > 0);

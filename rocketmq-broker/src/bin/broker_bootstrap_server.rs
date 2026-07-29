@@ -53,8 +53,6 @@ const LOGO: &str = r#"
  |_|  \_\___/ \___|_|\_\___|\__|_|  |_|\___\_\      |_|  \_\__,_|___/\__| |____/|_|  \___/|_|\_\___|_|
 "#;
 
-const ENTRYPOINT_MAX_BLOCKING_THREADS: usize = 64;
-
 fn main() -> Result<()> {
     let owner = RuntimeOwner::new(broker_runtime_config()).context("failed to build broker runtime")?;
     let service_context = owner.root_context().child("rocketmq-broker-runtime");
@@ -89,9 +87,7 @@ fn main() -> Result<()> {
 }
 
 fn broker_runtime_config() -> RuntimeConfig {
-    let mut config = RuntimeConfig::broker_default();
-    config.max_blocking_threads = ENTRYPOINT_MAX_BLOCKING_THREADS;
-    config
+    RuntimeConfig::broker_default()
 }
 
 async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) -> Result<()> {

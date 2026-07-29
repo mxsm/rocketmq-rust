@@ -97,6 +97,36 @@ pub struct BlockingLanePolicies {
 }
 
 impl BlockingLanePolicies {
+    pub(crate) fn for_parallelism(parallelism: usize) -> Self {
+        let parallelism = parallelism.max(1);
+        Self {
+            storage_io: BlockingPoolPolicy {
+                name: "rocketmq-blocking.storage-io".to_string(),
+                max_concurrency: parallelism.saturating_mul(4).max(4),
+                max_queue_depth: parallelism.saturating_mul(16).max(16),
+                ..BlockingPoolPolicy::default()
+            },
+            metadata_io: BlockingPoolPolicy {
+                name: "rocketmq-blocking.metadata-io".to_string(),
+                max_concurrency: parallelism.saturating_mul(2).max(2),
+                max_queue_depth: parallelism.saturating_mul(8).max(8),
+                ..BlockingPoolPolicy::default()
+            },
+            cpu_crypto: BlockingPoolPolicy {
+                name: "rocketmq-blocking.cpu-crypto".to_string(),
+                max_concurrency: parallelism.max(2),
+                max_queue_depth: parallelism.saturating_mul(4).max(8),
+                ..BlockingPoolPolicy::default()
+            },
+        }
+    }
+
+    pub(crate) fn cap_concurrency(&mut self, global_capacity: usize) {
+        self.storage_io.max_concurrency = self.storage_io.max_concurrency.min(global_capacity).max(1);
+        self.metadata_io.max_concurrency = self.metadata_io.max_concurrency.min(global_capacity).max(1);
+        self.cpu_crypto.max_concurrency = self.cpu_crypto.max_concurrency.min(global_capacity).max(1);
+    }
+
     pub fn validate(&self) -> RuntimeResult<()> {
         self.storage_io.validate()?;
         self.metadata_io.validate()?;
@@ -149,26 +179,7 @@ impl Default for BlockingLanePolicies {
         let parallelism = std::thread::available_parallelism()
             .map(|value| value.get())
             .unwrap_or(4);
-        Self {
-            storage_io: BlockingPoolPolicy {
-                name: "rocketmq-blocking.storage-io".to_string(),
-                max_concurrency: parallelism.saturating_mul(4).max(4),
-                max_queue_depth: parallelism.saturating_mul(16).max(16),
-                ..BlockingPoolPolicy::default()
-            },
-            metadata_io: BlockingPoolPolicy {
-                name: "rocketmq-blocking.metadata-io".to_string(),
-                max_concurrency: parallelism.saturating_mul(2).max(2),
-                max_queue_depth: parallelism.saturating_mul(8).max(8),
-                ..BlockingPoolPolicy::default()
-            },
-            cpu_crypto: BlockingPoolPolicy {
-                name: "rocketmq-blocking.cpu-crypto".to_string(),
-                max_concurrency: parallelism.max(2),
-                max_queue_depth: parallelism.saturating_mul(4).max(8),
-                ..BlockingPoolPolicy::default()
-            },
-        }
+        Self::for_parallelism(parallelism)
     }
 }
 

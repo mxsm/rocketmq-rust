@@ -179,6 +179,114 @@
           ]
         }
       ]
+    },
+    {
+      "id": "ARC-RUNTIME-004",
+      "class": "runtime_adapter",
+      "owner": "broker",
+      "status": "resolved",
+      "reason": "transaction bridge operations no longer borrow one outer async mutex across topic or store awaits",
+      "adr": "rocketmq-doc/en/single-writer-runtime-ownership-adr.md",
+      "removal_condition": "the transaction service continues to own the bridge directly and keeps coordination locks narrow",
+      "target_release": "2.0.0",
+      "evidence": [
+        "rocketmq-broker/src/transaction/queue/default_transactional_message_service.rs",
+        "rocketmq-broker/src/transaction/queue/transactional_message_bridge.rs"
+      ],
+      "scope_count": 0,
+      "source_checks": [
+        {
+          "pattern": "transactional_message_bridge: Mutex",
+          "max_count": 0,
+          "paths": [
+            "rocketmq-broker/src/transaction/queue/default_transactional_message_service.rs"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ARC-RUNTIME-005",
+      "class": "runtime_adapter",
+      "owner": "broker",
+      "status": "resolved",
+      "reason": "Broker wakeup responses now use Transport's canonical per-session writer without a second hash-sharded mutex layer",
+      "adr": "rocketmq-doc/en/single-writer-runtime-ownership-adr.md",
+      "removal_condition": "Broker response paths do not restore process-wide wakeup writer shards",
+      "target_release": "2.0.0",
+      "evidence": [
+        "rocketmq-broker/src/processor/pull_message_processor.rs",
+        "rocketmq-transport/tests/session_concurrency.rs"
+      ],
+      "scope_count": 0,
+      "source_checks": [
+        {
+          "pattern": "wakeup_write_locks: Arc",
+          "max_count": 0,
+          "paths": [
+            "rocketmq-broker/src/processor/pull_message_processor.rs"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ARC-RUNTIME-006",
+      "class": "runtime_adapter",
+      "owner": "dashboard",
+      "status": "resolved",
+      "reason": "Dashboard remote RPCs use concurrent generation leases while the lifecycle slot is limited to handle selection and replacement",
+      "adr": "rocketmq-doc/en/single-writer-runtime-ownership-adr.md",
+      "removal_condition": "the Dashboard lifecycle slot never owns a mutable AdminGuard across remote RPC awaits",
+      "target_release": "2.0.0",
+      "evidence": [
+        "rocketmq-dashboard/rocketmq-dashboard-web/backend/src/admin/dashboard_admin_client.rs",
+        "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/core/dashboard.rs"
+      ],
+      "scope_count": 0,
+      "source_checks": [
+        {
+          "pattern": "admin_session: Arc<Mutex<Option<AdminGuard>>>",
+          "max_count": 0,
+          "paths": [
+            "rocketmq-dashboard/rocketmq-dashboard-web/backend/src/admin/dashboard_admin_client.rs"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ARC-RUNTIME-007",
+      "class": "runtime_adapter",
+      "owner": "runtime-maintainers",
+      "status": "resolved",
+      "reason": "entrypoints derive one bounded blocking profile and the admin TUI uses a bounded observable action queue",
+      "adr": "rocketmq-doc/en/single-writer-runtime-ownership-adr.md",
+      "removal_condition": "fixed entrypoint blocking constants and the TUI unbounded action channel remain absent",
+      "target_release": "2.0.0",
+      "evidence": [
+        "rocketmq-runtime/src/config.rs",
+        "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/rocketmq_tui_app.rs"
+      ],
+      "scope_count": 0,
+      "source_checks": [
+        {
+          "pattern": "ENTRYPOINT_MAX_BLOCKING_THREADS",
+          "max_count": 0,
+          "paths": [
+            "rocketmq-broker/src/bin/broker_bootstrap_server.rs",
+            "rocketmq-controller/src/bin/controller_bootstrap.rs",
+            "rocketmq-namesrv/src/bin/namesrv_bootstrap_server.rs",
+            "rocketmq-proxy/src/bin/rocketmq-proxy-rust.rs",
+            "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/main.rs",
+            "rocketmq-tools/rocketmq-mcp/src/main.rs"
+          ]
+        },
+        {
+          "pattern": "UnboundedSender<Action>",
+          "max_count": 0,
+          "paths": [
+            "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/rocketmq_tui_app.rs"
+          ]
+        }
+      ]
     }
   ]
 }

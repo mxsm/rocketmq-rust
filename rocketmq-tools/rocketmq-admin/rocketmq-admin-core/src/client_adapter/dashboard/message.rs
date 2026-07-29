@@ -18,14 +18,14 @@ use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::MessageTrait;
 
 pub(super) fn query<'a>(
-    session: &'a mut AdminSession,
+    session: &'a AdminSession,
     request: &'a dashboard::DashboardMessageQuery,
 ) -> AdminFuture<'a, dashboard::DashboardMessageList> {
     Box::pin(async move { query_messages(session, request, true).await })
 }
 
 pub(super) fn query_dlq<'a>(
-    session: &'a mut AdminSession,
+    session: &'a AdminSession,
     request: &'a dashboard::DashboardDlqMessageQuery,
 ) -> AdminFuture<'a, dashboard::DashboardMessageList> {
     Box::pin(async move {
@@ -62,7 +62,7 @@ pub(super) fn query_dlq<'a>(
     reason = "the client SDK track result remains the compatibility source during M07"
 )]
 pub(super) fn trace<'a>(
-    session: &'a mut AdminSession,
+    session: &'a AdminSession,
     topic: &'a str,
     message_id: &'a str,
     trace_topic: &'a str,
@@ -97,7 +97,7 @@ pub(super) fn trace<'a>(
 }
 
 pub(super) fn consume_directly<'a>(
-    session: &'a mut AdminSession,
+    session: &'a AdminSession,
     request: &'a dashboard::DashboardDirectConsumeRequest,
 ) -> AdminFuture<'a, dashboard::AdminMutationResult> {
     Box::pin(async move {
@@ -165,7 +165,7 @@ fn map_message(message: &MessageExt) -> dashboard::DashboardMessage {
 }
 
 pub(super) async fn query_messages(
-    session: &mut AdminSession,
+    session: &AdminSession,
     request: &dashboard::DashboardMessageQuery,
     inclusive_end_offset: bool,
 ) -> Result<dashboard::DashboardMessageList, AdminError> {
@@ -224,7 +224,7 @@ pub(super) async fn query_messages(
 }
 
 pub(super) async fn scan_messages(
-    session: &mut AdminSession,
+    session: &AdminSession,
     topic: &str,
     request: &dashboard::DashboardMessageQuery,
     inclusive_end_offset: bool,

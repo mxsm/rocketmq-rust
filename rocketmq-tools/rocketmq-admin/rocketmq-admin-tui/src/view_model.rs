@@ -125,6 +125,37 @@ pub enum CommandResultViewModel {
     OperationSummary(OperationSummaryViewModel),
 }
 
+impl CommandResultViewModel {
+    pub(crate) fn retained_bytes(&self) -> usize {
+        match self {
+            Self::Table(table) => {
+                table.title.len()
+                    + table.headers.iter().map(String::len).sum::<usize>()
+                    + table
+                        .rows
+                        .iter()
+                        .flat_map(|row| row.iter())
+                        .map(String::len)
+                        .sum::<usize>()
+            }
+            Self::KeyValue(values) => {
+                values.title.len()
+                    + values
+                        .rows
+                        .iter()
+                        .map(|(key, value)| key.len().saturating_add(value.len()))
+                        .sum::<usize>()
+            }
+            Self::Json { title, body } | Self::Text { title, body } => title.len().saturating_add(body.len()),
+            Self::OperationSummary(summary) => {
+                summary.title.len()
+                    + summary.targets.iter().map(String::len).sum::<usize>()
+                    + summary.errors.iter().map(String::len).sum::<usize>()
+            }
+        }
+    }
+}
+
 mod conversions;
 
 #[cfg(test)]

@@ -353,96 +353,93 @@ pub struct DashboardMessageTrace {
     pub nodes: Vec<DashboardMessageTraceNode>,
 }
 
-pub trait DashboardAdmin: Send {
-    fn dashboard_list_topics(&mut self) -> AdminFuture<'_, DashboardTopicList>;
-    fn dashboard_topic_route<'a>(&'a mut self, topic: &'a str) -> AdminFuture<'a, DashboardTopicRoute>;
-    fn dashboard_topic_stats<'a>(&'a mut self, topic: &'a str) -> AdminFuture<'a, DashboardTopicStats>;
+pub trait DashboardAdmin: Send + Sync {
+    fn dashboard_list_topics(&self) -> AdminFuture<'_, DashboardTopicList>;
+    fn dashboard_topic_route<'a>(&'a self, topic: &'a str) -> AdminFuture<'a, DashboardTopicRoute>;
+    fn dashboard_topic_stats<'a>(&'a self, topic: &'a str) -> AdminFuture<'a, DashboardTopicStats>;
     fn dashboard_upsert_topic<'a>(
-        &'a mut self,
+        &'a self,
         request: &'a DashboardTopicMutationRequest,
     ) -> AdminFuture<'a, AdminMutationResult>;
-    fn dashboard_delete_topic<'a>(&'a mut self, topic: &'a str) -> AdminFuture<'a, AdminMutationResult>;
+    fn dashboard_delete_topic<'a>(&'a self, topic: &'a str) -> AdminFuture<'a, AdminMutationResult>;
 
-    fn dashboard_list_consumers(&mut self) -> AdminFuture<'_, DashboardConsumerList>;
-    fn dashboard_consumer_progress<'a>(&'a mut self, group: &'a str) -> AdminFuture<'a, DashboardConsumerProgress>;
+    fn dashboard_list_consumers(&self) -> AdminFuture<'_, DashboardConsumerList>;
+    fn dashboard_consumer_progress<'a>(&'a self, group: &'a str) -> AdminFuture<'a, DashboardConsumerProgress>;
     fn dashboard_reset_consumer<'a>(
-        &'a mut self,
+        &'a self,
         request: &'a DashboardConsumerResetRequest,
     ) -> AdminFuture<'a, AdminMutationResult>;
 
-    fn dashboard_list_producers(&mut self) -> AdminFuture<'_, Vec<DashboardProducerInfo>>;
+    fn dashboard_list_producers(&self) -> AdminFuture<'_, Vec<DashboardProducerInfo>>;
     fn dashboard_producer_connections<'a>(
-        &'a mut self,
+        &'a self,
         topic: &'a str,
         producer_group: &'a str,
     ) -> AdminFuture<'a, DashboardProducerConnections>;
 
-    fn dashboard_list_brokers(&mut self) -> AdminFuture<'_, DashboardBrokerList>;
+    fn dashboard_list_brokers(&self) -> AdminFuture<'_, DashboardBrokerList>;
     fn dashboard_broker_runtime<'a>(
-        &'a mut self,
+        &'a self,
         target: &'a DashboardBrokerTarget,
     ) -> AdminFuture<'a, DashboardBrokerRuntime>;
     fn dashboard_broker_config<'a>(
-        &'a mut self,
+        &'a self,
         target: &'a DashboardBrokerTarget,
     ) -> AdminFuture<'a, DashboardBrokerConfig>;
     fn dashboard_update_broker_config<'a>(
-        &'a mut self,
+        &'a self,
         request: &'a DashboardBrokerConfigUpdateRequest,
     ) -> AdminFuture<'a, AdminMutationResult>;
 
-    fn dashboard_list_acl_users<'a>(
-        &'a mut self,
-        query: &'a DashboardAclQuery,
-    ) -> AdminFuture<'a, Vec<DashboardAclUser>>;
+    fn dashboard_list_acl_users<'a>(&'a self, query: &'a DashboardAclQuery) -> AdminFuture<'a, Vec<DashboardAclUser>>;
     fn dashboard_create_acl_user<'a>(
-        &'a mut self,
+        &'a self,
         request: &'a DashboardAclUserMutationRequest,
     ) -> AdminFuture<'a, AdminMutationResult>;
     fn dashboard_update_acl_user<'a>(
-        &'a mut self,
+        &'a self,
         request: &'a DashboardAclUserMutationRequest,
     ) -> AdminFuture<'a, AdminMutationResult>;
     fn dashboard_delete_acl_user<'a>(
-        &'a mut self,
+        &'a self,
         selector: &'a TargetSelector,
         username: &'a str,
     ) -> AdminFuture<'a, AdminMutationResult>;
     fn dashboard_list_acl_policies<'a>(
-        &'a mut self,
+        &'a self,
         query: &'a DashboardAclQuery,
     ) -> AdminFuture<'a, Vec<DashboardAclPolicy>>;
     fn dashboard_create_acl_policy<'a>(
-        &'a mut self,
+        &'a self,
         request: &'a DashboardAclPolicyMutationRequest,
     ) -> AdminFuture<'a, AdminMutationResult>;
     fn dashboard_update_acl_policy<'a>(
-        &'a mut self,
+        &'a self,
         request: &'a DashboardAclPolicyMutationRequest,
     ) -> AdminFuture<'a, AdminMutationResult>;
     fn dashboard_delete_acl_policy<'a>(
-        &'a mut self,
+        &'a self,
         selector: &'a TargetSelector,
         subject: &'a str,
         resource: &'a str,
     ) -> AdminFuture<'a, AdminMutationResult>;
 
     fn dashboard_query_messages<'a>(
-        &'a mut self,
+        &'a self,
         request: &'a DashboardMessageQuery,
     ) -> AdminFuture<'a, DashboardMessageList>;
     fn dashboard_query_dlq_messages<'a>(
-        &'a mut self,
+        &'a self,
         request: &'a DashboardDlqMessageQuery,
     ) -> AdminFuture<'a, DashboardMessageList>;
     fn dashboard_message_trace<'a>(
-        &'a mut self,
+        &'a self,
         topic: &'a str,
         message_id: &'a str,
         trace_topic: &'a str,
     ) -> AdminFuture<'a, DashboardMessageTrace>;
     fn dashboard_consume_message_directly<'a>(
-        &'a mut self,
+        &'a self,
         request: &'a DashboardDirectConsumeRequest,
     ) -> AdminFuture<'a, AdminMutationResult>;
 }

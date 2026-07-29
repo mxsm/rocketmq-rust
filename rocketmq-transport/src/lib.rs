@@ -88,6 +88,7 @@ pub use config_support::network_util::NetworkUtil;
 pub use connection::transport_io_snapshot;
 pub use connection::Connection;
 pub use connection::ConnectionState;
+pub use connection::SessionWriterSnapshot;
 pub use connection::TransportIoSnapshot;
 pub use connection_context::ConnectionContext;
 pub use deadline::RequestDeadline;

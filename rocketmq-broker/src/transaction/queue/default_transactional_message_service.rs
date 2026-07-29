@@ -94,7 +94,7 @@ fn is_illegal_or_unmatched_offset(status: GetStatus) -> bool {
 }
 
 pub struct DefaultTransactionalMessageService<MS: MessageStore> {
-    transactional_message_bridge: Mutex<TransactionalMessageBridge<MS>>,
+    transactional_message_bridge: TransactionalMessageBridge<MS>,
     broker_config: Arc<BrokerConfig>,
     file_reserved_time_hours: i64,
     delete_context: Arc<Mutex<HashMap<i32, MessageQueueOpContext>>>,
@@ -187,7 +187,7 @@ where
                 reason: error.to_string(),
             })?;
         Ok(Self {
-            transactional_message_bridge: Mutex::new(transactional_message_bridge),
+            transactional_message_bridge,
             broker_config,
             file_reserved_time_hours,
             delete_context: Arc::new(Mutex::new(HashMap::new())),
@@ -209,11 +209,7 @@ where
     }
 
     async fn get_half_message_by_offset(&self, offset: i64) -> OperationResult {
-        let message_ext = self
-            .transactional_message_bridge
-            .lock()
-            .await
-            .look_message_by_offset(offset);
+        let message_ext = self.transactional_message_bridge.look_message_by_offset(offset);
 
         if let Some(message_ext) = message_ext {
             OperationResult {
@@ -269,8 +265,6 @@ where
         for (op_queue_id, op_message) in send_map {
             if !self
                 .transactional_message_bridge
-                .lock()
-                .await
                 .write_op(op_queue_id, op_message)
                 .await
             {
@@ -344,8 +338,11 @@ where
         );
 
         let put_message_result = {
-            let mut bridge = self.transactional_message_bridge.lock().await;
-            let Some(topic_config) = bridge.select_tran_check_max_time_topic().await else {
+            let Some(topic_config) = self
+                .transactional_message_bridge
+                .select_tran_check_max_time_topic()
+                .await
+            else {
                 error!(
                     "Create topic of tran check max time failed, real topic={}, msgId={}",
                     msg_ext.topic(),
@@ -353,7 +350,7 @@ where
                 );
                 return;
             };
-            bridge
+            self.transactional_message_bridge
                 .put_message_return_result(to_message_ext_broker_inner(&topic_config, &msg_ext))
                 .await
         };
@@ -385,12 +382,7 @@ where
         let topic = CheetahString::from_static_str(TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC);
 
         //TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC only one read and write queue
-        let msg_queues = self
-            .transactional_message_bridge
-            .lock()
-            .await
-            .fetch_message_queues(&topic)
-            .await;
+        let msg_queues = self.transactional_message_bridge.fetch_message_queues(&topic).await;
 
         if msg_queues.is_empty() {
             warn!("The queue of topic is empty: {}", topic);
@@ -403,13 +395,10 @@ where
             let start_time = current_millis() as i64;
             let op_queue = self.get_op_queue(&message_queue).await;
 
-            let (half_offset, op_offset) = {
-                let bridge = self.transactional_message_bridge.lock().await;
-                (
-                    bridge.fetch_consume_offset(&message_queue),
-                    bridge.fetch_consume_offset(&op_queue),
-                )
-            };
+            let (half_offset, op_offset) = (
+                self.transactional_message_bridge.fetch_consume_offset(&message_queue),
+                self.transactional_message_bridge.fetch_consume_offset(&op_queue),
+            );
 
             info!(
                 "Before check, the queue={:?} msgOffset={} opOffset={}",
@@ -547,12 +536,7 @@ where
                 // Handle slave acting master scenario
                 if self.should_escape_message().await {
                     let msg_inner = TransactionalMessageBridge::<MS>::renew_half_message_inner(&msg_ext);
-                    let is_success = self
-                        .transactional_message_bridge
-                        .lock()
-                        .await
-                        .escape_message(msg_inner)
-                        .await;
+                    let is_success = self.transactional_message_bridge.escape_message(msg_inner).await;
 
                     if is_success {
                         escape_fail_cnt = 0;
@@ -706,16 +690,12 @@ where
         // Update offsets
         if new_offset != half_offset {
             self.transactional_message_bridge
-                .lock()
-                .await
                 .update_consume_offset(message_queue, new_offset);
         }
 
         let new_op_offset = self.calculate_op_offset(done_op_offset, op_offset);
         if new_op_offset != op_offset {
             self.transactional_message_bridge
-                .lock()
-                .await
                 .update_consume_offset(op_queue, new_op_offset);
         }
 
@@ -796,8 +776,6 @@ where
         let msg_inner = TransactionalMessageBridge::<MS>::renew_half_message_inner(message_ext);
         Some(
             self.transactional_message_bridge
-                .lock()
-                .await
                 .put_message_return_result(msg_inner)
                 .await,
         )
@@ -806,11 +784,7 @@ where
     /// Put immunity message back to half queue
     async fn put_immunity_msg_back_to_half_queue(&self, message_ext: &MessageExt) -> bool {
         let msg_inner = TransactionalMessageBridge::<MS>::renew_immunity_half_message_inner(message_ext);
-        self.transactional_message_bridge
-            .lock()
-            .await
-            .put_message(msg_inner)
-            .await
+        self.transactional_message_bridge.put_message(msg_inner).await
     }
 
     /// Determine if message check is needed
@@ -964,8 +938,6 @@ where
     /// Pull half message
     async fn pull_half_msg(&self, mq: &MessageQueue, offset: i64, nums: i32) -> Option<TransactionReadOutcome> {
         self.transactional_message_bridge
-            .lock()
-            .await
             .get_half_message(mq.queue_id(), offset, nums)
             .await
     }
@@ -1028,8 +1000,6 @@ where
                 pull_offset_of_op, op_queue, pull_result
             );
             self.transactional_message_bridge
-                .lock()
-                .await
                 .update_consume_offset(op_queue, pull_result.next_begin_offset());
             return Ok(Some(pull_result));
         }
@@ -1111,8 +1081,6 @@ where
     /// Pull operation message
     async fn pull_op_msg(&self, mq: &MessageQueue, offset: i64, nums: i32) -> Option<TransactionReadOutcome> {
         self.transactional_message_bridge
-            .lock()
-            .await
             .get_op_message(mq.queue_id(), offset, nums)
             .await
     }
@@ -1141,19 +1109,11 @@ where
     MS: MessageStore + Send + Sync + 'static,
 {
     async fn prepare_message(&self, message_inner: MessageExtBrokerInner) -> PutMessageResult {
-        self.transactional_message_bridge
-            .lock()
-            .await
-            .put_half_message(message_inner)
-            .await
+        self.transactional_message_bridge.put_half_message(message_inner).await
     }
 
     async fn async_prepare_message(&self, message_inner: MessageExtBrokerInner) -> PutMessageResult {
-        self.transactional_message_bridge
-            .lock()
-            .await
-            .put_half_message(message_inner)
-            .await
+        self.transactional_message_bridge.put_half_message(message_inner).await
     }
 
     async fn delete_prepare_message(&self, message_ext: &MessageExt) -> bool {
@@ -1209,13 +1169,7 @@ where
             error!(queue_id, "Transaction op message was empty after offer fallback");
             return false;
         };
-        if self
-            .transactional_message_bridge
-            .lock()
-            .await
-            .write_op(queue_id, msg)
-            .await
-        {
+        if self.transactional_message_bridge.write_op(queue_id, msg).await {
             warn!("Force add remove op data. queueId={}", queue_id);
             true
         } else {
@@ -1395,7 +1349,10 @@ mod tests {
 
     #[test]
     fn transaction_service_ownership_uses_standard_arc_and_explicit_serialization() {
-        let service_source = include_str!("default_transactional_message_service.rs");
+        let service_source = include_str!("default_transactional_message_service.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production transaction service source");
         let batch_source = include_str!("transactional_op_batch_service.rs");
         let check_source = include_str!("../transactional_message_check_service.rs");
         let listener_source = include_str!("default_transactional_message_check_listener.rs");
@@ -1403,7 +1360,8 @@ mod tests {
         let store_source = include_str!("transaction_message_store.rs");
         let stats_source = include_str!("../../processor/admin_broker_processor/broker_stats_handler.rs");
 
-        assert!(service_source.contains("Mutex<TransactionalMessageBridge<MS>>"));
+        assert!(service_source.contains("transactional_message_bridge: TransactionalMessageBridge<MS>"));
+        assert!(!service_source.contains("Mutex<TransactionalMessageBridge<MS>>"));
         assert!(service_source.contains("OnceLock<TransactionalOpBatchService<MS>>"));
         assert!(!service_source.contains(concat!("Weak", "ArcMut")));
         assert!(batch_source.contains("Weak<DefaultTransactionalMessageService<MS>>"));
