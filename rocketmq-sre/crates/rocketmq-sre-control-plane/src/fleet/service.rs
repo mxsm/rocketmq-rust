@@ -15,14 +15,23 @@
 use chrono::Duration;
 use chrono::Utc;
 use rocketmq_sre_contracts::ClusterId;
+use rocketmq_sre_contracts::ClusterRegistration;
+use rocketmq_sre_contracts::FleetAccessProfile;
 use rocketmq_sre_contracts::FleetAssetIndex;
 use rocketmq_sre_contracts::FleetInspectionRun;
 use rocketmq_sre_contracts::FleetInspectionRunId;
+use rocketmq_sre_contracts::FleetOnboardingAssessment;
+use rocketmq_sre_contracts::FleetOnboardingAssessmentId;
+use rocketmq_sre_contracts::FleetQuotaDecisionId;
+use rocketmq_sre_contracts::FleetQuotaDecisionRecord;
+use rocketmq_sre_contracts::FleetQuotaResource;
+use rocketmq_sre_contracts::FleetQuotaWorkKind;
 use rocketmq_sre_contracts::RegionalEndpoint;
 use rocketmq_sre_contracts::RegionalEndpointHealth;
 use rocketmq_sre_contracts::is_sha256_digest;
 use rocketmq_sre_core::FleetQuotaEvaluator;
 use rocketmq_sre_core::FleetWorkPriority;
+use rocketmq_sre_core::QuotaDecisionReason;
 use rocketmq_sre_core::QuotaRequest;
 use rocketmq_sre_core::QuotaResource;
 use rocketmq_sre_core::residency_allows_route;
@@ -34,10 +43,17 @@ use super::model::ComplianceFindingQuery;
 use super::model::CreateFleetInspectionRequest;
 use super::model::CreateQuotaPolicyRequest;
 use super::model::EvaluateComplianceRequest;
+use super::model::EvaluateFleetQuotaRequest;
 use super::model::FLEET_API_SCHEMA_VERSION;
 use super::model::FleetAssetPage;
 use super::model::FleetInspectionPage;
+use super::model::FleetOffboardRequest;
+use super::model::FleetOnboardingRequest;
+use super::model::FleetOnboardingView;
 use super::model::FleetOverview;
+use super::model::FleetQuotaDecisionPage;
+use super::model::FleetQuotaDecisionQuery;
+use super::model::FleetQuotaDecisionView;
 use super::model::FleetScopeQuery;
 use super::model::QuotaPolicyView;
 use super::model::RegionalEndpointPage;
@@ -51,8 +67,13 @@ use super::model::UpsertFleetAssetRequest;
 use super::model::bounded_limit;
 use super::repository::FleetRepository;
 use crate::ControlPlaneError;
+use crate::DataSourceAvailability;
+use crate::MCP_BUSINESS_SCHEMA;
+use crate::MCP_PROTOCOL_VERSION;
+use crate::OffboardRequest;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
+use crate::repository::ClusterRepository;
 
 const ENDPOINT_HEARTBEAT_MAX_AGE_SECONDS: i64 = 120;
 const MAX_INSPECTION_CLUSTERS: usize = 100;
@@ -64,13 +85,216 @@ const MAX_DATABASE_I64: u64 = 9_223_372_036_854_775_807;
 #[derive(Clone)]
 pub(crate) struct FleetService {
     repository: FleetRepository,
+    cluster_repository: PostgresRepository,
 }
 
 impl FleetService {
     pub(crate) fn new(repository: PostgresRepository) -> Self {
         Self {
-            repository: FleetRepository::new(repository.pool),
+            repository: FleetRepository::new(repository.pool.clone()),
+            cluster_repository: repository,
         }
+    }
+
+    pub(crate) async fn assess_onboarding(
+        &self,
+        auth: &AuthContext,
+        request: &FleetOnboardingRequest,
+    ) -> Result<FleetOnboardingView, ControlPlaneError> {
+        self.onboarding_assessment(auth, request, false).await
+    }
+
+    pub(crate) async fn onboard_cluster(
+        &self,
+        auth: &AuthContext,
+        request: &FleetOnboardingRequest,
+    ) -> Result<FleetOnboardingView, ControlPlaneError> {
+        self.onboarding_assessment(auth, request, true).await
+    }
+
+    async fn onboarding_assessment(
+        &self,
+        auth: &AuthContext,
+        request: &FleetOnboardingRequest,
+        register: bool,
+    ) -> Result<FleetOnboardingView, ControlPlaneError> {
+        require_operator(auth)?;
+        authorize_cluster(auth, request.cluster_id)?;
+        validate_onboarding(request)?;
+        if !self
+            .repository
+            .onboarding_scope_exists(auth.tenant_id, request.fleet_id, request.region_id)
+            .await?
+        {
+            return Err(scope_mismatch());
+        }
+        let cluster = self.cluster_repository.get(request.cluster_id).await?;
+        if cluster.tenant_id != auth.tenant_id.to_string() || cluster.owner != request.owner {
+            return Err(scope_mismatch());
+        }
+        if cluster.state.is_terminal() {
+            return Err(ControlPlaneError::conflict_code(
+                "cluster_offboarded",
+                "offboarded clusters cannot re-enter Fleet onboarding",
+            ));
+        }
+
+        let mut missing_capabilities = request.required_capabilities.clone();
+        let mut signal_gaps = request.required_data_sources.clone();
+        let mut incompatibilities = std::collections::BTreeSet::new();
+        let mut schema_compatible = false;
+        match self.cluster_repository.capability(request.cluster_id).await {
+            Ok(capability) => {
+                schema_compatible = capability.protocol_version == MCP_PROTOCOL_VERSION
+                    && capability.schema_version == MCP_BUSINESS_SCHEMA
+                    && !capability.mutation_supported;
+                if capability.protocol_version != MCP_PROTOCOL_VERSION {
+                    incompatibilities.insert("mcp_protocol_incompatible".to_owned());
+                }
+                if capability.schema_version != MCP_BUSINESS_SCHEMA {
+                    incompatibilities.insert("business_schema_incompatible".to_owned());
+                }
+                if capability.mutation_supported {
+                    incompatibilities.insert("mutation_capability_exposed".to_owned());
+                }
+                let tools = capability_tool_names(&capability.manifest);
+                missing_capabilities.retain(|capability| !tools.contains(capability));
+                let queryable_sources = capability
+                    .data_sources
+                    .iter()
+                    .filter(|source| source.availability == DataSourceAvailability::Queryable)
+                    .map(|source| source.id.as_str())
+                    .collect::<std::collections::BTreeSet<_>>();
+                signal_gaps.retain(|source| !queryable_sources.contains(source.as_str()));
+            }
+            Err(ControlPlaneError::NotFound) => {
+                incompatibilities.insert("capability_manifest_missing".to_owned());
+            }
+            Err(error) => return Err(error),
+        }
+        if !request.connector_tls_verified {
+            incompatibilities.insert("connector_tls_unverified".to_owned());
+        }
+        let excessive_scopes = request
+            .oauth_scopes
+            .iter()
+            .filter(|scope| !is_allowed_onboarding_scope(scope))
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        let eligible = schema_compatible
+            && request.connector_tls_verified
+            && missing_capabilities.is_empty()
+            && excessive_scopes.is_empty()
+            && incompatibilities.is_empty();
+        let effective_access = if signal_gaps.is_empty() {
+            request.requested_access
+        } else {
+            FleetAccessProfile::ReadOnly
+        };
+        let assessment = FleetOnboardingAssessment {
+            id: FleetOnboardingAssessmentId::new(),
+            fleet_id: request.fleet_id,
+            tenant_id: auth.tenant_id,
+            region_id: request.region_id,
+            cluster_id: request.cluster_id,
+            requested_access: request.requested_access,
+            effective_access,
+            connector_tls_verified: request.connector_tls_verified,
+            schema_compatible,
+            missing_capabilities,
+            signal_gaps,
+            excessive_scopes,
+            incompatibilities,
+            eligible,
+            observed_at: Utc::now(),
+        };
+        self.repository.store_onboarding_assessment(&assessment).await?;
+        let registration = if register && assessment.eligible {
+            Some(
+                self.repository
+                    .upsert_cluster_registration(
+                        auth.tenant_id,
+                        request,
+                        assessment.effective_access == FleetAccessProfile::ReadOnly
+                            && request.requested_access != FleetAccessProfile::ReadOnly,
+                    )
+                    .await?,
+            )
+        } else {
+            None
+        };
+        Ok(FleetOnboardingView {
+            schema_version: FLEET_API_SCHEMA_VERSION,
+            assessment,
+            registration,
+        })
+    }
+
+    pub(crate) async fn offboard_cluster(
+        &self,
+        auth: &AuthContext,
+        cluster_id: ClusterId,
+        request: &FleetOffboardRequest,
+    ) -> Result<ClusterRegistration, ControlPlaneError> {
+        require_operator(auth)?;
+        authorize_cluster(auth, cluster_id)?;
+        validate_bounded(&request.reason, "offboarding reason", 2_048)?;
+        self.repository.begin_offboarding(auth.tenant_id, cluster_id).await?;
+        self.cluster_repository
+            .offboard(
+                cluster_id,
+                &OffboardRequest {
+                    actor_subject: auth.subject.clone(),
+                    correlation_id: request.correlation_id,
+                    reason: Some(request.reason.clone()),
+                },
+            )
+            .await?;
+        self.repository.retire_registration(auth.tenant_id, cluster_id).await
+    }
+
+    pub(crate) async fn evaluate_quota(
+        &self,
+        auth: &AuthContext,
+        request: &EvaluateFleetQuotaRequest,
+    ) -> Result<FleetQuotaDecisionView, ControlPlaneError> {
+        require_operator(auth)?;
+        if request.amount == 0 || request.amount > MAX_DATABASE_I64 {
+            return Err(invalid_request("quota amount must fit the supported storage range"));
+        }
+        if let Some(cluster_id) = request.cluster_id {
+            authorize_cluster(auth, cluster_id)?;
+        }
+        let decision = self
+            .evaluate_and_record_quota(
+                auth.tenant_id,
+                request.cluster_id,
+                request.work_kind,
+                request.resource,
+                request.amount,
+            )
+            .await?;
+        Ok(FleetQuotaDecisionView {
+            schema_version: FLEET_API_SCHEMA_VERSION,
+            decision,
+        })
+    }
+
+    pub(crate) async fn quota_decisions(
+        &self,
+        auth: &AuthContext,
+        query: &FleetQuotaDecisionQuery,
+    ) -> Result<FleetQuotaDecisionPage, ControlPlaneError> {
+        require_read_role(auth)?;
+        if let Some(cluster_id) = query.cluster_id {
+            authorize_cluster(auth, cluster_id)?;
+        }
+        let (items, truncated) = self.repository.quota_decisions(auth.tenant_id, query).await?;
+        Ok(FleetQuotaDecisionPage {
+            schema_version: FLEET_API_SCHEMA_VERSION,
+            items,
+            truncated,
+        })
     }
 
     pub(crate) async fn overview(&self, auth: &AuthContext) -> Result<FleetOverview, ControlPlaneError> {
@@ -434,16 +658,15 @@ impl FleetService {
                 return Err(scope_mismatch());
             }
         }
-        let (policy, usage) = self.repository.quota_policy(auth.tenant_id, None).await?;
-        let decision = FleetQuotaEvaluator::evaluate(
-            &policy,
-            &usage,
-            QuotaRequest {
-                resource: QuotaResource::ConcurrentInspection,
-                amount: 1,
-                priority: FleetWorkPriority::Background,
-            },
-        );
+        let decision = self
+            .evaluate_and_record_quota(
+                auth.tenant_id,
+                None,
+                FleetQuotaWorkKind::Inspection,
+                FleetQuotaResource::ConcurrentInspection,
+                1,
+            )
+            .await?;
         if !decision.allowed {
             return Err(ControlPlaneError::conflict_code(
                 "quota_exhausted",
@@ -451,6 +674,7 @@ impl FleetService {
             ));
         }
         let inspection = self.repository.create_inspection(auth.tenant_id, request).await?;
+        let (policy, _) = self.repository.quota_policy(auth.tenant_id, None).await?;
         self.repository.record_quota_usage(&policy, "inspection", 1).await?;
         Ok(inspection)
     }
@@ -480,6 +704,117 @@ impl FleetService {
             items,
             truncated,
         })
+    }
+
+    async fn evaluate_and_record_quota(
+        &self,
+        tenant_id: rocketmq_sre_contracts::TenantId,
+        cluster_id: Option<ClusterId>,
+        work_kind: FleetQuotaWorkKind,
+        resource: FleetQuotaResource,
+        amount: u64,
+    ) -> Result<FleetQuotaDecisionRecord, ControlPlaneError> {
+        let (policy, usage) = self.repository.quota_policy(tenant_id, cluster_id).await?;
+        let decision = FleetQuotaEvaluator::evaluate(
+            &policy,
+            &usage,
+            QuotaRequest {
+                resource: quota_resource(resource),
+                amount,
+                priority: work_priority(work_kind),
+            },
+        );
+        let record = FleetQuotaDecisionRecord {
+            id: FleetQuotaDecisionId::new(),
+            policy_id: policy.id,
+            tenant_id,
+            cluster_id,
+            work_kind,
+            resource,
+            amount,
+            allowed: decision.allowed,
+            reason: quota_reason(decision.reason).to_owned(),
+            observed: decision.observed,
+            limit: decision.limit,
+            occurred_at: Utc::now(),
+        };
+        self.repository.store_quota_decision(&record).await?;
+        Ok(record)
+    }
+}
+
+fn validate_onboarding(request: &FleetOnboardingRequest) -> Result<(), ControlPlaneError> {
+    validate_owner(&request.owner)?;
+    if request.residency_tags.len() > 64
+        || request.oauth_scopes.len() > 32
+        || request.required_capabilities.len() > 256
+        || request.required_data_sources.len() > 256
+    {
+        return Err(invalid_request("Fleet onboarding set exceeds the bounded limit"));
+    }
+    for value in request
+        .residency_tags
+        .iter()
+        .chain(request.oauth_scopes.iter())
+        .chain(request.required_capabilities.iter())
+        .chain(request.required_data_sources.iter())
+    {
+        validate_bounded(value, "onboarding value", 256)?;
+    }
+    Ok(())
+}
+
+fn capability_tool_names(manifest: &serde_json::Value) -> std::collections::BTreeSet<String> {
+    manifest
+        .get("tools")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|tool| {
+            tool.as_str()
+                .or_else(|| tool.get("name").and_then(serde_json::Value::as_str))
+                .map(str::to_owned)
+        })
+        .collect()
+}
+
+fn is_allowed_onboarding_scope(scope: &str) -> bool {
+    matches!(scope, "openid" | "profile" | "rocketmq:read" | "rocketmq:diagnose")
+}
+
+fn work_priority(kind: FleetQuotaWorkKind) -> FleetWorkPriority {
+    match kind {
+        FleetQuotaWorkKind::ActiveIncident
+        | FleetQuotaWorkKind::Verification
+        | FleetQuotaWorkKind::Rollback
+        | FleetQuotaWorkKind::Audit => FleetWorkPriority::SafetyCritical,
+        FleetQuotaWorkKind::InteractiveQuery | FleetQuotaWorkKind::Workflow => FleetWorkPriority::Interactive,
+        FleetQuotaWorkKind::Inspection
+        | FleetQuotaWorkKind::ModelExplanation
+        | FleetQuotaWorkKind::Notification
+        | FleetQuotaWorkKind::AutomaticAction => FleetWorkPriority::Background,
+    }
+}
+
+fn quota_resource(resource: FleetQuotaResource) -> QuotaResource {
+    match resource {
+        FleetQuotaResource::Query => QuotaResource::Query,
+        FleetQuotaResource::ModelToken => QuotaResource::ModelToken,
+        FleetQuotaResource::ConcurrentWorkflow => QuotaResource::ConcurrentWorkflow,
+        FleetQuotaResource::ConcurrentInspection => QuotaResource::ConcurrentInspection,
+        FleetQuotaResource::EvidenceByte => QuotaResource::EvidenceByte,
+        FleetQuotaResource::Notification => QuotaResource::Notification,
+        FleetQuotaResource::AutomaticAction => QuotaResource::AutomaticAction,
+    }
+}
+
+fn quota_reason(reason: QuotaDecisionReason) -> &'static str {
+    match reason {
+        QuotaDecisionReason::Allowed => "allowed",
+        QuotaDecisionReason::SafetyCriticalReservedCapacity => "safety_critical_reserved_capacity",
+        QuotaDecisionReason::PolicyInactive => "policy_inactive",
+        QuotaDecisionReason::ScopeMismatch => "scope_mismatch",
+        QuotaDecisionReason::LimitExceeded => "limit_exceeded",
     }
 }
 
