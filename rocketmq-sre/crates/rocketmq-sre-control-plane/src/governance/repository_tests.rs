@@ -51,14 +51,24 @@ async fn postgres_governance_enforces_human_lifecycle_and_fail_closed_admission(
         .expect("repository with governance migrations");
     let fixture = seed_fixture(&repository).await;
     let service = GovernanceService::new(repository.clone(), SIGNING_KEY).expect("governance service");
-    let owner = auth(fixture.tenant_id, fixture.cluster_id, "governance-owner", "model-governance");
+    let owner = auth(
+        fixture.tenant_id,
+        fixture.cluster_id,
+        "governance-owner",
+        "model-governance",
+    );
     let reviewer = auth(
         fixture.tenant_id,
         fixture.cluster_id,
         "governance-reviewer",
         "model-governance",
     );
-    let model = auth(fixture.tenant_id, fixture.cluster_id, "model:diagnostic", "model_service");
+    let model = auth(
+        fixture.tenant_id,
+        fixture.cluster_id,
+        "model:diagnostic",
+        "model_service",
+    );
 
     let policy_artifact = service
         .create_artifact(
@@ -73,40 +83,24 @@ async fn postgres_governance_enforces_human_lifecycle_and_fail_closed_admission(
         .await
         .expect("governed policy artifact");
     let policy_version = service
-        .create_version(
-            &model,
-            policy_artifact.id,
-            &version_request("3.0.0", 'a'),
-        )
+        .create_version(&model, policy_artifact.id, &version_request("3.0.0", 'a'))
         .await
         .expect("model-authored draft candidate");
     assert_eq!(policy_version.state, GovernanceLifecycleState::Draft);
     assert!(
         service
-            .transition_version(
-                &model,
-                policy_version.id,
-                &transition(GovernanceLifecycleState::Review),
-            )
+            .transition_version(&model, policy_version.id, &transition(GovernanceLifecycleState::Review),)
             .await
             .is_err(),
         "models must never promote governed candidates"
     );
 
     let review = service
-        .transition_version(
-            &owner,
-            policy_version.id,
-            &transition(GovernanceLifecycleState::Review),
-        )
+        .transition_version(&owner, policy_version.id, &transition(GovernanceLifecycleState::Review))
         .await
         .expect("owner submits candidate for review");
     let active = service
-        .transition_version(
-            &reviewer,
-            review.id,
-            &transition(GovernanceLifecycleState::Active),
-        )
+        .transition_version(&reviewer, review.id, &transition(GovernanceLifecycleState::Active))
         .await
         .expect("independent reviewer signs and activates");
     assert!(active.signature.is_some());
@@ -127,12 +121,12 @@ async fn postgres_governance_enforces_human_lifecycle_and_fail_closed_admission(
 
     for (kind, reference_id) in [
         (GovernanceImpactKind::Cluster, fixture.cluster_id.to_string()),
-        (GovernanceImpactKind::DiagnosticPack, "consumer-lag-diagnosis".to_owned()),
-        (GovernanceImpactKind::ActionPlan, "plan:governance-test".to_owned()),
         (
-            GovernanceImpactKind::Action,
-            "proxy.restart_one.v1".to_owned(),
+            GovernanceImpactKind::DiagnosticPack,
+            "consumer-lag-diagnosis".to_owned(),
         ),
+        (GovernanceImpactKind::ActionPlan, "plan:governance-test".to_owned()),
+        (GovernanceImpactKind::Action, "proxy.restart_one.v1".to_owned()),
         (GovernanceImpactKind::Incident, "incident:governance-test".to_owned()),
         (GovernanceImpactKind::ModelRoute, "route:primary-diagnosis".to_owned()),
     ] {
@@ -196,11 +190,7 @@ async fn postgres_governance_enforces_human_lifecycle_and_fail_closed_admission(
     assert!(expired_read_only.degraded);
 
     let quarantined = service
-        .transition_version(
-            &reviewer,
-            active.id,
-            &transition(GovernanceLifecycleState::Quarantined),
-        )
+        .transition_version(&reviewer, active.id, &transition(GovernanceLifecycleState::Quarantined))
         .await
         .expect("reviewer quarantines active policy");
     let quarantined_decision = guard
@@ -258,11 +248,7 @@ async fn postgres_governance_enforces_human_lifecycle_and_fail_closed_admission(
         .await;
     assert!(unsigned.is_err());
     let action_review = service
-        .transition_version(
-            &owner,
-            action_draft.id,
-            &transition(GovernanceLifecycleState::Review),
-        )
+        .transition_version(&owner, action_draft.id, &transition(GovernanceLifecycleState::Review))
         .await
         .expect("action review");
     service
@@ -307,11 +293,7 @@ async fn postgres_governance_enforces_human_lifecycle_and_fail_closed_admission(
     assert_eq!(compliance.unsigned_active, 0);
 }
 
-async fn register_remaining_object_kinds(
-    service: &GovernanceService,
-    owner: &AuthContext,
-    reviewer: &AuthContext,
-) {
+async fn register_remaining_object_kinds(service: &GovernanceService, owner: &AuthContext, reviewer: &AuthContext) {
     for kind in [
         GovernanceObjectKind::DataPolicy,
         GovernanceObjectKind::EvidencePolicy,
@@ -430,10 +412,7 @@ async fn seed_fixture(repository: &PostgresRepository) -> GovernanceFixture {
     .execute(&repository.pool)
     .await
     .expect("governance cluster registration fixture");
-    GovernanceFixture {
-        tenant_id,
-        cluster_id,
-    }
+    GovernanceFixture { tenant_id, cluster_id }
 }
 
 fn auth(tenant_id: TenantId, cluster_id: ClusterId, subject: &str, role: &str) -> AuthContext {
