@@ -21,6 +21,7 @@ use serde::Serialize;
 use crate::ActionItemStatus;
 use crate::ClusterId;
 use crate::DrActionItemId;
+use crate::DrBackupAssetId;
 use crate::DrExerciseId;
 use crate::DrFindingId;
 use crate::DrPlanId;
@@ -62,6 +63,49 @@ pub enum DrExecutionBoundary {
 pub struct RtoRpoTarget {
     pub rto_seconds: u64,
     pub rpo_seconds: u64,
+}
+
+/// Backup or rebuild surface tracked by DR Center.
+#[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DrBackupAssetKind {
+    PostgreSql,
+    ObjectStorage,
+    OidcConfiguration,
+    SecretReferences,
+    PolicyBundle,
+    ObservabilityBackend,
+    ControlPlaneRuntime,
+    ConnectorRuntime,
+    ExecutorRuntime,
+    ExecutionAgentRuntime,
+    OutboxLedger,
+    EffectLedger,
+    QuarantineLedger,
+    AuditLedger,
+    RocketMqRoute,
+    RocketMqController,
+    RocketMqBrokerHa,
+    RocketMqStore,
+    RocketMqRocksDb,
+    RocketMqTieredStore,
+    KubernetesStorage,
+}
+
+/// Inventory record for a backup, restore, or deterministic rebuild surface.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+pub struct DrBackupAsset {
+    pub id: DrBackupAssetId,
+    pub plan_id: DrPlanId,
+    pub kind: DrBackupAssetKind,
+    pub owner: String,
+    pub access_owner: String,
+    pub backup_locator_digest: String,
+    pub encrypted: bool,
+    pub last_backup_at: Option<DateTime<Utc>>,
+    pub restore_verified_at: Option<DateTime<Utc>>,
+    pub evidence_ids: Vec<EvidenceId>,
+    pub updated_at: DateTime<Utc>,
 }
 
 /// One required checkpoint declared by a versioned plan.
