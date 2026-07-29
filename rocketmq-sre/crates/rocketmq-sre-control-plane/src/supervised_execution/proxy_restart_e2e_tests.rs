@@ -427,7 +427,11 @@ async fn seed_complete_slo_evidence(repository: &PostgresRepository, fixture: &E
     let observed_at = Utc::now().with_nanosecond(0).expect("whole-second SLO timestamp");
     let sample_at = observed_at + Duration::seconds(55);
     let mut series = Vec::new();
-    for (sli, dimension) in [("delivery_ratio", "traffic"), ("proxy_connection", "routing_proxy")] {
+    for (sli, dimension) in [
+        ("delivery_ratio", "traffic"),
+        ("proxy_connection", "routing_proxy"),
+        ("telemetry_freshness", "platform"),
+    ] {
         for window in ["fast", "medium", "slow"] {
             for role in ["short", "long"] {
                 series.push(json!({
