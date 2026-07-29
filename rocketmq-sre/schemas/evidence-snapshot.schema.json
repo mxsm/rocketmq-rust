@@ -78,6 +78,11 @@
           "const": "unknown",
           "description": "Compatibility value for evidence captured before exposure metadata was\nintroduced.",
           "type": "string"
+        },
+        {
+          "const": "required_signals",
+          "description": "Connector-owned composition of fixed, bounded Required Signal reads.",
+          "type": "string"
         }
       ]
     },
