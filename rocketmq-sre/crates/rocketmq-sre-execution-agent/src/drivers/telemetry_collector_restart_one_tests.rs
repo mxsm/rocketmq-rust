@@ -139,11 +139,12 @@ async fn apply_reconcile_and_manual_takeover_bind_one_execution_step() {
         .dispatch(&request, "collector-forward")
         .await
         .expect("typed Collector restart");
-    let writes = client.writes.lock().expect("collector write lock");
-    assert_eq!(writes.len(), 1);
-    assert_eq!(writes[0].expected_uid, "collector-uid-before");
-    assert_eq!(writes[0].pipeline, "combined");
-    drop(writes);
+    {
+        let writes = client.writes.lock().expect("collector write lock");
+        assert_eq!(writes.len(), 1);
+        assert_eq!(writes[0].expected_uid, "collector-uid-before");
+        assert_eq!(writes[0].pipeline, "combined");
+    }
 
     let verified = handler
         .reconcile(&read, Some("collector-forward"))
