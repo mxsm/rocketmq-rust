@@ -578,6 +578,334 @@ function addFleetSchemas({ schemas, uuid }) {
     "rocketmq-sre.fleet-api.v1",
     "FleetInspectionRun",
   );
+  schemas.FleetReleaseStatus = {
+    type: "string",
+    enum: [
+      "planned",
+      "readiness_checking",
+      "ready",
+      "canary_running",
+      "batch_running",
+      "paused",
+      "verifying",
+      "rolling_back",
+      "rolled_back",
+      "completed",
+      "manual_takeover",
+      "failed",
+    ],
+  };
+  schemas.FleetReleaseTargetState = {
+    type: "string",
+    enum: [
+      "pending",
+      "readiness_checking",
+      "ready",
+      "ineligible",
+      "canary_running",
+      "batch_running",
+      "paused",
+      "rolling_back",
+      "rolled_back",
+      "completed",
+      "skipped",
+      "failed",
+    ],
+  };
+  schemas.FleetReleaseBatch = {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "sequence",
+      "region_id",
+      "cluster_ids",
+      "max_concurrency",
+      "canary",
+    ],
+    properties: {
+      sequence: { type: "integer", format: "uint32", minimum: 0 },
+      region_id: uuid,
+      cluster_ids: {
+        type: "array",
+        minItems: 1,
+        maxItems: 100,
+        uniqueItems: true,
+        items: uuid,
+      },
+      max_concurrency: {
+        type: "integer",
+        format: "uint32",
+        minimum: 1,
+        maximum: 32,
+      },
+      canary: { type: "boolean" },
+    },
+  };
+  schemas.FleetRelease = {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "schema_version",
+      "id",
+      "fleet_id",
+      "tenant_id",
+      "correlation_id",
+      "release_ref",
+      "artifact_digest",
+      "target_version",
+      "owner",
+      "maintenance_window_start",
+      "maintenance_window_end",
+      "rollback_artifact_digest",
+      "slo_policy_id",
+      "status",
+      "active_batch",
+      "batches",
+      "created_at",
+      "updated_at",
+    ],
+    properties: {
+      schema_version: { const: "rocketmq-sre.fleet-release.v1" },
+      id: uuid,
+      fleet_id: uuid,
+      tenant_id: uuid,
+      correlation_id: uuid,
+      release_ref: boundedText(128),
+      artifact_digest: {
+        type: "string",
+        pattern: "^sha256:[0-9A-Fa-f]{64}$",
+      },
+      target_version: boundedText(128),
+      owner: boundedText(256),
+      maintenance_window_start: dateTime,
+      maintenance_window_end: dateTime,
+      rollback_artifact_digest: {
+        type: "string",
+        pattern: "^sha256:[0-9A-Fa-f]{64}$",
+      },
+      slo_policy_id: boundedText(128),
+      status: ref("FleetReleaseStatus"),
+      active_batch: nullable({
+        type: "integer",
+        format: "uint32",
+        minimum: 0,
+      }),
+      batches: {
+        type: "array",
+        minItems: 1,
+        maxItems: 100,
+        items: ref("FleetReleaseBatch"),
+      },
+      created_at: dateTime,
+      updated_at: dateTime,
+    },
+  };
+  schemas.FleetReleaseTarget = {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "fleet_release_id",
+      "tenant_id",
+      "cluster_id",
+      "region_id",
+      "batch_sequence",
+      "canary",
+      "state",
+      "release_id",
+      "readiness_reason_codes",
+      "regression_detected",
+      "sanitized_outcome",
+      "updated_at",
+    ],
+    properties: {
+      fleet_release_id: uuid,
+      tenant_id: uuid,
+      cluster_id: uuid,
+      region_id: uuid,
+      batch_sequence: { type: "integer", format: "uint32", minimum: 0 },
+      canary: { type: "boolean" },
+      state: ref("FleetReleaseTargetState"),
+      release_id: nullable(uuid),
+      readiness_reason_codes: {
+        type: "array",
+        maxItems: 32,
+        uniqueItems: true,
+        items: boundedText(128),
+      },
+      regression_detected: { type: "boolean" },
+      sanitized_outcome: nullable(boundedText(2048)),
+      updated_at: dateTime,
+    },
+  };
+  schemas.FleetReleaseReport = {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "schema_version",
+      "release",
+      "targets",
+      "state_counts",
+      "skipped_clusters",
+      "generated_at",
+    ],
+    properties: {
+      schema_version: { const: "rocketmq-sre.fleet-release-report.v1" },
+      release: ref("FleetRelease"),
+      targets: {
+        type: "array",
+        maxItems: 100,
+        items: ref("FleetReleaseTarget"),
+      },
+      state_counts: {
+        type: "object",
+        additionalProperties: {
+          type: "integer",
+          format: "uint32",
+          minimum: 0,
+        },
+      },
+      skipped_clusters: {
+        type: "array",
+        maxItems: 100,
+        uniqueItems: true,
+        items: uuid,
+      },
+      generated_at: dateTime,
+    },
+  };
+  schemas.FleetReleaseTargetSpec = {
+    type: "object",
+    additionalProperties: false,
+    required: ["cluster_id", "region_id"],
+    properties: {
+      cluster_id: uuid,
+      region_id: uuid,
+      canary: { type: "boolean", default: false },
+    },
+  };
+  schemas.CreateFleetReleaseRequest = {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "fleet_id",
+      "release_ref",
+      "artifact_digest",
+      "target_version",
+      "owner",
+      "maintenance_window_start",
+      "maintenance_window_end",
+      "rollback_artifact_digest",
+      "slo_policy_id",
+      "regional_max_concurrency",
+      "targets",
+    ],
+    properties: {
+      fleet_id: uuid,
+      release_ref: boundedText(128),
+      artifact_digest: {
+        type: "string",
+        pattern: "^sha256:[0-9A-Fa-f]{64}$",
+      },
+      target_version: boundedText(128),
+      owner: boundedText(256),
+      maintenance_window_start: dateTime,
+      maintenance_window_end: dateTime,
+      rollback_artifact_digest: {
+        type: "string",
+        pattern: "^sha256:[0-9A-Fa-f]{64}$",
+      },
+      slo_policy_id: boundedText(128),
+      regional_max_concurrency: {
+        type: "integer",
+        format: "uint32",
+        minimum: 1,
+        maximum: 32,
+      },
+      targets: {
+        type: "array",
+        minItems: 1,
+        maxItems: 100,
+        uniqueItems: true,
+        items: ref("FleetReleaseTargetSpec"),
+      },
+    },
+  };
+  schemas.FleetReleasePage = {
+    type: "object",
+    additionalProperties: false,
+    required: ["schema_version", "items", "total", "limit", "offset"],
+    properties: {
+      schema_version: { const: "rocketmq-sre.fleet-release-api.v1" },
+      items: {
+        type: "array",
+        maxItems: 100,
+        items: ref("FleetRelease"),
+      },
+      total: { type: "integer", format: "uint64", minimum: 0 },
+      limit: { type: "integer", minimum: 1, maximum: 100 },
+      offset: { type: "integer", format: "uint32", minimum: 0 },
+    },
+  };
+  schemas.FleetReleaseView = {
+    type: "object",
+    additionalProperties: false,
+    required: ["schema_version", "release", "targets"],
+    properties: {
+      schema_version: { const: "rocketmq-sre.fleet-release-api.v1" },
+      release: ref("FleetRelease"),
+      targets: {
+        type: "array",
+        maxItems: 100,
+        items: ref("FleetReleaseTarget"),
+      },
+    },
+  };
+  schemas.RecordFleetTargetReadinessRequest = {
+    type: "object",
+    additionalProperties: false,
+    required: ["eligible"],
+    properties: {
+      eligible: { type: "boolean" },
+      release_id: nullable(uuid),
+      reason_codes: {
+        type: "array",
+        maxItems: 32,
+        uniqueItems: true,
+        items: boundedText(128),
+        default: [],
+      },
+    },
+  };
+  schemas.StartFleetReleaseBatchRequest = {
+    type: "object",
+    additionalProperties: false,
+    required: ["expected_sequence"],
+    properties: {
+      expected_sequence: {
+        type: "integer",
+        format: "uint32",
+        minimum: 0,
+      },
+    },
+  };
+  schemas.RecordFleetTargetOutcomeRequest = {
+    type: "object",
+    additionalProperties: false,
+    required: ["state"],
+    properties: {
+      state: ref("FleetReleaseTargetState"),
+      regression_detected: { type: "boolean", default: false },
+      sanitized_outcome: nullable(boundedText(2048)),
+    },
+  };
+  schemas.FleetReleaseReasonRequest = {
+    type: "object",
+    additionalProperties: false,
+    required: ["reason"],
+    properties: {
+      reason: boundedText(1024),
+    },
+  };
 
   for (const [name, shape] of Object.entries({
     QuotaPolicyView: {
@@ -1113,6 +1441,121 @@ function addFleetPaths({ document, operation, pathParameter, uuid }) {
       summary: "Advance bounded Fleet inspection progress",
       bodySchema: "UpdateFleetInspectionRequest",
       responseSchema: "FleetInspectionRun",
+      parameters: [pathParameter("id")],
+    }),
+  };
+  document.paths["/v1/fleet/releases"] = {
+    get: operation({
+      operationId: "listFleetReleasesV1",
+      summary: "List authorized multi-region Fleet release aggregates",
+      responseSchema: "FleetReleasePage",
+      parameters: [
+        queryParameter("status", ref("FleetReleaseStatus")),
+        queryParameter("limit", {
+          type: "integer",
+          minimum: 1,
+          maximum: 100,
+          default: 50,
+        }),
+        queryParameter("offset", {
+          type: "integer",
+          format: "uint32",
+          minimum: 0,
+          default: 0,
+        }),
+      ],
+    }),
+    post: operation({
+      operationId: "createFleetReleaseV1",
+      summary: "Create deterministic canary and region-serial release batches",
+      bodySchema: "CreateFleetReleaseRequest",
+      responseSchema: "FleetReleaseView",
+    }),
+  };
+  document.paths["/v1/fleet/releases/{id}"] = {
+    get: operation({
+      operationId: "getFleetReleaseV1",
+      summary: "Read one scoped Fleet release and its cluster targets",
+      responseSchema: "FleetReleaseView",
+      parameters: [pathParameter("id")],
+    }),
+  };
+  document.paths["/v1/fleet/releases/{id}/readiness/start"] = {
+    post: operation({
+      operationId: "beginFleetReleaseReadinessV1",
+      summary: "Begin fail-closed readiness evaluation for all targets",
+      responseSchema: "FleetReleaseView",
+      parameters: [pathParameter("id")],
+    }),
+  };
+  document.paths[
+    "/v1/fleet/releases/{id}/targets/{cluster_id}/readiness"
+  ] = {
+    post: operation({
+      operationId: "recordFleetReleaseTargetReadinessV1",
+      summary: "Link an eligible target to an independently ready release",
+      bodySchema: "RecordFleetTargetReadinessRequest",
+      responseSchema: "FleetReleaseView",
+      parameters: [pathParameter("id"), pathParameter("cluster_id")],
+    }),
+  };
+  document.paths[
+    "/v1/fleet/releases/{id}/batches/{sequence}/start"
+  ] = {
+    post: operation({
+      operationId: "startFleetReleaseBatchV1",
+      summary: "Start the next deterministic canary or regional batch",
+      bodySchema: "StartFleetReleaseBatchRequest",
+      responseSchema: "FleetReleaseView",
+      parameters: [
+        pathParameter("id"),
+        {
+          name: "sequence",
+          in: "path",
+          required: true,
+          schema: {
+            type: "integer",
+            format: "uint32",
+            minimum: 0,
+          },
+        },
+      ],
+    }),
+  };
+  document.paths[
+    "/v1/fleet/releases/{id}/targets/{cluster_id}/outcome"
+  ] = {
+    post: operation({
+      operationId: "recordFleetReleaseTargetOutcomeV1",
+      summary: "Reconcile a target outcome with its linked release workflow",
+      bodySchema: "RecordFleetTargetOutcomeRequest",
+      responseSchema: "FleetReleaseView",
+      parameters: [pathParameter("id"), pathParameter("cluster_id")],
+    }),
+  };
+  document.paths["/v1/fleet/releases/{id}/pause"] = {
+    post: operation({
+      operationId: "pauseFleetReleaseV1",
+      summary: "Pause Fleet scheduling after a regression or operator decision",
+      bodySchema: "FleetReleaseReasonRequest",
+      responseSchema: "FleetReleaseView",
+      parameters: [pathParameter("id")],
+    }),
+  };
+  document.paths["/v1/fleet/releases/{id}/resume"] = {
+    post: operation({
+      operationId: "resumeFleetReleaseV1",
+      summary: "Resume Fleet scheduling after all regressions are reconciled",
+      bodySchema: "FleetReleaseReasonRequest",
+      responseSchema: "FleetReleaseView",
+      parameters: [pathParameter("id")],
+    }),
+  };
+  document.paths["/v1/fleet/releases/{id}/report"] = {
+    get: operation({
+      operationId: "getFleetReleaseReportV1",
+      summary: "Read the bounded Fleet release outcome report",
+      responseSchema: "FleetReleaseReport",
       parameters: [pathParameter("id")],
     }),
   };
