@@ -788,6 +788,42 @@ impl TopicQueryAdmin for ReadAdminSession {
 }
 
 impl ConsumerQueryAdmin for ReadAdminSession {
+    fn query_config_cas_state<'a>(
+        &'a mut self,
+        request: &'a consumer::QuerySubscriptionGroupConfigCasRequest,
+    ) -> AdminFuture<'a, consumer::SubscriptionGroupConfigCasState> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            let snapshot = self
+                .inner
+                .subscription_group_config_with_version(
+                    CheetahString::from(request.broker_addr.as_str()),
+                    CheetahString::from(request.group.as_str()),
+                )
+                .await
+                .map_err(|error| backend_error("query_subscription_group_config_cas_state", error))?;
+            let config = snapshot.config;
+            Ok(consumer::SubscriptionGroupConfigCasState {
+                version: snapshot.version,
+                retry_max_times: bounded_subscription_group_value("retryMaxTimes", config.retry_max_times(), 16)?,
+                retry_queue_nums: bounded_subscription_group_value("retryQueueNums", config.retry_queue_nums(), 8)?,
+                consume_timeout_minutes: bounded_subscription_group_value(
+                    "consumeTimeoutMinutes",
+                    config.consume_timeout_minute(),
+                    1_440,
+                )?,
+                consume_enable: config.consume_enable(),
+                consume_from_min_enable: config.consume_from_min_enable(),
+                consume_broadcast_enable: config.consume_broadcast_enable(),
+                consume_message_orderly: config.consume_message_orderly(),
+                broker_id: config.broker_id(),
+                which_broker_when_consume_slowly: config.which_broker_when_consume_slowly(),
+                notify_consumer_ids_changed_enable: config.notify_consumer_ids_changed_enable(),
+                group_sys_flag: config.group_sys_flag(),
+            })
+        })
+    }
+
     fn list_consumer_groups<'a>(
         &'a mut self,
         _request: &'a consumer::ListConsumerGroupsRequest,
@@ -1144,6 +1180,22 @@ fn backend_error(operation: &'static str, error: RocketMQError) -> AdminError {
         view.http().status.as_u16(),
         view.is_retryable(),
     )
+}
+
+fn bounded_subscription_group_value(field: &'static str, value: i32, maximum: u32) -> AdminResult<u32> {
+    let value = u32::try_from(value).map_err(|_| {
+        AdminError::backend(
+            "query_subscription_group_config_cas_state",
+            format!("{field} is negative"),
+        )
+    })?;
+    if !(1..=maximum).contains(&value) {
+        return Err(AdminError::backend(
+            "query_subscription_group_config_cas_state",
+            format!("{field} is outside the supervised range 1..={maximum}"),
+        ));
+    }
+    Ok(value)
 }
 
 fn project_allowlisted_config(config: rocketmq_client_rust::BrokerConfigAllowlisted) -> BrokerAllowlistedConfig {
