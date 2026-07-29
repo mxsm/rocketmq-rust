@@ -188,7 +188,7 @@ async fn apply_and_verify_one_expected_uid_then_require_manual_takeover() {
         let calls = client.restart_calls.lock().expect("fake restart calls lock");
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].expected_uid, "uid-before");
-        assert_eq!(calls[0].drain_timeout_seconds, 300);
+        assert_eq!(calls[0].drain_timeout_seconds, 120);
     }
     let verified = handler
         .reconcile(&read_request(), Some("restart-forward"))
