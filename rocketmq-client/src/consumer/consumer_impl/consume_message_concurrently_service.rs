@@ -121,12 +121,34 @@ impl ConsumeMessageConcurrentlyService {
                 let pending_start = (ack_index + 1) as usize;
                 if pending_start < consume_request.msgs.len() {
                     let pending = consume_request.msgs.split_off(pending_start);
-                    self.submit_consume_request_later(
-                        pending,
-                        this,
-                        consume_request.process_queue.clone(),
-                        consume_request.message_queue.clone(),
-                    );
+                    let max_retries = self.consumer_config.broadcast_max_retries;
+                    let retry_delay = self.consumer_config.broadcast_retry_delay;
+                    let mut to_retry = Vec::with_capacity(pending.len());
+                    for mut msg in pending {
+                        let attempts = msg.reconsume_times() as u32;
+                        if attempts >= max_retries {
+                            warn!(
+                                "BROADCASTING terminal failure: topic={} queueOffset={} msgId={} \
+                                 retryCnt={}, dropping message",
+                                msg.get_topic(),
+                                msg.queue_offset,
+                                msg.msg_id,
+                                attempts,
+                            );
+                        } else {
+                            msg.set_reconsume_times(attempts as i32 + 1);
+                            to_retry.push(msg);
+                        }
+                    }
+                    if !to_retry.is_empty() {
+                        self.submit_consume_request_later_with_delay(
+                            to_retry,
+                            this,
+                            consume_request.process_queue.clone(),
+                            consume_request.message_queue.clone(),
+                            retry_delay,
+                        );
+                    }
                 }
             }
             MessageModel::Clustering => {
@@ -187,7 +209,22 @@ impl ConsumeMessageConcurrentlyService {
         self.consume_runtime.get_handle().spawn(async move {
             tokio::time::sleep(Duration::from_secs(5)).await;
             let this_ = this.clone();
+            this.submit_consume_request(this_, msgs, process_queue, message_queue, true)
+                .await;
+        });
+    }
 
+    fn submit_consume_request_later_with_delay(
+        &self,
+        msgs: Vec<ArcMut<MessageExt>>,
+        this: ArcMut<Self>,
+        process_queue: Arc<ProcessQueue>,
+        message_queue: MessageQueue,
+        delay: Duration,
+    ) {
+        self.consume_runtime.get_handle().spawn(async move {
+            tokio::time::sleep(delay).await;
+            let this_ = this.clone();
             this.submit_consume_request(this_, msgs, process_queue, message_queue, true)
                 .await;
         });
