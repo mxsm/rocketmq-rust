@@ -108,6 +108,12 @@ pub use crate::admin::MQAdminMutationExt;
 #[cfg(feature = "admin-read")]
 pub use crate::admin::MQAdminReadExt;
 #[cfg(feature = "admin-mutation")]
+pub use crate::admin::SubscriptionGroupConfigPatch;
+#[cfg(feature = "admin-mutation")]
+pub use crate::admin::SubscriptionGroupConfigPatchOutcome;
+#[cfg(feature = "admin-read")]
+pub use crate::admin::SubscriptionGroupConfigVersioned;
+#[cfg(feature = "admin-mutation")]
 pub use crate::admin::TopicConfigPatch;
 #[cfg(feature = "admin-mutation")]
 pub use crate::admin::TopicConfigPatchOutcome;
