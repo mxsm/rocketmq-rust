@@ -147,6 +147,8 @@ fn sli_for_condition(condition: &str) -> Option<&'static str> {
         "broker_error_ratio" => Some("broker_runtime"),
         "store_dispatch_latency" => Some("flush_dispatch"),
         "telemetry_export_success_ratio" | "telemetry_queue_utilization" => Some("telemetry_freshness"),
+        "credential_probe_success_ratio" => Some("delivery_ratio"),
+        "authentication_error_ratio" => Some("broker_runtime"),
         _ => None,
     }
 }
@@ -179,6 +181,12 @@ mod tests {
                 HealthDataQuality::Complete,
                 evidence_id,
             ),
+            sli(
+                "delivery_ratio",
+                HealthStatus::Healthy,
+                HealthDataQuality::Complete,
+                evidence_id,
+            ),
         ];
 
         let result = evaluate_conditions(
@@ -187,6 +195,8 @@ mod tests {
                 "store_dispatch_latency".to_owned(),
                 "telemetry_export_success_ratio".to_owned(),
                 "telemetry_queue_utilization".to_owned(),
+                "credential_probe_success_ratio".to_owned(),
+                "authentication_error_ratio".to_owned(),
             ],
             &slis,
         )
@@ -196,6 +206,8 @@ mod tests {
         assert_eq!(result.conditions.get("store_dispatch_latency"), Some(&false));
         assert_eq!(result.conditions.get("telemetry_export_success_ratio"), Some(&true));
         assert_eq!(result.conditions.get("telemetry_queue_utilization"), Some(&true));
+        assert_eq!(result.conditions.get("credential_probe_success_ratio"), Some(&true));
+        assert_eq!(result.conditions.get("authentication_error_ratio"), Some(&true));
         assert!(result.complete);
         assert_eq!(result.evidence_ids, [evidence_id]);
     }
