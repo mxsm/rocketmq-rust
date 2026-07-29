@@ -127,6 +127,88 @@ async fn postgres_dr_center_enforces_test_boundary_and_tracks_findings() {
         .await
         .expect("encrypted backup inventory");
     assert_eq!(backup.owner, "database-platform");
+    for (kind, owner, access_owner, digest_fill) in [
+        (
+            DrBackupAssetKind::ObjectStorage,
+            "object-storage-platform",
+            "security-platform",
+            'c',
+        ),
+        (
+            DrBackupAssetKind::OidcConfiguration,
+            "identity-platform",
+            "security-platform",
+            'd',
+        ),
+        (
+            DrBackupAssetKind::SecretReferences,
+            "vault-kms-platform",
+            "security-platform",
+            'e',
+        ),
+        (
+            DrBackupAssetKind::ObservabilityBackend,
+            "observability-platform",
+            "security-platform",
+            'f',
+        ),
+    ] {
+        service
+            .upsert_backup_asset(
+                &auth,
+                plan.id,
+                &UpsertDrBackupAssetRequest {
+                    kind,
+                    owner: owner.to_owned(),
+                    access_owner: access_owner.to_owned(),
+                    backup_locator_digest: digest(digest_fill),
+                    encrypted: true,
+                    last_backup_at: Some(Utc::now() - Duration::minutes(5)),
+                    restore_verified_at: Some(Utc::now()),
+                    evidence_ids: vec![evidence_id],
+                },
+            )
+            .await
+            .expect("required Control Plane backup inventory");
+    }
+    let backup_assets = service
+        .backup_assets(&auth, plan.id)
+        .await
+        .expect("required backup owner matrix");
+    for (kind, owner, access_owner) in [
+        (DrBackupAssetKind::PostgreSql, "database-platform", "security-platform"),
+        (
+            DrBackupAssetKind::ObjectStorage,
+            "object-storage-platform",
+            "security-platform",
+        ),
+        (
+            DrBackupAssetKind::OidcConfiguration,
+            "identity-platform",
+            "security-platform",
+        ),
+        (
+            DrBackupAssetKind::SecretReferences,
+            "vault-kms-platform",
+            "security-platform",
+        ),
+        (
+            DrBackupAssetKind::ObservabilityBackend,
+            "observability-platform",
+            "security-platform",
+        ),
+    ] {
+        let asset = backup_assets
+            .items
+            .iter()
+            .find(|asset| asset.kind == kind)
+            .expect("required backup asset kind");
+        assert_eq!(asset.owner, owner);
+        assert_eq!(asset.access_owner, access_owner);
+        assert!(asset.encrypted);
+        assert!(asset.last_backup_at.is_some());
+        assert!(asset.restore_verified_at.is_some());
+    }
 
     let exercise = service
         .create_exercise(
