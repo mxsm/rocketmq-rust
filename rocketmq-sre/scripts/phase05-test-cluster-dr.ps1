@@ -189,7 +189,6 @@ try {
     Invoke-Native kubectl @(
         '-n', $rocketmqNamespace,
         'delete', 'pod', $brokerPod,
-        "--field-selector=metadata.name=$brokerPod",
         '--wait=false'
     ) 'supervised test-cluster Broker loss'
     $brokerDisrupted = $true
