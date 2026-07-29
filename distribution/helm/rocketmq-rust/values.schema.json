@@ -620,6 +620,7 @@
       "required": [
         "replicas",
         "image",
+        "innerCredentials",
         "pdb",
         "resources"
       ],
@@ -631,6 +632,45 @@
         },
         "image": {
           "$ref": "#/definitions/image"
+        },
+        "innerCredentials": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "secretName",
+            "secretKey"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "secretName": {
+              "type": "string"
+            },
+            "secretKey": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "enabled": {
+                    "const": true
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "secretName": {
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          ]
         },
         "pdb": {
           "$ref": "#/definitions/pdb"
