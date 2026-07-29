@@ -331,6 +331,8 @@ def validate_release_assets(
         guard.require(marker in runbook, f"runbook marker missing: {marker}")
 
     runner = guard.read("scripts/run-architecture-slo-evidence.ps1")
+    cluster_runner = guard.read("scripts/run-architecture-slo-cluster.ps1")
+    secret_generator = guard.read("scripts/new-m11-evidence-secrets.ps1")
     workflow = guard.read(".github/workflows/architecture-slo-evidence.yml")
     tests = guard.read("scripts/tests/test_architecture_slo_guard.py")
     for marker in (
@@ -348,12 +350,51 @@ def validate_release_assets(
         "SLO workflow must require explicit dispatch",
     )
     guard.require(
-        "run-architecture-slo-evidence.ps1" in workflow,
-        "SLO workflow must execute the real runner",
+        "run-architecture-slo-cluster.ps1" in workflow,
+        "SLO workflow must execute the cluster-connected runner",
     )
     guard.require(
-        "permissions:\n  contents: read" in workflow,
-        "SLO workflow must retain contents:read only",
+        "permissions:\n  contents: read\n  packages: read" in workflow,
+        "SLO workflow must retain least-privilege contents/package reads",
+    )
+    guard.require(
+        "runs-on: [self-hosted, linux, x64, rocketmq-architecture-evidence]" in workflow,
+        "six-hour SLO must run on the dedicated self-hosted evidence runner",
+    )
+    guard.require(
+        "if: (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && "
+        "github.ref == 'refs/heads/main'" in workflow,
+        "untrusted refs must never reach the dynamic evidence runner",
+    )
+    guard.require("docker login ghcr.io" in workflow, "SLO workflow must authenticate immutable GHCR pulls")
+    guard.require(
+        "new-m11-evidence-secrets.ps1" in workflow,
+        "SLO workflow must generate isolated run-scoped evidence credentials",
+    )
+    guard.require(
+        "M11_RUNTIME_SECRET_MANIFEST_B64" not in workflow
+        and "M11_ROTATED_RUNTIME_SECRET_MANIFEST_B64" not in workflow,
+        "SLO workflow must not depend on repository-stored test secret manifests",
+    )
+    guard.require(
+        "Remove-Item -LiteralPath $inputDirectory -Recurse -Force" in workflow
+        and "docker logout ghcr.io" in workflow,
+        "SLO workflow must remove run-scoped credentials and registry sessions",
+    )
+    for marker in (
+        "PrometheusImage must be pinned by digest",
+        "rocketmq-slo-prometheus",
+        "rocketmq-slo-message-probe",
+        "while true; do",
+        "message sendMessage",
+        "message consumeMessage",
+        "run-architecture-slo-evidence.ps1",
+        "Stop-Process",
+    ):
+        guard.require(marker in cluster_runner, f"SLO cluster runner contract marker missing: {marker}")
+    guard.require(
+        "[Security.Cryptography.RandomNumberGenerator]::Create" in secret_generator,
+        "SLO evidence credentials must use a cryptographic run-scoped generator",
     )
     guard.require(
         "test_architecture_slo_guard" in workflow and "deliberate" in tests,

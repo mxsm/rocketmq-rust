@@ -3,6 +3,7 @@ name: Kubernetes architecture fault matrix
 on:
   pull_request:
     paths:
+      - ".github/actionlint.yaml"
       - ".github/workflows/kubernetes-fault-matrix.yml"
       - "distribution/helm/**"
       - "distribution/kubernetes/**"
@@ -10,11 +11,14 @@ on:
       - "rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/**"
       - "scripts/fault_matrix_guard.py"
       - "scripts/kind-architecture-refactor-e2e.ps1"
+      - "scripts/new-m11-evidence-secrets.ps1"
       - "scripts/tests/test_m11_fault_matrix.py"
+      - "scripts/tests/test_m11_dynamic_evidence.py"
       - "scripts/tests/fixtures/m11-fault-matrix/**"
   push:
     branches: [main]
     paths:
+      - ".github/actionlint.yaml"
       - ".github/workflows/kubernetes-fault-matrix.yml"
       - "distribution/helm/**"
       - "distribution/kubernetes/**"
@@ -22,7 +26,9 @@ on:
       - "rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/**"
       - "scripts/fault_matrix_guard.py"
       - "scripts/kind-architecture-refactor-e2e.ps1"
+      - "scripts/new-m11-evidence-secrets.ps1"
       - "scripts/tests/test_m11_fault_matrix.py"
+      - "scripts/tests/test_m11_dynamic_evidence.py"
       - "scripts/tests/fixtures/m11-fault-matrix/**"
   workflow_dispatch:
     inputs:
@@ -42,12 +48,14 @@ on:
       collector_image:
         description: OpenTelemetry Collector image@sha256 reference
         required: true
+        default: docker.io/otel/opentelemetry-collector-contrib@sha256:9c247564e65ca19f97d891cca19a1a8d291ce631b890885b44e3503c5fdb3895
         type: string
   schedule:
     - cron: "11 21 * * 6"
 
 permissions:
   contents: read
+  packages: read
 
 jobs:
   static-contract:
@@ -73,15 +81,15 @@ jobs:
 
   dynamic-fault-matrix:
     name: Dynamic fault matrix
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && github.ref == 'refs/heads/main'
     needs: static-contract
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      EVIDENCE_BACKEND: ${{ github.event_name == 'workflow_dispatch' && inputs.backend || vars.ARCHITECTURE_FAULT_BACKEND }}
+      EVIDENCE_BACKEND: ${{ github.event_name == 'workflow_dispatch' && inputs.backend || vars.ARCHITECTURE_FAULT_BACKEND || 'kind' }}
       BASELINE_IMAGES: ${{ github.event_name == 'workflow_dispatch' && inputs.baseline_images_json || vars.ARCHITECTURE_BASELINE_IMAGES_JSON }}
       CANDIDATE_IMAGES: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_images_json || vars.ARCHITECTURE_CANDIDATE_IMAGES_JSON }}
-      COLLECTOR_IMAGE: ${{ github.event_name == 'workflow_dispatch' && inputs.collector_image || vars.ARCHITECTURE_COLLECTOR_IMAGE }}
+      COLLECTOR_IMAGE: ${{ github.event_name == 'workflow_dispatch' && inputs.collector_image || vars.ARCHITECTURE_COLLECTOR_IMAGE || 'docker.io/otel/opentelemetry-collector-contrib@sha256:9c247564e65ca19f97d891cca19a1a8d291ce631b890885b44e3503c5fdb3895' }}
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -111,26 +119,31 @@ jobs:
           tar -xzf /tmp/helm.tgz -C /tmp
           sudo install -m 0755 /tmp/linux-amd64/helm /usr/local/bin/helm
 
-      - name: Materialize explicit dynamic inputs
+      - name: Authenticate immutable service image pulls
         shell: bash
         env:
-          RUNTIME_SECRET_B64: ${{ secrets.M11_RUNTIME_SECRET_MANIFEST_B64 }}
-          ROTATED_RUNTIME_SECRET_B64: ${{ secrets.M11_ROTATED_RUNTIME_SECRET_MANIFEST_B64 }}
-          BASELINE_DRIVER_SECRET_B64: ${{ secrets.M11_BASELINE_DRIVER_SECRET_MANIFEST_B64 }}
-          ROTATED_DRIVER_SECRET_B64: ${{ secrets.M11_ROTATED_DRIVER_SECRET_MANIFEST_B64 }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          test -n "$RUNTIME_SECRET_B64"
-          test -n "$ROTATED_RUNTIME_SECRET_B64"
-          test -n "$BASELINE_DRIVER_SECRET_B64"
-          test -n "$ROTATED_DRIVER_SECRET_B64"
-          mkdir -p target/fault-inputs
-          printf '%s' "$BASELINE_IMAGES" > target/fault-inputs/baseline-images.json
-          printf '%s' "$CANDIDATE_IMAGES" > target/fault-inputs/candidate-images.json
-          printf '%s' "$RUNTIME_SECRET_B64" | base64 --decode > target/fault-inputs/runtime-secret.yaml
-          printf '%s' "$ROTATED_RUNTIME_SECRET_B64" | base64 --decode > target/fault-inputs/rotated-runtime-secret.yaml
-          printf '%s' "$BASELINE_DRIVER_SECRET_B64" | base64 --decode > target/fault-inputs/baseline-driver-secret.yaml
-          printf '%s' "$ROTATED_DRIVER_SECRET_B64" | base64 --decode > target/fault-inputs/rotated-driver-secret.yaml
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "${{ github.actor }}" --password-stdin
+
+      - name: Materialize explicit dynamic inputs
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path target/fault-inputs | Out-Null
+          [IO.File]::WriteAllText(
+            (Join-Path $PWD target/fault-inputs/baseline-images.json),
+            $env:BASELINE_IMAGES,
+            [Text.UTF8Encoding]::new($false)
+          )
+          [IO.File]::WriteAllText(
+            (Join-Path $PWD target/fault-inputs/candidate-images.json),
+            $env:CANDIDATE_IMAGES,
+            [Text.UTF8Encoding]::new($false)
+          )
+          ./scripts/new-m11-evidence-secrets.ps1 `
+            -Mode Generate `
+            -OutputDirectory target/fault-inputs
 
       - name: Execute real fault matrix
         shell: pwsh
@@ -145,6 +158,19 @@ jobs:
           -BaselineDriverSecretManifest target/fault-inputs/baseline-driver-secret.yaml
           -RotatedDriverSecretManifest target/fault-inputs/rotated-driver-secret.yaml
           -CollectorImage '${{ env.COLLECTOR_IMAGE }}'
+
+      - name: Remove run-scoped credentials and registry session
+        if: always()
+        shell: pwsh
+        run: |
+          $inputDirectory = Join-Path $PWD 'target/fault-inputs'
+          if (Test-Path -LiteralPath $inputDirectory) {
+            Remove-Item -LiteralPath $inputDirectory -Recurse -Force
+          }
+          if (Get-Command docker -ErrorAction SilentlyContinue) {
+            docker logout ghcr.io 2>&1 | Out-Null
+          }
+          $global:LASTEXITCODE = 0
 
       - name: Upload immutable fault evidence
         if: always()

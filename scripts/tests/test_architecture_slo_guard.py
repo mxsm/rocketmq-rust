@@ -41,6 +41,8 @@ class ArchitectureSloGuardTests(unittest.TestCase):
             "distribution/kubernetes/fault-matrix-policy.json",
             "rocketmq-doc/en/architecture-production-readiness-runbook.md",
             "scripts/telemetry-semantic-registry.json",
+            "scripts/new-m11-evidence-secrets.ps1",
+            "scripts/run-architecture-slo-cluster.ps1",
             "scripts/run-architecture-slo-evidence.ps1",
             "scripts/architecture_slo_guard.py",
             "scripts/tests/test_architecture_slo_guard.py",
@@ -189,6 +191,27 @@ class ArchitectureSloGuardTests(unittest.TestCase):
             "--evidence", str(FIXTURE), "--allow-fixture", expect_success=False
         )
         self.assertIn("release artifact hash mismatch", result.stderr)
+
+    def test_hosted_six_hour_runner_regression_is_rejected(self) -> None:
+        workflow = self.root / ".github" / "workflows" / "architecture-slo-evidence.yml"
+        source = workflow.read_text(encoding="utf-8")
+        workflow.write_text(
+            source.replace(
+                "runs-on: [self-hosted, linux, x64, rocketmq-architecture-evidence]",
+                "runs-on: ubuntu-latest",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        result = self.run_guard("--policy-only", expect_success=False)
+        self.assertIn("dedicated self-hosted evidence runner", result.stderr)
+
+    def test_sustained_probe_regression_is_rejected(self) -> None:
+        wrapper = self.root / "scripts" / "run-architecture-slo-cluster.ps1"
+        source = wrapper.read_text(encoding="utf-8")
+        wrapper.write_text(source.replace("while true; do", "run-once", 1), encoding="utf-8")
+        result = self.run_guard("--policy-only", expect_success=False)
+        self.assertIn("while true; do", result.stderr)
 
 
 if __name__ == "__main__":

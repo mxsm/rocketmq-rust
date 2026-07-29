@@ -175,6 +175,22 @@ acknowledged-message query succeeds. Preserve both failed and successful evidenc
 directories. A failed run must not contain a production `run.json` that can be
 mistaken for a pass.
 
+## Evidence execution boundary
+
+The six-hour sampler runs only on the dedicated
+`self-hosted,linux,x64,rocketmq-architecture-evidence` runner. Pull requests execute
+the static contract job only. The dynamic workflow generates cryptographically
+random, run-scoped test credentials, authenticates and preloads immutable image
+digests, and never uploads those credential manifests.
+
+The retained fault cluster is promoted to the candidate digests before the soak.
+`run-architecture-slo-cluster.ps1` then deploys a digest-pinned private Prometheus
+that scrapes all five metrics Services and a bounded message send/consume probe.
+Prometheus is reached only through a loopback `kubectl port-forward`. The wrapper
+keeps the port-forward owned for the full sampler lifetime and terminates it during
+cleanup. Production credentials and an externally reachable metrics endpoint are
+not inputs to this isolated evidence environment.
+
 ## Evidence verification
 
 From the repository root, validate policy and fixtures:
@@ -185,6 +201,7 @@ python scripts/architecture_slo_guard.py `
   --evidence scripts/tests/fixtures/m11-slo/pass `
   --allow-fixture
 python -m unittest scripts.tests.test_architecture_slo_guard -v
+python -m unittest scripts.tests.test_m11_dynamic_evidence -v
 cargo test -p rocketmq-observability --test production_readiness_contract
 ```
 

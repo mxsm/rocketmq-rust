@@ -96,7 +96,7 @@
   "release_artifacts": {
     "distribution/config/grafana-architecture-production-readiness.json": "b586879abcf204d2cbf06c049fe21e0bfef10d1dadb67488a6c5ee91eab8ac70",
     "distribution/config/prometheus-architecture-production-readiness-alerts.yaml": "44bfcbb119343fd848fe7c32ffaeab235eee960c2ec3ad2130b31493893f4646",
-    "rocketmq-doc/en/architecture-production-readiness-runbook.md": "857a461791a5f6b7ba3301278b2fd103fd7b96161f4ee72525f5c865f62afa00",
+    "rocketmq-doc/en/architecture-production-readiness-runbook.md": "c19a9ee5ea258523bf3678f9f5167c8161197a72f75e094fd0bef0556e8a678d",
     "distribution/kubernetes/fault-matrix-policy.json": "771b3abf35213a4b6fbb3626d7822e11e6a17d9609ae7587d309bcaf2a5cdd37",
     "scripts/telemetry-semantic-registry.json": "32f7824018e2f7a5a73176a177198bef08e252eb6c23fdc43dd6e73b5ae294a5"
   },

@@ -407,6 +407,20 @@ nodes:
         $StorageClass = 'local-path'
     }
 
+    $clusterImages = @(
+        @('broker', 'namesrv', 'controller', 'proxy', 'mcp') | ForEach-Object { $BaselineImages[$_] }
+        @('broker', 'namesrv', 'controller', 'proxy', 'mcp') | ForEach-Object { $CandidateImages[$_] }
+        $CollectorImage
+    ) | Sort-Object -Unique
+    foreach ($image in $clusterImages) {
+        Invoke-Native docker @('pull', $image) | Out-Null
+    }
+    if ($Backend -eq 'kind') {
+        Invoke-Native kind (@('load', 'docker-image') + $clusterImages + @('--name', $ClusterName)) | Out-Null
+    } else {
+        Invoke-Native k3d (@('image', 'import') + $clusterImages + @('--cluster', $ClusterName)) | Out-Null
+    }
+
     $nodes = ((Invoke-Native kubectl @('get', 'nodes', '-o', 'json')).Output | ConvertFrom-Json).items
     Assert-True ($nodes.Count -eq 4) 'fault cluster must contain exactly four nodes'
     $workers = @($nodes | Where-Object { -not $_.metadata.labels.'node-role.kubernetes.io/control-plane' })
