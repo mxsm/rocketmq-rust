@@ -283,7 +283,7 @@ struct McpMetrics {
 #[cfg(feature = "otel-metrics")]
 impl McpMetrics {
     fn new(meter: &opentelemetry::metrics::Meter) -> Self {
-        Self {
+        let metrics = Self {
             requests_total: meter
                 .u64_counter(MCP_REQUESTS_TOTAL)
                 .with_description("Completed MCP Tool and Resource requests")
@@ -324,6 +324,35 @@ impl McpMetrics {
                 .with_description("MCP audit sink and flush failures")
                 .with_unit("{failure}")
                 .build(),
+        };
+        metrics.initialize_audit_health_series();
+        metrics
+    }
+
+    fn initialize_audit_health_series(&self) {
+        self.audit_backlog.record(0, &[]);
+        for reason in [
+            McpAuditDropReason::Oversized,
+            McpAuditDropReason::CountCapacity,
+            McpAuditDropReason::ByteCapacity,
+            McpAuditDropReason::Closed,
+        ] {
+            self.audit_dropped_total.add(
+                0,
+                &[opentelemetry::KeyValue::new(
+                    crate::semantic::labels::REASON,
+                    reason.as_str(),
+                )],
+            );
+        }
+        for kind in [McpAuditFailureKind::Sink, McpAuditFailureKind::Flush] {
+            self.audit_failures_total.add(
+                0,
+                &[opentelemetry::KeyValue::new(
+                    crate::semantic::labels::REASON,
+                    kind.as_str(),
+                )],
+            );
         }
     }
 
