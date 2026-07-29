@@ -75,6 +75,11 @@ use rocketmq_sre_contracts::ExternalApprovalInput;
 use rocketmq_sre_contracts::FenceAck;
 use rocketmq_sre_contracts::FleetHealthReport;
 use rocketmq_sre_contracts::GrantVerification;
+use rocketmq_sre_contracts::GovernanceAdmission;
+use rocketmq_sre_contracts::GovernanceArtifact;
+use rocketmq_sre_contracts::GovernanceEvent;
+use rocketmq_sre_contracts::GovernanceImpact;
+use rocketmq_sre_contracts::GovernanceVersion;
 use rocketmq_sre_contracts::Incident;
 use rocketmq_sre_contracts::IncidentOperationRequest;
 use rocketmq_sre_contracts::IncidentOperationResult;
@@ -632,6 +637,26 @@ fn generated_schemas() -> Result<Vec<(&'static str, serde_json::Value)>, EvalErr
             serde_json::to_value(schema_for!(DrActionItem))?,
         ),
         (
+            "governance-artifact.schema.json",
+            serde_json::to_value(schema_for!(GovernanceArtifact))?,
+        ),
+        (
+            "governance-version.schema.json",
+            serde_json::to_value(schema_for!(GovernanceVersion))?,
+        ),
+        (
+            "governance-impact.schema.json",
+            serde_json::to_value(schema_for!(GovernanceImpact))?,
+        ),
+        (
+            "governance-admission.schema.json",
+            serde_json::to_value(schema_for!(GovernanceAdmission))?,
+        ),
+        (
+            "governance-event.schema.json",
+            serde_json::to_value(schema_for!(GovernanceEvent))?,
+        ),
+        (
             "notification-delivery.schema.json",
             serde_json::to_value(schema_for!(NotificationDelivery))?,
         ),
@@ -971,6 +996,26 @@ signals:
             (
                 "dr-action-item.schema.json",
                 include_str!("../../../schemas/dr-action-item.schema.json"),
+            ),
+            (
+                "governance-artifact.schema.json",
+                include_str!("../../../schemas/governance-artifact.schema.json"),
+            ),
+            (
+                "governance-version.schema.json",
+                include_str!("../../../schemas/governance-version.schema.json"),
+            ),
+            (
+                "governance-impact.schema.json",
+                include_str!("../../../schemas/governance-impact.schema.json"),
+            ),
+            (
+                "governance-admission.schema.json",
+                include_str!("../../../schemas/governance-admission.schema.json"),
+            ),
+            (
+                "governance-event.schema.json",
+                include_str!("../../../schemas/governance-event.schema.json"),
             ),
             (
                 "notification-delivery.schema.json",
