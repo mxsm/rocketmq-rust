@@ -1,0 +1,150 @@
+{
+  "schema_version": 1,
+  "release_boundary": "2.0.0",
+  "generated_document": "rocketmq-doc/en/architecture-debt-register.md",
+  "entries": [
+    {
+      "id": "ARC-COMP-001",
+      "class": "compatibility",
+      "owner": "broker",
+      "status": "active",
+      "reason": "broker composition still depends on the aggregate store package",
+      "adr": "rocketmq-doc/en/architecture-debt-governance-adr.md",
+      "removal_condition": "broker production paths depend only on store capabilities and selected backends",
+      "target_release": "2.0.0",
+      "evidence": [
+        "scripts/architecture-dependency-baseline.json",
+        "scripts/architecture_dependency_guard.py"
+      ],
+      "scope_count": 1
+    },
+    {
+      "id": "ARC-COMP-002",
+      "class": "compatibility",
+      "owner": "store-tools",
+      "status": "active",
+      "reason": "store inspection composition still depends on the aggregate store package",
+      "adr": "rocketmq-doc/en/architecture-debt-governance-adr.md",
+      "removal_condition": "store inspection uses store-api and backend-specific inspection capabilities",
+      "target_release": "2.0.0",
+      "evidence": [
+        "scripts/architecture-dependency-baseline.json",
+        "scripts/architecture_dependency_guard.py"
+      ],
+      "scope_count": 1
+    },
+    {
+      "id": "ARC-PANIC-001",
+      "class": "panic",
+      "owner": "architecture-maintainers",
+      "status": "active",
+      "reason": "reviewed production panic surfaces require reachability classification and burn-down",
+      "adr": "rocketmq-doc/en/architecture-debt-governance-adr.md",
+      "removal_condition": "production panic-surface inventory reaches zero",
+      "target_release": "2.0.0",
+      "evidence": [
+        "scripts/rust-hygiene-baseline.json",
+        "scripts/rust_hygiene_guard.py"
+      ],
+      "scope_count": 938
+    },
+    {
+      "id": "ARC-TRAIT-001",
+      "class": "trait",
+      "owner": "architecture-maintainers",
+      "status": "active",
+      "reason": "trait migration identities remain governed while native async and marker decisions are reviewed",
+      "adr": "rocketmq-doc/en/architecture-debt-governance-adr.md",
+      "removal_condition": "all migrate-on-touch trait identities are resolved or accepted as final design",
+      "target_release": "2.0.0",
+      "evidence": [
+        "scripts/trait-policy-baseline.json",
+        "scripts/trait_policy_guard.py"
+      ],
+      "scope_count": 660
+    },
+    {
+      "id": "ARC-ALLOW-001",
+      "class": "allow",
+      "owner": "error-architecture-maintainers",
+      "status": "active",
+      "reason": "typed-error transition allowlists still contain reviewed source identities",
+      "adr": "rocketmq-doc/en/architecture-debt-governance-adr.md",
+      "removal_condition": "typed error paths replace all explicit error-architecture allowlist entries",
+      "target_release": "2.0.0",
+      "evidence": [
+        "scripts/error_architecture_guard.py",
+        "docs/07-error-hygiene-allowlist.md"
+      ],
+      "scope_count": 81
+    },
+    {
+      "id": "ARC-RUNTIME-001",
+      "class": "runtime_adapter",
+      "owner": "runtime-maintainers",
+      "status": "active",
+      "reason": "approved runtime adapter and task-group root sites remain during lifecycle ownership migration",
+      "adr": "rocketmq-doc/en/architecture-debt-governance-adr.md",
+      "removal_condition": "runtime audit reports zero current-runtime-adapter and task-group-root identities",
+      "target_release": "2.0.0",
+      "evidence": [
+        "scripts/runtime-audit-baseline.json",
+        "scripts/runtime-audit.ps1"
+      ],
+      "scope_count": 28
+    },
+    {
+      "id": "ARC-FACADE-001",
+      "class": "facade",
+      "owner": "store",
+      "status": "active",
+      "reason": "aggregate store package remains a composition facade while capability migration completes",
+      "adr": "rocketmq-doc/en/architecture-debt-governance-adr.md",
+      "removal_condition": "no production consumer requires aggregate MessageStore or store re-exports",
+      "target_release": "2.0.0",
+      "evidence": [
+        "scripts/architecture-dependency-policy.json",
+        "scripts/architecture-dependency-baseline.json"
+      ],
+      "scope_count": 1
+    },
+    {
+      "id": "ARC-FACADE-002",
+      "class": "facade",
+      "owner": "proxy",
+      "status": "active",
+      "reason": "aggregate proxy package remains a composition root while mode-specific APIs are adopted",
+      "adr": "rocketmq-doc/en/architecture-debt-governance-adr.md",
+      "removal_condition": "consumers use proxy-core and mode-specific packages without compatibility re-exports",
+      "target_release": "2.0.0",
+      "evidence": [
+        "scripts/architecture-dependency-policy.json",
+        "rocketmq-proxy/Cargo.toml"
+      ],
+      "scope_count": 1
+    },
+    {
+      "id": "ARC-RUNTIME-002",
+      "class": "runtime_adapter",
+      "owner": "runtime-maintainers",
+      "status": "resolved",
+      "reason": "the panicking ClientRuntime constructor was removed after all callers migrated to fallible construction",
+      "adr": "rocketmq-doc/en/architecture-debt-governance-adr.md",
+      "removal_condition": "the ClientRuntime::new API remains absent",
+      "target_release": "2.0.0",
+      "evidence": [
+        "rocketmq-client/src/runtime.rs"
+      ],
+      "scope_count": 0,
+      "source_checks": [
+        {
+          "pattern": "ClientRuntime::new",
+          "max_count": 0,
+          "paths": [
+            "rocketmq-client/src/runtime.rs"
+          ]
+        }
+      ]
+    }
+  ]
+}

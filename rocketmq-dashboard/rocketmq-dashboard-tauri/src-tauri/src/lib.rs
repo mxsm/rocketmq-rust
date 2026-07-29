@@ -66,11 +66,20 @@ pub fn run() {
             return;
         }
     };
-    let client_runtime = ClientRuntime::new(
+    let client_runtime = match ClientRuntime::try_new(
         client_runtime_owner.root_context().child("rocketmq-admin-client"),
         ClientRuntimeConfig::default(),
         TelemetryHandle::noop(),
-    );
+    ) {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("Failed to initialize dashboard client runtime: {error}");
+            if let Err(shutdown_error) = client_runtime_owner.shutdown_runtime_blocking() {
+                eprintln!("Failed to shut down dashboard client runtime owner: {shutdown_error}");
+            }
+            return;
+        }
+    };
     let setup_client_runtime = client_runtime.clone();
     let admin_lifecycle = Arc::new(OnceLock::new());
     let setup_lifecycle = admin_lifecycle.clone();

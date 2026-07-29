@@ -92,11 +92,12 @@ pub(crate) fn test_client_runtime() -> Arc<ClientRuntime> {
             .expect("admin TUI test runtime should start")
     });
 
-    ClientRuntime::new(
+    ClientRuntime::try_new(
         OWNER.root_context().child("client"),
         ClientRuntimeConfig::default(),
         TelemetryHandle::noop(),
     )
+    .expect("admin TUI test client runtime should be valid")
 }
 
 mod operations;

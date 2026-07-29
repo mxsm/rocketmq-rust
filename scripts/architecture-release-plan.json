@@ -50,7 +50,7 @@
         "kind": "normal",
         "path": "rocketmq-broker/Cargo.toml",
         "alias": "rocketmq_store",
-        "remove_by": "long-term"
+        "remove_by": "2.0.0"
       },
       {
         "caller": "rocketmq-store-inspect",
@@ -58,7 +58,7 @@
         "kind": "normal",
         "path": "rocketmq-tools/rocketmq-store-inspect/Cargo.toml",
         "alias": "rocketmq_store",
-        "remove_by": "long-term"
+        "remove_by": "2.0.0"
       }
     ]
   }

@@ -32,11 +32,11 @@ where
     let telemetry_guard =
         rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())
             .map_err(|source| RocketMQError::internal("initialize example telemetry", source))?;
-    let client_runtime = ClientRuntime::new(
+    let client_runtime = ClientRuntime::try_new(
         owner.root_context().child("client"),
         ClientRuntimeConfig::default(),
         telemetry_guard.handle(),
-    );
+    )?;
 
     let operation_result = owner.block_on(async {
         let result = operation(Arc::clone(&client_runtime)).await;

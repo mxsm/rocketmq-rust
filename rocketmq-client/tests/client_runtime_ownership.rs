@@ -29,14 +29,19 @@ fn runtime_owner(name: &str) -> RuntimeOwner {
     .expect("test runtime owner should start")
 }
 
+fn client_runtime(owner: &RuntimeOwner, telemetry_handle: TelemetryHandle) -> Arc<ClientRuntime> {
+    ClientRuntime::try_new(
+        owner.root_context().child("client"),
+        ClientRuntimeConfig::default(),
+        telemetry_handle,
+    )
+    .expect("test client runtime should be valid")
+}
+
 #[test]
 fn noop_telemetry_keeps_runtime_metrics_disabled() {
     let owner = runtime_owner("client-runtime-noop-telemetry");
-    let runtime = ClientRuntime::new(
-        owner.root_context().child("client"),
-        ClientRuntimeConfig::default(),
-        TelemetryHandle::noop(),
-    );
+    let runtime = client_runtime(&owner, TelemetryHandle::noop());
     let lease = runtime
         .pool()
         .get_or_create(ClientConfig::default(), None)
@@ -79,16 +84,8 @@ fn two_client_runtimes_keep_metrics_lifecycle_isolated() {
         rocketmq_observability::init_observability(&metrics_config()).expect("second telemetry runtime should start");
     let first_owner = runtime_owner("client-metrics-isolation-first");
     let second_owner = runtime_owner("client-metrics-isolation-second");
-    let first_runtime = ClientRuntime::new(
-        first_owner.root_context().child("client"),
-        ClientRuntimeConfig::default(),
-        first_guard.handle(),
-    );
-    let second_runtime = ClientRuntime::new(
-        second_owner.root_context().child("client"),
-        ClientRuntimeConfig::default(),
-        second_guard.handle(),
-    );
+    let first_runtime = client_runtime(&first_owner, first_guard.handle());
+    let second_runtime = client_runtime(&second_owner, second_guard.handle());
     let first_lease = first_runtime
         .pool()
         .get_or_create(ClientConfig::default(), None)
@@ -138,16 +135,8 @@ fn two_client_runtimes_keep_metrics_lifecycle_isolated() {
 fn client_pool_reuses_instances_only_within_one_explicit_runtime() {
     let first_owner = runtime_owner("client-runtime-isolation-first");
     let second_owner = runtime_owner("client-runtime-isolation-second");
-    let first_runtime = ClientRuntime::new(
-        first_owner.root_context().child("client"),
-        ClientRuntimeConfig::default(),
-        TelemetryHandle::noop(),
-    );
-    let second_runtime = ClientRuntime::new(
-        second_owner.root_context().child("client"),
-        ClientRuntimeConfig::default(),
-        TelemetryHandle::noop(),
-    );
+    let first_runtime = client_runtime(&first_owner, TelemetryHandle::noop());
+    let second_runtime = client_runtime(&second_owner, TelemetryHandle::noop());
     let config = ClientConfig::default();
 
     let first_lease = first_runtime
@@ -189,11 +178,7 @@ fn client_pool_reuses_instances_only_within_one_explicit_runtime() {
 #[test]
 fn client_pool_rejects_conflicting_configuration_for_the_same_client_id() {
     let owner = runtime_owner("client-runtime-conflict");
-    let runtime = ClientRuntime::new(
-        owner.root_context().child("client"),
-        ClientRuntimeConfig::default(),
-        TelemetryHandle::noop(),
-    );
+    let runtime = client_runtime(&owner, TelemetryHandle::noop());
     let first_config = ClientConfig::default();
     let mut conflicting_config = first_config.clone();
     conflicting_config.namesrv_addr = Some("127.0.0.1:19876".into());
@@ -221,11 +206,7 @@ fn client_pool_rejects_conflicting_configuration_for_the_same_client_id() {
 #[test]
 fn shutting_down_client_runtime_closes_pool_admission() {
     let owner = runtime_owner("client-runtime-shutdown");
-    let runtime = ClientRuntime::new(
-        owner.root_context().child("client"),
-        ClientRuntimeConfig::default(),
-        TelemetryHandle::noop(),
-    );
+    let runtime = client_runtime(&owner, TelemetryHandle::noop());
 
     owner.block_on(async {
         let report = runtime.shutdown().await;

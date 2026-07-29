@@ -6,7 +6,7 @@ use rocketmq_runtime::RuntimeOwner;
 
 fn main() {
     let owner = RuntimeOwner::new(RuntimeConfig::server_default("compile-fail")).unwrap();
-    let _ = ClientRuntime::new(
+    let _ = ClientRuntime::try_new(
         owner.root_context(),
         ClientRuntimeConfig::default(),
         TelemetryHandle::noop(),

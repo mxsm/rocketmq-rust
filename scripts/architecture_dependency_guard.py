@@ -391,6 +391,7 @@ def validate_baseline(baseline: dict[str, Any], policy: dict[str, Any]) -> None:
                 "path",
                 "alias",
                 "count",
+                "debt_id",
                 "owner",
                 "reason",
                 "remove_by",
@@ -404,7 +405,7 @@ def validate_baseline(baseline: dict[str, Any], policy: dict[str, Any]) -> None:
             raise InputError(f"baseline compatibility_manifest_exceptions[{index}] count must be exactly one")
         if not exception["reason"] or not exception["adr"]:
             raise InputError(f"baseline compatibility_manifest_exceptions[{index}] requires reason and adr")
-        if exception["remove_by"] not in {"M09-02", "M09-04", "R1", "next-major", "long-term"}:
+        if exception["remove_by"] != "2.0.0":
             raise InputError(
                 f"baseline compatibility_manifest_exceptions[{index}] has an expired removal window"
             )

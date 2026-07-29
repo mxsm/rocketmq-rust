@@ -198,11 +198,11 @@ impl ClusterTaskExecutor {
         telemetry_handle: TelemetryHandle,
     ) -> ProxyResult<Self> {
         let worker_context = service_context.child("command-worker");
-        let client_runtime = ClientRuntime::new(
+        let client_runtime = ClientRuntime::try_new(
             worker_context.child("client-runtime"),
             ClientRuntimeConfig::default(),
             telemetry_handle,
-        );
+        )?;
         let base_domain_id = worker_context.task_group().id().as_u64();
         Self::spawn_execution(
             config,

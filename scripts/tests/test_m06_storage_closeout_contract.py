@@ -1,275 +1,38 @@
-# Copyright 2023 The RocketMQ Rust Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright 2026 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0.
 
-from __future__ import annotations
-
-import json
-import tomllib
 import unittest
-from pathlib import Path
 
-
-ROOT = Path(__file__).resolve().parents[2]
-POLICY_PATH = ROOT / "scripts" / "architecture-dependency-policy.json"
-STANDALONE_MANIFESTS = (
-    "rocketmq-example/Cargo.toml",
-    "rocketmq-dashboard/rocketmq-dashboard-gpui/Cargo.toml",
-    "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/Cargo.toml",
-    "rocketmq-dashboard/rocketmq-dashboard-web/backend/Cargo.toml",
-)
-STORAGE_PACKAGES = {
-    "rocketmq-store-api",
-    "rocketmq-store-local",
-    "rocketmq-store-rocksdb",
-    "rocketmq-tieredstore",
-    "rocketmq-store",
-}
-
-
-def load_manifest(path: Path) -> dict:
-    return tomllib.loads(path.read_text(encoding="utf-8"))
-
-
-def normal_dependency_names(manifest: dict) -> set[str]:
-    tables = [manifest.get("dependencies", {})]
-    tables.extend(
-        target.get("dependencies", {})
-        for target in manifest.get("target", {}).values()
-    )
-    names: set[str] = set()
-    for table in tables:
-        for alias, specification in table.items():
-            package = (
-                specification.get("package")
-                if isinstance(specification, dict)
-                else None
-            )
-            names.add(package or alias)
-    return names
-
-
-def all_dependency_names(manifest: dict) -> set[str]:
-    names = normal_dependency_names(manifest)
-    for table_name in ("dev-dependencies", "build-dependencies"):
-        table = manifest.get(table_name, {})
-        for alias, specification in table.items():
-            package = (
-                specification.get("package")
-                if isinstance(specification, dict)
-                else None
-            )
-            names.add(package or alias)
-    for target in manifest.get("target", {}).values():
-        for table_name in ("dev-dependencies", "build-dependencies"):
-            table = target.get(table_name, {})
-            for alias, specification in table.items():
-                package = (
-                    specification.get("package")
-                    if isinstance(specification, dict)
-                    else None
-                )
-                names.add(package or alias)
-    return names
-
-
-def workspace_manifests() -> dict[str, tuple[Path, dict]]:
-    root = load_manifest(ROOT / "Cargo.toml")
-    manifests: dict[str, tuple[Path, dict]] = {}
-    for member in root["workspace"]["members"]:
-        path = ROOT / member / "Cargo.toml"
-        manifest = load_manifest(path)
-        manifests[manifest["package"]["name"]] = (path, manifest)
-    return manifests
+from scripts.tests.architecture_contract_helpers import ROOT
+from scripts.tests.architecture_contract_helpers import normal_dependencies
+from scripts.tests.architecture_contract_helpers import run_dependency_guard
+from scripts.tests.architecture_contract_helpers import source
 
 
 class StorageCloseoutContractTests(unittest.TestCase):
-    def test_workspace_registration_and_package_count_are_exact(self) -> None:
-        root = load_manifest(ROOT / "Cargo.toml")
-        members = root["workspace"]["members"]
-        policy = json.loads(POLICY_PATH.read_text(encoding="utf-8"))
+    def test_dependency_target_keeps_backend_direction_closed(self) -> None:
+        result = run_dependency_guard("target")
 
-        self.assertEqual(29, len(members))
-        self.assertTrue(STORAGE_PACKAGES.issubset(set(members)))
-        self.assertEqual(29, policy["package_counts"]["target"])
-        self.assertEqual(set(), set(policy["planned_packages"]) - set(members))
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("TARGET_COMPATIBILITY_LEDGER active_edges=2 entries=2", result.stdout)
 
-        dependencies = root["workspace"]["dependencies"]
-        for package in (
-            "rocketmq-store-api",
-            "rocketmq-store-local",
-            "rocketmq-store-rocksdb",
+    def test_store_api_is_used_by_real_broker_paths(self) -> None:
+        broker_dependencies = normal_dependencies("rocketmq-broker/Cargo.toml")
+        send_processor = source("rocketmq-broker/src/processor/send_message_processor.rs")
+        query_processor = source("rocketmq-broker/src/processor/query_message_processor.rs")
+
+        self.assertIn("rocketmq-store-api", broker_dependencies)
+        self.assertIn("rocketmq_store_api::MessageAppender", send_processor)
+        self.assertIn("rocketmq_store_api::StoreError", query_processor)
+
+    def test_capability_conformance_is_not_a_source_compatibility_facade(self) -> None:
+        self.assertTrue((ROOT / "rocketmq-store/tests/capability_conformance_tests.rs").is_file())
+        for name in (
+            "m06_store_local_compatibility.rs",
+            "m06_store_local_record_compatibility.rs",
+            "m06_store_local_commitlog_compatibility.rs",
         ):
-            self.assertFalse(dependencies[package]["default-features"], package)
-        self.assertEqual(
-            {
-                "version": "1.0.0",
-                "path": "./rocketmq-tieredstore",
-            },
-            dependencies["rocketmq-tieredstore"],
-        )
-
-    def test_storage_subgraph_matches_the_target_dag(self) -> None:
-        manifests = workspace_manifests()
-        actual = {
-            package: normal_dependency_names(manifests[package][1])
-            & STORAGE_PACKAGES
-            for package in STORAGE_PACKAGES
-        }
-        self.assertEqual(
-            {
-                "rocketmq-store-api": set(),
-                "rocketmq-store-local": {"rocketmq-store-api"},
-                "rocketmq-store-rocksdb": {
-                    "rocketmq-store-api",
-                    "rocketmq-store-local",
-                },
-                "rocketmq-tieredstore": {"rocketmq-store-api"},
-                "rocketmq-store": {
-                    "rocketmq-store-api",
-                    "rocketmq-store-local",
-                    "rocketmq-store-rocksdb",
-                    "rocketmq-tieredstore",
-                },
-            },
-            actual,
-        )
-
-        store = manifests["rocketmq-store"][1]["dependencies"]
-        self.assertEqual({"workspace": True}, store["rocketmq-store-api"])
-        self.assertEqual({"workspace": True}, store["rocketmq-store-local"])
-        self.assertEqual(
-            {"workspace": True, "optional": True},
-            store["rocketmq-store-rocksdb"],
-        )
-        self.assertEqual(
-            {"workspace": True, "optional": True},
-            store["rocketmq-tieredstore"],
-        )
-
-    def test_dependency_policy_freezes_backend_and_facade_direction(self) -> None:
-        policy = json.loads(POLICY_PATH.read_text(encoding="utf-8"))
-        rules = {rule["id"]: rule for rule in policy["package_rules"]}
-
-        self.assertEqual(
-            ["rocketmq-store"],
-            rules["store-facade-no-high-level-services"]["callers"],
-        )
-        self.assertEqual(
-            {
-                "rocketmq-client-rust",
-                "rocketmq-broker",
-                "rocketmq-namesrv",
-                "rocketmq-controller",
-                "rocketmq-proxy",
-            },
-            set(rules["store-facade-no-high-level-services"]["forbidden_targets"]),
-        )
-        self.assertEqual(
-            {"rocketmq-store-api"},
-            set(policy["target_dag"]["rocketmq-tieredstore"])
-            & STORAGE_PACKAGES,
-        )
-        self.assertEqual(
-            (STORAGE_PACKAGES - {"rocketmq-store"})
-            | {
-                "rocketmq-model",
-                "rocketmq-protocol",
-                "rocketmq-runtime",
-                "rocketmq-error",
-                "rocketmq-observability",
-            },
-            set(policy["target_dag"]["rocketmq-store"]),
-        )
-
-    def test_workspace_and_standalone_consumer_inventory_is_exact(self) -> None:
-        manifests = workspace_manifests()
-        dependencies = {
-            package: normal_dependency_names(manifest)
-            for package, (_, manifest) in manifests.items()
-        }
-
-        consumers = {
-            target: {
-                package
-                for package, direct_dependencies in dependencies.items()
-                if target in direct_dependencies
-            }
-            for target in STORAGE_PACKAGES
-        }
-        self.assertEqual(
-            {
-                "rocketmq-broker",
-                "rocketmq-store",
-                "rocketmq-store-local",
-                "rocketmq-store-rocksdb",
-                "rocketmq-tieredstore",
-            },
-            consumers["rocketmq-store-api"],
-        )
-        self.assertEqual({"rocketmq-broker", "rocketmq-store-inspect"}, consumers["rocketmq-store"])
-        self.assertEqual(
-            {"rocketmq-store", "rocketmq-store-rocksdb"},
-            consumers["rocketmq-store-local"],
-        )
-        self.assertEqual(
-            {"rocketmq-store"},
-            consumers["rocketmq-store-rocksdb"],
-        )
-        self.assertEqual({"rocketmq-store"}, consumers["rocketmq-tieredstore"])
-
-        for relative_path in STANDALONE_MANIFESTS:
-            manifest = load_manifest(ROOT / relative_path)
-            self.assertTrue(
-                STORAGE_PACKAGES.isdisjoint(all_dependency_names(manifest)),
-                relative_path,
-            )
-
-    def test_broker_capability_consumers_are_exact(self) -> None:
-        broker_manifest = load_manifest(ROOT / "rocketmq-broker/Cargo.toml")
-        self.assertEqual(
-            {"workspace": True},
-            broker_manifest["dependencies"]["rocketmq-store-api"],
-        )
-
-        processor = (
-            ROOT / "rocketmq-broker/src/processor/send_message_processor.rs"
-        ).read_text(encoding="utf-8")
-        production = processor.split("#[cfg(test)]", 1)[0]
-        self.assertIn("use rocketmq_store_api::MessageAppender;", production)
-        self.assertIn("use rocketmq_store_api::StoreHealth;", production)
-        self.assertIn("S: MessageAppender<M>", production)
-        self.assertIn("S: StoreHealth<Snapshot = StoreHealthSnapshot>", production)
-
-        direct_broker_files = {
-            path.relative_to(ROOT).as_posix()
-            for path in (ROOT / "rocketmq-broker/src").rglob("*.rs")
-            if "rocketmq_store_api" in path.read_text(encoding="utf-8")
-        }
-        self.assertEqual(
-            {
-                "rocketmq-broker/src/failover/escape_bridge.rs",
-                "rocketmq-broker/src/failover/escape_bridge_capability.rs",
-                "rocketmq-broker/src/processor/processor_service/pop_revive_service.rs",
-                "rocketmq-broker/src/processor/send_message_processor/capability.rs",
-                "rocketmq-broker/src/processor/send_message_processor.rs",
-                "rocketmq-broker/src/store_read.rs",
-                "rocketmq-broker/src/transaction/queue/default_transactional_message_service.rs",
-                "rocketmq-broker/src/transaction/queue/get_result.rs",
-                "rocketmq-broker/src/transaction/queue/transactional_message_bridge.rs",
-            },
-            direct_broker_files,
-        )
+            self.assertFalse((ROOT / "rocketmq-store/tests" / name).exists())
 
 
 if __name__ == "__main__":

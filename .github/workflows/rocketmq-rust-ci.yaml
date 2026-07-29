@@ -85,7 +85,7 @@ jobs:
         run: rustup show active-toolchain
 
       - name: Test architecture guards
-        run: python -m unittest discover -s scripts/tests -p "test_*guard.py" -v
+        run: python scripts/run_architecture_tests.py --tier pr_static
 
       - name: Check dependency policy fixtures
         run: python scripts/architecture_dependency_guard.py --fixtures
@@ -125,6 +125,25 @@ jobs:
 
       - name: Check stable nightly surface baseline
         run: python scripts/stable_surface_guard.py --mode baseline
+
+  architecture-contracts:
+    name: Architecture Contracts
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Use repository Rust 1.95 toolchain
+        run: rustup show active-toolchain
+
+      - name: Test milestone, phase, and fixture contracts
+        run: python scripts/run_architecture_tests.py --tier milestone_contract --tier phase_contract --tier dynamic_fixture
 
   architecture-target:
     name: Architecture Strict Target

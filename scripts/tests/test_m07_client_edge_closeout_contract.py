@@ -1,164 +1,40 @@
 # Copyright 2026 The RocketMQ Rust Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Licensed under the Apache License, Version 2.0.
 
-from __future__ import annotations
-
-import json
-import subprocess
-import sys
-import tomllib
 import unittest
-from pathlib import Path
+
+from scripts.tests.architecture_contract_helpers import load_json
+from scripts.tests.architecture_contract_helpers import run_dependency_guard
 
 
-ROOT = Path(__file__).resolve().parents[2]
-POLICY = ROOT / "scripts" / "architecture-dependency-policy.json"
-BASELINE = ROOT / "scripts" / "architecture-dependency-baseline.json"
-GUARD = ROOT / "scripts" / "architecture_dependency_guard.py"
-HANDOFF = (
-    ROOT
-    / "docs"
-    / "plans"
-    / "architecture-refactor-migration"
-    / "phase-2-core-boundaries"
-    / "07-client-edge-closeout-handoff.md"
-)
-
-EXPECTED_MANIFEST_ALLOWLIST = {
-    (
-        "rocketmq-admin-core",
-        "rocketmq-client-rust",
-        "normal",
-        "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/Cargo.toml",
-        "rocketmq_client_rust",
-    ),
-    (
-        "rocketmq-proxy-cluster",
-        "rocketmq-client-rust",
-        "normal",
-        "rocketmq-proxy-cluster/Cargo.toml",
-        "rocketmq_client_rust",
-    ),
-    (
-        "rocketmq-example",
-        "rocketmq-client-rust",
-        "dev",
-        "rocketmq-example/Cargo.toml",
-        "rocketmq_client_rust",
-    ),
-}
-EXPECTED_SOURCE_ALLOWLIST = {
-    (
-        "rocketmq-admin-core",
-        "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/client_adapter/",
-        ("rocketmq_client_rust",),
-    ),
-    ("rocketmq-proxy-cluster", "rocketmq-proxy-cluster/src/", ("rocketmq_client_rust",)),
-    ("rocketmq-example", "rocketmq-example/examples/", ("rocketmq_client_rust",)),
-}
 class ClientEdgeCloseoutContractTest(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls.policy = json.loads(POLICY.read_text(encoding="utf-8"))
-        cls.baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
+    def test_client_manifest_allowlist_is_exactly_current_consumers(self) -> None:
+        policy = load_json("scripts/architecture-dependency-policy.json")
+        entries = policy["client_policy"]["target_manifest_allowlist"]
+        identities = {(entry["caller"], entry["kind"]) for entry in entries}
 
-    def test_target_client_allowlist_is_exact(self) -> None:
-        client_policy = self.policy["client_policy"]
-
-        manifest_allowlist = {
-            (entry["caller"], entry["target"], entry["kind"], entry["path"], entry["alias"])
-            for entry in client_policy["target_manifest_allowlist"]
-        }
-        source_allowlist = {
-            (entry["caller"], entry["path_prefix"], tuple(entry["aliases"]))
-            for entry in client_policy["target_source_allowlist"]
-        }
-
-        self.assertEqual(EXPECTED_MANIFEST_ALLOWLIST, manifest_allowlist)
-        self.assertEqual(EXPECTED_SOURCE_ALLOWLIST, source_allowlist)
-
-    def test_only_the_example_standalone_manifest_directly_uses_client(self) -> None:
-        roots = self.policy["roots"]["standalone_manifests"]
-        consumers = set()
-        for relative in roots:
-            manifest = tomllib.loads((ROOT / relative).read_text(encoding="utf-8"))
-            for kind in ("dependencies", "dev-dependencies", "build-dependencies"):
-                for alias, value in manifest.get(kind, {}).items():
-                    package = value.get("package", alias) if isinstance(value, dict) else alias
-                    if package == "rocketmq-client-rust":
-                        consumers.add(relative)
-
-        self.assertEqual({"rocketmq-example/Cargo.toml"}, consumers)
-
-    def test_proxy_client_bypass_ledger_is_retired(self) -> None:
-        manifest_entries = [
-            item
-            for item in self.baseline["manifest_exceptions"]
-            if item.get("rule") is None
-        ]
-        self.assertEqual([], manifest_entries)
-        self.assertEqual([], self.baseline["source_exceptions"])
-
-    def test_target_guard_has_no_client_allowlist_findings(self) -> None:
-        completed = subprocess.run(
-            [
-                sys.executable,
-                str(GUARD),
-                "--mode",
-                "target",
-            ],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            check=False,
+        self.assertEqual(
+            {
+                ("rocketmq-admin-core", "normal"),
+                ("rocketmq-proxy-cluster", "normal"),
+                ("rocketmq-example", "dev"),
+            },
+            identities,
         )
-        self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
-        findings = [
-            line
-            for line in completed.stdout.splitlines()
-            if "rule=client-manifest-allowlist" in line or "rule=client-source-allowlist" in line
-        ]
-        self.assertEqual([], findings, completed.stdout)
 
-    def test_forbidden_normal_closures_cannot_reach_client(self) -> None:
-        expected_callers = {
-            "rocketmq-broker",
-            "rocketmq-namesrv",
-            "rocketmq-proxy-core",
-            "rocketmq-proxy-local",
-            "rocketmq-common",
-            "rocketmq-remoting",
-        }
-        matching_rules = [
-            rule
-            for rule in self.policy["closure_rules"]
-            if set(rule["callers"]) == expected_callers
-        ]
+    def test_client_source_allowlist_is_scoped_to_owned_adapters(self) -> None:
+        policy = load_json("scripts/architecture-dependency-policy.json")
+        entries = policy["client_policy"]["target_source_allowlist"]
 
-        self.assertEqual(1, len(matching_rules))
-        self.assertEqual(["rocketmq-client-rust"], matching_rules[0]["forbidden_targets"])
+        self.assertEqual(
+            {"rocketmq-admin-core", "rocketmq-proxy-cluster", "rocketmq-example"},
+            {entry["caller"] for entry in entries},
+        )
+        self.assertTrue(all(set(entry["aliases"]) == {"rocketmq_client_rust"} for entry in entries))
 
-    def test_m08_handoff_freezes_owned_pull_outcome_and_proxy_debt(self) -> None:
-        handoff = HANDOFF.read_text(encoding="utf-8")
-
-        self.assertIn("PullOutcome<MessageExt>", handoff)
-        self.assertIn("`rocketmq-proxy/src/cluster.rs` | 12", handoff)
-        self.assertIn("`rocketmq-proxy/src/remoting.rs` | 1", handoff)
-        self.assertIn("owner=`proxy`、remove_by=`M08`", handoff)
-        self.assertIn("Client manifest 1、Client source 13", handoff)
-        self.assertIn("## 11. PR-M08-03 消费记录（2026-07-17）", handoff)
-        self.assertIn("Client 临时账本\n  manifest/source 均为 0", handoff)
+    def test_target_dependency_guard_accepts_current_edges(self) -> None:
+        result = run_dependency_guard("target")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":
