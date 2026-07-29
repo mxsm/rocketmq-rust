@@ -50,6 +50,20 @@ pub enum IntegrationAdapterKind {
     SignedReleaseWebhook,
 }
 
+/// Process-isolated integration capabilities exposed by the SPI registry.
+#[derive(Clone, Copy, Debug, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IntegrationSpiCapability {
+    InboundEvent,
+    OutboundNotification,
+    Ticketing,
+    OnCall,
+    Cmdb,
+    DesiredState,
+    ReleaseEvent,
+    ExternalPolicy,
+}
+
 /// Data classification declared by an enterprise integration descriptor.
 #[derive(Clone, Copy, Debug, Default, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
