@@ -49,6 +49,7 @@ use super::proxy_restart_e2e_tests::seed_execution_fixture;
 use super::service::SupervisedExecutionService;
 use crate::PostgresRepository;
 use crate::models::ModelGatewayService;
+use crate::repository::ClusterRepository;
 use crate::workflow::WorkflowEventBus;
 use crate::workflow::WorkflowService;
 
@@ -100,6 +101,7 @@ async fn real_kind_supervised_credential_overlap_passes_critic_and_verification(
     let repository = PostgresRepository::connect(&database_url, 5)
         .await
         .expect("Kind PostgreSQL repository");
+    ensure_kind_cluster(&repository, tenant_id, cluster_id).await;
     let mut fixture = seed_execution_fixture(&repository, tenant_id, cluster_id, &target, &baseline).await;
     seed_complete_slo_evidence(&repository, &fixture).await;
     let refreshed = fetch_agent_state(
@@ -243,6 +245,36 @@ async fn real_kind_supervised_credential_overlap_passes_critic_and_verification(
         .await
         .expect("credential rotation before-state count"),
         1
+    );
+}
+
+async fn ensure_kind_cluster(
+    repository: &PostgresRepository,
+    tenant_id: rocketmq_sre_contracts::TenantId,
+    cluster_id: rocketmq_sre_contracts::ClusterId,
+) {
+    sqlx::query(
+        "INSERT INTO clusters (
+            id, tenant_id, external_cluster_key, environment, region,
+            rocketmq_version, deployment_mode, owner_name,
+            requested_access_profile, effective_access_profile, onboarding_state
+         ) VALUES (
+            $1, $2, $3, 'test', 'kind', 'phase03', 'kind',
+            'phase3-credential-e2e', 'read_only', 'read_only', 'ready_read_only'
+         )
+         ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(cluster_id.as_uuid())
+    .bind(tenant_id.as_uuid())
+    .bind(format!("phase3-credential-kind-{cluster_id}"))
+    .execute(&repository.pool)
+    .await
+    .expect("self-contained Kind cluster fixture");
+    let cluster = repository.get(cluster_id).await.expect("Kind cluster fixture");
+    assert_eq!(
+        cluster.tenant_id,
+        tenant_id.to_string(),
+        "the fixed Kind cluster must remain owned by the test tenant"
     );
 }
 
