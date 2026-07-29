@@ -340,6 +340,7 @@ function New-SecretMaterial([switch]$ExistingCluster) {
         'request-policy.json',
         'broker-acl.yml',
         'proxy-acl.yml',
+        'proxy-inner-credentials.yml',
         'mcp-rmq-credentials.yml',
         'probe-access-key',
         'probe-secret-key',
@@ -462,6 +463,7 @@ function New-SecretMaterial([switch]$ExistingCluster) {
         'request-policy.json' = '{"profile":"phase00-kind-read-only"}'
         'broker-acl.yml' = $brokerAcl
         'proxy-acl.yml' = $proxyAcl
+        'proxy-inner-credentials.yml' = "access_key: $mcpAccessKey`nsecret_key: $mcpSecretKey`n"
         'mcp-rmq-credentials.yml' = "access_key: $mcpAccessKey`nsecret_key: $mcpSecretKey`n"
         'admin-read-access-key' = $mcpAccessKey
         'admin-read-secret-key' = $mcpSecretKey
@@ -509,7 +511,8 @@ function Apply-Secrets {
         "--from-file=admin.identity=$(Join-Path $artifactRoot 'admin.identity')",
         "--from-file=request-policy.json=$(Join-Path $artifactRoot 'request-policy.json')",
         "--from-file=broker-acl.yml=$(Join-Path $artifactRoot 'broker-acl.yml')",
-        "--from-file=proxy-acl.yml=$(Join-Path $artifactRoot 'proxy-acl.yml')"
+        "--from-file=proxy-acl.yml=$(Join-Path $artifactRoot 'proxy-acl.yml')",
+        "--from-file=proxy-inner-credentials.yml=$(Join-Path $artifactRoot 'proxy-inner-credentials.yml')"
     )
     Apply-GeneratedSecret $rocketmqNamespace 'rocketmq-mcp-runtime-secrets' @(
         "--from-file=ca.crt=$(Join-Path $certificateRoot 'ca-cert.pem')",
