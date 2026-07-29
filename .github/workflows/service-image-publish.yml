@@ -1,0 +1,152 @@
+name: Publish signed service images
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Repository commit, tag, or branch to publish
+        required: true
+        default: main
+        type: string
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+concurrency:
+  group: service-image-publish-${{ github.event_name }}-${{ inputs.source_ref || github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish five immutable service images
+    if: github.repository == 'mxsm/rocketmq-rust'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      REPOSITORY_PREFIX: ghcr.io/mxsm/rocketmq-rust
+      CERTIFICATE_IDENTITY_REGEXP: ^https://github\.com/mxsm/rocketmq-rust/\.github/workflows/service-image-publish\.yml@refs/(heads/main|tags/[A-Za-z0-9._-]+)$
+      CERTIFICATE_OIDC_ISSUER: https://token.actions.githubusercontent.com
+    steps:
+      - name: Check out the explicit source ref
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.source_ref }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.2
+
+      - name: Resolve immutable source identity
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_commit="$(git rev-parse HEAD)"
+          source_version="$(python - <<'PY'
+          import tomllib
+          from pathlib import Path
+
+          manifest = tomllib.loads(Path("Cargo.toml").read_text(encoding="utf-8"))
+          print(manifest["workspace"]["package"]["version"])
+          PY
+          )"
+          immutable_tag="${source_version}-${source_commit:0:12}"
+          [[ "$source_commit" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$immutable_tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9a-f]{12}$ ]]
+          if [[ "$GITHUB_EVENT_NAME" == "release" && "$GITHUB_REF_NAME" != "v${source_version}" ]]; then
+            echo "release tag must equal workspace version: expected v${source_version}, got ${GITHUB_REF_NAME}" >&2
+            exit 1
+          fi
+          {
+            echo "commit=$source_commit"
+            echo "version=$source_version"
+            echo "tag=$immutable_tag"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to GHCR
+        shell: bash
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "${{ github.actor }}" --password-stdin
+
+      - name: Build, publish, sign, and verify five service images
+        shell: bash
+        env:
+          SOURCE_COMMIT: ${{ steps.source.outputs.commit }}
+          SOURCE_VERSION: ${{ steps.source.outputs.version }}
+          IMMUTABLE_TAG: ${{ steps.source.outputs.tag }}
+        run: |
+          set -euo pipefail
+          output="target/service-image-publication"
+          mkdir -p "$output/signatures" "$output/manifests"
+          image_map="$output/image-map.json"
+          printf '{}\n' > "$image_map"
+
+          for service in broker namesrv controller proxy mcp; do
+            repository="${REPOSITORY_PREFIX}/${service}"
+            tagged_ref="${repository}:${IMMUTABLE_TAG}"
+            metadata="$output/manifests/${service}.json"
+            docker buildx build \
+              --file docker/Dockerfile.base \
+              --platform linux/amd64 \
+              --target "$service" \
+              --tag "$tagged_ref" \
+              --build-arg "SOURCE_REVISION=$SOURCE_COMMIT" \
+              --build-arg "SOURCE_VERSION=$SOURCE_VERSION" \
+              --metadata-file "$metadata" \
+              --push \
+              .
+
+            digest="$(jq -r '."containerimage.digest"' "$metadata")"
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            digest_ref="${repository}@${digest}"
+            cosign sign --yes "$digest_ref"
+            cosign verify \
+              --certificate-identity-regexp "$CERTIFICATE_IDENTITY_REGEXP" \
+              --certificate-oidc-issuer "$CERTIFICATE_OIDC_ISSUER" \
+              --output json \
+              "$digest_ref" > "$output/signatures/${service}.json"
+            jq --arg service "$service" --arg reference "$digest_ref" \
+              '. + {($service): $reference}' "$image_map" > "$image_map.tmp"
+            mv "$image_map.tmp" "$image_map"
+          done
+
+          jq --sort-keys . "$image_map" > "$image_map.sorted"
+          mv "$image_map.sorted" "$image_map"
+          jq -n \
+            --arg source_commit "$SOURCE_COMMIT" \
+            --arg source_version "$SOURCE_VERSION" \
+            --arg immutable_tag "$IMMUTABLE_TAG" \
+            --arg workflow_run "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --slurpfile images "$image_map" \
+            '{
+              schema_version: 1,
+              source_commit: $source_commit,
+              source_version: $source_version,
+              immutable_tag: $immutable_tag,
+              workflow_run: $workflow_run,
+              images: $images[0],
+              signature: {
+                format: "sigstore-keyless",
+                oidc_issuer: "https://token.actions.githubusercontent.com"
+              }
+            }' > "$output/publication.json"
+          sha256sum "$image_map" "$output/publication.json" > "$output/SHA256SUMS"
+
+      - name: Upload commit-bound image map
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: architecture-service-images-${{ steps.source.outputs.commit }}
+          path: target/service-image-publication
+          if-no-files-found: error
+          retention-days: 90

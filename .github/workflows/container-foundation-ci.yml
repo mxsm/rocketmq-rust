@@ -11,6 +11,7 @@ on:
       - "scripts/service-image-contract.ps1"
       - "scripts/tests/test_m11_container_foundation.py"
       - ".github/workflows/container-foundation-ci.yml"
+      - ".github/workflows/service-image-publish.yml"
   push:
     branches:
       - main
@@ -21,6 +22,7 @@ on:
       - "scripts/service-image-contract.ps1"
       - "scripts/tests/test_m11_container_foundation.py"
       - ".github/workflows/container-foundation-ci.yml"
+      - ".github/workflows/service-image-publish.yml"
   workflow_dispatch:
 
 permissions:

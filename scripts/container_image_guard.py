@@ -88,6 +88,7 @@ def audit_foundation(
     signal_sources: dict[str, str] | None = None,
     dockerignore: str = "",
     smoke_configs: dict[str, str] | None = None,
+    publication_workflow: str = "",
 ) -> list[str]:
     findings: list[str] = []
     if policy.get("schema_version") != 1:
@@ -230,6 +231,14 @@ def audit_foundation(
         findings.append("service smoke config directory drifted")
     if policy.get("service_contract_script") != "scripts/service-image-contract.ps1":
         findings.append("service image contract script path drifted")
+    expected_publication = {
+        "workflow": ".github/workflows/service-image-publish.yml",
+        "artifact_prefix": "architecture-service-images",
+        "platform": "linux/amd64",
+        "automatic_release": True,
+    }
+    if policy.get("publication") != expected_publication:
+        findings.append("service image publication contract drifted")
     if policy.get("build", {}).get("service_builder_target") != "service-builder":
         findings.append("service builder target drifted")
     if policy.get("build", {}).get("service_runtime_target") != "service-runtime":
@@ -459,6 +468,37 @@ def audit_foundation(
         findings.append("service image CRITICAL vulnerability gate must not ignore unfixed findings")
     if "$_.FixedVersion" in service_script:
         findings.append("service vulnerability summary must tolerate a missing FixedVersion property")
+
+    publication_fragments = [
+        "workflow_dispatch:",
+        "release:",
+        "types: [published]",
+        "contents: read",
+        "packages: write",
+        "id-token: write",
+        "github.repository == 'mxsm/rocketmq-rust'",
+        "source_ref:",
+        "docker login ghcr.io",
+        "docker buildx build",
+        "--platform linux/amd64",
+        '--target "$service"',
+        '--tag "$tagged_ref"',
+        "--push",
+        "cosign sign --yes",
+        "cosign verify",
+        "containerimage.digest",
+        "image-map.json",
+        "publication.json",
+        "architecture-service-images-${{ steps.source.outputs.commit }}",
+    ]
+    for fragment in publication_fragments:
+        if fragment not in publication_workflow:
+            findings.append(f"service image publication workflow missing: {fragment}")
+    if "pull_request:" in publication_workflow:
+        findings.append("service image publication workflow must never run for pull requests")
+    for mutable_tag in (":latest", ":main", ":master"):
+        if mutable_tag in publication_workflow:
+            findings.append(f"service image publication workflow contains mutable tag: {mutable_tag}")
     return findings
 
 
@@ -477,6 +517,7 @@ def main() -> int:
         workflow = (ROOT / policy["workflow"]["path"]).read_text(encoding="utf-8")
         supply_script = (ROOT / "scripts" / "container-supply-chain.ps1").read_text(encoding="utf-8")
         service_script = (ROOT / policy["service_contract_script"]).read_text(encoding="utf-8")
+        publication_workflow = (ROOT / policy["publication"]["workflow"]).read_text(encoding="utf-8")
         signal_sources = {
             name: (ROOT / path).read_text(encoding="utf-8") for name, path in policy["signal_sources"].items()
         }
@@ -495,6 +536,7 @@ def main() -> int:
             signal_sources,
             dockerignore,
             smoke_configs,
+            publication_workflow,
         )
     except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
         print(f"CONTAINER_IMAGE_GUARD_FAILED {error}", file=sys.stderr)

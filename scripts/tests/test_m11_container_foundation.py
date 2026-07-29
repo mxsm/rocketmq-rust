@@ -50,6 +50,7 @@ class ContainerFoundationTests(unittest.TestCase):
         cls.workflow = (ROOT / cls.policy["workflow"]["path"]).read_text(encoding="utf-8")
         cls.supply_script = (ROOT / "scripts" / "container-supply-chain.ps1").read_text(encoding="utf-8")
         cls.service_script = (ROOT / cls.policy["service_contract_script"]).read_text(encoding="utf-8")
+        cls.publication_workflow = (ROOT / cls.policy["publication"]["workflow"]).read_text(encoding="utf-8")
         cls.dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
         cls.smoke_configs = {
             path.name: path.read_text(encoding="utf-8")
@@ -73,6 +74,7 @@ class ContainerFoundationTests(unittest.TestCase):
         dockerfiles=None,
         dockerignore=None,
         smoke_configs=None,
+        publication_workflow=None,
     ):
         return GUARD.audit_foundation(
             policy or self.policy,
@@ -84,6 +86,7 @@ class ContainerFoundationTests(unittest.TestCase):
             signal_sources if signal_sources is not None else self.signal_sources,
             dockerignore if dockerignore is not None else self.dockerignore,
             smoke_configs if smoke_configs is not None else self.smoke_configs,
+            publication_workflow if publication_workflow is not None else self.publication_workflow,
         )
 
     def test_repository_foundation_contract_passes(self) -> None:
@@ -128,6 +131,36 @@ class ContainerFoundationTests(unittest.TestCase):
         workflow = self.workflow.replace("if: always()", "if: success()", 1)
         findings = self.audit(workflow=workflow)
         self.assertTrue(any("if: always()" in finding for finding in findings))
+
+    def test_publication_requires_immutable_signed_digest_outputs(self) -> None:
+        pull_request_publish = self.publication_workflow.replace(
+            "  workflow_dispatch:",
+            "  pull_request:\n  workflow_dispatch:",
+            1,
+        )
+        self.assertTrue(
+            any(
+                "must never run for pull requests" in finding
+                for finding in self.audit(publication_workflow=pull_request_publish)
+            )
+        )
+
+        unsigned = self.publication_workflow.replace("cosign sign --yes", "cosign skipped", 1)
+        self.assertTrue(
+            any(
+                "cosign sign --yes" in finding
+                for finding in self.audit(publication_workflow=unsigned)
+            )
+        )
+
+        mutable = self.publication_workflow.replace(
+            'tagged_ref="${repository}:${IMMUTABLE_TAG}"',
+            'tagged_ref="${repository}:latest"',
+            1,
+        )
+        self.assertTrue(
+            any("mutable tag: :latest" in finding for finding in self.audit(publication_workflow=mutable))
+        )
 
     def test_unregistered_dockerfile_or_restored_legacy_exception_is_rejected(self) -> None:
         dockerfiles = set(self.dockerfiles)
