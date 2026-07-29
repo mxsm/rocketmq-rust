@@ -422,6 +422,131 @@ async fn postgres_fleet_scope_routing_compliance_and_inspection_are_bounded() {
     assert_eq!(retired.state, rocketmq_sre_contracts::ClusterRegistrationState::Retired);
 }
 
+#[tokio::test]
+#[ignore = "requires ROCKETMQ_SRE_TEST_DATABASE_URL pointing to Docker PostgreSQL"]
+async fn postgres_current_n_minus_one_and_incompatible_runtime_handshakes_fail_closed() {
+    let Some(database_url) = std::env::var("ROCKETMQ_SRE_TEST_DATABASE_URL").ok() else {
+        return;
+    };
+    let repository = PostgresRepository::connect(&database_url, 5)
+        .await
+        .expect("repository with Fleet migrations");
+    let fixture = seed_fixture(&repository).await;
+    let service = FleetService::new(repository);
+    let auth = operator_auth(fixture.tenant_id, [fixture.cluster_a, fixture.cluster_b]);
+
+    for (kind, capability, endpoint_prefix) in [
+        (RegionalEndpointKind::Connector, "evidence.query", "compat-connector"),
+        (
+            RegionalEndpointKind::ExecutionAgent,
+            "action.execute",
+            "compat-execution-agent",
+        ),
+        (RegionalEndpointKind::Mcp, "mcp.tools.list", "compat-mcp"),
+    ] {
+        let endpoint = regional_endpoint_with_kind(
+            &fixture,
+            endpoint_prefix,
+            fixture.region_a,
+            Some(fixture.cluster_a),
+            kind,
+            capability,
+            "2.0.0",
+            RegionalEndpointHealth::Healthy,
+        );
+        let request = RegionalRouteRequest {
+            cluster_id: fixture.cluster_a,
+            endpoint_kind: kind,
+            source_region_id: fixture.region_a,
+            residency: DataResidencyClass::RegionLocal,
+            current_protocol_version: "2.0.0".to_owned(),
+            previous_protocol_version: "1.0.0".to_owned(),
+            required_schema_digest: digest('c'),
+            required_capabilities: BTreeSet::from([capability.to_owned()]),
+        };
+        service
+            .register_endpoint(
+                &auth,
+                &RegisterRegionalEndpointRequest {
+                    endpoint: endpoint.clone(),
+                },
+            )
+            .await
+            .expect("current runtime endpoint");
+        assert_eq!(
+            service
+                .route(&auth, &request)
+                .await
+                .expect("current runtime route")
+                .mode,
+            RegionalRouteMode::Full,
+            "{kind:?} current protocol should remain fully available"
+        );
+
+        service
+            .register_endpoint(
+                &auth,
+                &RegisterRegionalEndpointRequest {
+                    endpoint: RegionalEndpoint {
+                        protocol_version: "1.0.0".to_owned(),
+                        ..endpoint.clone()
+                    },
+                },
+            )
+            .await
+            .expect("N-1 runtime endpoint");
+        let degraded = service.route(&auth, &request).await.expect("N-1 runtime route");
+        assert_eq!(
+            degraded.mode,
+            RegionalRouteMode::ReadOnlyDegraded,
+            "{kind:?} N-1 protocol must be read-only degraded"
+        );
+        assert_eq!(degraded.reason_codes, vec!["protocol_n_minus_one_read_only".to_owned()]);
+
+        service
+            .register_endpoint(
+                &auth,
+                &RegisterRegionalEndpointRequest {
+                    endpoint: RegionalEndpoint {
+                        protocol_version: "0.9.0".to_owned(),
+                        ..endpoint.clone()
+                    },
+                },
+            )
+            .await
+            .expect("incompatible runtime endpoint");
+        let rejected = service
+            .route(&auth, &request)
+            .await
+            .expect("incompatible runtime route");
+        assert_eq!(
+            rejected.mode,
+            RegionalRouteMode::Denied,
+            "{kind:?} incompatible protocol must fail closed"
+        );
+        assert_eq!(rejected.reason_codes, vec!["protocol_incompatible".to_owned()]);
+
+        service
+            .register_endpoint(
+                &auth,
+                &RegisterRegionalEndpointRequest {
+                    endpoint: RegionalEndpoint {
+                        capabilities: BTreeSet::new(),
+                        ..endpoint
+                    },
+                },
+            )
+            .await
+            .expect("capability-incompatible runtime endpoint");
+        let rejected = service
+            .route(&auth, &request)
+            .await
+            .expect("capability-incompatible runtime route");
+        assert_eq!(rejected.mode, RegionalRouteMode::Denied);
+        assert_eq!(rejected.reason_codes, vec!["capability_mismatch".to_owned()]);
+    }
+}
+
 #[derive(Clone, Copy)]
 struct FleetFixture {
     fleet_id: FleetId,
@@ -560,17 +685,43 @@ fn regional_endpoint(
     protocol_version: &str,
     health: RegionalEndpointHealth,
 ) -> RegionalEndpoint {
+    regional_endpoint_with_kind(
+        fixture,
+        id,
+        region_id,
+        cluster_id,
+        RegionalEndpointKind::Connector,
+        "evidence.query",
+        protocol_version,
+        health,
+    )
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "test fixture mirrors the regional handshake contract"
+)]
+fn regional_endpoint_with_kind(
+    fixture: &FleetFixture,
+    id: &str,
+    region_id: RegionId,
+    cluster_id: Option<ClusterId>,
+    kind: RegionalEndpointKind,
+    capability: &str,
+    protocol_version: &str,
+    health: RegionalEndpointHealth,
+) -> RegionalEndpoint {
     RegionalEndpoint {
         id: format!("{id}-{}", fixture.fleet_id),
         fleet_id: fixture.fleet_id,
         tenant_id: fixture.tenant_id,
         region_id,
         cluster_id,
-        kind: RegionalEndpointKind::Connector,
+        kind,
         component_version: "1.0.0".to_owned(),
         protocol_version: protocol_version.to_owned(),
         schema_digest: digest('c'),
-        capabilities: BTreeSet::from(["evidence.query".to_owned()]),
+        capabilities: BTreeSet::from([capability.to_owned()]),
         residency_tags: BTreeSet::from([region_id.to_string()]),
         capacity: 8,
         health,
