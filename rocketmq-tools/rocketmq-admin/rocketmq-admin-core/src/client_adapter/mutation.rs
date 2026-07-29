@@ -65,9 +65,7 @@ use crate::core::security::AdminCredentials;
 use crate::core::topic::DeleteTopicAdminRequest;
 use crate::core::topic::PatchTopicConfigOutcome;
 use crate::core::topic::PatchTopicConfigRequest;
-use crate::core::topic::QueryTopicConfigCasRequest;
 use crate::core::topic::ResetTopicConsumerOffsetRequest;
-use crate::core::topic::TopicConfigCasState;
 use crate::core::topic::TopicMutationAdmin;
 use crate::core::topic::TopicMutationOutcome;
 use crate::core::topic::TopicSendRequest;
@@ -186,31 +184,6 @@ impl MutationAdminSession {
 }
 
 impl TopicMutationAdmin for MutationAdminSession {
-    fn query_config_cas_state<'a>(
-        &'a mut self,
-        request: &'a QueryTopicConfigCasRequest,
-    ) -> AdminFuture<'a, TopicConfigCasState> {
-        Box::pin(async move {
-            self.inner.ensure_open()?;
-            let request = QueryTopicConfigCasRequest::try_new(&request.broker_addr, &request.topic)?;
-            let state = self
-                .inner
-                .inner
-                .topic_config_with_version(
-                    CheetahString::from(request.broker_addr),
-                    CheetahString::from(request.topic),
-                )
-                .await
-                .map_err(|error| backend_error("topic_config_with_version", error))?;
-            Ok(TopicConfigCasState {
-                version: state.version,
-                read_queue_nums: state.config.read_queue_nums,
-                write_queue_nums: state.config.write_queue_nums,
-                order: state.config.order,
-            })
-        })
-    }
-
     fn patch_config_if_version<'a>(
         &'a mut self,
         request: &'a PatchTopicConfigRequest,
