@@ -35,6 +35,9 @@ pub(super) const fn adapter_kind_name(kind: IntegrationAdapterKind) -> &'static 
         IntegrationAdapterKind::ChatOpsWebhook => "chatops_webhook",
         IntegrationAdapterKind::Pager => "pager",
         IntegrationAdapterKind::Email => "email",
+        IntegrationAdapterKind::MockCmdb => "mock_cmdb",
+        IntegrationAdapterKind::MockGitOps => "mock_gitops",
+        IntegrationAdapterKind::SignedReleaseWebhook => "signed_release_webhook",
     }
 }
 
@@ -45,6 +48,9 @@ pub(super) fn parse_adapter_kind(value: &str) -> Result<IntegrationAdapterKind, 
         "chatops_webhook" => Ok(IntegrationAdapterKind::ChatOpsWebhook),
         "pager" => Ok(IntegrationAdapterKind::Pager),
         "email" => Ok(IntegrationAdapterKind::Email),
+        "mock_cmdb" => Ok(IntegrationAdapterKind::MockCmdb),
+        "mock_gitops" => Ok(IntegrationAdapterKind::MockGitOps),
+        "signed_release_webhook" => Ok(IntegrationAdapterKind::SignedReleaseWebhook),
         _ => Err(invalid_persisted("integration adapter kind")),
     }
 }
