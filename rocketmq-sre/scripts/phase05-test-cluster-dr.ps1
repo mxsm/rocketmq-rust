@@ -271,14 +271,14 @@ try {
         replacement_pod_uid = $replacementUid
         broker_rebuild_seconds = $restartDurationSeconds
         pre_recovery_probe = [ordered]@{
-            sent = [int]$preProbe.sent_messages
-            received = [int]$preProbe.received_messages
-            acknowledged = [int]$preProbe.acknowledged_messages
+            sent = [int]$preProbe.content.value.sent_messages
+            received = [int]$preProbe.content.value.received_messages
+            acknowledged = [int]$preProbe.content.value.acknowledged_messages
         }
         post_recovery_probe = [ordered]@{
-            sent = [int]$postProbe.sent_messages
-            received = [int]$postProbe.received_messages
-            acknowledged = [int]$postProbe.acknowledged_messages
+            sent = [int]$postProbe.content.value.sent_messages
+            received = [int]$postProbe.content.value.received_messages
+            acknowledged = [int]$postProbe.content.value.acknowledged_messages
         }
         control_plane_ready_replicas = [int]$controlPlaneReady
         dr_center_record_verified = $true
