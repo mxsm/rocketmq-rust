@@ -5,7 +5,7 @@ waves:
     actions:
       - { id: subscription_group.patch_allowlisted.v1, priority: p0, driver_family: admin_core, handler_status: implemented, activation_status: test_cluster_verified, evidence: phase03-subscription-group-cas-smoke.ps1, representative: true }
       - { id: proxy.rollout_image_canary.v1, priority: p0, driver_family: kubernetes, handler_status: implemented, activation_status: test_cluster_verified, evidence: phase03-proxy-image-canary-smoke.ps1, representative: true }
-      - { id: security.credential_rotate_overlap.v1, priority: p0, driver_family: config, handler_status: typed_handler_complete, activation_status: awaiting_test_cluster, representative: true }
+      - { id: security.credential_rotate_overlap.v1, priority: p0, driver_family: config, handler_status: implemented, activation_status: test_cluster_verified, evidence: phase03-credential-rotation-smoke.ps1, representative: true }
       - { id: telemetry.collector.restart_one.v1, priority: p1, driver_family: kubernetes, handler_status: implemented, representative: false }
       - { id: broker.restart_one.v1, priority: p1, driver_family: kubernetes, handler_status: planned, representative: false }
       - { id: topic.queue.expand_only.v1, priority: p1, driver_family: admin_core, handler_status: planned, representative: false }
