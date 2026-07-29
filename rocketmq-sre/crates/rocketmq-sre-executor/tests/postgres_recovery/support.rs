@@ -138,6 +138,14 @@ pub(crate) async fn seed_proxy_restart_fixture(pool: &PgPool) -> Fixture {
     seed_fixture_for_action(pool, ExecutionAction::ProxyRestartOne).await
 }
 
+#[allow(
+    dead_code,
+    reason = "shared support is compiled into integration targets that do not exercise the Collector scenario"
+)]
+pub(crate) async fn seed_telemetry_collector_restart_fixture(pool: &PgPool) -> Fixture {
+    seed_fixture_for_action(pool, ExecutionAction::TelemetryCollectorRestartOne).await
+}
+
 async fn seed_fixture_for_action(pool: &PgPool, action: ExecutionAction) -> Fixture {
     sqlx::raw_sql(include_str!("../../../../deploy/dev/postgres/phase3-seed.sql"))
         .execute(pool)
@@ -273,7 +281,35 @@ fn action_plan(
                 timeout_seconds: 300,
             },
         ),
-        _ => panic!("the executor integration fixture supports only the three Wave 1 R1 scenarios under test"),
+        ExecutionAction::TelemetryCollectorRestartOne => (
+            "pod/observability/otel-collector-qualification".to_owned(),
+            json!({
+                "namespace": "observability",
+                "pod": "otel-collector-qualification",
+                "expected_uid": "00000000-0000-4000-8000-000000000002",
+                "pipeline": "combined"
+            }),
+            ImpactScope::SingleInstance,
+            VerificationSpec {
+                resource_conditions: vec![
+                    "replacement_uid_observed".to_owned(),
+                    "collector_ready".to_owned(),
+                    "exporter_connected".to_owned(),
+                ],
+                technical_slis: vec![
+                    "telemetry_export_success_ratio".to_owned(),
+                    "telemetry_queue_utilization".to_owned(),
+                ],
+                stable_window_seconds: 600,
+                max_wait_seconds: 900,
+            },
+            CompensationSpec {
+                mode: CompensationMode::ManualTakeover,
+                required_before_fields: vec!["expected_uid".to_owned(), "pipeline_health".to_owned()],
+                timeout_seconds: 300,
+            },
+        ),
+        _ => panic!("the executor integration fixture supports only the qualified R1 scenarios under test"),
     };
     let draft = ActionPlanDraft {
         id: rocketmq_sre_contracts::ActionPlanId::new(),
