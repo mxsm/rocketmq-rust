@@ -90,10 +90,11 @@ $deployment = Invoke-Native kubectl @(
     '-o', 'json'
 ) 'Proxy Deployment lookup'
 $deployment = $deployment | ConvertFrom-Json
-$containerSpec = $deployment.spec.template.spec.containers | Where-Object { $_.name -eq $Container }
-if ($null -eq $containerSpec -or $containerSpec.Count -ne 1) {
+$containerSpecs = @($deployment.spec.template.spec.containers | Where-Object { $_.name -eq $Container })
+if ($containerSpecs.Count -ne 1) {
     throw 'The exact Proxy container was not found.'
 }
+$containerSpec = $containerSpecs[0]
 if ($deployment.status.readyReplicas -ne $deployment.spec.replicas -or $deployment.status.observedGeneration -ne $deployment.metadata.generation) {
     throw 'The original Proxy Deployment is not fully ready.'
 }
