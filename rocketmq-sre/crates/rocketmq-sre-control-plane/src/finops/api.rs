@@ -50,9 +50,7 @@ pub(crate) fn routes() -> Router<AppState> {
         )
         .route(
             "/v1/finops/budgets",
-            post(create_budget)
-                .get(budgets)
-                .layer(DefaultBodyLimit::max(64 * 1024)),
+            post(create_budget).get(budgets).layer(DefaultBodyLimit::max(64 * 1024)),
         )
         .route(
             "/v1/finops/budgets/evaluate",
