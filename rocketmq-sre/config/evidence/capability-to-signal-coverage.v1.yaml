@@ -2,13 +2,13 @@ schema_version: rocketmq.sre.capability-signal-coverage.v1
 semantic_registry_owners:
   - owner: broker
     component_surface: Broker
-    exposure: implemented_local
-    backlog: expose bounded broker lifecycle and health evidence through the read-only MCP surface
+    exposure: queryable
+    backlog: production-verify broker Required Signals freshness and exporter recovery alerts
     notable_sources:
       - name: broker_metrics
         source_path: rocketmq-observability/src/metrics/broker.rs
         source_symbol: BrokerMetrics
-        exposure: metrics_observable_local
+        exposure: queryable
   - owner: client
     component_surface: Client
     exposure: implemented_local
@@ -38,13 +38,13 @@ semantic_registry_owners:
         exposure: queryable
   - owner: name-server
     component_surface: NameServer
-    exposure: implemented_local
-    backlog: expose bounded route diagnostics through an authenticated read-only resource
+    exposure: queryable
+    backlog: production-verify route diagnostics freshness and exporter recovery alerts
     notable_sources:
       - name: nameserver_metrics
         source_path: rocketmq-observability/src/metrics/namesrv.rs
         source_symbol: NameServerMetrics
-        exposure: metrics_observable_local
+        exposure: queryable
   - owner: observability
     component_surface: Observability
     exposure: mcp_system_resource_only
@@ -74,9 +74,13 @@ semantic_registry_owners:
         exposure: in_process_only
   - owner: remoting
     component_surface: Admission/Remoting
-    exposure: in_process_only
-    backlog: publish aggregate admission pressure without client addresses or request payloads
+    exposure: queryable
+    backlog: add protected aggregate admission-pressure evidence without client addresses or request payloads
     notable_sources:
+      - name: remoting_metrics
+        source_path: rocketmq-observability/src/metrics/remoting.rs
+        source_symbol: RemotingMetrics
+        exposure: queryable
       - name: AdmissionSnapshot
         source_path: rocketmq-transport/src/admission.rs
         source_symbol: AdmissionSnapshot
@@ -119,9 +123,13 @@ semantic_registry_owners:
         exposure: in_process_only
   - owner: store
     component_surface: Store
-    exposure: in_process_only
+    exposure: queryable
     backlog: add read-only evidence adapters for store health and background index rebuild progress
     notable_sources:
+      - name: store_metrics
+        source_path: rocketmq-observability/src/metrics/store.rs
+        source_symbol: StoreMetrics
+        exposure: queryable
       - name: StoreHealthSnapshot
         source_path: rocketmq-store/src/capability.rs
         source_symbol: StoreHealthSnapshot
