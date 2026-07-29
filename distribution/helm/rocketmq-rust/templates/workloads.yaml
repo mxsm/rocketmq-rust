@@ -402,6 +402,9 @@ spec:
           volumeMounts:
             - {name: config, mountPath: /etc/rocketmq/proxy.toml, subPath: proxy.toml, readOnly: true}
             - {name: data, mountPath: /var/lib/rocketmq/proxy}
+{{- if .Values.services.proxy.innerCredentials.enabled }}
+            - {name: proxy-inner-credentials, mountPath: /var/lib/rocketmq/proxy/conf, readOnly: true}
+{{- end }}
             - {name: runtime-secrets, mountPath: /var/run/secrets/rocketmq, readOnly: true}
             - {name: tmp, mountPath: /tmp/rocketmq}
       volumes:
@@ -411,6 +414,16 @@ spec:
         - name: data
           emptyDir:
             sizeLimit: 2Gi
+{{- if .Values.services.proxy.innerCredentials.enabled }}
+        - name: proxy-inner-credentials
+          secret:
+            secretName: {{ required "services.proxy.innerCredentials.secretName is required when inner credentials are enabled" .Values.services.proxy.innerCredentials.secretName | quote }}
+            optional: false
+            defaultMode: 0440
+            items:
+              - key: {{ required "services.proxy.innerCredentials.secretKey is required when inner credentials are enabled" .Values.services.proxy.innerCredentials.secretKey | quote }}
+                path: tools.yml
+{{- end }}
         - name: runtime-secrets
 {{- include "rocketmq.secretVolume" . | nindent 10 }}
         - name: tmp
