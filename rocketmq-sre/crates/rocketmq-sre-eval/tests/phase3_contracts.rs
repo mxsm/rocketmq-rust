@@ -57,8 +57,11 @@ fn phase_three_descriptor_catalog_is_typed_and_fail_closed() {
                 ExecutionAction::ObservabilityLoggerLevelTtl
                     | ExecutionAction::ProxyScaleOutOne
                     | ExecutionAction::ProxyRestartOne
+                    | ExecutionAction::ProxyRolloutImageCanary
                     | ExecutionAction::BrokerConfigPatchAllowlisted
                     | ExecutionAction::TopicConfigPatchAllowlisted
+                    | ExecutionAction::SubscriptionGroupPatchAllowlisted
+                    | ExecutionAction::SecurityCredentialRotateOverlap
                     | ExecutionAction::TelemetryCollectorRestartOne
             )
         );
