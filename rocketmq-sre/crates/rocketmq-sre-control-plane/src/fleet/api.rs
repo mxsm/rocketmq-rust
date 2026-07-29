@@ -119,6 +119,7 @@ pub(crate) fn routes() -> Router<AppState> {
             "/v1/fleet/inspections/{id}/progress",
             post(update_inspection).layer(DefaultBodyLimit::max(16 * 1024)),
         )
+        .merge(super::releases::routes())
 }
 
 async fn assess_onboarding(
