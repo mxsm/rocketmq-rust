@@ -512,6 +512,18 @@ impl BrokerFastFailure {
             .unwrap_or_default()
     }
 
+    pub(crate) fn pending_count_snapshot(&self) -> Vec<(String, i64)> {
+        ALL_QUEUE_KINDS
+            .into_iter()
+            .map(|kind| {
+                (
+                    kind.name().to_owned(),
+                    i64::try_from(self.inner.queues.get(kind).pending_count()).unwrap_or(i64::MAX),
+                )
+            })
+            .collect()
+    }
+
     pub(crate) fn enqueue(
         &self,
         kind: FastFailureQueueKind,
@@ -718,6 +730,30 @@ mod tests {
         fast_failure.complete(FastFailureQueueKind::Pull, &task, Some(response));
         let response = response_rx.await.expect("worker response").expect("response command");
         assert_eq!(response.opaque(), 9);
+    }
+
+    #[tokio::test]
+    async fn pending_count_snapshot_is_bounded_and_stable() {
+        let fast_failure = BrokerFastFailure::new(config_with_fast_failure_waits(1_000));
+        let (send_task, _send_rx) = fast_failure.enqueue(FastFailureQueueKind::Send, 10);
+        let (_pull_task, _pull_rx) = fast_failure.enqueue(FastFailureQueueKind::Pull, 11);
+
+        assert_eq!(
+            fast_failure.pending_count_snapshot(),
+            vec![
+                ("send".to_owned(), 1),
+                ("pull".to_owned(), 1),
+                ("litePull".to_owned(), 0),
+                ("heartbeat".to_owned(), 0),
+                ("transaction".to_owned(), 0),
+                ("ack".to_owned(), 0),
+                ("adminBroker".to_owned(), 0),
+            ]
+        );
+
+        assert!(fast_failure.try_mark_running(FastFailureQueueKind::Send, &send_task));
+        assert_eq!(fast_failure.pending_count_snapshot()[0], ("send".to_owned(), 0));
+        fast_failure.complete(FastFailureQueueKind::Send, &send_task, None);
     }
 
     #[tokio::test]
