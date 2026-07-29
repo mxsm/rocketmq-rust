@@ -4845,6 +4845,56 @@
       }
     },
     {
+      "id": "RocketMQ PROXY FORWARD",
+      "source_symbol": "PROXY_FORWARD",
+      "signal_type": "span",
+      "owner": "proxy",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "rpc",
+        "result"
+      ],
+      "cardinality_budget": 1000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "ratio",
+        "default_ratio": 0.01,
+        "max_events_per_operation": 0
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "RocketMQ PROXY AUTH",
+      "source_symbol": "PROXY_AUTH",
+      "signal_type": "span",
+      "owner": "proxy",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "rpc",
+        "result"
+      ],
+      "cardinality_budget": 1000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "ratio",
+        "default_ratio": 0.01,
+        "max_events_per_operation": 0
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
       "id": "rocketmq.auth.decision",
       "source_symbol": "AUTH_DECISION",
       "signal_type": "log",
