@@ -423,4 +423,30 @@ mod tests {
 
         assert_eq!(pq.msg_count(), 0, "count must not underflow");
     }
+
+    #[tokio::test]
+    async fn test_partial_remove_offset_is_lowest_retained() {
+        let pq = ProcessQueue::new();
+        let offsets: Vec<i64> = (0..16).collect();
+        put_msgs(&pq, &offsets, 4).await;
+
+        let to_remove: Vec<ArcMut<MessageExt>> = (0..5).map(|o| make_msg(o, 4)).collect();
+        let offset = pq.remove_message(&to_remove).await;
+
+        assert_eq!(offset, 5, "next offset should be the lowest retained key");
+        assert_eq!(pq.msg_count(), 11);
+    }
+
+    #[tokio::test]
+    async fn test_full_remove_returns_max_plus_one() {
+        let pq = ProcessQueue::new();
+        put_msgs(&pq, &[0, 1, 2], 4).await;
+
+        let to_remove: Vec<ArcMut<MessageExt>> = (0..3).map(|o| make_msg(o, 4)).collect();
+        let offset = pq.remove_message(&to_remove).await;
+
+        assert_eq!(offset, 3, "when empty, offset should be queue_offset_max + 1");
+        assert_eq!(pq.msg_count(), 0);
+        assert_eq!(pq.msg_size(), 0);
+    }
 }
