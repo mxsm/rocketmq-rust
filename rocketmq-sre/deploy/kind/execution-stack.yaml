@@ -68,6 +68,7 @@ spec:
             - {name: ROCKETMQ_SRE_EXECUTION_AGENT_URL, value: "http://sre-execution-agent:8095"}
             - {name: ROCKETMQ_SRE_EXECUTOR_SUBJECT, value: "rocketmq-sre-executor"}
             - {name: ROCKETMQ_SRE_EXECUTOR_VERIFICATION_POLL_SECONDS, value: "5"}
+            - {name: ROCKETMQ_SRE_EXECUTOR_REQUEST_TIMEOUT_SECONDS, value: "180"}
             - {name: ROCKETMQ_SRE_EXECUTOR_DEV_INSECURE_HTTP, value: "true"}
             - name: ROCKETMQ_SRE_EXECUTOR_AUTHORITY_TOKEN
               valueFrom:
@@ -156,6 +157,7 @@ spec:
             - {name: ROCKETMQ_SRE_AGENT_BIND_ADDR, value: "0.0.0.0:8095"}
             - {name: ROCKETMQ_SRE_LEASE_AUTHORITY_URL, value: "http://sre-control-plane:8090"}
             - {name: ROCKETMQ_SRE_AGENT_SUBJECT, value: "rocketmq-sre-execution-agent"}
+            - {name: ROCKETMQ_SRE_AGENT_DRIVER_TIMEOUT_SECONDS, value: "150"}
             - {name: ROCKETMQ_SRE_AGENT_DEV_INSECURE_HTTP, value: "true"}
             - {name: ROCKETMQ_SRE_AGENT_ENABLE_BROKER_CONFIG, value: "true"}
             - {name: ROCKETMQ_SRE_AGENT_ENABLE_PROXY_SCALE_OUT, value: "true"}
