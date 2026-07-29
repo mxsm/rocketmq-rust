@@ -22,6 +22,8 @@ use std::sync::Arc;
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::BrokerConfigPatchOutcome as ClientBrokerConfigPatchOutcome;
 use rocketmq_client_rust::MQAdminMutationExt;
+use rocketmq_client_rust::TopicConfigPatch as ClientTopicConfigPatch;
+use rocketmq_client_rust::TopicConfigPatchOutcome as ClientTopicConfigPatchOutcome;
 use rocketmq_error::RocketMQError;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::topic::TopicConfig;
@@ -61,7 +63,11 @@ use crate::core::proxy::ProxyDrainState;
 use crate::core::proxy::ProxyMutationAdmin;
 use crate::core::security::AdminCredentials;
 use crate::core::topic::DeleteTopicAdminRequest;
+use crate::core::topic::PatchTopicConfigOutcome;
+use crate::core::topic::PatchTopicConfigRequest;
+use crate::core::topic::QueryTopicConfigCasRequest;
 use crate::core::topic::ResetTopicConsumerOffsetRequest;
+use crate::core::topic::TopicConfigCasState;
 use crate::core::topic::TopicMutationAdmin;
 use crate::core::topic::TopicMutationOutcome;
 use crate::core::topic::TopicSendRequest;
@@ -180,6 +186,77 @@ impl MutationAdminSession {
 }
 
 impl TopicMutationAdmin for MutationAdminSession {
+    fn query_config_cas_state<'a>(
+        &'a mut self,
+        request: &'a QueryTopicConfigCasRequest,
+    ) -> AdminFuture<'a, TopicConfigCasState> {
+        Box::pin(async move {
+            self.inner.ensure_open()?;
+            let request = QueryTopicConfigCasRequest::try_new(&request.broker_addr, &request.topic)?;
+            let state = self
+                .inner
+                .inner
+                .topic_config_with_version(
+                    CheetahString::from(request.broker_addr),
+                    CheetahString::from(request.topic),
+                )
+                .await
+                .map_err(|error| backend_error("topic_config_with_version", error))?;
+            Ok(TopicConfigCasState {
+                version: state.version,
+                read_queue_nums: state.config.read_queue_nums,
+                write_queue_nums: state.config.write_queue_nums,
+                order: state.config.order,
+            })
+        })
+    }
+
+    fn patch_config_if_version<'a>(
+        &'a mut self,
+        request: &'a PatchTopicConfigRequest,
+    ) -> AdminFuture<'a, PatchTopicConfigOutcome> {
+        Box::pin(async move {
+            self.inner.ensure_open()?;
+            let request = PatchTopicConfigRequest::try_new(
+                &request.broker_addr,
+                &request.topic,
+                request.expected_version,
+                request.patch,
+            )?;
+            let outcome = self
+                .inner
+                .inner
+                .patch_topic_config_if_version(
+                    CheetahString::from(request.broker_addr),
+                    CheetahString::from(request.topic),
+                    request.expected_version,
+                    ClientTopicConfigPatch {
+                        read_queue_nums: request.patch.read_queue_nums,
+                        write_queue_nums: request.patch.write_queue_nums,
+                        order: request.patch.order,
+                    },
+                )
+                .await
+                .map_err(|error| backend_error("patch_topic_config_if_version", error))?;
+            Ok(match outcome {
+                ClientTopicConfigPatchOutcome::Applied {
+                    previous_version,
+                    version,
+                } => PatchTopicConfigOutcome::Applied {
+                    previous_version,
+                    version,
+                },
+                ClientTopicConfigPatchOutcome::VersionConflict {
+                    expected_version,
+                    actual_version,
+                } => PatchTopicConfigOutcome::VersionConflict {
+                    expected_version,
+                    actual_version,
+                },
+            })
+        })
+    }
+
     fn upsert_topic<'a>(&'a mut self, request: &'a UpsertTopicRequest) -> AdminFuture<'a, TopicMutationOutcome> {
         Box::pin(async move {
             self.inner.ensure_open()?;
@@ -1066,5 +1143,22 @@ mod tests {
         }
 
         assert_mutation_contracts::<MutationAdminSession>();
+    }
+
+    #[test]
+    fn topic_cas_patch_mapping_is_closed() {
+        let patch = crate::core::topic::TopicConfigCasPatch {
+            read_queue_nums: Some(4),
+            write_queue_nums: Some(6),
+            order: Some(true),
+        };
+        let client = ClientTopicConfigPatch {
+            read_queue_nums: patch.read_queue_nums,
+            write_queue_nums: patch.write_queue_nums,
+            order: patch.order,
+        };
+        assert_eq!(client.read_queue_nums, Some(4));
+        assert_eq!(client.write_queue_nums, Some(6));
+        assert_eq!(client.order, Some(true));
     }
 }
