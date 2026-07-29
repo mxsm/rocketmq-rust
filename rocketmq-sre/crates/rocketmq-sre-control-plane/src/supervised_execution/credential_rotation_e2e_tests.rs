@@ -206,19 +206,28 @@ async fn real_kind_supervised_credential_overlap_passes_critic_and_verification(
         )
         .await
         .expect("independent human approval");
-    let submitted = service
-        .submit_execution(
-            &operator,
-            &SubmitExecutionRequest {
-                plan_id: reviewed.plan.id,
-                plan_hash: reviewed.plan.plan_hash,
-                precondition_hash,
-                idempotency_key: format!("phase3-credential-overlap-{}", Uuid::new_v4()),
-            },
-            CorrelationId::new(),
-        )
-        .await
-        .expect("execute supervised credential overlap");
+    let execution_request = SubmitExecutionRequest {
+        plan_id: reviewed.plan.id,
+        plan_hash: reviewed.plan.plan_hash,
+        precondition_hash,
+        idempotency_key: format!("phase3-credential-overlap-{}", Uuid::new_v4()),
+    };
+    let submission = service.submit_execution(&operator, &execution_request, CorrelationId::new());
+    tokio::pin!(submission);
+    let submitted = loop {
+        tokio::select! {
+            result = &mut submission => {
+                break result.expect("execute supervised credential overlap");
+            }
+            () = tokio::time::sleep(StdDuration::from_secs(60)) => {
+                // Production Prometheus collection refreshes the 180-second
+                // SLO surface while the descriptor proves a 300-second stable
+                // window. Keep the Kind fixture equally live instead of
+                // weakening either production bound.
+                seed_complete_slo_evidence(&repository, &fixture).await;
+            }
+        }
+    };
     assert_eq!(submitted.state, ExecutionState::Succeeded);
 
     let applied = fetch_agent_state(
