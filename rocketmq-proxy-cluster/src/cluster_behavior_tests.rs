@@ -582,12 +582,29 @@ where
     F: FnOnce(ClusterTaskExecutor, CancellationToken) -> Fut,
     Fut: Future<Output = T>,
 {
-    let (sender, receiver) = mpsc::channel(CLUSTER_COMMAND_CAPACITY);
-    let executor = ClusterTaskExecutor { sender };
-    let cancellation = CancellationToken::new();
-    let scenario = scenario(executor, cancellation.clone());
-    let worker = run_cluster_worker_with_state(config, state, receiver, cancellation, None);
-    let ((), result) = tokio::join!(worker, scenario);
+    run_scripted_worker_with_policy(config, state, ClusterExecutionPolicy::default(), scenario).await
+}
+
+async fn run_scripted_worker_with_policy<T, F, Fut>(
+    config: ClusterConfig,
+    state: ClusterWorkerState,
+    policy: ClusterExecutionPolicy,
+    scenario: F,
+) -> T
+where
+    F: FnOnce(ClusterTaskExecutor, CancellationToken) -> Fut,
+    Fut: Future<Output = T>,
+{
+    let service = test_service_context("proxy-cluster-scripted");
+    let executor_result = ClusterTaskExecutor::new_with_test_state(config, state, &service, policy);
+    assert!(executor_result.is_ok(), "scripted cluster execution starts");
+    let Some((executor, cancellation)) = executor_result.ok() else {
+        std::process::abort();
+    };
+    let result = scenario(executor, cancellation.clone()).await;
+    cancellation.cancel();
+    let report = service.task_group().shutdown(Duration::from_secs(1)).await;
+    assert!(report.is_healthy(), "{}", report.to_json());
     result
 }
 
@@ -615,6 +632,140 @@ fn target() -> MessageQueueTarget {
         broker_name: Some("broker-a".to_owned()),
         broker_addr: Some("127.0.0.1:10911".to_owned()),
     }
+}
+
+#[tokio::test]
+async fn unrelated_route_progresses_while_pull_is_blocked() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let (client, pull_entered) = ScriptedClientIo::blocking_pull(events.clone());
+    client.push_pull(PullOutcome::new(
+        PullStatus::NoNewMsg,
+        7,
+        1,
+        11,
+        None::<Vec<MessageExt>>,
+    ));
+    client.push_route(TopicRouteData::default());
+    let client = Arc::new(client);
+    let factory = Arc::new(ScriptedProducerFactory {
+        events,
+        send_results: Arc::new(Mutex::new(VecDeque::new())),
+        start_control: None,
+    });
+
+    run_test_worker(client.clone(), factory, |executor, cancellation| async move {
+        let pull = executor.pull_message(
+            PullMessageRequest {
+                group: ResourceIdentity::new("", "BlockedGroup"),
+                target: target(),
+                offset: 5,
+                batch_size: 16,
+                filter_expression: filter_expression(),
+                long_polling_timeout: Duration::from_secs(1),
+            },
+            Some(Duration::from_secs(2)),
+        );
+        let probe = async {
+            let pull_started = pull_entered.await;
+            assert!(pull_started.is_ok(), "pull operation was entered");
+            let route = executor.query_route(ResourceIdentity::new("", "IndependentTopic"));
+            let observe = async {
+                let progress = tokio::time::timeout(Duration::from_millis(250), async {
+                    while client.route_calls.load(Ordering::Acquire) == 0 {
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await;
+                if let Some(block) = &client.pull_block {
+                    block.notify_one();
+                }
+                progress
+            };
+            let (route_result, progress) = tokio::join!(route, observe);
+            assert!(route_result.is_ok(), "unrelated route query");
+            progress
+        };
+        let (pull_result, route_progress) = tokio::join!(pull, probe);
+        assert!(pull_result.is_ok(), "blocked pull result");
+        cancellation.cancel();
+        assert!(
+            route_progress.is_ok(),
+            "an unrelated route query must not wait behind a blocked pull"
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn active_command_holds_its_global_admission_permit() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let (client, pull_entered) = ScriptedClientIo::blocking_pull(events.clone());
+    client.push_pull(PullOutcome::new(
+        PullStatus::NoNewMsg,
+        7,
+        1,
+        11,
+        None::<Vec<MessageExt>>,
+    ));
+    let client = Arc::new(client);
+    let factory = Arc::new(ScriptedProducerFactory {
+        events,
+        send_results: Arc::new(Mutex::new(VecDeque::new())),
+        start_control: None,
+    });
+    let state = ClusterWorkerState::with_test_runtime(client.clone(), factory);
+    let policy = ClusterExecutionPolicy {
+        capacity_count: 1,
+        capacity_bytes: 4 * 1024,
+        default_queue_deadline: Duration::from_secs(1),
+    };
+
+    run_scripted_worker_with_policy(
+        ClusterConfig::default(),
+        state,
+        policy,
+        |executor, cancellation| async move {
+            let pull = executor.pull_message(
+                PullMessageRequest {
+                    group: ResourceIdentity::new("", "BlockedGroup"),
+                    target: target(),
+                    offset: 5,
+                    batch_size: 16,
+                    filter_expression: filter_expression(),
+                    long_polling_timeout: Duration::from_secs(1),
+                },
+                Some(Duration::from_secs(2)),
+            );
+            let probe = async {
+                let pull_started = pull_entered.await;
+                assert!(pull_started.is_ok(), "pull operation was entered");
+                let route_result = executor
+                    .query_route(ResourceIdentity::new("", "IndependentTopic"))
+                    .await;
+                assert!(
+                    route_result.is_err(),
+                    "the one-command global budget remains reserved while pull is active"
+                );
+                let Some(error) = route_result.err() else {
+                    std::process::abort();
+                };
+                if let Some(block) = &client.pull_block {
+                    block.notify_one();
+                }
+                error
+            };
+            let (pull_result, admission_error) = tokio::join!(pull, probe);
+            assert!(pull_result.is_ok(), "blocked pull result");
+            cancellation.cancel();
+            assert!(matches!(
+                admission_error,
+                ProxyError::TooManyRequests {
+                    resource: "proxy-cluster-command-queue"
+                }
+            ));
+        },
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -826,20 +977,18 @@ async fn worker_passes_the_outbound_signer_hook_to_the_client_transport_factory(
         client_factory,
         producer_factory,
     );
+    let topic = ResourceIdentity::new("", "TopicA");
+    let expected_domain_id = cluster_lane_domain_id(domain_id, cluster_lane(0, &topic));
 
     run_scripted_worker(ClusterConfig::default(), state, |executor, cancellation| async move {
-        executor
-            .query_route(ResourceIdentity::new("", "TopicA"))
-            .await
-            .expect("signed Client route command");
+        let route_result = executor.query_route(topic).await;
+        assert!(route_result.is_ok(), "signed Client route command");
         cancellation.cancel();
     })
     .await;
 
-    assert_eq!(
-        *observed.lock().expect("Client factory observation lock poisoned"),
-        Some((domain_id, true))
-    );
+    let observed = observed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    assert_eq!(*observed, Some((expected_domain_id, true)));
 }
 
 #[tokio::test]
