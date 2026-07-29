@@ -107,8 +107,22 @@ async fn real_kind_supervised_proxy_restart_reaches_verified_success() {
     let repository = PostgresRepository::connect(&database_url, 5)
         .await
         .expect("Kind PostgreSQL repository");
-    let fixture = seed_execution_fixture(&repository, tenant_id, cluster_id, &target, &agent_state).await;
+    let mut fixture = seed_execution_fixture(&repository, tenant_id, cluster_id, &target, &agent_state).await;
     seed_complete_slo_evidence(&repository, &fixture).await;
+    let agent_state = fetch_agent_state(
+        &agent_url,
+        &workload_token,
+        tenant_id,
+        cluster_id,
+        &target,
+        parameters.clone(),
+    )
+    .await;
+    assert!(
+        agent_state.ready,
+        "live Proxy restart precheck must remain ready after SLI refresh"
+    );
+    fixture.agent_evidence_id = persist_agent_evidence(&repository, &fixture, &target, &agent_state).await;
 
     let workflow = WorkflowService::new(repository.clone(), WorkflowEventBus::new(64));
     let model_gateway = ModelGatewayService::disabled(repository.clone());
@@ -227,6 +241,7 @@ struct ExecutionFixture {
     cluster_id: ClusterId,
     incident_id: IncidentId,
     diagnosis_id: DiagnosisRevisionId,
+    model_invocation_id: Uuid,
     agent_evidence_id: EvidenceId,
 }
 
@@ -253,7 +268,30 @@ async fn seed_execution_fixture(
         target,
     )
     .await;
-    let auth = auth(tenant_id, cluster_id, "phase3-kind-fixture", &["operator"]);
+    let mut fixture = ExecutionFixture {
+        tenant_id,
+        cluster_id,
+        incident_id,
+        diagnosis_id,
+        model_invocation_id,
+        agent_evidence_id: EvidenceId::new(),
+    };
+    fixture.agent_evidence_id = persist_agent_evidence(repository, &fixture, target, agent_state).await;
+    fixture
+}
+
+async fn persist_agent_evidence(
+    repository: &PostgresRepository,
+    fixture: &ExecutionFixture,
+    target: &str,
+    agent_state: &AgentReadResult,
+) -> EvidenceId {
+    let auth = auth(
+        fixture.tenant_id,
+        fixture.cluster_id,
+        "phase3-kind-fixture",
+        &["operator"],
+    );
     let observed_at = agent_state
         .observed_at
         .with_nanosecond(0)
@@ -262,8 +300,8 @@ async fn seed_execution_fixture(
         EvidenceQuery {
             query_id: QueryId::new(),
             correlation_id: CorrelationId::new(),
-            tenant_id,
-            cluster_id,
+            tenant_id: fixture.tenant_id,
+            cluster_id: fixture.cluster_id,
             source: "execution-agent".to_owned(),
             resource: target.to_owned(),
             time_range: TimeRange::new(observed_at, observed_at).expect("Agent Evidence time range"),
@@ -279,7 +317,7 @@ async fn seed_execution_fixture(
     evidence.exposure = EvidenceExposure::Synthetic;
     let content_hash = evidence.content_hash.clone();
     let evidence = repository
-        .persist_evidence(&auth, &evidence, None, Some(incident_id), &content_hash)
+        .persist_evidence(&auth, &evidence, None, Some(fixture.incident_id), &content_hash)
         .await
         .expect("persist Agent Evidence");
     sqlx::query(
@@ -289,19 +327,13 @@ async fn seed_execution_fixture(
              execution_eligible = TRUE
          WHERE id = $1",
     )
-    .bind(diagnosis_id.as_uuid())
+    .bind(fixture.diagnosis_id.as_uuid())
     .bind(evidence.evidence_id.as_uuid())
-    .bind(model_invocation_id)
+    .bind(fixture.model_invocation_id)
     .execute(&repository.pool)
     .await
     .expect("mark diagnosis execution eligible");
-    ExecutionFixture {
-        tenant_id,
-        cluster_id,
-        incident_id,
-        diagnosis_id,
-        agent_evidence_id: evidence.evidence_id,
-    }
+    evidence.evidence_id
 }
 
 #[allow(
