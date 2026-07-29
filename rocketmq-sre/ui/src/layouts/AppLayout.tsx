@@ -52,6 +52,11 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  type OperatorLocale,
+  type OperatorTimeZone,
+  useOperatorPreferences,
+} from "@/preferences/OperatorPreferences";
 
 const groups = [
   {
@@ -124,12 +129,48 @@ const groups = [
   },
 ];
 
+const englishLabels: Record<string, string> = {
+  Fleet: "Fleet",
+  态势: "Situation",
+  诊断: "Diagnosis",
+  变更: "Change",
+  证据: "Evidence",
+  平台: "Platform",
+  "Fleet 态势": "Fleet Overview",
+  资产与合规: "Asset & Compliance",
+  灾备中心: "DR Center",
+  总览: "Overview",
+  集群接入: "Cluster Onboarding",
+  资产视图: "Assets",
+  拓扑关系: "Topology",
+  "Ask SRE": "Ask SRE",
+  事件诊断: "Incidents",
+  巡检建议: "Inspections",
+  容量预测: "Forecasts",
+  值班运营: "Operations",
+  复盘改进: "Action Items",
+  变更中心: "Change Center",
+  发布护航: "Release Escort",
+  企业集成: "Integrations",
+  证据浏览器: "Evidence Explorer",
+  消息旅程: "Message Journey",
+  诊断覆盖: "Coverage",
+  知识库: "Knowledge",
+  模型能力: "Models",
+  治理中心: "Governance",
+  模型与成本: "Model & Cost",
+  自治运营: "Autonomy",
+  系统状态: "System",
+};
+
 export function AppLayout() {
   const auth = useAuth();
   const { clusters, loading } = useSreData();
+  const preferences = useOperatorPreferences();
   const location = useLocation();
   const navigate = useNavigate();
   const [now, setNow] = useState(() => new Date());
+  const isEnglish = preferences.locale === "en-US";
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 30_000);
@@ -189,7 +230,11 @@ export function AppLayout() {
           <nav aria-label="主导航" className="sidebar-navigation">
             {groups.map((group) => (
               <section className="nav-group" key={group.label}>
-                <h2>{group.label}</h2>
+                <h2>
+                  {isEnglish
+                    ? (englishLabels[group.label] ?? group.label)
+                    : group.label}
+                </h2>
                 {group.items.map(({ to, label, icon: Icon, end }) => (
                   <NavLink
                     className={({ isActive }) =>
@@ -200,7 +245,9 @@ export function AppLayout() {
                     to={to}
                   >
                     <Icon aria-hidden="true" size={17} />
-                    <span>{label}</span>
+                    <span>
+                      {isEnglish ? (englishLabels[label] ?? label) : label}
+                    </span>
                   </NavLink>
                 ))}
               </section>
@@ -211,8 +258,16 @@ export function AppLayout() {
           <div className="boundary-note">
             <ShieldCheck aria-hidden="true" size={16} />
             <div>
-              <strong>分层变更安全边界</strong>
-              <span>诊断默认只读；变更仅限审批、围栏和类型化 Agent。</span>
+              <strong>
+                {isEnglish
+                  ? "Layered change boundary"
+                  : "分层变更安全边界"}
+              </strong>
+              <span>
+                {isEnglish
+                  ? "Diagnosis is read-only; changes require approval, fencing and a typed Agent."
+                  : "诊断默认只读；变更仅限审批、围栏和类型化 Agent。"}
+              </span>
             </div>
           </div>
           <div className="sidebar-meta">
@@ -225,9 +280,38 @@ export function AppLayout() {
           <header className="utility-bar">
             <div className="utility-product">
               <Badge variant="outline">ENTERPRISE</Badge>
-              <span>独立 AI SRE 运维面</span>
+              <span>
+                {isEnglish
+                  ? "Independent AI SRE plane"
+                  : "独立 AI SRE 运维面"}
+              </span>
             </div>
             <div className="utility-actions">
+              <select
+                aria-label={isEnglish ? "Language" : "语言"}
+                className="utility-select"
+                onChange={(event) =>
+                  preferences.setLocale(event.target.value as OperatorLocale)
+                }
+                value={preferences.locale}
+              >
+                <option value="zh-CN">中文</option>
+                <option value="en-US">EN</option>
+              </select>
+              <select
+                aria-label={isEnglish ? "Time zone" : "时区"}
+                className="utility-select utility-timezone"
+                onChange={(event) =>
+                  preferences.setTimeZone(
+                    event.target.value as OperatorTimeZone,
+                  )
+                }
+                value={preferences.timeZone}
+              >
+                <option value="Asia/Shanghai">UTC+8 · Shanghai</option>
+                <option value="Asia/Singapore">UTC+8 · Singapore</option>
+                <option value="UTC">UTC</option>
+              </select>
               <span className="utility-identity">
                 <UserRound aria-hidden="true" size={14} />
                 <span>
@@ -240,10 +324,7 @@ export function AppLayout() {
               </span>
               <span>
                 <Clock3 aria-hidden="true" size={14} />
-                {now.toLocaleString("zh-CN", {
-                  hour12: false,
-                  timeZone: "Asia/Shanghai",
-                })}
+                {preferences.formatDateTime(now)}
               </span>
               <Tooltip>
                 <TooltipTrigger asChild>
