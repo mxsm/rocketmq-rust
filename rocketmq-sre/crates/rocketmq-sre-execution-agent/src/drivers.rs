@@ -25,6 +25,7 @@ mod proxy_image_canary;
 mod proxy_restart_one;
 mod proxy_scale_out_one;
 mod subscription_group_patch;
+mod telemetry_collector_restart_one;
 #[cfg(test)]
 mod test_support;
 mod topic_config_patch;
@@ -81,6 +82,9 @@ pub use kubernetes::ProxyScaleClient;
 pub use kubernetes::ProxyScaleOutOneWrite;
 pub use kubernetes::ProxyScaleRestore;
 pub use kubernetes::ProxyScaleState;
+pub use kubernetes::TelemetryCollectorRestartClient;
+pub use kubernetes::TelemetryCollectorRestartOneWrite;
+pub use kubernetes::TelemetryCollectorRestartState;
 pub use logger_level_ttl::LoggerLevelTtlHandler;
 pub use logger_level_ttl::LoggerLevelTtlParameters;
 pub(crate) use production_broker_config::ProductionBrokerConfigPatchClient;
@@ -94,6 +98,8 @@ pub use proxy_scale_out_one::ProxyScaleOutOneHandler;
 pub use proxy_scale_out_one::ProxyScaleOutOneParameters;
 pub use subscription_group_patch::SubscriptionGroupPatchHandler;
 pub use subscription_group_patch::SubscriptionGroupPatchParameters;
+pub use telemetry_collector_restart_one::TelemetryCollectorRestartOneHandler;
+pub use telemetry_collector_restart_one::TelemetryCollectorRestartOneParameters;
 pub use topic_config_patch::TopicConfigPatchHandler;
 pub use topic_config_patch::TopicConfigPatchParameters;
 
