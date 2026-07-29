@@ -1108,17 +1108,29 @@ if ([string]::IsNullOrWhiteSpace($modelStatus.schema_version)) {
     throw 'Model status did not return a versioned contract.'
 }
 $openApi = Invoke-PublicApi Get '/v1/openapi.json' $null
-if (
-    $openApi.'x-rocketmq-effective-access' -ne 'read_only' `
-        -or $openApi.'x-rocketmq-cluster-mutation-supported' -ne $false
+$srePhase = [int]$openApi.'x-rocketmq-sre-phase'
+if ($srePhase -le 1) {
+    if (
+        $openApi.'x-rocketmq-effective-access' -ne 'read_only' `
+            -or $openApi.'x-rocketmq-cluster-mutation-supported' -ne $false
+    ) {
+        throw 'OpenAPI did not freeze the Phase 01 read-only boundary.'
+    }
+}
+elseif (
+    $openApi.'x-rocketmq-unattended-arbitrary-mutation-supported' -ne $false `
+        -or $openApi.'x-rocketmq-r3-agent-reachable' -ne $false
 ) {
-    throw 'OpenAPI did not freeze the Phase 01 read-only boundary.'
+    throw 'A later-phase OpenAPI surface escaped the bounded mutation boundary required by Phase 01 compatibility.'
 }
 foreach ($path in @($openApi.paths.PSObject.Properties)) {
-    foreach ($method in @('delete', 'patch', 'put')) {
+    foreach ($method in @('delete', 'put')) {
         if ($null -ne $path.Value.$method) {
             throw "OpenAPI exposed forbidden HTTP $($method.ToUpperInvariant()) operation on '$($path.Name)'."
         }
+    }
+    if ($path.Name -match '(?:/apply|/reset|/truncate)(?:/|$)') {
+        throw "OpenAPI exposed forbidden unbounded mutation path '$($path.Name)'."
     }
 }
 
