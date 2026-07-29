@@ -207,6 +207,8 @@ define_request_code! {
         CancelProxyDrain = 333,
         /// Version-checked allowlisted Topic configuration update used by supervised SRE execution.
         UpdateTopicConfigCas = 334,
+        /// Version-checked allowlisted Subscription Group update used by supervised SRE execution.
+        UpdateSubscriptionGroupConfigCas = 335,
         GetTopicConfig = 351,
         GetSubscriptionGroupConfig = 352,
         UpdateAndGetGroupForbidden = 353,
@@ -298,6 +300,7 @@ mod tests {
         assert_eq!(RequestCode::BeginProxyDrain.to_i32(), 332);
         assert_eq!(RequestCode::CancelProxyDrain.to_i32(), 333);
         assert_eq!(RequestCode::UpdateTopicConfigCas.to_i32(), 334);
+        assert_eq!(RequestCode::UpdateSubscriptionGroupConfigCas.to_i32(), 335);
         assert_eq!(RequestCode::AuthCreateUser.to_i32(), 3001);
         assert_eq!(RequestCode::MaintenanceCreateControllerSnapshot.to_i32(), 6002);
         assert_eq!(RequestCode::Unknown.to_i32(), -9999999);
@@ -315,6 +318,7 @@ mod tests {
         assert_eq!(RequestCode::from(332), RequestCode::BeginProxyDrain);
         assert_eq!(RequestCode::from(333), RequestCode::CancelProxyDrain);
         assert_eq!(RequestCode::from(334), RequestCode::UpdateTopicConfigCas);
+        assert_eq!(RequestCode::from(335), RequestCode::UpdateSubscriptionGroupConfigCas);
         assert_eq!(RequestCode::from(3001), RequestCode::AuthCreateUser);
         assert_eq!(RequestCode::from(6003), RequestCode::MaintenanceCreateStoreCheckpoint);
         assert_eq!(RequestCode::from(-9999999), RequestCode::Unknown);
