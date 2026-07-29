@@ -147,6 +147,7 @@ See:
 - [Control Plane connector-channel mTLS](docs/control-plane-connector-mtls.md)
 - [Connector transport ADR](docs/connector-control-plane-transport-adr.md)
 - [Compatibility](docs/compatibility.md)
+- [Phase 01 live Kind validation record](docs/phase01-live-validation-record.md)
 - [Phase 02 contracts and persistence](docs/phase02-contracts-and-persistence.md)
 - [Phase 02 diagnostic evidence sources](docs/phase02-evidence-sources.md)
 - [Phase 02 DiagnosticPack catalog](docs/phase02-diagnostic-packs.md)
@@ -216,3 +217,5 @@ Executor calls.
 
 See [Phase 01 Shadow evaluation](docs/phase01-shadow-evaluation.md) and
 [Phase 01 known issues and Phase 02 inputs](docs/phase01-known-issues-and-phase02-inputs.md).
+The real RocketMQ/MCP/Connector/model-provider acceptance evidence is recorded
+in [Phase 01 live Kind validation record](docs/phase01-live-validation-record.md).
