@@ -16,6 +16,7 @@ networkPolicy:
 services:
   broker:
     autoCreateTopicEnable: true
+    logFilterReloadEnabled: true
     resources:
       requests: {cpu: 100m, memory: 256Mi}
       limits: {cpu: 1000m, memory: 2Gi}
