@@ -55,6 +55,7 @@ pub(crate) struct RocketMqScenarioDriver {
     consumer: Option<DefaultMQPushConsumer>,
     observed: Arc<AtomicUsize>,
     notification: Arc<Notify>,
+    expected_key_prefix: Option<Arc<str>>,
     producer_stopped: bool,
     consumer_stopped: bool,
 }
@@ -72,6 +73,7 @@ impl RocketMqScenarioDriver {
             consumer: None,
             observed: Arc::new(AtomicUsize::new(0)),
             notification: Arc::new(Notify::new()),
+            expected_key_prefix: None,
             producer_stopped: true,
             consumer_stopped: true,
         }
@@ -182,10 +184,19 @@ impl RocketMqScenarioDriver {
 }
 
 impl ProbeDriver for RocketMqScenarioDriver {
+    fn set_expected_key_prefix(&mut self, key_prefix: &str) {
+        self.expected_key_prefix = Some(Arc::from(format!("{key_prefix}-")));
+    }
+
     async fn start_consumer(&mut self, plan: &ProbePlan, _mode: ProbeConsumerMode) -> Result<(), ProbeDriverError> {
+        let expected_key_prefix = self
+            .expected_key_prefix
+            .clone()
+            .ok_or_else(|| ProbeDriverError::new("consumer_key_filter_missing"))?;
         let listener = CountingListener {
             observed: Arc::clone(&self.observed),
             notification: Arc::clone(&self.notification),
+            expected_key_prefix,
         };
         let builder = DefaultMQPushConsumer::builder(Arc::clone(&self.client_runtime))
             .consumer_group(plan.identity.consumer_group.clone())
@@ -273,6 +284,7 @@ impl TransactionListener for CommitTransactionListener {
 struct CountingListener {
     observed: Arc<AtomicUsize>,
     notification: Arc<Notify>,
+    expected_key_prefix: Arc<str>,
 }
 
 impl MessageListenerConcurrently for CountingListener {
@@ -281,8 +293,34 @@ impl MessageListenerConcurrently for CountingListener {
         messages: &[&MessageExt],
         _context: &ConsumeConcurrentlyContext,
     ) -> RocketMQResult<ConsumeConcurrentlyStatus> {
-        self.observed.fetch_add(messages.len(), Ordering::AcqRel);
-        self.notification.notify_waiters();
+        let matched = messages
+            .iter()
+            .filter(|message| {
+                message
+                    .get_keys_ref()
+                    .is_some_and(|keys| contains_expected_key(keys.as_str(), self.expected_key_prefix.as_ref()))
+            })
+            .count();
+        if matched > 0 {
+            self.observed.fetch_add(matched, Ordering::AcqRel);
+            self.notification.notify_waiters();
+        }
         Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
+    }
+}
+
+fn contains_expected_key(keys: &str, expected_prefix: &str) -> bool {
+    keys.split_whitespace().any(|key| key.starts_with(expected_prefix))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::contains_expected_key;
+
+    #[test]
+    fn message_filter_counts_only_the_current_invocation_prefix() {
+        assert!(contains_expected_key("probe-current-0 unrelated", "probe-current-"));
+        assert!(!contains_expected_key("probe-previous-0", "probe-current-"));
+        assert!(!contains_expected_key("probe-current", "probe-current-"));
     }
 }
