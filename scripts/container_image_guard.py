@@ -121,6 +121,28 @@ def audit_foundation(
         expected_peer = [{"id": 1, "addr": "127.0.0.1:60110"}]
         if parsed_smoke_configs["controller.toml"].get("raftPeers") != expected_peer:
             findings.append("controller smoke config must retain its single-node Raft peer")
+    expected_smoke_network = {
+        "network_prefix": "rocketmq-service-smoke",
+        "namesrv_alias": "rocketmq-namesrv",
+        "namesrv_port": 9876,
+        "dependency_chain": ["namesrv", "broker"],
+        "dependent_services": ["proxy", "mcp"],
+    }
+    if policy.get("smoke_network") != expected_smoke_network:
+        findings.append("service smoke network contract drifted")
+    expected_namesrv_address = (
+        f"{expected_smoke_network['namesrv_alias']}:{expected_smoke_network['namesrv_port']}"
+    )
+    dependent_addresses = {
+        "broker.toml": lambda config: config.get("broker", {}).get("namesrvAddr"),
+        "proxy.toml": lambda config: config.get("cluster", {}).get("namesrvAddr"),
+        "mcp.toml": lambda config: (config.get("clusters") or [{}])[0].get("namesrv_addr"),
+    }
+    for name, address in dependent_addresses.items():
+        if name not in parsed_smoke_configs:
+            findings.append(f"{name} smoke config is missing")
+        elif address(parsed_smoke_configs[name]) != expected_namesrv_address:
+            findings.append(f"{name} must use the isolated smoke NameServer alias")
 
     builder_ref = policy["base_images"]["builder"]["reference"]
     runtime_ref = policy["base_images"]["runtime"]["reference"]
@@ -405,8 +427,17 @@ def audit_foundation(
         "--target $service.target",
         "--read-only",
         "must fail closed when its required config mount is absent",
-        "docker stop --signal SIGTERM --timeout $($policy.runtime.stop_grace_period_seconds)",
+        "docker stop --signal SIGTERM --timeout $GracePeriodSeconds",
         "{{.State.ExitCode}}",
+        "docker network create $smokeNetwork",
+        "docker network rm $smokeNetwork",
+        '"--network",',
+        "-NetworkName $smokeNetwork",
+        '"--network-alias",',
+        "-NetworkAlias $networkAlias",
+        "--volumes",
+        "$policy.smoke_network.namesrv_alias",
+        "$policy.smoke_network.dependency_chain",
         "$service.data_path",
         "find /usr/local/bin",
         "cyclonedx-json",

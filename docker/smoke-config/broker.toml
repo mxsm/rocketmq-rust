@@ -5,7 +5,7 @@
 listenPort = 10911
 brokerIp1 = "127.0.0.1"
 storePathRootDir = "/var/lib/rocketmq/broker"
-namesrvAddr = "127.0.0.1:9876"
+namesrvAddr = "rocketmq-namesrv:9876"
 autoCreateTopicEnable = false
 
 [broker.brokerIdentity]

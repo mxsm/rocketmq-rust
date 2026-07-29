@@ -171,6 +171,27 @@ class ContainerFoundationTests(unittest.TestCase):
         findings = self.audit(smoke_configs=missing_peer)
         self.assertTrue(any("single-node Raft peer" in finding for finding in findings))
 
+    def test_smoke_dependencies_must_use_the_isolated_namesrv_alias(self) -> None:
+        for config_name in ("broker.toml", "proxy.toml", "mcp.toml"):
+            with self.subTest(config=config_name):
+                loopback = dict(self.smoke_configs)
+                loopback[config_name] = loopback[config_name].replace(
+                    'rocketmq-namesrv:9876',
+                    '127.0.0.1:9876',
+                    1,
+                )
+                findings = self.audit(smoke_configs=loopback)
+                self.assertTrue(
+                    any(
+                        config_name in finding and "NameServer alias" in finding
+                        for finding in findings
+                    )
+                )
+
+        policy = copy.deepcopy(self.policy)
+        policy["smoke_network"]["dependency_chain"].remove("broker")
+        self.assertTrue(any("smoke network contract" in finding for finding in self.audit(policy=policy)))
+
     def test_missing_read_only_or_signature_verification_is_rejected(self) -> None:
         no_read_only = self.supply_script.replace("--read-only", "--read-write", 1)
         self.assertTrue(any("--read-only" in finding for finding in self.audit(supply_script=no_read_only)))
@@ -280,10 +301,20 @@ class ContainerFoundationTests(unittest.TestCase):
         findings = self.audit(signal_sources=signal_sources)
         self.assertTrue(any("mcp_stdio entrypoint" in finding for finding in findings))
 
-        stop_contract = "docker stop --signal SIGTERM --timeout $($policy.runtime.stop_grace_period_seconds)"
+        stop_contract = "docker stop --signal SIGTERM --timeout $GracePeriodSeconds"
         weakened = self.service_script.replace(stop_contract, "docker kill", 1)
         self.assertTrue(
             any("docker stop --signal SIGTERM" in finding for finding in self.audit(service_script=weakened))
+        )
+
+        isolated = self.service_script.replace("-NetworkName $smokeNetwork", "-NetworkName none")
+        self.assertTrue(
+            any("-NetworkName $smokeNetwork" in finding for finding in self.audit(service_script=isolated))
+        )
+
+        no_alias = self.service_script.replace("-NetworkAlias $networkAlias", "-NetworkAlias removed")
+        self.assertTrue(
+            any("-NetworkAlias $networkAlias" in finding for finding in self.audit(service_script=no_alias))
         )
 
     def test_native_dash_c_arguments_are_preserved_by_real_script_helpers(self) -> None:

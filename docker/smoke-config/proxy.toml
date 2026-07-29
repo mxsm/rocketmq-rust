@@ -11,4 +11,4 @@ enabled = false
 listenAddr = "0.0.0.0:8080"
 
 [cluster]
-namesrvAddr = "127.0.0.1:9876"
+namesrvAddr = "rocketmq-namesrv:9876"

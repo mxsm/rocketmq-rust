@@ -36,7 +36,7 @@ protected_resource_metadata_path = "/.well-known/oauth-protected-resource"
 
 [[clusters]]
 name = "container-smoke"
-namesrv_addr = "127.0.0.1:9876"
+namesrv_addr = "rocketmq-namesrv:9876"
 default = true
 
 [security]
