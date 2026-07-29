@@ -20,13 +20,13 @@ use chrono::Utc;
 use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::policy::v1::PodDisruptionBudget;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::Preconditions;
 use kube::Api;
 use kube::Client;
 use kube::Config;
 use kube::api::DeleteParams;
 use kube::api::ListParams;
 use kube::api::PostParams;
+use kube::api::Preconditions;
 use sqlx::PgPool;
 use sqlx::Row;
 use uuid::Uuid;
@@ -174,7 +174,7 @@ impl ProductionProxyImageCanaryClient {
         .await
         .map_err(|_| ExecutionAgentError::DriverFailed)?;
         let stored = self
-            .load_before(request.execution_id.as_uuid(), request.plan_step_id.as_uuid())
+            .load_before(&request.execution_id.as_uuid(), &request.plan_step_id.as_uuid())
             .await?;
         if stored == *state {
             Ok(stored)
@@ -239,8 +239,8 @@ impl ProductionProxyImageCanaryClient {
         ready: bool,
     ) -> Result<(), ExecutionAgentError> {
         self.insert_result(
-            request.execution_id.as_uuid(),
-            request.plan_step_id.as_uuid(),
+            &request.execution_id.as_uuid(),
+            &request.plan_step_id.as_uuid(),
             &request.namespace,
             &request.workload,
             canary_name,
@@ -481,7 +481,7 @@ impl ProxyImageCanaryClient for ProductionProxyImageCanaryClient {
     fn restore_proxy_image<'a>(&'a self, request: &'a ProxyImageCanaryRestore) -> DriverFuture<'a, ()> {
         Box::pin(async move {
             let before = self
-                .load_before(request.execution_id.as_uuid(), request.plan_step_id.as_uuid())
+                .load_before(&request.execution_id.as_uuid(), &request.plan_step_id.as_uuid())
                 .await?;
             if before.namespace != request.namespace
                 || before.workload != request.workload
@@ -518,8 +518,8 @@ impl ProxyImageCanaryClient for ProductionProxyImageCanaryClient {
                 .await
                 .map_err(|_| ExecutionAgentError::DriverFailed)?;
             self.insert_result(
-                request.execution_id.as_uuid(),
-                request.plan_step_id.as_uuid(),
+                &request.execution_id.as_uuid(),
+                &request.plan_step_id.as_uuid(),
                 &request.namespace,
                 &request.workload,
                 &canary_name,
