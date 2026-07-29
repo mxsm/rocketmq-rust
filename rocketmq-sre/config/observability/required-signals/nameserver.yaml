@@ -3,7 +3,7 @@ component: name_server
 exposure:
   implementation: implemented_local
   observable: true
-  remote_queryable: false
+  remote_queryable: protected_connector_api
 signals:
   - requirement_id: nameserver.route_requests
     purpose: Measure route lookup demand and availability.
@@ -11,8 +11,9 @@ signals:
     source_symbol: NAMESRV_ROUTE_REQUEST_TOTAL
     registry_reference: rocketmq_namesrv_route_request_total
     signal_type: metric
-    status: existing
+    status: queryable
     query: sum(rate(rocketmq_namesrv_route_request_total[5m]))
+    query_resource: metrics/rocketmq_namesrv_route_request_total
     freshness_seconds: 60
     expected_attributes: []
     sensitivity: operational
@@ -24,8 +25,9 @@ signals:
     source_symbol: NAMESRV_ROUTE_ERRORS_TOTAL
     registry_reference: rocketmq_namesrv_route_errors_total
     signal_type: metric
-    status: existing
+    status: queryable
     query: sum by (result) (rate(rocketmq_namesrv_route_errors_total[5m]))
+    query_resource: metrics/rocketmq_namesrv_route_errors_total
     freshness_seconds: 60
     expected_attributes: [result]
     sensitivity: operational
@@ -37,8 +39,9 @@ signals:
     source_symbol: NAMESRV_ROUTE_FRESHNESS
     registry_reference: rocketmq_namesrv_route_freshness
     signal_type: metric
-    status: existing
+    status: queryable
     query: histogram_quantile(0.99, sum by (le) (rate(rocketmq_namesrv_route_freshness_bucket[5m])))
+    query_resource: metrics/rocketmq_namesrv_route_freshness_milliseconds_bucket
     freshness_seconds: 60
     expected_attributes: []
     sensitivity: operational
@@ -50,8 +53,9 @@ signals:
     source_symbol: NAMESRV_ACTIVE_BROKERS
     registry_reference: rocketmq_namesrv_active_brokers
     signal_type: metric
-    status: existing
+    status: queryable
     query: max(rocketmq_namesrv_active_brokers)
+    query_resource: metrics/rocketmq_namesrv_active_brokers
     freshness_seconds: 30
     expected_attributes: []
     sensitivity: operational
@@ -63,8 +67,9 @@ signals:
     source_symbol: NAMESRV_BROKER_REGISTRATIONS
     registry_reference: rocketmq_namesrv_broker_registrations
     signal_type: metric
-    status: existing
+    status: queryable
     query: sum(rate(rocketmq_namesrv_broker_registrations[5m]))
+    query_resource: metrics/rocketmq_namesrv_broker_registrations_total
     freshness_seconds: 60
     expected_attributes: []
     sensitivity: operational
@@ -76,7 +81,7 @@ signals:
     source_symbol: NAMESRV_ROUTE_LOOKUP
     registry_reference: RocketMQ NAMESRV ROUTE_LOOKUP
     signal_type: span
-    status: existing
+    status: queryable
     query: span.name = "RocketMQ NAMESRV ROUTE_LOOKUP"
     freshness_seconds: 300
     expected_attributes: [result]
@@ -89,7 +94,7 @@ signals:
     source_symbol: NAMESRV_BROKER_REGISTRATION
     registry_reference: RocketMQ NAMESRV BROKER_REGISTRATION
     signal_type: span
-    status: existing
+    status: queryable
     query: span.name = "RocketMQ NAMESRV BROKER_REGISTRATION"
     freshness_seconds: 300
     expected_attributes: [result]
