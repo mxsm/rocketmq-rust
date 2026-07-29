@@ -71,7 +71,7 @@ impl PreventiveAutomationService {
         }
     }
 
-    pub(super) async fn submit(
+    pub(crate) async fn submit(
         &self,
         auth: &AuthContext,
         request: &PreventiveAutomationRequest,
