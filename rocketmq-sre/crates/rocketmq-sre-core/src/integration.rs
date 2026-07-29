@@ -88,6 +88,16 @@ impl IntegrationValidator {
                 "target enables inbound approval but descriptor is outbound-only".to_owned(),
             ));
         }
+        if target.inbound_approval
+            && !matches!(
+                target.adapter_kind,
+                IntegrationAdapterKind::MockItsm | IntegrationAdapterKind::SignedWebhookItsm
+            )
+        {
+            return Err(IntegrationError::InvalidTarget(
+                "only ITSM adapters may submit approval input".to_owned(),
+            ));
+        }
         if !target.outbound_events.is_empty() && !descriptor.outbound {
             return Err(IntegrationError::InvalidDescriptor(
                 "target enables outbound events but descriptor is inbound-only".to_owned(),
@@ -218,6 +228,9 @@ const fn adapter_kind_name(kind: IntegrationAdapterKind) -> &'static str {
         IntegrationAdapterKind::ChatOpsWebhook => "chatops_webhook",
         IntegrationAdapterKind::Pager => "pager",
         IntegrationAdapterKind::Email => "email",
+        IntegrationAdapterKind::MockCmdb => "mock_cmdb",
+        IntegrationAdapterKind::MockGitOps => "mock_gitops",
+        IntegrationAdapterKind::SignedReleaseWebhook => "signed_release_webhook",
     }
 }
 
@@ -239,6 +252,9 @@ fn validate_endpoint(kind: IntegrationAdapterKind, endpoint: &str) -> Result<(),
         | IntegrationAdapterKind::ChatOpsWebhook
         | IntegrationAdapterKind::Pager
         | IntegrationAdapterKind::Email
+        | IntegrationAdapterKind::MockCmdb
+        | IntegrationAdapterKind::MockGitOps
+        | IntegrationAdapterKind::SignedReleaseWebhook
             if endpoint.starts_with("https://")
                 || endpoint.starts_with("http://127.0.0.1/")
                 || endpoint.starts_with("http://127.0.0.1:")
@@ -332,6 +348,10 @@ mod tests {
             integration_kind: "mock_itsm".to_owned(),
             inbound: true,
             outbound: true,
+            operational: rocketmq_sre_contracts::IntegrationOperationalPolicy {
+                secret_required: false,
+                ..rocketmq_sre_contracts::IntegrationOperationalPolicy::default()
+            },
         }
     }
 
