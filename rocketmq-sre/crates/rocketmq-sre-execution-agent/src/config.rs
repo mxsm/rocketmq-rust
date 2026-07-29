@@ -96,6 +96,7 @@ pub struct ExecutionAgentConfig {
     pub(crate) dev_insecure_http: bool,
     pub(crate) broker_config_patch_enabled: bool,
     pub(crate) topic_config_patch_enabled: bool,
+    pub(crate) subscription_group_patch_enabled: bool,
     pub(crate) logger_ttl_enabled: bool,
     pub(crate) proxy_scale_out_enabled: bool,
     pub(crate) proxy_scale_targets: BTreeSet<String>,
@@ -137,6 +138,7 @@ impl ExecutionAgentConfig {
         let shutdown_timeout = duration_env("ROCKETMQ_SRE_AGENT_SHUTDOWN_SECONDS", 30)?;
         let broker_config_patch_enabled = parse_env("ROCKETMQ_SRE_AGENT_ENABLE_BROKER_CONFIG", false)?;
         let topic_config_patch_enabled = parse_env("ROCKETMQ_SRE_AGENT_ENABLE_TOPIC_CONFIG", false)?;
+        let subscription_group_patch_enabled = parse_env("ROCKETMQ_SRE_AGENT_ENABLE_SUBSCRIPTION_GROUP_CONFIG", false)?;
         let logger_ttl_enabled = parse_env("ROCKETMQ_SRE_AGENT_ENABLE_LOGGER_TTL", false)?;
         let proxy_scale_out_enabled = parse_env("ROCKETMQ_SRE_AGENT_ENABLE_PROXY_SCALE_OUT", false)?;
         let proxy_scale_targets = if proxy_scale_out_enabled {
@@ -174,7 +176,11 @@ impl ExecutionAgentConfig {
         let broker_admin = broker_admin_from_env(
             dev_insecure_http,
             shutdown_timeout,
-            broker_config_patch_enabled || topic_config_patch_enabled || logger_ttl_enabled || proxy_restart_enabled,
+            broker_config_patch_enabled
+                || topic_config_patch_enabled
+                || subscription_group_patch_enabled
+                || logger_ttl_enabled
+                || proxy_restart_enabled,
         )?;
         Ok(Self {
             bind_addr,
@@ -190,6 +196,7 @@ impl ExecutionAgentConfig {
             dev_insecure_http,
             broker_config_patch_enabled,
             topic_config_patch_enabled,
+            subscription_group_patch_enabled,
             logger_ttl_enabled,
             proxy_scale_out_enabled,
             proxy_scale_targets,
@@ -223,6 +230,10 @@ impl Debug for ExecutionAgentConfig {
             .field("dev_insecure_http", &self.dev_insecure_http)
             .field("broker_config_patch_enabled", &self.broker_config_patch_enabled)
             .field("topic_config_patch_enabled", &self.topic_config_patch_enabled)
+            .field(
+                "subscription_group_patch_enabled",
+                &self.subscription_group_patch_enabled,
+            )
             .field("logger_ttl_enabled", &self.logger_ttl_enabled)
             .field("proxy_scale_out_enabled", &self.proxy_scale_out_enabled)
             .field("proxy_scale_target_count", &self.proxy_scale_targets.len())
@@ -458,6 +469,7 @@ mod tests {
             dev_insecure_http: false,
             broker_config_patch_enabled: false,
             topic_config_patch_enabled: false,
+            subscription_group_patch_enabled: false,
             logger_ttl_enabled: false,
             proxy_scale_out_enabled: false,
             proxy_scale_targets: BTreeSet::new(),
