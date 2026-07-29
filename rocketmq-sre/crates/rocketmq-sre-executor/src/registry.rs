@@ -244,6 +244,7 @@ mod tests {
                 ExecutionAction::ObservabilityLoggerLevelTtl,
                 ExecutionAction::ProxyScaleOutOne,
                 ExecutionAction::ProxyRestartOne,
+                ExecutionAction::TelemetryCollectorRestartOne,
             ]
         );
     }
