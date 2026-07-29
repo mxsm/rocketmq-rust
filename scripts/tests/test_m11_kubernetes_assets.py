@@ -31,6 +31,7 @@ class KubernetesAssetsGuardTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(prefix="m11-kubernetes-assets-")
         self.root = Path(self.temporary.name)
+        shutil.copy2(REPO_ROOT / ".gitattributes", self.root / ".gitattributes")
         shutil.copytree(REPO_ROOT / "distribution", self.root / "distribution")
         (self.root / "docker").mkdir()
         shutil.copy2(REPO_ROOT / "docker" / "container-policy.json", self.root / "docker" / "container-policy.json")
@@ -133,14 +134,14 @@ class KubernetesAssetsGuardTests(unittest.TestCase):
         for name, _ in expected_environment:
             self.assertIn(name, result.stderr)
 
-    def test_secure_overlay_placeholder_digest_is_rejected(self) -> None:
+    def test_secure_overlay_remote_tag_is_rejected(self) -> None:
         self.mutate_text(
             "distribution/kubernetes/overlays/secure/kustomization.yaml",
-            "sha256:" + "1" * 64,
-            "sha256:" + "0" * 64,
+            "newTag: local",
+            "newTag: latest",
         )
         result = self.run_guard(expect_success=False)
-        self.assertIn("broker", result.stderr)
+        self.assertIn("secure Kustomize overlay", result.stderr)
 
     def test_proxy_pvc_regression_is_rejected(self) -> None:
         path = self.root / "distribution/kubernetes/deployment-policy.json"
@@ -162,6 +163,15 @@ class KubernetesAssetsGuardTests(unittest.TestCase):
         path.write_text(source.replace("$hostIsWindows", "$isWindows"), encoding="utf-8")
         result = self.run_guard(expect_success=False)
         self.assertIn("reserved $IsWindows", result.stderr)
+
+    def test_embedded_maintenance_policy_must_use_lf_on_every_host(self) -> None:
+        self.mutate_text(
+            ".gitattributes",
+            "distribution/helm/rocketmq-rust/files/maintenance-policy.json text eol=lf",
+            "distribution/helm/rocketmq-rust/files/maintenance-policy.json text",
+        )
+        result = self.run_guard(expect_success=False)
+        self.assertIn("canonical LF bytes", result.stderr)
 
 
 if __name__ == "__main__":
