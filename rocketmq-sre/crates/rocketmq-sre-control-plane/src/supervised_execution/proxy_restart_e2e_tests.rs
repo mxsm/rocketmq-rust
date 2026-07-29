@@ -98,6 +98,7 @@ async fn real_kind_supervised_proxy_restart_reaches_verified_success() {
         &workload_token,
         tenant_id,
         cluster_id,
+        ExecutionAction::ProxyRestartOne,
         &target,
         parameters.clone(),
     )
@@ -114,6 +115,7 @@ async fn real_kind_supervised_proxy_restart_reaches_verified_success() {
         &workload_token,
         tenant_id,
         cluster_id,
+        ExecutionAction::ProxyRestartOne,
         &target,
         parameters.clone(),
     )
@@ -193,11 +195,147 @@ async fn real_kind_supervised_proxy_restart_reaches_verified_success() {
     assert_eq!(submitted.state, ExecutionState::Succeeded);
 }
 
+#[tokio::test]
+#[ignore = "requires the live Kind PostgreSQL, Executor, Execution Agent, and Collector fixture"]
+async fn real_kind_supervised_telemetry_collector_restart_reaches_verified_success() {
+    let Some(database_url) = required_env("ROCKETMQ_SRE_PHASE3_DATABASE_URL") else {
+        return;
+    };
+    let Some(executor_url) = required_env("ROCKETMQ_SRE_PHASE3_EXECUTOR_URL") else {
+        return;
+    };
+    let Some(agent_url) = required_env("ROCKETMQ_SRE_PHASE3_AGENT_URL") else {
+        return;
+    };
+    let Some(workload_token) = required_env("ROCKETMQ_SRE_PHASE3_WORKLOAD_TOKEN") else {
+        return;
+    };
+    let Some(signing_key) = required_env("ROCKETMQ_SRE_PHASE3_SIGNING_KEY") else {
+        return;
+    };
+    let Some(target_pod) = required_env("ROCKETMQ_SRE_PHASE4_COLLECTOR_POD") else {
+        return;
+    };
+    let Some(expected_uid) = required_env("ROCKETMQ_SRE_PHASE4_COLLECTOR_UID") else {
+        return;
+    };
+    let tenant_id = optional_id("ROCKETMQ_SRE_PHASE3_TENANT_ID", DEFAULT_TENANT_ID);
+    let cluster_id = optional_id("ROCKETMQ_SRE_PHASE3_CLUSTER_ID", DEFAULT_CLUSTER_ID);
+    let target = format!("pod/observability/{target_pod}");
+    let parameters = json!({
+        "namespace": "observability",
+        "pod": target_pod,
+        "expected_uid": expected_uid,
+        "pipeline": "combined",
+    });
+    let agent_state = fetch_agent_state(
+        &agent_url,
+        &workload_token,
+        tenant_id,
+        cluster_id,
+        ExecutionAction::TelemetryCollectorRestartOne,
+        &target,
+        parameters.clone(),
+    )
+    .await;
+    assert!(agent_state.ready, "live Collector restart precheck must be ready");
+
+    let repository = PostgresRepository::connect(&database_url, 5)
+        .await
+        .expect("Kind PostgreSQL repository");
+    let mut fixture = seed_execution_fixture(&repository, tenant_id, cluster_id, &target, &agent_state).await;
+    seed_complete_slo_evidence(&repository, &fixture).await;
+    let agent_state = fetch_agent_state(
+        &agent_url,
+        &workload_token,
+        tenant_id,
+        cluster_id,
+        ExecutionAction::TelemetryCollectorRestartOne,
+        &target,
+        parameters.clone(),
+    )
+    .await;
+    assert!(
+        agent_state.ready,
+        "live Collector restart precheck must remain ready after SLI refresh"
+    );
+    fixture.agent_evidence_id = persist_agent_evidence(&repository, &fixture, &target, &agent_state).await;
+
+    let workflow = WorkflowService::new(repository.clone(), WorkflowEventBus::new(64));
+    let model_gateway = ModelGatewayService::disabled(repository.clone());
+    let executor = ExecutorSubmissionClient::http(
+        executor_url.parse::<Url>().expect("Executor URL"),
+        workload_token,
+        StdDuration::from_secs(360),
+        true,
+    )
+    .expect("Executor client");
+    let service =
+        SupervisedExecutionService::new_with_executor(repository, workflow, signing_key, model_gateway, executor)
+            .expect("supervised execution service");
+    let operator = auth(tenant_id, cluster_id, "phase4-kind-operator", &["operator"]);
+    let approver = auth(tenant_id, cluster_id, "phase4-kind-approver", &["approver"]);
+    let created = service
+        .create_plan(
+            &operator,
+            &CreatePlanRequest {
+                cluster_id,
+                incident_id: fixture.incident_id,
+                diagnosis_revision_id: fixture.diagnosis_id,
+                expires_at: Some(Utc::now() + Duration::minutes(25)),
+                steps: vec![CandidatePlanStep {
+                    action_id: ExecutionAction::TelemetryCollectorRestartOne.id().to_owned(),
+                    descriptor_version: "1.0.0".to_owned(),
+                    resource: target,
+                    parameters,
+                    evidence_ids: vec![fixture.agent_evidence_id],
+                }],
+            },
+            CorrelationId::new(),
+        )
+        .await
+        .expect("create Collector restart plan");
+    let CreatePlanResponse::ActionPlan { plan, .. } = created else {
+        panic!("an enabled R1 Collector restart must create an ActionPlan");
+    };
+    assert_eq!(plan.steps[0].precondition_hash, agent_state.precondition_hash);
+    let precondition_hash = plan.compute_precondition_hash().expect("plan precondition hash");
+    service
+        .approve(
+            &approver,
+            plan.id,
+            &ApprovalDecisionRequest {
+                plan_hash: plan.plan_hash.clone(),
+                precondition_hash: precondition_hash.clone(),
+                reason: "Kind Collector UID, pipeline health, isolation, and SLO evidence reviewed".to_owned(),
+                validity_seconds: Some(1_500),
+            },
+            CorrelationId::new(),
+        )
+        .await
+        .expect("independent human approval");
+    let submitted = service
+        .submit_execution(
+            &operator,
+            &SubmitExecutionRequest {
+                plan_id: plan.id,
+                plan_hash: plan.plan_hash,
+                precondition_hash,
+                idempotency_key: format!("phase4-collector-restart-{}", Uuid::new_v4()),
+            },
+            CorrelationId::new(),
+        )
+        .await
+        .expect("execute supervised Collector restart");
+    assert_eq!(submitted.state, ExecutionState::Succeeded);
+}
+
 async fn fetch_agent_state(
     base_url: &str,
     token: &str,
     tenant_id: TenantId,
     cluster_id: ClusterId,
+    action: ExecutionAction,
     target: &str,
     parameters: serde_json::Value,
 ) -> AgentReadResult {
@@ -220,7 +358,7 @@ async fn fetch_agent_state(
             cluster_id,
             execution_id: ExecutionId::new(),
             plan_step_id: PlanStepId::new(),
-            action: ExecutionAction::ProxyRestartOne,
+            action,
             descriptor_version: "1.0.0".to_owned(),
             target: target.to_owned(),
             parameters,
