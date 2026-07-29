@@ -21,7 +21,7 @@ use crate::admin::BrokerConfigPatchOutcome;
 use crate::admin::TopicConfigPatch;
 #[cfg(feature = "admin-mutation")]
 use crate::admin::TopicConfigPatchOutcome;
-#[cfg(feature = "admin-mutation")]
+#[cfg(feature = "admin-read")]
 use crate::admin::TopicConfigVersioned;
 use rocketmq_protocol::protocol::header::get_broker_config_response_header::GetBrokerConfigResponseHeader;
 #[cfg(feature = "admin-mutation")]
@@ -30,7 +30,7 @@ use rocketmq_protocol::protocol::header::update_broker_config_request_header::Up
 use rocketmq_protocol::protocol::header::update_broker_config_response_header::UpdateBrokerConfigResponseHeader;
 #[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::update_topic_config_cas_request_header::UpdateTopicConfigCasRequestHeader;
-#[cfg(feature = "admin-mutation")]
+#[cfg(any(feature = "admin-read", feature = "admin-mutation"))]
 use rocketmq_protocol::protocol::header::update_topic_config_cas_response_header::UpdateTopicConfigCasResponseHeader;
 
 pub struct AdminClient<'a> {
@@ -63,7 +63,7 @@ fn broker_config_snapshot_from_response(response: &RemotingCommand) -> RocketMQR
     Ok(BrokerConfigSnapshot { generation, properties })
 }
 
-#[cfg(feature = "admin-mutation")]
+#[cfg(feature = "admin-read")]
 fn topic_config_versioned_from_response(response: &RemotingCommand) -> RocketMQResult<TopicConfigVersioned> {
     let body = response.get_body().ok_or(RocketMQError::ResponseProcessFailed {
         operation: "get_topic_config_with_version",
@@ -1465,7 +1465,7 @@ impl MQClientAPIImpl {
         ))
     }
 
-    #[cfg(feature = "admin-mutation")]
+    #[cfg(feature = "admin-read")]
     pub(crate) async fn get_topic_config_with_version(
         &self,
         addr: &CheetahString,
@@ -3942,7 +3942,7 @@ mod broker_config_snapshot_tests {
         assert_eq!(snapshot.generation, None);
     }
 
-    #[cfg(feature = "admin-mutation")]
+    #[cfg(feature = "admin-read")]
     #[test]
     fn topic_config_response_binds_body_to_version() {
         let config = TopicConfig::with_queues("orders", 4, 6);
