@@ -36,7 +36,7 @@ CREATE TABLE finops_cost_ledger (
         ),
     provider_profile TEXT,
     model_family TEXT,
-    incident_id UUID REFERENCES incidents(id),
+    incident_id UUID REFERENCES sre_incidents(id),
     pack_id TEXT,
     workflow_id TEXT,
     request_count BIGINT NOT NULL CHECK (request_count >= 0),
