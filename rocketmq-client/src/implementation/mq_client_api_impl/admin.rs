@@ -17,11 +17,21 @@ use super::response_decoder::*;
 use super::*;
 #[cfg(feature = "admin-mutation")]
 use crate::admin::BrokerConfigPatchOutcome;
+#[cfg(feature = "admin-mutation")]
+use crate::admin::TopicConfigPatch;
+#[cfg(feature = "admin-mutation")]
+use crate::admin::TopicConfigPatchOutcome;
+#[cfg(feature = "admin-mutation")]
+use crate::admin::TopicConfigVersioned;
 use rocketmq_protocol::protocol::header::get_broker_config_response_header::GetBrokerConfigResponseHeader;
 #[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::update_broker_config_request_header::UpdateBrokerConfigRequestHeader;
 #[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::update_broker_config_response_header::UpdateBrokerConfigResponseHeader;
+#[cfg(feature = "admin-mutation")]
+use rocketmq_protocol::protocol::header::update_topic_config_cas_request_header::UpdateTopicConfigCasRequestHeader;
+#[cfg(feature = "admin-mutation")]
+use rocketmq_protocol::protocol::header::update_topic_config_cas_response_header::UpdateTopicConfigCasResponseHeader;
 
 pub struct AdminClient<'a> {
     api: &'a MQClientAPIImpl,
@@ -51,6 +61,82 @@ fn broker_config_snapshot_from_response(response: &RemotingCommand) -> RocketMQR
         .map(|header| header.config_generation)
         .filter(|generation| *generation > 0);
     Ok(BrokerConfigSnapshot { generation, properties })
+}
+
+#[cfg(feature = "admin-mutation")]
+fn topic_config_versioned_from_response(response: &RemotingCommand) -> RocketMQResult<TopicConfigVersioned> {
+    let body = response.get_body().ok_or(RocketMQError::ResponseProcessFailed {
+        operation: "get_topic_config_with_version",
+        reason: "Topic config response body is empty".to_owned(),
+    })?;
+    let mapping = serde_json::from_slice::<TopicConfigAndQueueMapping>(body.as_ref()).map_err(|error| {
+        RocketMQError::ResponseProcessFailed {
+            operation: "get_topic_config_with_version",
+            reason: format!("Topic config response body is invalid: {error}"),
+        }
+    })?;
+    let header = response
+        .decode_command_custom_header::<UpdateTopicConfigCasResponseHeader>()
+        .map_err(|error| RocketMQError::ResponseProcessFailed {
+            operation: "get_topic_config_with_version",
+            reason: format!("Topic config response version is missing: {error}"),
+        })?;
+    Ok(TopicConfigVersioned {
+        version: header.topic_version,
+        config: mapping.topic_config,
+    })
+}
+
+#[cfg(feature = "admin-mutation")]
+fn topic_config_patch_outcome_from_response(
+    response: &RemotingCommand,
+    expected_version: u64,
+) -> RocketMQResult<TopicConfigPatchOutcome> {
+    match ResponseCode::from(response.code()) {
+        ResponseCode::Success => {
+            let header = response
+                .decode_command_custom_header::<UpdateTopicConfigCasResponseHeader>()
+                .map_err(|error| RocketMQError::ResponseProcessFailed {
+                    operation: "patch_topic_config_if_version",
+                    reason: format!("missing committed Topic config version: {error}"),
+                })?;
+            let expected_next = expected_version
+                .checked_add(1)
+                .ok_or(RocketMQError::ResponseProcessFailed {
+                    operation: "patch_topic_config_if_version",
+                    reason: "Broker accepted a Topic patch after the version counter was exhausted".to_owned(),
+                })?;
+            if header.topic_version != expected_next {
+                return Err(RocketMQError::ResponseProcessFailed {
+                    operation: "patch_topic_config_if_version",
+                    reason: format!(
+                        "Broker returned Topic config version {}, expected {}",
+                        header.topic_version, expected_next
+                    ),
+                });
+            }
+            Ok(TopicConfigPatchOutcome::Applied {
+                previous_version: expected_version,
+                version: header.topic_version,
+            })
+        }
+        ResponseCode::InvalidParameter => {
+            if let Ok(header) = response.decode_command_custom_header::<UpdateTopicConfigCasResponseHeader>() {
+                return Ok(TopicConfigPatchOutcome::VersionConflict {
+                    expected_version,
+                    actual_version: header.topic_version,
+                });
+            }
+            Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or_else(String::new, |remark| remark.to_string())
+            ))
+        }
+        _ => Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or_else(String::new, |remark| remark.to_string())
+        )),
+    }
 }
 
 impl MQClientAPIImpl {
@@ -1380,6 +1466,34 @@ impl MQClientAPIImpl {
     }
 
     #[cfg(feature = "admin-mutation")]
+    pub(crate) async fn get_topic_config_with_version(
+        &self,
+        addr: &CheetahString,
+        topic: CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<TopicConfigVersioned> {
+        let request = RemotingCommand::create_request_command(
+            RequestCode::GetTopicConfig,
+            GetTopicConfigRequestHeader {
+                topic,
+                topic_request_header: None,
+            },
+        );
+        let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&broker_addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            return topic_config_versioned_from_response(&response);
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or_else(String::new, |remark| remark.to_string())
+        ))
+    }
+
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn create_static_topic(
         &self,
         addr: &CheetahString,
@@ -2019,6 +2133,62 @@ impl MQClientAPIImpl {
                 response.remark().map_or_else(String::new, |remark| remark.to_string())
             )),
         }
+    }
+
+    #[cfg(feature = "admin-mutation")]
+    pub(crate) async fn update_topic_config_if_version(
+        &self,
+        addr: &CheetahString,
+        topic: CheetahString,
+        expected_version: u64,
+        patch: TopicConfigPatch,
+        timeout_millis: u64,
+    ) -> RocketMQResult<TopicConfigPatchOutcome> {
+        if patch.is_empty() {
+            return Err(RocketMQError::illegal_argument(
+                "version-checked Topic config patch must not be empty",
+            ));
+        }
+        let read_queue_nums = patch
+            .read_queue_nums
+            .map(|value| {
+                if !(1..=128).contains(&value) {
+                    return Err(RocketMQError::illegal_argument(
+                        "readQueueNums must be between 1 and 128",
+                    ));
+                }
+                i32::try_from(value)
+                    .map_err(|_| RocketMQError::illegal_argument("readQueueNums exceeds Java int range"))
+            })
+            .transpose()?;
+        let write_queue_nums = patch
+            .write_queue_nums
+            .map(|value| {
+                if !(1..=128).contains(&value) {
+                    return Err(RocketMQError::illegal_argument(
+                        "writeQueueNums must be between 1 and 128",
+                    ));
+                }
+                i32::try_from(value)
+                    .map_err(|_| RocketMQError::illegal_argument("writeQueueNums exceeds Java int range"))
+            })
+            .transpose()?;
+        let request = RemotingCommand::create_request_command(
+            RequestCode::UpdateTopicConfigCas,
+            UpdateTopicConfigCasRequestHeader {
+                topic,
+                expected_version,
+                read_queue_nums,
+                write_queue_nums,
+                order: patch.order,
+            },
+        );
+        let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&broker_addr), request, timeout_millis)
+            .await?;
+        topic_config_patch_outcome_from_response(&response, expected_version)
     }
 
     #[cfg(feature = "admin-mutation")]
@@ -3770,5 +3940,51 @@ mod broker_config_snapshot_tests {
 
         let snapshot = broker_config_snapshot_from_response(&response).expect("legacy snapshot");
         assert_eq!(snapshot.generation, None);
+    }
+
+    #[cfg(feature = "admin-mutation")]
+    #[test]
+    fn topic_config_response_binds_body_to_version() {
+        let config = TopicConfig::with_queues("orders", 4, 6);
+        let mut response = RemotingCommand::create_response_command()
+            .set_code(ResponseCode::Success)
+            .set_command_custom_header(UpdateTopicConfigCasResponseHeader { topic_version: 9 })
+            .set_body(
+                serde_json::to_vec(&TopicConfigAndQueueMapping::new(config.clone(), None))
+                    .expect("Topic response body"),
+            );
+        response.make_custom_header_to_net();
+
+        let snapshot = topic_config_versioned_from_response(&response).expect("versioned Topic config");
+        assert_eq!(snapshot.version, 9);
+        assert_eq!(snapshot.config, config);
+    }
+
+    #[cfg(feature = "admin-mutation")]
+    #[test]
+    fn topic_config_patch_response_distinguishes_commit_and_conflict() {
+        let mut applied = RemotingCommand::create_response_command()
+            .set_code(ResponseCode::Success)
+            .set_command_custom_header(UpdateTopicConfigCasResponseHeader { topic_version: 10 });
+        applied.make_custom_header_to_net();
+        assert_eq!(
+            topic_config_patch_outcome_from_response(&applied, 9).expect("applied outcome"),
+            TopicConfigPatchOutcome::Applied {
+                previous_version: 9,
+                version: 10,
+            }
+        );
+
+        let mut conflict = RemotingCommand::create_response_command()
+            .set_code(ResponseCode::InvalidParameter)
+            .set_command_custom_header(UpdateTopicConfigCasResponseHeader { topic_version: 11 });
+        conflict.make_custom_header_to_net();
+        assert_eq!(
+            topic_config_patch_outcome_from_response(&conflict, 9).expect("conflict outcome"),
+            TopicConfigPatchOutcome::VersionConflict {
+                expected_version: 9,
+                actual_version: 11,
+            }
+        );
     }
 }
