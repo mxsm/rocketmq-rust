@@ -1421,14 +1421,14 @@ fn eligible(profile: &RuntimeModelProfile, data_class: DataClass) -> bool {
             .contains(&ProviderCapability::JsonSchema)
 }
 
-fn cost_aware_profile_order(profile: &RuntimeModelProfile) -> (u16, u64, &str) {
+fn cost_aware_profile_order(profile: &RuntimeModelProfile) -> (u16, u64, String) {
     (
         profile.profile.priority,
         profile
             .profile
             .estimated_cost_microusd_per_1k_tokens
             .unwrap_or(u64::MAX),
-        profile.profile.id.as_str(),
+        profile.profile.id.clone(),
     )
 }
 
