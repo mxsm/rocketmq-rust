@@ -19,8 +19,11 @@ use chrono::Utc;
 
 use crate::PostgresRepository;
 use crate::forecast::ForecastService;
+use crate::release_management::secret_provider::EnvSecretProvider;
+use crate::release_management::secret_provider::SecretProvider;
 use crate::supervised_execution::SupervisedExecutionService;
 
+mod enterprise_integration;
 mod integration;
 mod release;
 mod release_execution;
@@ -37,6 +40,7 @@ pub(crate) struct ReleaseManagementService {
     pub(super) repository: PostgresRepository,
     pub(super) supervised: SupervisedExecutionService,
     pub(super) forecast: ForecastService,
+    pub(super) secrets: Arc<dyn SecretProvider>,
     clock: Clock,
 }
 
@@ -50,6 +54,7 @@ impl ReleaseManagementService {
             repository,
             supervised,
             forecast,
+            secrets: Arc::new(EnvSecretProvider),
             clock: Arc::new(Utc::now),
         }
     }
