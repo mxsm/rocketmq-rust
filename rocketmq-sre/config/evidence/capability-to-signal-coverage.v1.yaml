@@ -30,11 +30,19 @@ semantic_registry_owners:
   - owner: mcp
     component_surface: MCP
     exposure: queryable
-    backlog: production-verify exporter recovery and audit backlog alerts
+    backlog: tune exporter recovery and audit backlog alert thresholds from production baselines
     notable_sources:
       - name: mcp_system_resources
         source_path: rocketmq-tools/rocketmq-mcp/src/resources/system.rs
         source_symbol: read_result
+        exposure: queryable
+      - name: mcp_metrics
+        source_path: rocketmq-observability/src/metrics/mcp.rs
+        source_symbol: McpMetrics
+        exposure: queryable
+      - name: mcp_protocol_spans
+        source_path: rocketmq-tools/rocketmq-mcp/src/protocol/server.rs
+        source_symbol: read_resource
         exposure: queryable
   - owner: name-server
     component_surface: NameServer
@@ -201,9 +209,20 @@ diagnostic_packs:
   mcp_runtime:
     capabilities: [runtime.diagnostics, observability.status]
     required_signals:
+      - mcp.operation_requests
+      - mcp.request_latency
+      - mcp.request_errors
+      - mcp.tool_span
+      - mcp.resource_span
+      - mcp.cache_operations
+      - mcp.rate_limit
+      - mcp.audit_backlog
+      - mcp.audit_dropped
+      - mcp.audit_failures
       - mcp.runtime_resource
       - mcp.observability_resource
     optional_signals:
+      - mcp.action_audit
       - runtime.tasks
       - runtime.task_groups
       - runtime.long_running
