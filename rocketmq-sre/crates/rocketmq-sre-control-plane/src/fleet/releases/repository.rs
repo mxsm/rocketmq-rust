@@ -41,7 +41,7 @@ use crate::ControlPlaneError;
 use crate::fleet::repository::FleetRepository;
 
 impl FleetRepository {
-    pub(in crate::fleet) async fn create_fleet_release(
+    pub(super) async fn create_fleet_release(
         &self,
         release: &FleetRelease,
         targets: &[FleetReleaseTarget],
@@ -106,7 +106,7 @@ impl FleetRepository {
         Ok(())
     }
 
-    pub(in crate::fleet) async fn fleet_release(
+    pub(super) async fn fleet_release(
         &self,
         tenant_id: TenantId,
         id: FleetReleaseId,
@@ -140,7 +140,7 @@ impl FleetRepository {
         })
     }
 
-    pub(in crate::fleet) async fn fleet_releases(
+    pub(super) async fn fleet_releases(
         &self,
         tenant_id: TenantId,
         allowed_clusters: &[ClusterId],
@@ -196,7 +196,7 @@ impl FleetRepository {
         Ok((items, total))
     }
 
-    pub(in crate::fleet) async fn linked_release_status(
+    pub(super) async fn linked_release_status(
         &self,
         tenant_id: TenantId,
         cluster_id: ClusterId,
@@ -216,7 +216,7 @@ impl FleetRepository {
         parse_linked_release_status(&status)
     }
 
-    pub(in crate::fleet) async fn apply_fleet_release_transition(
+    pub(super) async fn apply_fleet_release_transition(
         &self,
         previous: &FleetReleaseView,
         transition: &FleetReleaseTransition,
