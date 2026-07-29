@@ -112,6 +112,7 @@ foreach ($node in $nodes) {
         'exec', $node,
         'ctr', '--namespace', 'k8s.io',
         'images', 'tag',
+        '--force',
         $ImageReference,
         "$ImageRepository@$ImageDigest"
     ) "Kind image digest registration on $node"
