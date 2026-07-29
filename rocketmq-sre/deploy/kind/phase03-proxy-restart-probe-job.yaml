@@ -42,7 +42,7 @@ spec:
             - -c
             - RocketmqRust
             - -t
-            - SRE_PROBE_00000000000040008000000000000001_00000000000000000000000000000003
+            - SRE_PROBE_00000000000040008000000000000001_00000000000000000000000000000000
             - -r
             - "4"
             - -w
@@ -77,7 +77,7 @@ spec:
           env:
             - {name: ROCKETMQ_NAMESRV_ADDR, value: "rocketmq-namesrv:9876"}
             - {name: ROCKETMQ_SRE_PROBE_CLUSTER_ID, value: "00000000-0000-4000-8000-000000000001"}
-            - {name: ROCKETMQ_SRE_PROBE_RUN_ID, value: "00000000-0000-0000-0000-000000000003"}
+            - {name: ROCKETMQ_SRE_PROBE_RUN_ID, value: "00000000-0000-0000-0000-000000000000"}
             - {name: ROCKETMQ_SRE_PROBE_MAX_MESSAGES, value: "10"}
             - {name: ROCKETMQ_SRE_PROBE_MAX_MESSAGES_PER_SECOND, value: "5"}
             - {name: ROCKETMQ_SRE_PROBE_PAYLOAD_BYTES, value: "64"}
