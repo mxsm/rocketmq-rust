@@ -706,8 +706,8 @@ mod tests {
     fn credential_rotation_targets_bind_selector_broker_and_probe_topic() {
         assert_eq!(
             parse_credential_rotation_targets(
-                "broker-admin=rocketmq-sre/broker-admin-selector|broker.rocketmq-system:10911|\
-                 SRE_PROBE_CREDENTIAL_ROTATION",
+                "broker-admin=rocketmq-sre/broker-admin-selector|broker.rocketmq-system:\
+                 10911|SRE_PROBE_CREDENTIAL_ROTATION",
             )
             .expect("credential target allowlist"),
             BTreeMap::from([(
