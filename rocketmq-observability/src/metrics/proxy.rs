@@ -53,6 +53,20 @@ pub fn init_global_with_proxy_up_attributes(attributes: ProxyUpAttributes) -> bo
 }
 
 #[cfg(feature = "otel-metrics")]
+pub fn init_global_with_runtime_observers<F>(attributes: ProxyUpAttributes, active_connections: F) -> bool
+where
+    F: Fn() -> u64 + Send + Sync + 'static,
+{
+    PROXY_METRICS
+        .set(ProxyMetrics::new_with_runtime_observers(
+            &opentelemetry::global::meter("rocketmq-proxy"),
+            attributes,
+            active_connections,
+        ))
+        .is_ok()
+}
+
+#[cfg(feature = "otel-metrics")]
 fn global_metrics() -> &'static ProxyMetrics {
     if let Some(metrics) = PROXY_METRICS.get() {
         return metrics;
@@ -294,7 +308,7 @@ struct ProxyMetricInstruments {
     grpc_requests_total: opentelemetry::metrics::Counter<u64>,
     grpc_request_latency: opentelemetry::metrics::Histogram<u64>,
     forward_latency: opentelemetry::metrics::Histogram<u64>,
-    active_connections: opentelemetry::metrics::Gauge<u64>,
+    active_connections: Option<Arc<AtomicU64>>,
     grpc_errors_total: opentelemetry::metrics::Counter<u64>,
 }
 
@@ -326,61 +340,37 @@ impl ProxyMetrics {
         Self::new_with_proxy_up(meter, ProxyUpAttributes::default())
     }
 
-    #[cfg(test)]
-    pub(crate) fn new_with_proxy_up(
+    pub fn new_with_proxy_up(meter: &opentelemetry::metrics::Meter, proxy_up_attributes: ProxyUpAttributes) -> Self {
+        let active_connections = Arc::new(AtomicU64::new(0));
+        let observed_active_connections = Arc::clone(&active_connections);
+        Self::build(
+            meter,
+            proxy_up_attributes,
+            move || observed_active_connections.load(Ordering::Relaxed),
+            Some(active_connections),
+        )
+    }
+
+    pub fn new_with_runtime_observers<F>(
         meter: &opentelemetry::metrics::Meter,
         proxy_up_attributes: ProxyUpAttributes,
-    ) -> Self {
-        Self {
-            telemetry: None,
-            instruments: Some(ProxyMetricInstruments::new(meter, proxy_up_attributes)),
-        }
+        active_connections: F,
+    ) -> Self
+    where
+        F: Fn() -> u64 + Send + Sync + 'static,
+    {
+        Self::build(meter, proxy_up_attributes, active_connections, None)
     }
 
-    fn is_active(&self) -> bool {
-        self.telemetry.as_ref().is_none_or(crate::TelemetryHandle::is_active)
-    }
-
-    #[inline]
-    pub fn record_grpc_requests_total(&self, count: u64) {
-        if self.is_active() {
-            if let Some(instruments) = &self.instruments {
-                instruments.grpc_requests_total.add(count, &[]);
-            }
-        }
-    }
-
-    #[inline]
-    pub fn record_grpc_request_latency(&self, latency_ms: u64) {
-        if self.is_active() {
-            if let Some(instruments) = &self.instruments {
-                instruments.grpc_request_latency.record(latency_ms, &[]);
-            }
-        }
-    }
-
-    #[inline]
-    pub fn record_forward_latency(&self, latency_ms: u64) {
-        if self.is_active() {
-            if let Some(instruments) = &self.instruments {
-                instruments.forward_latency.record(latency_ms, &[]);
-            }
-        }
-    }
-
-    #[inline]
-    pub fn record_active_connections(&self, count: u64) {
-        if self.is_active() {
-            if let Some(instruments) = &self.instruments {
-                instruments.active_connections.record(count, &[]);
-            }
-        }
-    }
-}
-
-#[cfg(feature = "otel-metrics")]
-impl ProxyMetricInstruments {
-    fn new(meter: &opentelemetry::metrics::Meter, proxy_up_attributes: ProxyUpAttributes) -> Self {
+    fn build<F>(
+        meter: &opentelemetry::metrics::Meter,
+        proxy_up_attributes: ProxyUpAttributes,
+        active_connections: F,
+        recorded_active_connections: Option<Arc<AtomicU64>>,
+    ) -> Self
+    where
+        F: Fn() -> u64 + Send + Sync + 'static,
+    {
         let grpc_requests_total = meter
             .u64_counter(PROXY_GRPC_REQUESTS_TOTAL)
             .with_description("Total number of proxy gRPC requests")
@@ -399,10 +389,13 @@ impl ProxyMetricInstruments {
             .with_unit("ms")
             .build();
 
-        let active_connections = meter
-            .u64_gauge(PROXY_ACTIVE_CONNECTIONS)
+        let _active_connections = meter
+            .u64_observable_gauge(PROXY_ACTIVE_CONNECTIONS)
             .with_description("Number of active proxy connections")
             .with_unit("{connection}")
+            .with_callback(move |observer| {
+                observer.observe(active_connections(), &[]);
+            })
             .build();
         let grpc_errors_total = meter
             .u64_counter(PROXY_GRPC_ERRORS_TOTAL)
@@ -424,7 +417,7 @@ impl ProxyMetricInstruments {
             grpc_requests_total,
             grpc_request_latency,
             forward_latency,
-            active_connections,
+            active_connections: recorded_active_connections,
             grpc_errors_total,
         }
     }
@@ -446,7 +439,10 @@ impl ProxyMetricInstruments {
 
     #[inline]
     pub fn record_active_connections(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.active_connections.record(count, attributes);
+        let _ = attributes;
+        if let Some(active_connections) = self.active_connections.as_ref() {
+            active_connections.store(count, Ordering::Relaxed);
+        }
     }
 
     #[inline]
@@ -499,12 +495,29 @@ mod tests {
     }
 
     #[test]
-    fn proxy_noop_recorder_is_safe_without_explicit_meter() {
-        let metrics = ProxyMetrics::from_handle(&crate::TelemetryHandle::noop());
-        metrics.record_grpc_requests_total(1);
-        metrics.record_grpc_request_latency(6);
-        metrics.record_forward_latency(12);
-        metrics.record_active_connections(4);
+    fn proxy_metrics_constructs_with_runtime_observers() {
+        let provider = SdkMeterProvider::builder().build();
+        let meter = provider.meter("proxy-runtime-observers-test");
+        let active_connections = Arc::new(AtomicU64::new(2));
+        let observed_active_connections = Arc::clone(&active_connections);
+        let metrics = ProxyMetrics::new_with_runtime_observers(
+            &meter,
+            ProxyUpAttributes::new("proxy", "ClusterA", "proxy-a", "cluster"),
+            move || observed_active_connections.load(Ordering::Relaxed),
+        );
+
+        active_connections.store(3, Ordering::Relaxed);
+        metrics.record_forward_latency(4, &[]);
+    }
+
+    #[test]
+    fn proxy_global_recorders_lazy_initialize() {
+        record_grpc_requests_total(1);
+        record_grpc_request_latency(6);
+        record_forward_latency(12);
+        record_active_connections(4);
+
+        assert!(PROXY_METRICS.get().is_some() || PROXY_GLOBAL_METRICS.get().is_some());
     }
 }
 
