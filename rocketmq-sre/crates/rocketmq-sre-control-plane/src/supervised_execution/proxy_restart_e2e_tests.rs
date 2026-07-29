@@ -567,6 +567,7 @@ pub(super) async fn seed_complete_slo_evidence(repository: &PostgresRepository, 
     let mut series = Vec::new();
     for (sli, dimension) in [
         ("delivery_ratio", "traffic"),
+        ("broker_runtime", "broker"),
         ("proxy_connection", "routing_proxy"),
         ("telemetry_freshness", "platform"),
     ] {
