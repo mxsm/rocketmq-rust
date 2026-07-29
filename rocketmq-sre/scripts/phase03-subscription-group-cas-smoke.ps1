@@ -251,7 +251,6 @@ try {
     $group = "SRE_SUBSCRIPTION_CAS_$([Guid]::NewGuid().ToString('N'))"
     Invoke-Native $adminBinary @(
         'consumer', 'updateSubGroup',
-        '-n', "127.0.0.1:$NameServerPort",
         '-b', "127.0.0.1:$BrokerPort",
         '-g', $group,
         '-r', '16',
