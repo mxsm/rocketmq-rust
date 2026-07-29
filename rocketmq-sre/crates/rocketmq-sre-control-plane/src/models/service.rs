@@ -394,7 +394,7 @@ impl ModelGatewayService {
         let requested_profile = profiles
             .iter()
             .filter(|profile| eligible(profile, data_class))
-            .min_by_key(|profile| (profile.profile.priority, profile.profile.id.as_str()));
+            .min_by_key(|profile| cost_aware_profile_order(profile));
         let Some(requested_profile) = requested_profile else {
             return Ok(ModelDiagnosisDecision::rules_only());
         };
@@ -404,7 +404,7 @@ impl ModelGatewayService {
             .iter()
             .filter(|profile| eligible(profile, data_class))
             .collect::<Vec<_>>();
-        candidates.sort_by_key(|profile| (profile.profile.priority, profile.profile.id.as_str()));
+        candidates.sort_by_key(|profile| cost_aware_profile_order(profile));
 
         let deadline = rocketmq_sre_model_gateway::current_unix_ms()
             .saturating_add(self.config.request_timeout.as_millis().min(u128::from(u64::MAX)) as u64);
@@ -1421,6 +1421,17 @@ fn eligible(profile: &RuntimeModelProfile, data_class: DataClass) -> bool {
             .contains(&ProviderCapability::JsonSchema)
 }
 
+fn cost_aware_profile_order(profile: &RuntimeModelProfile) -> (u16, u64, &str) {
+    (
+        profile.profile.priority,
+        profile
+            .profile
+            .estimated_cost_microusd_per_1k_tokens
+            .unwrap_or(u64::MAX),
+        profile.profile.id.as_str(),
+    )
+}
+
 fn fallback_safe(error: &ProviderError) -> bool {
     matches!(
         error.code,
@@ -2026,6 +2037,39 @@ mod tests {
         assert_eq!(invocation_cost(None, Some(4), Some(3)), None);
         assert_eq!(invocation_cost(Some(100), None, Some(3)), None);
         assert_eq!(invocation_cost(Some(100), Some(4), None), None);
+    }
+
+    #[test]
+    fn eligible_profiles_compare_cost_after_routing_priority() {
+        let mut expensive = deepseek_profile(Some(10_000));
+        expensive.id = "expensive".to_owned();
+        expensive.priority = 10;
+        let mut affordable = deepseek_profile(Some(1_000));
+        affordable.id = "affordable".to_owned();
+        affordable.priority = 10;
+        let mut higher_quality = deepseek_profile(Some(100_000));
+        higher_quality.id = "higher-quality".to_owned();
+        higher_quality.priority = 1;
+        let mut profiles = [
+            RuntimeModelProfile {
+                id: ModelProfileId::new(),
+                profile: expensive,
+            },
+            RuntimeModelProfile {
+                id: ModelProfileId::new(),
+                profile: affordable,
+            },
+            RuntimeModelProfile {
+                id: ModelProfileId::new(),
+                profile: higher_quality,
+            },
+        ];
+
+        profiles.sort_by_key(cost_aware_profile_order);
+
+        assert_eq!(profiles[0].profile.id, "higher-quality");
+        assert_eq!(profiles[1].profile.id, "affordable");
+        assert_eq!(profiles[2].profile.id, "expensive");
     }
 
     #[test]
