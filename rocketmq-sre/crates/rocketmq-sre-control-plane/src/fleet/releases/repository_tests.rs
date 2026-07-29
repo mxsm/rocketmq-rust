@@ -330,7 +330,7 @@ async fn seed_linked_release(
             rocketmq_version, deployment_mode, owner_name,
             requested_access_profile, effective_access_profile, onboarding_state
          ) VALUES ($1, $2, $3, 'test', $4, '5.3.2', 'docker',
-                   'fleet-release-test', 'supervised', 'supervised', 'ready_read_only')",
+                   'fleet-release-test', 'supervised', 'read_only', 'ready_read_only')",
     )
     .bind(cluster_id.as_uuid())
     .bind(tenant_id.as_uuid())
