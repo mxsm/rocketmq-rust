@@ -20,14 +20,12 @@ use std::time::Duration as StdDuration;
 use chrono::Duration;
 use chrono::Utc;
 use reqwest::Url;
-use rocketmq_sre_contracts::ClusterId;
 use rocketmq_sre_contracts::CorrelationId;
 use rocketmq_sre_contracts::CriticGateState;
 use rocketmq_sre_contracts::CriticReviewStatus;
 use rocketmq_sre_contracts::ExecutionAction;
 use rocketmq_sre_contracts::ExecutionState;
 use rocketmq_sre_contracts::PlanStatus;
-use rocketmq_sre_contracts::TenantId;
 use rocketmq_sre_model_gateway::AsyncModelTransport;
 use rocketmq_sre_model_gateway::ProviderError;
 use rocketmq_sre_model_gateway::TransportFuture;
@@ -129,7 +127,7 @@ async fn real_kind_supervised_credential_overlap_passes_critic_and_verification(
     let workflow = WorkflowService::new(repository.clone(), WorkflowEventBus::new(64));
     let executor = ExecutorSubmissionClient::http(
         executor_url.parse::<Url>().expect("Executor URL"),
-        workload_token,
+        workload_token.clone(),
         StdDuration::from_secs(900),
         true,
     )
