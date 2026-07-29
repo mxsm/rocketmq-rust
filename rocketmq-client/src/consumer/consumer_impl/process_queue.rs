@@ -222,21 +222,23 @@ impl ProcessQueue {
             return result;
         }
         result = self.queue_offset_max.load(Ordering::Acquire) as i64 + 1;
-        let mut removed_cnt = 0;
+        let mut removed_cnt: u64 = 0;
         for message in messages {
             let prev = msg_tree_map.remove(&message.queue_offset);
-            if let Some(prev) = prev {
+            if prev.is_some() {
                 removed_cnt += 1;
                 self.msg_size
                     .fetch_sub(message.body().as_ref().unwrap().len() as u64, Ordering::AcqRel);
             }
+        }
+        if removed_cnt > 0 {
             self.msg_count.fetch_sub(removed_cnt, Ordering::AcqRel);
-            if self.msg_count.load(Ordering::Acquire) == 0 {
-                self.msg_size.store(0, Ordering::Release);
-            }
-            if !msg_tree_map.is_empty() {
-                result = *msg_tree_map.first_key_value().unwrap().0;
-            }
+        }
+        if self.msg_count.load(Ordering::Acquire) == 0 {
+            self.msg_size.store(0, Ordering::Release);
+        }
+        if !msg_tree_map.is_empty() {
+            result = *msg_tree_map.first_key_value().unwrap().0;
         }
         result
     }
@@ -332,5 +334,93 @@ impl ProcessQueue {
 
     pub(crate) fn is_locked(&self) -> bool {
         self.locked.load(std::sync::atomic::Ordering::Acquire)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+    use rocketmq_common::common::message::message_ext::MessageExt;
+    use rocketmq_rust::ArcMut;
+
+    use super::ProcessQueue;
+
+    fn make_msg(offset: i64, body_size: usize) -> ArcMut<MessageExt> {
+        let mut msg = MessageExt::default();
+        msg.queue_offset = offset;
+        msg.message.body = Some(Bytes::from(vec![0u8; body_size]));
+        ArcMut::new(msg)
+    }
+
+    async fn put_msgs(pq: &ProcessQueue, offsets: &[i64], body_size: usize) {
+        let msgs = offsets.iter().map(|&o| make_msg(o, body_size)).collect();
+        pq.put_message(msgs).await;
+    }
+
+    #[tokio::test]
+    async fn test_remove_single_message_correct_count() {
+        let pq = ProcessQueue::new();
+        put_msgs(&pq, &[0], 10).await;
+        assert_eq!(pq.msg_count(), 1);
+        assert_eq!(pq.msg_size(), 10);
+
+        let msgs = vec![make_msg(0, 10)];
+        pq.remove_message(&msgs).await;
+
+        assert_eq!(pq.msg_count(), 0);
+        assert_eq!(pq.msg_size(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_remove_two_messages_correct_count() {
+        let pq = ProcessQueue::new();
+        put_msgs(&pq, &[0, 1], 10).await;
+        assert_eq!(pq.msg_count(), 2);
+
+        let msgs = vec![make_msg(0, 10), make_msg(1, 10)];
+        pq.remove_message(&msgs).await;
+
+        assert_eq!(pq.msg_count(), 0);
+        assert_eq!(pq.msg_size(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_remove_16_messages_correct_count() {
+        let pq = ProcessQueue::new();
+        let offsets: Vec<i64> = (0..16).collect();
+        put_msgs(&pq, &offsets, 5).await;
+        assert_eq!(pq.msg_count(), 16);
+        assert_eq!(pq.msg_size(), 80);
+
+        let msgs: Vec<ArcMut<MessageExt>> = offsets.iter().map(|&o| make_msg(o, 5)).collect();
+        pq.remove_message(&msgs).await;
+
+        assert_eq!(pq.msg_count(), 0);
+        assert_eq!(pq.msg_size(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_remove_subset_correct_count() {
+        let pq = ProcessQueue::new();
+        put_msgs(&pq, &[0, 1, 2, 3, 4], 4).await;
+        assert_eq!(pq.msg_count(), 5);
+
+        let to_remove: Vec<ArcMut<MessageExt>> = vec![0, 1, 2].iter().map(|&o| make_msg(o, 4)).collect();
+        pq.remove_message(&to_remove).await;
+
+        let tree = pq.msg_tree_map.read().await;
+        assert_eq!(pq.msg_count(), 2, "count should match retained map size");
+        assert_eq!(tree.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_msg_count_no_underflow() {
+        let pq = ProcessQueue::new();
+        put_msgs(&pq, &[0], 4).await;
+
+        let msgs = vec![make_msg(0, 4), make_msg(99, 4)];
+        pq.remove_message(&msgs).await;
+
+        assert_eq!(pq.msg_count(), 0, "count must not underflow");
     }
 }
