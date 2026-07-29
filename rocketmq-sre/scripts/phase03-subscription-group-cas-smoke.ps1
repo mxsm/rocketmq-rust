@@ -263,6 +263,22 @@ try {
         '-w', '1',
         '-a', 'true'
     ) 'dedicated Subscription Group bootstrap'
+    $retryTopic = "%RETRY%$group"
+    Invoke-Native $adminBinary @(
+        'topic', 'updateTopic',
+        '-n', "127.0.0.1:$NameServerPort",
+        '-b', "127.0.0.1:$BrokerPort",
+        '-t', $retryTopic,
+        '-r', '1',
+        '-w', '1',
+        '-p', '6'
+    ) 'dedicated retry Topic bootstrap'
+    Invoke-Native $adminBinary @(
+        'topic', 'topicRoute',
+        '-n', "127.0.0.1:$NameServerPort",
+        '-t', $retryTopic,
+        '-l', 'true'
+    ) 'dedicated retry Topic route readiness'
 
     $env:ROCKETMQ_SRE_TEST_DATABASE_URL = $DatabaseUrl
     $env:ROCKETMQ_SRE_TEST_NAMESRV_ADDR = "127.0.0.1:$NameServerPort"
