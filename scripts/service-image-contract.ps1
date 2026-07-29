@@ -52,6 +52,78 @@ function Invoke-Captured {
     return $output
 }
 
+function Start-ServiceSmokeContainer {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ImageRef,
+        [Parameter(Mandatory = $true)]
+        [string]$NetworkName,
+        [Parameter(Mandatory = $true)]
+        [string]$ConfigPath,
+        [Parameter(Mandatory = $true)]
+        [string]$WritableDataPath,
+        [Parameter(Mandatory = $true)]
+        [string]$TmpfsOptions,
+        [string]$NetworkAlias = ""
+    )
+
+    $dockerArguments = @(
+        "run",
+        "--detach",
+        "--interactive",
+        "--network",
+        $NetworkName
+    )
+    if (-not [string]::IsNullOrWhiteSpace($NetworkAlias)) {
+        $dockerArguments += @("--network-alias", $NetworkAlias)
+    }
+    $dockerArguments += @(
+        "--read-only",
+        "--mount",
+        "type=volume,destination=$WritableDataPath",
+        "--mount",
+        "type=bind,source=$ConfigPath,target=/etc/rocketmq,readonly",
+        "--tmpfs",
+        $TmpfsOptions,
+        $ImageRef
+    )
+    return (Invoke-Captured docker @dockerArguments).Trim()
+}
+
+function Assert-ServiceSmokeRunning {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ServiceName,
+        [Parameter(Mandatory = $true)]
+        [string]$ContainerId
+    )
+
+    Start-Sleep -Seconds 5
+    $running = (Invoke-Captured docker inspect --format "{{.State.Running}}" $ContainerId).Trim()
+    if ($running -ne "true") {
+        $logs = Invoke-Captured docker logs $ContainerId
+        throw "$ServiceName exited before SIGTERM smoke: $logs"
+    }
+}
+
+function Stop-ServiceSmokeContainer {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ServiceName,
+        [Parameter(Mandatory = $true)]
+        [string]$ContainerId,
+        [Parameter(Mandatory = $true)]
+        [int]$GracePeriodSeconds
+    )
+
+    Invoke-Checked docker stop --signal SIGTERM --timeout $GracePeriodSeconds $ContainerId
+    $exitCode = [int](Invoke-Captured docker inspect --format "{{.State.ExitCode}}" $ContainerId).Trim()
+    if ($exitCode -ne 0) {
+        $logs = Invoke-Captured docker logs $ContainerId
+        throw "$ServiceName SIGTERM exit code was $exitCode`: $logs"
+    }
+}
+
 function Format-CriticalVulnerabilitySummary {
     param(
         [object[]]$Vulnerabilities
@@ -104,6 +176,10 @@ $oldPassword = $env:COSIGN_PASSWORD
 $randomBytes = New-Object byte[] 32
 $random = [System.Security.Cryptography.RandomNumberGenerator]::Create()
 $evidence = [System.Collections.Generic.List[object]]::new()
+$smokeContainerIds = [System.Collections.Generic.List[string]]::new()
+$dependencyContainerIds = @{}
+$smokeNetwork = ""
+$smokeNetworkCreated = $false
 
 try {
     $random.GetBytes($randomBytes)
@@ -176,28 +252,6 @@ try {
         ) -join "; "
         Invoke-Checked docker run --rm --network none --read-only --mount "type=volume,destination=$($policy.runtime.writable_data_path)" --tmpfs $tmpfsOptions --entrypoint /bin/sh $imageRef -c $permissionSmoke
 
-        $containerId = ""
-        try {
-            $containerId = (Invoke-Captured docker run --detach --interactive --network none --read-only --mount "type=volume,destination=$($policy.runtime.writable_data_path)" --mount "type=bind,source=$smokeConfigPath,target=/etc/rocketmq,readonly" --tmpfs $tmpfsOptions $imageRef).Trim()
-            Start-Sleep -Seconds 5
-            $running = (Invoke-Captured docker inspect --format "{{.State.Running}}" $containerId).Trim()
-            if ($running -ne "true") {
-                $logs = Invoke-Captured docker logs $containerId
-                throw "$serviceName exited before SIGTERM smoke: $logs"
-            }
-            Invoke-Checked docker stop --signal SIGTERM --timeout $($policy.runtime.stop_grace_period_seconds) $containerId
-            $exitCode = [int](Invoke-Captured docker inspect --format "{{.State.ExitCode}}" $containerId).Trim()
-            if ($exitCode -ne 0) {
-                $logs = Invoke-Captured docker logs $containerId
-                throw "$serviceName SIGTERM exit code was $exitCode`: $logs"
-            }
-        }
-        finally {
-            if ($containerId) {
-                & docker rm --force $containerId *> $null
-            }
-        }
-
         $sbomPath = Join-Path $outputPath "$serviceName.cdx.json"
         $trivyPath = Join-Path $outputPath "$serviceName.trivy.json"
         $bundlePath = Join-Path $outputPath "$serviceName.sbom.sigstore.json"
@@ -247,8 +301,65 @@ try {
             signature_bundle_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $bundlePath).Hash.ToLowerInvariant()
         })
     }
+
+    $smokeNetwork = "$($policy.smoke_network.network_prefix)-$PID-$($sourceCommit.Substring(0, 8))"
+    Invoke-Checked docker network create $smokeNetwork
+    $smokeNetworkCreated = $true
+
+    $namesrvAlias = $policy.smoke_network.namesrv_alias
+    foreach ($dependencyServiceName in @($policy.smoke_network.dependency_chain)) {
+        $networkAlias = if ($dependencyServiceName -eq "namesrv") {
+            $namesrvAlias
+        }
+        else {
+            ""
+        }
+        $containerId = Start-ServiceSmokeContainer `
+            -ImageRef "rocketmq-rust/$($dependencyServiceName):verification" `
+            -NetworkName $smokeNetwork `
+            -NetworkAlias $networkAlias `
+            -ConfigPath $smokeConfigPath `
+            -WritableDataPath $policy.runtime.writable_data_path `
+            -TmpfsOptions $tmpfsOptions
+        $smokeContainerIds.Add($containerId)
+        $dependencyContainerIds[$dependencyServiceName] = $containerId
+        Assert-ServiceSmokeRunning -ServiceName $dependencyServiceName -ContainerId $containerId
+    }
+
+    foreach ($serviceProperty in $policy.services.PSObject.Properties) {
+        $serviceName = $serviceProperty.Name
+        if (@($policy.smoke_network.dependency_chain) -contains $serviceName) {
+            continue
+        }
+        $containerId = Start-ServiceSmokeContainer `
+            -ImageRef "rocketmq-rust/$($serviceName):verification" `
+            -NetworkName $smokeNetwork `
+            -ConfigPath $smokeConfigPath `
+            -WritableDataPath $policy.runtime.writable_data_path `
+            -TmpfsOptions $tmpfsOptions
+        $smokeContainerIds.Add($containerId)
+        Assert-ServiceSmokeRunning -ServiceName $serviceName -ContainerId $containerId
+        Stop-ServiceSmokeContainer `
+            -ServiceName $serviceName `
+            -ContainerId $containerId `
+            -GracePeriodSeconds $policy.runtime.stop_grace_period_seconds
+    }
+    [array]$dependencyShutdownOrder = @($policy.smoke_network.dependency_chain)
+    [array]::Reverse($dependencyShutdownOrder)
+    foreach ($dependencyServiceName in $dependencyShutdownOrder) {
+        Stop-ServiceSmokeContainer `
+            -ServiceName $dependencyServiceName `
+            -ContainerId $dependencyContainerIds[$dependencyServiceName] `
+            -GracePeriodSeconds $policy.runtime.stop_grace_period_seconds
+    }
 }
 finally {
+    foreach ($containerId in @($smokeContainerIds)) {
+        & docker rm --force --volumes $containerId *> $null
+    }
+    if ($smokeNetworkCreated) {
+        & docker network rm $smokeNetwork *> $null
+    }
     $random.Dispose()
     $env:COSIGN_PASSWORD = $oldPassword
     if (Test-Path -LiteralPath $privateKey) {

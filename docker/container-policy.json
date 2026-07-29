@@ -4,6 +4,13 @@
   "foundation_dockerfile": "docker/Dockerfile.base",
   "service_contract_script": "scripts/service-image-contract.ps1",
   "smoke_config_directory": "docker/smoke-config",
+  "smoke_network": {
+    "network_prefix": "rocketmq-service-smoke",
+    "namesrv_alias": "rocketmq-namesrv",
+    "namesrv_port": 9876,
+    "dependency_chain": ["namesrv", "broker"],
+    "dependent_services": ["proxy", "mcp"]
+  },
   "base_images": {
     "builder": {
       "reference": "docker.io/library/rust:slim-bookworm@sha256:99e09cb2284e2ddbb73a995deee3e91783fd04d177602ccf6eab326d778ee777",
