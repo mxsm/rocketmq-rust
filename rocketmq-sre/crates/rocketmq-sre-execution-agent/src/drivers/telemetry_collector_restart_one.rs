@@ -170,6 +170,8 @@ where
                 .client
                 .telemetry_collector_restart_state(&parameters.namespace, &parameters.pod, &parameters.pipeline)
                 .await?;
+            let execution_id = request.execution_id.to_string();
+            let plan_step_id = request.plan_step_id.to_string();
             let effect_state = if state.pod_uid != parameters.expected_uid
                 && state.replacement_ready
                 && state.pod_ready
@@ -180,6 +182,8 @@ where
                 && operation_id
                     .as_deref()
                     .is_some_and(|expected| state.last_operation_id.as_deref() == Some(expected))
+                && state.last_execution_id.as_deref() == Some(execution_id.as_str())
+                && state.last_plan_step_id.as_deref() == Some(plan_step_id.as_str())
             {
                 ReconcileEffectState::Applied
             } else if state.pod_uid == parameters.expected_uid && state.last_operation_id.is_none() {
