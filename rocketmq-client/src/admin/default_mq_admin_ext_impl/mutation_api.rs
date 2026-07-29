@@ -57,6 +57,9 @@ use rocketmq_protocol::protocol::subscription::subscription_group_config::Subscr
 
 use crate::admin::mq_admin_mutation_ext::BrokerConfigPatchOutcome;
 use crate::admin::mq_admin_mutation_ext::MQAdminMutationExt;
+use crate::admin::mq_admin_mutation_ext::TopicConfigPatch;
+use crate::admin::mq_admin_mutation_ext::TopicConfigPatchOutcome;
+use crate::admin::mq_admin_mutation_ext::TopicConfigVersioned;
 
 use super::DefaultMQAdminExtImpl;
 use super::NAMESPACE_ORDER_TOPIC_CONFIG;
@@ -319,6 +322,34 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
                 &broker_addr,
                 expected_generation,
                 properties,
+                self.remoting_timeout_millis()?,
+            )
+            .await
+    }
+
+    async fn topic_config_with_version(
+        &self,
+        broker_addr: CheetahString,
+        topic: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<TopicConfigVersioned> {
+        self.mq_client_api()?
+            .get_topic_config_with_version(&broker_addr, topic, self.remoting_timeout_millis()?)
+            .await
+    }
+
+    async fn patch_topic_config_if_version(
+        &self,
+        broker_addr: CheetahString,
+        topic: CheetahString,
+        expected_version: u64,
+        patch: TopicConfigPatch,
+    ) -> rocketmq_error::RocketMQResult<TopicConfigPatchOutcome> {
+        self.mq_client_api()?
+            .update_topic_config_if_version(
+                &broker_addr,
+                topic,
+                expected_version,
+                patch,
                 self.remoting_timeout_millis()?,
             )
             .await
