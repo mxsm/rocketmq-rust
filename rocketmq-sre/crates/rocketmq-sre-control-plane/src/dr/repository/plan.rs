@@ -113,12 +113,14 @@ impl DrRepository {
             ControlPlaneError::validation("invalid_dr_plan", "plan version exceeds the supported range")
         })?)
         .bind(&plan.owner)
-        .bind(i64::try_from(plan.target.rto_seconds).map_err(|_| {
-            ControlPlaneError::validation("invalid_dr_plan", "RTO exceeds the supported range")
-        })?)
-        .bind(i64::try_from(plan.target.rpo_seconds).map_err(|_| {
-            ControlPlaneError::validation("invalid_dr_plan", "RPO exceeds the supported range")
-        })?)
+        .bind(
+            i64::try_from(plan.target.rto_seconds)
+                .map_err(|_| ControlPlaneError::validation("invalid_dr_plan", "RTO exceeds the supported range"))?,
+        )
+        .bind(
+            i64::try_from(plan.target.rpo_seconds)
+                .map_err(|_| ControlPlaneError::validation("invalid_dr_plan", "RPO exceeds the supported range"))?,
+        )
         .bind(allowed_modes)
         .bind(&plan.required_sources)
         .bind(checkpoint_definitions)
@@ -129,11 +131,7 @@ impl DrRepository {
         plan_from_row(&row)
     }
 
-    pub(super) async fn get_plan(
-        &self,
-        tenant_id: TenantId,
-        id: DrPlanId,
-    ) -> Result<DrPlan, ControlPlaneError> {
+    pub(super) async fn get_plan(&self, tenant_id: TenantId, id: DrPlanId) -> Result<DrPlan, ControlPlaneError> {
         let row = sqlx::query("SELECT * FROM dr_plans WHERE tenant_id = $1 AND id = $2")
             .bind(tenant_id.as_uuid())
             .bind(id.as_uuid())
@@ -234,9 +232,7 @@ impl DrRepository {
         .bind(plan_id.as_uuid())
         .fetch_all(&self.pool)
         .await?;
-        rows.into_iter()
-            .map(|row| backup_asset_from_row(&row))
-            .collect()
+        rows.into_iter().map(|row| backup_asset_from_row(&row)).collect()
     }
 
     pub(super) async fn cluster_environment(
