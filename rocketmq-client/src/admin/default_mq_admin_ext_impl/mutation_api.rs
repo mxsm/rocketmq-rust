@@ -57,6 +57,8 @@ use rocketmq_protocol::protocol::subscription::subscription_group_config::Subscr
 
 use crate::admin::mq_admin_mutation_ext::BrokerConfigPatchOutcome;
 use crate::admin::mq_admin_mutation_ext::MQAdminMutationExt;
+use crate::admin::mq_admin_mutation_ext::SubscriptionGroupConfigPatch;
+use crate::admin::mq_admin_mutation_ext::SubscriptionGroupConfigPatchOutcome;
 use crate::admin::mq_admin_mutation_ext::TopicConfigPatch;
 use crate::admin::mq_admin_mutation_ext::TopicConfigPatchOutcome;
 
@@ -337,6 +339,24 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
             .update_topic_config_if_version(
                 &broker_addr,
                 topic,
+                expected_version,
+                patch,
+                self.remoting_timeout_millis()?,
+            )
+            .await
+    }
+
+    async fn patch_subscription_group_config_if_version(
+        &self,
+        broker_addr: CheetahString,
+        group: CheetahString,
+        expected_version: u64,
+        patch: SubscriptionGroupConfigPatch,
+    ) -> rocketmq_error::RocketMQResult<SubscriptionGroupConfigPatchOutcome> {
+        self.mq_client_api()?
+            .update_subscription_group_config_if_version(
+                &broker_addr,
+                group,
                 expected_version,
                 patch,
                 self.remoting_timeout_millis()?,
