@@ -22,6 +22,7 @@ use rocketmq_sre_contracts::ClusterId;
 use rocketmq_sre_contracts::CorrelationId;
 use rocketmq_sre_contracts::IntegrationAdapterKind;
 use rocketmq_sre_contracts::IntegrationDelivery;
+use rocketmq_sre_contracts::IntegrationDeliveryId;
 use rocketmq_sre_contracts::IntegrationDeliveryStatus;
 use rocketmq_sre_contracts::IntegrationTarget;
 use rocketmq_sre_contracts::IntegrationTargetId;
@@ -176,6 +177,37 @@ impl PostgresRepository {
         self.integration_target(target.target.tenant_id, target.target.id).await
     }
 
+    pub(in crate::release_management) async fn rotate_integration_secret(
+        &self,
+        target: &IntegrationTargetView,
+        secret_reference: &str,
+        updated_at: chrono::DateTime<Utc>,
+        audit: &AuditEvent,
+    ) -> Result<IntegrationTargetView, ControlPlaneError> {
+        let mut transaction = self.pool.begin().await?;
+        let updated = sqlx::query(
+            "UPDATE integration_targets
+             SET secret_reference = $4, updated_at = $5
+             WHERE id = $1 AND tenant_id = $2 AND updated_at = $3",
+        )
+        .bind(target.target.id.as_uuid())
+        .bind(target.target.tenant_id.as_uuid())
+        .bind(target.target.updated_at)
+        .bind(secret_reference)
+        .bind(updated_at)
+        .execute(&mut *transaction)
+        .await?;
+        if updated.rows_affected() != 1 {
+            return Err(ControlPlaneError::conflict_code(
+                "integration_target_state_changed",
+                "integration target was changed by another operator",
+            ));
+        }
+        insert_audit(&mut transaction, audit).await?;
+        transaction.commit().await?;
+        self.integration_target(target.target.tenant_id, target.target.id).await
+    }
+
     pub(in crate::release_management) async fn integration_deliveries(
         &self,
         tenant_id: TenantId,
@@ -199,6 +231,52 @@ impl PostgresRepository {
         .fetch_all(&self.pool)
         .await?;
         rows.iter().map(integration_delivery_from_row).collect()
+    }
+
+    pub(in crate::release_management) async fn integration_delivery(
+        &self,
+        tenant_id: TenantId,
+        id: IntegrationDeliveryId,
+    ) -> Result<IntegrationDelivery, ControlPlaneError> {
+        let row = sqlx::query(
+            "SELECT delivery_snapshot, status, attempt_count, next_attempt_at,
+                    last_error_code, delivered_at
+             FROM integration_outbox
+             WHERE tenant_id = $1 AND id = $2",
+        )
+        .bind(tenant_id.as_uuid())
+        .bind(id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or(ControlPlaneError::NotFound)?;
+        integration_delivery_from_row(&row)
+    }
+
+    pub(in crate::release_management) async fn replay_integration_delivery(
+        &self,
+        delivery: &IntegrationDelivery,
+        audit: &AuditEvent,
+    ) -> Result<IntegrationDelivery, ControlPlaneError> {
+        let mut transaction = self.pool.begin().await?;
+        let updated = sqlx::query(
+            "UPDATE integration_outbox
+             SET status = 'pending', attempt_count = 0, next_attempt_at = NOW(),
+                 last_error_code = NULL, claim_token = NULL, claimed_at = NULL
+             WHERE id = $1 AND tenant_id = $2 AND status = 'failed'",
+        )
+        .bind(delivery.id.as_uuid())
+        .bind(delivery.tenant_id.as_uuid())
+        .execute(&mut *transaction)
+        .await?;
+        if updated.rows_affected() != 1 {
+            return Err(ControlPlaneError::conflict_code(
+                "integration_delivery_not_replayable",
+                "only a failed integration delivery can be replayed",
+            ));
+        }
+        insert_audit(&mut transaction, audit).await?;
+        transaction.commit().await?;
+        self.integration_delivery(delivery.tenant_id, delivery.id).await
     }
 
     pub(in crate::release_management) async fn claim_integration_deliveries(
