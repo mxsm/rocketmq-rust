@@ -114,6 +114,22 @@ uuid_id!(
     DrActionItemId,
     "Stable identifier for an action item created from a disaster-recovery finding."
 );
+uuid_id!(
+    GovernanceArtifactId,
+    "Stable identifier for one governed logical artifact."
+);
+uuid_id!(
+    GovernanceVersionId,
+    "Stable identifier for an immutable governed artifact version."
+);
+uuid_id!(
+    GovernanceEventId,
+    "Stable identifier for an append-only governance lifecycle event."
+);
+uuid_id!(
+    GovernanceAdmissionId,
+    "Stable identifier for one immutable governance admission decision."
+);
 uuid_id!(ConversationId, "Stable identifier for an operator conversation.");
 uuid_id!(InvestigationId, "Stable identifier for a multi-step investigation.");
 uuid_id!(TimelineEventId, "Stable identifier for a workflow timeline event.");
