@@ -54,6 +54,11 @@ data:
     brokerClusterName = "RocketmqRust"
     brokerId = 0
 
+{{- if $.Values.services.broker.logFilterReloadEnabled }}
+    [logging.reload]
+    enabled = true
+
+{{- end }}
     [store]
     haListenAddress = "0.0.0.0"
     haListenPort = 10912
