@@ -457,10 +457,8 @@ fn validate_cost_request(request: &RecordFinOpsCostRequest) -> Result<(), Contro
             "FinOps occurrence time is too far in the future",
         ));
     }
-    for value in [&request.pack_id, &request.workflow_id] {
-        if let Some(value) = value {
-            validate_text("FinOps workload dimension", value, 256)?;
-        }
+    for value in [&request.pack_id, &request.workflow_id].into_iter().flatten() {
+        validate_text("FinOps workload dimension", value, 256)?;
     }
     Ok(())
 }
