@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeMap;
+
 use chrono::DateTime;
 use chrono::Utc;
 use schemars::JsonSchema;
@@ -23,8 +25,11 @@ use crate::ClusterId;
 use crate::CorrelationId;
 use crate::EvidenceId;
 use crate::ExecutionId;
+use crate::FleetId;
+use crate::FleetReleaseId;
 use crate::IncidentId;
 use crate::ReadinessReportId;
+use crate::RegionId;
 use crate::ReleaseId;
 use crate::ReleaseReportId;
 use crate::RunbookId;
@@ -154,5 +159,128 @@ pub struct ReleaseReport {
     pub before: Vec<ReleaseObservation>,
     pub during: Vec<ReleaseObservation>,
     pub after: Vec<ReleaseObservation>,
+    pub generated_at: DateTime<Utc>,
+}
+
+/// Aggregate lifecycle for a bounded multi-cluster release.
+#[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FleetReleaseStatus {
+    Planned,
+    ReadinessChecking,
+    Ready,
+    CanaryRunning,
+    BatchRunning,
+    Paused,
+    Verifying,
+    RollingBack,
+    RolledBack,
+    Completed,
+    ManualTakeover,
+    Failed,
+}
+
+impl FleetReleaseStatus {
+    /// Returns whether the Fleet release reached a terminal state.
+    #[must_use]
+    pub const fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::RolledBack | Self::Completed | Self::ManualTakeover | Self::Failed
+        )
+    }
+}
+
+/// State of one cluster inside a Fleet release.
+#[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FleetReleaseTargetState {
+    Pending,
+    ReadinessChecking,
+    Ready,
+    Ineligible,
+    CanaryRunning,
+    BatchRunning,
+    Paused,
+    RollingBack,
+    RolledBack,
+    Completed,
+    Skipped,
+    Failed,
+}
+
+impl FleetReleaseTargetState {
+    /// Returns whether the target needs no further scheduling.
+    #[must_use]
+    pub const fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Ineligible | Self::RolledBack | Self::Completed | Self::Skipped | Self::Failed
+        )
+    }
+}
+
+/// Deterministic regional batch in a Fleet release.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FleetReleaseBatch {
+    pub sequence: u32,
+    pub region_id: RegionId,
+    pub cluster_ids: Vec<ClusterId>,
+    pub max_concurrency: u32,
+    pub canary: bool,
+}
+
+/// Durable aggregate that coordinates independent per-cluster release workflows.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FleetRelease {
+    pub schema_version: String,
+    pub id: FleetReleaseId,
+    pub fleet_id: FleetId,
+    pub tenant_id: TenantId,
+    pub correlation_id: CorrelationId,
+    pub release_ref: String,
+    pub artifact_digest: String,
+    pub target_version: String,
+    pub owner: String,
+    pub maintenance_window_start: DateTime<Utc>,
+    pub maintenance_window_end: DateTime<Utc>,
+    pub rollback_artifact_digest: String,
+    pub slo_policy_id: String,
+    pub status: FleetReleaseStatus,
+    pub active_batch: Option<u32>,
+    pub batches: Vec<FleetReleaseBatch>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Per-cluster projection linked to an independently approved release workflow.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FleetReleaseTarget {
+    pub fleet_release_id: FleetReleaseId,
+    pub tenant_id: TenantId,
+    pub cluster_id: ClusterId,
+    pub region_id: RegionId,
+    pub batch_sequence: u32,
+    pub canary: bool,
+    pub state: FleetReleaseTargetState,
+    pub release_id: Option<ReleaseId>,
+    pub readiness_reason_codes: Vec<String>,
+    pub regression_detected: bool,
+    pub sanitized_outcome: Option<String>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Bounded aggregate report for one Fleet release.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FleetReleaseReport {
+    pub schema_version: String,
+    pub release: FleetRelease,
+    pub targets: Vec<FleetReleaseTarget>,
+    pub state_counts: BTreeMap<String, u32>,
+    pub skipped_clusters: Vec<ClusterId>,
     pub generated_at: DateTime<Utc>,
 }
