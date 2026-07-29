@@ -26,10 +26,7 @@ use crate::finops::model::FinOpsLedgerQuery;
 use crate::finops::model::bounded_limit;
 
 impl FinOpsRepository {
-    pub(in crate::finops) async fn scope_exists(
-        &self,
-        entry: &FinOpsCostEntry,
-    ) -> Result<bool, ControlPlaneError> {
+    pub(in crate::finops) async fn scope_exists(&self, entry: &FinOpsCostEntry) -> Result<bool, ControlPlaneError> {
         let row = sqlx::query(
             "SELECT EXISTS (
                 SELECT 1
