@@ -20,9 +20,9 @@ param(
 
     [string]$CargoTargetDir = 'D:\BuildCache\rocketmq-sre-target',
 
-    [string]$TenantId = '00000000-0000-4000-8000-000000000001',
+    [string]$TenantId = '00000000-0000-4000-8000-000000000002',
 
-    [string]$ClusterId = '10000000-0000-4000-8000-000000000001',
+    [string]$ClusterId = '00000000-0000-4000-8000-000000000001',
 
     [string]$BrokerResource = 'broker/rocketmq-broker.rocketmq-system.svc.cluster.local:10911',
 
