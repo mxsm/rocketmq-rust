@@ -88,8 +88,9 @@ $env:CARGO_TARGET_DIR = [System.IO.Path]::GetFullPath($CargoTargetDir)
 $env:TEMP = [System.IO.Path]::GetFullPath($TempDir)
 $env:TMP = $env:TEMP
 
-& cargo test `
+& cargo +1.95.0 test `
     --manifest-path $manifestPath `
+    --locked `
     -p rocketmq-sre-control-plane `
     supervised_execution::proxy_restart_e2e_tests::real_kind_supervised_proxy_restart_reaches_verified_success `
     -- `
