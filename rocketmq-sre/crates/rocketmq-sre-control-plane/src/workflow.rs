@@ -12,11 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod event_entry_model;
+mod event_entry_repository;
+mod event_entry_service;
 mod events;
 mod model;
 mod repository;
 mod service;
 
+pub(crate) use event_entry_model::EventEntrySourceKind;
+pub(crate) use event_entry_model::EventEntryTargetKind;
+use event_entry_model::EventEntryWorkflowTarget;
+pub(crate) use event_entry_model::UnifiedEventEntryRequest;
+pub(crate) use event_entry_model::UnifiedEventEntryResult;
+use event_entry_model::UnifiedEventPayload;
+pub(crate) use event_entry_service::UnifiedEventEntryService;
 pub(crate) use events::WorkflowEventBus;
 pub(crate) use events::WorkflowStreamEvent;
 pub(crate) use model::ConversationCreateRequest;
