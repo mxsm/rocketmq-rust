@@ -30,9 +30,11 @@ $sreRoot = [IO.Path]::GetFullPath((Join-Path $scriptDirectory '..'))
 $manifestPath = Join-Path $sreRoot 'Cargo.toml'
 $probeManifest = Join-Path $sreRoot 'deploy\kind\phase03-proxy-restart-probe-job.yaml'
 $probeJob = 'rocketmq-sre-phase03-proxy-restart-probe'
+$probeMessageCount = 10
 $rocketmqNamespace = 'rocketmq-system'
 $sreNamespace = 'rocketmq-sre'
 $brokerPod = 'rocketmq-broker-0'
+$brokerPvc = 'data-rocketmq-broker-0'
 $runtimeDirectory = Join-Path $TemporaryRoot "phase05-dr-$([Guid]::NewGuid().ToString('N').Substring(0, 12))"
 $portForwardOutput = Join-Path $runtimeDirectory 'postgres-port-forward.stdout.log'
 $portForwardError = Join-Path $runtimeDirectory 'postgres-port-forward.stderr.log'
@@ -51,10 +53,14 @@ function Invoke-Native {
     }
 }
 
-function Assert-NonSystemPath([string]$Path, [string]$Description) {
+function Assert-DataPath([string]$Path, [string]$Description) {
     $fullPath = [IO.Path]::GetFullPath($Path)
-    if ([IO.Path]::GetPathRoot($fullPath).Equals('C:\', [StringComparison]::OrdinalIgnoreCase)) {
-        throw "$Description must not use the C drive."
+    $root = [IO.Path]::GetPathRoot($fullPath)
+    if (
+        -not $root.Equals('D:\', [StringComparison]::OrdinalIgnoreCase) -and
+        -not $root.Equals('F:\', [StringComparison]::OrdinalIgnoreCase)
+    ) {
+        throw "$Description must use the D or F drive."
     }
 }
 
@@ -94,6 +100,94 @@ function Invoke-BoundedProbe([string]$Phase, [int]$MaxAttempts = 1) {
         }
     }
     throw "The '$Phase' RocketMQ bounded probe did not complete 10/10/10 after $MaxAttempts attempt(s)."
+}
+
+function Invoke-HistoryProbe(
+    [ValidateSet('send', 'consume')][string]$Command,
+    [string]$RunId
+) {
+    $manifest = Get-Content -Raw -LiteralPath $probeManifest
+    $rendered = $manifest.Replace(
+        'args: ["run", "send-consume-ack"]',
+        "args: [`"$Command`"]"
+    ).Replace(
+        'value: "00000000-0000-0000-0000-000000000000"',
+        "value: `"$RunId`""
+    )
+    if ($rendered -eq $manifest) {
+        throw "Unable to render the '$Command' history probe fixture."
+    }
+    $renderedPath = Join-Path $runtimeDirectory "history-$Command-probe.yaml"
+    [IO.File]::WriteAllText(
+        $renderedPath,
+        $rendered,
+        [Text.UTF8Encoding]::new($false)
+    )
+
+    & kubectl -n $rocketmqNamespace delete job $probeJob --ignore-not-found=true --wait=true | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to clear the prior bounded probe before history '$Command'."
+    }
+    Invoke-Native kubectl @(
+        'apply', '-f', $renderedPath
+    ) "history $Command probe creation" | Out-Host
+    & kubectl -n $rocketmqNamespace wait `
+        --for=condition=complete `
+        --timeout=190s `
+        "job/$probeJob" | Out-Host
+    $waitExitCode = $LASTEXITCODE
+    $probeOutput = @(& kubectl -n $rocketmqNamespace logs "job/$probeJob" -c bounded-probe 2>$null)
+    $logExitCode = $LASTEXITCODE
+    $operationPattern = if ($Command -eq 'send') {
+        '^sent=(?<count>\d+)\s'
+    }
+    else {
+        '^consumed=(?<count>\d+)\s'
+    }
+    $operationLine = $probeOutput |
+        Where-Object { $_ -match $operationPattern } |
+        Select-Object -Last 1
+    $resultLine = $probeOutput |
+        Where-Object { $_ -match "^probe_result command=$Command cleanup_partial=false$" } |
+        Select-Object -Last 1
+    $observed = 0
+    if (-not [string]::IsNullOrWhiteSpace($operationLine) -and $operationLine -match $operationPattern) {
+        $observed = [int]$Matches.count
+    }
+    if (
+        $waitExitCode -ne 0 -or
+        $logExitCode -ne 0 -or
+        [string]::IsNullOrWhiteSpace($resultLine) -or
+        $observed -ne $probeMessageCount
+    ) {
+        $probeOutput | Out-Host
+        throw "The history '$Command' probe did not complete exactly $probeMessageCount messages."
+    }
+    return $observed
+}
+
+function Get-BrokerPersistence {
+    $pvcJson = @(& kubectl -n $rocketmqNamespace get pvc $brokerPvc -o json 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $pvcJson.Count -eq 0) {
+        throw "The Broker PVC '$brokerPvc' is required before DR fault injection."
+    }
+    $pvc = ($pvcJson -join "`n") | ConvertFrom-Json
+    if ($pvc.status.phase -ne 'Bound' -or [string]::IsNullOrWhiteSpace($pvc.spec.volumeName)) {
+        throw "The Broker PVC '$brokerPvc' is not Bound."
+    }
+    $pvJson = @(& kubectl get pv $pvc.spec.volumeName -o json 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $pvJson.Count -eq 0) {
+        throw "The Broker PV '$($pvc.spec.volumeName)' is unavailable."
+    }
+    $pv = ($pvJson -join "`n") | ConvertFrom-Json
+    return [pscustomobject]@{
+        PvcUid = [string]$pvc.metadata.uid
+        PvName = [string]$pvc.spec.volumeName
+        PvUid = [string]$pv.metadata.uid
+        StorageClass = [string]$pvc.spec.storageClassName
+        Capacity = [string]$pvc.status.capacity.storage
+        ReclaimPolicy = [string]$pv.spec.persistentVolumeReclaimPolicy
+    }
 }
 
 function Wait-BrokerReplacement([string]$PreviousUid) {
@@ -148,7 +242,7 @@ foreach ($path in @(
     @{ Value = $TemporaryRoot; Description = 'temporary directory' },
     @{ Value = $EvidenceOutput; Description = 'DR evidence output' }
 )) {
-    Assert-NonSystemPath $path.Value $path.Description
+    Assert-DataPath $path.Value $path.Description
 }
 if ($PostgresPort -lt 1024 -or $PostgresPort -gt 65535) {
     throw 'The local PostgreSQL port must be between 1024 and 65535.'
@@ -187,7 +281,10 @@ try {
         '--timeout=120s'
     ) 'pre-exercise Control Plane readiness'
 
+    $persistenceBefore = Get-BrokerPersistence
     $preProbe = Invoke-BoundedProbe 'pre-recovery'
+    $historyRunId = [Guid]::NewGuid().ToString()
+    $historySent = Invoke-HistoryProbe 'send' $historyRunId
     $previousUid = (& kubectl -n $rocketmqNamespace get pod $brokerPod -o jsonpath='{.metadata.uid}').Trim()
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($previousUid)) {
         throw 'Unable to resolve the exact test Broker pod UID.'
@@ -210,6 +307,22 @@ try {
         ([DateTimeOffset]::UtcNow - $restartStartedAt).TotalSeconds
     )
     $brokerDisrupted = $false
+    $persistenceAfter = Get-BrokerPersistence
+    if (
+        $persistenceAfter.PvcUid -ne $persistenceBefore.PvcUid -or
+        $persistenceAfter.PvUid -ne $persistenceBefore.PvUid -or
+        $persistenceAfter.PvName -ne $persistenceBefore.PvName
+    ) {
+        throw 'The Broker replacement did not retain the original PVC and PV.'
+    }
+    $historyRecovered = Invoke-HistoryProbe 'consume' $historyRunId
+    $historyRecoverySeconds = [int][Math]::Ceiling(
+        ([DateTimeOffset]::UtcNow - $restartStartedAt).TotalSeconds
+    )
+    $historyLost = $historySent - $historyRecovered
+    if ($historyLost -ne 0) {
+        throw "Broker message-history RPO failed: sent=$historySent recovered=$historyRecovered."
+    }
     $postProbe = Invoke-BoundedProbe 'post-recovery' 2
 
     $portForward = Start-Process `
@@ -227,11 +340,12 @@ try {
         -RedirectStandardError $portForwardError
     Wait-LocalPort $PostgresPort
 
-    $dFreeGiB = (Get-PSDrive -Name D).Free / 1GB
-    $gFreeGiB = (Get-PSDrive -Name G).Free / 1GB
-    Write-Host "D_FREE_GIB=$([Math]::Round($dFreeGiB, 2))"
-    Write-Host "G_FREE_GIB=$([Math]::Round($gFreeGiB, 2))"
-    if ($dFreeGiB -lt 15 -or $gFreeGiB -lt 15) {
+    $targetDriveName = [IO.Path]::GetPathRoot(
+        [IO.Path]::GetFullPath($CargoTargetDir)
+    ).TrimEnd('\').TrimEnd(':')
+    $targetFreeGiB = (Get-PSDrive -Name $targetDriveName).Free / 1GB
+    Write-Host "${targetDriveName}_FREE_GIB=$([Math]::Round($targetFreeGiB, 2))"
+    if ($targetFreeGiB -lt 15) {
         Invoke-Native cargo @(
             'clean',
             '--manifest-path', $manifestPath,
@@ -270,6 +384,24 @@ try {
         previous_pod_uid = $previousUid
         replacement_pod_uid = $replacementUid
         broker_rebuild_seconds = $restartDurationSeconds
+        persistent_storage = [ordered]@{
+            pvc_name = $brokerPvc
+            pvc_uid = $persistenceAfter.PvcUid
+            pv_name = $persistenceAfter.PvName
+            pv_uid = $persistenceAfter.PvUid
+            storage_class = $persistenceAfter.StorageClass
+            capacity = $persistenceAfter.Capacity
+            reclaim_policy = $persistenceAfter.ReclaimPolicy
+            retained_across_pod_replacement = $true
+        }
+        message_history = [ordered]@{
+            run_id = $historyRunId
+            expected_messages = $historySent
+            recovered_messages = $historyRecovered
+            lost_messages = $historyLost
+            rpo_messages = $historyLost
+            rto_seconds = $historyRecoverySeconds
+        }
         pre_recovery_probe = [ordered]@{
             sent = [int]$preProbe.content.value.sent_messages
             received = [int]$preProbe.content.value.received_messages
@@ -282,8 +414,8 @@ try {
         }
         control_plane_ready_replicas = [int]$controlPlaneReady
         dr_center_record_verified = $true
-        synthetic_topic_rebuilt = $true
-        message_history_restore_claimed = $false
+        synthetic_topic_persisted = $true
+        message_history_restore_claimed = $true
         secrets_recorded = $false
     }
     $evidenceDirectory = Split-Path -Parent ([IO.Path]::GetFullPath($EvidenceOutput))
