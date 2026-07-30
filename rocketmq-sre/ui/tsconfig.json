@@ -18,7 +18,8 @@
     "jsx": "react-jsx",
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["src/*"],
+      "react-router-dom": ["src/router.tsx"]
     }
   },
   "include": ["src", "vite.config.ts"]
