@@ -5,6 +5,7 @@ import { createSupervisedSreApi } from "./supervisedClient";
 import type {
   ApprovalDecisionRequest,
   ClearQuarantineRequest,
+  ConfirmDiagnosisExecutionRequest,
   CreatePlanRequest,
   CriticReviewRequest,
   SubmitExecutionRequest,
@@ -34,6 +35,10 @@ describe("createSupervisedSreApi", () => {
     const plan = {
       cluster_id: "cluster/one",
     } as CreatePlanRequest;
+    const confirmation = {
+      human_confirmed: true,
+      reason: "Evidence and root cause reviewed",
+    } as ConfirmDiagnosisExecutionRequest;
     const decision = {
       plan_hash: "sha256:plan",
       precondition_hash: "sha256:precondition",
@@ -50,6 +55,11 @@ describe("createSupervisedSreApi", () => {
       evidence_ids: ["evidence-1"],
     } as ClearQuarantineRequest;
 
+    await api.confirmDiagnosisExecution(
+      "incident/one",
+      "revision/one",
+      confirmation,
+    );
     await api.createPlan(plan);
     await api.getPlan("plan/one");
     await api.reviewPlanWithCritic("plan/one", critic);
@@ -62,6 +72,7 @@ describe("createSupervisedSreApi", () => {
     await api.clearQuarantine("quarantine/one", clear);
 
     expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
+      "/v1/incidents/incident%2Fone/diagnosis-revisions/revision%2Fone/confirm-execution",
       "/v1/plans",
       "/v1/plans/plan%2Fone",
       "/v1/plans/plan%2Fone/critic",
@@ -78,11 +89,14 @@ describe("createSupervisedSreApi", () => {
     expect(headers.get("X-RocketMQ-Tenant")).toBe("tenant-1");
     expect(headers.get("X-RocketMQ-Clusters")).toBe("cluster/one");
     expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("POST");
-    expect(fetchMock.mock.calls[1]?.[1]?.method).toBe("GET");
-    expect(JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body))).toEqual(
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual(
+      confirmation,
+    );
+    expect(fetchMock.mock.calls[2]?.[1]?.method).toBe("GET");
+    expect(JSON.parse(String(fetchMock.mock.calls[3]?.[1]?.body))).toEqual(
       critic,
     );
-    expect(JSON.parse(String(fetchMock.mock.calls[3]?.[1]?.body))).toEqual(
+    expect(JSON.parse(String(fetchMock.mock.calls[4]?.[1]?.body))).toEqual(
       decision,
     );
   });
