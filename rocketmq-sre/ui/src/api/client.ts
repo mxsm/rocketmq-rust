@@ -40,6 +40,8 @@ import type {
   ModelProfileRollbackRequest,
   OnboardClusterRequest,
   OnboardOutcome,
+  OperationsAnalyticsQuery,
+  OperationsAnalyticsReport,
   OperationsReport,
   OperationsReportWindow,
   Phase2ContractManifest,
@@ -407,6 +409,10 @@ export interface SreApi {
     query: AutonomyOperationalReportQuery,
     signal?: AbortSignal,
   ) => Promise<AutonomyOperationalReport>;
+  getOperationsAnalytics: (
+    query: OperationsAnalyticsQuery,
+    signal?: AbortSignal,
+  ) => Promise<OperationsAnalyticsReport>;
   subscribeWorkflowEvents: (
     onEvent: (event: WorkflowStreamEvent) => void,
     signal: AbortSignal,
@@ -735,6 +741,19 @@ export function createHttpSreApi(auth?: ApiRequestContext): SreApi {
           period: query.period,
           anchor: query.anchor,
           cluster_id: query.clusterId,
+        }),
+        signal,
+      ),
+    getOperationsAnalytics: (query, signal) =>
+      get<OperationsAnalyticsReport>(
+        apiQuery("/v1/operations/analytics", {
+          period: query.period,
+          anchor: query.anchor,
+          cluster_id: query.clusterId,
+          scenario: query.scenario,
+          provider_family: query.providerFamily,
+          model_family: query.modelFamily,
+          action_id: query.actionId,
         }),
         signal,
       ),
