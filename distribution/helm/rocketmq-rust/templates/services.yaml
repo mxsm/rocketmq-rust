@@ -39,6 +39,12 @@ spec:
       targetPort: {{ $port }}
       protocol: TCP
 {{- end }}
+{{- if $root.Values.global.runtimeDiagnostics.enabled }}
+    - name: runtime-diag
+      port: {{ $root.Values.global.runtimeDiagnostics.port }}
+      targetPort: runtime-diag
+      protocol: TCP
+{{- end }}
 ---
 {{- end }}
 {{- if eq .Values.deploymentProfile "production-controller-ha" }}
@@ -80,6 +86,12 @@ spec:
     - name: tcp-{{ $port }}
       port: {{ $port }}
       targetPort: {{ $port }}
+      protocol: TCP
+{{- end }}
+{{- if and (eq $service "proxy") $root.Values.global.runtimeDiagnostics.enabled }}
+    - name: runtime-diag
+      port: {{ $root.Values.global.runtimeDiagnostics.port }}
+      targetPort: runtime-diag
       protocol: TCP
 {{- end }}
 ---
