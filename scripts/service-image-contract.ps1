@@ -159,6 +159,7 @@ $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $policyPath = Join-Path $root "docker/container-policy.json"
 $policy = Get-Content -Raw -LiteralPath $policyPath | ConvertFrom-Json
 $tmpfsOptions = "$($policy.runtime.tmpfs_path):rw,noexec,nosuid,size=16m,uid=$($policy.runtime.uid),gid=$($policy.runtime.gid),mode=0700"
+$loopbackHealthBind = "127.0.0.1:8088"
 $dockerfilePath = (Resolve-Path (Join-Path $root $policy.foundation_dockerfile)).Path
 $smokeConfigPath = (Resolve-Path (Join-Path $root $policy.smoke_config_directory)).Path
 $outputPath = Join-Path $root $OutputDirectory
@@ -250,6 +251,7 @@ try {
             $ErrorActionPreference = "Continue"
             & docker run --rm --network none --read-only --tmpfs $tmpfsOptions `
                 --env "ROCKETMQ_SECURITY_PROFILE=development-insecure-loopback" `
+                --env "ROCKETMQ_HEALTH_BIND_ADDR=$loopbackHealthBind" `
                 $imageRef 2> $null | Out-Null
             $missingConfigExitCode = $LASTEXITCODE
         }
@@ -305,6 +307,7 @@ try {
                     --mount "type=bind,source=$smokeConfigPath,target=/etc/rocketmq,readonly" `
                     --tmpfs $tmpfsOptions `
                     --env "ROCKETMQ_SECURITY_PROFILE=development-insecure-loopback" `
+                    --env "ROCKETMQ_HEALTH_BIND_ADDR=$loopbackHealthBind" `
                     $imageRef
             ).Trim()
             Start-Sleep -Seconds 5
