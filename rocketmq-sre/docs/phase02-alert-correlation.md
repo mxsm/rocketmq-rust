@@ -134,10 +134,10 @@ The following identities make retries and restarts safe:
 Run all commands with Cargo directories outside the system drive:
 
 ```powershell
-$env:CARGO_TARGET_DIR='G:\rocketmq-sre-phase2-cargo-target'
-$env:CARGO_HOME='G:\rocketmq-sre-phase1-cargo-home'
-$env:TEMP='G:\rocketmq-sre-phase2-temp'
-$env:TMP='G:\rocketmq-sre-phase2-temp'
+$env:CARGO_TARGET_DIR='D:\BuildCache\rocketmq-sre-target'
+$env:CARGO_HOME='D:\BuildCache\rocketmq-sre-cargo-home'
+$env:TEMP='D:\BuildCache\rocketmq-sre-temp'
+$env:TMP='D:\BuildCache\rocketmq-sre-temp'
 
 cargo test --manifest-path rocketmq-sre/Cargo.toml --locked `
   -p rocketmq-sre-core correlation
