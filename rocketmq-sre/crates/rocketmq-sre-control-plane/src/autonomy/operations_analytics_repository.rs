@@ -18,7 +18,7 @@ use rocketmq_sre_contracts::TenantId;
 use sqlx::Row;
 use uuid::Uuid;
 
-use super::operations::AutomationSavingsMetrics;
+use super::operations::AttributedAutomationSavingsMetrics;
 use super::operations::AutonomyFeedbackMetrics;
 use super::operations::AutonomyReportWindow;
 use super::operations::ExecutionOperationsMetrics;
@@ -37,7 +37,7 @@ const MTTR_DEFINITION: &str =
     "mean seconds from incident creation to terminal resolved or escalated update in the selected scope";
 const SAVINGS_DEFINITION: &str = "fixed conservative estimate: alert correlation 3m, owner/severity 4m, evidence \
                                   10m, shift summary 15m, notification 2m, postmortem draft 30m, preventive \
-                                  inspection 20m";
+                                  inspection 20m, successful autonomous action 15m";
 
 impl PostgresRepository {
     pub(super) async fn operations_analytics(
@@ -206,6 +206,15 @@ impl PostgresRepository {
                           AND $8::TEXT IS NULL
                           AND ($5::TEXT IS NULL OR run.risk_family = $5)
                     ) AS preventive_runs,
+                    (
+                        SELECT COUNT(*)
+                        FROM autonomy_outcomes outcome
+                        JOIN scoped_executions execution ON execution.id = outcome.execution_id
+                        WHERE outcome.tenant_id = $1
+                          AND outcome.outcome_class = 'success'
+                          AND outcome.occurred_at >= $3
+                          AND outcome.occurred_at < $4
+                    ) AS autonomous_actions,
                     COALESCE((
                         SELECT SUM(CASE run.automation_kind
                             WHEN 'alert_correlation' THEN 3
@@ -243,7 +252,16 @@ impl PostgresRepository {
                           AND $7::TEXT IS NULL
                           AND $8::TEXT IS NULL
                           AND ($5::TEXT IS NULL OR run.risk_family = $5)
-                    ), 0)::BIGINT AS estimated_minutes
+                    ), 0)::BIGINT
+                    + (
+                        SELECT COUNT(*) * 15
+                        FROM autonomy_outcomes outcome
+                        JOIN scoped_executions execution ON execution.id = outcome.execution_id
+                        WHERE outcome.tenant_id = $1
+                          AND outcome.outcome_class = 'success'
+                          AND outcome.occurred_at >= $3
+                          AND outcome.occurred_at < $4
+                    )::BIGINT AS estimated_minutes
              )
              SELECT *
              FROM incident_metrics
@@ -309,9 +327,10 @@ impl PostgresRepository {
             escalated: analytics_count(row.try_get("execution_escalated")?)?,
             success_basis_points: ratio_basis_points(execution_succeeded, execution_terminal),
         };
-        let savings = AutomationSavingsMetrics {
+        let savings = AttributedAutomationSavingsMetrics {
             successful_no_side_effect_runs: analytics_count(row.try_get("no_side_effect_runs")?)?,
             successful_preventive_runs: analytics_count(row.try_get("preventive_runs")?)?,
+            successful_autonomous_actions: analytics_count(row.try_get("autonomous_actions")?)?,
             estimated_minutes_saved: analytics_count(row.try_get("estimated_minutes")?)?,
             estimate_method: SAVINGS_DEFINITION.to_owned(),
         };
