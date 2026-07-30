@@ -316,9 +316,11 @@ fn fixed_query(component: &str, signal: &ManifestSignal) -> Result<FixedQuery, C
         RequiredSignalType::Log => Ok(FixedQuery::Loki(format!("logs/{service_name}"))),
         RequiredSignalType::Span => Ok(FixedQuery::Tempo(format!("traces/service/{service_name}"))),
         RequiredSignalType::Resource => match signal.registry_reference.as_str() {
-            "rocketmq://system/runtime/v1" | "rocketmq.runtime-diagnostics.v1" => {
-                Ok(FixedQuery::Runtime("runtime".to_owned()))
+            "rocketmq://system/runtime/v1" => Ok(FixedQuery::Runtime("runtime".to_owned())),
+            "rocketmq.runtime-diagnostics.v1" if component == "runtime" => {
+                Ok(FixedQuery::Runtime("runtime/components".to_owned()))
             }
+            "rocketmq.runtime-diagnostics.v1" => Ok(FixedQuery::Runtime(format!("runtime/{component}"))),
             "rocketmq://system/observability/v1" => Ok(FixedQuery::Runtime("observability".to_owned())),
             _ => Ok(FixedQuery::NotProductionVerified(
                 "required_signal_resource_adapter_missing",
