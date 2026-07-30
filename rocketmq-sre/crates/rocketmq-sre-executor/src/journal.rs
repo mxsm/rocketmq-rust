@@ -994,6 +994,26 @@ impl ExecutionJournal {
             .collect()
     }
 
+    /// Lists interrupted compensation records in deterministic recovery
+    /// order.
+    ///
+    /// # Errors
+    ///
+    /// Returns database failures.
+    pub async fn compensating_execution_ids(&self, limit: u32) -> Result<Vec<ExecutionId>, JournalError> {
+        let rows: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT id
+             FROM executions
+             WHERE state = 'compensating'
+             ORDER BY updated_at, id
+             LIMIT $1",
+        )
+        .bind(i64::from(limit.min(1_000)))
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(ExecutionId::from_uuid).collect())
+    }
+
     /// Returns whether any immutable intent was persisted for an execution.
     ///
     /// # Errors
