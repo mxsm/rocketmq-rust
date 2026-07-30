@@ -6,6 +6,13 @@ global:
   secretRefs:
     existingSecret: rocketmq-runtime-secrets
     secretProviderClassName: ""
+  runtimeDiagnostics:
+    enabled: false
+    bindAddress: "0.0.0.0:8087"
+    port: 8087
+    tokenFile: "/var/run/secrets/rocketmq/runtime-diagnostics-token"
+    sampleIntervalSeconds: 10
+    allowInsecureHttp: false
   podSecurity:
     runAsUser: 10001
     runAsGroup: 10001
