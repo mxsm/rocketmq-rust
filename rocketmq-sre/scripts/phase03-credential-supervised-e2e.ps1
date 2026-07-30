@@ -359,6 +359,7 @@ try {
         '--manifest-path', $manifestPath,
         '--locked',
         '--package', 'rocketmq-sre-control-plane',
+        '--lib',
         'supervised_execution::credential_rotation_e2e_tests::real_kind_supervised_credential_overlap_passes_critic_and_verification',
         '--',
         '--ignored',
