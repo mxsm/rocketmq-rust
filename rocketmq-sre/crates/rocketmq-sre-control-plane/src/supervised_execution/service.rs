@@ -428,7 +428,7 @@ impl SupervisedExecutionService {
             .next_action_plan_version(auth, request.incident_id)
             .await?;
         let evidence = self
-            .load_candidate_evidence(auth, &context.evidence_ids, &request.steps)
+            .load_candidate_evidence(auth, request.incident_id, &context.evidence_ids, &request.steps)
             .await?;
         let evidence_hash = evidence_hash(&evidence)?;
         let mut risks = Vec::with_capacity(request.steps.len());
@@ -553,23 +553,45 @@ impl SupervisedExecutionService {
     async fn load_candidate_evidence(
         &self,
         auth: &AuthContext,
+        incident_id: rocketmq_sre_contracts::IncidentId,
         diagnosis_evidence: &[EvidenceId],
         steps: &[CandidatePlanStep],
     ) -> Result<BTreeMap<EvidenceId, EvidenceSnapshot>, ControlPlaneError> {
         let allowed = diagnosis_evidence.iter().copied().collect::<BTreeSet<_>>();
+        if steps
+            .iter()
+            .any(|step| !step.evidence_ids.iter().any(|id| allowed.contains(id)))
+        {
+            return Err(ControlPlaneError::validation(
+                "invalid_evidence_binding",
+                "every plan step must retain Evidence from the confirmed diagnosis",
+            ));
+        }
         let requested = steps
             .iter()
             .flat_map(|step| step.evidence_ids.iter().copied())
             .collect::<BTreeSet<_>>();
-        if requested.is_empty() || !requested.is_subset(&allowed) {
+        if requested.is_empty() {
             return Err(ControlPlaneError::validation(
                 "invalid_evidence_binding",
-                "every plan Evidence ID must belong to the confirmed diagnosis",
+                "every plan step must bind persisted Evidence",
             ));
         }
         let mut evidence = BTreeMap::new();
         for id in requested {
             let snapshot = self.repository.evidence(auth, id).await?;
+            if !allowed.contains(&id)
+                && (snapshot.source != "execution-agent"
+                    || !self
+                        .repository
+                        .evidence_linked_to_incident(auth, incident_id, id)
+                        .await?)
+            {
+                return Err(ControlPlaneError::validation(
+                    "invalid_evidence_binding",
+                    "additional plan Evidence must be a live Execution Agent precondition linked to the incident",
+                ));
+            }
             snapshot.verify_content_hash().map_err(|_| {
                 ControlPlaneError::conflict_code(
                     "invalid_content_hash",
