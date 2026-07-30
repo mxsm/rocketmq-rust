@@ -18,9 +18,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use reqwest::StatusCode;
+use rocketmq_sre_contracts::AgentReadRequest;
+use rocketmq_sre_contracts::AgentReadResult;
+use rocketmq_sre_contracts::EXECUTION_AGENT_SCHEMA_VERSION;
 use rocketmq_sre_contracts::ExecutionId;
 use rocketmq_sre_contracts::ExecutionRequest;
 use rocketmq_sre_contracts::ExecutionState;
+use rocketmq_sre_contracts::is_sha256_digest;
 use serde::Deserialize;
 use url::Url;
 
@@ -151,6 +155,79 @@ impl ExecutorSubmissionClient {
             return Err(invalid_response());
         }
         Ok(receipt)
+    }
+
+    pub(super) async fn read_precondition(
+        &self,
+        request: &AgentReadRequest,
+    ) -> Result<AgentReadResult, ControlPlaneError> {
+        let Self::Http {
+            client,
+            base_url,
+            bearer_token,
+        } = self
+        else {
+            return Err(ControlPlaneError::conflict_code(
+                "executor_not_configured",
+                "the isolated Change Executor endpoint is not configured",
+            ));
+        };
+        let url = base_url
+            .join("/internal/v1/executor/preconditions")
+            .map_err(|_| ControlPlaneError::configuration("Executor URL is invalid"))?;
+        let mut response = client
+            .post(url)
+            .bearer_auth(bearer_token.as_ref())
+            .header("x-forwarded-client-cert", "URI=spiffe://rocketmq-sre/control-plane")
+            .json(request)
+            .send()
+            .await
+            .map_err(ControlPlaneError::Executor)?;
+        match response.status() {
+            StatusCode::OK => {}
+            StatusCode::CONFLICT => {
+                return Err(ControlPlaneError::conflict_code(
+                    "execution_precondition_not_ready",
+                    "Execution Agent did not report a ready precondition",
+                ));
+            }
+            status if status.is_client_error() => {
+                return Err(ControlPlaneError::forbidden(
+                    "executor_rejected",
+                    "Change Executor rejected the precondition request",
+                ));
+            }
+            _ => {
+                return Err(ControlPlaneError::conflict_code(
+                    "executor_unavailable",
+                    "Change Executor is temporarily unavailable",
+                ));
+            }
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length > MAX_EXECUTOR_RESPONSE_BYTES as u64)
+        {
+            return Err(invalid_response());
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(ControlPlaneError::Executor)? {
+            if bytes.len().saturating_add(chunk.len()) > MAX_EXECUTOR_RESPONSE_BYTES {
+                return Err(invalid_response());
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        let result: AgentReadResult = serde_json::from_slice(&bytes).map_err(|_| invalid_response())?;
+        if result.schema_version != EXECUTION_AGENT_SCHEMA_VERSION
+            || result.action != request.action
+            || result.target != request.target
+            || !result.ready
+            || !result.reason_codes.is_empty()
+            || !is_sha256_digest(&result.precondition_hash)
+        {
+            return Err(invalid_response());
+        }
+        Ok(result)
     }
 }
 
