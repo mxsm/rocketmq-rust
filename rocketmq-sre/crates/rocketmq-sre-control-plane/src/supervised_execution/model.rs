@@ -65,6 +65,7 @@ pub(crate) struct CandidatePlanStep {
 pub(crate) enum CreatePlanResponse {
     ActionPlan {
         plan: Box<ActionPlan>,
+        precondition_hash: String,
         risk: ActionRisk,
         policy_decision: PolicyDecision,
     },
@@ -76,6 +77,7 @@ pub(crate) enum CreatePlanResponse {
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct ActionPlanView {
     pub(crate) plan: ActionPlan,
+    pub(crate) precondition_hash: String,
     pub(crate) risk: ActionRisk,
     pub(crate) critic_state: CriticGateState,
     pub(crate) latest_critic_review: Option<CriticReview>,
