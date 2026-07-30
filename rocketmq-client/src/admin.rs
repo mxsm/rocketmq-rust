@@ -16,8 +16,6 @@ pub mod default_mq_admin_ext;
 pub mod default_mq_admin_ext_impl;
 #[cfg(feature = "admin-full")]
 pub mod mq_admin_ext_async;
-pub mod mq_admin_ext_async_inner;
-pub mod mq_admin_ext_inner;
 #[cfg(feature = "admin-mutation")]
 mod mq_admin_mutation_ext;
 #[cfg(feature = "admin-read")]
@@ -27,8 +25,6 @@ pub use default_mq_admin_ext::DefaultMQAdminExt;
 pub use default_mq_admin_ext_impl::DefaultMQAdminExtImpl;
 #[cfg(feature = "admin-full")]
 pub use mq_admin_ext_async::MQAdminExt;
-pub use mq_admin_ext_async_inner::MQAdminExtInnerImpl;
-pub use mq_admin_ext_inner::MQAdminExtInner;
 #[cfg(feature = "admin-mutation")]
 pub use mq_admin_mutation_ext::BrokerConfigPatchOutcome;
 #[cfg(feature = "admin-mutation")]
