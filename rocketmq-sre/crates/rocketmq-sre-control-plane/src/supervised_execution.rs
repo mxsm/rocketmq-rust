@@ -31,6 +31,8 @@ mod proxy_restart_e2e_tests;
 mod service_tests;
 #[cfg(test)]
 mod wave_actions_e2e_tests;
+#[cfg(test)]
+mod wave_admin_actions_e2e_tests;
 
 pub(crate) use api::routes;
 pub(crate) use executor_client::ExecutorSubmissionClient;
