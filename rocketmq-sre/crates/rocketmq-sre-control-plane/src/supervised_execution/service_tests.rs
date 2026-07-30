@@ -38,6 +38,8 @@ use rocketmq_sre_contracts::Sensitivity;
 use rocketmq_sre_contracts::TenantId;
 use rocketmq_sre_contracts::TimeRange;
 use serde_json::json;
+use sha2::Digest;
+use sha2::Sha256;
 use uuid::Uuid;
 
 use super::model::ApprovalDecisionRequest;
@@ -434,6 +436,106 @@ async fn postgres_latest_evidence_uses_collection_order_when_observation_times_t
         .expect("query latest evidence")
         .expect("latest evidence");
     assert_eq!(latest.evidence_id, second_id);
+}
+
+#[tokio::test]
+#[ignore = "requires ROCKETMQ_SRE_TEST_DATABASE_URL pointing to Docker PostgreSQL"]
+async fn postgres_plan_accepts_only_incident_linked_execution_precondition_evidence() {
+    let Some(database_url) = std::env::var("ROCKETMQ_SRE_TEST_DATABASE_URL").ok() else {
+        return;
+    };
+    let repository = PostgresRepository::connect(&database_url, 5).await.expect("repository");
+    let fixture = seed_fixture(&repository).await;
+    let workflow = WorkflowService::new(repository.clone(), WorkflowEventBus::new(64));
+    let service = SupervisedExecutionService::new_with_clock(
+        repository.clone(),
+        workflow,
+        "phase3-test-signing-key-not-exported",
+        Arc::new(Utc::now),
+    )
+    .expect("service");
+    let operator = auth(fixture.tenant_id, fixture.cluster_id, "operator-a", &["operator"]);
+    let observed_at = Utc::now().with_nanosecond(0).expect("whole-second timestamp");
+    let live_hash = format!("sha256:{}", "7".repeat(64));
+    let content = json!({
+        "schema_version": "rocketmq-sre.execution-agent.v1",
+        "action": "proxy.scale_out_one.v1",
+        "target": "deployment/default/proxy",
+        "precondition_hash": live_hash,
+        "ready": true,
+        "reason_codes": [],
+        "resource_conditions": {"replica_capacity_available": true},
+        "observed_at": observed_at,
+    });
+    let content_digest = format!(
+        "sha256:{:x}",
+        Sha256::digest(serde_json::to_vec(&content).expect("Evidence content"))
+    );
+    let mut agent_evidence = rocketmq_sre_contracts::EvidenceSnapshot::capture(
+        EvidenceQuery {
+            query_id: QueryId::new(),
+            correlation_id: CorrelationId::new(),
+            tenant_id: fixture.tenant_id,
+            cluster_id: fixture.cluster_id,
+            source: "execution-agent".to_owned(),
+            resource: "deployment/default/proxy".to_owned(),
+            time_range: TimeRange::new(observed_at, observed_at).expect("time range"),
+        },
+        SchemaVersion::new("rocketmq-sre.evidence", 1, 0),
+        observed_at,
+        EvidenceContent::Inline(content),
+    )
+    .expect("Agent Evidence");
+    agent_evidence.freshness_seconds = 120;
+    agent_evidence.coverage = CoverageStatus::Available;
+    agent_evidence.sensitivity = Sensitivity::Internal;
+    agent_evidence.exposure = EvidenceExposure::ExecutionAgentApi;
+    let unlinked = repository
+        .persist_evidence(&operator, &agent_evidence, None, None, &content_digest)
+        .await
+        .expect("unlinked Agent Evidence");
+    let request = CreatePlanRequest {
+        cluster_id: fixture.cluster_id,
+        incident_id: fixture.incident_id,
+        diagnosis_revision_id: fixture.diagnosis_id,
+        expires_at: Some(Utc::now() + Duration::hours(1)),
+        steps: vec![CandidatePlanStep {
+            action_id: "proxy.scale_out_one.v1".to_owned(),
+            descriptor_version: "1.0.0".to_owned(),
+            resource: "deployment/default/proxy".to_owned(),
+            parameters: json!({
+                "namespace": "default",
+                "workload": "proxy",
+                "expected_replicas": 2
+            }),
+            evidence_ids: vec![fixture.evidence_id, unlinked.evidence_id],
+        }],
+    };
+    let error = service
+        .create_plan(&operator, &request, CorrelationId::new())
+        .await
+        .expect_err("unlinked Agent Evidence must fail closed");
+    assert_eq!(error_code(&error), "invalid_evidence_binding");
+
+    let linked = repository
+        .persist_evidence(
+            &operator,
+            &agent_evidence,
+            None,
+            Some(fixture.incident_id),
+            &content_digest,
+        )
+        .await
+        .expect("incident-linked Agent Evidence");
+    assert_eq!(linked.evidence_id, unlinked.evidence_id);
+    let CreatePlanResponse::ActionPlan { plan, .. } = service
+        .create_plan(&operator, &request, CorrelationId::new())
+        .await
+        .expect("plan with linked precondition")
+    else {
+        panic!("execution-ready diagnosis must produce an action plan");
+    };
+    assert_eq!(plan.steps[0].precondition_hash, live_hash);
 }
 
 #[tokio::test]
