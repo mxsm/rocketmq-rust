@@ -4,9 +4,9 @@
 [CmdletBinding()]
 param(
     [string]$DatabaseUrl = 'postgres://rocketmq_sre:rocketmq_sre@127.0.0.1:5432/rocketmq_sre',
-    [string]$CargoTargetDir = 'G:\rocketmq-sre-phase2-cargo-target',
-    [string]$CargoHome = 'G:\rocketmq-sre-phase1-cargo-home',
-    [string]$TemporaryRoot = 'G:\rocketmq-sre-phase2-temp',
+    [string]$CargoTargetDir = 'D:\BuildCache\rocketmq-sre-target',
+    [string]$CargoHome = 'D:\BuildCache\rocketmq-sre-cargo-home',
+    [string]$TemporaryRoot = 'D:\BuildCache\rocketmq-sre-temp',
     [ValidateRange(1024, 65535)]
     [int]$NameServerPort = 19876,
     [ValidateRange(1026, 65535)]
