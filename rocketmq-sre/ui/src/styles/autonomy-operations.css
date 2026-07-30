@@ -53,6 +53,207 @@
   line-height: 1.5;
 }
 
+.operations-analytics-panel {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background:
+    linear-gradient(135deg, rgb(36 63 44 / 14%), transparent 42%),
+    var(--card);
+}
+
+.operations-analytics-panel > header,
+.operations-analytics-panel > header > div,
+.operations-analytics-scope {
+  display: flex;
+  align-items: center;
+}
+
+.operations-analytics-panel > header {
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.operations-analytics-panel > header > div {
+  min-width: 0;
+  gap: 10px;
+}
+
+.operations-analytics-panel > header > div > div {
+  display: grid;
+  gap: 3px;
+}
+
+.operations-analytics-panel > header strong {
+  font-size: 13px;
+}
+
+.operations-analytics-panel > header p {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.operations-analytics-icon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  place-items: center;
+  color: var(--success);
+  border: 1px solid #214c27;
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--success-muted);
+}
+
+.operations-analytics-filters {
+  display: grid;
+  grid-template-columns:
+    minmax(150px, 0.8fr)
+    minmax(140px, 0.7fr)
+    minmax(140px, 0.7fr)
+    minmax(270px, 1.3fr)
+    auto;
+  align-items: end;
+  gap: 9px;
+}
+
+.operations-analytics-filters label {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  color: var(--muted-foreground);
+  font-size: 9px;
+}
+
+.operations-analytics-panel .input {
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  color: var(--foreground);
+  border: 1px solid var(--input);
+  border-radius: calc(var(--radius) - 2px);
+  outline: none;
+  background: #0b0b0b;
+  font: inherit;
+  font-size: 10px;
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.operations-analytics-panel .input::placeholder {
+  color: #5f5f5f;
+}
+
+.operations-analytics-panel .input:focus-visible {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 2px rgb(212 212 212 / 10%);
+}
+
+.operations-analytics-scope {
+  flex-wrap: wrap;
+  gap: 7px;
+  padding-top: 2px;
+}
+
+.operations-analytics-scope > span {
+  margin-right: 2px;
+  color: var(--muted-foreground);
+  font-size: 9px;
+}
+
+.operations-analytics-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 1px);
+}
+
+.operations-analytics-metrics article {
+  display: flex;
+  min-width: 0;
+  min-height: 88px;
+  gap: 9px;
+  padding: 12px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: #0d0d0d;
+}
+
+.operations-analytics-metrics article:nth-child(4n) {
+  border-right: 0;
+}
+
+.operations-analytics-metrics article:last-child {
+  border-right: 0;
+}
+
+.operations-analytics-metrics article:nth-last-child(-n + 3) {
+  border-bottom: 0;
+}
+
+.operations-analytics-metrics article > span {
+  display: grid;
+  width: 27px;
+  height: 27px;
+  flex: 0 0 27px;
+  place-items: center;
+  color: var(--info);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 3px);
+  background: var(--secondary);
+}
+
+.operations-analytics-metrics article > div {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: 3px;
+}
+
+.operations-analytics-metrics small,
+.operations-analytics-metrics p {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.operations-analytics-metrics strong {
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.025em;
+}
+
+.operations-analytics-metrics p {
+  margin: 1px 0 0;
+}
+
+.operations-analytics-empty,
+.operations-analytics-warnings {
+  padding: 10px 12px;
+  color: var(--muted-foreground);
+  border: 1px dashed var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  background: #0b0b0b;
+  font-size: 10px;
+}
+
+.operations-analytics-warnings {
+  display: grid;
+  gap: 4px;
+  color: var(--warning);
+  border-color: #4b4118;
+  background: var(--warning-muted);
+}
+
 .autonomy-report-window {
   display: flex;
   min-height: 42px;
