@@ -121,8 +121,18 @@ $runtimeGid = (& docker @runtimeArguments --entrypoint /usr/bin/id $ImageRef -g 
 if ($LASTEXITCODE -ne 0 -or $runtimeGid -ne [string]$policy.runtime.gid) {
     throw "runtime image effective gid mismatch: $runtimeGid"
 }
-& docker @runtimeArguments --entrypoint /usr/bin/touch $ImageRef /opt/rocketmq/rootfs-must-stay-read-only *> $null
-if ($LASTEXITCODE -eq 0) {
+$rootfsWriteExitCode = 0
+$previousErrorActionPreference = $ErrorActionPreference
+try {
+    $ErrorActionPreference = "Continue"
+    & docker @runtimeArguments --entrypoint /usr/bin/touch $ImageRef /opt/rocketmq/rootfs-must-stay-read-only `
+        2> $null | Out-Null
+    $rootfsWriteExitCode = $LASTEXITCODE
+}
+finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+}
+if ($rootfsWriteExitCode -eq 0) {
     throw "runtime image root filesystem must remain read-only"
 }
 Invoke-Checked docker @runtimeArguments --entrypoint /usr/bin/touch $ImageRef `
