@@ -223,17 +223,19 @@ New-Item -ItemType Directory -Force -Path `
 $targetDrive = Get-PSDrive -Name (
     [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($CargoTargetDir)).Substring(0, 1)
 )
-if (($targetDrive.Free / 1GB) -lt 15) {
+$targetFreeGiB = $targetDrive.Free / 1GB
+$targetFreePercent = 100 * $targetDrive.Free / ($targetDrive.Free + $targetDrive.Used)
+if ($targetFreeGiB -lt 30 -or $targetFreePercent -lt 15) {
     Invoke-Native cargo @(
         '+1.95.0', 'clean',
         '--manifest-path', (Join-Path $sreRoot 'Cargo.toml'),
         '--target-dir', $CargoTargetDir
-    ) 'low-space SRE Cargo cleanup'
+    ) 'Broker-reserve SRE Cargo cleanup'
     Invoke-Native cargo @(
         '+1.95.0', 'clean',
         '--manifest-path', (Join-Path $repositoryRoot 'Cargo.toml'),
         '--target-dir', $ClusterTargetDir
-    ) 'low-space test-cluster Cargo cleanup'
+    ) 'Broker-reserve test-cluster Cargo cleanup'
 }
 
 $runRoot = [IO.Path]::GetFullPath(
@@ -388,8 +390,13 @@ try {
     $targetDrive = Get-PSDrive -Name (
         [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($ClusterTargetDir)).Substring(0, 1)
     )
-    if (($targetDrive.Free / 1GB) -lt 15) {
-        throw 'Test-cluster build cleanup left less than 15 GiB free on the target drive.'
+    $targetFreeGiB = $targetDrive.Free / 1GB
+    $targetFreePercent = 100 * $targetDrive.Free / ($targetDrive.Free + $targetDrive.Used)
+    if ($targetFreeGiB -lt 15 -or $targetFreePercent -lt 12) {
+        throw (
+            'Test-cluster build cleanup left insufficient Broker runtime reserve ' +
+            'on the target drive.'
+        )
     }
 
     $env:ROCKETMQ_SECURITY_PROFILE = 'development-insecure-loopback'
