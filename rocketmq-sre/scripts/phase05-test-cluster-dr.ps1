@@ -14,13 +14,13 @@
 
 [CmdletBinding()]
 param(
-    [string]$Kubeconfig = 'G:\rocketmq-sre-phase2-temp\kind-access\rocketmq-sre-phase00.kubeconfig',
+    [string]$Kubeconfig = 'D:\BuildCache\rocketmq-sre-temp\kind\phase00-kubeconfig',
     [string]$ExpectedContext = 'kubernetes-admin@rocketmq-sre-phase00',
     [int]$PostgresPort = 15432,
-    [string]$CargoTargetDir = 'G:\rocketmq-sre-phase2-cargo-target',
-    [string]$CargoHome = 'G:\rocketmq-sre-phase1-cargo-home',
-    [string]$TemporaryRoot = 'G:\rocketmq-sre-phase2-temp',
-    [string]$EvidenceOutput = 'G:\rocketmq-sre-phase2-temp\phase05-test-cluster-dr.json'
+    [string]$CargoTargetDir = 'D:\BuildCache\rocketmq-sre-target',
+    [string]$CargoHome = 'D:\BuildCache\rocketmq-sre-cargo-home',
+    [string]$TemporaryRoot = 'D:\BuildCache\rocketmq-sre-temp',
+    [string]$EvidenceOutput = 'D:\BuildCache\rocketmq-sre-temp\phase05-test-cluster-dr.json'
 )
 
 $ErrorActionPreference = 'Stop'
