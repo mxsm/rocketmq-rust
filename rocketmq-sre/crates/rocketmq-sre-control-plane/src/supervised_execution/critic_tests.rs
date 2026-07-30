@@ -76,6 +76,12 @@ async fn postgres_r2_critic_is_heterogeneous_durable_and_required_for_approval()
     let fixture = seed_fixture(&repository).await;
     let operator = auth(fixture.tenant_id, fixture.cluster_id, "operator-critic", &["operator"]);
     let approver = auth(fixture.tenant_id, fixture.cluster_id, "approver-critic", &["approver"]);
+    let governance = auth(
+        fixture.tenant_id,
+        fixture.cluster_id,
+        "model-governance-critic",
+        &["model-governance"],
+    );
 
     let mut deepseek = profile("deepseek", 1);
     deepseek.model_revision = "deepseek-actual-r7".to_owned();
@@ -91,6 +97,12 @@ async fn postgres_r2_critic_is_heterogeneous_durable_and_required_for_approval()
     ]));
     let model_gateway =
         ModelGatewayService::for_tests(repository.clone(), vec![deepseek.clone(), kimi.clone()], transport);
+    for profile_name in [&deepseek.id, &kimi.id] {
+        model_gateway
+            .certify_profile_for_tests(&governance, profile_name, rocketmq_sre_contracts::CorrelationId::new())
+            .await
+            .expect("Critic profile certification fixture");
+    }
     let workflow = WorkflowService::new(repository.clone(), WorkflowEventBus::new(64));
     let service = SupervisedExecutionService::new_with_clock_and_model(
         repository.clone(),
@@ -255,12 +267,23 @@ async fn postgres_same_family_alias_and_endpoint_degrade_without_unlocking_r2() 
         "approver-same-family",
         &["approver"],
     );
+    let governance = auth(
+        fixture.tenant_id,
+        fixture.cluster_id,
+        "model-governance-same-family",
+        &["model-governance"],
+    );
     let mut alias = profile("deepseek", 1);
     alias.id = "different-profile-alias".to_owned();
     alias.model_family = " FIXTURE_FAMILY ".to_owned();
     alias.endpoint_instance = "different-region:different-endpoint".to_owned();
+    let alias_id = alias.id.clone();
     let model_gateway =
         ModelGatewayService::for_tests(repository.clone(), vec![alias], Arc::new(ScriptedTransport::new([])));
+    model_gateway
+        .certify_profile_for_tests(&governance, &alias_id, rocketmq_sre_contracts::CorrelationId::new())
+        .await
+        .expect("same-family profile certification fixture");
     let workflow = WorkflowService::new(repository.clone(), WorkflowEventBus::new(64));
     let service = SupervisedExecutionService::new_with_clock_and_model(
         repository,
