@@ -48,9 +48,19 @@ import {
 } from "@/components/ui/tabs";
 import { useSreData } from "@/data/SreDataContext";
 import { useAsyncResource } from "@/hooks/useAsyncResource";
+import {
+  OperationsAnalyticsPanel,
+  type OperationsAnalyticsDraft,
+} from "@/pages/autonomy-operations/OperationsAnalyticsPanel";
 
 const ALL_CLUSTERS = "all-clusters";
 const ALL_OUTCOMES = "all-outcomes";
+const EMPTY_ANALYTICS_DRAFT: OperationsAnalyticsDraft = {
+  scenario: "",
+  providerFamily: "",
+  modelFamily: "",
+  actionId: "",
+};
 
 export function AutonomyOperationsPage() {
   const { api, clusters } = useSreData();
@@ -60,13 +70,17 @@ export function AutonomyOperationsPage() {
   const [outcomeClass, setOutcomeClass] = useState<
     AutonomyOutcomeClass | typeof ALL_OUTCOMES
   >(ALL_OUTCOMES);
+  const [analyticsDraft, setAnalyticsDraft] =
+    useState<OperationsAnalyticsDraft>(EMPTY_ANALYTICS_DRAFT);
+  const [analyticsFilters, setAnalyticsFilters] =
+    useState<OperationsAnalyticsDraft>(EMPTY_ANALYTICS_DRAFT);
   const effectiveClusterId =
     clusterId === ALL_CLUSTERS ? undefined : clusterId;
   const effectiveOutcomeClass =
     outcomeClass === ALL_OUTCOMES ? undefined : outcomeClass;
   const load = useCallback(
     async (signal: AbortSignal) => {
-      const [report, outcomes] = await Promise.all([
+      const [report, outcomes, analytics] = await Promise.all([
         api.getAutonomyOperationalReport(
           {
             period,
@@ -82,13 +96,36 @@ export function AutonomyOperationsPage() {
           },
           signal,
         ),
+        api.getOperationsAnalytics(
+          {
+            period,
+            clusterId: effectiveClusterId,
+            scenario: normalizedDimension(
+              analyticsFilters.scenario,
+            ),
+            providerFamily: normalizedDimension(
+              analyticsFilters.providerFamily,
+            ),
+            modelFamily: normalizedDimension(
+              analyticsFilters.modelFamily,
+            ),
+            actionId: normalizedDimension(
+              analyticsFilters.actionId,
+            ),
+          },
+          signal,
+        ),
       ]);
-      return { outcomes, report };
+      return { analytics, outcomes, report };
     },
     [
       api,
       effectiveClusterId,
       effectiveOutcomeClass,
+      analyticsFilters.actionId,
+      analyticsFilters.modelFamily,
+      analyticsFilters.providerFamily,
+      analyticsFilters.scenario,
       period,
     ],
   );
@@ -181,6 +218,26 @@ export function AutonomyOperationsPage() {
       {report && (
         <>
           <ReportWindow report={report} />
+          <OperationsAnalyticsPanel
+            draft={analyticsDraft}
+            loading={resource.loading}
+            onApply={() =>
+              setAnalyticsFilters({
+                actionId: analyticsDraft.actionId.trim(),
+                modelFamily: analyticsDraft.modelFamily.trim(),
+                providerFamily:
+                  analyticsDraft.providerFamily.trim(),
+                scenario: analyticsDraft.scenario.trim(),
+              })
+            }
+            onChange={(field, value) =>
+              setAnalyticsDraft((current) => ({
+                ...current,
+                [field]: value,
+              }))
+            }
+            report={resource.data?.analytics}
+          />
           <section
             aria-label="自治运营核心指标"
             className="autonomy-metric-grid"
@@ -956,4 +1013,9 @@ function outcomeVariant(value: AutonomyOutcomeClass) {
     case "autonomous_execution_failure":
       return "destructive" as const;
   }
+}
+
+function normalizedDimension(value: string) {
+  const normalized = value.trim();
+  return normalized.length === 0 ? undefined : normalized;
 }
