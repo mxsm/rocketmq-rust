@@ -24,6 +24,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 pub(super) const OPERATIONS_SCHEMA_VERSION: &str = "rocketmq-sre.autonomy-operations.v1";
+pub(super) const OPERATIONS_ANALYTICS_SCHEMA_VERSION: &str = "rocketmq-sre.operations-analytics.v1";
 
 /// Bounded query over the append-only autonomy outcome dataset.
 #[derive(Clone, Debug, Deserialize)]
@@ -76,12 +77,85 @@ pub(crate) struct AutonomyOperationalReportQuery {
     pub(crate) cluster_id: Option<ClusterId>,
 }
 
+/// Cross-dimensional operating query. Tenant scope always comes from the
+/// authenticated identity and cannot be supplied by the caller.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct OperationsAnalyticsQuery {
+    #[serde(default)]
+    pub(crate) period: AutonomyReportPeriod,
+    pub(crate) anchor: Option<DateTime<Utc>>,
+    pub(crate) cluster_id: Option<ClusterId>,
+    pub(crate) scenario: Option<String>,
+    pub(crate) provider_family: Option<String>,
+    pub(crate) model_family: Option<String>,
+    pub(crate) action_id: Option<String>,
+}
+
+impl OperationsAnalyticsQuery {
+    pub(super) fn validate(&self) -> Result<(), crate::ControlPlaneError> {
+        validate_dimension("scenario", self.scenario.as_deref(), 128)?;
+        validate_dimension("provider_family", self.provider_family.as_deref(), 128)?;
+        validate_dimension("model_family", self.model_family.as_deref(), 128)?;
+        validate_dimension("action_id", self.action_id.as_deref(), 128)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct AutonomyReportWindow {
     pub(crate) period: AutonomyReportPeriod,
     pub(crate) start: DateTime<Utc>,
     pub(crate) end: DateTime<Utc>,
     pub(crate) complete: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(crate) struct OperationsAnalyticsFilters {
+    pub(crate) cluster_ids: Vec<ClusterId>,
+    pub(crate) scenario: Option<String>,
+    pub(crate) provider_family: Option<String>,
+    pub(crate) model_family: Option<String>,
+    pub(crate) action_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub(crate) struct IncidentOperationsMetrics {
+    pub(crate) total: u64,
+    pub(crate) diagnosed: u64,
+    pub(crate) terminal: u64,
+    pub(crate) recurrent: u64,
+    pub(crate) mean_time_to_detect_seconds: Option<f64>,
+    pub(crate) mean_time_to_resolve_seconds: Option<f64>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub(crate) struct ExecutionOperationsMetrics {
+    pub(crate) total: u64,
+    pub(crate) terminal: u64,
+    pub(crate) succeeded: u64,
+    pub(crate) rolled_back: u64,
+    pub(crate) escalated: u64,
+    pub(crate) success_basis_points: Option<u32>,
+}
+
+/// Authenticated, bounded aggregate over one explicit intersection of
+/// tenant, cluster, scenario, model and action dimensions.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(crate) struct OperationsAnalyticsReport {
+    pub(crate) schema_version: &'static str,
+    pub(crate) tenant_id: TenantId,
+    pub(crate) filters: OperationsAnalyticsFilters,
+    pub(crate) window: AutonomyReportWindow,
+    pub(crate) incidents: IncidentOperationsMetrics,
+    pub(crate) model_usage: ModelUsageMetrics,
+    pub(crate) recommendation_feedback: AutonomyFeedbackMetrics,
+    pub(crate) executions: ExecutionOperationsMetrics,
+    pub(crate) savings: AutomationSavingsMetrics,
+    pub(crate) mttd_definition: &'static str,
+    pub(crate) mttr_definition: &'static str,
+    pub(crate) savings_definition: &'static str,
+    pub(crate) warnings: Vec<String>,
+    pub(crate) observed_at: DateTime<Utc>,
 }
 
 /// Deterministic candidate and terminal outcome counts.
@@ -257,8 +331,31 @@ const fn default_outcome_limit() -> u16 {
     100
 }
 
+fn validate_dimension(
+    name: &'static str,
+    value: Option<&str>,
+    max_chars: usize,
+) -> Result<(), crate::ControlPlaneError> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    let valid = value == value.trim()
+        && (1..=max_chars).contains(&value.chars().count())
+        && !value.chars().any(char::is_control);
+    if valid {
+        Ok(())
+    } else {
+        Err(crate::ControlPlaneError::validation(
+            "invalid_operations_dimension",
+            format!("{name} must contain 1 to {max_chars} non-control characters without surrounding whitespace"),
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::AutonomyReportPeriod;
+    use super::OperationsAnalyticsQuery;
     use super::bounded_outcome_limit;
 
     #[test]
@@ -266,5 +363,25 @@ mod tests {
         assert_eq!(bounded_outcome_limit(0), 1);
         assert_eq!(bounded_outcome_limit(42), 42);
         assert_eq!(bounded_outcome_limit(u16::MAX), 200);
+    }
+
+    #[test]
+    fn analytics_dimensions_reject_ambiguous_or_control_text() {
+        let valid = OperationsAnalyticsQuery {
+            period: AutonomyReportPeriod::Weekly,
+            anchor: None,
+            cluster_id: None,
+            scenario: Some("consumer_lag".to_owned()),
+            provider_family: Some("deepseek".to_owned()),
+            model_family: Some("deepseek-chat".to_owned()),
+            action_id: Some("observability.logger_level.ttl.v1".to_owned()),
+        };
+        valid.validate().expect("bounded dimensions");
+
+        let mut invalid = valid;
+        invalid.scenario = Some(" consumer_lag".to_owned());
+        assert!(invalid.validate().is_err());
+        invalid.scenario = Some("consumer\nlag".to_owned());
+        assert!(invalid.validate().is_err());
     }
 }
