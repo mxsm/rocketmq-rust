@@ -138,6 +138,15 @@ pub(crate) struct ExecutionOperationsMetrics {
     pub(crate) success_basis_points: Option<u32>,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub(crate) struct AttributedAutomationSavingsMetrics {
+    pub(crate) successful_no_side_effect_runs: u64,
+    pub(crate) successful_preventive_runs: u64,
+    pub(crate) successful_autonomous_actions: u64,
+    pub(crate) estimated_minutes_saved: u64,
+    pub(crate) estimate_method: String,
+}
+
 /// Authenticated, bounded aggregate over one explicit intersection of
 /// tenant, cluster, scenario, model and action dimensions.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -150,7 +159,7 @@ pub(crate) struct OperationsAnalyticsReport {
     pub(crate) model_usage: ModelUsageMetrics,
     pub(crate) recommendation_feedback: AutonomyFeedbackMetrics,
     pub(crate) executions: ExecutionOperationsMetrics,
-    pub(crate) savings: AutomationSavingsMetrics,
+    pub(crate) savings: AttributedAutomationSavingsMetrics,
     pub(crate) mttd_definition: &'static str,
     pub(crate) mttr_definition: &'static str,
     pub(crate) savings_definition: &'static str,
