@@ -39,6 +39,12 @@ use super::channel_schema;
 use crate::ControlPlaneError;
 use crate::PostgresRepository;
 
+mod retention;
+
+use retention::allocate_next_sequence;
+use retention::maintain_retention;
+use retention::resume_frontier;
+
 #[derive(Clone, Debug)]
 pub(crate) struct RegistrationResult {
     pub resume_after_sequence: u64,
@@ -186,6 +192,16 @@ impl ConnectorChannelStore for PostgresConnectorChannelStore {
             request.observed_at,
         )
         .await?;
+        maintain_retention(
+            &mut transaction,
+            request.session_id,
+            request.tenant_id,
+            request.cluster_id,
+            &principal.subject,
+            &principal.issuer,
+            now,
+        )
+        .await?;
         let resume_after_sequence = resume_frontier(&mut transaction, request.session_id).await?;
         transaction.commit().await?;
         Ok(RegistrationResult { resume_after_sequence })
@@ -226,6 +242,16 @@ impl ConnectorChannelStore for PostgresConnectorChannelStore {
             request.observed_at,
         )
         .await?;
+        maintain_retention(
+            &mut transaction,
+            request.session_id,
+            request.tenant_id,
+            request.cluster_id,
+            &principal.subject,
+            &principal.issuer,
+            now,
+        )
+        .await?;
         transaction.commit().await?;
         Ok(SessionScope {
             last_heartbeat_at: now,
@@ -255,14 +281,24 @@ impl ConnectorChannelStore for PostgresConnectorChannelStore {
         let max_commands = i64::try_from(max_commands).map_err(|_| {
             ControlPlaneError::validation("output_too_large", "command limit exceeds the database bound")
         })?;
-        let highest_sequence: i64 = sqlx::query_scalar(
-            "SELECT COALESCE(MAX(sequence), 0)
-             FROM connector_channel_commands
+        let frontier = sqlx::query(
+            "SELECT next_sequence - 1 AS highest_sequence,
+                    compacted_through_sequence
+             FROM connector_channel_sessions
              WHERE session_id = $1",
         )
         .bind(scope.session_id.as_uuid())
-        .fetch_one(&self.repository.pool)
-        .await?;
+        .fetch_optional(&self.repository.pool)
+        .await?
+        .ok_or(ControlPlaneError::NotFound)?;
+        let highest_sequence: i64 = frontier.try_get("highest_sequence")?;
+        let compacted_through: i64 = frontier.try_get("compacted_through_sequence")?;
+        if after_sequence < compacted_through {
+            return Err(ControlPlaneError::validation(
+                "capability_mismatch",
+                "after_sequence predates the retained connector command frontier; register again before polling",
+            ));
+        }
         if after_sequence > highest_sequence {
             return Err(ControlPlaneError::validation(
                 "capability_mismatch",
@@ -301,7 +337,7 @@ impl ConnectorChannelStore for PostgresConnectorChannelStore {
         let scope =
             latest_online_session_for_update(&mut transaction, tenant_id, cluster_id, stale_before, &query.source)
                 .await?;
-        let sequence = next_sequence(&mut transaction, scope.session_id).await?;
+        let sequence = allocate_next_sequence(&mut transaction, scope.session_id).await?;
         let command = ConnectorCommand::Query {
             envelope: ConnectorQueryEnvelope {
                 schema: channel_schema(),
@@ -351,7 +387,7 @@ impl ConnectorChannelStore for PostgresConnectorChannelStore {
         .await?
         .ok_or_else(|| ControlPlaneError::conflict("no online connector owns the requested query"))?;
         let scope = session_scope_from_row(&row)?;
-        let sequence = next_sequence(&mut transaction, scope.session_id).await?;
+        let sequence = allocate_next_sequence(&mut transaction, scope.session_id).await?;
         let command = ConnectorCommand::Cancel {
             schema: channel_schema(),
             session_id: scope.session_id,
@@ -749,21 +785,6 @@ async fn latest_online_session_for_update(
     session_scope_from_row(&row)
 }
 
-async fn next_sequence(
-    transaction: &mut Transaction<'_, Postgres>,
-    session_id: ConnectorSessionId,
-) -> Result<u64, ControlPlaneError> {
-    let sequence: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(MAX(sequence), 0) + 1
-         FROM connector_channel_commands
-         WHERE session_id = $1",
-    )
-    .bind(session_id.as_uuid())
-    .fetch_one(&mut **transaction)
-    .await?;
-    u64::try_from(sequence).map_err(|_| ControlPlaneError::configuration("connector command sequence is invalid"))
-}
-
 async fn insert_command(
     transaction: &mut Transaction<'_, Postgres>,
     command: &ConnectorCommand,
@@ -785,32 +806,6 @@ async fn insert_command(
     .execute(&mut **transaction)
     .await?;
     Ok(())
-}
-
-async fn resume_frontier(
-    transaction: &mut Transaction<'_, Postgres>,
-    session_id: ConnectorSessionId,
-) -> Result<u64, ControlPlaneError> {
-    let frontier: i64 = sqlx::query_scalar(
-        "WITH command_state AS (
-            SELECT
-                MIN(c.sequence) FILTER (WHERE r.sequence IS NULL) AS first_missing,
-                COALESCE(MAX(c.sequence), 0) AS highest
-            FROM connector_channel_commands c
-            LEFT JOIN connector_channel_responses r
-              ON r.session_id = c.session_id AND r.sequence = c.sequence
-            WHERE c.session_id = $1
-         )
-         SELECT CASE
-             WHEN first_missing IS NULL THEN highest
-             ELSE first_missing - 1
-         END
-         FROM command_state",
-    )
-    .bind(session_id.as_uuid())
-    .fetch_one(&mut **transaction)
-    .await?;
-    u64::try_from(frontier).map_err(|_| ControlPlaneError::configuration("connector response frontier is invalid"))
 }
 
 fn session_scope_from_row(row: &PgRow) -> Result<SessionScope, ControlPlaneError> {
