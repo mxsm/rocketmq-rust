@@ -29,6 +29,7 @@ use rocketmq_client_rust::DefaultMQPushConsumer;
 use rocketmq_client_rust::MQPushConsumer;
 use rocketmq_client_rust::MessageListenerConcurrently;
 use rocketmq_error::RocketMQResult;
+use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_single::Message;
 use rocketmq_runtime::RuntimeConfig;
@@ -388,12 +389,13 @@ async fn send(
     producer.start().await?;
     println!("probe_stage command=send stage=producer_start status=end");
     let payload = vec![b'x'; plan.max_payload_bytes as usize];
+    let message_key_prefix = legacy_message_key_prefix(plan.run_id);
     println!("probe_stage command=send stage=message_batch status=begin");
     for sequence in 0..plan.max_messages {
         let message = Message::builder()
             .topic(plan.identity.topic.clone())
             .tags("phase00")
-            .keys(vec![format!("probe-{sequence}")])
+            .keys(vec![format!("{message_key_prefix}-{sequence}")])
             .body_slice(&payload)
             .build_unchecked();
         producer.send_with_timeout(message, 2_000).await?;
@@ -426,7 +428,7 @@ async fn consume(
     namesrv_addr: &str,
     acl_config: Option<&ProbeAclConfig>,
 ) -> Result<bool, ProbeRunError> {
-    let listener = CountingListener::default();
+    let listener = CountingListener::matching_run(plan.run_id);
     let observed = Arc::clone(&listener.observed);
     let notification = Arc::clone(&listener.notification);
     let builder = DefaultMQPushConsumer::builder(Arc::clone(&client_runtime))
@@ -475,6 +477,16 @@ async fn consume(
 struct CountingListener {
     observed: Arc<AtomicUsize>,
     notification: Arc<Notify>,
+    expected_key_prefix: Option<Arc<str>>,
+}
+
+impl CountingListener {
+    fn matching_run(run_id: Uuid) -> Self {
+        Self {
+            expected_key_prefix: Some(Arc::from(format!("{}-", legacy_message_key_prefix(run_id)))),
+            ..Self::default()
+        }
+    }
 }
 
 impl MessageListenerConcurrently for CountingListener {
@@ -483,8 +495,51 @@ impl MessageListenerConcurrently for CountingListener {
         messages: &[&MessageExt],
         _context: &ConsumeConcurrentlyContext,
     ) -> RocketMQResult<ConsumeConcurrentlyStatus> {
-        self.observed.fetch_add(messages.len(), Ordering::AcqRel);
-        self.notification.notify_waiters();
+        let matched = match &self.expected_key_prefix {
+            Some(expected) => messages
+                .iter()
+                .filter(|message| {
+                    message
+                        .get_keys_ref()
+                        .is_some_and(|keys| contains_expected_key(keys.as_str(), expected.as_ref()))
+                })
+                .count(),
+            None => messages.len(),
+        };
+        if matched > 0 {
+            self.observed.fetch_add(matched, Ordering::AcqRel);
+            self.notification.notify_waiters();
+        }
         Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
+    }
+}
+
+fn legacy_message_key_prefix(run_id: Uuid) -> String {
+    format!("probe-{}", run_id.simple())
+}
+
+fn contains_expected_key(keys: &str, expected_prefix: &str) -> bool {
+    keys.split_whitespace().any(|key| key.starts_with(expected_prefix))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::contains_expected_key;
+    use super::legacy_message_key_prefix;
+    use uuid::Uuid;
+
+    #[test]
+    fn legacy_probe_keys_are_bound_to_one_run() {
+        let run_id = Uuid::parse_str("5d3c8215-5ad3-4668-8310-f69a20b87c8f").expect("fixture UUID should parse");
+        let prefix = format!("{}-", legacy_message_key_prefix(run_id));
+
+        assert!(contains_expected_key(
+            "probe-5d3c82155ad346688310f69a20b87c8f-9 unrelated",
+            &prefix
+        ));
+        assert!(!contains_expected_key(
+            "probe-00000000000000000000000000000000-9",
+            &prefix
+        ));
     }
 }
