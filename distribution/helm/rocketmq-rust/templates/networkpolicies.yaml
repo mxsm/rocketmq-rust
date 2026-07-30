@@ -55,6 +55,31 @@ spec:
       ports:
         - {protocol: TCP, port: 4317}
 ---
+{{- if .Values.global.runtimeDiagnostics.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rocketmq-runtime-diagnostics
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: rocketmq.apache.org/service
+        operator: In
+        values: [broker, namesrv, controller, proxy]
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              {{ .Values.networkPolicy.clientNamespaceLabel }}: "true"
+          podSelector:
+            matchLabels:
+              rocketmq.apache.org/sre-connector: "true"
+      ports:
+        - {protocol: TCP, port: {{ .Values.global.runtimeDiagnostics.port }}}
+---
+{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
