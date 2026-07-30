@@ -532,7 +532,10 @@ impl ChangeExecutor {
         compensation: bool,
         direction: &str,
     ) -> Result<StepIntent, ExecutorError> {
-        let lease = self.current_lease(request.cluster_id).await?;
+        // Verification can legitimately run for the full descriptor window.
+        // Re-establish the fenced owner before every dispatch so a lease that
+        // expired while observing the previous effect cannot strand rollback.
+        let lease = self.ensure_active_lease(request, false).await?;
         let grant = self
             .authority
             .issue_fence_grant(&IssueFenceGrantRequest {
