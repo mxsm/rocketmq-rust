@@ -33,6 +33,7 @@ use rocketmq_sre_contracts::DynamicSafetyDecision;
 use rocketmq_sre_contracts::DynamicSafetyDecisionId;
 use rocketmq_sre_contracts::DynamicSafetyVerification;
 use rocketmq_sre_contracts::EXECUTION_AGENT_SCHEMA_VERSION;
+use rocketmq_sre_contracts::EffectState;
 use rocketmq_sre_contracts::ExecutionAction;
 use rocketmq_sre_contracts::ExecutionId;
 use rocketmq_sre_contracts::ExecutionStepId;
@@ -52,6 +53,7 @@ use serde_json::json;
 use sqlx::postgres::PgPoolOptions;
 
 use super::ExecutionAgent;
+use super::reconciliation_requires_store_confirmation;
 use crate::AgentActionHandler;
 use crate::AgentDriverRegistry;
 use crate::AgentEffectStore;
@@ -299,6 +301,28 @@ async fn autonomous_forward_requires_live_safety_but_compensation_remains_availa
         Err(ExecutionAgentError::InvalidRequest)
     ));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn recovery_does_not_rewrite_an_already_confirmed_dispatch_terminal() {
+    for reconciliation in [
+        ReconcileEffectState::Applied,
+        ReconcileEffectState::NotApplied,
+        ReconcileEffectState::Failed,
+    ] {
+        assert!(!reconciliation_requires_store_confirmation(
+            EffectState::Confirmed,
+            reconciliation
+        ));
+    }
+    assert!(reconciliation_requires_store_confirmation(
+        EffectState::Dispatched,
+        ReconcileEffectState::NotApplied
+    ));
+    assert!(!reconciliation_requires_store_confirmation(
+        EffectState::Unknown,
+        ReconcileEffectState::Unknown
+    ));
 }
 
 fn dispatch_request() -> AgentDispatchRequest {
