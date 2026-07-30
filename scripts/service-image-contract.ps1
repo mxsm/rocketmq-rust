@@ -177,15 +177,34 @@ $oldPassword = $env:COSIGN_PASSWORD
 $randomBytes = New-Object byte[] 32
 $random = [System.Security.Cryptography.RandomNumberGenerator]::Create()
 $evidence = [System.Collections.Generic.List[object]]::new()
-$smokeContainerIds = [System.Collections.Generic.List[string]]::new()
-$dependencyContainerIds = @{}
-$smokeNetwork = ""
-$smokeNetworkCreated = $false
+$nameServerHelperId = ""
+$brokerHelperId = ""
 
 try {
     $random.GetBytes($randomBytes)
     $env:COSIGN_PASSWORD = [Convert]::ToBase64String($randomBytes)
     Invoke-Checked cosign generate-key-pair --output-key-prefix $keyPrefix
+
+    $nameServerImageRef = "rocketmq-rust/namesrv:verification"
+    Invoke-Checked docker buildx build --load --file $dockerfilePath --target namesrv --tag $nameServerImageRef --build-arg "SOURCE_REVISION=$sourceCommit" --build-arg "SOURCE_VERSION=$sourceVersion" $root
+    $nameServerHelperId = (
+        Invoke-Captured docker run --detach --interactive --network none --read-only `
+            --mount "type=volume,destination=$($policy.runtime.writable_data_path)" `
+            --mount "type=bind,source=$smokeConfigPath,target=/etc/rocketmq,readonly" `
+            --tmpfs $tmpfsOptions `
+            --env "ROCKETMQ_SECURITY_PROFILE=development-insecure-loopback" `
+            --env "ROCKETMQ_HEALTH_BIND_ADDR=127.0.0.1:18088" `
+            $nameServerImageRef `
+            --configFile /etc/rocketmq/namesrv.toml `
+            --bindAddress 127.0.0.1
+    ).Trim()
+    Start-Sleep -Seconds 3
+    $nameServerHelperRunning =
+        (Invoke-Captured docker inspect --format "{{.State.Running}}" $nameServerHelperId).Trim()
+    if ($nameServerHelperRunning -ne "true") {
+        $nameServerHelperLogs = Invoke-Captured docker logs $nameServerHelperId
+        throw "NameServer helper exited before dependent service smoke: $nameServerHelperLogs"
+    }
 
     foreach ($serviceProperty in $policy.services.PSObject.Properties) {
         $serviceName = $serviceProperty.Name
@@ -299,16 +318,62 @@ try {
             "$($service.data_path)/data-write" `
             "$($policy.runtime.tmpfs_path)/tmp-write"
 
-        $containerId = ""
-        try {
-            $containerId = (
-                Invoke-Captured docker run --detach --interactive --network none --read-only `
+        if ($serviceName -eq "proxy") {
+            $brokerHelperId = (
+                Invoke-Captured docker run --detach --interactive `
+                    --network "container:$nameServerHelperId" `
+                    --read-only `
                     --mount "type=volume,destination=$($policy.runtime.writable_data_path)" `
                     --mount "type=bind,source=$smokeConfigPath,target=/etc/rocketmq,readonly" `
                     --tmpfs $tmpfsOptions `
                     --env "ROCKETMQ_SECURITY_PROFILE=development-insecure-loopback" `
-                    --env "ROCKETMQ_HEALTH_BIND_ADDR=$loopbackHealthBind" `
-                    $imageRef
+                    --env "ROCKETMQ_HEALTH_BIND_ADDR=127.0.0.1:18089" `
+                    rocketmq-rust/broker:verification
+            ).Trim()
+            Start-Sleep -Seconds 5
+            $brokerHelperRunning =
+                (Invoke-Captured docker inspect --format "{{.State.Running}}" $brokerHelperId).Trim()
+            if ($brokerHelperRunning -ne "true") {
+                $brokerHelperLogs = Invoke-Captured docker logs $brokerHelperId
+                throw "Broker helper exited before Proxy smoke: $brokerHelperLogs"
+            }
+        }
+
+        $containerId = ""
+        try {
+            $smokeNetwork = if ($serviceName -in @("broker", "proxy")) {
+                "container:$nameServerHelperId"
+            }
+            else {
+                "none"
+            }
+            $smokeArguments = @(
+                "run",
+                "--detach",
+                "--interactive",
+                "--network",
+                $smokeNetwork,
+                "--read-only",
+                "--mount",
+                "type=volume,destination=$($policy.runtime.writable_data_path)",
+                "--mount",
+                "type=bind,source=$smokeConfigPath,target=/etc/rocketmq,readonly",
+                "--tmpfs",
+                $tmpfsOptions,
+                "--env",
+                "ROCKETMQ_SECURITY_PROFILE=development-insecure-loopback",
+                "--env",
+                "ROCKETMQ_HEALTH_BIND_ADDR=$loopbackHealthBind",
+                "--env",
+                "ROCKETMQ_CONTROLLER_RAFT_BIND_ADDR=127.0.0.1:60110",
+                $imageRef
+            )
+            if ($serviceName -eq "namesrv") {
+                $smokeArguments += @($service.command)
+                $smokeArguments += @("--bindAddress", "127.0.0.1")
+            }
+            $containerId = (
+                Invoke-Captured docker @smokeArguments
             ).Trim()
             Start-Sleep -Seconds 5
             $running = (Invoke-Captured docker inspect --format "{{.State.Running}}" $containerId).Trim()
@@ -431,11 +496,11 @@ try {
     }
 }
 finally {
-    foreach ($containerId in @($smokeContainerIds)) {
-        & docker rm --force --volumes $containerId *> $null
+    if ($brokerHelperId) {
+        & docker rm --force $brokerHelperId *> $null
     }
-    if ($smokeNetworkCreated) {
-        & docker network rm $smokeNetwork *> $null
+    if ($nameServerHelperId) {
+        & docker rm --force $nameServerHelperId *> $null
     }
     $random.Dispose()
     $env:COSIGN_PASSWORD = $oldPassword
