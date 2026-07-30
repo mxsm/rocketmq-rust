@@ -106,6 +106,9 @@ use crate::workflow::InvestigationCreateRequest;
 use crate::workflow::InvestigationView;
 use crate::workflow::PromoteInvestigationRequest;
 use crate::workflow::RecommendationDispositionRequest;
+use crate::workflow::UnifiedEventEntryRequest;
+use crate::workflow::UnifiedEventEntryResult;
+use crate::workflow::UnifiedEventEntryService;
 use crate::workflow::WorkflowListQuery;
 use crate::workflow::WorkflowPage;
 
@@ -135,6 +138,10 @@ pub(crate) fn public_routes() -> Router<AppState> {
         .route(
             "/v1/integrations/events",
             post(ingest_integration_event).layer(DefaultBodyLimit::max(64 * 1024)),
+        )
+        .route(
+            "/v1/event-entries",
+            post(ingest_unified_event_entry).layer(DefaultBodyLimit::max(64 * 1024)),
         )
         .route(
             "/v1/integrations/webhook/test",
@@ -685,6 +692,18 @@ async fn ingest_integration_event(
     state
         .alerting
         .ingest_integration_event(&auth, &request, correlation_id(&headers))
+        .await
+        .map(Json)
+}
+
+async fn ingest_unified_event_entry(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<UnifiedEventEntryRequest>,
+) -> Result<Json<UnifiedEventEntryResult>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
+    UnifiedEventEntryService::new(state.repository.clone(), state.workflow.clone(), state.alerting.clone())
+        .ingest(&auth, &request, correlation_id(&headers))
         .await
         .map(Json)
 }
