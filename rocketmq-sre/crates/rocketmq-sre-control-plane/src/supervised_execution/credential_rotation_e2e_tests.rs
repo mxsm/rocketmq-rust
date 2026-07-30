@@ -305,12 +305,12 @@ async fn ensure_kind_cluster(
     );
 }
 
-struct ScriptedTransport {
+pub(super) struct ScriptedTransport {
     responses: Mutex<VecDeque<Result<TransportResponse, ProviderError>>>,
 }
 
 impl ScriptedTransport {
-    fn new(responses: impl IntoIterator<Item = Result<TransportResponse, ProviderError>>) -> Self {
+    pub(super) fn new(responses: impl IntoIterator<Item = Result<TransportResponse, ProviderError>>) -> Self {
         Self {
             responses: Mutex::new(responses.into_iter().collect()),
         }
@@ -329,7 +329,7 @@ impl AsyncModelTransport for ScriptedTransport {
     }
 }
 
-fn critic_profile() -> rocketmq_sre_model_gateway::ProviderProfile {
+pub(super) fn critic_profile() -> rocketmq_sre_model_gateway::ProviderProfile {
     let mut profile = rocketmq_sre_model_gateway::builtin_provider_profiles()
         .into_iter()
         .find(|profile| profile.id == "kimi-moonshot")
@@ -339,7 +339,7 @@ fn critic_profile() -> rocketmq_sre_model_gateway::ProviderProfile {
     profile
 }
 
-fn valid_critic_response(evidence_id: rocketmq_sre_contracts::EvidenceId) -> TransportResponse {
+pub(super) fn valid_critic_response(evidence_id: rocketmq_sre_contracts::EvidenceId) -> TransportResponse {
     TransportResponse {
         status: 200,
         body: json!({
