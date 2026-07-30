@@ -69,6 +69,9 @@ spec:
             - {name: ROCKETMQ_SRE_PROMETHEUS_URL, value: "http://prometheus.observability.svc.cluster.local:9090"}
             - {name: ROCKETMQ_SRE_LOKI_URL, value: "http://loki.observability.svc.cluster.local:3100"}
             - {name: ROCKETMQ_SRE_TEMPO_URL, value: "http://tempo.observability.svc.cluster.local:3200"}
+            - name: ROCKETMQ_SRE_RUNTIME_DIAGNOSTICS_ENDPOINTS
+              value: "broker=http://rocketmq-broker:8087/internal/v1/runtime/diagnostics;name_server=http://rocketmq-namesrv:8087/internal/v1/runtime/diagnostics;controller=http://rocketmq-controller:8087/internal/v1/runtime/diagnostics;proxy=http://rocketmq-proxy:8087/internal/v1/runtime/diagnostics"
+            - {name: ROCKETMQ_SRE_RUNTIME_DIAGNOSTICS_ALLOW_INSECURE_HTTP, value: "true"}
             - {name: ROCKETMQ_SRE_ADMIN_NAMESRV_ADDR, value: "rocketmq-namesrv:9876"}
             - {name: ROCKETMQ_SRE_ADMIN_USE_TLS, value: "false"}
             - {name: ROCKETMQ_SRE_ADMIN_ACCESS_KEY_ENV, value: "ROCKETMQ_SRE_ADMIN_ACCESS_KEY"}
