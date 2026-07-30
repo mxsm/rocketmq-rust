@@ -172,7 +172,6 @@ See:
 - [Phase 03 Plan, Policy, Approval, and Audit](docs/phase03-plan-policy-approval.md)
 - [Phase 03 heterogeneous Critic](docs/phase03-heterogeneous-critic.md)
 - [Phase 05 OpenAPI, SDK, and CLI](docs/phase05-openapi-sdk-cli.md)
-- [Phase 05 immutable release supply chain](docs/phase05-release-supply-chain.md)
 - [Phase 05 enterprise validation record](docs/phase05-enterprise-validation-record.md)
 - [Phase 05 operations guide](docs/phase05-operations-guide.md)
 - [Phase 05 extension guide](docs/phase05-extension-guide.md)
