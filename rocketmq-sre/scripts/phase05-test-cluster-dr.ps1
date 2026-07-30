@@ -414,6 +414,7 @@ try {
         }
         control_plane_ready_replicas = [int]$controlPlaneReady
         dr_center_record_verified = $true
+        synthetic_topic_rebuilt = $false
         synthetic_topic_persisted = $true
         message_history_restore_claimed = $true
         secrets_recorded = $false
