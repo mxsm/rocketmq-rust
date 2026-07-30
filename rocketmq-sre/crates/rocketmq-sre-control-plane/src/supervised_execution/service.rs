@@ -343,6 +343,7 @@ impl SupervisedExecutionService {
         let mut plan = ActionPlan::seal(draft)
             .map_err(|error| ControlPlaneError::validation("invalid_plan", error.to_string()))?;
         let live = self.live_plan_state(auth, &plan, now).await?;
+        let precondition_hash = live.precondition_hash.clone();
         let decision = self.policy.evaluate(auth, &plan, &risks, live.facts, now)?;
         plan = if decision.effect == PolicyEffect::RequireApproval {
             plan.submit_for_review(now, risk == ActionRisk::R2)
@@ -358,6 +359,7 @@ impl SupervisedExecutionService {
         self.publish_audits(&audits);
         Ok(CreatePlanResponse::ActionPlan {
             plan: Box::new(plan),
+            precondition_hash,
             risk,
             policy_decision: decision,
         })
@@ -369,8 +371,13 @@ impl SupervisedExecutionService {
         let critic_state = critic_gate_state(projection.risk, latest_critic_review.as_ref());
         let latest_policy_decision = self.repository.latest_policy_decision(auth, &projection.plan).await?;
         let latest_approval = self.repository.latest_approval(auth, &projection.plan).await?;
+        let precondition_hash = projection
+            .plan
+            .compute_precondition_hash()
+            .map_err(|error| ControlPlaneError::validation("invalid_precondition_hash", error.to_string()))?;
         Ok(ActionPlanView {
             plan: projection.plan,
+            precondition_hash,
             risk: projection.risk,
             critic_state,
             latest_critic_review,
