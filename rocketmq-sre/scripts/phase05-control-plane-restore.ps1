@@ -20,10 +20,10 @@ param(
     [string]$DatabasePassword = 'rocketmq_sre',
     [int]$PublicPort = 18091,
     [int]$ConnectorPort = 18093,
-    [string]$CargoTargetDir = 'G:\rocketmq-sre-phase2-cargo-target',
-    [string]$CargoHome = 'G:\rocketmq-sre-phase1-cargo-home',
-    [string]$TemporaryRoot = 'G:\rocketmq-sre-phase2-temp',
-    [string]$EvidenceOutput = 'G:\rocketmq-sre-phase2-temp\phase05-control-plane-restore.json'
+    [string]$CargoTargetDir = 'D:\BuildCache\rocketmq-sre-target',
+    [string]$CargoHome = 'D:\BuildCache\rocketmq-sre-cargo-home',
+    [string]$TemporaryRoot = 'D:\BuildCache\rocketmq-sre-temp',
+    [string]$EvidenceOutput = 'D:\BuildCache\rocketmq-sre-temp\phase05-control-plane-restore.json'
 )
 
 $ErrorActionPreference = 'Stop'
