@@ -33,23 +33,28 @@ function Invoke-Native {
     }
 }
 
-function Assert-NonSystemBuildPath([string]$Path, [string]$Description) {
+function Assert-DataPath([string]$Path, [string]$Description) {
     $fullPath = [IO.Path]::GetFullPath($Path)
-    if ([IO.Path]::GetPathRoot($fullPath).Equals('C:\', [StringComparison]::OrdinalIgnoreCase)) {
-        throw "$Description must not use the C drive."
+    $root = [IO.Path]::GetPathRoot($fullPath)
+    if (
+        -not $root.Equals('D:\', [StringComparison]::OrdinalIgnoreCase) -and
+        -not $root.Equals('F:\', [StringComparison]::OrdinalIgnoreCase)
+    ) {
+        throw "$Description must use the D or F drive."
     }
 }
 
-function Ensure-CargoCapacity {
-    $dDrive = Get-PSDrive -Name D
-    $gDrive = Get-PSDrive -Name G
-    Write-Host "D_FREE_GIB=$([Math]::Round($dDrive.Free / 1GB, 2))"
-    Write-Host "G_FREE_GIB=$([Math]::Round($gDrive.Free / 1GB, 2))"
-    if (($dDrive.Free / 1GB) -lt 15 -or ($gDrive.Free / 1GB) -lt 15) {
+function Ensure-CargoCapacity([string]$TargetDirectory) {
+    $targetDriveName = [IO.Path]::GetPathRoot(
+        [IO.Path]::GetFullPath($TargetDirectory)
+    ).TrimEnd('\').TrimEnd(':')
+    $targetFreeGiB = (Get-PSDrive -Name $targetDriveName).Free / 1GB
+    Write-Host "${targetDriveName}_FREE_GIB=$([Math]::Round($targetFreeGiB, 2))"
+    if ($targetFreeGiB -lt 15) {
         Invoke-Native cargo @(
             '+1.95.0', 'clean',
             '--manifest-path', (Join-Path $sreRoot 'Cargo.toml'),
-            '--target-dir', $CargoTargetDir
+            '--target-dir', $TargetDirectory
         ) 'low-space Cargo cleanup'
     }
 }
@@ -126,7 +131,7 @@ foreach ($path in @(
     @{ Value = $CargoHome; Description = 'Cargo home' },
     @{ Value = $TemporaryRoot; Description = 'temporary directory' }
 )) {
-    Assert-NonSystemBuildPath $path.Value $path.Description
+    Assert-DataPath $path.Value $path.Description
 }
 
 foreach ($port in @(
@@ -141,7 +146,7 @@ foreach ($port in @(
 }
 
 New-Item -ItemType Directory -Force -Path $CargoTargetDir, $ClusterTargetDir, $CargoHome, $TemporaryRoot | Out-Null
-Ensure-CargoCapacity
+Ensure-CargoCapacity $CargoTargetDir
 
 $runRoot = [IO.Path]::GetFullPath(
     (Join-Path $TemporaryRoot "phase04-logger-ttl-$([Guid]::NewGuid().ToString('N'))")
@@ -256,6 +261,7 @@ try {
     $env:TEMP = $TemporaryRoot
     $env:TMP = $TemporaryRoot
     Set-Location $repositoryRoot
+    Ensure-CargoCapacity $ClusterTargetDir
     Invoke-Native cargo @(
         '+1.95.0', 'build', '--locked',
         '--package', 'rocketmq-namesrv',
@@ -263,7 +269,6 @@ try {
         '--package', 'rocketmq-broker',
         '--bin', 'rocketmq-broker-rust'
     ) 'RocketMQ logger test-cluster build'
-    Ensure-CargoCapacity
 
     $namesrvBinary = Join-Path $ClusterTargetDir 'debug/rocketmq-namesrv-rust.exe'
     $brokerBinary = Join-Path $ClusterTargetDir 'debug/rocketmq-broker-rust.exe'
