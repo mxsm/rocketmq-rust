@@ -133,6 +133,48 @@ const inspectionTemplates = [
   "upgrade",
   "disaster_recovery",
 ];
+const eventEntryCommonProperties = {
+  schema_version: {
+    type: "string",
+    const: "rocketmq-sre.event-entry.v1",
+  },
+  cluster_id: uuid,
+  idempotency_key: {
+    type: "string",
+    minLength: 1,
+    maxLength: 256,
+    pattern: "^[A-Za-z0-9._:/#-]+$",
+  },
+  occurred_at: {
+    oneOf: [dateTime, { type: "null" }],
+  },
+};
+const eventEntryCommonRequired = [
+  "schema_version",
+  "cluster_id",
+  "idempotency_key",
+  "source_kind",
+];
+const workflowTitle = {
+  type: "string",
+  minLength: 1,
+  maxLength: 512,
+};
+const workflowResource = {
+  oneOf: [
+    {
+      type: "string",
+      minLength: 1,
+      maxLength: 1024,
+    },
+    { type: "null" },
+  ],
+};
+const workflowSymptomFamily = {
+  type: "string",
+  minLength: 1,
+  maxLength: 128,
+};
 
 document.components.schemas.CreateInspectionRequest.properties.template.enum =
   inspectionTemplates;
@@ -272,6 +314,280 @@ Object.assign(document.components.schemas, {
         minimum: 0,
       },
       occurred_at: dateTime,
+    },
+  },
+  UnifiedAlertSource: {
+    type: "string",
+    enum: [
+      "alertmanager",
+      "kubernetes_event",
+      "health_probe",
+      "synthetic_probe",
+    ],
+  },
+  EventEntryWorkflowTarget: {
+    type: "string",
+    enum: ["investigation", "incident"],
+  },
+  ChangeEventKind: {
+    type: "string",
+    enum: ["release", "deployment", "configuration"],
+  },
+  ExternalEventChannel: {
+    type: "string",
+    enum: ["itsm", "chat_ops"],
+  },
+  EventEntrySourceKind: {
+    type: "string",
+    enum: [
+      "alert",
+      "manual_issue",
+      "scheduled_inspection",
+      "change_event",
+      "external_integration",
+    ],
+  },
+  EventEntryTargetKind: {
+    type: "string",
+    enum: ["investigation", "incident", "inspection_run"],
+  },
+  AlertEventEntryRequest: {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      ...eventEntryCommonRequired,
+      "source",
+      "source_event_id",
+      "resource_kind",
+      "resource_key",
+      "symptom_family",
+      "severity",
+      "status",
+      "summary",
+      "sequence",
+    ],
+    properties: {
+      ...eventEntryCommonProperties,
+      source_kind: {
+        type: "string",
+        const: "alert",
+      },
+      source: {
+        $ref: "#/components/schemas/UnifiedAlertSource",
+      },
+      source_event_id: {
+        type: "string",
+        minLength: 1,
+        maxLength: 512,
+      },
+      resource_kind: {
+        $ref: "#/components/schemas/AlertEvent__ResourceKind",
+      },
+      resource_key: {
+        type: "string",
+        minLength: 1,
+        maxLength: 512,
+      },
+      display_name: {
+        oneOf: [
+          {
+            type: "string",
+            minLength: 1,
+            maxLength: 512,
+          },
+          { type: "null" },
+        ],
+      },
+      symptom_family: workflowSymptomFamily,
+      severity: {
+        $ref: "#/components/schemas/AlertEvent__AlertSeverity",
+      },
+      status: {
+        $ref: "#/components/schemas/AlertEvent__AlertStatus",
+      },
+      summary: {
+        type: "string",
+        minLength: 1,
+        maxLength: 2048,
+      },
+      labels: boundedLabels,
+      evidence_ids: {
+        type: "array",
+        maxItems: 64,
+        items: uuid,
+      },
+      sequence: {
+        type: "integer",
+        format: "uint64",
+        minimum: 0,
+      },
+    },
+  },
+  ManualIssueEventEntryRequest: {
+    type: "object",
+    additionalProperties: false,
+    required: [...eventEntryCommonRequired, "title", "symptom_family"],
+    properties: {
+      ...eventEntryCommonProperties,
+      source_kind: {
+        type: "string",
+        const: "manual_issue",
+      },
+      title: workflowTitle,
+      resource: workflowResource,
+      symptom_family: workflowSymptomFamily,
+    },
+  },
+  ScheduledInspectionEventEntryRequest: {
+    type: "object",
+    additionalProperties: false,
+    required: [...eventEntryCommonRequired, "template"],
+    properties: {
+      ...eventEntryCommonProperties,
+      source_kind: {
+        type: "string",
+        const: "scheduled_inspection",
+      },
+      template: {
+        type: "string",
+        enum: inspectionTemplates,
+      },
+      schedule: {
+        oneOf: [
+          {
+            type: "string",
+            minLength: 1,
+            maxLength: 128,
+          },
+          { type: "null" },
+        ],
+      },
+    },
+  },
+  ChangeEventEntryRequest: {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      ...eventEntryCommonRequired,
+      "change_kind",
+      "title",
+      "symptom_family",
+    ],
+    properties: {
+      ...eventEntryCommonProperties,
+      source_kind: {
+        type: "string",
+        const: "change_event",
+      },
+      change_kind: {
+        $ref: "#/components/schemas/ChangeEventKind",
+      },
+      target: {
+        allOf: [
+          {
+            $ref: "#/components/schemas/EventEntryWorkflowTarget",
+          },
+        ],
+        default: "investigation",
+      },
+      title: workflowTitle,
+      resource: workflowResource,
+      symptom_family: workflowSymptomFamily,
+    },
+  },
+  ExternalIntegrationEventEntryRequest: {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      ...eventEntryCommonRequired,
+      "channel",
+      "target",
+      "title",
+      "symptom_family",
+    ],
+    properties: {
+      ...eventEntryCommonProperties,
+      source_kind: {
+        type: "string",
+        const: "external_integration",
+      },
+      channel: {
+        $ref: "#/components/schemas/ExternalEventChannel",
+      },
+      target: {
+        $ref: "#/components/schemas/EventEntryWorkflowTarget",
+      },
+      title: workflowTitle,
+      resource: workflowResource,
+      symptom_family: workflowSymptomFamily,
+    },
+  },
+  UnifiedEventEntryRequest: {
+    oneOf: [
+      {
+        $ref: "#/components/schemas/AlertEventEntryRequest",
+      },
+      {
+        $ref: "#/components/schemas/ManualIssueEventEntryRequest",
+      },
+      {
+        $ref: "#/components/schemas/ScheduledInspectionEventEntryRequest",
+      },
+      {
+        $ref: "#/components/schemas/ChangeEventEntryRequest",
+      },
+      {
+        $ref: "#/components/schemas/ExternalIntegrationEventEntryRequest",
+      },
+    ],
+    discriminator: {
+      propertyName: "source_kind",
+      mapping: {
+        alert: "#/components/schemas/AlertEventEntryRequest",
+        manual_issue: "#/components/schemas/ManualIssueEventEntryRequest",
+        scheduled_inspection:
+          "#/components/schemas/ScheduledInspectionEventEntryRequest",
+        change_event: "#/components/schemas/ChangeEventEntryRequest",
+        external_integration:
+          "#/components/schemas/ExternalIntegrationEventEntryRequest",
+      },
+    },
+  },
+  UnifiedEventEntryResult: {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "schema_version",
+      "entry_id",
+      "source_kind",
+      "target_kind",
+      "target_id",
+      "created",
+      "replayed",
+      "correlation_id",
+      "accepted_at",
+    ],
+    properties: {
+      schema_version: {
+        type: "string",
+        const: "rocketmq-sre.event-entry-result.v1",
+      },
+      entry_id: uuid,
+      source_kind: {
+        $ref: "#/components/schemas/EventEntrySourceKind",
+      },
+      target_kind: {
+        $ref: "#/components/schemas/EventEntryTargetKind",
+      },
+      target_id: uuid,
+      created: {
+        type: "boolean",
+      },
+      replayed: {
+        type: "boolean",
+      },
+      correlation_id: uuid,
+      accepted_at: dateTime,
     },
   },
   AlertIngestionOutcome: {
@@ -937,6 +1253,35 @@ document.paths["/v1/integrations/events"] = {
           "application/json": {
             schema: {
               $ref: "#/components/schemas/AlertIngestionOutcome",
+            },
+          },
+        },
+      },
+    },
+  },
+};
+
+document.paths["/v1/event-entries"] = {
+  post: {
+    operationId: "ingestUnifiedEventEntry",
+    "x-max-body-bytes": 65536,
+    requestBody: {
+      required: true,
+      content: {
+        "application/json": {
+          schema: {
+            $ref: "#/components/schemas/UnifiedEventEntryRequest",
+          },
+        },
+      },
+    },
+    responses: {
+      200: {
+        description: "Idempotent workflow target created from one of five event sources",
+        content: {
+          "application/json": {
+            schema: {
+              $ref: "#/components/schemas/UnifiedEventEntryResult",
             },
           },
         },
