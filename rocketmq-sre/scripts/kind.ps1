@@ -512,7 +512,8 @@ function Apply-Secrets {
         "--from-file=request-policy.json=$(Join-Path $artifactRoot 'request-policy.json')",
         "--from-file=broker-acl.yml=$(Join-Path $artifactRoot 'broker-acl.yml')",
         "--from-file=proxy-acl.yml=$(Join-Path $artifactRoot 'proxy-acl.yml')",
-        "--from-file=proxy-inner-credentials.yml=$(Join-Path $artifactRoot 'proxy-inner-credentials.yml')"
+        "--from-file=proxy-inner-credentials.yml=$(Join-Path $artifactRoot 'proxy-inner-credentials.yml')",
+        "--from-file=runtime-diagnostics-token=$(Join-Path $artifactRoot 'internal-token')"
     )
     Apply-GeneratedSecret $rocketmqNamespace 'rocketmq-mcp-runtime-secrets' @(
         "--from-file=ca.crt=$(Join-Path $certificateRoot 'ca-cert.pem')",
