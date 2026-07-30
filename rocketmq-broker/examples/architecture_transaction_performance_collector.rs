@@ -45,7 +45,7 @@ const VARIANT: &str = "queues-8";
 const SAMPLE_COUNT: usize = 5;
 const PRIMING_SAMPLE_COUNT: usize = 2;
 const QUEUE_COUNT: usize = 8;
-const OPERATIONS_PER_QUEUE: usize = 512;
+const OPERATIONS_PER_QUEUE: usize = 8_192;
 const PAYLOAD_BYTES: usize = 1_024;
 const SYNC_EVERY: usize = 32;
 

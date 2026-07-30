@@ -152,9 +152,11 @@ class ArchitecturePerformanceSidecarTest(unittest.TestCase):
             )
 
             check_count = len(self.policy["required_correctness_checks"])
+            profile_count = len(self.policy["profiles"])
             variant_count = sum(len(profile["variants"]) for profile in self.policy["profiles"])
             self.assertEqual(4, check_count)
-            self.assertEqual(11, variant_count)
+            self.assertEqual(10, profile_count)
+            self.assertEqual(13, variant_count)
             self.assertTrue(all(command[1] == "correctness" for command in calls[:check_count]))
             self.assertTrue(all(command[1] == "measurement" for command in calls[check_count:]))
             self.assertEqual(check_count + variant_count, len(calls))

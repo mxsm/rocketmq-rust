@@ -82,7 +82,7 @@ const OVERLOAD_VARIANT: &str = "bounded-rejection";
 const MESSAGE_SIZE_BYTES: usize = 1024;
 const SAMPLE_COUNT: usize = 5;
 const PRIMING_SAMPLE_COUNT: usize = 2;
-const CONNECTION_SOAK_CONNECTIONS: usize = 10_000;
+const CONNECTION_SOAK_CONNECTIONS: usize = 50_000;
 const CONNECTION_SOAK_DURATION: Duration = Duration::from_secs(900);
 const CONNECTION_SOAK_COOLDOWN: Duration = Duration::from_secs(60);
 const OVERLOAD_DURATION: Duration = Duration::from_secs(300);
@@ -1160,7 +1160,7 @@ mod tests {
         let connection = Scenario::parse(CONNECTION_SOAK_PROFILE, CONNECTION_SOAK_VARIANT)
             .expect("connection scenario")
             .production_spec();
-        assert_eq!(connection.operation_count, 10_000);
+        assert_eq!(connection.operation_count, 50_000);
         assert_eq!(connection.duration, Duration::from_secs(900));
         assert_eq!(connection.cooldown, Duration::from_secs(60));
         assert!(connection.operation_count.is_multiple_of(2));

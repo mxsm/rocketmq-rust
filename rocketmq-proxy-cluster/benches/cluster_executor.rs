@@ -19,19 +19,22 @@ use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::BenchmarkId;
 use criterion::Criterion;
-use rocketmq_proxy_cluster::bench_support::run_cluster_admission_probe;
-use rocketmq_proxy_cluster::bench_support::ClusterAdmissionPattern;
+use rocketmq_proxy_cluster::bench_support::run_cluster_admission_microprobe;
+use rocketmq_proxy_cluster::bench_support::ClusterAdmissionMicroPattern;
 
 fn bench_cluster_executor(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("proxy_cluster_keyed_admission");
     for command_count in [256usize, 1_024] {
-        for pattern in [ClusterAdmissionPattern::SameKey, ClusterAdmissionPattern::DistinctKeys] {
+        for pattern in [
+            ClusterAdmissionMicroPattern::SameKey,
+            ClusterAdmissionMicroPattern::DistinctKeys,
+        ] {
             group.bench_with_input(
                 BenchmarkId::new(format!("{pattern:?}"), command_count),
                 &(pattern, command_count),
                 |bencher, &(pattern, command_count)| {
                     bencher.iter(|| {
-                        let probe = run_cluster_admission_probe(black_box(command_count), pattern)
+                        let probe = run_cluster_admission_microprobe(black_box(command_count), pattern)
                             .expect("proxy cluster admission benchmark should complete");
                         assert_eq!(probe.drained_count, probe.command_count);
                         assert_eq!(probe.diagnostics.active_keys, 0);

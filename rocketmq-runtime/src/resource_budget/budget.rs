@@ -15,6 +15,8 @@
 use std::fmt;
 use std::sync::Arc;
 use std::sync::Mutex;
+
+use smallvec::SmallVec;
 use std::time::Duration;
 
 use super::clock::MonotonicClock;
@@ -166,7 +168,7 @@ impl ResourceBudget {
 
     /// Attempts to acquire.
     pub fn try_acquire(&self, bytes: usize, class: BudgetClass) -> Result<ResourcePermit, BudgetAcquireError> {
-        let mut reservations = Vec::with_capacity(self.chain.len());
+        let mut reservations = SmallVec::<[NodeReservation; 4]>::with_capacity(self.chain.len());
         for node in self.chain.iter() {
             match node.try_reserve(bytes, class) {
                 Ok(reservation) => reservations.push(reservation),
@@ -256,7 +258,7 @@ fn validated_name(name: String) -> Result<String, BudgetConfigError> {
 
 /// Represents resource permit.
 pub struct ResourcePermit {
-    reservations: Vec<NodeReservation>,
+    reservations: SmallVec<[NodeReservation; 4]>,
     bytes: usize,
     class: BudgetClass,
 }

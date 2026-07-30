@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Target-hardware collector for bounded Proxy Cluster keyed admission.
+//! Target-hardware collector for Proxy Cluster head-of-line isolation.
 //!
-//! The workload alternates same-key and distinct-key batches through the
-//! production count/byte admission and exact-key lane registry. Behaviour
-//! tests separately exercise blocked remote I/O; this collector measures the
-//! hot admission/retirement path without claiming end-to-end broker TPS.
+//! The workload holds one key in simulated remote I/O while unrelated keys
+//! execute through the production count/byte admission and exact-key queues.
+//! Throughput and p99 describe unrelated completion while the slow key is
+//! blocked; they are not end-to-end Broker TPS.
 
 use std::alloc::GlobalAlloc;
 use std::alloc::Layout;
@@ -29,15 +29,13 @@ use std::process::Command;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
-use std::time::Instant;
 
 use anyhow::anyhow;
 use anyhow::bail;
 use anyhow::ensure;
 use anyhow::Context;
 use anyhow::Result;
-use rocketmq_proxy_cluster::bench_support::run_cluster_admission_probe;
-use rocketmq_proxy_cluster::bench_support::ClusterAdmissionPattern;
+use rocketmq_proxy_cluster::bench_support::run_cluster_mixed_execution_probe;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -45,8 +43,12 @@ const PROFILE: &str = "proxy-mixed-execution";
 const VARIANT: &str = "same-and-distinct-keys";
 const SAMPLE_COUNT: usize = 5;
 const PRIMING_SAMPLE_COUNT: usize = 2;
-const BATCH_COUNT: usize = 256;
-const COMMANDS_PER_BATCH: usize = 1_024;
+const ROUND_COUNT: usize = 512;
+const UNRELATED_COMMANDS_PER_ROUND: usize = 64;
+const UNRELATED_KEY_COUNT: usize = 16;
+const MESSAGES_PER_COMMAND: usize = 32;
+const MESSAGE_SIZE_BYTES: usize = 1_024;
+const BLOCKED_IO_DURATION: Duration = Duration::from_millis(20);
 
 static ALLOCATION_CALLS: AtomicU64 = AtomicU64::new(0);
 
@@ -132,60 +134,55 @@ fn parse_invocation(arguments: &[String]) -> Result<bool> {
 }
 
 fn run_sample() -> Result<SampleObservation> {
-    let operation_count = BATCH_COUNT
-        .checked_mul(COMMANDS_PER_BATCH)
-        .ok_or_else(|| anyhow!("proxy operation count overflowed"))?;
     let allocation_start = ALLOCATION_CALLS.load(Ordering::Relaxed);
-    let started = Instant::now();
-    let mut operation_latencies = Vec::with_capacity(BATCH_COUNT);
-    let mut admitted = 0u64;
-    let mut drained = 0usize;
-
-    for batch in 0..BATCH_COUNT {
-        let pattern = if batch.is_multiple_of(2) {
-            ClusterAdmissionPattern::SameKey
-        } else {
-            ClusterAdmissionPattern::DistinctKeys
-        };
-        let batch_started = Instant::now();
-        let probe = run_cluster_admission_probe(COMMANDS_PER_BATCH, pattern)
-            .context("run production Proxy Cluster admission probe")?;
-        let elapsed = batch_started.elapsed();
-        operation_latencies.push(elapsed.div_f64(COMMANDS_PER_BATCH as f64));
-        ensure!(
-            probe.drained_count == probe.command_count,
-            "Proxy command drain count changed"
-        );
-        ensure!(probe.diagnostics.active_keys == 0, "Proxy key registry did not retire");
-        ensure!(
-            probe.diagnostics.queued_and_active == 0 && probe.diagnostics.retained_bytes == 0,
-            "Proxy admission budget did not return to zero"
-        );
-        ensure!(
-            probe.diagnostics.rejected == 0,
-            "Proxy admission unexpectedly rejected commands"
-        );
-        admitted = admitted
-            .checked_add(probe.diagnostics.admitted)
-            .ok_or_else(|| anyhow!("Proxy admitted counter overflowed"))?;
-        drained = drained
-            .checked_add(probe.drained_count)
-            .ok_or_else(|| anyhow!("Proxy drained counter overflowed"))?;
-    }
-
-    let elapsed = started.elapsed();
-    ensure!(admitted == operation_count as u64, "Proxy admitted count changed");
-    ensure!(drained == operation_count, "Proxy drained count changed");
+    let probe = run_cluster_mixed_execution_probe(
+        ROUND_COUNT,
+        UNRELATED_COMMANDS_PER_ROUND,
+        UNRELATED_KEY_COUNT,
+        MESSAGES_PER_COMMAND,
+        MESSAGE_SIZE_BYTES,
+        BLOCKED_IO_DURATION,
+    )
+    .context("run production Proxy Cluster blocked-key mixed-execution probe")?;
+    let expected_drained = probe
+        .unrelated_command_count
+        .checked_add(ROUND_COUNT)
+        .ok_or_else(|| anyhow!("proxy drain count overflowed"))?;
+    ensure!(
+        probe.drained_count == expected_drained,
+        "Proxy command drain count changed"
+    );
+    ensure!(probe.diagnostics.active_keys == 0, "Proxy key registry did not retire");
+    ensure!(
+        probe.diagnostics.queued_and_active == 0 && probe.diagnostics.retained_bytes == 0,
+        "Proxy admission budget did not return to zero"
+    );
+    ensure!(
+        probe.diagnostics.rejected == 0,
+        "Proxy admission unexpectedly rejected commands"
+    );
+    let measured_duration = probe
+        .unrelated_completion_latencies
+        .iter()
+        .copied()
+        .try_fold(Duration::ZERO, |total, latency| total.checked_add(latency))
+        .ok_or_else(|| anyhow!("Proxy unrelated completion duration overflowed"))?;
+    ensure!(
+        !measured_duration.is_zero(),
+        "Proxy unrelated completion duration was zero"
+    );
     let allocations = ALLOCATION_CALLS
         .load(Ordering::Relaxed)
         .checked_sub(allocation_start)
         .ok_or_else(|| anyhow!("allocation counter moved backwards"))?;
     let observation = SampleObservation {
-        throughput_per_second: operation_count as f64 / elapsed.as_secs_f64(),
-        p99_latency_us: percentile_99(&operation_latencies)?.as_secs_f64() * 1_000_000.0,
+        throughput_per_second: probe.unrelated_operation_count as f64 / measured_duration.as_secs_f64(),
+        p99_latency_us: percentile_99(&probe.unrelated_completion_latencies)?.as_secs_f64() * 1_000_000.0,
         peak_rss_bytes: peak_rss_bytes()? as f64,
-        allocations_per_operation: allocations as f64 / operation_count as f64,
-        io_amplification_ratio: admitted as f64 / drained as f64,
+        allocations_per_operation: allocations as f64 / probe.unrelated_operation_count as f64,
+        io_amplification_ratio: probe.unrelated_operation_count as f64
+            / (probe.drained_count - ROUND_COUNT) as f64
+            / MESSAGES_PER_COMMAND as f64,
     };
     observation.validate()?;
     Ok(observation)

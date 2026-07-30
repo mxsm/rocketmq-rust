@@ -36,6 +36,7 @@ use rocketmq_runtime::FullPolicy;
 use rocketmq_runtime::QueuePushErrorKind;
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::ResourceBudgetTree;
+use smallvec::SmallVec;
 use tokio::sync::Notify;
 use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::Semaphore;
@@ -55,7 +56,7 @@ pub(super) enum ClusterCommandClass {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(super) struct ClusterOrderingKey {
     domain: &'static str,
-    components: Arc<[String]>,
+    components: SmallVec<[String; 8]>,
 }
 
 impl ClusterOrderingKey {
