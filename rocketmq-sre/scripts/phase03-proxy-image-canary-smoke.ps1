@@ -7,16 +7,16 @@ param(
     [string]$DatabaseUrl,
     [Parameter(Mandatory = $true)]
     [string]$ImageDigest,
-    [string]$Kubeconfig = 'G:\rocketmq-sre-phase2-temp\kind-access\rocketmq-sre-phase00.kubeconfig',
+    [string]$Kubeconfig = 'D:\BuildCache\rocketmq-sre-temp\kind\phase00-kubeconfig',
     [string]$Namespace = 'rocketmq-system',
     [string]$Workload = 'rocketmq-proxy',
     [string]$Container = 'proxy',
     [string]$KindNodes = 'rocketmq-sre-phase00-control-plane',
     [string]$ImageReference = 'docker.io/rocketmq-rust/proxy:local',
     [string]$ImageRepository = 'docker.io/rocketmq-rust/proxy',
-    [string]$CargoTargetDir = 'G:\rocketmq-sre-phase2-cargo-target',
-    [string]$CargoHome = 'G:\rocketmq-sre-phase1-cargo-home',
-    [string]$TemporaryRoot = 'G:\rocketmq-sre-phase2-temp'
+    [string]$CargoTargetDir = 'D:\BuildCache\rocketmq-sre-target',
+    [string]$CargoHome = 'D:\BuildCache\rocketmq-sre-cargo-home',
+    [string]$TemporaryRoot = 'D:\BuildCache\rocketmq-sre-temp'
 )
 
 $ErrorActionPreference = 'Stop'
