@@ -375,6 +375,47 @@ function Wait-ConnectorOnline([int]$Seconds = 90) {
     throw 'Connector did not become online through the mTLS control-plane channel.'
 }
 
+function Ensure-CertifiedLocalModelProfile {
+    $page = Invoke-PublicApi Get '/v1/models/profiles/lifecycle' $null
+    $profile = @(
+        $page.items |
+            Where-Object { $_.profile_name -eq 'local-openai-compatible' }
+    ) | Select-Object -First 1
+    if ($null -eq $profile) {
+        throw 'The Phase 01 local model profile is not registered.'
+    }
+    if ($profile.state -eq 'retired') {
+        throw 'The Phase 01 local model profile is retired and cannot be certified.'
+    }
+
+    $smoke = Invoke-PublicApi Post "/v1/models/profiles/$($profile.profile_id)/smoke" $null
+    if (
+        $smoke.profile_id -ne $profile.profile_id `
+            -or $smoke.overall_ok -ne $true `
+            -or $smoke.connectivity_ok -ne $true `
+            -or $smoke.structured_output_ok -ne $true `
+            -or $smoke.evidence_citation_ok -ne $true
+    ) {
+        throw 'The Phase 01 local model profile did not pass its bounded provider smoke.'
+    }
+
+    $profile = Invoke-PublicApi Get "/v1/models/profiles/$($profile.profile_id)/lifecycle" $null
+    if ($profile.state -in @('draft', 'quarantined')) {
+        $profile = Invoke-PublicApi Post "/v1/models/profiles/$($profile.profile_id)/lifecycle" @{
+            target_state = 'certified'
+            expected_revision = [long]$profile.revision
+            rollback_profile_id = $null
+            reason_code = 'phase01.smoke.certified'
+            operator_confirmed = $true
+        }
+    }
+    if ($profile.state -notin @('certified', 'promoted')) {
+        throw "The Phase 01 local model profile is not routable after certification (state=$($profile.state))."
+    }
+    Write-Host "Certified model profile: $($profile.profile_name) (state=$($profile.state), revision=$($profile.revision))"
+    return $profile
+}
+
 function Wait-Inventory([int]$Seconds = 120) {
     $deadline = [DateTime]::UtcNow.AddSeconds($Seconds)
     do {
@@ -890,6 +931,8 @@ elseif ($BootstrapProbe) {
 
 $capabilities = Assert-ReadOnlyCapabilityBoundary
 Write-Host "Verified persisted MCP capability: $($capabilities.digest) (mutation_supported=false)"
+
+$null = Ensure-CertifiedLocalModelProfile
 
 $inventory = Wait-Inventory
 if ($inventory.cluster_id -ne $clusterId -or [string]::IsNullOrWhiteSpace($inventory.content_hash)) {
