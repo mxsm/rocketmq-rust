@@ -14,6 +14,8 @@
 
 mod event_entry_model;
 mod event_entry_repository;
+#[cfg(test)]
+mod event_entry_repository_tests;
 mod event_entry_service;
 mod events;
 mod model;
