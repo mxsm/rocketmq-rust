@@ -16,6 +16,10 @@ x-rocketmq-environment: &rocketmq-environment
   ROCKETMQ_SECURITY_SECRET_PROVIDER: mounted-files
   ROCKETMQ_SECURITY_ADMIN_IDENTITY: /etc/rocketmq/security/admin.identity
   ROCKETMQ_SECURITY_REQUEST_POLICY: /etc/rocketmq/security/request-policy.json
+  ROCKETMQ_RUNTIME_DIAGNOSTICS_BIND_ADDR: 0.0.0.0:8087
+  ROCKETMQ_RUNTIME_DIAGNOSTICS_TOKEN_FILE: /etc/rocketmq/security/runtime-diagnostics-token
+  ROCKETMQ_RUNTIME_DIAGNOSTICS_SAMPLE_INTERVAL_SECONDS: "10"
+  ROCKETMQ_RUNTIME_DIAGNOSTICS_ALLOW_INSECURE_HTTP: "true"
 
 x-dev-issuer-url: &dev-issuer-url https://dev-issuer-tls:8443
 
@@ -37,6 +41,7 @@ services:
       - ../../../target/phase00-certs/server-key.pem:/etc/rocketmq/tls/server-key.pem:ro
       - ../../../target/phase00-certs/admin.identity:/etc/rocketmq/security/admin.identity:ro
       - ../../../target/phase00-certs/request-policy.json:/etc/rocketmq/security/request-policy.json:ro
+      - ../../../target/phase00-certs/runtime-diagnostics-token:/etc/rocketmq/security/runtime-diagnostics-token:ro
       - namesrv-data:/var/lib/rocketmq/namesrv
     ports:
       - "9876:9876"
@@ -60,6 +65,7 @@ services:
       - ../../../target/phase00-certs/server-key.pem:/etc/rocketmq/tls/server-key.pem:ro
       - ../../../target/phase00-certs/admin.identity:/etc/rocketmq/security/admin.identity:ro
       - ../../../target/phase00-certs/request-policy.json:/etc/rocketmq/security/request-policy.json:ro
+      - ../../../target/phase00-certs/runtime-diagnostics-token:/etc/rocketmq/security/runtime-diagnostics-token:ro
       - controller-data:/var/lib/rocketmq/controller
     ports:
       - "60109:60109"
@@ -88,6 +94,7 @@ services:
       - ../../../target/phase00-certs/server-key.pem:/etc/rocketmq/tls/server-key.pem:ro
       - ../../../target/phase00-certs/admin.identity:/etc/rocketmq/security/admin.identity:ro
       - ../../../target/phase00-certs/request-policy.json:/etc/rocketmq/security/request-policy.json:ro
+      - ../../../target/phase00-certs/runtime-diagnostics-token:/etc/rocketmq/security/runtime-diagnostics-token:ro
       - ../../../target/phase00-certs/broker-acl.yml:/etc/rocketmq/security/broker-acl.yml:ro
       - broker-data:/var/lib/rocketmq/broker
     ports:
@@ -116,6 +123,7 @@ services:
       - ../../../target/phase00-certs/server-key.pem:/etc/rocketmq/tls/server-key.pem:ro
       - ../../../target/phase00-certs/admin.identity:/etc/rocketmq/security/admin.identity:ro
       - ../../../target/phase00-certs/request-policy.json:/etc/rocketmq/security/request-policy.json:ro
+      - ../../../target/phase00-certs/runtime-diagnostics-token:/etc/rocketmq/security/runtime-diagnostics-token:ro
     ports:
       - "8080:8080"
       - "8081:8081"
@@ -465,6 +473,8 @@ services:
       ROCKETMQ_SRE_PROMETHEUS_URL: http://prometheus:9090
       ROCKETMQ_SRE_LOKI_URL: http://loki:3100
       ROCKETMQ_SRE_TEMPO_URL: http://tempo:3200
+      ROCKETMQ_SRE_RUNTIME_DIAGNOSTICS_ENDPOINTS: "broker=http://broker:8087/internal/v1/runtime/diagnostics;name_server=http://namesrv:8087/internal/v1/runtime/diagnostics;controller=http://controller:8087/internal/v1/runtime/diagnostics;proxy=http://proxy:8087/internal/v1/runtime/diagnostics"
+      ROCKETMQ_SRE_RUNTIME_DIAGNOSTICS_ALLOW_INSECURE_HTTP: "true"
       ROCKETMQ_SRE_ADMIN_NAMESRV_ADDR: namesrv:9876
       ROCKETMQ_SRE_ADMIN_USE_TLS: "false"
       ROCKETMQ_SRE_ADMIN_ACCESS_KEY_ENV: ROCKETMQ_SRE_ADMIN_ACCESS_KEY
