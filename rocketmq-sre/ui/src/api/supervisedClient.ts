@@ -13,7 +13,9 @@ import type {
   CriticReviewRequest,
   CriticReviewResponse,
   DiagnosisExecutionConfirmation,
+  ExecutionPreconditionEvidenceView,
   ExecutionSubmissionView,
+  PrepareExecutionPreconditionRequest,
   QuarantinePage,
   ResourceQuarantine,
   SubmitExecutionRequest,
@@ -26,6 +28,11 @@ export interface SupervisedSreApi {
     input: ConfirmDiagnosisExecutionRequest,
     signal?: AbortSignal,
   ) => Promise<DiagnosisExecutionConfirmation>;
+  prepareExecutionPrecondition: (
+    incidentId: string,
+    input: PrepareExecutionPreconditionRequest,
+    signal?: AbortSignal,
+  ) => Promise<ExecutionPreconditionEvidenceView>;
   createPlan: (
     input: CreatePlanRequest,
     signal?: AbortSignal,
@@ -88,6 +95,12 @@ export function createSupervisedSreApi(
     confirmDiagnosisExecution: (incidentId, revisionId, input, signal) =>
       post<DiagnosisExecutionConfirmation>(
         `/v1/incidents/${encodeURIComponent(incidentId)}/diagnosis-revisions/${encodeURIComponent(revisionId)}/confirm-execution`,
+        input,
+        signal,
+      ),
+    prepareExecutionPrecondition: (incidentId, input, signal) =>
+      post<ExecutionPreconditionEvidenceView>(
+        `/v1/incidents/${encodeURIComponent(incidentId)}/execution-preconditions`,
         input,
         signal,
       ),
