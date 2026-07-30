@@ -92,6 +92,13 @@ impl PostgresRepository {
         let accepted_at = Utc::now();
         let (target_kind, target_id) =
             create_non_alert_target(&mut transaction, auth, request, correlation_id, accepted_at).await?;
+        if target_kind != request.target_kind() {
+            transaction.rollback().await?;
+            return Err(ControlPlaneError::validation(
+                "source_unavailable",
+                "unified event entry produced an unexpected workflow target",
+            ));
+        }
         let result = UnifiedEventEntryResult {
             schema_version: EVENT_ENTRY_RESULT_SCHEMA,
             entry_id: Uuid::new_v4(),
