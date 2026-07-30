@@ -29,6 +29,7 @@ use rocketmq_admin_core::read_client_adapter::ClientRuntime;
 use rocketmq_admin_core::read_client_adapter::ClientRuntimeConfig;
 use rocketmq_admin_core::read_client_adapter::ReadAdminBuilder;
 use rocketmq_admin_core::read_client_adapter::ReadAdminSession;
+use rocketmq_admin_core::read_client_adapter::TelemetryHandle;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_sre_contracts::ExecutionId;
 use rocketmq_sre_contracts::PlanStepId;
@@ -286,12 +287,15 @@ impl ProductionBrokerConfigPatchClient {
         pool: PgPool,
         context: ChildServiceContext,
     ) -> Result<Self, ExecutionAgentError> {
-        let client_runtime = ClientRuntime::new(
+        let client_runtime = ClientRuntime::try_new(
             context.child("broker-admin-client"),
             ClientRuntimeConfig {
                 shutdown_timeout: config.shutdown_timeout,
+                ..ClientRuntimeConfig::default()
             },
-        );
+            TelemetryHandle::noop(),
+        )
+        .map_err(|_| ExecutionAgentError::Configuration)?;
         let timeout_millis = duration_millis(config.request_timeout)?;
         let mut read_builder = ReadAdminBuilder::new(Arc::clone(&client_runtime))
             .namesrv_addr(config.namesrv_addr.clone())
