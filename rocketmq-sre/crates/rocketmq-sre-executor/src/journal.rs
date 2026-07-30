@@ -953,6 +953,47 @@ impl ExecutionJournal {
         parse_execution_state(state.ok_or(JournalError::NotFound)?.as_str())
     }
 
+    /// Loads the immutable request that was accepted when an execution was
+    /// created.
+    ///
+    /// Recovery uses this durable snapshot after its dispatch validity window
+    /// has elapsed. The caller must still acquire a fresh fenced lease before
+    /// consulting the Agent or changing execution state.
+    ///
+    /// # Errors
+    ///
+    /// Returns not-found, database, or snapshot-decoding failures.
+    pub async fn execution_request(&self, id: ExecutionId) -> Result<ExecutionRequest, JournalError> {
+        let snapshot: Option<Value> = sqlx::query_scalar("SELECT request_snapshot FROM executions WHERE id = $1")
+            .bind(id.as_uuid())
+            .fetch_optional(&self.pool)
+            .await?;
+        from_json(snapshot.ok_or(JournalError::NotFound)?)
+    }
+
+    /// Loads the ordered forward intents whose live effects must be reconciled
+    /// before a compensating execution can be closed after interruption.
+    ///
+    /// # Errors
+    ///
+    /// Returns database or snapshot-decoding failures.
+    pub async fn forward_intents_for_execution(&self, id: ExecutionId) -> Result<Vec<StepIntent>, JournalError> {
+        let rows = sqlx::query(
+            "SELECT intent_snapshot
+             FROM execution_steps
+             WHERE execution_id = $1
+               AND record_kind = 'intent'
+               AND NOT compensation
+             ORDER BY sequence_id",
+        )
+        .bind(id.as_uuid())
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| from_json(row.try_get("intent_snapshot")?))
+            .collect()
+    }
+
     /// Returns whether any immutable intent was persisted for an execution.
     ///
     /// # Errors
