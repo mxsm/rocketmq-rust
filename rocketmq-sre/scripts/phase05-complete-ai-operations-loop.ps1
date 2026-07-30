@@ -26,6 +26,10 @@ param(
 
     [string]$BrokerResource = 'broker/rocketmq-broker.rocketmq-system.svc.cluster.local:10911',
 
+    [string]$Topic = 'SRE_PROBE_00000000000040008000000000000001_00000000000000000000000000000000',
+
+    [string]$ConsumerGroup = 'SRE_PROBE_G_C_00000000000040008000000000000001_00000000000000000000000000000000',
+
     [ValidateRange(1024, 65535)]
     [int]$ControlPlaneLocalPort = 18090,
 
@@ -339,8 +343,8 @@ try {
         source_kind = 'alert'
         source = 'synthetic_probe'
         source_event_id = "phase05-complete-loop-$runSuffix"
-        resource_kind = 'broker'
-        resource_key = $BrokerResource.Substring('broker/'.Length)
+        resource_kind = 'consumer_group'
+        resource_key = "$ConsumerGroup/$Topic"
         display_name = 'Phase 5 complete AI operations loop'
         symptom_family = 'consumer_lag'
         severity = 'warning'
