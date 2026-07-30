@@ -30,6 +30,7 @@ use rocketmq_admin_core::core::topic::TopicQueryAdmin;
 use rocketmq_admin_core::read_client_adapter::ClientRuntime;
 use rocketmq_admin_core::read_client_adapter::ClientRuntimeConfig;
 use rocketmq_admin_core::read_client_adapter::ReadAdminBuilder;
+use rocketmq_admin_core::read_client_adapter::TelemetryHandle;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_sre_contracts::canonical_precondition_hash;
 use sqlx::PgPool;
@@ -110,12 +111,15 @@ impl ProductionCredentialRotationClient {
             .ok()
             .filter(|value| *value > 0)
             .ok_or(ExecutionAgentError::Configuration)?;
-        let client_runtime = ClientRuntime::new(
+        let client_runtime = ClientRuntime::try_new(
             context.child("credential-probe-admin-client"),
             ClientRuntimeConfig {
                 shutdown_timeout: config.shutdown_timeout,
+                ..ClientRuntimeConfig::default()
             },
-        );
+            TelemetryHandle::noop(),
+        )
+        .map_err(|_| ExecutionAgentError::Configuration)?;
         Ok(Self {
             client,
             targets: Arc::new(config.targets.clone()),
