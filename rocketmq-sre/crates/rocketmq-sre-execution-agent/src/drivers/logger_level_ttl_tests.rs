@@ -179,6 +179,28 @@ async fn apply_verify_and_compensate_use_one_typed_call_each() {
     assert_eq!(client.state.lock().expect("fake state lock").level, "WARN");
 }
 
+#[tokio::test]
+async fn reconcile_reports_absent_after_the_matching_ttl_operation_restores() {
+    let client = Arc::new(FakeLoggerClient::new("WARN"));
+    let handler = LoggerLevelTtlHandler::new(Arc::clone(&client));
+    let request = step_request();
+    handler.dispatch(&request, "op-forward").await.expect("typed apply");
+    {
+        let mut state = client.state.lock().expect("fake state lock");
+        state.level = "WARN".to_owned();
+        state.active_operation_id = None;
+        state.last_completed_operation_id = Some("op-forward".to_owned());
+    }
+
+    let reconciled = handler
+        .reconcile(&read_request(request.parameters), Some("op-forward"))
+        .await
+        .expect("typed TTL reconciliation");
+
+    assert_eq!(reconciled.state, ReconcileEffectState::NotApplied);
+    assert_eq!(reconciled.outcome_code, "logger_level_effect_absent");
+}
+
 fn read_request(parameters: serde_json::Value) -> AgentReadRequest {
     AgentReadRequest {
         schema_version: EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
