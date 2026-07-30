@@ -12938,6 +12938,157 @@
           }
         }
       }
+    },
+    "/v1/operations/analytics": {
+      "get": {
+        "operationId": "getDimensionalOperationsAnalytics",
+        "summary": "Query quality, cost, latency, adoption, execution and savings by authenticated dimensions",
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "period",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "weekly",
+                "monthly"
+              ],
+              "default": "weekly"
+            }
+          },
+          {
+            "name": "anchor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "scenario",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "provider_family",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "model_family",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "action_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationsAnalyticsReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -28402,6 +28553,491 @@
             "format": "uuid"
           },
           "accepted_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "OperationsAnalyticsFilters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "cluster_ids",
+          "scenario",
+          "provider_family",
+          "model_family",
+          "action_id"
+        ],
+        "properties": {
+          "cluster_ids": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 1000,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "scenario": {
+            "oneOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "provider_family": {
+            "oneOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "model_family": {
+            "oneOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "action_id": {
+            "oneOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "OperationsAnalyticsWindow": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "period",
+          "start",
+          "end",
+          "complete"
+        ],
+        "properties": {
+          "period": {
+            "type": "string",
+            "enum": [
+              "weekly",
+              "monthly"
+            ]
+          },
+          "start": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "end": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "complete": {
+            "type": "boolean"
+          }
+        }
+      },
+      "IncidentOperationsMetrics": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "total",
+          "diagnosed",
+          "terminal",
+          "recurrent",
+          "mean_time_to_detect_seconds",
+          "mean_time_to_resolve_seconds"
+        ],
+        "properties": {
+          "total": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "diagnosed": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "terminal": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "recurrent": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "mean_time_to_detect_seconds": {
+            "oneOf": [
+              {
+                "type": "number",
+                "format": "double",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mean_time_to_resolve_seconds": {
+            "oneOf": [
+              {
+                "type": "number",
+                "format": "double",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "OperationsAnalyticsModelUsage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "calls",
+          "input_tokens",
+          "output_tokens",
+          "cost_micros",
+          "calls_missing_tokens",
+          "calls_missing_cost",
+          "failed_calls",
+          "fallback_calls",
+          "usage_coverage_basis_points",
+          "cost_coverage_basis_points"
+        ],
+        "properties": {
+          "calls": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "input_tokens": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "output_tokens": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "cost_micros": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "calls_missing_tokens": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "calls_missing_cost": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "failed_calls": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "fallback_calls": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "usage_coverage_basis_points": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0,
+                "maximum": 10000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cost_coverage_basis_points": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0,
+                "maximum": 10000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "OperationsAnalyticsFeedback": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "total",
+          "adopted",
+          "modified",
+          "rejected",
+          "adoption_basis_points",
+          "modification_basis_points",
+          "rejection_basis_points"
+        ],
+        "properties": {
+          "total": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "adopted": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "modified": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "rejected": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "adoption_basis_points": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0,
+                "maximum": 10000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "modification_basis_points": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0,
+                "maximum": 10000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rejection_basis_points": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0,
+                "maximum": 10000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "ExecutionOperationsMetrics": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "total",
+          "terminal",
+          "succeeded",
+          "rolled_back",
+          "escalated",
+          "success_basis_points"
+        ],
+        "properties": {
+          "total": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "terminal": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "succeeded": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "rolled_back": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "escalated": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "success_basis_points": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0,
+                "maximum": 10000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "AttributedAutomationSavingsMetrics": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "successful_no_side_effect_runs",
+          "successful_preventive_runs",
+          "successful_autonomous_actions",
+          "estimated_minutes_saved",
+          "estimate_method"
+        ],
+        "properties": {
+          "successful_no_side_effect_runs": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "successful_preventive_runs": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "successful_autonomous_actions": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "estimated_minutes_saved": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "estimate_method": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        }
+      },
+      "OperationsAnalyticsReport": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "tenant_id",
+          "filters",
+          "window",
+          "incidents",
+          "model_usage",
+          "recommendation_feedback",
+          "executions",
+          "savings",
+          "mttd_definition",
+          "mttr_definition",
+          "savings_definition",
+          "warnings",
+          "observed_at"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "rocketmq-sre.operations-analytics.v1"
+          },
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "filters": {
+            "$ref": "#/components/schemas/OperationsAnalyticsFilters"
+          },
+          "window": {
+            "$ref": "#/components/schemas/OperationsAnalyticsWindow"
+          },
+          "incidents": {
+            "$ref": "#/components/schemas/IncidentOperationsMetrics"
+          },
+          "model_usage": {
+            "$ref": "#/components/schemas/OperationsAnalyticsModelUsage"
+          },
+          "recommendation_feedback": {
+            "$ref": "#/components/schemas/OperationsAnalyticsFeedback"
+          },
+          "executions": {
+            "$ref": "#/components/schemas/ExecutionOperationsMetrics"
+          },
+          "savings": {
+            "$ref": "#/components/schemas/AttributedAutomationSavingsMetrics"
+          },
+          "mttd_definition": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "mttr_definition": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "savings_definition": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "warnings": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+              "type": "string",
+              "maxLength": 512
+            }
+          },
+          "observed_at": {
             "type": "string",
             "format": "date-time"
           }
