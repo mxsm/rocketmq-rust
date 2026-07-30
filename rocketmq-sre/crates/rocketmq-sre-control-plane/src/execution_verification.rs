@@ -143,10 +143,9 @@ fn sli_for_condition(condition: &str) -> Option<&'static str> {
     match condition {
         "runtime_error_ratio" => Some("runtime_saturation"),
         "proxy_error_ratio" | "proxy_p99_latency" => Some("proxy_connection"),
-        "synthetic_message_path"
-        | "send_success_ratio"
-        | "consume_success_ratio"
-        | "retry_backlog_growth" => Some("delivery_ratio"),
+        "synthetic_message_path" | "send_success_ratio" | "consume_success_ratio" | "retry_backlog_growth" => {
+            Some("delivery_ratio")
+        }
         "broker_error_ratio" => Some("broker_runtime"),
         "store_dispatch_latency" => Some("flush_dispatch"),
         "telemetry_export_success_ratio" | "telemetry_queue_utilization" => Some("telemetry_freshness"),
