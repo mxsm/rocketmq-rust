@@ -66,7 +66,7 @@ impl GroupTransferService {
         let inner = Arc::new(GroupTransferServiceInner::try_new(ha_service)?);
         Ok(GroupTransferService {
             inner: inner.clone(),
-            service_manager: ServiceManager::new_arc(inner),
+            service_manager: ServiceManager::new_arc_legacy_compatibility(inner),
         })
     }
 

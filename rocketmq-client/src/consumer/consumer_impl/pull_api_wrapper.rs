@@ -277,6 +277,10 @@ impl PullAPIWrapper {
     ///
     /// A `Result` containing an `Option` with the `PullResultExt` if successful, or an
     /// `MQClientError` if an error occurs.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "existing pull wire adapter signature is tracked by the lint debt registry"
+    )]
     pub async fn pull_kernel_impl<PCB>(
         &self,
         mq: &MessageQueue,
@@ -484,6 +488,10 @@ impl PullAPIWrapper {
     /// matching Java's second `pullKernelImpl` overload.
     ///
     /// [`pull_kernel_impl`]: PullAPIWrapper::pull_kernel_impl
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "existing pull convenience signature is tracked by the lint debt registry"
+    )]
     pub async fn pull_kernel_impl_default_size<PCB>(
         &self,
         mq: &MessageQueue,

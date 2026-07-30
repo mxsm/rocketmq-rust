@@ -24,6 +24,14 @@ use crate::kind::ErrorScope;
 use crate::policy::ObserveSpec;
 use crate::policy::RecoverySpec;
 
+mod registry;
+
+/// Static registry for all current error kinds.
+///
+/// The public path remains anchored in this module while the entries are
+/// organized by domain in the private registry unit.
+pub const ALL_ERROR_SPECS: &[ErrorSpec] = registry::ERROR_SPECS;
+
 /// Static metadata for one [`ErrorKind`].
 ///
 /// The registry is the single source for machine-readable error identity. Later
@@ -64,107 +72,6 @@ impl ErrorSpec {
         }
     }
 }
-
-macro_rules! spec {
-    ($kind:ident, $message:literal) => {
-        ErrorSpec::new(ErrorKind::$kind, $message)
-    };
-}
-
-/// Static registry for all current error kinds.
-pub const ALL_ERROR_SPECS: &[ErrorSpec] = &[
-    spec!(Network, "Network operation failed"),
-    spec!(Serialization, "Serialization failed"),
-    spec!(Protocol, "Protocol error"),
-    spec!(Rpc, "RPC operation failed"),
-    spec!(Authentication, "Authentication failed"),
-    spec!(Controller, "Controller operation failed"),
-    spec!(InvalidProperty, "Message property is invalid"),
-    spec!(BrokerNotFound, "Broker was not found"),
-    spec!(BrokerRegistrationFailed, "Broker registration failed"),
-    spec!(BrokerOperationFailed, "Broker operation failed"),
-    spec!(TopicNotExist, "Topic does not exist"),
-    spec!(QueueNotExist, "Queue does not exist"),
-    spec!(SubscriptionGroupNotExist, "Subscription group does not exist"),
-    spec!(QueueIdOutOfRange, "Queue id is out of range"),
-    spec!(MessageTooLarge, "Message body is too large"),
-    spec!(MessageValidationFailed, "Message validation failed"),
-    spec!(RetryLimitExceeded, "Retry limit was exceeded"),
-    spec!(TransactionRejected, "Transaction message was rejected"),
-    spec!(BrokerPermissionDenied, "Broker permission was denied"),
-    spec!(NotMasterBroker, "Broker is not the master"),
-    spec!(MessageLookupFailed, "Message lookup failed"),
-    spec!(QueryNotFound, "Query result was not found"),
-    spec!(TopicSendingForbidden, "Topic sending is forbidden"),
-    spec!(BrokerAsyncTaskFailed, "Broker asynchronous operation failed"),
-    spec!(RequestBodyInvalid, "Request body is invalid"),
-    spec!(RequestHeaderError, "Request header is invalid"),
-    spec!(ResponseProcessFailed, "Response processing failed"),
-    spec!(RouteNotFound, "Route information was not found"),
-    spec!(RouteInconsistent, "Route data is inconsistent"),
-    spec!(RouteRegistrationConflict, "Route registration conflict"),
-    spec!(RouteVersionConflict, "Route version conflict"),
-    spec!(ClusterNotFound, "Cluster was not found"),
-    spec!(ClientNotStarted, "Client is not started"),
-    spec!(ClientAlreadyStarted, "Client is already started"),
-    spec!(ClientShuttingDown, "Client is shutting down"),
-    spec!(ClientInvalidState, "Client state is invalid"),
-    spec!(ProducerNotAvailable, "Producer is not available"),
-    spec!(ConsumerNotAvailable, "Consumer is not available"),
-    spec!(Tools, "Tools operation failed"),
-    spec!(Filter, "Filter operation failed"),
-    spec!(ObservabilityFeatureDisabled, "Observability feature is disabled"),
-    spec!(ObservabilityConfigInvalid, "Observability configuration is invalid"),
-    spec!(
-        ObservabilityMetricsInitFailed,
-        "Observability metrics initialization failed"
-    ),
-    spec!(
-        ObservabilityTracesInitFailed,
-        "Observability traces initialization failed"
-    ),
-    spec!(ObservabilityLogsInitFailed, "Observability logs initialization failed"),
-    spec!(
-        ObservabilityLoggingInitFailed,
-        "Observability logging initialization failed"
-    ),
-    spec!(ObservabilityLogFilterInvalid, "Observability log filter is invalid"),
-    spec!(
-        ObservabilitySubscriberInstallFailed,
-        "Observability subscriber installation failed"
-    ),
-    spec!(
-        ObservabilityMetricsShutdownFailed,
-        "Observability metrics shutdown failed"
-    ),
-    spec!(
-        ObservabilityTracesShutdownFailed,
-        "Observability traces shutdown failed"
-    ),
-    spec!(ObservabilityLogsShutdownFailed, "Observability logs shutdown failed"),
-    spec!(StorageReadFailed, "Storage read failed"),
-    spec!(StorageWriteFailed, "Storage write failed"),
-    spec!(StorageCorrupted, "Storage data is corrupted"),
-    spec!(StorageOutOfSpace, "Storage is out of space"),
-    spec!(StorageLockFailed, "Storage lock failed"),
-    spec!(ConfigParseFailed, "Configuration parsing failed"),
-    spec!(ConfigMissing, "Required configuration is missing"),
-    spec!(ConfigInvalidValue, "Configuration value is invalid"),
-    spec!(AuthConfigInvalid, "Authentication configuration is invalid"),
-    spec!(AuthHotReloadFailed, "Authentication hot reload failed"),
-    spec!(ControllerNotLeader, "Controller is not the leader"),
-    spec!(ControllerRaftError, "Controller raft operation failed"),
-    spec!(ControllerConsensusTimeout, "Controller consensus operation timed out"),
-    spec!(ControllerSnapshotFailed, "Controller snapshot operation failed"),
-    spec!(Io, "I/O operation failed"),
-    spec!(IllegalArgument, "Argument is illegal"),
-    spec!(Timeout, "Operation timed out"),
-    spec!(Internal, "Internal error"),
-    spec!(Service, "Service lifecycle operation failed"),
-    spec!(InvalidVersionOrdinal, "Version ordinal is invalid"),
-    spec!(NotInitialized, "Component is not initialized"),
-    spec!(MissingRequiredMessageProperty, "Message is missing a required property"),
-];
 
 /// Return the static metadata for an error kind.
 #[inline]

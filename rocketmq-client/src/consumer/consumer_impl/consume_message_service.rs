@@ -340,7 +340,7 @@ pub trait ConsumeMessageServiceTrait {
     /// # Arguments
     ///
     /// * `core_pool_size` - The new core pool size.
-    fn update_core_pool_size(&self, core_pool_size: usize) {}
+    fn update_core_pool_size(&self, _core_pool_size: usize) {}
 
     /// Increases the core pool size of the service by one.
     fn inc_core_pool_size(&self) {}

@@ -579,9 +579,11 @@ impl ClusterTaskExecutor {
         let lane_task = LaneTaskGuard {
             lanes: task_lanes.clone(),
             registration: task_registration.clone(),
+            cancellation: cancellation.clone(),
+            completed: false,
         };
         let spawn_result = worker_context.spawn_service("proxy.cluster.keyed-lane", async move {
-            let _lane_task = lane_task;
+            let mut lane_task = lane_task;
             let state = ClusterWorkerState::with_factories(
                 runtime.client_runtime.clone(),
                 runtime.base_domain_id,
@@ -598,6 +600,7 @@ impl ClusterTaskExecutor {
                 task_lanes.clone(),
             )
             .await;
+            lane_task.completed = true;
         });
         if let Err(error) = spawn_result {
             let message = format!("failed to spawn proxy cluster keyed lane: {error}");
@@ -610,14 +613,23 @@ impl ClusterTaskExecutor {
 struct LaneTaskGuard {
     lanes: Arc<ClusterExecutionLanes>,
     registration: ClusterLaneRegistration,
+    cancellation: CancellationToken,
+    completed: bool,
 }
 
 impl Drop for LaneTaskGuard {
     fn drop(&mut self) {
-        self.lanes.reject_failed_lane(
-            &self.registration,
-            "proxy cluster keyed lane terminated before completing the command",
-        );
+        if !self.completed {
+            // Publish the failure before TaskGroup observes the panicked join.
+            // Otherwise a concurrent request can create a replacement lane in
+            // the gap between unwind and parent cancellation.
+            self.lanes.close();
+            self.cancellation.cancel();
+            self.lanes.reject_failed_lane(
+                &self.registration,
+                "proxy cluster keyed lane terminated before completing the command",
+            );
+        }
         self.lanes.lane_task_finished();
     }
 }
@@ -697,6 +709,12 @@ pub(super) async fn run_cluster_lane(
                 continue;
             },
             permit = &mut acquire_inflight => permit,
+        };
+        let Some(inflight_permit) = inflight_permit else {
+            lanes.record_shutdown_rejected();
+            queued.command.reject(cluster_shutdown_error());
+            drop(active_permit);
+            break;
         };
 
         let mut command = queued.command;
@@ -830,9 +848,12 @@ mod tests {
             .expect("first key creates a lane");
 
         lanes.lane_task_started();
+        let cancellation = CancellationToken::new();
         let guard = LaneTaskGuard {
             lanes: lanes.clone(),
             registration,
+            cancellation: cancellation.clone(),
+            completed: false,
         };
         let unpolled = async move {
             let _guard = guard;
@@ -844,6 +865,7 @@ mod tests {
         assert_eq!(diagnostics.active_lane_tasks, 0);
         assert_eq!(diagnostics.active_keys, 0);
         assert_eq!(diagnostics.queued_and_active, 0);
+        assert!(cancellation.is_cancelled());
         assert!(receiver.try_recv().expect("queued command is rejected").is_err());
     }
 }

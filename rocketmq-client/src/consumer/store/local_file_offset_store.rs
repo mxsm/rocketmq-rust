@@ -760,9 +760,9 @@ impl OffsetStoreTrait for LocalFileOffsetStore {
 
     async fn update_consume_offset_to_broker(
         &self,
-        mq: &MessageQueue,
-        offset: i64,
-        is_oneway: bool,
+        _mq: &MessageQueue,
+        _offset: i64,
+        _is_oneway: bool,
     ) -> rocketmq_error::RocketMQResult<()> {
         Ok(())
     }

@@ -1,0 +1,1823 @@
+{
+  "entries": [
+    {
+      "identity": "rocketmq-auth/src/authorization/builder/default_authorization_context_builder.rs:item:impl DefaultAuthorizationContextBuilder:dead_code:0",
+      "item": "impl DefaultAuthorizationContextBuilder",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-auth",
+      "path": "rocketmq-auth/src/authorization/builder/default_authorization_context_builder.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-auth/src/authorization/manager/metadata_manager_impl.rs:item:fn get_authentication_provider:dead_code:0",
+      "item": "fn get_authentication_provider",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-auth",
+      "path": "rocketmq-auth/src/authorization/manager/metadata_manager_impl.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-auth/src/authorization/manager/metadata_manager_impl.rs:item:fn get_authorization_provider:dead_code:0",
+      "item": "fn get_authorization_provider",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-auth",
+      "path": "rocketmq-auth/src/authorization/manager/metadata_manager_impl.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-auth/src/authorization/provider.rs:item:fn authorize:unused_variables:0",
+      "item": "fn authorize",
+      "lints": [
+        "unused_variables"
+      ],
+      "owner": "rocketmq-auth",
+      "path": "rocketmq-auth/src/authorization/provider.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-auth/src/authorization/provider.rs:item:fn new_contexts_from_grpc_metadata:unused_variables:0",
+      "item": "fn new_contexts_from_grpc_metadata",
+      "lints": [
+        "unused_variables"
+      ],
+      "owner": "rocketmq-auth",
+      "path": "rocketmq-auth/src/authorization/provider.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-auth/src/authorization/provider.rs:item:fn new_contexts_from_remoting_command:unused_variables:0",
+      "item": "fn new_contexts_from_remoting_command",
+      "lints": [
+        "unused_variables"
+      ],
+      "owner": "rocketmq-auth",
+      "path": "rocketmq-auth/src/authorization/provider.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-auth/src/lib.rs:crate:<crate>:dead_code:0",
+      "item": "<crate>",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-auth",
+      "path": "rocketmq-auth/src/lib.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "crate"
+    },
+    {
+      "identity": "rocketmq-broker/src/broker/broker_admin_runtime.rs:item:fn new:clippy::too_many_arguments:0",
+      "item": "fn new",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/broker/broker_admin_runtime.rs",
+      "reason": "the broker composition root enumerates the complete Admin boundary",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-broker/src/broker/broker_control_plane.rs:item:fn apply_controller_role_change:clippy::too_many_arguments:0",
+      "item": "fn apply_controller_role_change",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/broker/broker_control_plane.rs",
+      "reason": "preserves the controller notification protocol",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-broker/src/broker/broker_control_plane.rs:item:fn new:clippy::too_many_arguments:0",
+      "item": "fn new",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/broker/broker_control_plane.rs",
+      "reason": "the composition root lists the complete controller boundary",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-broker/src/broker/broker_pre_online_capability.rs:item:fn new:clippy::too_many_arguments:0",
+      "item": "fn new",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/broker/broker_pre_online_capability.rs",
+      "reason": "the composition root lists each role-sensitive service capability explicitly",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-broker/src/broker/broker_pre_online_capability.rs:item:fn new:clippy::too_many_arguments:1",
+      "item": "fn new",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/broker/broker_pre_online_capability.rs",
+      "reason": "the composition root lists the complete broker pre-online capability boundary",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-broker/src/broker/broker_registration_runtime.rs:item:fn new:clippy::too_many_arguments:0",
+      "item": "fn new",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/broker/broker_registration_runtime.rs",
+      "reason": "the broker composition root enumerates the complete registration boundary",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-broker/src/failover/escape_bridge.rs:item:fn get_message_with_size_limit_from_local_store:clippy::too_many_arguments:0",
+      "item": "fn get_message_with_size_limit_from_local_store",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/failover/escape_bridge.rs",
+      "reason": "preserves the Store pull read contract",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-broker/src/failover/escape_bridge_capability.rs:item:fn get_message_with_size_limit:clippy::too_many_arguments:0",
+      "item": "fn get_message_with_size_limit",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/failover/escape_bridge_capability.rs",
+      "reason": "preserves the Store pull read contract",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-broker/src/filter/expression_for_retry_message_filter.rs:item:impl MessageFilter:unused_variables:0",
+      "item": "impl MessageFilter",
+      "lints": [
+        "unused_variables"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/filter/expression_for_retry_message_filter.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-broker/src/filter/expression_message_filter.rs:item:impl MessageFilter:unused_variables:0",
+      "item": "impl MessageFilter",
+      "lints": [
+        "unused_variables"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/filter/expression_message_filter.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-broker/src/lib.rs:crate:<crate>:clippy::result_large_err:0",
+      "item": "<crate>",
+      "lints": [
+        "clippy::result_large_err"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/lib.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "crate"
+    },
+    {
+      "identity": "rocketmq-broker/src/lib.rs:crate:<crate>:dead_code:0",
+      "item": "<crate>",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/lib.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "crate"
+    },
+    {
+      "identity": "rocketmq-broker/src/long_polling/long_polling_service/pop_long_polling_service.rs:crate:<crate>:unused_variables:0",
+      "item": "<crate>",
+      "lints": [
+        "unused_variables"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/long_polling/long_polling_service/pop_long_polling_service.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "crate"
+    },
+    {
+      "identity": "rocketmq-broker/src/long_polling/long_polling_service/pull_request_hold_service.rs:item:fn start:unused_variables:0",
+      "item": "fn start",
+      "lints": [
+        "unused_variables"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/long_polling/long_polling_service/pull_request_hold_service.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-broker/src/long_polling/notify_message_arriving_listener.rs:item:fn arriving:unused_variables:0",
+      "item": "fn arriving",
+      "lints": [
+        "unused_variables"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/long_polling/notify_message_arriving_listener.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-broker/src/out_api/broker_outer_api.rs:item:fn register_broker_all:clippy::too_many_arguments:0",
+      "item": "fn register_broker_all",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/out_api/broker_outer_api.rs",
+      "reason": "existing broker registration wire composition is tracked by the lint debt registry",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-broker/src/processor/ack_message_processor.rs:item:fn new:clippy::too_many_arguments:0",
+      "item": "fn new",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/processor/ack_message_processor.rs",
+      "reason": "constructor lists the complete narrow acknowledgment capability boundary",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-broker/src/processor/change_invisible_time_processor.rs:item:fn new:clippy::too_many_arguments:0",
+      "item": "fn new",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/processor/change_invisible_time_processor.rs",
+      "reason": "constructor lists the complete narrow change-invisible-time capability boundary",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-broker/src/processor/change_invisible_time_processor.rs:item:fn update_next_visible_time:clippy::too_many_arguments:0",
+      "item": "fn update_next_visible_time",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/processor/change_invisible_time_processor.rs",
+      "reason": "arguments preserve ConsumerOrderInfoManager's protocol update coordinates",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-broker/src/processor/consumer_manage_processor.rs:item:fn process_request_inner:unused_variables:0",
+      "item": "fn process_request_inner",
+      "lints": [
+        "unused_variables"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/processor/consumer_manage_processor.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-broker/src/processor/lite_manager_processor.rs:item:fn new:clippy::too_many_arguments:0",
+      "item": "fn new",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/processor/lite_manager_processor.rs",
+      "reason": "composition root wires explicit Lite manager capabilities",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-broker/src/processor/lite_subscription_ctl_processor.rs:item:fn new:clippy::too_many_arguments:0",
+      "item": "fn new",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/processor/lite_subscription_ctl_processor.rs",
+      "reason": "composition root lists each Lite subscription capability explicitly",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-broker/src/processor/notification_processor.rs:item:fn new:clippy::too_many_arguments:0",
+      "item": "fn new",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/processor/notification_processor.rs",
+      "reason": "constructor lists the complete narrow Notification capability boundary",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-broker/src/processor/peek_message_processor.rs:item:fn new:clippy::too_many_arguments:0",
+      "item": "fn new",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/processor/peek_message_processor.rs",
+      "reason": "constructor lists the complete narrow Peek capability boundary",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-broker/src/processor/pop_lite_message_processor.rs:item:fn new:clippy::too_many_arguments:0",
+      "item": "fn new",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/processor/pop_lite_message_processor.rs",
+      "reason": "composition root lists each POP Lite capability explicitly",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-broker/src/processor/pop_message_processor.rs:crate:<crate>:unused_variables:0",
+      "item": "<crate>",
+      "lints": [
+        "unused_variables"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/processor/pop_message_processor.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "crate"
+    },
+    {
+      "identity": "rocketmq-broker/src/processor/pop_message_processor.rs:item:fn pop_msg_from_queue:clippy::too_many_arguments:0",
+      "item": "fn pop_msg_from_queue",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/processor/pop_message_processor.rs",
+      "reason": "existing POP queue execution context is tracked by the lint debt registry",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-broker/src/processor/pop_message_processor.rs:item:fn pop_msg_from_topic:clippy::too_many_arguments:0",
+      "item": "fn pop_msg_from_topic",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/processor/pop_message_processor.rs",
+      "reason": "existing POP topic execution context is tracked by the lint debt registry",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-broker/src/processor/pop_message_processor.rs:item:fn pop_msg_from_topic_by_name:clippy::too_many_arguments:0",
+      "item": "fn pop_msg_from_topic_by_name",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/processor/pop_message_processor.rs",
+      "reason": "existing POP topic lookup context is tracked by the lint debt registry",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-broker/src/processor/pop_message_processor/capability.rs:item:fn new:clippy::too_many_arguments:0",
+      "item": "fn new",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/processor/pop_message_processor/capability.rs",
+      "reason": "composition root enumerates the POP request capability boundary",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-broker/src/processor/pop_message_processor/capability.rs:item:fn new:clippy::too_many_arguments:1",
+      "item": "fn new",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/processor/pop_message_processor/capability.rs",
+      "reason": "composition root enumerates the POP revive capability boundary",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-broker/src/processor/pop_message_processor/capability.rs:item:fn update:clippy::too_many_arguments:0",
+      "item": "fn update",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/processor/pop_message_processor/capability.rs",
+      "reason": "preserves the POP order update contract",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-broker/src/processor/processor_service/pop_buffer_merge_service.rs:crate:<crate>:unused_variables:0",
+      "item": "<crate>",
+      "lints": [
+        "unused_variables"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/processor/processor_service/pop_buffer_merge_service.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "crate"
+    },
+    {
+      "identity": "rocketmq-broker/src/processor/pull_message_processor.rs:item:fn process_request_:unused_variables:0",
+      "item": "fn process_request_",
+      "lints": [
+        "unused_variables"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/processor/pull_message_processor.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-broker/src/processor/pull_message_processor/capability.rs:item:fn new:clippy::too_many_arguments:0",
+      "item": "fn new",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/processor/pull_message_processor/capability.rs",
+      "reason": "composition root enumerates the complete pull processor capability boundary",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-broker/src/processor/pull_message_result_handler.rs:item:fn handle:clippy::too_many_arguments:0",
+      "item": "fn handle",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/processor/pull_message_result_handler.rs",
+      "reason": "existing pull result protocol context is tracked by the lint debt registry",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-broker/src/processor/send_message_processor.rs:item:fn handle_put_message_result:clippy::too_many_arguments:0",
+      "item": "fn handle_put_message_result",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/processor/send_message_processor.rs",
+      "reason": "existing send result protocol context is tracked by the lint debt registry",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-broker/src/processor/send_message_processor/capability.rs:item:fn new:clippy::too_many_arguments:0",
+      "item": "fn new",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/processor/send_message_processor/capability.rs",
+      "reason": "constructor enumerates the complete topic creation and registration boundary",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-broker/src/processor/send_message_processor/capability.rs:item:fn new:clippy::too_many_arguments:1",
+      "item": "fn new",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/processor/send_message_processor/capability.rs",
+      "reason": "constructor enumerates the complete send/reply processor capability boundary",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-broker/src/slave/slave_synchronize.rs:item:fn new:clippy::too_many_arguments:0",
+      "item": "fn new",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/slave/slave_synchronize.rs",
+      "reason": "the composition root wires explicit slave synchronization capabilities",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-broker/src/transaction/queue/default_transactional_message_service.rs:item:fn process_message_queue:clippy::too_many_arguments:0",
+      "item": "fn process_message_queue",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-broker",
+      "path": "rocketmq-broker/src/transaction/queue/default_transactional_message_service.rs",
+      "reason": "existing transaction scan context is tracked by the lint debt registry",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-client/src/admin/default_mq_admin_ext_impl.rs:crate:<crate>:dead_code:0",
+      "item": "<crate>",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-client",
+      "path": "rocketmq-client/src/admin/default_mq_admin_ext_impl.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "crate"
+    },
+    {
+      "identity": "rocketmq-client/src/admin/default_mq_admin_ext_impl/admin_api.rs:item:impl MQAdminExt:unused_variables:0",
+      "item": "impl MQAdminExt",
+      "lints": [
+        "unused_variables"
+      ],
+      "owner": "rocketmq-client",
+      "path": "rocketmq-client/src/admin/default_mq_admin_ext_impl/admin_api.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-client/src/admin/mq_admin_ext_async.rs:item:trait MQAdminExt:dead_code:0",
+      "item": "trait MQAdminExt",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-client",
+      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-client/src/base/mq_admin.rs:item:trait MQAdmin:dead_code:0",
+      "item": "trait MQAdmin",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-client",
+      "path": "rocketmq-client/src/base/mq_admin.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-client/src/common/admin_tool_result.rs:item:fn new:dead_code:0",
+      "item": "fn new",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-client",
+      "path": "rocketmq-client/src/common/admin_tool_result.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-client/src/common/admin_tools_result_code_enum.rs:item:enum AdminToolsResultCodeEnum:dead_code:0",
+      "item": "enum AdminToolsResultCodeEnum",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-client",
+      "path": "rocketmq-client/src/common/admin_tools_result_code_enum.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-client/src/common/admin_tools_result_code_enum.rs:item:impl AdminToolsResultCodeEnum:dead_code:0",
+      "item": "impl AdminToolsResultCodeEnum",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-client",
+      "path": "rocketmq-client/src/common/admin_tools_result_code_enum.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-client/src/consumer/consumer_impl/default_lite_pull_consumer_impl.rs:item:fn earliest_msg_store_time:dead_code:0",
+      "item": "fn earliest_msg_store_time",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-client",
+      "path": "rocketmq-client/src/consumer/consumer_impl/default_lite_pull_consumer_impl.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-client/src/consumer/consumer_impl/default_lite_pull_consumer_impl.rs:item:fn is_auto_commit:dead_code:0",
+      "item": "fn is_auto_commit",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-client",
+      "path": "rocketmq-client/src/consumer/consumer_impl/default_lite_pull_consumer_impl.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-client/src/consumer/consumer_impl/default_lite_pull_consumer_impl.rs:item:fn max_offset_public:dead_code:0",
+      "item": "fn max_offset_public",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-client",
+      "path": "rocketmq-client/src/consumer/consumer_impl/default_lite_pull_consumer_impl.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-client/src/consumer/consumer_impl/default_lite_pull_consumer_impl.rs:item:fn min_offset_public:dead_code:0",
+      "item": "fn min_offset_public",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-client",
+      "path": "rocketmq-client/src/consumer/consumer_impl/default_lite_pull_consumer_impl.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-client/src/consumer/consumer_impl/default_lite_pull_consumer_impl.rs:item:fn offset_for_timestamp:dead_code:0",
+      "item": "fn offset_for_timestamp",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-client",
+      "path": "rocketmq-client/src/consumer/consumer_impl/default_lite_pull_consumer_impl.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-client/src/consumer/consumer_impl/pull_api_wrapper.rs:item:fn pull_kernel_impl:clippy::too_many_arguments:0",
+      "item": "fn pull_kernel_impl",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-client",
+      "path": "rocketmq-client/src/consumer/consumer_impl/pull_api_wrapper.rs",
+      "reason": "existing pull wire adapter signature is tracked by the lint debt registry",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-client/src/consumer/consumer_impl/pull_api_wrapper.rs:item:fn pull_kernel_impl_default_size:clippy::too_many_arguments:0",
+      "item": "fn pull_kernel_impl_default_size",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-client",
+      "path": "rocketmq-client/src/consumer/consumer_impl/pull_api_wrapper.rs",
+      "reason": "existing pull convenience signature is tracked by the lint debt registry",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-client/src/implementation/mq_client_api_impl/producer.rs:item:fn send_message:clippy::too_many_arguments:0",
+      "item": "fn send_message",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-client",
+      "path": "rocketmq-client/src/implementation/mq_client_api_impl/producer.rs",
+      "reason": "existing send wire adapter signature is tracked by the lint debt registry",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-client/src/implementation/mq_client_api_impl/producer.rs:item:fn send_message_async_impl:clippy::too_many_arguments:0",
+      "item": "fn send_message_async_impl",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-client",
+      "path": "rocketmq-client/src/implementation/mq_client_api_impl/producer.rs",
+      "reason": "existing asynchronous send context is tracked by the lint debt registry",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-client/src/lib.rs:crate:<crate>:clippy::result_large_err:0",
+      "item": "<crate>",
+      "lints": [
+        "clippy::result_large_err"
+      ],
+      "owner": "rocketmq-client",
+      "path": "rocketmq-client/src/lib.rs",
+      "reason": "Client error payload migration remains under the non-growth lint debt registry",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "crate"
+    },
+    {
+      "identity": "rocketmq-client/src/lib.rs:crate:<crate>:dead_code:0",
+      "item": "<crate>",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-client",
+      "path": "rocketmq-client/src/lib.rs",
+      "reason": "legacy private Client items remain under the non-growth lint debt registry",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "crate"
+    },
+    {
+      "identity": "rocketmq-client/src/lib.rs:item:fn consumer_send_message_back:clippy::too_many_arguments:0",
+      "item": "fn consumer_send_message_back",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-client",
+      "path": "rocketmq-client/src/lib.rs",
+      "reason": "mirrors the RocketMQ send-back wire contract",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-client/src/lib.rs:item:fn query_assignment:clippy::too_many_arguments:0",
+      "item": "fn query_assignment",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-client",
+      "path": "rocketmq-client/src/lib.rs",
+      "reason": "mirrors the RocketMQ query-assignment wire contract",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-controller/src/lib.rs:crate:<crate>:dead_code:0",
+      "item": "<crate>",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-controller",
+      "path": "rocketmq-controller/src/lib.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "crate"
+    },
+    {
+      "identity": "rocketmq-dashboard/rocketmq-dashboard-gpui/src/ui/icons.rs:crate:<crate>:dead_code:0",
+      "item": "<crate>",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "dashboard",
+      "path": "rocketmq-dashboard/rocketmq-dashboard-gpui/src/ui/icons.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "crate"
+    },
+    {
+      "identity": "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/auth/db.rs:item:const DB_FILE_NAME:dead_code:0",
+      "item": "const DB_FILE_NAME",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "dashboard",
+      "path": "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/auth/db.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/auth/db.rs:item:const USERS_TABLE_SCHEMA:dead_code:0",
+      "item": "const USERS_TABLE_SCHEMA",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "dashboard",
+      "path": "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/auth/db.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/auth/db.rs:item:impl AuthDb:dead_code:0",
+      "item": "impl AuthDb",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "dashboard",
+      "path": "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/auth/db.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/auth/db.rs:item:struct AuthDb:dead_code:0",
+      "item": "struct AuthDb",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "dashboard",
+      "path": "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/auth/db.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/message/types.rs:item:struct MessageDetailView:dead_code:0",
+      "item": "struct MessageDetailView",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "dashboard",
+      "path": "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/message/types.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/message/types.rs:item:struct MessageTrackView:dead_code:0",
+      "item": "struct MessageTrackView",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "dashboard",
+      "path": "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/message/types.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-dashboard/rocketmq-dashboard-web/backend/src/admin/dashboard_admin_client.rs:item:fn query_messages:clippy::too_many_arguments:0",
+      "item": "fn query_messages",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "dashboard",
+      "path": "rocketmq-dashboard/rocketmq-dashboard-web/backend/src/admin/dashboard_admin_client.rs",
+      "reason": "preserves the existing HTTP query facade",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-error/src/boundary.rs:item:fn new:clippy::too_many_arguments:0",
+      "item": "fn new",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-error",
+      "path": "rocketmq-error/src/boundary.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-model/src/common/message/message_batch.rs:item:impl MessageTrait:unused_variables:0",
+      "item": "impl MessageTrait",
+      "lints": [
+        "unused_variables"
+      ],
+      "owner": "rocketmq-model",
+      "path": "rocketmq-model/src/common/message/message_batch.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-model/src/common/message/message_envelope.rs:item:fn new:clippy::too_many_arguments:0",
+      "item": "fn new",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-model",
+      "path": "rocketmq-model/src/common/message/message_envelope.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-model/src/common/message/message_single.rs:item:impl MessageTrait:unused_variables:0",
+      "item": "impl MessageTrait",
+      "lints": [
+        "unused_variables"
+      ],
+      "owner": "rocketmq-model",
+      "path": "rocketmq-model/src/common/message/message_single.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-model/src/common/message/storage_metadata.rs:item:fn new:clippy::too_many_arguments:0",
+      "item": "fn new",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-model",
+      "path": "rocketmq-model/src/common/message/storage_metadata.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-model/src/common/tools/broker_operator_result.rs:item:impl BrokerOperatorResult:dead_code:0",
+      "item": "impl BrokerOperatorResult",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-model",
+      "path": "rocketmq-model/src/common/tools/broker_operator_result.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-model/src/common/tools/message_track.rs:item:impl MessageTrack:dead_code:0",
+      "item": "impl MessageTrack",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-model",
+      "path": "rocketmq-model/src/common/tools/message_track.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-namesrv/src/bootstrap.rs:item:fn register_broker_request:clippy::too_many_arguments:0",
+      "item": "fn register_broker_request",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-namesrv",
+      "path": "rocketmq-namesrv/src/bootstrap.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-namesrv/src/bootstrap.rs:item:fn register_test_broker_with_harness:clippy::too_many_arguments:0",
+      "item": "fn register_test_broker_with_harness",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-namesrv",
+      "path": "rocketmq-namesrv/src/bootstrap.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-namesrv/src/lib.rs:crate:<crate>:clippy::result_large_err:0",
+      "item": "<crate>",
+      "lints": [
+        "clippy::result_large_err"
+      ],
+      "owner": "rocketmq-namesrv",
+      "path": "rocketmq-namesrv/src/lib.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "crate"
+    },
+    {
+      "identity": "rocketmq-namesrv/src/lib.rs:crate:<crate>:dead_code:0",
+      "item": "<crate>",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-namesrv",
+      "path": "rocketmq-namesrv/src/lib.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "crate"
+    },
+    {
+      "identity": "rocketmq-namesrv/src/route/batch_unregistration_service.rs:item:fn queue_length:dead_code:0",
+      "item": "fn queue_length",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-namesrv",
+      "path": "rocketmq-namesrv/src/route/batch_unregistration_service.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-namesrv/src/route/route_info_manager.rs:item:fn register_broker:clippy::too_many_arguments:0",
+      "item": "fn register_broker",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-namesrv",
+      "path": "rocketmq-namesrv/src/route/route_info_manager.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-observability/src/metrics/release_identity.rs:item:fn try_from_values:clippy::too_many_arguments:0",
+      "item": "fn try_from_values",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-observability",
+      "path": "rocketmq-observability/src/metrics/release_identity.rs",
+      "reason": "mirrors the seven explicit process-root inputs",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-proxy-cluster/src/cluster.rs:item:fn consumer_send_message_back:clippy::too_many_arguments:0",
+      "item": "fn consumer_send_message_back",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-proxy-cluster",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "reason": "mirrors the RocketMQ send-back wire contract",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-proxy-cluster/src/cluster.rs:item:fn query_assignment:clippy::too_many_arguments:0",
+      "item": "fn query_assignment",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-proxy-cluster",
+      "path": "rocketmq-proxy-cluster/src/cluster.rs",
+      "reason": "mirrors the RocketMQ query-assignment wire contract",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-proxy-cluster/src/cluster_execution.rs:item:fn spawn_execution:clippy::too_many_arguments:0",
+      "item": "fn spawn_execution",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-proxy-cluster",
+      "path": "rocketmq-proxy-cluster/src/cluster_execution.rs",
+      "reason": "execution ownership is assembled at one private boundary",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-proxy/src/bootstrap.rs:item:fn from_processor_with_local_mode_support_and_guards:clippy::too_many_arguments:0",
+      "item": "fn from_processor_with_local_mode_support_and_guards",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-proxy",
+      "path": "rocketmq-proxy/src/bootstrap.rs",
+      "reason": "assembles the validated Proxy runtime from independently owned production components",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-store-local/src/consume_queue/batch.rs:item:fn correct_batch_min_offsets:clippy::too_many_arguments:0",
+      "item": "fn correct_batch_min_offsets",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-store-local",
+      "path": "rocketmq-store-local/src/consume_queue/batch.rs",
+      "reason": "callbacks keep mapped-file ownership out of the BatchCQ kernel",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-store-local/src/consume_queue/batch.rs:item:fn new:clippy::too_many_arguments:0",
+      "item": "fn new",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-store-local",
+      "path": "rocketmq-store-local/src/consume_queue/batch.rs",
+      "reason": "the constructor mirrors the frozen seven-field persisted BatchCQ format",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-store-local/src/consume_queue/single.rs:item:fn search_queue_offset_by_time:clippy::too_many_arguments:0",
+      "item": "fn search_queue_offset_by_time",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-store-local",
+      "path": "rocketmq-store-local/src/consume_queue/single.rs",
+      "reason": "The frozen search boundary is clearer as explicit scalar inputs until the SingleConsumeQueue root moves",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-store-local/src/mapped_file/default_mapped_file.rs:item:fn get_mapped_file:unused_variables:0",
+      "item": "fn get_mapped_file",
+      "lints": [
+        "unused_variables"
+      ],
+      "owner": "rocketmq-store-local",
+      "path": "rocketmq-store-local/src/mapped_file/default_mapped_file.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-store-local/src/mapped_file/default_mapped_file.rs:item:type SelectResult:unused_variables:0",
+      "item": "type SelectResult",
+      "lints": [
+        "unused_variables"
+      ],
+      "owner": "rocketmq-store-local",
+      "path": "rocketmq-store-local/src/mapped_file/default_mapped_file.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-store-local/src/mapped_file/queue_lifecycle.rs:item:fn delete_expired_mapped_files_by_time_before:clippy::too_many_arguments:0",
+      "item": "fn delete_expired_mapped_files_by_time_before",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-store-local",
+      "path": "rocketmq-store-local/src/mapped_file/queue_lifecycle.rs",
+      "reason": "mirrors the legacy cleanup policy plus one hard WAL boundary",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-store/src/lib.rs:crate:<crate>:dead_code:0",
+      "item": "<crate>",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "rocketmq-store",
+      "path": "rocketmq-store/src/lib.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "crate"
+    },
+    {
+      "identity": "rocketmq-store/src/lib.rs:crate:<crate>:unused_variables:0",
+      "item": "<crate>",
+      "lints": [
+        "unused_variables"
+      ],
+      "owner": "rocketmq-store",
+      "path": "rocketmq-store/src/lib.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "crate"
+    },
+    {
+      "identity": "rocketmq-store/src/log_file/commit_log.rs:item:impl CommitLog:unused_variables:0",
+      "item": "impl CommitLog",
+      "lints": [
+        "unused_variables"
+      ],
+      "owner": "rocketmq-store",
+      "path": "rocketmq-store/src/log_file/commit_log.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-store/src/message_store/local_file_message_store.rs:crate:<crate>:unused_variables:0",
+      "item": "<crate>",
+      "lints": [
+        "unused_variables"
+      ],
+      "owner": "rocketmq-store",
+      "path": "rocketmq-store/src/message_store/local_file_message_store.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "crate"
+    },
+    {
+      "identity": "rocketmq-store/src/message_store/local_file_message_store.rs:item:impl MessageStore:unused_variables:0",
+      "item": "impl MessageStore",
+      "lints": [
+        "unused_variables"
+      ],
+      "owner": "rocketmq-store",
+      "path": "rocketmq-store/src/message_store/local_file_message_store.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-store/src/queue/local_file_consume_queue_store.rs:crate:<crate>:unused_variables:0",
+      "item": "<crate>",
+      "lints": [
+        "unused_variables"
+      ],
+      "owner": "rocketmq-store",
+      "path": "rocketmq-store/src/queue/local_file_consume_queue_store.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "crate"
+    },
+    {
+      "identity": "rocketmq-store/src/queue/local_file_consume_queue_store.rs:item:impl ConsumeQueueStoreTrait:unused_variables:0",
+      "item": "impl ConsumeQueueStoreTrait",
+      "lints": [
+        "unused_variables"
+      ],
+      "owner": "rocketmq-store",
+      "path": "rocketmq-store/src/queue/local_file_consume_queue_store.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-store/src/queue/single_consume_queue.rs:item:impl ConsumeQueueTrait:unused_variables:0",
+      "item": "impl ConsumeQueueTrait",
+      "lints": [
+        "unused_variables"
+      ],
+      "owner": "rocketmq-store",
+      "path": "rocketmq-store/src/queue/single_consume_queue.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/src/commands/message/query_msg_by_id_sub_command.rs:item:fn create_test_command:dead_code:0",
+      "item": "fn create_test_command",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "admin",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/src/commands/message/query_msg_by_id_sub_command.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/src/commands/message/query_msg_by_id_sub_command.rs:item:fn create_test_command_multiple_ids:dead_code:0",
+      "item": "fn create_test_command_multiple_ids",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "admin",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/src/commands/message/query_msg_by_id_sub_command.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/client_adapter/services/message.rs:item:fn try_new:clippy::too_many_arguments:0",
+      "item": "fn try_new",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "admin",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/client_adapter/services/message.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/client_adapter/services/message.rs:item:fn try_new:clippy::too_many_arguments:1",
+      "item": "fn try_new",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "admin",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/client_adapter/services/message.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/client_adapter/services/message.rs:item:fn try_new:clippy::too_many_arguments:2",
+      "item": "fn try_new",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "admin",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/client_adapter/services/message.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/client_adapter/services/producer.rs:item:fn try_new:clippy::too_many_arguments:0",
+      "item": "fn try_new",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "admin",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/client_adapter/services/producer.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/client_adapter/services/topic/types.rs:item:fn try_new:clippy::too_many_arguments:0",
+      "item": "fn try_new",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "admin",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/client_adapter/services/topic/types.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade.rs:item:fn admin_builder:dead_code:0",
+      "item": "fn admin_builder",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "admin",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade.rs:item:fn with_namesrv_addr:dead_code:0",
+      "item": "fn with_namesrv_addr",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "admin",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs:item:fn auth_create_acl_request:clippy::too_many_arguments:0",
+      "item": "fn auth_create_acl_request",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "admin",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs:item:fn auth_update_acl_request:clippy::too_many_arguments:0",
+      "item": "fn auth_update_acl_request",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "admin",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs:item:fn commit_log_read_ahead_request:clippy::too_many_arguments:0",
+      "item": "fn commit_log_read_ahead_request",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "admin",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs:item:fn consume_messages_request:clippy::too_many_arguments:0",
+      "item": "fn consume_messages_request",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "admin",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs:item:fn consume_messages_with_progress:clippy::too_many_arguments:0",
+      "item": "fn consume_messages_with_progress",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "admin",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs:item:fn create_auth_acl:clippy::too_many_arguments:0",
+      "item": "fn create_auth_acl",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "admin",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs:item:fn print_messages_by_queue_request:clippy::too_many_arguments:0",
+      "item": "fn print_messages_by_queue_request",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "admin",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs:item:fn print_messages_by_queue_with_progress:clippy::too_many_arguments:0",
+      "item": "fn print_messages_by_queue_with_progress",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "admin",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs:item:fn print_messages_with_progress:clippy::too_many_arguments:0",
+      "item": "fn print_messages_with_progress",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "admin",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs:item:fn query_message_by_key:clippy::too_many_arguments:0",
+      "item": "fn query_message_by_key",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "admin",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs:item:fn query_message_by_key_request:clippy::too_many_arguments:0",
+      "item": "fn query_message_by_key_request",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "admin",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs:item:fn query_message_by_unique_key:clippy::too_many_arguments:0",
+      "item": "fn query_message_by_unique_key",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "admin",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs:item:fn query_message_by_unique_key_request:clippy::too_many_arguments:0",
+      "item": "fn query_message_by_unique_key_request",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "admin",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs:item:fn send_message:clippy::too_many_arguments:0",
+      "item": "fn send_message",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "admin",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs:item:fn send_message_request:clippy::too_many_arguments:0",
+      "item": "fn send_message_request",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "admin",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs:item:fn set_commit_log_read_ahead:clippy::too_many_arguments:0",
+      "item": "fn set_commit_log_read_ahead",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "admin",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs:item:fn subscription_group_config:clippy::too_many_arguments:0",
+      "item": "fn subscription_group_config",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "admin",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs:item:fn update_auth_acl:clippy::too_many_arguments:0",
+      "item": "fn update_auth_acl",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "admin",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs:item:fn update_subscription_group:clippy::too_many_arguments:0",
+      "item": "fn update_subscription_group",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "admin",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs:item:fn update_subscription_group_list:clippy::too_many_arguments:0",
+      "item": "fn update_subscription_group_list",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "admin",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs:item:fn update_subscription_group_list_request:clippy::too_many_arguments:0",
+      "item": "fn update_subscription_group_list_request",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "admin",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs:item:fn update_subscription_group_request:clippy::too_many_arguments:0",
+      "item": "fn update_subscription_group_request",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "admin",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs:item:fn update_topic_request:clippy::too_many_arguments:0",
+      "item": "fn update_topic_request",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "admin",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/operations.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/rocketmq_tui_app.rs:item:fn admin_facade:dead_code:0",
+      "item": "fn admin_facade",
+      "lints": [
+        "dead_code"
+      ],
+      "owner": "admin",
+      "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/rocketmq_tui_app.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-tools/rocketmq-mcp/src/guard/audit.rs:item:fn new:clippy::too_many_arguments:0",
+      "item": "fn new",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "mcp",
+      "path": "rocketmq-tools/rocketmq-mcp/src/guard/audit.rs",
+      "reason": "audit records are constructed from a complete decision",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-transport/src/clients/client.rs:item:fn connect:clippy::too_many_arguments:0",
+      "item": "fn connect",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-transport",
+      "path": "rocketmq-transport/src/clients/client.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-transport/src/clients/client.rs:item:fn connect_with_task_group:clippy::too_many_arguments:0",
+      "item": "fn connect_with_task_group",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-transport",
+      "path": "rocketmq-transport/src/clients/client.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-transport/src/clients/rocketmq_tokio_client.rs:item:fn start:unused_variables:0",
+      "item": "fn start",
+      "lints": [
+        "unused_variables"
+      ],
+      "owner": "rocketmq-transport",
+      "path": "rocketmq-transport/src/clients/rocketmq_tokio_client.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-transport/src/clients/rocketmq_tokio_client.rs:item:fn update_name_server_address_list:unused_variables:0",
+      "item": "fn update_name_server_address_list",
+      "lints": [
+        "unused_variables"
+      ],
+      "owner": "rocketmq-transport",
+      "path": "rocketmq-transport/src/clients/rocketmq_tokio_client.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-transport/src/remoting.rs:module:mod inner:unused_variables:0",
+      "item": "mod inner",
+      "lints": [
+        "unused_variables"
+      ],
+      "owner": "rocketmq-transport",
+      "path": "rocketmq-transport/src/remoting.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "module"
+    },
+    {
+      "identity": "rocketmq-transport/src/remoting_server/rocketmq_tokio_server.rs:item:fn run_with_report_with_service_context_and_telemetry:clippy::too_many_arguments:0",
+      "item": "fn run_with_report_with_service_context_and_telemetry",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-transport",
+      "path": "rocketmq-transport/src/remoting_server/rocketmq_tokio_server.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-transport/src/server.rs:item:fn run_connected_session:clippy::too_many_arguments:0",
+      "item": "fn run_connected_session",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-transport",
+      "path": "rocketmq-transport/src/server.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    },
+    {
+      "identity": "rocketmq-transport/src/server.rs:item:fn run_framed_session:clippy::too_many_arguments:0",
+      "item": "fn run_framed_session",
+      "lints": [
+        "clippy::too_many_arguments"
+      ],
+      "owner": "rocketmq-transport",
+      "path": "rocketmq-transport/src/server.rs",
+      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
+      "removal_issue": "ARC-ALLOW-001",
+      "scope": "item"
+    }
+  ],
+  "maximum_entries": 151,
+  "schema_version": 1,
+  "too_many_arguments": {
+    "current_threshold": 12,
+    "next_approved_threshold": 8,
+    "next_condition": "all signatures newly exposed after this baseline use request/config structs"
+  }
+}

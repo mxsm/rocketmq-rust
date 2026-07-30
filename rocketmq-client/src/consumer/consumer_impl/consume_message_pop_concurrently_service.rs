@@ -459,7 +459,7 @@ impl ConsumeMessagePopConcurrentlyService {
 
     async fn process_consume_result(
         &self,
-        this: Arc<Self>,
+        _this: Arc<Self>,
         status: ConsumeConcurrentlyStatus,
         context: &ConsumeConcurrentlyContext,
         consume_request: &mut ConsumeRequest,
@@ -586,7 +586,7 @@ impl ConsumeMessagePopConcurrentlyService {
         struct DefaultAckCallback;
 
         impl AckCallback for DefaultAckCallback {
-            fn on_success(&self, ack_result: AckResult) {}
+            fn on_success(&self, _ack_result: AckResult) {}
 
             fn on_exception(&self, e: rocketmq_error::RocketMQError) {
                 error!("changePopInvisibleTime exception: {}", e);

@@ -27,7 +27,9 @@ pub struct GetSyncStateDataRequest {
 impl GetSyncStateDataRequest {
     pub fn new() -> Self {
         Self {
-            invoke_time: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64,
+            invoke_time: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_millis() as u64),
         }
     }
 

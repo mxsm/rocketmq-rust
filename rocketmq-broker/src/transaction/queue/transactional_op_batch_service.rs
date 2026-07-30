@@ -48,7 +48,7 @@ where
             transactional_message_service,
             wakeup_timestamp: AtomicU64::new(0),
         };
-        let service_manager = ServiceManager::new(inner);
+        let service_manager = ServiceManager::new_legacy_compatibility(inner);
         TransactionalOpBatchService { service_manager }
     }
 

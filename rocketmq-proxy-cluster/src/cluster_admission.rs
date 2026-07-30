@@ -302,30 +302,19 @@ impl ClusterExecutionLanes {
         }
     }
 
-    pub(super) async fn acquire_inflight(&self, class: ClusterCommandClass) -> ClusterInflightPermit {
+    pub(super) async fn acquire_inflight(&self, class: ClusterCommandClass) -> Option<ClusterInflightPermit> {
         let data = match class {
             ClusterCommandClass::Control => None,
-            ClusterCommandClass::Data => Some(
-                self.data_inflight
-                    .clone()
-                    .acquire_owned()
-                    .await
-                    .expect("proxy cluster data semaphore remains open"),
-            ),
+            ClusterCommandClass::Data => Some(self.data_inflight.clone().acquire_owned().await.ok()?),
         };
-        let total = self
-            .total_inflight
-            .clone()
-            .acquire_owned()
-            .await
-            .expect("proxy cluster total semaphore remains open");
+        let total = self.total_inflight.clone().acquire_owned().await.ok()?;
         let current = self.counters.current_inflight.fetch_add(1, Ordering::AcqRel) + 1;
         self.counters.max_inflight.fetch_max(current, Ordering::Relaxed);
-        ClusterInflightPermit {
+        Some(ClusterInflightPermit {
             _data: data,
             _total: total,
             counters: self.counters.clone(),
-        }
+        })
     }
 
     pub(super) fn record_timeout(&self) {

@@ -134,14 +134,22 @@ fn scheduler_runtime_error(operation: &'static str, error: crate::RuntimeError) 
 
 impl Default for TaskScheduler {
     fn default() -> Self {
-        Self::new(SchedulerConfig::default())
+        Self::new_legacy_compatibility(SchedulerConfig::default())
     }
 }
 
 impl TaskScheduler {
-    /// Create a new task scheduler
-    pub fn new(config: SchedulerConfig) -> Self {
+    /// Creates a scheduler that discovers the current runtime when started.
+    ///
+    /// New production code must use [`Self::new_with_task_group`].
+    pub fn new_legacy_compatibility(config: SchedulerConfig) -> Self {
         Self::new_with_optional_task_group(config, None)
+    }
+
+    /// Create a new task scheduler.
+    #[deprecated(note = "use TaskScheduler::new_with_task_group; the ambient-runtime adapter is removed in 2.0.0")]
+    pub fn new(config: SchedulerConfig) -> Self {
+        Self::new_legacy_compatibility(config)
     }
 
     pub fn new_with_task_group(config: SchedulerConfig, parent_task_group: TaskGroup) -> Self {
@@ -652,7 +660,7 @@ mod tests {
 
     #[tokio::test]
     async fn stop_notifies_and_drains_scheduler_tasks() {
-        let scheduler = TaskScheduler::new(SchedulerConfig {
+        let scheduler = TaskScheduler::new_legacy_compatibility(SchedulerConfig {
             check_interval: Duration::from_secs(60),
             max_scheduler_threads: 1,
             enable_persistence: true,
@@ -708,7 +716,7 @@ mod tests {
 
     #[tokio::test]
     async fn stop_aborts_running_executor_tasks() {
-        let scheduler = TaskScheduler::new(SchedulerConfig {
+        let scheduler = TaskScheduler::new_legacy_compatibility(SchedulerConfig {
             check_interval: Duration::from_secs(60),
             max_scheduler_threads: 1,
             executor_pool_size: 1,

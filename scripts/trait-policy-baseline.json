@@ -125,24 +125,8 @@
     },
     {
       "kind": "async_trait",
-      "path": "rocketmq-proxy-core/src/processor.rs",
-      "line": 297,
-      "item": "trait MessagingProcessor",
-      "owner": "proxy-core",
-      "decision": "migrate-on-touch"
-    },
-    {
-      "kind": "async_trait",
-      "path": "rocketmq-proxy-core/src/processor.rs",
-      "line": 375,
-      "item": "impl MessagingProcessor",
-      "owner": "proxy-core",
-      "decision": "migrate-on-touch"
-    },
-    {
-      "kind": "async_trait",
       "path": "rocketmq-proxy/src/grpc/service.rs",
-      "line": 779,
+      "line": 704,
       "item": "impl RecordingHook",
       "owner": "proxy",
       "decision": "migrate-on-touch"
@@ -4049,110 +4033,6 @@
       "line": 690,
       "item": "trait ClusterProducerIo::send_to_queue",
       "owner": "proxy-cluster",
-      "decision": "preferred-static-dispatch"
-    },
-    {
-      "kind": "native_async",
-      "path": "rocketmq-proxy-core/src/processor.rs",
-      "line": 305,
-      "item": "trait MessagingProcessor::query_route",
-      "owner": "proxy-core",
-      "decision": "preferred-static-dispatch"
-    },
-    {
-      "kind": "native_async",
-      "path": "rocketmq-proxy-core/src/processor.rs",
-      "line": 307,
-      "item": "trait MessagingProcessor::query_assignment",
-      "owner": "proxy-core",
-      "decision": "preferred-static-dispatch"
-    },
-    {
-      "kind": "native_async",
-      "path": "rocketmq-proxy-core/src/processor.rs",
-      "line": 313,
-      "item": "trait MessagingProcessor::send_message",
-      "owner": "proxy-core",
-      "decision": "preferred-static-dispatch"
-    },
-    {
-      "kind": "native_async",
-      "path": "rocketmq-proxy-core/src/processor.rs",
-      "line": 315,
-      "item": "trait MessagingProcessor::recall_message",
-      "owner": "proxy-core",
-      "decision": "preferred-static-dispatch"
-    },
-    {
-      "kind": "native_async",
-      "path": "rocketmq-proxy-core/src/processor.rs",
-      "line": 321,
-      "item": "trait MessagingProcessor::receive_message",
-      "owner": "proxy-core",
-      "decision": "preferred-static-dispatch"
-    },
-    {
-      "kind": "native_async",
-      "path": "rocketmq-proxy-core/src/processor.rs",
-      "line": 327,
-      "item": "trait MessagingProcessor::pull_message",
-      "owner": "proxy-core",
-      "decision": "preferred-static-dispatch"
-    },
-    {
-      "kind": "native_async",
-      "path": "rocketmq-proxy-core/src/processor.rs",
-      "line": 329,
-      "item": "trait MessagingProcessor::ack_message",
-      "owner": "proxy-core",
-      "decision": "preferred-static-dispatch"
-    },
-    {
-      "kind": "native_async",
-      "path": "rocketmq-proxy-core/src/processor.rs",
-      "line": 331,
-      "item": "trait MessagingProcessor::forward_message_to_dead_letter_queue",
-      "owner": "proxy-core",
-      "decision": "preferred-static-dispatch"
-    },
-    {
-      "kind": "native_async",
-      "path": "rocketmq-proxy-core/src/processor.rs",
-      "line": 337,
-      "item": "trait MessagingProcessor::change_invisible_duration",
-      "owner": "proxy-core",
-      "decision": "preferred-static-dispatch"
-    },
-    {
-      "kind": "native_async",
-      "path": "rocketmq-proxy-core/src/processor.rs",
-      "line": 343,
-      "item": "trait MessagingProcessor::update_offset",
-      "owner": "proxy-core",
-      "decision": "preferred-static-dispatch"
-    },
-    {
-      "kind": "native_async",
-      "path": "rocketmq-proxy-core/src/processor.rs",
-      "line": 349,
-      "item": "trait MessagingProcessor::get_offset",
-      "owner": "proxy-core",
-      "decision": "preferred-static-dispatch"
-    },
-    {
-      "kind": "native_async",
-      "path": "rocketmq-proxy-core/src/processor.rs",
-      "line": 351,
-      "item": "trait MessagingProcessor::query_offset",
-      "owner": "proxy-core",
-      "decision": "preferred-static-dispatch"
-    },
-    {
-      "kind": "native_async",
-      "path": "rocketmq-proxy-core/src/processor.rs",
-      "line": 353,
-      "item": "trait MessagingProcessor::end_transaction",
-      "owner": "proxy-core",
       "decision": "preferred-static-dispatch"
     },
     {

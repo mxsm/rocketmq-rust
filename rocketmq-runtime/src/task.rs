@@ -24,7 +24,7 @@ macro_rules! service_manager {
     ($service_type:ty) => {
         impl $service_type {
             pub fn create_service_task(self) -> $crate::task::service_task::ServiceManager<Self> {
-                $crate::task::service_task::ServiceManager::new(self)
+                $crate::task::service_task::ServiceManager::new_legacy_compatibility(self)
             }
         }
     };

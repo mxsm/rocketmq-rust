@@ -41,6 +41,20 @@ FUNCTION = re.compile(
     r"\b(?:async\s+)?(?:unsafe\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)",
     re.MULTILINE,
 )
+CFG_ATTRIBUTE = re.compile(r"#\s*\[\s*cfg\s*\((?P<body>.*?)\)\s*\]", re.DOTALL)
+DEBT_FIELDS = {
+    "identity",
+    "path",
+    "kind",
+    "item",
+    "line",
+    "fingerprint",
+    "classification",
+    "owner",
+    "reachability",
+    "justification",
+    "expiry",
+}
 
 
 class SafetyFinding(NamedTuple):
@@ -50,6 +64,53 @@ class SafetyFinding(NamedTuple):
 
 def is_test_only(offset: int, ranges: list[tuple[int, int]]) -> bool:
     return any(start <= offset < end for start, end in ranges)
+
+
+def is_test_source_path(relative: str) -> bool:
+    path = Path(relative)
+    stem = path.stem.lower()
+    return (
+        "tests" in {part.lower() for part in path.parts}
+        or stem.startswith("test_")
+        or stem.endswith("_test")
+        or stem.endswith("_tests")
+    )
+
+
+def cfg_test_item_ranges(masked: str) -> list[tuple[int, int]]:
+    ranges: list[tuple[int, int]] = []
+    for match in CFG_ATTRIBUTE.finditer(masked):
+        body = match.group("body")
+        if not re.search(r"\btest\b", body) or re.search(r"\bnot\s*\(\s*test\s*\)", body):
+            continue
+        cursor = match.end()
+        while True:
+            whitespace = re.match(r"\s*", masked[cursor:])
+            cursor += len(whitespace.group(0)) if whitespace else 0
+            if not masked.startswith("#[", cursor):
+                break
+            attribute_end = masked.find("]", cursor + 2)
+            if attribute_end == -1:
+                break
+            cursor = attribute_end + 1
+
+        opening = masked.find("{", cursor)
+        semicolon = masked.find(";", cursor)
+        if semicolon != -1 and (opening == -1 or semicolon < opening):
+            ranges.append((match.start(), semicolon + 1))
+            continue
+        if opening == -1:
+            continue
+        depth = 0
+        for index in range(opening, len(masked)):
+            if masked[index] == "{":
+                depth += 1
+            elif masked[index] == "}":
+                depth -= 1
+                if depth == 0:
+                    ranges.append((match.start(), index + 1))
+                    break
+    return ranges
 
 
 def preceding_safety_comment(source: str, offset: int) -> bool:
@@ -87,6 +148,11 @@ def debt_entry(relative: str, kind: str, masked: str, source: str, offset: int) 
     item = enclosing_function(masked, offset)
     snippet = normalized_line(masked, offset)
     fingerprint = hashlib.sha256(f"{relative}\0{kind}\0{item}\0{snippet}".encode()).hexdigest()[:20]
+    classification = {
+        "panic_surface": "internal_invariant",
+        "manual_pin": "unsafe_invariant",
+        "legacy_mod_rs": "legacy_layout",
+    }.get(kind, "reviewed_legacy")
     return {
         "identity": f"{relative}:{kind}:{item}:{fingerprint}",
         "path": relative,
@@ -94,14 +160,19 @@ def debt_entry(relative: str, kind: str, masked: str, source: str, offset: int) 
         "item": item,
         "line": line,
         "fingerprint": fingerprint,
-        "classification": "reviewed legacy occurrence; additions are forbidden",
-        "owner": "architecture maintainers",
+        "classification": classification,
+        "owner": relative.split("/", 1)[0],
+        "reachability": "production-internal",
+        "justification": "reviewed legacy identity; additions are forbidden and deletion is monotonic",
+        "expiry": "2.0.0",
     }
 
 
 def scan_source(source: str, relative: str) -> tuple[list[SafetyFinding], list[dict[str, object]]]:
+    if is_test_source_path(relative):
+        return [], []
     masked = rust_source.mask_comments_and_literals(source)
-    test_ranges = rust_source.test_module_ranges(masked)
+    test_ranges = rust_source.test_module_ranges(masked) + cfg_test_item_ranges(masked)
     safety_findings: list[SafetyFinding] = []
     debt: list[dict[str, object]] = []
 
@@ -153,6 +224,9 @@ def scan_tree(root: Path) -> tuple[list[SafetyFinding], list[dict[str, object]]]
                 "fingerprint": fingerprint,
                 "classification": "legacy module layout; additions are forbidden",
                 "owner": "owning crate maintainers",
+                "reachability": "production-layout",
+                "justification": "legacy module identity retained only until its owning module is touched",
+                "expiry": "2.0.0",
             }
         )
 
@@ -161,7 +235,7 @@ def scan_tree(root: Path) -> tuple[list[SafetyFinding], list[dict[str, object]]]
 
 def write_baseline(path: Path, debt: list[dict[str, object]]) -> None:
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "policy": {
             "unsafe": "Every production unsafe block or impl requires an adjacent // SAFETY: comment.",
             "debt": "Existing panic surfaces, manual Pin projection, and mod.rs files may be deleted but not added.",
@@ -173,8 +247,15 @@ def write_baseline(path: Path, debt: list[dict[str, object]]) -> None:
 
 def load_baseline(path: Path) -> set[str]:
     payload = json.loads(path.read_text(encoding="utf-8"))
-    if payload.get("schema_version") != 1 or not isinstance(payload.get("entries"), list):
+    if payload.get("schema_version") != 2 or not isinstance(payload.get("entries"), list):
         raise ValueError("rust hygiene baseline has an unsupported schema")
+    for entry in payload["entries"]:
+        if not isinstance(entry, dict) or set(entry) != DEBT_FIELDS:
+            raise ValueError("rust hygiene baseline contains an invalid debt entry")
+        if any(not isinstance(entry[field], str) or not entry[field] for field in DEBT_FIELDS - {"line"}):
+            raise ValueError("rust hygiene baseline contains empty debt metadata")
+        if not isinstance(entry["line"], int) or entry["line"] < 1:
+            raise ValueError("rust hygiene baseline contains an invalid line")
     identities = [entry.get("identity") for entry in payload["entries"]]
     if any(not isinstance(identity, str) or not identity for identity in identities):
         raise ValueError("rust hygiene baseline contains an invalid identity")

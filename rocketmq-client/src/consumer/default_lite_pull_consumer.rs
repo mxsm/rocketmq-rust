@@ -1742,7 +1742,12 @@ impl MQConsumer for DefaultLitePullConsumer {
         DefaultLitePullConsumer::view_message(self, topic, msg_id).await
     }
 
-    async fn send_message_back(&mut self, msg: MessageExt, delay_level: i32, broker_name: &str) -> RocketMQResult<()> {
+    async fn send_message_back(
+        &mut self,
+        _msg: MessageExt,
+        _delay_level: i32,
+        _broker_name: &str,
+    ) -> RocketMQResult<()> {
         // Lite pull consumer doesn't support send message back
         // This is typically used in push consumer for retry
         Err(crate::mq_client_err!(

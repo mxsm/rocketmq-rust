@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Typed V1 persistence boundary for Controller OpenRaft state.
+//! Typed V1 persistence boundary for Controller OpenRaft state and repositories.
 
 mod codec;
 mod key;
@@ -62,8 +62,8 @@ fn backend_error(operation: &'static str, key: RaftRecordKey, error: ControllerE
 mod tests {
     #[test]
     fn openraft_consumers_do_not_restore_raw_persistence_access() {
-        let log_store = include_str!("../log_store.rs");
-        let state_machine = include_str!("../state_machine.rs");
+        let log_store = include_str!("log_store.rs");
+        let state_machine = include_str!("state_machine.rs");
         let production_state_machine = state_machine
             .split("#[cfg(test)]")
             .next()

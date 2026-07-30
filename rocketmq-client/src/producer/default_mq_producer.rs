@@ -2155,8 +2155,8 @@ impl MQProducer for DefaultMQProducer {
 
     async fn send_message_in_transaction<T, M>(
         &mut self,
-        msg: M,
-        arg: Option<T>,
+        _msg: M,
+        _arg: Option<T>,
     ) -> rocketmq_error::RocketMQResult<TransactionSendResult>
     where
         T: std::any::Any + Sync + Send,
@@ -3183,7 +3183,7 @@ mod tests {
         let producer_impl = producer
             .default_mq_producer_impl()
             .expect("producer impl should be initialized");
-        let impl_config = producer_impl.producer_config();
+        let _impl_config = producer_impl.producer_config();
         assert_eq!(producer_impl.latency_max(), &[10, 20, 30]);
         assert_eq!(producer_impl.not_available_duration(), &[0, 100, 200]);
     }

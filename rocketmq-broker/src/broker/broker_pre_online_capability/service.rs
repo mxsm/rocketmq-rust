@@ -49,7 +49,7 @@ impl<MS: MessageStore> BrokerPreOnlineService<MS> {
         };
         let service_manager = match parent_task_group {
             Some(parent_task_group) => ServiceManager::new_with_task_group(inner, parent_task_group),
-            None => ServiceManager::new(inner),
+            None => ServiceManager::new_legacy_compatibility(inner),
         };
         BrokerPreOnlineService { service_manager }
     }

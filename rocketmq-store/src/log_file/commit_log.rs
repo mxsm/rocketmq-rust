@@ -13,20 +13,26 @@
 // limitations under the License.
 
 mod append_sequencer;
+mod context;
+mod handles;
+
+pub(crate) use context::CommitLogStoreContext;
+pub(crate) use handles::CommitLogCleanupHandle;
+pub(crate) use handles::CommitLogInternalMessageWriteHandle;
+pub(crate) use handles::CommitLogReadHandle;
+pub(crate) use handles::CommitLogReplicaHandle;
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 
 use crate::config::store_runtime_config::StoreRuntimeConfig;
-use arc_swap::ArcSwapOption;
 use bytes::Buf;
 use bytes::Bytes;
 use bytes::BytesMut;
@@ -73,7 +79,6 @@ use crate::base::message_store::StoreHealthRecorder;
 use crate::base::put_message_context::PutMessageContext;
 use crate::base::select_result::SelectMappedBufferResult;
 use crate::base::store_checkpoint::StoreCheckpoint;
-use crate::base::store_stats_service::StoreStatsService;
 use crate::base::swappable::Swappable;
 use crate::config::flush_disk_type::FlushDiskType;
 use crate::config::message_store_config::LinuxMemoryLockMode;
@@ -82,8 +87,6 @@ use crate::config::message_store_config::MessageStoreConfig;
 use crate::consume_queue::mapped_file_queue::MappedFileIoStats;
 use crate::consume_queue::mapped_file_queue::MappedFileQueue;
 use crate::consume_queue::mapped_file_queue::MappedFileQueueAppendHandle;
-use crate::consume_queue::mapped_file_queue::MappedFileQueueCleanupHandle;
-use crate::consume_queue::mapped_file_queue::MappedFileQueueReadHandle;
 use crate::consume_queue::mapped_file_queue::MappedFileWarmupStats;
 use crate::ha::general_ha_service::GeneralHAService;
 use crate::ha::ha_service::HAService;
@@ -104,10 +107,8 @@ use crate::message_store::local_file_message_store::CommitLogDispatchHandle;
 use crate::message_store::runtime_state::StoreRuntimeState;
 use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
 use crate::queue::local_file_consume_queue_store::ConsumeQueueStore;
-use crate::store::running_flags::RunningFlags;
 use crate::store_error::StoreError;
 use crate::store_error::StoreOperation;
-use crate::transfer::error::TransferError;
 use crate::transfer::error::TransferResult;
 use crate::transfer::segment::SegmentLease;
 use crate::utils::ffi::MADV_NORMAL;
@@ -150,9 +151,10 @@ use rocketmq_store_local::commit_log::runtime_state::CommitLogActiveMemoryLock;
 use rocketmq_store_local::commit_log::runtime_state::CommitLogRuntimeState;
 
 use self::append_sequencer::CommitLogAppendDependencies;
-use self::append_sequencer::CommitLogAppendPort;
 use self::append_sequencer::CommitLogAppendProcessor;
 use self::append_sequencer::CommitLogAppendRuntime;
+use self::handles::publish_confirm_offset;
+use self::handles::resolve_commit_log_confirm_offset;
 
 pub use rocketmq_store_local::commit_log::record::BLANK_MAGIC_CODE;
 pub use rocketmq_store_local::commit_log::record::MESSAGE_MAGIC_CODE;
@@ -240,48 +242,6 @@ macro_rules! apply_recovery_completion {
     }};
 }
 
-/// Immutable and atomically published LocalStore capabilities consumed by the commit log.
-///
-/// The context deliberately excludes the `LocalFileMessageStore` root. Static state is shared
-/// through `Arc`, counters remain atomic, and the HA service is published only after local-store
-/// initialization. Commit-log hot paths therefore never require a mutable store back-reference.
-#[derive(Clone)]
-pub(crate) struct CommitLogStoreContext {
-    running_flags: Arc<RunningFlags>,
-    alive_replica_num_in_group: Arc<AtomicI32>,
-    store_stats_service: Arc<StoreStatsService>,
-    ha_service: Arc<ArcSwapOption<GeneralHAService>>,
-    max_delay_level: i32,
-    delay_level_table: Arc<BTreeMap<i32, i64>>,
-}
-
-impl CommitLogStoreContext {
-    pub(crate) fn new(
-        running_flags: Arc<RunningFlags>,
-        alive_replica_num_in_group: Arc<AtomicI32>,
-        store_stats_service: Arc<StoreStatsService>,
-        max_delay_level: i32,
-        delay_level_table: Arc<BTreeMap<i32, i64>>,
-    ) -> Self {
-        Self {
-            running_flags,
-            alive_replica_num_in_group,
-            store_stats_service,
-            ha_service: Arc::new(ArcSwapOption::empty()),
-            max_delay_level,
-            delay_level_table,
-        }
-    }
-
-    fn publish_ha_service(&self, ha_service: GeneralHAService) {
-        self.ha_service.store(Some(Arc::new(ha_service)));
-    }
-
-    fn ha_service(&self) -> Option<Arc<GeneralHAService>> {
-        self.ha_service.load_full()
-    }
-}
-
 // This reduces heap allocations by ~50% by reusing encoder instances
 fn encode_message_ext(
     message_ext: &MessageExtBrokerInner,
@@ -363,337 +323,6 @@ macro_rules! lock_active_mapped_file_parts {
 
 pub struct CommitLog {
     root: CommitLogRoot<CommitLogAdapter>,
-}
-
-/// Safe, narrow capability for scheduled commit-log retention work.
-///
-/// It owns only the atomically published mapped-file generation and therefore
-/// does not dereference the composition-root-owned `CommitLog`.
-#[derive(Clone)]
-pub(crate) struct CommitLogCleanupHandle {
-    mapped_file_queue: MappedFileQueueCleanupHandle,
-}
-
-impl CommitLogCleanupHandle {
-    #[inline]
-    pub(crate) fn get_min_offset(&self) -> i64 {
-        self.mapped_file_queue.get_min_offset()
-    }
-
-    pub(crate) fn delete_expired_files_by_time_before(
-        &self,
-        expired_time: i64,
-        delete_files_interval: i32,
-        interval_forcibly: i64,
-        clean_immediately: bool,
-        delete_file_batch_max: i32,
-        pinned_file_offset: Option<u64>,
-    ) -> i32 {
-        self.mapped_file_queue.delete_expired_files_by_time_before(
-            expired_time,
-            delete_files_interval,
-            interval_forcibly,
-            clean_immediately,
-            delete_file_batch_max,
-            pinned_file_offset,
-        )
-    }
-
-    #[inline]
-    pub(crate) fn retry_delete_first_file(&self, interval_forcibly: i64) -> bool {
-        self.mapped_file_queue.retry_delete_first_file(interval_forcibly)
-    }
-}
-
-/// Safe, cloneable capability for long-lived commit-log readers.
-///
-/// The handle observes the current mapped-file generation, flush progress, and
-/// confirm-offset policy without retaining the mutable `CommitLog` facade.
-#[derive(Clone)]
-pub(crate) struct CommitLogReadHandle {
-    mapped_file_queue: MappedFileQueueReadHandle,
-    message_store_config: Arc<MessageStoreConfig>,
-    store_runtime_state: Arc<StoreRuntimeState>,
-    broker_config: Arc<StoreRuntimeConfig>,
-    store_context: CommitLogStoreContext,
-    runtime_state: Arc<CommitLogRuntimeState>,
-}
-
-impl CommitLogReadHandle {
-    pub(crate) fn get_message(&self, offset: i64, size: i32) -> Option<SelectMappedBufferResult> {
-        self.mapped_file_queue.get_message(offset, size)
-    }
-
-    pub(crate) fn get_bulk_data(&self, offset: i64, size: i32) -> Option<Vec<SelectMappedBufferResult>> {
-        self.mapped_file_queue.get_bulk_data(offset, size)
-    }
-
-    pub(crate) fn get_data(&self, offset: i64) -> Option<SelectMappedBufferResult> {
-        self.mapped_file_queue.get_data(offset)
-    }
-
-    pub(crate) fn get_max_offset(&self) -> i64 {
-        self.mapped_file_queue.get_max_offset()
-    }
-
-    pub(crate) fn get_min_offset(&self) -> i64 {
-        self.mapped_file_queue.get_min_offset()
-    }
-
-    pub(crate) fn pickup_store_timestamp(&self, offset: i64, size: i32) -> i64 {
-        if offset < self.get_min_offset() || offset + size as i64 > self.get_max_offset() {
-            return -1;
-        }
-        self.get_message(offset, size)
-            .map(|result| rocketmq_store_local::commit_log::header::store_timestamp_from_frame(result.get_buffer()))
-            .unwrap_or(-1)
-    }
-
-    pub(crate) fn check_self(&self) {
-        self.mapped_file_queue.check_self();
-    }
-
-    pub(crate) fn roll_next_file(&self, offset: i64) -> i64 {
-        self.mapped_file_queue.roll_next_file(offset)
-    }
-
-    pub(crate) fn get_confirm_offset(&self) -> i64 {
-        resolve_commit_log_confirm_offset(
-            self.message_store_config.as_ref(),
-            self.store_runtime_state.broker_role(),
-            self.broker_config.as_ref(),
-            &self.store_context,
-            self.runtime_state.confirm_offset(),
-            self.mapped_file_queue.get_max_offset(),
-            self.mapped_file_queue.get_flushed_where(),
-        )
-    }
-
-    pub(crate) fn get_confirm_offset_directly(&self) -> i64 {
-        if self.broker_config.enable_controller_mode {
-            if self.store_runtime_state.broker_role() != BrokerRole::Slave
-                && !self.store_context.running_flags.is_fenced()
-            {
-                let max_phy_offset = self.get_max_offset();
-                if let Some(ha_service) = self.store_context.ha_service() {
-                    if ha_service.local_sync_state_set_size(max_phy_offset) <= 1 {
-                        return max_phy_offset;
-                    }
-                }
-            }
-
-            self.runtime_state.confirm_offset()
-        } else if self.broker_config.duplication_enable {
-            self.runtime_state.confirm_offset()
-        } else {
-            self.get_max_offset()
-        }
-    }
-
-    pub(crate) fn select_segments(
-        &self,
-        offset: i64,
-        max_bytes: usize,
-        allow_cross_file: bool,
-    ) -> TransferResult<Vec<SegmentLease>> {
-        if offset < 0 {
-            return Err(TransferError::InvalidInput(format!(
-                "offset must be non-negative: {offset}"
-            )));
-        }
-        if max_bytes == 0 {
-            return Ok(Vec::new());
-        }
-        let mapped_file_size = self.message_store_config.mapped_file_size_commit_log;
-        if mapped_file_size == 0 {
-            return Err(TransferError::InvalidInput(
-                "mapped_file_size_commit_log must be greater than zero".to_string(),
-            ));
-        }
-
-        let mut max_bytes = max_bytes.min(i32::MAX as usize);
-        if !allow_cross_file {
-            let position_in_file = offset.rem_euclid(mapped_file_size as i64) as usize;
-            max_bytes = max_bytes.min(mapped_file_size.saturating_sub(position_in_file));
-        }
-
-        let Some(results) = self.get_bulk_data(offset, max_bytes as i32) else {
-            return Ok(Vec::new());
-        };
-        Ok(results
-            .into_iter()
-            .filter_map(|result| SegmentLease::from_select_result(result.start_offset as i64, result))
-            .collect())
-    }
-}
-
-/// Safe, cloneable append capability for Timer's internal redelivery messages.
-///
-/// Timer messages never wait for store or replica acknowledgement. This handle owns only the
-/// shared append synchronization, queue-offset state, statistics, and flush wake-up ports needed
-/// by that invariant; recovery and CommitLog lifecycle remain exclusively owned by `CommitLog`.
-#[derive(Clone)]
-pub(crate) struct CommitLogInternalMessageWriteHandle {
-    message_store_config: Arc<MessageStoreConfig>,
-    store_runtime_state: Arc<StoreRuntimeState>,
-    enabled_append_prop_crc: bool,
-    append_port: CommitLogAppendPort,
-    telemetry_handle: rocketmq_observability::TelemetryHandle,
-}
-
-impl CommitLogInternalMessageWriteHandle {
-    pub(crate) async fn put_message(&self, mut msg: MessageExtBrokerInner) -> PutMessageResult {
-        let append_span = rocketmq_observability::trace::store::append_span(&self.telemetry_handle);
-        msg.set_wait_store_msg_ok(false);
-        #[cfg(any(feature = "observability", feature = "observability-traces"))]
-        rocketmq_observability::trace::record_message_properties_with_handle(
-            &self.telemetry_handle,
-            &append_span,
-            msg.get_properties(),
-            msg.get_body().map(|body| body.len()),
-        );
-        msg.message_ext_inner.body_crc = crc32_bytes(msg.message_ext_inner.message.get_body());
-        if self.enabled_append_prop_crc {
-            msg.delete_property(MessageConst::PROPERTY_CRC32);
-        }
-
-        msg.with_version(MessageVersion::V1);
-        if self.message_store_config.auto_message_version_on_topic_len && msg.topic().len() > i8::MAX as usize {
-            msg.with_version(MessageVersion::V2);
-        }
-        if msg.born_host().is_ipv6() {
-            msg.with_born_host_v6_flag();
-        }
-        if msg.store_host().is_ipv6() {
-            msg.with_store_host_v6_flag();
-        }
-
-        let need_assign_offset = !(self.message_store_config.duplication_enable
-            && self.store_runtime_state.broker_role() != BrokerRole::Slave);
-        let prepared = match message_encoder_pool::prepare_message_with_pool(&msg, &self.message_store_config) {
-            Ok(prepared) => prepared,
-            Err(result) => return result,
-        };
-        self.append_port
-            .append_message(msg, prepared, need_assign_offset)
-            .instrument(append_span)
-            .await
-            .result
-    }
-}
-
-/// Safe, cloneable capability used by HA replica readers.
-///
-/// It shares only raw replica append synchronization, physical-offset reads,
-/// and confirm-offset publication state. Normal message append, recovery, and
-/// mapped-file lifecycle operations remain on the owning `CommitLog`.
-#[derive(Clone)]
-pub(crate) struct CommitLogReplicaHandle {
-    read: CommitLogReadHandle,
-    append: MappedFileQueueAppendHandle,
-    put_message_lock: Arc<tokio::sync::Mutex<()>>,
-    runtime_state: Arc<CommitLogRuntimeState>,
-    store_checkpoint: Arc<StoreCheckpoint>,
-}
-
-impl CommitLogReplicaHandle {
-    #[inline]
-    pub(crate) fn get_max_offset(&self) -> i64 {
-        self.read.get_max_offset()
-    }
-
-    #[inline]
-    pub(crate) fn get_min_offset(&self) -> i64 {
-        self.read.get_min_offset()
-    }
-
-    #[inline]
-    pub(crate) fn get_confirm_offset(&self) -> i64 {
-        self.read.get_confirm_offset()
-    }
-
-    #[inline]
-    pub(crate) fn get_confirm_offset_directly(&self) -> i64 {
-        self.read.get_confirm_offset_directly()
-    }
-
-    pub(crate) fn select_segments(
-        &self,
-        offset: i64,
-        max_bytes: usize,
-        allow_cross_file: bool,
-    ) -> TransferResult<Vec<SegmentLease>> {
-        self.read.select_segments(offset, max_bytes, allow_cross_file)
-    }
-
-    pub(crate) async fn append_data(
-        &self,
-        start_offset: i64,
-        data: &[u8],
-        data_start: i32,
-        data_length: i32,
-    ) -> Result<bool, StoreError> {
-        let lock = self.put_message_lock.lock().await;
-        let mapped_file = self.append.get_last_mapped_file(start_offset as u64, true);
-        if mapped_file.is_none() {
-            drop(lock);
-            return Err(StoreError::mapped_file_not_found(StoreOperation::Append));
-        }
-        let Some(mapped_file) = self.append.get_last_mapped_file(start_offset as u64, true) else {
-            drop(lock);
-            return Err(StoreError::mapped_file_not_found(StoreOperation::Append));
-        };
-        let appended = mapped_file.append_message_offset_length(data, data_start as usize, data_length as usize);
-        drop(lock);
-        Ok(appended)
-    }
-
-    #[inline]
-    pub(crate) fn publish_confirm_offset(&self, phy_offset: i64) {
-        publish_confirm_offset(&self.runtime_state, &self.store_checkpoint, phy_offset);
-    }
-}
-
-#[inline]
-fn publish_confirm_offset(runtime_state: &CommitLogRuntimeState, store_checkpoint: &StoreCheckpoint, phy_offset: i64) {
-    runtime_state.publish_confirm_offset(phy_offset);
-    store_checkpoint.set_confirm_phy_offset(phy_offset as u64);
-}
-
-fn resolve_commit_log_confirm_offset(
-    message_store_config: &MessageStoreConfig,
-    broker_role: BrokerRole,
-    broker_config: &StoreRuntimeConfig,
-    store_context: &CommitLogStoreContext,
-    stored_confirm_offset: i64,
-    max_phy_offset: i64,
-    flushed_where: i64,
-) -> i64 {
-    if broker_config.enable_controller_mode {
-        if broker_role == BrokerRole::Slave || store_context.running_flags.is_fenced() {
-            return stored_confirm_offset;
-        }
-
-        let Some(ha_service) = store_context.ha_service() else {
-            return stored_confirm_offset;
-        };
-        if ha_service.local_sync_state_set_size(max_phy_offset) <= 1 || !message_store_config.all_ack_in_sync_state_set
-        {
-            return max_phy_offset;
-        }
-        if stored_confirm_offset >= 0 {
-            return stored_confirm_offset;
-        }
-        return ha_service.compute_confirm_offset(stored_confirm_offset, max_phy_offset);
-    }
-
-    if broker_config.duplication_enable {
-        stored_confirm_offset
-    } else if message_store_config.flush_disk_type == FlushDiskType::SyncFlush {
-        flushed_where
-    } else {
-        max_phy_offset
-    }
 }
 
 mod adapter {

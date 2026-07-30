@@ -204,7 +204,7 @@ impl HAConnectionStateNotificationService {
             last_check_time_stamp: AtomicU64::new(0),
         });
         HAConnectionStateNotificationService {
-            service_manager: ServiceManager::new_arc(inner.clone()),
+            service_manager: ServiceManager::new_arc_legacy_compatibility(inner.clone()),
             inner,
         }
     }

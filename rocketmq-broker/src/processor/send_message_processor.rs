@@ -908,6 +908,10 @@ where
         send_message_context.send_msg_num = msg_num;
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "existing send result protocol context is tracked by the lint debt registry"
+    )]
     async fn handle_put_message_result(
         &self,
         append_receipt: StoreAppendReceipt,

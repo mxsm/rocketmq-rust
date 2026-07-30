@@ -14,5 +14,5 @@
 
 
 # https://doc.rust-lang.org/clippy/index.html
-too-many-arguments-threshold = 20
+too-many-arguments-threshold = 12
 msrv = "1.95.0"

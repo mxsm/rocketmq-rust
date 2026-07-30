@@ -38,6 +38,10 @@ impl MQClientAPIImpl {
 }
 
 impl MQClientAPIImpl {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "existing send wire adapter signature is tracked by the lint debt registry"
+    )]
     pub async fn send_message<T>(
         &self,
         addr: &CheetahString,
@@ -311,6 +315,10 @@ impl MQClientAPIImpl {
 
     /// Background task implementation for async message sending.
     #[allow(clippy::type_complexity)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "existing asynchronous send context is tracked by the lint debt registry"
+    )]
     pub(super) async fn send_message_async_impl(
         remoting_client: Arc<RocketmqDefaultClient<ClientRemotingProcessor>>,
         client_config: Arc<ClientConfig>,
@@ -319,7 +327,7 @@ impl MQClientAPIImpl {
         mut current_broker_name: CheetahString,
         msg_topic: CheetahString,
         msg_uniq_id: Option<CheetahString>,
-        is_batch_message: bool,
+        _is_batch_message: bool,
         timeout_millis: u64,
         current_request: RemotingCommand,
         send_callback: Option<ArcSendCallback>,
@@ -690,7 +698,7 @@ impl MQClientAPIImpl {
         &self,
         broker_name: &CheetahString,
         msg: &T,
-        request: &mut RemotingCommand,
+        _request: &mut RemotingCommand,
         topic_publish_info: Option<&TopicPublishInfo>,
         instance: Option<&Arc<MQClientInstance>>,
         producer: &DefaultMQProducerImpl,

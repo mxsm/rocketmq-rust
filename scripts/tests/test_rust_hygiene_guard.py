@@ -92,6 +92,20 @@ mod tests {
 
         self.assertEqual(([], []), self.guard.scan_source(source, "crate/src/lib.rs"))
 
+    def test_ignores_cfg_test_items_and_test_named_sources(self):
+        source = """
+#[cfg(test)]
+fn test_runtime() {
+    Option::<u8>::None.unwrap();
+}
+"""
+
+        self.assertEqual(([], []), self.guard.scan_source(source, "crate/src/runtime.rs"))
+        self.assertEqual(
+            ([], []),
+            self.guard.scan_source("fn probe() { panic!(); }", "crate/src/behavior_tests.rs"),
+        )
+
     def test_detects_manual_pin_projection(self):
         _, debt = self.guard.scan_source(
             "fn poll(value: Pin<&mut Value>) { value.get_unchecked_mut(); }\n",
@@ -99,6 +113,8 @@ mod tests {
         )
 
         self.assertEqual("manual_pin", debt[0]["kind"])
+        self.assertEqual("unsafe_invariant", debt[0]["classification"])
+        self.assertEqual("2.0.0", debt[0]["expiry"])
 
 
 if __name__ == "__main__":

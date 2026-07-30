@@ -179,7 +179,7 @@ impl DefaultMQProducerImpl {
     /// Spawn a background task for oneway message sending.
     ///
     /// This is a helper method for send_oneway_batch to avoid code duplication.
-    pub(super) fn spawn_oneway_send<T>(&self, msg: T, mq: MessageQueue, timeout: u64)
+    pub(super) fn spawn_oneway_send<T>(&self, msg: T, mq: MessageQueue, _timeout: u64)
     where
         T: MessageTrait + Send + Sync + 'static,
     {
@@ -729,6 +729,7 @@ impl DefaultMQProducerImpl {
         let begin_start_time = Instant::now();
 
         let client_instance = self.client_instance()?;
+        #[cfg(feature = "observability")]
         let telemetry_handle = client_instance.telemetry_handle();
 
         // Get broker info with a single lookup path
@@ -766,11 +767,9 @@ impl DefaultMQProducerImpl {
         }
 
         let mut sys_flag = 0i32;
-        let mut msg_body_compressed = false;
         if self.try_to_compress_message(msg, &runtime.send_config) {
             sys_flag |= MessageSysFlag::COMPRESSED_FLAG;
             sys_flag |= runtime.send_config.compress_type.get_compression_flag();
-            msg_body_compressed = true;
         }
 
         let tran_msg_property = msg.property_ref(&CheetahString::from_static_str(
@@ -1877,7 +1876,7 @@ pub(super) fn build_oneway_request_internal<T>(
     mq: &MessageQueue,
     broker_name: &CheetahString,
     send_config: &ProducerSendConfigSnapshot,
-    namespace: Option<&str>,
+    _namespace: Option<&str>,
 ) -> rocketmq_error::RocketMQResult<RemotingCommand>
 where
     T: MessageTrait,
