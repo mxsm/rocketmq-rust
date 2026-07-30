@@ -74,7 +74,7 @@ impl<'a> DiagnosticContext<'a> {
                     CoverageStatus::Available | CoverageStatus::Partial | CoverageStatus::Missing => {}
                 }
             }
-            matched.usable.sort_by_key(|snapshot| snapshot.evidence_id);
+            sort_usable_evidence(&mut matched.usable);
             matches.insert(requirement.key, matched);
         }
 
@@ -85,13 +85,16 @@ impl<'a> DiagnosticContext<'a> {
         }
     }
 
-    /// Returns the first usable snapshot for a requirement in stable ID order.
+    /// Returns the preferred usable snapshot for a requirement.
+    ///
+    /// Complete evidence is preferred over partial evidence, then the newest
+    /// observation wins with the evidence ID as a deterministic tie-breaker.
     #[must_use]
     pub fn evidence(&self, requirement_key: &str) -> Option<&'a EvidenceSnapshot> {
         self.matches.get(requirement_key)?.usable.first().copied()
     }
 
-    /// Returns all usable snapshots for a requirement in stable ID order.
+    /// Returns all usable snapshots in preferred-evidence order.
     #[must_use]
     pub fn all_evidence(&self, requirement_key: &str) -> &[&'a EvidenceSnapshot] {
         self.matches
@@ -194,9 +197,10 @@ impl<'a> DiagnosticContext<'a> {
             .filter(|requirement| self.is_available(requirement.key))
             .count();
         let partial_evidence = self
-            .matches
-            .values()
-            .flat_map(|matched| &matched.usable)
+            .required
+            .iter()
+            .chain(self.optional)
+            .filter_map(|requirement| self.evidence(requirement.key))
             .filter(|snapshot| snapshot.partial || snapshot.coverage == CoverageStatus::Partial)
             .count();
         let unsupported_required = self.unsupported_required().len();
@@ -212,6 +216,19 @@ impl<'a> DiagnosticContext<'a> {
             ..ConfidenceInputs::default()
         }
     }
+}
+
+fn evidence_priority(snapshot: &EvidenceSnapshot) -> u8 {
+    u8::from(snapshot.partial || snapshot.coverage != CoverageStatus::Available)
+}
+
+fn sort_usable_evidence(evidence: &mut [&EvidenceSnapshot]) {
+    evidence.sort_by(|left, right| {
+        evidence_priority(left)
+            .cmp(&evidence_priority(right))
+            .then_with(|| right.observed_at.cmp(&left.observed_at))
+            .then_with(|| left.evidence_id.cmp(&right.evidence_id))
+    });
 }
 
 /// Offline-capable deterministic diagnostic engine.
@@ -453,4 +470,80 @@ fn seal_finding(
 
 fn as_u16(value: usize) -> u16 {
     u16::try_from(value).unwrap_or(u16::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Duration;
+    use chrono::Utc;
+    use rocketmq_sre_contracts::ClusterId;
+    use rocketmq_sre_contracts::CorrelationId;
+    use rocketmq_sre_contracts::EvidenceQuery;
+    use rocketmq_sre_contracts::QueryId;
+    use rocketmq_sre_contracts::TenantId;
+    use rocketmq_sre_contracts::TimeRange;
+    use rocketmq_sre_contracts::current_evidence_schema;
+    use serde_json::json;
+
+    use super::*;
+
+    fn snapshot(
+        tenant_id: TenantId,
+        cluster_id: ClusterId,
+        observed_at: chrono::DateTime<Utc>,
+        partial: bool,
+    ) -> EvidenceSnapshot {
+        let mut snapshot = EvidenceSnapshot::capture(
+            EvidenceQuery {
+                query_id: QueryId::new(),
+                correlation_id: CorrelationId::new(),
+                tenant_id,
+                cluster_id,
+                source: "rocketmq-mcp".to_owned(),
+                resource: "consumer-lag/group/topic".to_owned(),
+                time_range: TimeRange::new(observed_at, observed_at).expect("time range"),
+            },
+            current_evidence_schema(),
+            observed_at,
+            EvidenceContent::Inline(json!({"total_lag": 10})),
+        )
+        .expect("evidence");
+        snapshot.partial = partial;
+        snapshot.coverage = if partial {
+            CoverageStatus::Partial
+        } else {
+            CoverageStatus::Available
+        };
+        snapshot
+    }
+
+    #[test]
+    fn complete_evidence_precedes_newer_partial_evidence() {
+        let tenant_id = TenantId::new();
+        let cluster_id = ClusterId::new();
+        let now = Utc::now();
+        let complete = snapshot(tenant_id, cluster_id, now - Duration::seconds(2), false);
+        let partial = snapshot(tenant_id, cluster_id, now, true);
+        let mut evidence = [&partial, &complete];
+
+        sort_usable_evidence(&mut evidence);
+
+        assert_eq!(evidence[0].evidence_id, complete.evidence_id);
+        assert_eq!(evidence[1].evidence_id, partial.evidence_id);
+    }
+
+    #[test]
+    fn newest_evidence_wins_within_the_same_completeness_class() {
+        let tenant_id = TenantId::new();
+        let cluster_id = ClusterId::new();
+        let now = Utc::now();
+        let older = snapshot(tenant_id, cluster_id, now - Duration::seconds(2), false);
+        let newer = snapshot(tenant_id, cluster_id, now, false);
+        let mut evidence = [&older, &newer];
+
+        sort_usable_evidence(&mut evidence);
+
+        assert_eq!(evidence[0].evidence_id, newer.evidence_id);
+        assert_eq!(evidence[1].evidence_id, older.evidence_id);
+    }
 }
