@@ -12161,6 +12161,7 @@
               "tempo_api",
               "kubernetes_api",
               "runtime_diagnostics",
+              "execution_agent_api",
               "synthetic",
               "unsupported"
             ],
