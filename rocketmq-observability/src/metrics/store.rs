@@ -90,7 +90,9 @@ where
         .is_ok()
 }
 
-pub fn record_append_latency(latency_ms: u64) {
+/// Cloneable Store recorder bound to one explicit telemetry runtime.
+#[derive(Clone)]
+pub struct StoreMetricsRecorder {
     #[cfg(feature = "otel-metrics")]
     telemetry: crate::TelemetryRecorder,
     #[cfg(feature = "otel-metrics")]
@@ -164,7 +166,7 @@ impl StoreMetricsRecorder {
     {
         #[cfg(feature = "otel-metrics")]
         if let Some(meter) = self.telemetry.meter() {
-            StoreMetrics::register_observables(&meter, source);
+            register_store_observables(&meter, Arc::new(source));
         }
 
         #[cfg(not(feature = "otel-metrics"))]
