@@ -26,6 +26,8 @@ use axum::routing::get;
 use axum::routing::post;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::wait_for_signal_result;
+use rocketmq_sre_contracts::AgentReadRequest;
+use rocketmq_sre_contracts::AgentReadResult;
 use rocketmq_sre_contracts::CorrelationId;
 use rocketmq_sre_contracts::ExecutionId;
 use rocketmq_sre_contracts::ExecutionRequest;
@@ -89,6 +91,7 @@ pub fn build_router(
         .route("/healthz", get(health))
         .route("/readyz", get(ready))
         .route("/internal/v1/executor/status", get(status))
+        .route("/internal/v1/executor/preconditions", post(read_precondition))
         .route("/internal/v1/executor/executions", post(execute))
         .route("/internal/v1/executor/executions/{id}/recover", post(recover_execution))
         .with_state(AppState {
@@ -232,6 +235,15 @@ async fn execute(
 ) -> Result<Json<crate::ExecuteOutcome>, ExecutorError> {
     authorize(&state, &headers)?;
     state.executor.execute(&request).await.map(Json)
+}
+
+async fn read_precondition(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<AgentReadRequest>,
+) -> Result<Json<AgentReadResult>, ExecutorError> {
+    authorize(&state, &headers)?;
+    state.executor.read_precondition(&request).await.map(Json)
 }
 
 async fn recover_execution(
