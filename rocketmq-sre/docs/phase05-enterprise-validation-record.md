@@ -38,6 +38,33 @@ or full service configuration is included in the result.
 | Fleet release | Passed | Two regions and two targets; one readiness denial, out-of-order batch denial, canary regression, pause, and rollback |
 | Control Plane restore | Passed | PostgreSQL custom-format backup restored into an isolated database; all sampled counts matched; current Control Plane health and readiness succeeded |
 | RocketMQ test-cluster DR | Passed | 10 GiB PVC/PV retained across Broker Pod replacement; 10/10 historical messages recovered, RPO 0, RTO 13 seconds; pre/post synthetic probes both reached 10/10/10 |
+| Container supply chain | Passed locally | Runtime base plus Broker, NameServer, Controller, Proxy, and MCP produced CycloneDX SBOMs, zero Critical findings, verified Cosign blob bundles, and provenance |
+
+## Container supply-chain evidence
+
+The runtime foundation and all five service images were rebuilt and validated
+from source revision `da4acdd46862156ebe00c846d6868cfa0f594002`:
+
+```powershell
+.\scripts\container-supply-chain.ps1 `
+  -OutputDirectory target/container-foundation-phase00-final
+.\scripts\service-image-contract.ps1 `
+  -OutputDirectory target/service-images-phase00-final
+```
+
+The runtime-base evidence reports CycloneDX SBOM output, zero Critical
+vulnerabilities, a verified Cosign blob bundle, and
+`private_key_retained=false`. The service evidence contains the same checks for
+Broker, NameServer, Controller, Proxy, and MCP, plus non-root
+`10001:10001`, read-only root filesystems, bounded writable paths, and graceful
+SIGTERM shutdown. The generated private signing keys were deleted after each
+run.
+
+This was a local artifact and blob-signature verification. No registry digest
+was supplied, so `published_image_verified=false`; the result does not claim
+that a published production image digest or keyless CI identity has been
+verified. Generated evidence remained under the ignored `target/` tree on
+`D:`, while Docker layers remained on `F:`.
 
 ## Control Plane restore sample
 
