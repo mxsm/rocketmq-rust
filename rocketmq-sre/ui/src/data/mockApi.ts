@@ -52,6 +52,7 @@ import {
 import {
   emptyAutonomyReport,
   phase4AutonomyOutcomes,
+  phase4OperationsAnalytics,
   phase4AutonomyReports,
 } from "./phase4AutonomyDemo";
 import { createModelLifecycleMock } from "./modelLifecycleMock";
@@ -1134,6 +1135,26 @@ export function createMockSreApi(auth?: ApiRequestContext): SreApi {
       report.cluster_ids = report.cluster_ids.filter((clusterId) =>
         visibleClusterIds.includes(clusterId),
       );
+      return report;
+    },
+    getOperationsAnalytics: async (query, signal) => {
+      await wait(signal);
+      if (query.clusterId) {
+        scope(query.clusterId);
+      }
+      const visibleClusterIds = query.clusterId
+        ? [query.clusterId]
+        : (auth?.clusterIds ?? clusters.map((cluster) => cluster.id));
+      const report = clone(phase4OperationsAnalytics);
+      report.tenant_id = auth?.tenantId ?? DEMO_TENANT_ID;
+      report.filters = {
+        cluster_ids: visibleClusterIds,
+        scenario: query.scenario ?? null,
+        provider_family: query.providerFamily ?? null,
+        model_family: query.modelFamily ?? null,
+        action_id: query.actionId ?? null,
+      };
+      report.window.period = query.period;
       return report;
     },
     subscribeWorkflowEvents: async (onEvent, signal) => {
