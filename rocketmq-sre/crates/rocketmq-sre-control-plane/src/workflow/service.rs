@@ -16,6 +16,7 @@ use chrono::Utc;
 use rocketmq_sre_contracts::ConversationId;
 use rocketmq_sre_contracts::CorrelationId;
 use rocketmq_sre_contracts::DiagnosisRevision;
+use rocketmq_sre_contracts::DiagnosisRevisionId;
 use rocketmq_sre_contracts::EvidenceId;
 use rocketmq_sre_contracts::IncidentId;
 use rocketmq_sre_contracts::IncidentStatus;
@@ -28,8 +29,10 @@ use serde_json::Value;
 use serde_json::json;
 use tokio::sync::broadcast;
 
+use super::ConfirmDiagnosisExecutionRequest;
 use super::ConversationCreateRequest;
 use super::ConversationView;
+use super::DiagnosisExecutionConfirmation;
 use super::IncidentCreateRequest;
 use super::IncidentView;
 use super::InspectionCreateRequest;
@@ -216,6 +219,37 @@ impl WorkflowService {
 
     pub(crate) fn ensure_operator(&self, auth: &AuthContext) -> Result<(), ControlPlaneError> {
         authorize_operator(auth)
+    }
+
+    pub(crate) async fn confirm_diagnosis_for_execution(
+        &self,
+        auth: &AuthContext,
+        incident_id: IncidentId,
+        source_revision_id: DiagnosisRevisionId,
+        request: &ConfirmDiagnosisExecutionRequest,
+        correlation_id: CorrelationId,
+    ) -> Result<DiagnosisExecutionConfirmation, ControlPlaneError> {
+        authorize_operator(auth)?;
+        request.validate()?;
+        let confirmation = self
+            .repository
+            .confirm_diagnosis_for_execution(auth, incident_id, source_revision_id, request, correlation_id)
+            .await?;
+        self.events.publish(WorkflowStreamEvent {
+            tenant_id: auth.tenant_id,
+            cluster_id: confirmation.cluster_id,
+            aggregate_type: "incident",
+            aggregate_id: incident_id.to_string(),
+            event_type: "diagnosis_execution_confirmed",
+            payload: json!({
+                "source_revision_id": source_revision_id,
+                "confirmed_revision_id": confirmation.confirmed_revision_id,
+                "execution_eligible": true,
+            }),
+            correlation_id,
+            occurred_at: confirmation.confirmed_at,
+        });
+        Ok(confirmation)
     }
 
     pub(crate) async fn transition_incident(
