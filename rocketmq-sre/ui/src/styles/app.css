@@ -2458,6 +2458,158 @@ td small {
   border-right: 0;
 }
 
+.supervised-diagnosis-panel {
+  margin-bottom: 14px;
+  overflow: hidden;
+}
+
+.supervised-diagnosis-panel > .surface-heading {
+  background:
+    linear-gradient(90deg, rgb(59 130 246 / 7%), transparent 48%),
+    var(--card);
+}
+
+.supervised-diagnosis-steps {
+  display: grid;
+  grid-template-columns: 0.9fr 1.25fr 0.85fr;
+}
+
+.supervised-diagnosis-steps > article {
+  display: flex;
+  min-width: 0;
+  min-height: 310px;
+  flex-direction: column;
+  gap: 14px;
+  padding: 17px;
+  border-right: 1px solid var(--border);
+}
+
+.supervised-diagnosis-steps > article:last-child {
+  border-right: 0;
+}
+
+.supervised-diagnosis-steps > article > .button {
+  width: 100%;
+  margin-top: auto;
+}
+
+.supervised-diagnosis-steps > article > .button + .button {
+  margin-top: -6px;
+}
+
+.supervised-step-heading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+}
+
+.supervised-step-heading > span {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  color: var(--muted-foreground);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--background);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9px;
+}
+
+.supervised-step-heading > div {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.supervised-step-heading strong {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.supervised-step-heading small {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.supervised-step-heading > svg {
+  color: var(--muted-foreground);
+}
+
+.supervised-action-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(92px, 0.55fr) minmax(86px, 0.45fr);
+  gap: 9px;
+}
+
+.supervised-diagnosis-panel .input,
+.supervised-diagnosis-panel .select-trigger {
+  width: 100%;
+}
+
+.supervised-evidence-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+}
+
+.supervised-evidence-summary > div {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  padding: 9px 10px;
+  border-right: 1px solid var(--border);
+}
+
+.supervised-evidence-summary > div:last-child {
+  border-right: 0;
+}
+
+.supervised-evidence-summary dt {
+  color: var(--muted-foreground);
+  font-size: 9px;
+}
+
+.supervised-evidence-summary dd {
+  margin: 0;
+  overflow: hidden;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.supervised-plan-readiness {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--background);
+}
+
+.supervised-plan-readiness > span {
+  color: var(--muted-foreground);
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.supervised-diagnosis-panel > .inline-alert {
+  margin: 0;
+  border-right: 0;
+  border-bottom: 0;
+  border-left: 0;
+  border-radius: 0;
+}
+
 .phase1-definition-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
