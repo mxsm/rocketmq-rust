@@ -226,9 +226,13 @@ export interface LinkProps
 export const Link = forwardRef<HTMLAnchorElement, LinkProps>(
   function Link({ to, replace = false, onClick, target, ...props }, ref) {
     const { location, navigate } = useNavigationContext();
-    const href = resolveInternalHref(to, location);
+    const href = tryResolveInternalHref(to, location);
     const follow = (event: MouseEvent<HTMLAnchorElement>) => {
       onClick?.(event);
+      if (!href) {
+        event.preventDefault();
+        return;
+      }
       if (
         event.defaultPrevented ||
         event.button !== 0 ||
@@ -247,7 +251,8 @@ export const Link = forwardRef<HTMLAnchorElement, LinkProps>(
     return (
       <a
         {...props}
-        href={href}
+        aria-disabled={href ? props["aria-disabled"] : true}
+        href={href ?? "#"}
         onClick={follow}
         ref={ref}
         target={target}
@@ -276,10 +281,11 @@ export const NavLink = forwardRef<HTMLAnchorElement, NavLinkProps>(
     const location = useLocation();
     const target = pathnameFor(to, location);
     const isActive =
-      location.pathname === target ||
+      target !== undefined &&
+      (location.pathname === target ||
       (!end &&
         target !== "/" &&
-        location.pathname.startsWith(`${target}/`));
+        location.pathname.startsWith(`${target}/`)));
     const resolvedClassName =
       typeof className === "function"
         ? className({ isActive })
@@ -402,11 +408,28 @@ function locationFromUrl(url: URL): Location {
   };
 }
 
-function pathnameFor(target: To, location: Location): string {
-  const href = resolveInternalHref(target, location);
+function pathnameFor(
+  target: To,
+  location: Location,
+): string | undefined {
+  const href = tryResolveInternalHref(target, location);
+  if (!href) {
+    return undefined;
+  }
   return normalizePathname(
     new URL(href, "http://router.local").pathname,
   );
+}
+
+function tryResolveInternalHref(
+  target: To,
+  location: Location,
+): string | undefined {
+  try {
+    return resolveInternalHref(target, location);
+  } catch {
+    return undefined;
+  }
 }
 
 function resolveInternalHref(target: To, location: Location): string {
