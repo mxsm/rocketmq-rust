@@ -84,6 +84,30 @@ loopback-only on `8089` inside its Pod. The Phase 01 model
 fixture is a separate ClusterIP-only workload on `8094`. Its NetworkPolicy
 allows ingress only from the Control Plane and denies all egress.
 
+Broker, NameServer, Controller, and Proxy each expose the fixed
+`/internal/v1/runtime/diagnostics` contract on port `8087`. This listener is
+separate from `/livez` and `/readyz`, requires both the mounted bearer
+credential and the `rocketmq:diagnose` scope, returns only the bounded
+`RuntimeDiagnosticsViewV1`, and is reachable only from the Connector under the
+Kind NetworkPolicy. The Kind profile explicitly opts into non-loopback HTTP
+for this local network-isolated fixture. Production deployments must terminate
+TLS before the listener and production-verify credential rotation and
+multi-replica discovery.
+
+After `kind.ps1 Up`, validate the four protected endpoints and all six required
+Runtime metric families with:
+
+```powershell
+$env:ROCKETMQ_SRE_KIND_KUBECONFIG = `
+  (Resolve-Path .\target\phase00-kind\kubeconfig)
+.\rocketmq-sre\scripts\phase00-runtime-diagnostics-smoke.ps1
+```
+
+The smoke rejects artifact and kubeconfig locations outside D: or F:, never
+prints the bearer credential, and writes only a sanitized JSON report plus
+`kubectl port-forward` logs below
+`target/phase00-runtime-diagnostics-smoke`.
+
 The Executor and Agent run as separate Deployments with different
 ServiceAccounts. NetworkPolicy permits only Control Plane → Executor,
 Executor → Control Plane Lease Authority, and Executor → Agent. Executor has no
