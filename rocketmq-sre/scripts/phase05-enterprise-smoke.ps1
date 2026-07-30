@@ -48,19 +48,24 @@ function Invoke-Native {
     }
 }
 
-function Assert-NonSystemPath([string]$Path, [string]$Description) {
+function Assert-DataPath([string]$Path, [string]$Description) {
     $fullPath = [IO.Path]::GetFullPath($Path)
-    if ([IO.Path]::GetPathRoot($fullPath).Equals('C:\', [StringComparison]::OrdinalIgnoreCase)) {
-        throw "$Description must not use the C drive."
+    $root = [IO.Path]::GetPathRoot($fullPath)
+    if (
+        -not $root.Equals('D:\', [StringComparison]::OrdinalIgnoreCase) -and
+        -not $root.Equals('F:\', [StringComparison]::OrdinalIgnoreCase)
+    ) {
+        throw "$Description must use the D or F drive."
     }
 }
 
 function Invoke-SpaceGuard {
-    $dFreeGiB = (Get-PSDrive -Name D).Free / 1GB
-    $gFreeGiB = (Get-PSDrive -Name G).Free / 1GB
-    Write-Host "D_FREE_GIB=$([Math]::Round($dFreeGiB, 2))"
-    Write-Host "G_FREE_GIB=$([Math]::Round($gFreeGiB, 2))"
-    if ($dFreeGiB -lt 15 -or $gFreeGiB -lt 15) {
+    $targetDriveName = [IO.Path]::GetPathRoot(
+        [IO.Path]::GetFullPath($CargoTargetDir)
+    ).TrimEnd('\').TrimEnd(':')
+    $targetFreeGiB = (Get-PSDrive -Name $targetDriveName).Free / 1GB
+    Write-Host "${targetDriveName}_FREE_GIB=$([Math]::Round($targetFreeGiB, 2))"
+    if ($targetFreeGiB -lt 15) {
         Invoke-Native cargo @(
             'clean',
             '--manifest-path', $manifestPath,
@@ -98,7 +103,7 @@ foreach ($path in @(
     @{ Value = $TemporaryRoot; Description = 'temporary directory' },
     @{ Value = $EvidenceOutput; Description = 'enterprise evidence output' }
 )) {
-    Assert-NonSystemPath $path.Value $path.Description
+    Assert-DataPath $path.Value $path.Description
 }
 
 $savedEnvironment = @{}
@@ -165,6 +170,12 @@ try {
 
     $restore = Get-Content -Raw -LiteralPath $restoreEvidence | ConvertFrom-Json
     $dr = Get-Content -Raw -LiteralPath $drEvidence | ConvertFrom-Json
+    if (
+        -not [bool]$dr.message_history_restore_claimed -or
+        [int]$dr.message_history.rpo_messages -ne 0
+    ) {
+        throw 'The enterprise smoke requires verified Broker message-history RPO=0.'
+    }
     $evidence = [ordered]@{
         schema_version = 'rocketmq-sre.phase05-enterprise-smoke.v1'
         status = 'passed'
@@ -192,7 +203,7 @@ try {
         }
         control_plane_restore = $restore
         test_cluster_dr = $dr
-        message_history_restore_claimed = $false
+        message_history_restore_claimed = [bool]$dr.message_history_restore_claimed
         secrets_recorded = $false
     }
     $evidenceDirectory = Split-Path -Parent ([IO.Path]::GetFullPath($EvidenceOutput))
