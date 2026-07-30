@@ -240,6 +240,60 @@ function Invoke-Api(
     }
 }
 
+function Ensure-CertifiedLocalModelProfile {
+    $page = Invoke-Api `
+        Get `
+        '/v1/models/profiles/lifecycle' `
+        $null `
+        $operatorSubject
+    $profile = @(
+        $page.items |
+            Where-Object { $_.profile_name -eq 'local-openai-compatible' }
+    ) | Select-Object -First 1
+    if ($null -eq $profile) {
+        throw 'The local OpenAI-compatible model fixture is not registered.'
+    }
+    if ($profile.state -eq 'retired') {
+        throw 'The local OpenAI-compatible model fixture is retired.'
+    }
+
+    $smoke = Invoke-Api `
+        Post `
+        "/v1/models/profiles/$($profile.profile_id)/smoke" `
+        $null `
+        $operatorSubject
+    Assert-True (
+        $smoke.profile_id -eq $profile.profile_id -and
+        $smoke.overall_ok -eq $true -and
+        $smoke.connectivity_ok -eq $true -and
+        $smoke.structured_output_ok -eq $true -and
+        $smoke.evidence_citation_ok -eq $true
+    ) 'The bounded local model provider smoke did not pass.'
+
+    $profile = Invoke-Api `
+        Get `
+        "/v1/models/profiles/$($profile.profile_id)/lifecycle" `
+        $null `
+        $operatorSubject
+    if (@('draft', 'quarantined') -contains $profile.state) {
+        $profile = Invoke-Api `
+            Post `
+            "/v1/models/profiles/$($profile.profile_id)/lifecycle" `
+            @{
+                target_state = 'certified'
+                expected_revision = [long]$profile.revision
+                rollback_profile_id = $null
+                reason_code = 'phase05.complete_loop.certified'
+                operator_confirmed = $true
+            } `
+            $operatorSubject
+    }
+    Assert-True (
+        @('certified', 'promoted') -contains $profile.state
+    ) 'The local model profile is not routable after certification.'
+    return $profile
+}
+
 function Wait-Execution([string]$ExecutionId) {
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds(
         $ExecutionTimeoutSeconds
@@ -368,6 +422,7 @@ try {
         -PassThru
     Wait-PortForward $portForward $portForwardError
 
+    $null = Ensure-CertifiedLocalModelProfile
     $occurredAt = [DateTimeOffset]::UtcNow.ToString('o')
     $eventEntry = Invoke-Api Post '/v1/event-entries' @{
         schema_version = 'rocketmq-sre.event-entry.v1'
