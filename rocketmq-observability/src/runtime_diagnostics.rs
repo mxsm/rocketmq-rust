@@ -503,10 +503,8 @@ impl<'a> ParsedRequest<'a> {
                 if bearer_token.is_none() {
                     return Err(());
                 }
-            } else if name.eq_ignore_ascii_case("x-rocketmq-sre-scope") {
-                if scope.replace(value).is_some() {
-                    return Err(());
-                }
+            } else if name.eq_ignore_ascii_case("x-rocketmq-sre-scope") && scope.replace(value).is_some() {
+                return Err(());
             }
         }
         Ok(Self {
