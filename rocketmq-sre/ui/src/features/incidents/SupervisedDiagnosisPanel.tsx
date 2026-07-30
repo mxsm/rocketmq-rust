@@ -73,7 +73,9 @@ export function SupervisedDiagnosisPanel({
   const [reason, setReason] = useState(
     "已人工核对模型诊断、Evidence 引用与影响范围",
   );
-  const [resource, setResource] = useState(incident.resource ?? "");
+  const [resource, setResource] = useState(
+    isBrokerResource(incident.resource) ? incident.resource : "",
+  );
   const [logger, setLogger] = useState("rocketmq_broker::processor");
   const [level, setLevel] = useState<ActionParameters["level"]>("DEBUG");
   const [ttlSeconds, setTtlSeconds] = useState(60);
@@ -385,4 +387,12 @@ function shortId(value: string) {
   return value.length > 24
     ? `${value.slice(0, 12)}…${value.slice(-8)}`
     : value;
+}
+
+function isBrokerResource(resource: string | undefined): resource is string {
+  return Boolean(
+    resource &&
+      (resource.startsWith("broker/") ||
+        resource.startsWith("broker:")),
+  );
 }
