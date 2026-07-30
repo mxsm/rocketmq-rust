@@ -32,12 +32,17 @@ export function ApprovalPanel({
   onExecute: (preconditionHash: string) => Promise<void>;
   onCriticReview: () => Promise<void>;
 }) {
-  const firstPrecondition = view.plan.steps[0]?.precondition_hash ?? "";
+  const aggregatePrecondition = view.precondition_hash;
   const [reason, setReason] = useState("");
-  const [preconditionHash, setPreconditionHash] = useState(firstPrecondition);
+  const [preconditionHash, setPreconditionHash] = useState(
+    aggregatePrecondition,
+  );
   const [validitySeconds, setValiditySeconds] = useState("900");
 
-  useEffect(() => setPreconditionHash(firstPrecondition), [firstPrecondition]);
+  useEffect(
+    () => setPreconditionHash(aggregatePrecondition),
+    [aggregatePrecondition],
+  );
 
   const expired = new Date(view.plan.expires_at).getTime() <= Date.now();
   const criticReady =
