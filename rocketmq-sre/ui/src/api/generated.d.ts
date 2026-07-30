@@ -2671,6 +2671,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/incidents/{incident_id}/execution-preconditions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Capture a current read-only Execution Agent precondition as incident-linked Evidence */
+        post: operations["prepareExecutionPreconditionEvidenceV1"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -4592,7 +4609,7 @@ export interface components {
          *     Exposure is transport metadata rather than source content, so it does not
          *     participate in the canonical content hash.
          */
-        EvidenceSnapshot__EvidenceExposure: ("mcp_tool" | "mcp_resource" | "admin_rpc" | "prometheus_api" | "alertmanager_api" | "loki_api" | "tempo_api" | "kubernetes_api" | "runtime_diagnostics" | "synthetic" | "unsupported") | "unknown";
+        EvidenceSnapshot__EvidenceExposure: ("mcp_tool" | "mcp_resource" | "admin_rpc" | "prometheus_api" | "alertmanager_api" | "loki_api" | "tempo_api" | "kubernetes_api" | "runtime_diagnostics" | "execution_agent_api" | "synthetic" | "unsupported") | "unknown";
         /**
          * Format: uuid
          * @description Stable identifier for an evidence snapshot.
@@ -7345,6 +7362,26 @@ export interface components {
             correlation_id: string;
             /** Format: date-time */
             confirmed_at: string;
+        };
+        PrepareExecutionPreconditionRequest: {
+            /** Format: uuid */
+            cluster_id: string;
+            /** Format: uuid */
+            diagnosis_revision_id: string;
+            action_id: string;
+            descriptor_version: string;
+            resource: string;
+            parameters: Record<string, never>;
+        };
+        ExecutionPreconditionEvidenceView: {
+            /** @constant */
+            schema_version: "rocketmq-sre.execution-precondition-evidence.v1";
+            /** Format: uuid */
+            incident_id: string;
+            /** Format: uuid */
+            diagnosis_revision_id: string;
+            evidence: components["schemas"]["EvidenceSnapshot"];
+            precondition_hash: string;
         };
     };
     responses: {
@@ -17341,6 +17378,86 @@ export interface operations {
                 };
             };
             /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    prepareExecutionPreconditionEvidenceV1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                incident_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PrepareExecutionPreconditionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecutionPreconditionEvidenceView"];
+                };
+            };
+            /** @description Stable sanitized error */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Stable sanitized error */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Stable sanitized error */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Stable sanitized error */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Stable sanitized error */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Stable sanitized error */
             503: {
                 headers: {
                     [name: string]: unknown;
