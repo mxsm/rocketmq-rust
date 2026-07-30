@@ -1,0 +1,159 @@
+# Copyright 2026 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0.
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: rocketmq-sre-phase03-wave-admin-bootstrap
+  namespace: rocketmq-system
+  labels:
+    app.kubernetes.io/name: rocketmq-sre-phase03-wave-admin-bootstrap
+    app.kubernetes.io/part-of: rocketmq-sre
+    rocketmq.apache.org/sre-bootstrap: "true"
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 600
+  activeDeadlineSeconds: 180
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rocketmq-sre-phase03-wave-admin-bootstrap
+        app.kubernetes.io/part-of: rocketmq-sre
+        rocketmq.apache.org/sre-bootstrap: "true"
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: create-wave-topic
+          image: rocketmq-rust/fault-driver:local
+          imagePullPolicy: Never
+          args:
+            - topic
+            - updateTopic
+            - --yes
+            - -n
+            - rocketmq-namesrv:9876
+            - -b
+            - rocketmq-broker:10911
+            - -t
+            - SRE_PHASE03_WAVE_TOPIC
+            - -r
+            - "4"
+            - -w
+            - "4"
+            - -p
+            - "6"
+          env:
+            - name: ROCKETMQ_ACL_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-sre-kind-secrets
+                  key: bootstrap-access-key
+            - name: ROCKETMQ_ACL_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-sre-kind-secrets
+                  key: bootstrap-secret-key
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 200m, memory: 128Mi}
+        - name: create-wave-subscription-group
+          image: rocketmq-rust/fault-driver:local
+          imagePullPolicy: Never
+          args:
+            - consumer
+            - updateSubGroup
+            - -b
+            - rocketmq-broker:10911
+            - -g
+            - SRE_PHASE03_WAVE_GROUP
+            - -r
+            - "16"
+            - -q
+            - "1"
+            - -s
+            - "true"
+            - -m
+            - "true"
+            - -d
+            - "false"
+            - -o
+            - "false"
+            - -i
+            - "0"
+            - -w
+            - "1"
+            - -a
+            - "true"
+          env:
+            - name: ROCKETMQ_ACL_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-sre-kind-secrets
+                  key: bootstrap-access-key
+            - name: ROCKETMQ_ACL_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-sre-kind-secrets
+                  key: bootstrap-secret-key
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 200m, memory: 128Mi}
+      containers:
+        - name: create-wave-retry-topic
+          image: rocketmq-rust/fault-driver:local
+          imagePullPolicy: Never
+          args:
+            - topic
+            - updateTopic
+            - --yes
+            - -n
+            - rocketmq-namesrv:9876
+            - -b
+            - rocketmq-broker:10911
+            - -t
+            - "%RETRY%SRE_PHASE03_WAVE_GROUP"
+            - -r
+            - "1"
+            - -w
+            - "1"
+            - -p
+            - "6"
+          env:
+            - name: ROCKETMQ_ACL_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-sre-kind-secrets
+                  key: bootstrap-access-key
+            - name: ROCKETMQ_ACL_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-sre-kind-secrets
+                  key: bootstrap-secret-key
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 200m, memory: 128Mi}
