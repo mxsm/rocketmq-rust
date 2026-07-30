@@ -118,6 +118,7 @@ async fn real_kind_supervised_credential_overlap_passes_critic_and_verification(
     fixture.agent_evidence_id = persist_agent_evidence(&repository, &fixture, &target, &refreshed).await;
 
     let critic_profile = critic_profile();
+    let critic_profile_id = critic_profile.id.clone();
     let critic_family = critic_profile.model_family.clone();
     let model_gateway = ModelGatewayService::for_tests(
         repository.clone(),
@@ -126,6 +127,16 @@ async fn real_kind_supervised_credential_overlap_passes_critic_and_verification(
             fixture.agent_evidence_id,
         ))])),
     );
+    let governance = auth(
+        tenant_id,
+        cluster_id,
+        "phase3-credential-model-governance",
+        &["model-governance"],
+    );
+    model_gateway
+        .certify_profile_for_tests(&governance, &critic_profile_id, CorrelationId::new())
+        .await
+        .expect("credential Critic profile certification fixture");
     let workflow = WorkflowService::new(repository.clone(), WorkflowEventBus::new(64));
     let executor = ExecutorSubmissionClient::http(
         executor_url.parse::<Url>().expect("Executor URL"),
