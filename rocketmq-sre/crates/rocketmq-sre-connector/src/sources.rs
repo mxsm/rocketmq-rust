@@ -54,6 +54,7 @@ use rocketmq_sre_contracts::EvidenceQuery;
 use rocketmq_sre_contracts::EvidenceSnapshot;
 use rocketmq_sre_contracts::current_evidence_schema;
 use serde::Serialize;
+use serde_json::Value;
 use sha2::Digest;
 use sha2::Sha256;
 use tokio::sync::Mutex;
@@ -84,6 +85,8 @@ use crate::EvidenceOperation;
 use crate::mcp::McpGateway;
 
 const CACHE_MAX_ENTRIES: usize = 1024;
+const CONSUMER_LAG_HISTORY_MIN_INTERVAL: Duration = Duration::from_secs(1);
+const CONSUMER_LAG_HISTORY_MAX_INTERVAL: Duration = Duration::from_secs(300);
 const SOURCE_IDS: [&str; 10] = [
     "rocketmq-mcp",
     "admin-query",
@@ -101,6 +104,13 @@ const SOURCE_IDS: [&str; 10] = [
 struct CacheEntry {
     expires_at: Instant,
     output: SourceOutput,
+}
+
+#[derive(Clone, Debug)]
+struct ConsumerLagSample {
+    observed_at: Instant,
+    total_lag: f64,
+    consume_rate_per_sec: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -160,6 +170,7 @@ pub(crate) struct SourceManager<G> {
     kubernetes: KubernetesSource,
     admission: QueryAdmission,
     cache: Mutex<BTreeMap<String, CacheEntry>>,
+    consumer_lag_history: Mutex<BTreeMap<String, ConsumerLagSample>>,
     state: Mutex<BTreeMap<&'static str, SourceRuntimeState>>,
 }
 
@@ -222,6 +233,7 @@ where
             tempo,
             kubernetes,
             cache: Mutex::new(BTreeMap::new()),
+            consumer_lag_history: Mutex::new(BTreeMap::new()),
             state: Mutex::new(state),
             config,
         })
@@ -456,7 +468,8 @@ where
                 "canonical read-only evidence query stage failed"
             );
         })?;
-        projection::apply(output, projection).inspect_err(|error| {
+        let source_was_partial = output.partial;
+        let mut projected = projection::apply(output, projection).inspect_err(|error| {
             tracing::warn!(
                 source,
                 projection = ?projection,
@@ -465,7 +478,41 @@ where
                 retryable = error.retryable,
                 "canonical read-only evidence query stage failed"
             );
-        })
+        })?;
+        if projection == canonical::CanonicalProjection::ConsumerLag {
+            self.enrich_consumer_lag_rates(external_cluster, &query.resource, &mut projected, source_was_partial)
+                .await?;
+        }
+        Ok(projected)
+    }
+
+    async fn enrich_consumer_lag_rates(
+        &self,
+        external_cluster: &str,
+        resource: &str,
+        output: &mut SourceOutput,
+        source_was_partial: bool,
+    ) -> Result<(), ConnectorError> {
+        let observed_at = Instant::now();
+        let sample = consumer_lag_sample(&output.content, observed_at)?;
+        let key = format!("{external_cluster}\u{0}{resource}");
+        let previous = {
+            let mut history = self.consumer_lag_history.lock().await;
+            let previous = history.insert(key, sample.clone());
+            if history.len() > CACHE_MAX_ENTRIES
+                && let Some(oldest) = history
+                    .iter()
+                    .min_by_key(|(_, sample)| sample.observed_at)
+                    .map(|(key, _)| key.clone())
+            {
+                history.remove(&oldest);
+            }
+            previous
+        };
+        if let Some(previous) = previous {
+            augment_consumer_lag_rates(output, &previous, &sample, source_was_partial);
+        }
+        Ok(())
     }
 
     #[allow(
@@ -721,6 +768,80 @@ where
     }
 }
 
+fn consumer_lag_sample(content: &Value, observed_at: Instant) -> Result<ConsumerLagSample, ConnectorError> {
+    let content = content.as_object().ok_or_else(consumer_lag_history_schema_mismatch)?;
+    let total_lag = content
+        .get("total_lag")
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .ok_or_else(consumer_lag_history_schema_mismatch)?;
+    let consume_rate_per_sec = content
+        .get("consume_rate_per_sec")
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .ok_or_else(consumer_lag_history_schema_mismatch)?;
+    Ok(ConsumerLagSample {
+        observed_at,
+        total_lag,
+        consume_rate_per_sec,
+    })
+}
+
+fn consumer_lag_history_schema_mismatch() -> ConnectorError {
+    ConnectorError::capability(
+        ConnectorErrorCode::CapabilityMismatch,
+        "consumer lag projection cannot supply a bounded rate-history sample",
+    )
+}
+
+fn augment_consumer_lag_rates(
+    output: &mut SourceOutput,
+    previous: &ConsumerLagSample,
+    current: &ConsumerLagSample,
+    source_was_partial: bool,
+) {
+    let Some(elapsed) = current.observed_at.checked_duration_since(previous.observed_at) else {
+        return;
+    };
+    if !(CONSUMER_LAG_HISTORY_MIN_INTERVAL..=CONSUMER_LAG_HISTORY_MAX_INTERVAL).contains(&elapsed) {
+        return;
+    }
+    let elapsed_seconds = elapsed.as_secs_f64();
+    let lag_delta_per_sec = (current.total_lag - previous.total_lag) / elapsed_seconds;
+    let lag_slope_per_min = lag_delta_per_sec * 60.0;
+    let estimated_produce_rate = current.consume_rate_per_sec + lag_delta_per_sec;
+    if !lag_slope_per_min.is_finite() || !estimated_produce_rate.is_finite() || estimated_produce_rate < -0.001 {
+        output
+            .warnings
+            .push("consumer_lag_rate_history_inconsistent".to_owned());
+        return;
+    }
+    let Some(content) = output.content.as_object_mut() else {
+        return;
+    };
+    content.insert("lag_slope_per_min".to_owned(), Value::from(lag_slope_per_min));
+    content.insert(
+        "produce_rate_per_sec".to_owned(),
+        Value::from(estimated_produce_rate.max(0.0)),
+    );
+    output
+        .warnings
+        .retain(|warning| warning != "consumer_lag_rate_history_unavailable");
+    let required_fields_available = [
+        "total_lag",
+        "lag_slope_per_min",
+        "queue_skew_ratio",
+        "consume_rate_per_sec",
+        "produce_rate_per_sec",
+    ]
+    .iter()
+    .all(|field| content.get(*field).is_some_and(Value::is_number));
+    if !source_was_partial && output.warnings.is_empty() && required_fields_available {
+        output.partial = false;
+        output.coverage = CoverageStatus::Available;
+    }
+}
+
 fn runtime_failure_status(existing: &SourceRuntimeState) -> ConnectorSourceStatus {
     match existing.status {
         // A configured or previously healthy source remains dispatchable while
@@ -907,6 +1028,7 @@ mod tests {
     use rocketmq_sre_contracts::QueryId;
     use rocketmq_sre_contracts::TenantId;
     use rocketmq_sre_contracts::TimeRange;
+    use serde_json::json;
     use url::Url;
 
     use super::*;
@@ -932,6 +1054,74 @@ mod tests {
             runtime_failure_status(&previously_healthy),
             ConnectorSourceStatus::Degraded
         );
+    }
+
+    #[test]
+    fn consumer_lag_history_supplies_measured_rates_without_neutral_defaults() {
+        let observed_at = Instant::now();
+        let previous = ConsumerLagSample {
+            observed_at,
+            total_lag: 10.0,
+            consume_rate_per_sec: 1.0,
+        };
+        let current = ConsumerLagSample {
+            observed_at: observed_at + Duration::from_secs(2),
+            total_lag: 14.0,
+            consume_rate_per_sec: 1.0,
+        };
+        let mut output = SourceOutput::available(
+            json!({
+                "total_lag": 14,
+                "queue_skew_ratio": 1.0,
+                "consume_rate_per_sec": 1.0
+            }),
+            Utc::now(),
+        );
+        output.partial = true;
+        output.coverage = CoverageStatus::Partial;
+        output.warnings = vec!["consumer_lag_rate_history_unavailable".to_owned()];
+
+        augment_consumer_lag_rates(&mut output, &previous, &current, false);
+
+        assert_eq!(output.content["lag_slope_per_min"], 120.0);
+        assert_eq!(output.content["produce_rate_per_sec"], 3.0);
+        assert!(!output.partial);
+        assert_eq!(output.coverage, CoverageStatus::Available);
+        assert!(output.warnings.is_empty());
+    }
+
+    #[test]
+    fn consumer_lag_history_keeps_single_or_too_recent_samples_partial() {
+        let observed_at = Instant::now();
+        let previous = ConsumerLagSample {
+            observed_at,
+            total_lag: 10.0,
+            consume_rate_per_sec: 0.0,
+        };
+        let current = ConsumerLagSample {
+            observed_at: observed_at + Duration::from_millis(500),
+            total_lag: 10.0,
+            consume_rate_per_sec: 0.0,
+        };
+        let mut output = SourceOutput::available(
+            json!({
+                "total_lag": 10,
+                "queue_skew_ratio": 1.0,
+                "consume_rate_per_sec": 0.0
+            }),
+            Utc::now(),
+        );
+        output.partial = true;
+        output.coverage = CoverageStatus::Partial;
+        output.warnings = vec!["consumer_lag_rate_history_unavailable".to_owned()];
+
+        augment_consumer_lag_rates(&mut output, &previous, &current, false);
+
+        assert!(output.content.get("lag_slope_per_min").is_none());
+        assert!(output.content.get("produce_rate_per_sec").is_none());
+        assert!(output.partial);
+        assert_eq!(output.coverage, CoverageStatus::Partial);
+        assert_eq!(output.warnings, ["consumer_lag_rate_history_unavailable"]);
     }
 
     struct NoQueryGateway;
