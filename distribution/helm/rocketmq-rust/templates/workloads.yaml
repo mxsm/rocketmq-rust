@@ -45,7 +45,7 @@ spec:
           args: ["--configFile", "/etc/rocketmq/broker.toml"]
           env:
 {{ include "rocketmq.lifecycleEnv" . | indent 12 }}
-{{ include "rocketmq.telemetryEnv" . | indent 12 }}
+{{ include "rocketmq.runtimeDiagnosticsEnv" . | indent 12 }}
             - name: POD_NAME
               valueFrom:
                 fieldRef:
@@ -56,8 +56,8 @@ spec:
             - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
           ports:
             - {name: health, containerPort: 8088, protocol: TCP}
-{{- if .Values.metrics.enabled }}
-            - {name: metrics, containerPort: {{ .Values.metrics.port }}, protocol: TCP}
+{{- if .Values.global.runtimeDiagnostics.enabled }}
+            - {name: runtime-diag, containerPort: {{ .Values.global.runtimeDiagnostics.port }}, protocol: TCP}
 {{- end }}
             - {name: remoting, containerPort: 10911, protocol: TCP}
             - {name: ha, containerPort: 10912, protocol: TCP}
@@ -164,15 +164,15 @@ spec:
           args: ["--configFile", "/etc/rocketmq/namesrv.toml"]
           env:
 {{ include "rocketmq.lifecycleEnv" . | indent 12 }}
-{{ include "rocketmq.telemetryEnv" . | indent 12 }}
+{{ include "rocketmq.runtimeDiagnosticsEnv" . | indent 12 }}
             - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/namesrv}
             - {name: OTEL_SERVICE_NAME, value: rocketmq-namesrv}
             - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: {{ .Values.global.otelEndpoint | quote }}}
             - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
           ports:
             - {name: health, containerPort: 8088, protocol: TCP}
-{{- if .Values.metrics.enabled }}
-            - {name: metrics, containerPort: {{ .Values.metrics.port }}, protocol: TCP}
+{{- if .Values.global.runtimeDiagnostics.enabled }}
+            - {name: runtime-diag, containerPort: {{ .Values.global.runtimeDiagnostics.port }}, protocol: TCP}
 {{- end }}
             - {name: remoting, containerPort: 9876, protocol: TCP}
 {{ include "rocketmq.lifecycleProbes" . | indent 10 }}
@@ -261,7 +261,7 @@ spec:
           args: ["--config-file", "/etc/rocketmq/controller.toml"]
           env:
 {{ include "rocketmq.lifecycleEnv" . | indent 12 }}
-{{ include "rocketmq.telemetryEnv" . | indent 12 }}
+{{ include "rocketmq.runtimeDiagnosticsEnv" . | indent 12 }}
             - name: POD_NAME
               valueFrom:
                 fieldRef:
@@ -274,8 +274,8 @@ spec:
             - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
           ports:
             - {name: health, containerPort: 8088, protocol: TCP}
-{{- if .Values.metrics.enabled }}
-            - {name: metrics, containerPort: {{ .Values.metrics.port }}, protocol: TCP}
+{{- if .Values.global.runtimeDiagnostics.enabled }}
+            - {name: runtime-diag, containerPort: {{ .Values.global.runtimeDiagnostics.port }}, protocol: TCP}
 {{- end }}
             - {name: remoting, containerPort: 60109, protocol: TCP}
             - {name: raft, containerPort: 60110, protocol: TCP}
@@ -382,15 +382,15 @@ spec:
           args: ["--config", "/etc/rocketmq/proxy.toml"]
           env:
 {{ include "rocketmq.lifecycleEnv" . | indent 12 }}
-{{ include "rocketmq.telemetryEnv" . | indent 12 }}
+{{ include "rocketmq.runtimeDiagnosticsEnv" . | indent 12 }}
             - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/proxy}
             - {name: OTEL_SERVICE_NAME, value: rocketmq-proxy}
             - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: {{ .Values.global.otelEndpoint | quote }}}
             - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
           ports:
             - {name: health, containerPort: 8088, protocol: TCP}
-{{- if .Values.metrics.enabled }}
-            - {name: metrics, containerPort: {{ .Values.metrics.port }}, protocol: TCP}
+{{- if .Values.global.runtimeDiagnostics.enabled }}
+            - {name: runtime-diag, containerPort: {{ .Values.global.runtimeDiagnostics.port }}, protocol: TCP}
 {{- end }}
             - {name: remoting, containerPort: 8080, protocol: TCP}
             - {name: grpc, containerPort: 8081, protocol: TCP}
