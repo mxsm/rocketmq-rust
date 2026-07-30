@@ -23,7 +23,9 @@ use axum::routing::get;
 use axum::routing::post;
 use rocketmq_sre_contracts::ActionPlanId;
 use rocketmq_sre_contracts::CorrelationId;
+use rocketmq_sre_contracts::DiagnosisRevisionId;
 use rocketmq_sre_contracts::ExecutionId;
+use rocketmq_sre_contracts::IncidentId;
 use rocketmq_sre_contracts::ResourceQuarantine;
 use rocketmq_sre_contracts::ResourceQuarantineId;
 
@@ -43,9 +45,15 @@ use super::model::SubmitExecutionRequest;
 use crate::ControlPlaneError;
 use crate::api::AppState;
 use crate::observability::CORRELATION_ID_HEADER;
+use crate::workflow::ConfirmDiagnosisExecutionRequest;
+use crate::workflow::DiagnosisExecutionConfirmation;
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
+        .route(
+            "/v1/incidents/{incident_id}/diagnosis-revisions/{revision_id}/confirm-execution",
+            post(confirm_diagnosis_for_execution).layer(DefaultBodyLimit::max(32 * 1024)),
+        )
         .route("/v1/plans", post(create_plan).layer(DefaultBodyLimit::max(256 * 1024)))
         .route("/v1/plans/{id}", get(get_plan))
         .route(
@@ -71,6 +79,26 @@ pub(crate) fn routes() -> Router<AppState> {
             "/v1/resource-quarantines/{id}/clear",
             post(clear_quarantine).layer(DefaultBodyLimit::max(32 * 1024)),
         )
+}
+
+async fn confirm_diagnosis_for_execution(
+    State(state): State<AppState>,
+    Path((incident_id, revision_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(request): Json<ConfirmDiagnosisExecutionRequest>,
+) -> Result<Json<DiagnosisExecutionConfirmation>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, None).await?;
+    state
+        .workflow
+        .confirm_diagnosis_for_execution(
+            &auth,
+            parse_incident_id(&incident_id)?,
+            parse_diagnosis_revision_id(&revision_id)?,
+            &request,
+            correlation_id(&headers),
+        )
+        .await
+        .map(Json)
 }
 
 async fn create_plan(
@@ -207,6 +235,18 @@ fn parse_plan_id(value: &str) -> Result<ActionPlanId, ControlPlaneError> {
     value
         .parse()
         .map_err(|_| ControlPlaneError::validation("invalid_request", "plan identifier must be a UUID"))
+}
+
+fn parse_incident_id(value: &str) -> Result<IncidentId, ControlPlaneError> {
+    value
+        .parse()
+        .map_err(|_| ControlPlaneError::validation("invalid_request", "incident identifier must be a UUID"))
+}
+
+fn parse_diagnosis_revision_id(value: &str) -> Result<DiagnosisRevisionId, ControlPlaneError> {
+    value
+        .parse()
+        .map_err(|_| ControlPlaneError::validation("invalid_request", "diagnosis revision identifier must be a UUID"))
 }
 
 fn parse_execution_id(value: &str) -> Result<ExecutionId, ControlPlaneError> {
