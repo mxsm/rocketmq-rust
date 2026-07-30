@@ -101,8 +101,6 @@ pub use crate::admin::DefaultMQAdminExt;
 pub use crate::admin::DefaultMQAdminExtImpl;
 #[cfg(feature = "admin-full")]
 pub use crate::admin::MQAdminExt;
-pub use crate::admin::MQAdminExtInner;
-pub use crate::admin::MQAdminExtInnerImpl;
 #[cfg(feature = "admin-mutation")]
 pub use crate::admin::MQAdminMutationExt;
 #[cfg(feature = "admin-read")]
