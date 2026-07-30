@@ -123,7 +123,7 @@ Assert-Contains $kindExecutionStack 'name:\s+sre-execution-agent\s*\r?\n\s+names
 Assert-Contains $kindExecutionStack 'serviceAccountName:\s+sre-executor' 'Kind dedicated Executor ServiceAccount'
 Assert-Contains $kindExecutionStack 'serviceAccountName:\s+sre-execution-agent' 'Kind dedicated Agent ServiceAccount'
 Assert-Contains $kindExecutionStack 'ROCKETMQ_SRE_AGENT_ENABLE_BROKER_CONFIG,\s+value:\s+"true"' 'Kind explicit Broker driver enablement'
-Assert-Contains $kindExecutionStack 'ROCKETMQ_SRE_AGENT_NAMESRV_ADDR,\s+value:\s+"rocketmq-namesrv:9876"' 'Kind Agent Broker target'
+Assert-Contains $kindExecutionStack 'ROCKETMQ_SRE_AGENT_NAMESRV_ADDR,\s+value:\s+"rocketmq-namesrv\.rocketmq-system\.svc\.cluster\.local:9876"' 'Kind Agent Broker target'
 Assert-Contains $kindExecutionStack 'key:\s+agent-read-access-key' 'Kind Agent read identity'
 Assert-Contains $kindExecutionStack 'key:\s+agent-mutation-access-key' 'Kind Agent mutation identity'
 Assert-Contains $kindExecutionRbac 'name:\s+sre-execution-agent\s*\r?\n\s+namespace:\s+rocketmq-sre' 'Kind Agent-only mutation role binding'
