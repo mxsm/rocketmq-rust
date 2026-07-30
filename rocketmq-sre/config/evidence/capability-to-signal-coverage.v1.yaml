@@ -104,13 +104,17 @@ semantic_registry_owners:
         exposure: metrics_observable_local
   - owner: runtime
     component_surface: Runtime
-    exposure: mcp_system_resource_only
-    backlog: add authenticated component adapters for Broker NameServer Controller and Proxy
+    exposure: protected_component_endpoints
+    backlog: production-verify TLS termination, token rotation, and multi-replica endpoint discovery
     notable_sources:
       - name: RuntimeDiagnosticsViewV1
         source_path: rocketmq-runtime/src/diagnostics.rs
         source_symbol: RuntimeDiagnosticsViewV1
-        exposure: mcp_system_resource_only
+        exposure: queryable
+      - name: protected_runtime_diagnostics
+        source_path: rocketmq-observability/src/runtime_diagnostics.rs
+        source_symbol: start_runtime_diagnostics_endpoint_from_env
+        exposure: queryable
   - owner: security
     component_surface: Auth
     exposure: in_process_only
