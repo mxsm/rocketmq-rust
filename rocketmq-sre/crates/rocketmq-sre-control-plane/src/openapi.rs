@@ -126,6 +126,7 @@ mod tests {
         "/v1/incidents",
         "/v1/incidents/{id}",
         "/v1/incidents/{id}/diagnose",
+        "/v1/incidents/{incident_id}/diagnosis-revisions/{revision_id}/confirm-execution",
         "/v1/incidents/{id}/notes",
         "/v1/incidents/{id}/operations",
         "/v1/incidents/{id}/postmortems",
@@ -352,6 +353,8 @@ mod tests {
             "AuditEvent",
             "ResourceQuarantine",
             "CreatePlanRequest",
+            "ConfirmDiagnosisExecutionRequest",
+            "DiagnosisExecutionConfirmation",
             "ApprovalDecisionRequest",
             "CriticReview",
             "CriticReviewRequest",
@@ -398,9 +401,21 @@ mod tests {
             assert!(schemas.contains_key(required), "missing Phase 3 schema {required}");
         }
         assert_eq!(
+            document["paths"]["/v1/incidents/{incident_id}/diagnosis-revisions/{revision_id}/confirm-execution"]["post"]
+                ["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/ConfirmDiagnosisExecutionRequest"
+        );
+        assert_eq!(
             document["paths"]["/v1/plans/{id}/critic"]["post"]["requestBody"]["content"]["application/json"]["schema"]
                 ["$ref"],
             "#/components/schemas/CriticReviewRequest"
+        );
+        assert!(
+            schemas["ActionPlanView"]["required"]
+                .as_array()
+                .expect("ActionPlanView required fields")
+                .iter()
+                .any(|field| field == "precondition_hash")
         );
         assert_eq!(
             document["paths"]["/v1/plans/{id}/approve"]["post"]["requestBody"]["content"]["application/json"]["schema"]
