@@ -61,6 +61,7 @@ impl ScopeId {
         Self::new(Arc::<str>::from(name)).expect("static service context scope name must be valid")
     }
 
+    /// Borrows this value as str.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -159,10 +160,12 @@ impl RootServiceContext {
         })
     }
 
+    /// Returns the name.
     pub fn name(&self) -> &str {
         &self.name
     }
 
+    /// Returns the child.
     pub fn child(&self, scope: impl Into<ScopeId>) -> ChildServiceContext {
         ChildServiceContext::new(
             scope.into(),
@@ -172,6 +175,7 @@ impl RootServiceContext {
         )
     }
 
+    /// Returns the diagnostics snapshot.
     pub fn diagnostics_snapshot(&self) -> RuntimeDiagnosticsSnapshot {
         self.diagnostics
             .snapshot(&self.task_group, self.blocking_lanes.snapshots())
@@ -232,43 +236,53 @@ impl ChildServiceContext {
         }
     }
 
+    /// Returns the name.
     pub fn name(&self) -> &str {
         &self.name
     }
 
+    /// Returns the task spawner.
     pub fn task_spawner(&self) -> TaskSpawner {
         TaskSpawner::new(self.task_group.clone())
     }
 
+    /// Returns the task group.
     pub fn task_group(&self) -> &TaskGroup {
         &self.task_group
     }
 
+    /// Returns the blocking.
     pub fn blocking(&self, lane: BlockingLane) -> &BlockingExecutor {
         self.blocking_lanes.get(lane)
     }
 
+    /// Returns the storage io.
     pub fn storage_io(&self) -> &BlockingExecutor {
         self.blocking(BlockingLane::StorageIo)
     }
 
+    /// Returns the metadata io.
     pub fn metadata_io(&self) -> &BlockingExecutor {
         self.blocking(BlockingLane::MetadataIo)
     }
 
+    /// Returns the cpu crypto.
     pub fn cpu_crypto(&self) -> &BlockingExecutor {
         self.blocking(BlockingLane::CpuCrypto)
     }
 
+    /// Returns the diagnostics.
     pub fn diagnostics(&self) -> &RuntimeDiagnostics {
         &self.diagnostics
     }
 
+    /// Returns the diagnostics snapshot.
     pub fn diagnostics_snapshot(&self) -> RuntimeDiagnosticsSnapshot {
         self.diagnostics
             .snapshot(&self.task_group, self.blocking_lanes.snapshots())
     }
 
+    /// Returns the child.
     pub fn child(&self, scope: impl Into<ScopeId>) -> Self {
         Self::new(
             scope.into(),
@@ -278,11 +292,13 @@ impl ChildServiceContext {
         )
     }
 
+    /// Returns the scheduled tasks.
     pub fn scheduled_tasks(&self, scope: impl Into<ScopeId>) -> ScheduledTaskGroup {
         let scope = scope.into().into_inner();
         ScheduledTaskGroup::new(self.task_group.child(scope))
     }
 
+    /// Spawns the supplied task.
     pub fn spawn<F>(&self, name: impl Into<Arc<str>>, kind: TaskKind, future: F) -> RuntimeResult<TaskId>
     where
         F: Future<Output = ()> + Send + 'static,
@@ -290,6 +306,7 @@ impl ChildServiceContext {
         self.task_group.spawn(name, kind, future)
     }
 
+    /// Spawns service.
     pub fn spawn_service<F>(&self, name: impl Into<Arc<str>>, future: F) -> RuntimeResult<TaskId>
     where
         F: Future<Output = ()> + Send + 'static,

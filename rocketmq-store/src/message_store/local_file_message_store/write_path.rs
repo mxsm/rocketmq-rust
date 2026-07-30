@@ -136,8 +136,8 @@ impl LocalFileMessageStore {
     }
 
     pub(crate) async fn put_message_shared(&self, mut msg: MessageExtBrokerInner) -> PutMessageResult {
-        if !self.is_store_available_for_io() {
-            warn!("message store has shutdown, so putMessage is forbidden");
+        if !self.is_store_available_for_io() || !self.running_flags.is_writeable() {
+            warn!("message store is unavailable for writes, so putMessage is forbidden");
             return PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable);
         }
 
@@ -197,8 +197,8 @@ impl LocalFileMessageStore {
     }
 
     pub(crate) async fn put_messages_shared(&self, mut message_ext_batch: MessageExtBatch) -> PutMessageResult {
-        if !self.is_store_available_for_io() {
-            warn!("message store has shutdown, so putMessages is forbidden");
+        if !self.is_store_available_for_io() || !self.running_flags.is_writeable() {
+            warn!("message store is unavailable for writes, so putMessages is forbidden");
             return PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable);
         }
 

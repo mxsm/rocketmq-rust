@@ -17,7 +17,9 @@ use std::future::Future;
 
 /// Message append capability generic over a consumer-owned input.
 pub trait MessageAppender<M: Send>: Send {
+    /// Value type used for receipt.
     type Receipt: Send;
+    /// Value type used for error.
     type Error: StdError + Send + Sync + 'static;
 
     /// Appends one input and returns the implementation-owned receipt projection.

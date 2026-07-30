@@ -12,9 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+/// Executor types and operations.
 pub mod executor;
+/// Scheduler types and operations.
 pub mod scheduler;
+/// Task types and operations.
 pub mod task;
+/// Trigger types and operations.
 pub mod trigger;
 
 use std::error::Error;
@@ -29,10 +33,15 @@ pub use task::TaskStatus;
 /// Scheduler error type
 #[derive(Debug)]
 pub enum SchedulerError {
+    /// Represents the task not found case.
     TaskNotFound(String),
+    /// Represents the task already exists case.
     TaskAlreadyExists(String),
+    /// Represents the executor error case.
     ExecutorError(String),
+    /// Represents the trigger error case.
     TriggerError(String),
+    /// Represents the system error case.
     SystemError(String),
 }
 
@@ -50,8 +59,10 @@ impl fmt::Display for SchedulerError {
 
 impl Error for SchedulerError {}
 
+/// Alias for the scheduler result type.
 pub type SchedulerResult<T> = Result<T, SchedulerError>;
 
+/// Simple scheduler types and operations.
 pub mod simple_scheduler {
     use std::collections::HashMap;
     use std::collections::HashSet;
@@ -81,6 +92,7 @@ pub mod simple_scheduler {
     type Result<T> = RuntimeResult<T>;
 
     #[derive(Debug, Clone, Copy)]
+    /// Identifies the schedule mode state.
     pub enum ScheduleMode {
         /// Align the beats, and they might pile up.
         FixedRate,
@@ -92,19 +104,28 @@ pub mod simple_scheduler {
 
     type TaskId = u64;
 
+    /// The legacy scheduled task manager boundary constant.
     pub const LEGACY_SCHEDULED_TASK_MANAGER_BOUNDARY: &str = "rocketmq.simple-scheduled-task-manager";
+    /// The legacy scheduled task manager compatibility constant.
     pub const LEGACY_SCHEDULED_TASK_MANAGER_COMPATIBILITY: &str =
         "legacy scheduled task manager compatibility boundary";
+    /// The legacy scheduled task manager replacement constant.
     pub const LEGACY_SCHEDULED_TASK_MANAGER_REPLACEMENT: &str = "rocketmq_runtime::ScheduledTaskGroup";
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    /// Represents legacy scheduled task manager boundary.
     pub struct LegacyScheduledTaskManagerBoundary {
+        /// The boundary value.
         pub boundary: &'static str,
+        /// The compatibility value.
         pub compatibility: &'static str,
+        /// The replacement value.
         pub replacement: &'static str,
+        /// Whether prefers parent task group.
         pub prefers_parent_task_group: bool,
     }
 
+    /// Creates the legacy scheduled task manager boundary value.
     pub fn legacy_scheduled_task_manager_boundary() -> LegacyScheduledTaskManagerBoundary {
         LegacyScheduledTaskManagerBoundary {
             boundary: LEGACY_SCHEDULED_TASK_MANAGER_BOUNDARY,
@@ -114,6 +135,7 @@ pub mod simple_scheduler {
         }
     }
 
+    /// Represents task info.
     pub struct TaskInfo {
         cancel_token: CancellationToken,
         runtime_task_id: RuntimeTaskId,
@@ -139,12 +161,19 @@ pub mod simple_scheduler {
     }
 
     #[derive(Debug, Clone)]
+    /// Represents scheduled shutdown report.
     pub struct ScheduledShutdownReport {
+        /// The number of task entries.
         pub task_count: usize,
+        /// The completed value.
         pub completed: usize,
+        /// The aborted value.
         pub aborted: usize,
+        /// The panicked value.
         pub panicked: usize,
+        /// The timed out value.
         pub timed_out: usize,
+        /// The elapsed value.
         pub elapsed: Duration,
     }
 
@@ -160,6 +189,7 @@ pub mod simple_scheduler {
             }
         }
 
+        /// Returns whether healthy.
         pub fn is_healthy(&self) -> bool {
             self.panicked == 0 && self.timed_out == 0
         }
@@ -174,6 +204,7 @@ pub mod simple_scheduler {
     }
 
     #[derive(Clone)]
+    /// Represents scheduled task manager.
     pub struct ScheduledTaskManager {
         tasks: Arc<RwLock<HashMap<TaskId, TaskInfo>>>,
         counter: Arc<AtomicU64>,
@@ -188,15 +219,18 @@ pub mod simple_scheduler {
     }
 
     impl ScheduledTaskManager {
+        /// Creates legacy compatibility.
         pub fn new_legacy_compatibility() -> Self {
             Self::new_with_optional_task_group(None)
         }
 
         #[deprecated(note = "use ScheduledTaskManager::new_with_task_group or rocketmq_runtime::ScheduledTaskGroup")]
+        /// Creates a new `ScheduledTaskManager`.
         pub fn new() -> Self {
             Self::new_legacy_compatibility()
         }
 
+        /// Creates with task group.
         pub fn new_with_task_group(parent_task_group: TaskGroup) -> Self {
             Self::new_with_optional_task_group(Some(parent_task_group.child(LEGACY_SCHEDULED_TASK_MANAGER_BOUNDARY)))
         }
@@ -532,6 +566,7 @@ pub mod simple_scheduler {
             }
         }
 
+        /// Shuts down all.
         pub async fn shutdown_all(&self, timeout: Duration) -> ScheduledShutdownReport {
             let tasks = {
                 let mut tasks = self.tasks.write();
@@ -542,6 +577,7 @@ pub mod simple_scheduler {
             report
         }
 
+        /// Shuts down tasks.
         pub async fn shutdown_tasks<I>(&self, task_ids: I, timeout: Duration) -> ScheduledShutdownReport
         where
             I: IntoIterator<Item = TaskId>,
@@ -601,10 +637,12 @@ pub mod simple_scheduler {
             !matches!(done.try_recv(), Err(oneshot::error::TryRecvError::Empty))
         }
 
+        /// Returns the task count.
         pub fn task_count(&self) -> usize {
             self.tasks.read().len()
         }
 
+        /// Returns the driver task count.
         pub fn driver_task_count(&self) -> usize {
             self.task_group
                 .read()
@@ -613,6 +651,7 @@ pub mod simple_scheduler {
                 .unwrap_or_default()
         }
 
+        /// Returns the last task group shutdown report.
         pub fn last_task_group_shutdown_report(&self) -> Option<ShutdownReport> {
             self.last_task_group_shutdown_report.read().clone()
         }

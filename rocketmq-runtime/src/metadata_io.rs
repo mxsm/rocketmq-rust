@@ -126,12 +126,19 @@ pub enum MetadataDurability {
 /// A filesystem step in the atomic replacement protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MetadataIoOperation {
+    /// Represents the create parent case.
     CreateParent,
+    /// Represents the create temporary case.
     CreateTemporary,
+    /// Represents the write temporary case.
     WriteTemporary,
+    /// Represents the sync temporary case.
     SyncTemporary,
+    /// Represents the replace target case.
     ReplaceTarget,
+    /// Represents the sync parent case.
     SyncParent,
+    /// Represents the remove temporary case.
     RemoveTemporary,
 }
 
@@ -154,53 +161,81 @@ impl fmt::Display for MetadataIoOperation {
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum MetadataIoError {
     #[error("invalid metadata I/O config: {0}")]
+    /// Represents the invalid config case.
     InvalidConfig(&'static str),
 
     #[error("metadata I/O actor is closed")]
+    /// Represents the closed case.
     Closed,
 
     #[error("metadata deadline elapsed during {operation}")]
-    DeadlineExceeded { operation: &'static str },
+    /// Represents the deadline exceeded case.
+    DeadlineExceeded {
+        /// The operation value.
+        operation: &'static str,
+    },
 
     #[error("metadata operation queue is full (limit {limit})")]
-    QueueFull { limit: usize },
+    /// Represents the queue full case.
+    QueueFull {
+        /// The limit value.
+        limit: usize,
+    },
 
     #[error(
         "metadata snapshot bytes would exceed the limit (retained {retained}, requested {requested}, limit {limit})"
     )]
+    /// Represents the byte limit exceeded case.
     ByteLimitExceeded {
+        /// The struct field value.
         retained: usize,
+        /// The struct field value.
         requested: usize,
+        /// The struct field value.
         limit: usize,
     },
 
     #[error(
         "metadata resource {resource} changed target path from {existing} to {requested} while work was outstanding"
     )]
+    /// Represents the resource path conflict case.
     ResourcePathConflict {
+        /// The struct field value.
         resource: Arc<str>,
+        /// The struct field value.
         existing: Arc<Path>,
+        /// The struct field value.
         requested: Arc<Path>,
     },
 
     #[error("metadata actor worker stopped before resource {resource} generation {generation:?} became durable")]
+    /// Represents the worker stopped case.
     WorkerStopped {
+        /// The struct field value.
         resource: Arc<str>,
+        /// The struct field value.
         generation: MetadataGeneration,
     },
 
     #[error("metadata worker failed for resource {resource}: {source}")]
+    /// Represents the worker failed case.
     WorkerFailed {
+        /// The struct field value.
         resource: Arc<str>,
         #[source]
+        /// The struct field value.
         source: Arc<RuntimeError>,
     },
 
     #[error("metadata {operation} failed for {path}: {source}")]
+    /// Represents the io case.
     Io {
+        /// The struct field value.
         operation: MetadataIoOperation,
+        /// The struct field value.
         path: Arc<Path>,
         #[source]
+        /// The struct field value.
         source: Arc<std::io::Error>,
     },
 }
@@ -301,10 +336,15 @@ impl MetadataFileSystem for LocalMetadataFileSystem {
 /// Admission and dedicated blocking-lane limits.
 #[derive(Debug, Clone)]
 pub struct MetadataIoConfig {
+    /// The max pending operations value.
     pub max_pending_operations: usize,
+    /// The max pending size in bytes.
     pub max_pending_bytes: usize,
+    /// The blocking queue timeout value.
     pub blocking_queue_timeout: Duration,
+    /// The blocking task timeout value.
     pub blocking_task_timeout: Duration,
+    /// The blocking warn after value.
     pub blocking_warn_after: Duration,
 }
 
@@ -344,31 +384,47 @@ impl Default for MetadataIoConfig {
 /// A snapshot of one logical metadata resource.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MetadataIoResourceSnapshot {
+    /// The resource value.
     pub resource: Arc<str>,
+    /// The target value.
     pub target: Option<Arc<Path>>,
+    /// The durable generation value.
     pub durable_generation: Option<MetadataGeneration>,
+    /// The in flight generation value.
     pub in_flight_generation: Option<MetadataGeneration>,
+    /// The queued generation value.
     pub queued_generation: Option<MetadataGeneration>,
+    /// The number of waiter entries.
     pub waiter_count: usize,
 }
 
 /// A point-in-time actor snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MetadataIoSnapshot {
+    /// Whether accepting.
     pub accepting: bool,
+    /// The pending operations value.
     pub pending_operations: usize,
+    /// The pending size in bytes.
     pub pending_bytes: usize,
+    /// The max pending operations value.
     pub max_pending_operations: usize,
+    /// The max pending size in bytes.
     pub max_pending_bytes: usize,
+    /// The resources value.
     pub resources: Vec<MetadataIoResourceSnapshot>,
 }
 
 /// Result of stopping admission and draining accepted work.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MetadataIoShutdownReport {
+    /// Whether timed out.
     pub timed_out: bool,
+    /// The pending operations value.
     pub pending_operations: usize,
+    /// The pending size in bytes.
     pub pending_bytes: usize,
+    /// The unfinished value.
     pub unfinished: Vec<MetadataIoResourceSnapshot>,
 }
 

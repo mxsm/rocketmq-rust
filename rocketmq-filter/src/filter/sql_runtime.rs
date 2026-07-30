@@ -25,6 +25,10 @@ use crate::expression::Expression;
 use crate::expression::Value;
 use crate::filter::filter_spi::FilterError;
 
+const MAX_EXPRESSION_BYTES: usize = 64 * 1024;
+const MAX_SQL_TOKENS: usize = 4_096;
+const MAX_PARSE_NESTING: usize = 128;
+
 fn current_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -36,6 +40,11 @@ pub(crate) fn compile_expression(expr: &str) -> Result<Box<dyn Expression>, Filt
     let trimmed = expr.trim();
     if trimmed.is_empty() {
         return Err(FilterError::new("empty SQL92 expression"));
+    }
+    if trimmed.len() > MAX_EXPRESSION_BYTES {
+        return Err(FilterError::new(format!(
+            "SQL92 expression exceeds the {MAX_EXPRESSION_BYTES}-byte limit"
+        )));
     }
 
     let mut parser = Parser::new(trimmed)?;
@@ -621,6 +630,7 @@ fn is_ident_part(byte: u8) -> bool {
 struct Parser {
     tokens: Vec<Token>,
     cursor: usize,
+    nesting: usize,
 }
 
 impl Parser {
@@ -631,12 +641,33 @@ impl Parser {
             let token = lexer.next_token()?;
             let is_end = token == Token::End;
             tokens.push(token);
+            if tokens.len() > MAX_SQL_TOKENS {
+                return Err(FilterError::new(format!(
+                    "SQL92 expression exceeds the {MAX_SQL_TOKENS}-token limit"
+                )));
+            }
             if is_end {
                 break;
             }
         }
 
-        Ok(Self { tokens, cursor: 0 })
+        Ok(Self {
+            tokens,
+            cursor: 0,
+            nesting: 0,
+        })
+    }
+
+    fn nested<T>(&mut self, parse: impl FnOnce(&mut Self) -> Result<T, FilterError>) -> Result<T, FilterError> {
+        if self.nesting >= MAX_PARSE_NESTING {
+            return Err(FilterError::new(format!(
+                "SQL92 expression exceeds the {MAX_PARSE_NESTING}-level nesting limit"
+            )));
+        }
+        self.nesting += 1;
+        let result = parse(self);
+        self.nesting -= 1;
+        result
     }
 
     fn parse_expression(&mut self) -> Result<ExprNode, FilterError> {
@@ -671,7 +702,8 @@ impl Parser {
 
     fn parse_not(&mut self) -> Result<ExprNode, FilterError> {
         if self.consume(TokenKind::Not) {
-            return Ok(ExprNode::Not(Box::new(self.parse_not()?)));
+            let expression = self.nested(Self::parse_not)?;
+            return Ok(ExprNode::Not(Box::new(expression)));
         }
 
         self.parse_primary()
@@ -679,7 +711,7 @@ impl Parser {
 
     fn parse_primary(&mut self) -> Result<ExprNode, FilterError> {
         if self.consume(TokenKind::LParen) {
-            let expr = self.parse_expression()?;
+            let expr = self.nested(Self::parse_expression)?;
             self.expect(TokenKind::RParen)?;
             return Ok(expr);
         }
@@ -944,6 +976,9 @@ impl TokenKind {
 mod tests {
     use super::compile_expression;
     use super::current_millis;
+    use super::MAX_EXPRESSION_BYTES;
+    use super::MAX_PARSE_NESTING;
+    use super::MAX_SQL_TOKENS;
     use crate::expression::EmptyEvaluationContext;
     use crate::expression::EvaluationError;
     use crate::expression::MessageEvaluationContext;
@@ -969,6 +1004,22 @@ mod tests {
     fn compile_rejects_empty_expression() {
         let error = compile_error("   ");
         assert!(error.contains("empty SQL92 expression"));
+    }
+
+    #[test]
+    fn compile_rejects_oversized_and_deeply_nested_expressions() {
+        let oversized = "x".repeat(MAX_EXPRESSION_BYTES + 1);
+        assert!(compile_error(&oversized).contains("byte limit"));
+
+        let deeply_nested = format!(
+            "{}flag{}",
+            "(".repeat(MAX_PARSE_NESTING + 1),
+            ")".repeat(MAX_PARSE_NESTING + 1)
+        );
+        assert!(compile_error(&deeply_nested).contains("nesting limit"));
+
+        let too_many_tokens = "flag OR ".repeat(MAX_SQL_TOKENS / 2 + 1) + "flag";
+        assert!(compile_error(&too_many_tokens).contains("token limit"));
     }
 
     #[test]

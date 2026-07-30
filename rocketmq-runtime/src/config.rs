@@ -18,19 +18,31 @@ use crate::blocking::BlockingLanePolicies;
 use crate::error::RuntimeError;
 use crate::error::RuntimeResult;
 
+/// The min entrypoint blocking threads constant.
 pub const MIN_ENTRYPOINT_BLOCKING_THREADS: usize = 3;
+/// The max entrypoint blocking threads constant.
 pub const MAX_ENTRYPOINT_BLOCKING_THREADS: usize = 512;
 
 #[derive(Debug, Clone)]
+/// Represents runtime config.
 pub struct RuntimeConfig {
+    /// The worker threads value.
     pub worker_threads: usize,
+    /// The max blocking threads value.
     pub max_blocking_threads: usize,
+    /// The thread name value.
     pub thread_name: String,
+    /// The thread stack size value.
     pub thread_stack_size: Option<usize>,
+    /// The thread keep alive value.
     pub thread_keep_alive: Duration,
+    /// The shutdown timeout value.
     pub shutdown_timeout: Duration,
+    /// The blocking lane policies value.
     pub blocking_lane_policies: BlockingLanePolicies,
+    /// Whether enable io.
     pub enable_io: bool,
+    /// Whether enable time.
     pub enable_time: bool,
 }
 
@@ -79,6 +91,7 @@ impl RuntimeConfig {
         Ok(self)
     }
 
+    /// Creates the server default value.
     pub fn server_default(thread_name: impl Into<String>) -> Self {
         Self {
             thread_name: thread_name.into(),
@@ -86,22 +99,27 @@ impl RuntimeConfig {
         }
     }
 
+    /// Creates the broker default value.
     pub fn broker_default() -> Self {
         Self::server_default("rocketmq-broker")
     }
 
+    /// Creates the namesrv default value.
     pub fn namesrv_default() -> Self {
         Self::server_default("rocketmq-namesrv")
     }
 
+    /// Creates the proxy default value.
     pub fn proxy_default() -> Self {
         Self::server_default("rocketmq-proxy")
     }
 
+    /// Creates the controller default value.
     pub fn controller_default() -> Self {
         Self::server_default("rocketmq-controller")
     }
 
+    /// Validates this value.
     pub fn validate(&self) -> RuntimeResult<()> {
         if self.worker_threads == 0 {
             return Err(RuntimeError::InvalidConfig(

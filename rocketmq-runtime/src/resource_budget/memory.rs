@@ -21,21 +21,29 @@ use sysinfo::System;
 const EXPLICIT_MEMORY_LIMIT_ENV: &str = "ROCKETMQ_PROCESS_MEMORY_LIMIT_BYTES";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Identifies the memory limit source state.
 pub enum MemoryLimitSource {
+    /// Represents the configured case.
     Configured,
+    /// Represents the environment case.
     Environment,
+    /// Represents the cgroup v2 case.
     CgroupV2,
+    /// Represents the cgroup v1 case.
     CgroupV1,
+    /// Represents the host physical memory case.
     HostPhysicalMemory,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Represents process memory limit.
 pub struct ProcessMemoryLimit {
     bytes: u64,
     source: MemoryLimitSource,
 }
 
 impl ProcessMemoryLimit {
+    /// Creates the detect value.
     pub fn detect() -> Result<Self, MemoryLimitError> {
         if let Some(value) = std::env::var_os(EXPLICIT_MEMORY_LIMIT_ENV) {
             let value = value.to_string_lossy();
@@ -52,6 +60,7 @@ impl ProcessMemoryLimit {
         detect_platform_limit()
     }
 
+    /// Creates the configured value.
     pub fn configured(bytes: u64) -> Result<Self, MemoryLimitError> {
         if bytes == 0 {
             return Err(MemoryLimitError::ZeroConfiguredLimit);
@@ -63,15 +72,18 @@ impl ProcessMemoryLimit {
     }
 
     #[must_use]
+    /// Returns the bytes.
     pub const fn bytes(self) -> u64 {
         self.bytes
     }
 
     #[must_use]
+    /// Returns the source.
     pub const fn source(self) -> MemoryLimitSource {
         self.source
     }
 
+    /// Returns the fraction.
     pub fn fraction(self, numerator: u64, denominator: u64) -> Result<u64, MemoryLimitError> {
         if numerator == 0 || denominator == 0 || numerator > denominator {
             return Err(MemoryLimitError::InvalidFraction { numerator, denominator });
@@ -82,20 +94,38 @@ impl ProcessMemoryLimit {
 }
 
 #[derive(Debug, thiserror::Error)]
+/// Identifies the memory limit error state.
 pub enum MemoryLimitError {
     #[error("environment variable {name} must contain a positive byte count, got {value:?}")]
-    InvalidEnvironment { name: &'static str, value: String },
+    /// Represents the invalid environment case.
+    InvalidEnvironment {
+        /// The name value.
+        name: &'static str,
+        /// The value value.
+        value: String,
+    },
     #[error("configured process memory limit must be greater than zero")]
+    /// Represents the zero configured limit case.
     ZeroConfiguredLimit,
     #[error("invalid memory budget fraction {numerator}/{denominator}")]
-    InvalidFraction { numerator: u64, denominator: u64 },
+    /// Represents the invalid fraction case.
+    InvalidFraction {
+        /// The numerator value.
+        numerator: u64,
+        /// The denominator value.
+        denominator: u64,
+    },
     #[error("failed to read process memory limit from {path}: {source}")]
+    /// Represents the read case.
     Read {
+        /// The struct field value.
         path: &'static str,
         #[source]
+        /// The struct field value.
         source: io::Error,
     },
     #[error("no finite process, cgroup, or host memory limit is available")]
+    /// Represents the unavailable case.
     Unavailable,
 }
 

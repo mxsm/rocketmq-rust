@@ -17,8 +17,11 @@ use std::future::Future;
 
 /// Administrative storage capability with implementation-owned values.
 pub trait AdminStore: Send {
+    /// Value type used for request.
     type Request: Send;
+    /// Value type used for response.
     type Response: Send;
+    /// Value type used for error.
     type Error: StdError + Send + Sync + 'static;
 
     /// Executes one bounded administrative operation.

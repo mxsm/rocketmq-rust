@@ -1,1 +1,1 @@
-fixture: broker restart retained message ID, queue offset, commitlog offset, and PVC identity
+M11-11 guard fixture only: acknowledged_message_recovery

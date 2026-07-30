@@ -247,6 +247,7 @@ enum PendingHAService {
 pub(crate) struct HAReplicaStoreHandle {
     message_store_config: Arc<MessageStoreConfig>,
     shutdown: Arc<AtomicBool>,
+    running_flags: Arc<RunningFlags>,
     master_flushed_offset: Arc<AtomicI64>,
     alive_replica_num_in_group: Arc<AtomicI32>,
     state_machine_version: Arc<AtomicI64>,
@@ -328,8 +329,8 @@ impl HAReplicaStoreHandle {
         data_start: i32,
         data_length: i32,
     ) -> Result<bool, StoreError> {
-        if self.shutdown.load(Ordering::Acquire) {
-            warn!("message store has shutdown, so replica append is forbidden");
+        if self.shutdown.load(Ordering::Acquire) || !self.running_flags.is_writeable() {
+            warn!("message store is unavailable for writes, so replica append is forbidden");
             return Ok(false);
         }
 
@@ -362,6 +363,7 @@ pub(crate) struct TimerMessageWriteHandle {
     message_store_config: Arc<MessageStoreConfig>,
     lifecycle: Arc<LocalStoreLifecycle>,
     shutdown: Arc<AtomicBool>,
+    running_flags: Arc<RunningFlags>,
     put_message_hooks: HookRegistry<dyn PutMessageHook + Send + Sync>,
     topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
     commit_log: CommitLogInternalMessageWriteHandle,
@@ -375,8 +377,9 @@ impl TimerMessageWriteHandle {
         if !self
             .lifecycle
             .is_available_for_io(self.shutdown.load(Ordering::Acquire))
+            || !self.running_flags.is_writeable()
         {
-            warn!("message store has shutdown, so Timer putMessage is forbidden");
+            warn!("message store is unavailable for writes, so Timer putMessage is forbidden");
             return PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable);
         }
 

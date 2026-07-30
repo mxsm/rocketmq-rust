@@ -99,6 +99,32 @@ async fn corrupt_snapshot_is_rejected_without_mutating_live_state() {
 }
 
 #[tokio::test]
+async fn interrupted_snapshot_install_is_rejected_and_full_retry_recovers() {
+    let mut source = state_machine();
+    apply_broker_id(&mut source, "incoming", 1).await;
+    let snapshot = source.build_snapshot().await.expect("build snapshot");
+    let snapshot_bytes = snapshot.snapshot.into_inner();
+    let interrupted_at = snapshot_bytes.len() / 2;
+
+    let mut target = state_machine();
+    apply_broker_id(&mut target, "existing", 1).await;
+    let error = target
+        .install_snapshot(&snapshot.meta, Cursor::new(snapshot_bytes[..interrupted_at].to_vec()))
+        .await
+        .expect_err("an interrupted snapshot stream must fail closed");
+
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    assert_eq!(next_broker_id(&target, "existing"), 2);
+    assert_eq!(next_broker_id(&target, "incoming"), 1);
+
+    target
+        .install_snapshot(&snapshot.meta, Cursor::new(snapshot_bytes))
+        .await
+        .expect("a complete retry should restore the snapshot");
+    assert_eq!(next_broker_id(&target, "incoming"), 2);
+}
+
+#[tokio::test]
 async fn oversized_snapshot_is_rejected_before_install() {
     let mut target = state_machine();
     let error = target

@@ -44,6 +44,13 @@ fn encode_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+fn next_case_value(state: &mut u64) -> u64 {
+    *state = state
+        .wrapping_mul(6_364_136_223_846_793_005)
+        .wrapping_add(1_442_695_040_888_963_407);
+    *state
+}
+
 #[test]
 fn rocketmq_binary_frame_matches_the_checked_in_wire_contract() {
     let command = RemotingCommand::with_resolved_defaults(321, SerializeType::ROCKETMQ)
@@ -103,4 +110,70 @@ fn rocketmq_binary_frame_matches_the_checked_in_wire_contract() {
     assert_eq!(ext_fields.get("zeta").map(CheetahString::as_str), Some("last"));
     assert_eq!(decoded.body().map(Bytes::as_ref), Some(b"body".as_slice()));
     assert_eq!(decoded.get_serialize_type(), SerializeType::ROCKETMQ);
+}
+
+#[test]
+fn deterministic_remoting_cases_round_trip_without_trailing_bytes() {
+    const SEED: u64 = 0x524d_5150_524f_544f;
+    let mut state = SEED;
+
+    for case in 0..32 {
+        let serialize_type = if case % 2 == 0 {
+            SerializeType::JSON
+        } else {
+            SerializeType::ROCKETMQ
+        };
+        let version = (next_case_value(&mut state) & 0x7fff) as i32;
+        let code = (next_case_value(&mut state) & 0x7fff) as i32;
+        let opaque = next_case_value(&mut state) as i32;
+        let flag = (next_case_value(&mut state) & 0x03) as i32;
+        let body_len = (next_case_value(&mut state) & 0x3f) as usize;
+        let body = (0..body_len)
+            .map(|_| next_case_value(&mut state) as u8)
+            .collect::<Vec<_>>();
+        let remark = format!("seed-{SEED:016x}-case-{case}");
+        let key = CheetahString::from_string(format!("key-{case}"));
+        let value = CheetahString::from_string(format!("value-{}", next_case_value(&mut state)));
+        let command = RemotingCommand::with_resolved_defaults(version, serialize_type)
+            .set_code(code)
+            .set_opaque(opaque)
+            .set_flag(flag)
+            .set_remark(remark.clone())
+            .set_ext_fields(HashMap::from([(key.clone(), value.clone())]))
+            .set_body(Bytes::copy_from_slice(&body));
+
+        let frame = EncodedFrame::from_command(command)
+            .unwrap_or_else(|error| panic!("seed={SEED:#018x} case={case} failed to encode: {error}"))
+            .into_bytes();
+        let mut input = BytesMut::from(frame.as_ref());
+        let decoded = RemotingCommand::decode(&mut input)
+            .unwrap_or_else(|error| panic!("seed={SEED:#018x} case={case} failed to decode: {error}"))
+            .unwrap_or_else(|| panic!("seed={SEED:#018x} case={case} produced an incomplete frame"));
+
+        assert!(input.is_empty(), "seed={SEED:#018x} case={case}");
+        assert_eq!(decoded.version(), version, "seed={SEED:#018x} case={case}");
+        assert_eq!(decoded.code(), code, "seed={SEED:#018x} case={case}");
+        assert_eq!(decoded.opaque(), opaque, "seed={SEED:#018x} case={case}");
+        assert_eq!(decoded.flag(), flag, "seed={SEED:#018x} case={case}");
+        assert_eq!(
+            decoded.remark().map(CheetahString::as_str),
+            Some(remark.as_str()),
+            "seed={SEED:#018x} case={case}"
+        );
+        assert_eq!(
+            decoded.ext_fields().and_then(|fields| fields.get(&key)),
+            Some(&value),
+            "seed={SEED:#018x} case={case}"
+        );
+        assert_eq!(
+            decoded.body().map(Bytes::as_ref),
+            Some(body.as_slice()),
+            "seed={SEED:#018x} case={case}"
+        );
+        assert_eq!(
+            decoded.get_serialize_type(),
+            serialize_type,
+            "seed={SEED:#018x} case={case}"
+        );
+    }
 }

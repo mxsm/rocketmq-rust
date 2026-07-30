@@ -166,13 +166,13 @@ and inject `ChildServiceContext`/`TaskGroup` capabilities.
 
 ## Python architecture test inventory
 
-- Inventoried test modules: 53.
+- Inventoried test modules: 54.
 - Guard runner: `python scripts/run_architecture_tests.py --tier pr_static`.
 - Contract runner: `python scripts/run_architecture_tests.py --tier milestone_contract --tier phase_contract --tier dynamic_fixture`.
 
 | Tier | Modules |
 |---|---:|
-| `pr_static` | 16 |
+| `pr_static` | 17 |
 | `milestone_contract` | 26 |
 | `phase_contract` | 4 |
 | `dynamic_fixture` | 7 |
@@ -187,7 +187,7 @@ and inject `ChildServiceContext`/`TaskGroup` capabilities.
 | fault | `.github/workflows/kubernetes-fault-matrix.yml` | `m11-11-<backend>-<commit>` |
 | six-hour-soak | `.github/workflows/architecture-slo-evidence.yml` | `m11-12-r24-<backend>-<commit>` |
 
-Coverage uses a root-workspace auto baseline with a 1% allowed regression and a 50% patch
+Coverage uses a root-workspace auto baseline with a 1% allowed regression and a 70% patch
 target. Each standalone application publishes a separate LCOV artifact; the fuzz standalone
 reports libFuzzer edge coverage and retains its versioned corpus rather than producing an empty
 unit-test LCOV report.
@@ -198,6 +198,11 @@ and comparison result required by `scripts/architecture-performance-profiles.jso
 artifacts use the production-readiness and fault-matrix policies; failures retain replay inputs and
 diagnostics without committing runtime output.
 
+The target-hardware inventory includes focused Proxy Cluster keyed admission and transaction
+queue/file-I/O profiles in addition to Transport writer/overload and Store read-segment profiles.
+These focused collectors report relative regression evidence; they are not presented as
+end-to-end production message throughput.
+
 ## Architecture evidence cross-checks
 
 - Trait decisions: `scripts/trait-policy-baseline.json` and `rocketmq-doc/en/rust-trait-design-guidelines.md`.
@@ -207,3 +212,10 @@ diagnostics without committing runtime output.
 - Runtime ownership: `scripts/runtime-task-escape-policy.json` and the enforcing runtime audit.
 - Performance thresholds: `scripts/architecture-performance-profiles.json` and the performance guard.
 - Distributed evidence: `distribution/kubernetes/fault-matrix-policy.json` and the SLO/fault guards.
+- Risk-to-test matrix: `scripts/architecture-risk-test-matrix.json`.
+- Deterministic property suites: `scripts/property-state-suite-registry.json`.
+- Fuzz corpus ownership and retention: `fuzz/corpus-registry.json`.
+- Cross-registry guard: `scripts/architecture_evidence_governance_guard.py`.
+- Core capability contracts: `rocketmq-doc/en/core-capability-contracts.md`.
+- Acknowledgement/failover ADR: `rocketmq-doc/en/acknowledgement-failover-contract-adr.md`.
+- Regional DR boundary: `rocketmq-doc/en/regional-disaster-recovery-adr.md`.

@@ -26,19 +26,29 @@ use crate::task_group::TaskGroupLifecycleState;
 static NEXT_RUNTIME_DIAGNOSTICS_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone)]
+/// Represents runtime diagnostics.
 pub struct RuntimeDiagnostics {
     runtime_id: Arc<str>,
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Represents runtime diagnostics snapshot.
 pub struct RuntimeDiagnosticsSnapshot {
+    /// The runtime identifier.
     pub runtime_id: String,
+    /// The root name value.
     pub root_name: String,
+    /// The group identifier.
     pub group_id: TaskGroupId,
+    /// The parent group identifier.
     pub parent_group_id: Option<TaskGroupId>,
+    /// The lifecycle state value.
     pub lifecycle_state: TaskGroupLifecycleState,
+    /// The number of task entries.
     pub task_count: usize,
+    /// The number of child entries.
     pub child_count: usize,
+    /// The blocking lanes value.
     pub blocking_lanes: Vec<BlockingExecutorSnapshot>,
 }
 
@@ -50,10 +60,12 @@ impl RuntimeDiagnostics {
         }
     }
 
+    /// Returns the runtime id.
     pub fn runtime_id(&self) -> &str {
         &self.runtime_id
     }
 
+    /// Returns the snapshot.
     pub fn snapshot(
         &self,
         root: &TaskGroup,

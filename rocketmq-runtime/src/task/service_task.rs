@@ -44,6 +44,7 @@ pub struct ServiceTaskContext {
 }
 
 impl ServiceTaskContext {
+    /// Creates a new `ServiceTaskContext`.
     pub fn new(wait_point: Arc<Notify>, has_notified: Arc<AtomicBool>, stopped: Arc<AtomicBool>) -> Self {
         Self {
             wait_point,
@@ -82,6 +83,7 @@ impl ServiceTaskContext {
         true // Should call on_wait_end
     }
 
+    /// Executes wakeup.
     pub fn wakeup(&self) {
         if self
             .has_notified
@@ -93,6 +95,7 @@ impl ServiceTaskContext {
     }
 }
 
+/// Defines service task behavior.
 pub trait ServiceTask: Sync + Send {
     /// Get the service name
     fn get_service_name(&self) -> String;
@@ -199,17 +202,29 @@ impl ServiceTaskHandle {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Represents service manager lifecycle probe.
 pub struct ServiceManagerLifecycleProbe {
+    /// Whether healthy.
     pub healthy: bool,
+    /// The task count before shutdown value.
     pub task_count_before_shutdown: usize,
+    /// The task count after shutdown value.
     pub task_count_after_shutdown: usize,
+    /// The task group count before shutdown value.
     pub task_group_count_before_shutdown: usize,
+    /// The task group count after shutdown value.
     pub task_group_count_after_shutdown: usize,
+    /// The task group completed value.
     pub task_group_completed: usize,
+    /// The task group cancelled value.
     pub task_group_cancelled: usize,
+    /// The task group aborted value.
     pub task_group_aborted: usize,
+    /// The task group timed out value.
     pub task_group_timed_out: usize,
+    /// Whether task group healthy.
     pub task_group_healthy: bool,
+    /// The shutdown elapsed us value.
     pub shutdown_elapsed_us: u128,
 }
 
@@ -265,10 +280,15 @@ impl<T: ServiceTask> AsRef<T> for ServiceManager<T> {
 /// Service state enumeration
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ServiceLifecycle {
+    /// Represents the not started case.
     NotStarted,
+    /// Represents the starting case.
     Starting,
+    /// Represents the running case.
     Running,
+    /// Represents the stopping case.
     Stopping,
+    /// Represents the stopped case.
     Stopped,
 }
 
@@ -288,6 +308,7 @@ impl<T: ServiceTask + 'static> ServiceManager<T> {
         Self::new_legacy_compatibility(service)
     }
 
+    /// Creates with task group.
     pub fn new_with_task_group(service: T, parent_task_group: TaskGroup) -> Self {
         Self::new_with_optional_task_group(Arc::new(service), Some(parent_task_group))
     }
@@ -299,10 +320,12 @@ impl<T: ServiceTask + 'static> ServiceManager<T> {
     }
 
     #[deprecated(note = "use ServiceManager::new_arc_with_task_group; the ambient-runtime adapter is removed in 2.0.0")]
+    /// Creates arc.
     pub fn new_arc(service: Arc<T>) -> Self {
         Self::new_arc_legacy_compatibility(service)
     }
 
+    /// Creates arc with task group.
     pub fn new_arc_with_task_group(service: Arc<T>, parent_task_group: TaskGroup) -> Self {
         Self::new_with_optional_task_group(service, Some(parent_task_group))
     }
@@ -591,6 +614,7 @@ impl<T: ServiceTask + 'static> ServiceManager<T> {
         self.started.load(Ordering::Acquire)
     }
 
+    /// Returns the task count.
     pub async fn task_count(&self) -> usize {
         self.task_handle
             .read()
@@ -600,6 +624,7 @@ impl<T: ServiceTask + 'static> ServiceManager<T> {
             .unwrap_or_default()
     }
 
+    /// Returns the last task group shutdown report.
     pub async fn last_task_group_shutdown_report(&self) -> Option<ShutdownReport> {
         self.last_task_group_shutdown_report.read().await.clone()
     }

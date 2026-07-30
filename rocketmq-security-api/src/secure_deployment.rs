@@ -27,23 +27,34 @@ use thiserror::Error;
 
 use crate::DeploymentProfile;
 
+/// The security profile env constant.
 pub const SECURITY_PROFILE_ENV: &str = "ROCKETMQ_SECURITY_PROFILE";
+/// The security trust anchor env constant.
 pub const SECURITY_TRUST_ANCHOR_ENV: &str = "ROCKETMQ_SECURITY_TRUST_ANCHOR";
+/// The security tls cert env constant.
 pub const SECURITY_TLS_CERT_ENV: &str = "ROCKETMQ_SECURITY_TLS_CERT";
+/// The security tls key env constant.
 pub const SECURITY_TLS_KEY_ENV: &str = "ROCKETMQ_SECURITY_TLS_KEY";
+/// The security secret provider env constant.
 pub const SECURITY_SECRET_PROVIDER_ENV: &str = "ROCKETMQ_SECURITY_SECRET_PROVIDER";
+/// The security admin identity env constant.
 pub const SECURITY_ADMIN_IDENTITY_ENV: &str = "ROCKETMQ_SECURITY_ADMIN_IDENTITY";
+/// The security request policy env constant.
 pub const SECURITY_REQUEST_POLICY_ENV: &str = "ROCKETMQ_SECURITY_REQUEST_POLICY";
+/// The mounted files secret provider constant.
 pub const MOUNTED_FILES_SECRET_PROVIDER: &str = "mounted-files";
 
 /// Explicit startup posture shared by every production service composition root.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SecurityBootstrapProfile {
+    /// Represents the development insecure loopback case.
     DevelopmentInsecureLoopback,
+    /// Represents the secure enforced case.
     SecureEnforced,
 }
 
 impl SecurityBootstrapProfile {
+    /// Borrows this value as str.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::DevelopmentInsecureLoopback => "development-insecure-loopback",
@@ -79,11 +90,14 @@ pub struct SecurityBootstrapConfig {
 /// Resolved process-wide security bootstrap state.
 #[derive(Debug, Clone)]
 pub enum SecurityBootstrap {
+    /// Represents the disabled case.
     Disabled,
+    /// Represents the enabled case.
     Enabled(SecurityBootstrapConfig),
 }
 
 impl SecurityBootstrap {
+    /// Returns whether enabled.
     pub const fn is_enabled(&self) -> bool {
         matches!(self, Self::Enabled(_))
     }
@@ -182,6 +196,7 @@ impl fmt::Debug for SecurityBootstrapConfig {
 }
 
 impl SecurityBootstrapConfig {
+    /// Creates a new `SecurityBootstrapConfig`.
     pub const fn new(profile: SecurityBootstrapProfile) -> Self {
         Self {
             profile,
@@ -207,27 +222,32 @@ impl SecurityBootstrapConfig {
         SecurityBootstrapEnvironment::from_env()?.resolve()
     }
 
+    /// Sets trust anchor and returns the updated value.
     pub fn with_trust_anchor(mut self, path: impl Into<PathBuf>) -> Self {
         self.trust_anchor = Some(path.into());
         self
     }
 
+    /// Sets tls identity and returns the updated value.
     pub fn with_tls_identity(mut self, certificate: impl Into<PathBuf>, private_key: impl Into<PathBuf>) -> Self {
         self.tls_certificate = Some(certificate.into());
         self.tls_private_key = Some(private_key.into());
         self
     }
 
+    /// Sets secret provider and returns the updated value.
     pub fn with_secret_provider(mut self, provider: impl Into<String>) -> Self {
         self.secret_provider = Some(provider.into());
         self
     }
 
+    /// Sets admin identity and returns the updated value.
     pub fn with_admin_identity(mut self, path: impl Into<PathBuf>) -> Self {
         self.admin_identity = Some(path.into());
         self
     }
 
+    /// Sets request policy and returns the updated value.
     pub fn with_request_policy(mut self, path: impl Into<PathBuf>) -> Self {
         self.request_policy = Some(path.into());
         self
@@ -294,7 +314,9 @@ pub fn validate_security_bootstrap_from_env(
 /// Result of resolving and, when enabled, validating process security bootstrap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SecurityBootstrapOutcome {
+    /// Represents the disabled case.
     Disabled,
+    /// Represents the validated case.
     Validated(ValidatedSecurityBootstrap),
 }
 
@@ -306,21 +328,29 @@ pub struct ValidatedSecurityBootstrap {
 }
 
 impl ValidatedSecurityBootstrap {
+    /// Returns the profile.
     pub const fn profile(self) -> SecurityBootstrapProfile {
         self.profile
     }
 
+    /// Returns the listener count.
     pub const fn listener_count(self) -> usize {
         self.listener_count
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Identifies the security bootstrap material state.
 pub enum SecurityBootstrapMaterial {
+    /// Represents the trust anchor case.
     TrustAnchor,
+    /// Represents the tls certificate case.
     TlsCertificate,
+    /// Represents the tls private key case.
     TlsPrivateKey,
+    /// Represents the admin identity case.
     AdminIdentity,
+    /// Represents the request policy case.
     RequestPolicy,
 }
 
@@ -340,24 +370,34 @@ impl fmt::Display for SecurityBootstrapMaterial {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum SecurityBootstrapError {
     #[error("security bootstrap profile is required when bootstrap fields are configured")]
+    /// Represents the missing profile case.
     MissingProfile,
     #[error("security bootstrap profile is unknown")]
+    /// Represents the unknown profile case.
     UnknownProfile,
     #[error("security bootstrap environment field is not valid UTF-8")]
+    /// Represents the invalid environment encoding case.
     InvalidEnvironmentEncoding,
     #[error("secure bootstrap is missing {0}")]
+    /// Represents the missing material case.
     MissingMaterial(SecurityBootstrapMaterial),
     #[error("secure bootstrap {0} is unavailable")]
+    /// Represents the material unavailable case.
     MaterialUnavailable(SecurityBootstrapMaterial),
     #[error("secure bootstrap {0} is not a regular file")]
+    /// Represents the material not regular file case.
     MaterialNotRegularFile(SecurityBootstrapMaterial),
     #[error("secure bootstrap {0} is empty")]
+    /// Represents the material empty case.
     MaterialEmpty(SecurityBootstrapMaterial),
     #[error("secure bootstrap secret provider is required")]
+    /// Represents the missing secret provider case.
     MissingSecretProvider,
     #[error("secure bootstrap secret provider is unsupported")]
+    /// Represents the unsupported secret provider case.
     UnsupportedSecretProvider,
     #[error("development-insecure profile requires every listener to use a loopback address")]
+    /// Represents the development listener not loopback case.
     DevelopmentListenerNotLoopback,
 }
 
@@ -403,7 +443,9 @@ fn inspect_bootstrap_file(
 /// Whether configuration belongs to a newly created or already deployed installation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeploymentOrigin {
+    /// Represents the new case.
     New,
+    /// Represents the existing case.
     Existing,
 }
 
@@ -415,6 +457,7 @@ pub struct SecurityProfileSelection<'a> {
 }
 
 impl<'a> SecurityProfileSelection<'a> {
+    /// Creates a new `SecurityProfileSelection`.
     pub const fn new(origin: DeploymentOrigin) -> Self {
         Self {
             origin,
@@ -422,6 +465,7 @@ impl<'a> SecurityProfileSelection<'a> {
         }
     }
 
+    /// Sets configured profile and returns the updated value.
     pub const fn with_configured_profile(mut self, profile: &'a str) -> Self {
         self.configured_profile = Some(profile);
         self
@@ -431,8 +475,11 @@ impl<'a> SecurityProfileSelection<'a> {
 /// Migration action produced alongside the effective profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SecurityMigrationStatus {
+    /// Represents the not required case.
     NotRequired,
+    /// Represents the compatibility profile must be persisted case.
     CompatibilityProfileMustBePersisted,
+    /// Represents the migration to secure pending case.
     MigrationToSecurePending,
 }
 
@@ -444,10 +491,12 @@ pub struct SecurityProfileResolution {
 }
 
 impl SecurityProfileResolution {
+    /// Returns the profile.
     pub const fn profile(self) -> DeploymentProfile {
         self.profile
     }
 
+    /// Returns the migration status.
     pub const fn migration_status(self) -> SecurityMigrationStatus {
         self.migration_status
     }
@@ -457,6 +506,7 @@ impl SecurityProfileResolution {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum SecurityProfileSelectionError {
     #[error("configured security profile is unknown")]
+    /// Represents the unknown profile case.
     UnknownProfile,
 }
 
@@ -503,6 +553,7 @@ pub struct BootstrapReadinessView {
 }
 
 impl BootstrapReadinessView {
+    /// Creates a new `BootstrapReadinessView`.
     pub const fn new(expires_at: SystemTime) -> Self {
         Self {
             expires_at,
@@ -511,11 +562,13 @@ impl BootstrapReadinessView {
         }
     }
 
+    /// Sets available material and returns the updated value.
     pub const fn with_available_material(mut self) -> Self {
         self.material_available = true;
         self
     }
 
+    /// Sets verified tls listener and returns the updated value.
     pub const fn with_verified_tls_listener(mut self) -> Self {
         self.verified_tls_listener = true;
         self
@@ -534,6 +587,7 @@ pub struct DeploymentSecurityConfigView<'a> {
 }
 
 impl<'a> DeploymentSecurityConfigView<'a> {
+    /// Creates a new `DeploymentSecurityConfigView`.
     pub const fn new(profile: SecurityProfileSelection<'a>) -> Self {
         Self {
             profile,
@@ -545,26 +599,31 @@ impl<'a> DeploymentSecurityConfigView<'a> {
         }
     }
 
+    /// Sets trust anchor and returns the updated value.
     pub const fn with_trust_anchor(mut self, path: &'a Path) -> Self {
         self.trust_anchor = Some(path);
         self
     }
 
+    /// Sets registered secret provider and returns the updated value.
     pub const fn with_registered_secret_provider(mut self) -> Self {
         self.secret_provider_registered = true;
         self
     }
 
+    /// Sets provisioned admin identity and returns the updated value.
     pub const fn with_provisioned_admin_identity(mut self) -> Self {
         self.provisioned_admin_identity = true;
         self
     }
 
+    /// Sets one time bootstrap and returns the updated value.
     pub const fn with_one_time_bootstrap(mut self, bootstrap: BootstrapReadinessView) -> Self {
         self.one_time_bootstrap = Some(bootstrap);
         self
     }
 
+    /// Sets insecure downgrade and returns the updated value.
     pub const fn with_insecure_downgrade(mut self) -> Self {
         self.insecure_downgrade = true;
         self
@@ -574,15 +633,25 @@ impl<'a> DeploymentSecurityConfigView<'a> {
 /// Stable reasons a resolved deployment is not safe to serve traffic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DeploymentSecurityFailure {
+    /// Represents the missing trust anchor case.
     MissingTrustAnchor,
+    /// Represents the trust anchor unavailable case.
     TrustAnchorUnavailable,
+    /// Represents the trust anchor not regular file case.
     TrustAnchorNotRegularFile,
+    /// Represents the missing secret provider case.
     MissingSecretProvider,
+    /// Represents the missing identity bootstrap case.
     MissingIdentityBootstrap,
+    /// Represents the multiple identity bootstrap sources case.
     MultipleIdentityBootstrapSources,
+    /// Represents the missing bootstrap material case.
     MissingBootstrapMaterial,
+    /// Represents the expired bootstrap case.
     ExpiredBootstrap,
+    /// Represents the bootstrap listener not tls case.
     BootstrapListenerNotTls,
+    /// Represents the insecure downgrade case.
     InsecureDowngrade,
 }
 
@@ -594,14 +663,17 @@ pub struct DeploymentSecurityReport {
 }
 
 impl DeploymentSecurityReport {
+    /// Returns whether ready.
     pub fn is_ready(&self) -> bool {
         self.failures.is_empty()
     }
 
+    /// Returns the resolution.
     pub const fn resolution(&self) -> SecurityProfileResolution {
         self.resolution
     }
 
+    /// Returns the failures.
     pub fn failures(&self) -> &[DeploymentSecurityFailure] {
         &self.failures
     }

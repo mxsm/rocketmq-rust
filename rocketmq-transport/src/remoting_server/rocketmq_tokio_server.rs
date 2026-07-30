@@ -965,6 +965,14 @@ mod tests {
         RuntimeContext::from_current(name).service_context("remoting-server-service")
     }
 
+    async fn await_server_startup(startup: oneshot::Receiver<RocketMQResult<SocketAddr>>) -> SocketAddr {
+        tokio::time::timeout(Duration::from_secs(1), startup)
+            .await
+            .expect("remoting server startup acknowledgement deadline")
+            .expect("remoting server startup sender")
+            .expect("remoting server should bind")
+    }
+
     impl rocketmq_security_api::OutboundSigner for RemotingMarkerSigner {
         fn sign(
             &self,
@@ -1234,16 +1242,13 @@ mod tests {
 
     #[tokio::test]
     async fn remoting_control_response_uses_reserve_when_data_writer_budget_is_full() {
-        let reserved = TcpListener::bind("127.0.0.1:0").await.expect("reserve port");
-        let addr = reserved.local_addr().unwrap();
-        drop(reserved);
         let limits = AdmissionLimits {
             queued: ResourceLimit { count: 4, bytes: 4096 },
             control_reserve: ResourceLimit { count: 2, bytes: 2048 },
             ..AdmissionLimits::default()
         };
         let admission = Arc::new(AdmissionController::new(limits));
-        let scope = crate::admission::AdmissionScope::new(addr.ip());
+        let scope = crate::admission::AdmissionScope::new("127.0.0.1".parse().expect("loopback address"));
         let _data_one = admission
             .try_acquire(
                 crate::admission::AdmissionResource::Queued,
@@ -1261,8 +1266,8 @@ mod tests {
             )
             .unwrap();
         let config = Arc::new(ServerConfig {
-            bind_address: addr.ip().to_string(),
-            listen_port: u32::from(addr.port()),
+            bind_address: "127.0.0.1".to_owned(),
+            listen_port: 0,
             ..ServerConfig::default()
         });
         let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(
@@ -1271,14 +1276,20 @@ mod tests {
         )
         .with_admission_controller(admission);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let (startup_tx, startup_rx) = oneshot::channel();
         let server_task = tokio::spawn(async move {
             server
-                .run_with_shutdown_report(DefaultRemotingRequestProcessor, None, async {
-                    let _ = shutdown_rx.await;
-                })
+                .run_with_shutdown_report_and_startup(
+                    DefaultRemotingRequestProcessor,
+                    None,
+                    async {
+                        let _ = shutdown_rx.await;
+                    },
+                    startup_tx,
+                )
                 .await
         });
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        let addr = await_server_startup(startup_rx).await;
 
         let mut client = crate::connection::Connection::new(TcpStream::connect(addr).await.unwrap());
         client
@@ -1310,9 +1321,6 @@ mod tests {
     async fn command_snapshot_task_groups_prune_after_each_response() {
         const COMMAND_COUNT: usize = 128;
 
-        let reserved = TcpListener::bind("127.0.0.1:0").await.expect("reserve port");
-        let addr = reserved.local_addr().unwrap();
-        drop(reserved);
         let request_executor_group = Arc::new(std::sync::Mutex::new(None::<TaskGroup>));
         let request_executor_group_for_hook = request_executor_group.clone();
         let hook: TestRequestHook = Arc::new(move |_code, _opaque, _channel, task_group, _deferred_response| {
@@ -1325,8 +1333,8 @@ mod tests {
             TestRequestHookResult::Continue
         });
         let config = Arc::new(ServerConfig {
-            bind_address: addr.ip().to_string(),
-            listen_port: u32::from(addr.port()),
+            bind_address: "127.0.0.1".to_owned(),
+            listen_port: 0,
             ..ServerConfig::default()
         });
         let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(
@@ -1335,14 +1343,20 @@ mod tests {
         )
         .with_test_request_hook(hook);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let (startup_tx, startup_rx) = oneshot::channel();
         let server_task = tokio::spawn(async move {
             server
-                .run_with_shutdown_report(DefaultRemotingRequestProcessor, None, async {
-                    let _ = shutdown_rx.await;
-                })
+                .run_with_shutdown_report_and_startup(
+                    DefaultRemotingRequestProcessor,
+                    None,
+                    async {
+                        let _ = shutdown_rx.await;
+                    },
+                    startup_tx,
+                )
                 .await
         });
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        let addr = await_server_startup(startup_rx).await;
 
         let mut client = crate::connection::Connection::new(TcpStream::connect(addr).await.unwrap());
         for index in 0..COMMAND_COUNT {
@@ -1386,16 +1400,13 @@ mod tests {
 
     #[tokio::test]
     async fn delayed_data_response_keeps_its_request_admission_class_after_control_request() {
-        let reserved = TcpListener::bind("127.0.0.1:0").await.expect("reserve port");
-        let addr = reserved.local_addr().unwrap();
-        drop(reserved);
         let limits = AdmissionLimits {
             queued: ResourceLimit { count: 4, bytes: 4096 },
             control_reserve: ResourceLimit { count: 2, bytes: 2048 },
             ..AdmissionLimits::default()
         };
         let admission = Arc::new(AdmissionController::new(limits));
-        let scope = crate::admission::AdmissionScope::new(addr.ip());
+        let scope = crate::admission::AdmissionScope::new("127.0.0.1".parse().expect("loopback address"));
         let delayed: Arc<std::sync::Mutex<Option<DelayedResponse>>> = Arc::new(std::sync::Mutex::new(None));
         let first_seen = Arc::new(tokio::sync::Notify::new());
         let second_seen = Arc::new(tokio::sync::Notify::new());
@@ -1438,8 +1449,8 @@ mod tests {
             },
         );
         let config = Arc::new(ServerConfig {
-            bind_address: addr.ip().to_string(),
-            listen_port: u32::from(addr.port()),
+            bind_address: "127.0.0.1".to_owned(),
+            listen_port: 0,
             ..ServerConfig::default()
         });
         let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(
@@ -1449,14 +1460,20 @@ mod tests {
         .with_admission_controller(admission.clone())
         .with_test_request_hook(hook);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let (startup_tx, startup_rx) = oneshot::channel();
         let server_task = tokio::spawn(async move {
             server
-                .run_with_shutdown_report(DefaultRemotingRequestProcessor, None, async {
-                    let _ = shutdown_rx.await;
-                })
+                .run_with_shutdown_report_and_startup(
+                    DefaultRemotingRequestProcessor,
+                    None,
+                    async {
+                        let _ = shutdown_rx.await;
+                    },
+                    startup_tx,
+                )
                 .await
         });
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        let addr = await_server_startup(startup_rx).await;
 
         let mut client = crate::connection::Connection::new(TcpStream::connect(addr).await.unwrap());
         client
@@ -1545,9 +1562,6 @@ mod tests {
 
     #[tokio::test]
     async fn production_remoting_client_and_server_use_injected_transport_security() {
-        let reserved = TcpListener::bind("127.0.0.1:0").await.expect("reserve port");
-        let addr = reserved.local_addr().unwrap();
-        drop(reserved);
         let policy = Arc::new(RequireTransportSignature {
             calls: std::sync::atomic::AtomicUsize::new(0),
         });
@@ -1556,22 +1570,28 @@ mod tests {
             None,
         ));
         let config = Arc::new(ServerConfig {
-            bind_address: addr.ip().to_string(),
-            listen_port: u32::from(addr.port()),
+            bind_address: "127.0.0.1".to_owned(),
+            listen_port: 0,
             ..ServerConfig::default()
         });
         let service = test_service_context("remoting-server-security-test");
         let mut server = RocketMQServer::<DefaultRemotingRequestProcessor>::new(config, service.clone())
             .with_transport_security(security, Some(rocketmq_security_api::Principal::new("remoting-test")));
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let (startup_tx, startup_rx) = oneshot::channel();
         let server_task = tokio::spawn(async move {
             server
-                .run_with_shutdown_report(DefaultRemotingRequestProcessor, None, async {
-                    let _ = shutdown_rx.await;
-                })
+                .run_with_shutdown_report_and_startup(
+                    DefaultRemotingRequestProcessor,
+                    None,
+                    async {
+                        let _ = shutdown_rx.await;
+                    },
+                    startup_tx,
+                )
                 .await
         });
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        let addr = await_server_startup(startup_rx).await;
 
         let client = RocketmqDefaultClient::new(
             Arc::new(TokioClientConfig::default()),

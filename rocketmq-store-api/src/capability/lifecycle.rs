@@ -17,6 +17,7 @@ use std::future::Future;
 
 /// Storage lifecycle capability.
 pub trait StoreLifecycle: Send + Sync {
+    /// Value type used for error.
     type Error: StdError + Send + Sync + 'static;
 
     /// Loads existing state.

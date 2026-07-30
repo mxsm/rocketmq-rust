@@ -47,7 +47,7 @@ class ArchitectureTargetRunnerTest(unittest.TestCase):
         self.assertEqual(expected_checks, set(runner.CORRECTNESS_COMMANDS))
         self.assertEqual(expected_variants, set(runner.MEASUREMENT_COMMANDS))
         self.assertEqual(4, len(runner.CORRECTNESS_COMMANDS))
-        self.assertEqual(11, len(runner.MEASUREMENT_COMMANDS))
+        self.assertEqual(13, len(runner.MEASUREMENT_COMMANDS))
 
     def test_every_command_is_an_explicit_argument_vector(self) -> None:
         for commands in runner.CORRECTNESS_COMMANDS.values():

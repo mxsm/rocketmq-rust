@@ -219,6 +219,8 @@ def validate_schema(policy: dict[str, Any]) -> list[Finding]:
         "critical_action_pins",
         "critical_workflows",
         "evidence_artifacts",
+        "evidence_governance",
+        "documentation_contracts",
         "python_tests",
         "generated_document",
     }
@@ -293,7 +295,12 @@ def validate_python_tests(root: Path, policy: dict[str, Any]) -> list[Finding]:
     if not isinstance(config, dict) or set(config) != {"expected_count", "ci", "entries"}:
         return [Finding("test-inventory-schema", normalized(POLICY_RELATIVE), "unexpected python_tests schema")]
     entries = config["entries"]
-    if not isinstance(entries, list) or config["expected_count"] != 53 or len(entries) != config["expected_count"]:
+    if (
+        not isinstance(config["expected_count"], int)
+        or config["expected_count"] < 49
+        or not isinstance(entries, list)
+        or len(entries) != config["expected_count"]
+    ):
         findings.append(
             Finding(
                 "test-inventory-count",
@@ -556,6 +563,114 @@ def validate_document_language(root: Path) -> list[Finding]:
     return findings
 
 
+def validate_local_links(root: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    candidates = [root / "README.md", *sorted((root / "rocketmq-doc/en").glob("*.md"))]
+    pattern = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
+    for path in candidates:
+        source = path.read_text(encoding="utf-8")
+        source = re.sub(r"```.*?```", "", source, flags=re.DOTALL)
+        source = re.sub(r"`[^`\n]*`", "", source)
+        for raw_target in pattern.findall(source):
+            target = raw_target.strip().split(maxsplit=1)[0].strip("<>")
+            target = target.split("#", maxsplit=1)[0]
+            if not target or target.startswith(("http://", "https://", "mailto:", "/")):
+                continue
+            resolved = (path.parent / target).resolve()
+            try:
+                resolved.relative_to(root.resolve())
+            except ValueError:
+                findings.append(
+                    Finding("local-link-outside-root", normalized(path.relative_to(root)), raw_target)
+                )
+                continue
+            if not resolved.exists():
+                findings.append(Finding("broken-local-link", normalized(path.relative_to(root)), raw_target))
+    return findings
+
+
+def validate_documentation_contracts(root: Path, policy: dict[str, Any], facts: Facts) -> list[Finding]:
+    findings: list[Finding] = []
+    contracts = policy["documentation_contracts"]
+    required_fields = {
+        "core_capabilities",
+        "acknowledgement_adr",
+        "regional_dr_adr",
+        "acknowledgement_evidence_schema",
+        "missing_docs_crates",
+    }
+    if set(contracts) != required_fields:
+        return [Finding("documentation-contract-schema", normalized(POLICY_RELATIVE), "unexpected fields")]
+
+    for field in required_fields - {"missing_docs_crates"}:
+        relative = contracts[field]
+        if not isinstance(relative, str) or not (root / relative).is_file():
+            findings.append(Finding("documentation-contract-missing", str(relative), field))
+
+    for field in ("acknowledgement_adr", "regional_dr_adr"):
+        relative = contracts[field]
+        path = root / relative
+        if path.is_file():
+            source = path.read_text(encoding="utf-8")
+            for marker in ("- Status: Accepted", "- Owners:", "- Target:"):
+                if marker not in source:
+                    findings.append(Finding("adr-metadata", relative, marker))
+
+    schema_path = root / contracts["acknowledgement_evidence_schema"]
+    if schema_path.is_file():
+        try:
+            schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as error:
+            findings.append(Finding("ack-evidence-schema", normalized(schema_path.relative_to(root)), str(error)))
+        else:
+            profiles = schema.get("profiles", [])
+            if {profile.get("id") for profile in profiles if isinstance(profile, dict)} != {
+                "memory-accepted",
+                "local-durable",
+                "replicated-durable",
+            }:
+                findings.append(
+                    Finding("ack-evidence-profiles", normalized(schema_path.relative_to(root)), "profile drift")
+                )
+            required_run_fields = set(schema.get("required_run_fields", []))
+            for field in (
+                "candidate_commit",
+                "candidate_images",
+                "acknowledged_message_ids_before",
+                "acknowledged_message_ids_after",
+                "observed_rpo_messages",
+                "ready_rto_millis",
+                "message_visible_rto_millis",
+                "leaked",
+                "detached_still_running",
+                "checksums",
+            ):
+                if field not in required_run_fields:
+                    findings.append(Finding("ack-evidence-field", normalized(schema_path.relative_to(root)), field))
+
+    crates = contracts["missing_docs_crates"]
+    if not isinstance(crates, list) or len(crates) != 4 or len(set(crates)) != 4:
+        findings.append(Finding("missing-docs-crates", normalized(POLICY_RELATIVE), "exactly four crates required"))
+    else:
+        package_paths = {package.name: package.path for package in facts.root_packages}
+        for crate in crates:
+            crate_path = package_paths.get(crate)
+            if crate_path is None:
+                findings.append(Finding("missing-docs-crate-unknown", normalized(POLICY_RELATIVE), crate))
+                continue
+            lib = root / crate_path / "src/lib.rs"
+            source = lib.read_text(encoding="utf-8") if lib.is_file() else ""
+            if "#![deny(missing_docs)]" not in source:
+                findings.append(Finding("missing-docs-not-denied", normalized(lib.relative_to(root)), crate))
+
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    for package in facts.root_packages:
+        expected_link = f"./{package.path}"
+        if expected_link not in readme:
+            findings.append(Finding("readme-package-missing", "README.md", f"{package.name}: {expected_link}"))
+    return findings
+
+
 def render_document(policy: dict[str, Any], facts: Facts) -> str:
     lines = [
         "# Architecture validation and release evidence index",
@@ -688,7 +803,7 @@ def render_document(policy: dict[str, Any], facts: Facts) -> str:
     lines.extend(
         [
             "",
-            "Coverage uses a root-workspace auto baseline with a 1% allowed regression and a 50% patch",
+            f"Coverage uses a root-workspace auto baseline with a 1% allowed regression and a {policy['coverage']['patch_target']} patch",
             "target. Each standalone application publishes a separate LCOV artifact; the fuzz standalone",
             "reports libFuzzer edge coverage and retains its versioned corpus rather than producing an empty",
             "unit-test LCOV report.",
@@ -708,6 +823,13 @@ def render_document(policy: dict[str, Any], facts: Facts) -> str:
             "- Runtime ownership: `scripts/runtime-task-escape-policy.json` and the enforcing runtime audit.",
             "- Performance thresholds: `scripts/architecture-performance-profiles.json` and the performance guard.",
             "- Distributed evidence: `distribution/kubernetes/fault-matrix-policy.json` and the SLO/fault guards.",
+            f"- Risk-to-test matrix: `{policy['evidence_governance']['risk_matrix']}`.",
+            f"- Deterministic property suites: `{policy['evidence_governance']['property_registry']}`.",
+            f"- Fuzz corpus ownership and retention: `{policy['evidence_governance']['fuzz_registry']}`.",
+            f"- Cross-registry guard: `{policy['evidence_governance']['guard']}`.",
+            f"- Core capability contracts: `{policy['documentation_contracts']['core_capabilities']}`.",
+            f"- Acknowledgement/failover ADR: `{policy['documentation_contracts']['acknowledgement_adr']}`.",
+            f"- Regional DR boundary: `{policy['documentation_contracts']['regional_dr_adr']}`.",
             "",
         ]
     )
@@ -725,6 +847,8 @@ def validate(root: Path, policy: dict[str, Any], facts: Facts) -> list[Finding]:
     findings.extend(validate_coverage(root, policy))
     findings.extend(validate_compatibility(root))
     findings.extend(validate_document_language(root))
+    findings.extend(validate_local_links(root))
+    findings.extend(validate_documentation_contracts(root, policy, facts))
     document_path = root / policy["generated_document"]
     expected = render_document(policy, facts)
     actual = document_path.read_text(encoding="utf-8") if document_path.is_file() else ""

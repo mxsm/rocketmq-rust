@@ -21,15 +21,27 @@ use thiserror::Error;
 pub enum ProtocolError {
     /// Invalid command code
     #[error("Invalid command code: {code}")]
-    InvalidCommand { code: i32 },
+    /// The invalid command value.
+    InvalidCommand {
+        /// The code value.
+        code: i32,
+    },
 
     /// Unsupported protocol version
     #[error("Unsupported protocol version: {version}")]
-    UnsupportedVersion { version: i32 },
+    /// The unsupported version value.
+    UnsupportedVersion {
+        /// The version value.
+        version: i32,
+    },
 
     /// Required header field is missing
     #[error("Missing required header field: {field}")]
-    HeaderMissing { field: &'static str },
+    /// The header missing value.
+    HeaderMissing {
+        /// The field value.
+        field: &'static str,
+    },
 
     /// Required body is missing
     #[error("Missing required message body")]
@@ -37,19 +49,39 @@ pub enum ProtocolError {
 
     /// Checksum mismatch
     #[error("Checksum mismatch: expected {expected:x}, got {actual:x}")]
-    ChecksumMismatch { expected: u32, actual: u32 },
+    /// The checksum mismatch value.
+    ChecksumMismatch {
+        /// The expected value.
+        expected: u32,
+        /// The actual value.
+        actual: u32,
+    },
 
     /// Invalid message format
     #[error("Invalid message format: {reason}")]
-    InvalidMessage { reason: String },
+    /// The invalid message value.
+    InvalidMessage {
+        /// The reason value.
+        reason: String,
+    },
 
     /// Protocol decode error
     #[error("Protocol decode error: ext_fields_length={ext_fields_len}, header_length={header_len}")]
-    DecodeError { ext_fields_len: usize, header_len: usize },
+    /// The decode error value.
+    DecodeError {
+        /// The ext fields len value.
+        ext_fields_len: usize,
+        /// The header len value.
+        header_len: usize,
+    },
 
     /// Unsupported serialization type
     #[error("Unsupported serialization type: {serialize_type}")]
-    UnsupportedSerializationType { serialize_type: u8 },
+    /// The unsupported serialization type value.
+    UnsupportedSerializationType {
+        /// The serialize type value.
+        serialize_type: u8,
+    },
 }
 
 impl ProtocolError {

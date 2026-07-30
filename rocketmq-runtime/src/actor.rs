@@ -16,9 +16,11 @@ use std::future::Future;
 use std::io;
 use std::thread;
 
+/// Represents actor runtime.
 pub struct ActorRuntime;
 
 impl ActorRuntime {
+    /// Spawns current thread.
     pub fn spawn_current_thread<F>(thread_name: impl Into<String>, future: F) -> io::Result<thread::JoinHandle<()>>
     where
         F: Future<Output = ()> + Send + 'static,

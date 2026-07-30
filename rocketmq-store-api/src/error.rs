@@ -28,15 +28,25 @@ type BoxError = Box<dyn StdError + Send + Sync>;
 /// Closed vocabulary for operations that may cross the capability boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum StoreOperation {
+    /// Represents the load case.
     Load,
+    /// Represents the start case.
     Start,
+    /// Represents the shutdown case.
     Shutdown,
+    /// Represents the append case.
     Append,
+    /// Represents the flush case.
     Flush,
+    /// Represents the read case.
     Read,
+    /// Represents the query offset case.
     QueryOffset,
+    /// Represents the replicate case.
     Replicate,
+    /// Represents the append derived case.
     AppendDerived,
+    /// Represents the admin case.
     Admin,
 }
 
@@ -61,16 +71,27 @@ impl StoreOperation {
 /// Stable, low-cardinality storage failure classification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum StoreErrorKind {
+    /// Represents the not started case.
     NotStarted,
+    /// Represents the unavailable case.
     Unavailable,
+    /// Represents the invalid request case.
     InvalidRequest,
+    /// Represents the not found case.
     NotFound,
+    /// Represents the capacity case.
     Capacity,
+    /// Represents the storage case.
     Storage,
+    /// Represents the io case.
     Io,
+    /// Represents the corruption case.
     Corruption,
+    /// Represents the timeout case.
     Timeout,
+    /// Represents the unsupported case.
     Unsupported,
+    /// Represents the internal case.
     Internal,
 }
 
@@ -129,13 +150,21 @@ impl StoreErrorKind {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum StoreComponent {
     #[default]
+    /// Represents the store case.
     Store,
+    /// Represents the configuration case.
     Configuration,
+    /// Represents the commit log case.
     CommitLog,
+    /// Represents the mapped file case.
     MappedFile,
+    /// Represents the rocks db case.
     RocksDb,
+    /// Represents the tiered store case.
     TieredStore,
+    /// Represents the high availability case.
     HighAvailability,
+    /// Represents the dledger case.
     DLedger,
 }
 

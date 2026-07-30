@@ -111,6 +111,34 @@ fn expected_body(sequence: usize) -> Bytes {
 }
 
 #[tokio::test]
+async fn disk_full_state_rejects_new_writes_without_losing_acknowledged_data() {
+    let temp_dir = TempDir::new().expect("create disk-full fault directory");
+    let topic = CheetahString::from_static_str("ArchitectureDiskFullRecovery");
+    let mut store = new_store(temp_dir.path(), FlushDiskType::SyncFlush);
+    start_store(&mut store).await;
+
+    let acknowledged = store.put_message(message(&topic, 0)).await;
+    assert_eq!(acknowledged.put_message_status(), PutMessageStatus::PutOk);
+    let acknowledged_offset = acknowledged
+        .append_message_result()
+        .expect("acknowledged append")
+        .wrote_offset;
+
+    assert!(store.get_running_flags().get_and_make_disk_full());
+    let rejected = store.put_message(message(&topic, 1)).await;
+    assert_eq!(rejected.put_message_status(), PutMessageStatus::ServiceNotAvailable);
+    assert!(
+        store.look_message_by_offset(acknowledged_offset).is_some(),
+        "disk-full admission must not hide previously acknowledged data"
+    );
+
+    assert!(!store.get_running_flags().get_and_make_disk_ok());
+    let recovered = store.put_message(message(&topic, 1)).await;
+    assert_eq!(recovered.put_message_status(), PutMessageStatus::PutOk);
+    store.shutdown().await;
+}
+
+#[tokio::test]
 #[ignore = "subprocess helper; the parent test terminates it after durable acknowledgements"]
 async fn sync_flush_crash_writer_helper() {
     let root = env::var_os(CHILD_STORE_ROOT).expect("child store root");

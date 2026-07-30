@@ -23,32 +23,63 @@ use thiserror::Error;
 pub enum SerializationError {
     /// Encoding failed
     #[error("Encoding failed ({format}): {message}")]
-    EncodeFailed { format: &'static str, message: String },
+    /// The encode failed value.
+    EncodeFailed {
+        /// The format value.
+        format: &'static str,
+        /// The message value.
+        message: String,
+    },
 
     /// Decoding failed
     #[error("Decoding failed ({format}): {message}")]
-    DecodeFailed { format: &'static str, message: String },
+    /// The decode failed value.
+    DecodeFailed {
+        /// The format value.
+        format: &'static str,
+        /// The message value.
+        message: String,
+    },
 
     /// Serialization operation failed with a preserved typed source.
     #[error("{operation} failed ({format})")]
     Source {
+        /// The struct field value.
         operation: &'static str,
+        /// The struct field value.
         format: &'static str,
         #[source]
+        /// The struct field value.
         source: Box<dyn StdError + Send + Sync>,
     },
 
     /// Invalid data format
     #[error("Invalid format: expected {expected}, got {got}")]
-    InvalidFormat { expected: &'static str, got: String },
+    /// The invalid format value.
+    InvalidFormat {
+        /// The expected value.
+        expected: &'static str,
+        /// The got value.
+        got: String,
+    },
 
     /// Missing required field
     #[error("Missing required field: {field}")]
-    MissingField { field: &'static str },
+    /// The missing field value.
+    MissingField {
+        /// The field value.
+        field: &'static str,
+    },
 
     /// Invalid field value
     #[error("Invalid value for field '{field}': {reason}")]
-    InvalidValue { field: &'static str, reason: String },
+    /// The invalid value value.
+    InvalidValue {
+        /// The field value.
+        field: &'static str,
+        /// The reason value.
+        reason: String,
+    },
 
     /// UTF-8 encoding error
     #[error("UTF-8 encoding error: {0}")]

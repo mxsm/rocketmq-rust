@@ -138,7 +138,7 @@
     "config": "codecov.yml",
     "root_target": "auto",
     "allowed_regression": "1%",
-    "patch_target": "50%",
+    "patch_target": "70%",
     "standalone_workflow": ".github/workflows/architecture-nightly-evidence.yml",
     "fuzz_workflow": ".github/workflows/fuzz-ci.yml"
   },
@@ -180,8 +180,26 @@
       "artifact": "m11-12-r24-<backend>-<commit>"
     }
   ],
+  "evidence_governance": {
+    "risk_matrix": "scripts/architecture-risk-test-matrix.json",
+    "property_registry": "scripts/property-state-suite-registry.json",
+    "fuzz_registry": "fuzz/corpus-registry.json",
+    "guard": "scripts/architecture_evidence_governance_guard.py"
+  },
+  "documentation_contracts": {
+    "core_capabilities": "rocketmq-doc/en/core-capability-contracts.md",
+    "acknowledgement_adr": "rocketmq-doc/en/acknowledgement-failover-contract-adr.md",
+    "regional_dr_adr": "rocketmq-doc/en/regional-disaster-recovery-adr.md",
+    "acknowledgement_evidence_schema": "distribution/config/ack-failover-evidence-schema.json",
+    "missing_docs_crates": [
+      "rocketmq-store-api",
+      "rocketmq-runtime",
+      "rocketmq-error",
+      "rocketmq-security-api"
+    ]
+  },
   "python_tests": {
-    "expected_count": 53,
+    "expected_count": 54,
     "ci": {
       "guards": "python scripts/run_architecture_tests.py --tier pr_static",
       "contracts": "python scripts/run_architecture_tests.py --tier milestone_contract --tier phase_contract --tier dynamic_fixture"
@@ -192,6 +210,7 @@
       {"path": "scripts/tests/test_architecture_debt_guard.py", "owner": "architecture", "tier": "pr_static", "trigger_paths": ["scripts/**", "rocketmq-doc/en/**"], "command": "python -m unittest scripts.tests.test_architecture_debt_guard -v", "estimated_seconds": 10, "platform": "any", "fixture_policy": "temporary-only"},
       {"path": "scripts/tests/test_architecture_dependency_guard.py", "owner": "architecture", "tier": "pr_static", "trigger_paths": ["scripts/**", "**/Cargo.toml"], "command": "python -m unittest scripts.tests.test_architecture_dependency_guard -v", "estimated_seconds": 60, "platform": "any", "fixture_policy": "temporary-only"},
       {"path": "scripts/tests/test_architecture_documentation_guard.py", "owner": "architecture", "tier": "pr_static", "trigger_paths": ["scripts/**", "rocketmq-doc/**", ".github/workflows/**"], "command": "python -m unittest scripts.tests.test_architecture_documentation_guard -v", "estimated_seconds": 10, "platform": "any", "fixture_policy": "temporary-only"},
+      {"path": "scripts/tests/test_architecture_evidence_governance_guard.py", "owner": "architecture", "tier": "pr_static", "trigger_paths": ["scripts/**", "fuzz/**", "codecov.yml", ".github/workflows/**"], "command": "python -m unittest scripts.tests.test_architecture_evidence_governance_guard -v", "estimated_seconds": 30, "platform": "any", "fixture_policy": "repository-fixtures"},
       {"path": "scripts/tests/test_architecture_performance_guard.py", "owner": "performance", "tier": "pr_static", "trigger_paths": ["scripts/**", "benches/**"], "command": "python -m unittest scripts.tests.test_architecture_performance_guard -v", "estimated_seconds": 30, "platform": "any", "fixture_policy": "repository-fixtures"},
       {"path": "scripts/tests/test_architecture_performance_sidecar.py", "owner": "performance", "tier": "dynamic_fixture", "trigger_paths": ["scripts/**", "benches/**"], "command": "python -m unittest scripts.tests.test_architecture_performance_sidecar -v", "estimated_seconds": 120, "platform": "any", "fixture_policy": "temporary-only"},
       {"path": "scripts/tests/test_architecture_release_guard.py", "owner": "release-engineering", "tier": "pr_static", "trigger_paths": ["scripts/**", "distribution/**"], "command": "python -m unittest scripts.tests.test_architecture_release_guard -v", "estimated_seconds": 30, "platform": "any", "fixture_policy": "repository-fixtures"},

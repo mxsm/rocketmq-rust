@@ -15,9 +15,11 @@
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+/// Represents system clock.
 pub struct SystemClock;
 
 impl SystemClock {
+    /// Executes now.
     pub fn now() -> u128 {
         millis_since_epoch(SystemTime::now())
     }

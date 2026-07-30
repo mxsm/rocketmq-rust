@@ -43,10 +43,15 @@ use crate::RuntimeResult;
 use crate::ShutdownDeadline;
 use crate::TaskGroupChildLease;
 
+/// The health bind addr env constant.
 pub const HEALTH_BIND_ADDR_ENV: &str = "ROCKETMQ_HEALTH_BIND_ADDR";
+/// The shutdown timeout seconds env constant.
 pub const SHUTDOWN_TIMEOUT_SECONDS_ENV: &str = "ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS";
+/// The liveness stale seconds env constant.
 pub const LIVENESS_STALE_SECONDS_ENV: &str = "ROCKETMQ_LIVENESS_STALE_SECONDS";
+/// The default shutdown timeout constant.
 pub const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(45);
+/// The default liveness stale after constant.
 pub const DEFAULT_LIVENESS_STALE_AFTER: Duration = Duration::from_secs(30);
 const PROGRESS_INTERVAL: Duration = Duration::from_secs(1);
 const PROBE_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
@@ -61,10 +66,15 @@ const STATE_FAILED: u8 = 4;
 /// Stable process lifecycle states used by readiness and liveness probes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServiceLifecycleState {
+    /// Represents the starting case.
     Starting,
+    /// Represents the ready case.
     Ready,
+    /// Represents the draining case.
     Draining,
+    /// Represents the stopped case.
     Stopped,
+    /// Represents the failed case.
     Failed,
 }
 
@@ -79,6 +89,7 @@ impl ServiceLifecycleState {
         }
     }
 
+    /// Borrows this value as str.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Starting => "starting",
@@ -93,12 +104,16 @@ impl ServiceLifecycleState {
 /// Source of the first shutdown request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShutdownReason {
+    /// Represents the pre stop case.
     PreStop,
+    /// Represents the signal case.
     Signal,
+    /// Represents the internal case.
     Internal,
 }
 
 impl ShutdownReason {
+    /// Borrows this value as str.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::PreStop => "pre_stop",
@@ -111,16 +126,22 @@ impl ShutdownReason {
 /// Immutable first shutdown request and its shared absolute deadline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShutdownRequest {
+    /// The reason value.
     pub reason: ShutdownReason,
+    /// The deadline value.
     pub deadline: ShutdownDeadline,
 }
 
 /// Versioned runtime configuration for the process lifecycle boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceLifecycleConfig {
+    /// The service name value.
     pub service_name: Arc<str>,
+    /// The probe bind addr value.
     pub probe_bind_addr: Option<SocketAddr>,
+    /// The shutdown timeout value.
     pub shutdown_timeout: Duration,
+    /// The liveness stale after value.
     pub liveness_stale_after: Duration,
 }
 
@@ -242,6 +263,7 @@ pub struct ServiceLifecycle {
 }
 
 impl ServiceLifecycle {
+    /// Creates a new `ServiceLifecycle`.
     pub fn new(config: ServiceLifecycleConfig) -> Self {
         let (shutdown_tx, _shutdown_rx) = watch::channel(None);
         Self {
@@ -259,10 +281,12 @@ impl ServiceLifecycle {
         }
     }
 
+    /// Creates a value from env.
     pub fn from_env(service_name: impl Into<Arc<str>>) -> RuntimeResult<Self> {
         Ok(Self::new(ServiceLifecycleConfig::from_env(service_name)?))
     }
 
+    /// Returns the config.
     pub fn config(&self) -> &ServiceLifecycleConfig {
         &self.inner.config
     }
@@ -361,18 +385,22 @@ impl ServiceLifecycle {
         Err(error)
     }
 
+    /// Returns the state.
     pub fn state(&self) -> ServiceLifecycleState {
         ServiceLifecycleState::from_u8(self.inner.state.load(Ordering::Acquire))
     }
 
+    /// Returns the probe local addr.
     pub fn probe_local_addr(&self) -> Option<SocketAddr> {
         *self.inner.probe_local_addr.lock()
     }
 
+    /// Returns whether ready.
     pub fn is_ready(&self) -> bool {
         self.state() == ServiceLifecycleState::Ready
     }
 
+    /// Returns whether live.
     pub fn is_live(&self) -> bool {
         if matches!(
             self.state(),
@@ -383,6 +411,7 @@ impl ServiceLifecycle {
         self.progress_age() <= self.inner.config.liveness_stale_after
     }
 
+    /// Records progress.
     pub fn record_progress(&self) {
         let elapsed = self.inner.started_at.elapsed().as_millis();
         self.inner
@@ -422,11 +451,13 @@ impl ServiceLifecycle {
         }
     }
 
+    /// Executes mark failed.
     pub fn mark_failed(&self) {
         self.inner.state.store(STATE_FAILED, Ordering::Release);
         self.record_progress();
     }
 
+    /// Executes mark stopped.
     pub fn mark_stopped(&self) {
         let _ = self
             .inner
@@ -459,10 +490,12 @@ impl ServiceLifecycle {
         first
     }
 
+    /// Shuts down request.
     pub fn shutdown_request(&self) -> Option<ShutdownRequest> {
         *self.inner.shutdown_request.lock()
     }
 
+    /// Returns the wait for shutdown.
     pub async fn wait_for_shutdown(&self) -> ShutdownRequest {
         if let Some(request) = self.shutdown_request() {
             return request;

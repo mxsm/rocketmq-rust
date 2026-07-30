@@ -18,55 +18,101 @@ use crate::blocking::BlockingKind;
 use crate::blocking::BlockingTaskId;
 use crate::task_group::TaskGroupId;
 
+/// Alias for the runtime result type.
 pub type RuntimeResult<T> = Result<T, RuntimeError>;
 
 #[derive(Debug, thiserror::Error)]
+/// Identifies the runtime error state.
 pub enum RuntimeError {
     #[error("invalid runtime config: {0}")]
+    /// Represents the invalid config case.
     InvalidConfig(String),
 
     #[error("failed to build tokio runtime: {0}")]
+    /// Represents the build runtime case.
     BuildRuntime(#[from] std::io::Error),
 
     #[error("runtime I/O failed: {0}")]
+    /// Represents the io case.
     Io(std::io::Error),
 
     #[error("runtime configuration loading failed: {0}")]
+    /// Represents the configuration case.
     Configuration(String),
 
     #[error("no current Tokio runtime is available")]
+    /// Represents the no current runtime case.
     NoCurrentRuntime,
 
     #[error("operation {0} cannot run inside a Tokio runtime")]
+    /// Represents the inside tokio runtime case.
     InsideTokioRuntime(&'static str),
 
     #[error("task group {group_name} ({group_id:?}) is closing or closed")]
+    /// Represents the task group closing case.
     TaskGroupClosing {
+        /// The struct field value.
         group_id: TaskGroupId,
+        /// The struct field value.
         group_name: Arc<str>,
     },
 
     #[error("blocking queue timeout for {name}")]
-    BlockingQueueTimeout { name: Arc<str> },
+    /// Represents the blocking queue timeout case.
+    BlockingQueueTimeout {
+        /// The name value.
+        name: Arc<str>,
+    },
 
     #[error("blocking queue is full for {name}; maximum queued tasks: {max_queue_depth}")]
-    BlockingQueueFull { name: Arc<str>, max_queue_depth: usize },
+    /// Represents the blocking queue full case.
+    BlockingQueueFull {
+        /// The name value.
+        name: Arc<str>,
+        /// The max queue depth value.
+        max_queue_depth: usize,
+    },
 
     #[error("blocking kind {kind:?} is not supported by BlockingExecutor for {name}; use a dedicated thread")]
-    UnsupportedBlockingKind { name: Arc<str>, kind: BlockingKind },
+    /// Represents the unsupported blocking kind case.
+    UnsupportedBlockingKind {
+        /// The name value.
+        name: Arc<str>,
+        /// The kind value.
+        kind: BlockingKind,
+    },
 
     #[error("blocking task {name} ({task_id:?}) timed out and is still running")]
-    BlockingTaskTimeoutStillRunning { name: Arc<str>, task_id: BlockingTaskId },
+    /// Represents the blocking task timeout still running case.
+    BlockingTaskTimeoutStillRunning {
+        /// The name value.
+        name: Arc<str>,
+        /// The task identifier.
+        task_id: BlockingTaskId,
+    },
 
     #[error("blocking task join failed for {name}: {error}")]
+    /// Represents the blocking join case.
     BlockingJoin {
+        /// The struct field value.
         name: Arc<str>,
+        /// The struct field value.
         error: tokio::task::JoinError,
     },
 
     #[error("scheduled task {name} already exists")]
-    ScheduledTaskExists { name: Arc<str> },
+    /// Represents the scheduled task exists case.
+    ScheduledTaskExists {
+        /// The name value.
+        name: Arc<str>,
+    },
 
     #[error("runtime lifecycle operation {operation} failed: {message}")]
-    LifecycleOperation { operation: &'static str, message: String },
+    /// Represents the lifecycle operation case.
+    LifecycleOperation {
+        /// The operation value.
+        operation: &'static str,
+        /// The message value.
+        message: String,
+    },
 }

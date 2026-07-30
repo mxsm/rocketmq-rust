@@ -284,7 +284,7 @@ async fn queued_request_expiry_is_reported_before_send() {
     runner.await.expect("session runner");
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn missing_response_uses_the_same_absolute_response_deadline() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -319,10 +319,16 @@ async fn missing_response_uses_the_same_absolute_response_deadline() {
             )
             .await
     });
-    request_seen_rx.await.expect("server observed request");
+    tokio::time::timeout(Duration::from_secs(1), request_seen_rx)
+        .await
+        .expect("server should observe request before the outer test deadline")
+        .expect("server observed request");
 
-    tokio::time::advance(Duration::from_millis(100)).await;
-    let error = match invoke.await.expect("invoke task") {
+    let error = match tokio::time::timeout(Duration::from_secs(1), invoke)
+        .await
+        .expect("invoke should honor its response deadline")
+        .expect("invoke task")
+    {
         Ok(_) => panic!("missing response must time out"),
         Err(error) => error,
     };

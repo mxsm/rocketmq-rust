@@ -33,29 +33,44 @@ use crate::task_group::TaskId;
 use crate::task_group::TaskKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// Identifies the schedule mode state.
 pub enum ScheduleMode {
+    /// Represents the fixed delay case.
     FixedDelay,
+    /// Represents the fixed rate no overlap case.
     FixedRateNoOverlap,
+    /// Represents the fixed rate allow overlap case.
     FixedRateAllowOverlap,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// Identifies the scheduled task control state.
 pub enum ScheduledTaskControl {
+    /// Represents the continue case.
     Continue,
+    /// Represents the stop case.
     Stop,
 }
 
 #[derive(Debug, Clone)]
+/// Represents scheduled task config.
 pub struct ScheduledTaskConfig {
+    /// The name value.
     pub name: String,
+    /// The initial delay value.
     pub initial_delay: Duration,
+    /// The period value.
     pub period: Duration,
+    /// The mode value.
     pub mode: ScheduleMode,
+    /// The max run time value.
     pub max_run_time: Option<Duration>,
+    /// The shutdown timeout value.
     pub shutdown_timeout: Duration,
 }
 
 impl ScheduledTaskConfig {
+    /// Creates the fixed delay value.
     pub fn fixed_delay(name: impl Into<String>, period: Duration) -> Self {
         Self {
             name: name.into(),
@@ -67,6 +82,7 @@ impl ScheduledTaskConfig {
         }
     }
 
+    /// Creates the fixed rate no overlap value.
     pub fn fixed_rate_no_overlap(name: impl Into<String>, period: Duration) -> Self {
         Self {
             mode: ScheduleMode::FixedRateNoOverlap,
@@ -74,6 +90,7 @@ impl ScheduledTaskConfig {
         }
     }
 
+    /// Creates the fixed rate value.
     pub fn fixed_rate(name: impl Into<String>, period: Duration) -> Self {
         Self {
             mode: ScheduleMode::FixedRateAllowOverlap,
@@ -83,6 +100,7 @@ impl ScheduledTaskConfig {
 }
 
 #[derive(Debug, Clone)]
+/// Represents scheduled task group.
 pub struct ScheduledTaskGroup {
     group: TaskGroup,
     schedules: Arc<DashMap<Arc<str>, Arc<ScheduledTaskMetrics>>>,
@@ -103,21 +121,34 @@ struct ScheduledTaskMetrics {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Represents scheduled task snapshot.
 pub struct ScheduledTaskSnapshot {
+    /// The name value.
     pub name: String,
+    /// The mode value.
     pub mode: ScheduleMode,
+    /// Whether running.
     pub running: bool,
+    /// The active runs value.
     pub active_runs: u64,
+    /// The runs value.
     pub runs: u64,
+    /// The skips value.
     pub skips: u64,
+    /// The overlaps value.
     pub overlaps: u64,
+    /// The failures value.
     pub failures: u64,
+    /// The last drift duration in milliseconds.
     pub last_drift_ms: u64,
+    /// The last elapsed duration in milliseconds.
     pub last_elapsed_ms: u64,
+    /// The max elapsed duration in milliseconds.
     pub max_elapsed_ms: u64,
 }
 
 impl ScheduledTaskGroup {
+    /// Creates a new `ScheduledTaskGroup`.
     pub fn new(group: TaskGroup) -> Self {
         Self {
             group,
@@ -125,10 +156,12 @@ impl ScheduledTaskGroup {
         }
     }
 
+    /// Returns the group.
     pub fn group(&self) -> &TaskGroup {
         &self.group
     }
 
+    /// Returns the schedule fixed delay.
     pub fn schedule_fixed_delay<F, Fut>(&self, config: ScheduledTaskConfig, mut task: F) -> RuntimeResult<TaskId>
     where
         F: FnMut() -> Fut + Send + 'static,
@@ -143,6 +176,7 @@ impl ScheduledTaskGroup {
         })
     }
 
+    /// Returns the schedule fixed delay controlled.
     pub fn schedule_fixed_delay_controlled<F, Fut>(
         &self,
         mut config: ScheduledTaskConfig,
@@ -190,6 +224,7 @@ impl ScheduledTaskGroup {
         spawn_result
     }
 
+    /// Returns the schedule fixed rate no overlap.
     pub fn schedule_fixed_rate_no_overlap<F, Fut>(
         &self,
         mut config: ScheduledTaskConfig,
@@ -251,6 +286,7 @@ impl ScheduledTaskGroup {
         spawn_result
     }
 
+    /// Returns the schedule fixed rate.
     pub fn schedule_fixed_rate<F, Fut>(&self, mut config: ScheduledTaskConfig, task: F) -> RuntimeResult<TaskId>
     where
         F: Fn() -> Fut + Send + Sync + 'static,
@@ -305,6 +341,7 @@ impl ScheduledTaskGroup {
         spawn_result
     }
 
+    /// Returns the schedule fixed rate allow overlap.
     pub fn schedule_fixed_rate_allow_overlap<F, Fut>(
         &self,
         config: ScheduledTaskConfig,
@@ -317,10 +354,12 @@ impl ScheduledTaskGroup {
         self.schedule_fixed_rate(config, task)
     }
 
+    /// Returns the snapshot.
     pub fn snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
         self.schedules.iter().map(|entry| entry.value().snapshot()).collect()
     }
 
+    /// Shuts down the owned service.
     pub async fn shutdown(&self, timeout: Duration) -> ShutdownReport {
         self.group.shutdown(timeout).await
     }

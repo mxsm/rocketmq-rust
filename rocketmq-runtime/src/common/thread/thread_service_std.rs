@@ -23,6 +23,7 @@ use tracing::info;
 
 use crate::common::thread::Runnable;
 
+/// Represents service thread std.
 pub struct ServiceThreadStd {
     name: String,
     runnable: Arc<Mutex<dyn Runnable>>,
@@ -33,6 +34,7 @@ pub struct ServiceThreadStd {
 }
 
 impl ServiceThreadStd {
+    /// Creates a new `ServiceThreadStd`.
     pub fn new<T: Runnable>(name: String, runnable: T) -> Self {
         ServiceThreadStd {
             name,
@@ -46,6 +48,7 @@ impl ServiceThreadStd {
 }
 
 impl ServiceThreadStd {
+    /// Starts the owned service.
     pub fn start(&mut self) {
         if let Ok(value) = self
             .started
@@ -78,10 +81,12 @@ impl ServiceThreadStd {
         self.thread = Some(thread);
     }
 
+    /// Shuts down the owned service.
     pub fn shutdown(&mut self) {
         self.shutdown_interrupt(false);
     }
 
+    /// Shuts down interrupt.
     pub fn shutdown_interrupt(&mut self, interrupt: bool) {
         if let Ok(value) = self
             .started
@@ -106,6 +111,7 @@ impl ServiceThreadStd {
         }
     }
 
+    /// Executes make stop.
     pub fn make_stop(&mut self) {
         if !self.started.load(Ordering::Acquire) {
             return;
@@ -113,10 +119,12 @@ impl ServiceThreadStd {
         self.stopped.store(true, Ordering::Release);
     }
 
+    /// Executes wakeup.
     pub fn wakeup(&mut self) {
         self.notified.1.notify_all();
     }
 
+    /// Executes wait for running.
     pub fn wait_for_running(&mut self, interval: i64) {
         let mut guard = self.notified.0.lock();
         self.notified
@@ -124,10 +132,12 @@ impl ServiceThreadStd {
             .wait_for(&mut guard, std::time::Duration::from_millis(interval as u64));
     }
 
+    /// Returns whether stopped.
     pub fn is_stopped(&self) -> bool {
         self.stopped.load(Ordering::Acquire)
     }
 
+    /// Returns service name.
     pub fn get_service_name(&self) -> String {
         self.name.clone()
     }

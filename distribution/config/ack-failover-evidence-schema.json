@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "contract": "rocketmq.ack-failover-evidence",
+  "adr": "rocketmq-doc/en/acknowledgement-failover-contract-adr.md",
+  "profiles": [
+    {
+      "id": "memory-accepted",
+      "receipt_durability": "Memory",
+      "zero_loss_claim_allowed": false,
+      "maximum_ready_rto_seconds": 300,
+      "required_faults": [
+        "broker_restart",
+        "network_partition",
+        "disk_fsync_jitter"
+      ]
+    },
+    {
+      "id": "local-durable",
+      "receipt_durability": "Local",
+      "zero_loss_claim_allowed": true,
+      "maximum_acknowledged_loss": 0,
+      "maximum_ready_rto_seconds": 300,
+      "required_faults": [
+        "broker_restart",
+        "node_eviction",
+        "slow_disk"
+      ]
+    },
+    {
+      "id": "replicated-durable",
+      "receipt_durability": "Replicated",
+      "zero_loss_claim_allowed": true,
+      "maximum_acknowledged_loss": 0,
+      "maximum_ready_rto_seconds": 300,
+      "required_faults": [
+        "controller_leader_failure",
+        "controller_quorum_loss",
+        "ha_replication_lag",
+        "snapshot_install_interruption"
+      ]
+    }
+  ],
+  "required_run_fields": [
+    "schema_version",
+    "candidate_commit",
+    "candidate_images",
+    "profile",
+    "flush_mode",
+    "broker_role",
+    "controller_mode",
+    "fault",
+    "topology",
+    "started_at",
+    "finished_at",
+    "acknowledged_message_ids_before",
+    "acknowledged_message_ids_after",
+    "commitlog_position_before",
+    "commitlog_position_after",
+    "consumequeue_position_before",
+    "consumequeue_position_after",
+    "raft_position_before",
+    "raft_position_after",
+    "lost_acknowledged_messages",
+    "duplicate_messages",
+    "observed_rpo_messages",
+    "ready_rto_millis",
+    "message_visible_rto_millis",
+    "promotion_gate",
+    "cleanup",
+    "leaked",
+    "detached_still_running",
+    "artifacts",
+    "checksums"
+  ],
+  "promotion_gate": {
+    "allowed_values": [
+      "not_applicable",
+      "approved",
+      "blocked"
+    ],
+    "blocked_on_missing_quorum": true,
+    "blocked_on_replica_position_behind": true
+  },
+  "completion": {
+    "cleanup_must_be_complete": true,
+    "leaked_must_equal": 0,
+    "detached_still_running_must_equal": 0,
+    "artifact_hash": "sha256",
+    "commit_and_image_digest_match_required": true
+  }
+}

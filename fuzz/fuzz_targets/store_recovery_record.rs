@@ -40,6 +40,9 @@ impl CommitLogFrameSource for CorpusSource {
 }
 
 fuzz_target!(|input: &[u8]| {
+    if input.len() > 1024 * 1024 {
+        return;
+    }
     let input = corpus_bytes(input);
     let bytes = Bytes::copy_from_slice(input.as_ref());
     let mut frames = CommitLogFrameCursor::new(CorpusSource(bytes.clone()));

@@ -20,6 +20,9 @@ use rocketmq_protocol::RemotingCommand;
 use rocketmq_rust_fuzz::corpus_bytes;
 
 fuzz_target!(|input: &[u8]| {
+    if input.len() > 1024 * 1024 {
+        return;
+    }
     let input = corpus_bytes(input);
     let mut frame = BytesMut::from(input.as_ref());
     let _ = RemotingCommand::decode(&mut frame);

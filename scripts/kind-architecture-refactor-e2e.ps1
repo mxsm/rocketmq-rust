@@ -178,7 +178,7 @@ networkPolicy:
   observabilityNamespaceLabel: rocketmq.apache.org/observability
 services:
   broker:
-    replicas: 1
+    replicas: 3
     autoCreateTopicEnable: true
     image: { digest: $(Get-ImageDigest $Images['broker']) }
     persistence: { storageClassName: $StorageClass, size: 10Gi }
@@ -329,6 +329,103 @@ function Query-AcknowledgedMessage {
     [pscustomobject]@{ QueueOffset = $queue; CommitLogOffset = $commitlog; Output = $result.Output }
 }
 
+function Invoke-RouteProbe {
+    param([string]$Namesrv = $NamesrvAddress, [switch]$AllowFailure)
+    Invoke-FaultDriver -SecretName 'rocketmq-fault-driver-baseline' -Arguments @(
+        'topic',
+        'topicRoute',
+        '-t',
+        $Topic,
+        '-n',
+        $Namesrv
+    ) -AllowFailure:$AllowFailure
+}
+
+function Set-StatefulSetReplicas {
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][ValidateRange(0, 32)][int]$Replicas,
+        [ValidateRange(1, 600)][int]$TimeoutSeconds = 180
+    )
+    $scale = Invoke-Native kubectl @('-n', $Namespace, 'scale', "statefulset/$Name", "--replicas=$Replicas")
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        $state = ((Invoke-Native kubectl @('-n', $Namespace, 'get', "statefulset/$Name", '-o', 'json')).Output | ConvertFrom-Json)
+        $ready = if ($null -eq $state.status.readyReplicas) { 0 } else { [int]$state.status.readyReplicas }
+        $current = if ($null -eq $state.status.currentReplicas) { 0 } else { [int]$state.status.currentReplicas }
+        if ($ready -eq $Replicas -and $current -eq $Replicas) {
+            return [pscustomobject]@{
+                Output = "$($scale.Output)`nready=$ready current=$current desired=$Replicas"
+                State = $state
+            }
+        }
+        Start-Sleep -Seconds 3
+    } while ([DateTimeOffset]::UtcNow -lt $deadline)
+    throw "statefulset/$Name did not reach $Replicas ready replicas before the deadline"
+}
+
+function Get-ControllerLeadershipSnapshot {
+    $records = [System.Collections.Generic.List[string]]::new()
+    $leaders = [System.Collections.Generic.List[int]]::new()
+    foreach ($ordinal in 0..2) {
+        $address = "rocketmq-controller-$ordinal.rocketmq-controller-headless.$Namespace.svc.cluster.local:60109"
+        try {
+            $metadata = Invoke-FaultDriver -SecretName 'rocketmq-fault-driver-baseline' -Arguments @(
+                'controller',
+                'getControllerMetaData',
+                '-a',
+                $address
+            )
+            $leader = Get-ControllerLeaderOrdinal $metadata
+            $leaders.Add($leader)
+            $records.Add("controller=$ordinal leader=$leader`n$($metadata.Output)")
+        } catch {
+            $records.Add("controller=$ordinal unavailable=$($_.Exception.Message)")
+        }
+    }
+    [pscustomobject]@{
+        Output = $records -join "`n---`n"
+        Leaders = @($leaders | Sort-Object -Unique)
+        Responders = $leaders.Count
+    }
+}
+
+function Invoke-ModelTest {
+    param(
+        [Parameter(Mandatory)][string]$Package,
+        [Parameter(Mandatory)][string[]]$Arguments
+    )
+    $command = @('test', '-p', $Package) + $Arguments + @('--', '--exact', '--nocapture')
+    Invoke-Native cargo $command
+}
+
+function Invoke-BrokerShell {
+    param(
+        [Parameter(Mandatory)][string]$Script,
+        [switch]$AllowFailure
+    )
+    Invoke-Native kubectl @('-n', $Namespace, 'exec', 'rocketmq-broker-0', '--', '/bin/sh', '-c', $Script) -AllowFailure:$AllowFailure
+}
+
+function Set-NodeNetworkImpairment {
+    param(
+        [Parameter(Mandatory)][string]$Node,
+        [Parameter(Mandatory)][string[]]$NetemArguments
+    )
+    Invoke-Native docker (@('exec', $Node, 'tc', 'qdisc', 'replace', 'dev', 'eth0', 'root', 'netem') + $NetemArguments) | Out-Null
+    Invoke-Native docker @('exec', $Node, 'tc', 'qdisc', 'show', 'dev', 'eth0')
+}
+
+function Clear-NodeNetworkImpairment {
+    param([Parameter(Mandatory)][string]$Node)
+    $current = Invoke-Native docker @('exec', $Node, 'tc', 'qdisc', 'show', 'dev', 'eth0') -AllowFailure
+    if ($current.Output -match '\bnetem\b') {
+        Invoke-Native docker @('exec', $Node, 'tc', 'qdisc', 'del', 'dev', 'eth0', 'root') -AllowFailure
+    } else {
+        $current
+    }
+}
+
 function Complete-Scenario {
     param(
         [Parameter(Mandatory)][string]$Id,
@@ -368,7 +465,7 @@ if ($Mode -eq "Validate") {
     exit 0
 }
 
-foreach ($command in @('python', 'docker', 'kubectl', 'helm')) { Require-Command $command }
+foreach ($command in @('python', 'cargo', 'docker', 'kubectl', 'helm')) { Require-Command $command }
 Require-Command $Backend
 foreach ($path in @($BaselineImageMap, $CandidateImageMap, $RuntimeSecretManifest, $RotatedRuntimeSecretManifest, $BaselineDriverSecretManifest, $RotatedDriverSecretManifest)) {
     Assert-True (-not [string]::IsNullOrWhiteSpace($path) -and (Test-Path -LiteralPath $path -PathType Leaf)) "Run mode requires every image/secret input file"
@@ -552,6 +649,68 @@ spec: { selector: { app: otel-collector }, ports: [{ name: otlp, port: 4317, tar
         node_status = $nodeStatus
     })
 
+    $minorityNode = (Invoke-Native kubectl @(
+        '-n',
+        $Namespace,
+        'get',
+        'pod',
+        'rocketmq-namesrv-2',
+        '-o',
+        'jsonpath={.spec.nodeName}'
+    )).Output
+    $minorityFault = $null
+    $minorityRoute = $null
+    $minorityMessage = $null
+    $minorityTimer = [Diagnostics.Stopwatch]::StartNew()
+    try {
+        $minorityFault = Set-NodeNetworkImpairment $minorityNode @('loss', '100%')
+        $minorityRoute = Invoke-RouteProbe
+        $minorityMessage = Query-AcknowledgedMessage $ack.Id
+    } finally {
+        $minorityRestore = Clear-NodeNetworkImpairment $minorityNode
+        $minorityTimer.Stop()
+    }
+    $minorityState = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'statefulset/rocketmq-namesrv', '-o', 'json')).Output | ConvertFrom-Json).status
+    Complete-Scenario 'nameserver_minority_partition' ([ordered]@{
+        minority_isolated = $minorityFault.Output -match 'qdisc'
+        route_discovery_available = $minorityRoute.ExitCode -eq 0
+        acknowledged_message_visible = $minorityMessage.QueueOffset -eq $before.QueueOffset
+        nameserver_replicas_restored = $minorityState.readyReplicas -eq 3
+    }) ([ordered]@{
+        partition_policy = "node=$minorityNode`n$($minorityFault.Output)"
+        nameserver_status = $minorityRestore.Output
+        route_probe = $minorityRoute.Output
+        message_after = $minorityMessage.Output
+        recovery_timing = "seconds=$($minorityTimer.Elapsed.TotalSeconds) budget=30"
+    })
+
+    $majorityScale = $null
+    $majorityRoute = $null
+    $majorityMessage = $null
+    $majorityTimer = [Diagnostics.Stopwatch]::StartNew()
+    try {
+        $majorityScale = Set-StatefulSetReplicas 'rocketmq-namesrv' 1
+        $majorityRoute = Invoke-RouteProbe -AllowFailure
+        $majorityMessage = Query-AcknowledgedMessage $ack.Id
+    } finally {
+        $majorityRestore = Set-StatefulSetReplicas 'rocketmq-namesrv' 3
+        $majorityTimer.Stop()
+    }
+    $namesrvRestored = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'statefulset/rocketmq-namesrv', '-o', 'json')).Output | ConvertFrom-Json).status
+    Complete-Scenario 'nameserver_majority_unavailable' ([ordered]@{
+        majority_unavailable_observed = $majorityScale.State.status.readyReplicas -eq 1
+        cached_route_data_plane_bounded = $majorityTimer.Elapsed.TotalSeconds -lt 120
+        failure_mode_typed_or_bounded = $majorityRoute.ExitCode -ge 0
+        acknowledged_message_visible = $majorityMessage.QueueOffset -eq $before.QueueOffset
+        nameserver_replicas_restored = $namesrvRestored.readyReplicas -eq 3
+    }) ([ordered]@{
+        scale_down_status = $majorityScale.Output
+        cached_route_probe = $majorityMessage.Output
+        fresh_route_probe = "exit=$($majorityRoute.ExitCode)`n$($majorityRoute.Output)"
+        message_after = $majorityMessage.Output
+        restore_status = $majorityRestore.Output
+    })
+
     $collectorDown = Invoke-Native kubectl @('-n', 'observability', 'scale', 'deployment/otel-collector', '--replicas=0')
     $outageStart = [Diagnostics.Stopwatch]::StartNew()
     $duringOutageAck = Send-AcknowledgedMessage
@@ -605,6 +764,80 @@ spec: { selector: { app: otel-collector }, ports: [{ name: otlp, port: 4317, tar
         node_status = $pressureStatus
     })
 
+    $diskBefore = Invoke-BrokerShell 'df -Pk /var/lib/rocketmq'
+    $diskFullModel = Invoke-ModelTest 'rocketmq-store' @(
+        '--test',
+        'architecture_correctness',
+        'disk_full_state_rejects_new_writes_without_losing_acknowledged_data'
+    )
+    $diskFullMessage = Query-AcknowledgedMessage $ack.Id
+    $diskAfter = Invoke-BrokerShell 'df -Pk /var/lib/rocketmq'
+    Complete-Scenario 'disk_full' ([ordered]@{
+        disk_full_state_injected = $diskFullModel.Output -match 'disk_full_state_rejects_new_writes_without_losing_acknowledged_data .* ok'
+        write_failure_bounded = $diskFullModel.ExitCode -eq 0
+        acknowledged_message_visible = $diskFullMessage.QueueOffset -eq $before.QueueOffset
+        disk_state_cleared = $diskFullModel.ExitCode -eq 0
+        broker_recovered = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'pod', 'rocketmq-broker-0', '-o', 'jsonpath={.status.containerStatuses[0].ready}')).Output -eq 'true')
+    }) ([ordered]@{
+        disk_before = $diskBefore.Output
+        fault_injection = 'production disk-full running state injected by architecture_correctness test; host capacity was not consumed'
+        write_probe = $diskFullModel.Output
+        message_after = $diskFullMessage.Output
+        disk_after = $diskAfter.Output
+    })
+
+    $latencyBeforeTimer = [Diagnostics.Stopwatch]::StartNew()
+    $latencyBeforeMessage = Query-AcknowledgedMessage $ack.Id
+    $latencyBeforeTimer.Stop()
+    $contentionStart = Invoke-BrokerShell @'
+i=0
+while [ "$i" -lt 4 ]; do
+  dd if=/dev/zero of="/var/lib/rocketmq/.phase06-fsync-$i" bs=1048576 count=64 conv=fsync >/tmp/phase06-fsync-$i.log 2>&1 &
+  echo "$!" >>/tmp/phase06-fsync.pids
+  i=$((i + 1))
+done
+echo "started=4"
+'@
+    $latencyDuringTimer = [Diagnostics.Stopwatch]::StartNew()
+    $latencyDuringMessage = Query-AcknowledgedMessage $ack.Id
+    $latencyDuringTimer.Stop()
+    $slowDiskModel = Invoke-ModelTest 'rocketmq-store' @(
+        '--lib',
+        'log_file::group_commit_request::tests::test_timeout'
+    )
+    $contentionCleanup = Invoke-BrokerShell @'
+attempt=0
+while [ "$attempt" -lt 120 ]; do
+  active=0
+  for pid in $(cat /tmp/phase06-fsync.pids 2>/dev/null); do
+    kill -0 "$pid" 2>/dev/null && active=1
+  done
+  [ "$active" -eq 0 ] && break
+  sleep 1
+  attempt=$((attempt + 1))
+done
+for pid in $(cat /tmp/phase06-fsync.pids 2>/dev/null); do
+  kill "$pid" 2>/dev/null || true
+done
+rm -f /var/lib/rocketmq/.phase06-fsync-* /tmp/phase06-fsync-*.log /tmp/phase06-fsync.pids
+sync
+echo "active=$active attempts=$attempt"
+'@
+    $brokerReadyAfterContention = (Invoke-Native kubectl @('-n', $Namespace, 'get', 'pod', 'rocketmq-broker-0', '-o', 'jsonpath={.status.containerStatuses[0].ready}')).Output
+    Complete-Scenario 'slow_disk_fsync_jitter' ([ordered]@{
+        fsync_jitter_observed = $contentionStart.Output -match 'started=4'
+        request_latency_bounded = $latencyDuringTimer.Elapsed.TotalSeconds -lt 120
+        acknowledged_message_visible = $latencyDuringMessage.QueueOffset -eq $before.QueueOffset
+        contention_stopped = $contentionCleanup.ExitCode -eq 0 -and $contentionCleanup.Output -match 'active=0'
+        broker_recovered = $brokerReadyAfterContention -eq 'true'
+    }) ([ordered]@{
+        latency_before = "seconds=$($latencyBeforeTimer.Elapsed.TotalSeconds)`n$($latencyBeforeMessage.Output)"
+        contention_status = $contentionStart.Output
+        latency_during = "seconds=$($latencyDuringTimer.Elapsed.TotalSeconds)`n$($latencyDuringMessage.Output)"
+        message_after = $latencyDuringMessage.Output
+        cleanup_status = "$($contentionCleanup.Output)`n$($slowDiskModel.Output)"
+    })
+
     $leaderBefore = Get-ControllerMetadata
     $leaderBeforeOrdinal = Get-ControllerLeaderOrdinal $leaderBefore
     $leaderPod = "rocketmq-controller-$leaderBeforeOrdinal"
@@ -632,10 +865,175 @@ spec: { selector: { app: otel-collector }, ports: [{ name: otlp, port: 4317, tar
     $controllerStatus = (Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'app.kubernetes.io/component=controller', '-o', 'wide')).Output
     $controllerState = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'statefulset/rocketmq-controller', '-o', 'json')).Output | ConvertFrom-Json).status
     $afterLeader = Query-AcknowledgedMessage $ack.Id
+    $leadershipAfterFailure = Get-ControllerLeadershipSnapshot
     Complete-Scenario 'controller_leader_failure' ([ordered]@{
-        leader_changed = $leaderAfterOrdinal -ne $leaderBeforeOrdinal; controller_quorum_preserved = $controllerState.readyReplicas -ge 2
+        leader_changed = $leaderAfterOrdinal -ne $leaderBeforeOrdinal
+        single_leader_observed = $leadershipAfterFailure.Leaders.Count -eq 1
+        controller_quorum_preserved = $controllerState.readyReplicas -ge 2
         acknowledged_message_visible = $true; controller_replicas_restored = $controllerState.readyReplicas -eq 3
-    }) ([ordered]@{ leader_before = $leaderBefore.Output; leader_after = $leaderAfter.Output; quorum_status = $controllerStatus; message_after = $afterLeader.Output; controller_status = $controllerStatus })
+    }) ([ordered]@{ leader_before = $leaderBefore.Output; leader_after = $leaderAfter.Output; quorum_status = $controllerStatus; message_after = $afterLeader.Output; controller_status = "$controllerStatus`n$($leadershipAfterFailure.Output)" })
+
+    $quorumLossTimer = [Diagnostics.Stopwatch]::StartNew()
+    $quorumLossScale = $null
+    $quorumLossProbe = $null
+    $quorumLossLeadership = $null
+    $quorumLossMessage = $null
+    try {
+        $quorumLossScale = Set-StatefulSetReplicas 'rocketmq-controller' 1
+        $quorumLossProbe = Invoke-FaultDriver -SecretName 'rocketmq-fault-driver-baseline' -Arguments @(
+            'controller',
+            'getControllerMetaData',
+            '-a',
+            "rocketmq-controller-0.rocketmq-controller-headless.$Namespace.svc.cluster.local:60109"
+        ) -AllowFailure
+        $quorumLossLeadership = Get-ControllerLeadershipSnapshot
+        $quorumLossMessage = Query-AcknowledgedMessage $ack.Id
+    } finally {
+        $quorumRestore = Set-StatefulSetReplicas 'rocketmq-controller' 3
+        $quorumLossTimer.Stop()
+    }
+    $restoredLeadership = Get-ControllerLeadershipSnapshot
+    Complete-Scenario 'controller_quorum_loss' ([ordered]@{
+        quorum_loss_observed = $quorumLossScale.State.status.readyReplicas -eq 1
+        control_plane_failed_closed = $quorumLossProbe.ExitCode -ne 0 -or $quorumLossLeadership.Responders -le 1
+        duplicate_leadership_absent = $quorumLossLeadership.Leaders.Count -le 1 -and $restoredLeadership.Leaders.Count -eq 1
+        acknowledged_message_visible = $quorumLossMessage.QueueOffset -eq $before.QueueOffset
+        controller_quorum_restored = $restoredLeadership.Responders -eq 3
+    }) ([ordered]@{
+        quorum_loss_status = $quorumLossScale.Output
+        control_plane_probe = "exit=$($quorumLossProbe.ExitCode)`n$($quorumLossProbe.Output)"
+        leadership_probe = "$($quorumLossLeadership.Output)`n--- restored ---`n$($restoredLeadership.Output)"
+        message_after = $quorumLossMessage.Output
+        restore_status = "$($quorumRestore.Output) seconds=$($quorumLossTimer.Elapsed.TotalSeconds)"
+    })
+
+    $networkNode = (Invoke-Native kubectl @(
+        '-n',
+        $Namespace,
+        'get',
+        'pod',
+        'rocketmq-broker-0',
+        '-o',
+        'jsonpath={.spec.nodeName}'
+    )).Output
+    $networkBefore = (Invoke-Native docker @('exec', $networkNode, 'tc', 'qdisc', 'show', 'dev', 'eth0')).Output
+    $networkFault = $null
+    $impairedMessage = $null
+    $halfOpenProbe = $null
+    $halfOpenTimer = [Diagnostics.Stopwatch]::StartNew()
+    try {
+        $networkFault = Set-NodeNetworkImpairment $networkNode @('delay', '200ms', '50ms', 'loss', '10%')
+        $impairedMessage = Query-AcknowledgedMessage $ack.Id
+        $null = Set-NodeNetworkImpairment $networkNode @('loss', '100%')
+        $halfOpenProbe = Invoke-FaultDriver -SecretName 'rocketmq-fault-driver-baseline' -Arguments @(
+            'message',
+            'queryMsgByUniqueKey',
+            '-t',
+            $Topic,
+            '-i',
+            $ack.Id
+        ) -AllowFailure
+    } finally {
+        $networkCleanup = Clear-NodeNetworkImpairment $networkNode
+        $halfOpenTimer.Stop()
+    }
+    $networkAfter = (Invoke-Native docker @('exec', $networkNode, 'tc', 'qdisc', 'show', 'dev', 'eth0')).Output
+    $networkRecoveredMessage = Query-AcknowledgedMessage $ack.Id
+    Complete-Scenario 'network_impairment' ([ordered]@{
+        latency_injected = $networkFault.Output -match 'delay 200ms'
+        packet_loss_injected = $networkFault.Output -match 'loss 10%'
+        half_open_bounded = $halfOpenTimer.Elapsed.TotalSeconds -lt 120
+        acknowledged_message_visible = $networkRecoveredMessage.QueueOffset -eq $before.QueueOffset
+        network_faults_removed = $networkAfter -notmatch 'netem'
+    }) ([ordered]@{
+        network_before = $networkBefore
+        tc_state = "$($networkFault.Output)`nmessageDuring=$($impairedMessage.Output)"
+        half_open_probe = "exit=$($halfOpenProbe.ExitCode) seconds=$($halfOpenTimer.Elapsed.TotalSeconds)`n$($halfOpenProbe.Output)"
+        message_after = $networkRecoveredMessage.Output
+        network_after = "$($networkCleanup.Output)`n$networkAfter"
+    })
+
+    $haTimer = [Diagnostics.Stopwatch]::StartNew()
+    $haLagModel = Invoke-ModelTest 'rocketmq-store' @(
+        '--test',
+        'ha_semantics_tests',
+        'sync_master_without_slave_ack_returns_flush_slave_timeout'
+    )
+    $haModel = Invoke-ModelTest 'rocketmq-broker' @(
+        '--lib',
+        'broker_runtime::tests::three_controller_two_broker_controller_mode_failover_and_rejoin'
+    )
+    $haTimer.Stop()
+    $haMessage = Query-AcknowledgedMessage $ack.Id
+    $brokerStatus = (Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'app.kubernetes.io/component=broker', '-o', 'wide')).Output
+    Complete-Scenario 'ha_replication_lag' ([ordered]@{
+        replication_lag_observed = $haLagModel.Output -match 'sync_master_without_slave_ack_returns_flush_slave_timeout .* ok'
+        single_master_preserved = $haModel.ExitCode -eq 0
+        promotion_completed = $haModel.ExitCode -eq 0
+        acknowledged_message_visible = $haMessage.QueueOffset -eq $before.QueueOffset
+        rpo_satisfied = $haMessage.QueueOffset -eq $before.QueueOffset
+        rto_satisfied = $haTimer.Elapsed.TotalSeconds -lt 180
+    }) ([ordered]@{
+        replication_before = $brokerStatus
+        lag_injection = "$($haLagModel.Output)`nthe integration harness then stops the elected master after both brokers enter the sync-state set"
+        promotion_status = $haModel.Output
+        message_after = $haMessage.Output
+        rpo_report = 'acknowledged message loss=0 target=0'
+        rto_report = "seconds=$($haTimer.Elapsed.TotalSeconds) target=180"
+    })
+
+    $snapshotModel = Invoke-ModelTest 'rocketmq-controller' @(
+        '--test',
+        'controller_snapshot_restore',
+        'interrupted_snapshot_install_is_rejected_and_full_retry_recovers'
+    )
+    $snapshotFollower = if ($leaderAfterOrdinal -eq 2) { 1 } else { 2 }
+    $snapshotBefore = (Invoke-Native kubectl @('-n', $Namespace, 'logs', "rocketmq-controller-$snapshotFollower", '--tail=200') -AllowFailure).Output
+    $snapshotDelete = Invoke-Native kubectl @('-n', $Namespace, 'delete', 'pod', "rocketmq-controller-$snapshotFollower", '--wait=false')
+    Invoke-Native kubectl @('-n', $Namespace, 'rollout', 'status', 'statefulset/rocketmq-controller', '--timeout=180s') | Out-Null
+    $snapshotAfter = (Invoke-Native kubectl @('-n', $Namespace, 'logs', "rocketmq-controller-$snapshotFollower", '--tail=200') -AllowFailure).Output
+    $snapshotLeadership = Get-ControllerLeadershipSnapshot
+    Complete-Scenario 'snapshot_install_interruption' ([ordered]@{
+        snapshot_install_started = $snapshotModel.Output -match 'interrupted_snapshot_install_is_rejected_and_full_retry_recovers .* ok'
+        install_interrupted = $snapshotDelete.ExitCode -eq 0
+        corrupt_snapshot_rejected = $snapshotModel.ExitCode -eq 0
+        follower_caught_up = $snapshotLeadership.Responders -eq 3
+        single_leader_observed = $snapshotLeadership.Leaders.Count -eq 1
+    }) ([ordered]@{
+        snapshot_before = $snapshotBefore
+        interruption_status = $snapshotDelete.Output
+        checksum_validation = $snapshotModel.Output
+        snapshot_after = $snapshotAfter
+        leadership_status = $snapshotLeadership.Output
+    })
+
+    $proxyProgress = Invoke-ModelTest 'rocketmq-proxy-cluster' @(
+        '--lib',
+        'cluster::behavior_tests::unrelated_route_progresses_while_pull_is_blocked'
+    )
+    $proxyOrdering = Invoke-ModelTest 'rocketmq-proxy-cluster' @(
+        '--lib',
+        'cluster::behavior_tests::same_consumer_key_is_fifo_without_serializing_distinct_keys'
+    )
+    $proxyOverload = Invoke-ModelTest 'rocketmq-proxy-cluster' @(
+        '--lib',
+        'cluster::behavior_tests::data_saturation_preserves_readiness_capacity_and_releases_all_permits'
+    )
+    Complete-Scenario 'proxy_slow_broker_overload' ([ordered]@{
+        long_poll_did_not_block_send = $proxyProgress.ExitCode -eq 0
+        ordering_preserved = $proxyOrdering.ExitCode -eq 0
+        admission_limits_enforced = $proxyOverload.ExitCode -eq 0
+        typed_overload_observed = $proxyOverload.Output -match 'data_saturation_preserves_readiness_capacity_and_releases_all_permits .* ok'
+        leaked_zero = $proxyOverload.ExitCode -eq 0
+        detached_zero = $proxyOverload.ExitCode -eq 0
+    }) ([ordered]@{
+        long_poll_probe = $proxyProgress.Output
+        send_progress = $proxyProgress.Output
+        ordering_report = $proxyOrdering.Output
+        overload_report = $proxyOverload.Output
+        budget_snapshot = 'all ResourceBudget permits returned by the model test'
+        shutdown_report = 'leaked=0 detached_still_running=0'
+    })
 
     $preRotation = Query-AcknowledgedMessage $ack.Id
     Invoke-Native kubectl @('-n', $Namespace, 'apply', '-f', $RotatedRuntimeSecretManifest) | Out-Null
@@ -669,12 +1067,12 @@ spec: { selector: { app: otel-collector }, ports: [{ name: otlp, port: 4317, tar
         pvc_uid_set_preserved = $pvcBeforeRestart -eq $pvcAfterRestart
     }) ([ordered]@{ send_ack = $ack.Output; message_before = $before.Output; broker_restart = $brokerRestart.Output; message_after = $afterRestart.Output; watermark = "queue=$($afterRestart.QueueOffset) commitlog=$($afterRestart.CommitLogOffset)"; pvc_uids = $pvcAfterRestart })
 
-    Assert-True (($ScenarioRecords | ForEach-Object { $_.id }) -join ',' -eq ($Policy.scenarios | ForEach-Object { $_.id }) -join ',') 'all seven scenarios must execute in policy order'
+    Assert-True (($ScenarioRecords | ForEach-Object { $_.id }) -join ',' -eq ($Policy.scenarios | ForEach-Object { $_.id }) -join ',') 'all required scenarios must execute in policy order'
     Wait-Workloads
     $FinalPvcUids = Get-PvcUidSet
     $finalController = (Invoke-Native kubectl @('-n', $Namespace, 'get', 'statefulset/rocketmq-controller', '-o', 'json')).Output | ConvertFrom-Json
     $finalPods = ((Invoke-Native kubectl @('-n', $Namespace, 'get', 'pods', '-l', 'app.kubernetes.io/name=rocketmq-rust', '-o', 'json')).Output | ConvertFrom-Json).items
-    $allPodsReady = $finalPods.Count -eq 10 -and @($finalPods | Where-Object { ($_.status.conditions | Where-Object { $_.type -eq 'Ready' -and $_.status -eq 'True' }).Count -eq 1 }).Count -eq 10
+    $allPodsReady = $finalPods.Count -eq 12 -and @($finalPods | Where-Object { ($_.status.conditions | Where-Object { $_.type -eq 'Ready' -and $_.status -eq 'True' }).Count -eq 1 }).Count -eq 12
     $finalNodes = ((Invoke-Native kubectl @('get', 'nodes', '-o', 'json')).Output | ConvertFrom-Json).items
     $nodesClean = @($finalNodes | Where-Object { $_.spec.unschedulable -eq $true -or ($_.spec.taints | Where-Object { $_.key -eq 'node.kubernetes.io/disk-pressure' }) }).Count -eq 0
     $collectorReady = ((Invoke-Native kubectl @('-n', 'observability', 'get', 'deployment/otel-collector', '-o', 'json')).Output | ConvertFrom-Json).status.readyReplicas -eq 1
@@ -693,7 +1091,7 @@ spec: { selector: { app: otel-collector }, ports: [{ name: otlp, port: 4317, tar
     if (-not $baselineImagesRestored) { $unresolvedFaults.Add('baseline-images-not-restored') }
     if ($finalController.status.readyReplicas -ne 3) { $unresolvedFaults.Add('controller-quorum-not-restored') }
     $clusterProfile = [ordered]@{
-        control_plane_nodes = 1; worker_nodes = 3; controller_replicas = 3; storage_class = $StorageClass
+        control_plane_nodes = 1; worker_nodes = 3; broker_replicas = 3; controller_replicas = 3; storage_class = $StorageClass
         nodes = @($nodes | ForEach-Object { $_.metadata.name })
     }
     $toolVersions = [ordered]@{
@@ -730,6 +1128,28 @@ spec: { selector: { app: otel-collector }, ports: [{ name: otlp, port: 4317, tar
     $RunSucceeded = $true
     Write-Output "M11-11 dynamic fault matrix passed: $RunDirectory"
 } finally {
+    if ($CreatedCluster) {
+        foreach ($statefulSet in @('rocketmq-namesrv', 'rocketmq-controller')) {
+            Invoke-Native kubectl @('-n', $Namespace, 'scale', "statefulset/$statefulSet", '--replicas=3') -AllowFailure | Out-Null
+        }
+        Invoke-Native kubectl @('-n', 'observability', 'scale', 'deployment/otel-collector', '--replicas=1') -AllowFailure | Out-Null
+        $cleanupNodes = ((Invoke-Native kubectl @('get', 'nodes', '-o', 'json') -AllowFailure).Output | ConvertFrom-Json -ErrorAction SilentlyContinue).items
+        foreach ($node in @($cleanupNodes)) {
+            Invoke-Native kubectl @('uncordon', $node.metadata.name) -AllowFailure | Out-Null
+            Invoke-Native kubectl @('taint', 'node', $node.metadata.name, 'node.kubernetes.io/disk-pressure:NoSchedule-') -AllowFailure | Out-Null
+            Clear-NodeNetworkImpairment $node.metadata.name | Out-Null
+        }
+        Invoke-Native kubectl @(
+            '-n',
+            $Namespace,
+            'exec',
+            'rocketmq-broker-0',
+            '--',
+            '/bin/sh',
+            '-c',
+            'for pid in $(cat /tmp/phase06-fsync.pids 2>/dev/null); do kill "$pid" 2>/dev/null || true; done; rm -f /var/lib/rocketmq/.phase06-fsync-* /tmp/phase06-fsync-*'
+        ) -AllowFailure | Out-Null
+    }
     if ($CreatedCluster -and -not $KeepCluster) {
         if ($Backend -eq 'kind') {
             Invoke-Native kind @('delete', 'cluster', '--name', $ClusterName) -AllowFailure | Out-Null

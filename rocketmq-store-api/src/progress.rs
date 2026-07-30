@@ -30,10 +30,15 @@ const CHECKSUM_OFFSET: usize = DERIVED_CHECKPOINT_ENCODED_LEN - 4;
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DerivedEngine {
+    /// Represents the consume queue case.
     ConsumeQueue = 1,
+    /// Represents the index case.
     Index = 2,
+    /// Represents the rocks db case.
     RocksDb = 3,
+    /// Represents the tiered case.
     Tiered = 4,
+    /// Represents the compaction case.
     Compaction = 5,
 }
 
@@ -113,7 +118,9 @@ impl DerivedRecordId {
 /// Invalid CommitLog identity supplied to a derived engine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DerivedRecordIdError {
+    /// Represents the empty record case.
     EmptyRecord,
+    /// Represents the range overflow case.
     RangeOverflow,
 }
 
@@ -239,17 +246,27 @@ impl CursorAdvance {
 /// Violation of continuous per-engine cursor progression.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CursorAdvanceError {
+    /// Represents the source epoch mismatch case.
     SourceEpochMismatch {
+        /// The struct field value.
         expected: u64,
+        /// The struct field value.
         actual: u64,
     },
+    /// Represents the gap case.
     Gap {
+        /// The struct field value.
         expected: u64,
+        /// The struct field value.
         actual: u64,
     },
+    /// Represents the partial overlap case.
     PartialOverlap {
+        /// The struct field value.
         committed: u64,
+        /// The struct field value.
         record_start: u64,
+        /// The struct field value.
         record_end: u64,
     },
 }
@@ -423,18 +440,29 @@ impl DerivedCheckpoint {
 /// Failure while validating durable derived-progress metadata.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DerivedCheckpointDecodeError {
+    /// Represents the invalid length case.
     InvalidLength {
+        /// The struct field value.
         expected: usize,
+        /// The struct field value.
         actual: usize,
     },
+    /// Represents the invalid magic case.
     InvalidMagic,
+    /// Represents the unsupported version case.
     UnsupportedVersion(u16),
+    /// Represents the unknown engine case.
     UnknownEngine(u8),
+    /// Represents the engine mismatch case.
     EngineMismatch {
+        /// The struct field value.
         expected: DerivedEngine,
+        /// The struct field value.
         actual: DerivedEngine,
     },
+    /// Represents the invalid reserved byte case.
     InvalidReservedByte(u8),
+    /// Represents the checksum mismatch case.
     ChecksumMismatch,
 }
 

@@ -1,1 +1,1 @@
-fixture: rolling upgrade preserved acknowledgement, offsets, PVCs, drain deadline, and rollback
+M11-11 guard fixture only: rolling_upgrade

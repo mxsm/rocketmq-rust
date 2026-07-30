@@ -181,10 +181,12 @@ impl BlockingExecutor {
         }
     }
 
+    /// Returns the policy.
     pub fn policy(&self) -> &BlockingPoolPolicy {
         &self.policy
     }
 
+    /// Spawns io.
     pub async fn spawn_io<F, R>(&self, name: impl Into<Arc<str>>, operation: F) -> RuntimeResult<R>
     where
         F: FnOnce() -> R + Send + 'static,
@@ -207,6 +209,7 @@ impl BlockingExecutor {
         self.spawn_until(name, BlockingKind::ShortIo, deadline, operation).await
     }
 
+    /// Spawns the supplied task.
     pub async fn spawn<F, R>(&self, name: impl Into<Arc<str>>, kind: BlockingKind, operation: F) -> RuntimeResult<R>
     where
         F: FnOnce() -> R + Send + 'static,
@@ -343,6 +346,7 @@ impl BlockingExecutor {
         }
     }
 
+    /// Returns the snapshot.
     pub fn snapshot(&self) -> BlockingExecutorSnapshot {
         let tasks = self
             .tasks
@@ -390,6 +394,7 @@ impl BlockingExecutor {
         }
     }
 
+    /// Returns the blocking still running.
     pub fn blocking_still_running(&self) -> usize {
         self.tasks
             .iter()

@@ -21,6 +21,7 @@ use serde::Deserialize;
 use crate::RuntimeError;
 use crate::RuntimeResult;
 
+/// Parses config file.
 pub fn parse_config_file<'de, C>(config_file: PathBuf) -> RuntimeResult<C>
 where
     C: Debug + Deserialize<'de>,

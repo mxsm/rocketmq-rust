@@ -68,6 +68,8 @@ pub(crate) fn test_task_group(name: impl Into<std::sync::Arc<str>>) -> rocketmq_
 // Re-export types needed for benchmarking
 #[doc(hidden)]
 pub mod bench_support {
+    use std::collections::HashMap;
+    use std::io;
     use std::path::PathBuf;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
@@ -77,14 +79,19 @@ pub mod bench_support {
 
     use crate::config::broker_config::BrokerConfig;
     use crate::config::validated::ValidatedBrokerConfig;
+    use crate::transaction::queue::transactional_message_bridge::resolve_op_queue;
     use cheetah_string::CheetahString;
+    use futures::future::try_join_all;
     use rocketmq_model::common::filter::expression_type::ExpressionType;
+    use rocketmq_model::common::message::message_queue::MessageQueue;
     use rocketmq_runtime::schedule::simple_scheduler::ScheduledShutdownReport;
     use rocketmq_runtime::ChildServiceContext;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_store::get_delay_offset_store_path;
     use rocketmq_store::MessageStoreConfig;
     use serde::Serialize;
+    use tokio::io::AsyncWriteExt;
+    use tokio::sync::Mutex;
 
     pub use crate::client::client_channel_info::ClientChannelInfo;
     pub use crate::client::consumer_group_event::ConsumerGroupEvent;
@@ -105,6 +112,95 @@ pub mod bench_support {
 
     pub struct ConsumerFilterBenchHarness {
         manager: crate::filter::manager::consumer_filter_manager::ConsumerFilterManager,
+    }
+
+    /// Observation from the transaction queue registry and isolated store-I/O probe.
+    #[derive(Debug, Clone, Serialize)]
+    pub struct TransactionQueueIoProbe {
+        pub queue_count: usize,
+        pub operation_count: usize,
+        pub bytes_written: u64,
+        pub operation_latencies_us: Vec<f64>,
+        pub registry_entries: usize,
+    }
+
+    /// Exercises the production transaction queue resolver while file I/O stays outside its lock.
+    pub async fn run_transaction_queue_io_probe(
+        root: PathBuf,
+        queue_count: usize,
+        operations_per_queue: usize,
+        payload_bytes: usize,
+        sync_every: usize,
+    ) -> io::Result<TransactionQueueIoProbe> {
+        if queue_count == 0 || operations_per_queue == 0 || payload_bytes == 0 || sync_every == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "transaction queue probe dimensions must be positive",
+            ));
+        }
+        tokio::fs::create_dir_all(&root).await?;
+        let registry = Arc::new(Mutex::new(HashMap::<i32, MessageQueue>::new()));
+        let broker_name = CheetahString::from("architecture-performance-broker");
+        let payload = Arc::new(vec![0x5au8; payload_bytes]);
+
+        let queues = (0..queue_count).map(|queue_index| {
+            let root = root.clone();
+            let registry = Arc::clone(&registry);
+            let broker_name = broker_name.clone();
+            let payload = Arc::clone(&payload);
+            async move {
+                let queue_id = i32::try_from(queue_index)
+                    .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "transaction queue id exceeds i32"))?;
+                let path = root.join(format!("queue-{queue_id}.dat"));
+                let mut file = tokio::fs::OpenOptions::new()
+                    .create(true)
+                    .truncate(true)
+                    .write(true)
+                    .open(path)
+                    .await?;
+                let mut latencies = Vec::with_capacity(operations_per_queue);
+                for operation in 0..operations_per_queue {
+                    let started = Instant::now();
+                    let queue = resolve_op_queue(&registry, queue_id, &broker_name).await;
+                    if queue.queue_id() != queue_id {
+                        return Err(io::Error::other("transaction queue resolver changed the queue id"));
+                    }
+                    file.write_all(payload.as_slice()).await?;
+                    if (operation + 1).is_multiple_of(sync_every) {
+                        file.sync_data().await?;
+                    }
+                    latencies.push(started.elapsed().as_secs_f64() * 1_000_000.0);
+                }
+                file.sync_data().await?;
+                let bytes = u64::try_from(operations_per_queue)
+                    .ok()
+                    .and_then(|operations| {
+                        u64::try_from(payload_bytes)
+                            .ok()
+                            .and_then(|payload| operations.checked_mul(payload))
+                    })
+                    .ok_or_else(|| io::Error::other("transaction queue probe byte count overflowed"))?;
+                Ok::<_, io::Error>((bytes, latencies))
+            }
+        });
+        let observations = try_join_all(queues).await?;
+        let operation_count = queue_count
+            .checked_mul(operations_per_queue)
+            .ok_or_else(|| io::Error::other("transaction queue probe operation count overflowed"))?;
+        let bytes_written = observations.iter().try_fold(0u64, |total, (bytes, _)| {
+            total
+                .checked_add(*bytes)
+                .ok_or_else(|| io::Error::other("transaction queue probe byte count overflowed"))
+        })?;
+        let operation_latencies_us = observations.into_iter().flat_map(|(_, latencies)| latencies).collect();
+        let registry_entries = registry.lock().await.len();
+        Ok(TransactionQueueIoProbe {
+            queue_count,
+            operation_count,
+            bytes_written,
+            operation_latencies_us,
+            registry_entries,
+        })
     }
 
     #[derive(Debug, Clone, Serialize)]
@@ -691,6 +787,25 @@ pub mod bench_support {
 
 #[cfg(test)]
 mod bench_support_tests {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn transaction_queue_io_probe_uses_all_queues_and_accounts_bytes() {
+        let root = tempfile::tempdir().expect("transaction queue probe temp directory");
+        let probe = super::bench_support::run_transaction_queue_io_probe(root.path().to_path_buf(), 4, 3, 128, 2)
+            .await
+            .expect("transaction queue probe");
+
+        assert_eq!(probe.queue_count, 4);
+        assert_eq!(probe.operation_count, 12);
+        assert_eq!(probe.bytes_written, 1_536);
+        assert_eq!(probe.operation_latencies_us.len(), probe.operation_count);
+        assert_eq!(probe.registry_entries, probe.queue_count);
+        for queue_id in 0..probe.queue_count {
+            let metadata = std::fs::metadata(root.path().join(format!("queue-{queue_id}.dat")))
+                .expect("transaction queue probe file");
+            assert_eq!(metadata.len(), 384);
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn broker_client_housekeeping_lifecycle_probe_reports_clean_shutdown() {
         let runtime = rocketmq_runtime::RuntimeContext::from_current("broker-client-housekeeping-probe-test");

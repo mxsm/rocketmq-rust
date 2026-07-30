@@ -1059,7 +1059,7 @@ mod retirement_tests {
         }
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn delayed_plaintext_first_byte_uses_idle_timeout_not_tls_handshake_timeout() {
         let runtime = RuntimeContext::from_current("transport-delayed-plaintext-test");
         let service = runtime.service_context("transport-delayed-plaintext");
@@ -1099,7 +1099,7 @@ mod retirement_tests {
             .expect("server result");
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn silent_connection_uses_idle_timeout_before_closing() {
         let runtime = RuntimeContext::from_current("transport-silent-connection-test");
         let service = runtime.service_context("transport-silent-connection");
@@ -1145,7 +1145,7 @@ mod retirement_tests {
     }
 
     #[cfg(feature = "tls")]
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn detected_tls_handshake_remains_bounded_by_handshake_timeout() {
         let runtime = RuntimeContext::from_current("transport-stalled-tls-test");
         let service = runtime.service_context("transport-stalled-tls");

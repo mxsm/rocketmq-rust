@@ -319,6 +319,10 @@ public `RuntimeHandle`, and detached task spawning.
   registration behavior have focused tests.
 - Phase 3 owns long-running soak, failure-matrix, and production evidence work;
   those are intentionally not Phase 2 merge prerequisites.
+- Public capability behavior and failure boundaries are consolidated in the
+  [core capability contracts](core-capability-contracts.md). `rocketmq-store-api`,
+  `rocketmq-runtime`, `rocketmq-error`, and `rocketmq-security-api` enforce
+  `deny(missing_docs)`, so a newly exposed undocumented item fails compilation.
 
 ## Proxy Cluster execution ownership
 

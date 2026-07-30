@@ -16,6 +16,7 @@ use std::fmt;
 
 use crate::kind::ErrorKind;
 
+/// The redacted constant.
 pub const REDACTED: &str = "<redacted>";
 
 /// Wrapper for values that must never be formatted directly.
@@ -26,16 +27,19 @@ pub struct Sensitive<T> {
 
 impl<T> Sensitive<T> {
     #[inline]
+    /// Creates a new `Sensitive`.
     pub const fn new(inner: T) -> Self {
         Self { inner }
     }
 
     #[inline]
+    /// Returns the expose secret.
     pub const fn expose_secret(&self) -> &T {
         &self.inner
     }
 
     #[inline]
+    /// Converts this value into inner.
     pub fn into_inner(self) -> T {
         self.inner
     }
@@ -63,7 +67,9 @@ impl<T> fmt::Debug for Sensitive<T> {
 /// Redaction policy for one context field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RedactionKind {
+    /// Represents the public case.
     Public,
+    /// Represents the sensitive case.
     Sensitive,
 }
 
@@ -75,7 +81,9 @@ pub enum RedactionKind {
 /// `Display` or `Debug` output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RedactionPolicy {
+    /// Represents the public case.
     Public,
+    /// Represents the redact sensitive case.
     RedactSensitive,
 }
 
@@ -137,8 +145,11 @@ impl RedactionPolicy {
 /// One structured error context field.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ErrorContextField {
+    /// The key value.
     pub key: &'static str,
+    /// The value value.
     pub value: String,
+    /// The redaction value.
     pub redaction: RedactionKind,
 }
 
@@ -150,17 +161,20 @@ pub struct ErrorContext {
 
 impl ErrorContext {
     #[inline]
+    /// Creates a new `ErrorContext`.
     pub const fn new() -> Self {
         Self { fields: Vec::new() }
     }
 
     #[inline]
+    /// Sets field and returns the updated value.
     pub fn with_field(mut self, key: &'static str, value: impl Into<String>) -> Self {
         self.push_field(key, value);
         self
     }
 
     #[inline]
+    /// Sets sensitive and returns the updated value.
     pub fn with_sensitive<T>(mut self, key: &'static str, _value: Sensitive<T>) -> Self {
         self.fields.push(ErrorContextField {
             key,
@@ -171,6 +185,7 @@ impl ErrorContext {
     }
 
     #[inline]
+    /// Appends field.
     pub fn push_field(&mut self, key: &'static str, value: impl Into<String>) {
         self.fields.push(ErrorContextField {
             key,
@@ -180,6 +195,7 @@ impl ErrorContext {
     }
 
     #[inline]
+    /// Appends a sensitive context field that is redacted at boundaries.
     pub fn push_sensitive<T>(&mut self, key: &'static str, value: Sensitive<T>) {
         self.fields.push(ErrorContextField {
             key,
@@ -189,16 +205,19 @@ impl ErrorContext {
     }
 
     #[inline]
+    /// Returns the fields.
     pub fn fields(&self) -> &[ErrorContextField] {
         &self.fields
     }
 
     #[inline]
+    /// Returns whether empty.
     pub fn is_empty(&self) -> bool {
         self.fields.is_empty()
     }
 
     #[inline]
+    /// Returns the len.
     pub fn len(&self) -> usize {
         self.fields.len()
     }

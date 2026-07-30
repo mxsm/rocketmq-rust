@@ -112,6 +112,13 @@ def production_projection(source: str) -> str:
     return "".join(projected)
 
 
+def production_code_lines(source: str) -> int:
+    """Count non-comment production lines after removing test-only modules."""
+    projected = production_projection(source)
+    masked = rust_source.mask_comments_and_literals(projected)
+    return sum(bool(line.strip()) for line in masked.splitlines())
+
+
 def crate_name(relative: Path) -> str:
     parts = relative.parts
     if parts[0] == "rocketmq-dashboard" and len(parts) > 1:
@@ -206,7 +213,9 @@ def scan_file(root: Path, path: Path, history: History) -> FileMetrics:
     source = path.read_text(encoding="utf-8")
     production = production_projection(source)
     masked = rust_source.mask_comments_and_literals(production)
-    production_lines = sum(bool(line.strip()) for line in production.splitlines())
+    # Documentation and comments are required quality controls, not
+    # module-complexity growth.
+    production_lines = production_code_lines(source)
     public_items = len(PUBLIC_ITEM.findall(masked))
     reexports = len(REEXPORT.findall(masked))
     lock_sites = len(LOCK_SITE.findall(masked))

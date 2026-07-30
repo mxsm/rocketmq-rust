@@ -47,34 +47,58 @@ impl BlockingTaskMeta {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Represents blocking executor snapshot.
 pub struct BlockingExecutorSnapshot {
+    /// The name value.
     pub name: String,
+    /// The lane value.
     pub lane: BlockingLane,
+    /// The max concurrency value.
     pub max_concurrency: usize,
+    /// The max queue depth value.
     pub max_queue_depth: usize,
+    /// The global capacity value.
     pub global_capacity: usize,
+    /// The global running value.
     pub global_running: usize,
+    /// The global available value.
     pub global_available: usize,
+    /// The lane reserved value.
     pub lane_reserved: usize,
+    /// The lane running value.
     pub lane_running: usize,
+    /// The lane borrowed value.
     pub lane_borrowed: usize,
+    /// The queued value.
     pub queued: usize,
+    /// The running value.
     pub running: usize,
+    /// The timed out still running value.
     pub timed_out_still_running: usize,
+    /// The blocking still running value.
     pub blocking_still_running: usize,
+    /// The rejected value.
     pub rejected: u64,
     #[serde(with = "duration_millis")]
+    /// The oldest queue wait value.
     pub oldest_queue_wait: Duration,
+    /// The tasks value.
     pub tasks: Vec<BlockingTaskSnapshot>,
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Represents blocking task snapshot.
 pub struct BlockingTaskSnapshot {
+    /// The id identifier.
     pub id: BlockingTaskId,
+    /// The name value.
     pub name: String,
+    /// The kind value.
     pub kind: BlockingKind,
+    /// The state value.
     pub state: BlockingTaskState,
     #[serde(with = "duration_millis")]
+    /// The elapsed value.
     pub elapsed: Duration,
 }
 

@@ -37,7 +37,10 @@ Apache RocketMQ-Rust adopts a distributed architecture. Its core components incl
 
 - Architectural Design:
   - Master - slave replication architecture. The Master supports writes and reads while replicas provide backup and eligible reads. The implemented HA paths support synchronous/asynchronous replication, and controller mode uses the pinned OpenRaft stack for leadership decisions.
-  - Multi - cluster deployment (such as `Broker - Cluster - A`) supports horizontal scaling and regional disaster recovery.
+  - Multi-cluster deployment supports horizontal scaling. It does not by itself
+    provide cross-region replication or regional disaster recovery; those
+    boundaries are defined by the
+    [regional disaster recovery ADR](regional-disaster-recovery-adr.md).
 - Core Functions:
   - **Message Storage**: Based on memory - mapped files (MappedFile), unified storage in CommitLog, and ConsumeQueue index queues to improve read and write performance.
   - **Message Forwarding**: Provide a write interface for Producers and long - polling pull (Pull) or active push (Push) for Consumers.
@@ -65,7 +68,11 @@ Apache RocketMQ-Rust adopts a distributed architecture. Its core components incl
 ## 4. Technical Advantages of the Architecture
 
 - **High - Performance Storage**: Memory-mapped files, bounded transfer strategies, and batched indexing reduce unnecessary copies. Measured results belong to the versioned architecture performance evidence rather than this overview.
-- **High - Availability Guarantee**: The Broker master - slave architecture combined with the Name Server cluster supports automatic failover.
+- **High-availability mechanisms**: Broker replication, NameServer routing, and
+  optional Controller mode provide failover building blocks. The measurable
+  RPO/RTO depends on the acknowledgement profile and the exact candidate
+  evidence described by the
+  [acknowledgement and failover ADR](acknowledgement-failover-contract-adr.md).
 - **Flexible Scalability**: Multi - Broker cluster deployment horizontally scales message processing capabilities.
 - **Rich Functions**: Based on the architecture, features such as transactional messages (two - phase commit), message filtering (SQL/Tag filtering), and message backtracking are implemented to adapt to scenarios such as finance and e - commerce.
 
@@ -79,4 +86,7 @@ Apache RocketMQ-Rust adopts a distributed architecture. Its core components incl
 | **Memory Efficiency** | `bytes::Bytes`, bounded queues, and transfer capabilities make ownership and copying decisions explicit. |
 | **Error Handling** | Typed errors preserve category, retry, severity, redaction, and source information across boundaries. |
 
-Through the above architecture, RocketMQ - Rust achieves high performance, high reliability, and easy scalability in the field of distributed messaging, becoming the preferred solution for message middleware in distributed systems.
+These mechanisms define the implementation boundaries. Performance,
+reliability, and promotion claims apply only to a candidate whose current
+fault, soak, performance, acknowledgement, and rollback evidence passes the
+[production-readiness runbook](architecture-production-readiness-runbook.md).

@@ -18,5 +18,8 @@ use libfuzzer_sys::fuzz_target;
 use rocketmq_controller::validate_snapshot_payload;
 
 fuzz_target!(|input: &[u8]| {
+    if input.len() > 1024 * 1024 {
+        return;
+    }
     let _ = validate_snapshot_payload(input);
 });

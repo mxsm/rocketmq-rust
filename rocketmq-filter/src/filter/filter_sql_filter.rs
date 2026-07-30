@@ -151,4 +151,54 @@ mod tests {
 
         assert!(filter.compile("color = ").is_err());
     }
+
+    #[test]
+    fn deterministic_equivalent_expressions_match_for_all_contexts() {
+        const SEED: u64 = 0x524d_5146_494c_5445;
+        let filter = SqlFilter::new();
+        let left = filter
+            .compile("score >= 10 AND color = 'blue'")
+            .expect("left expression");
+        let right = filter
+            .compile("color = 'blue' AND score >= 10")
+            .expect("right expression");
+        let complement = filter
+            .compile("NOT (score >= 10 AND color = 'blue')")
+            .expect("complement expression");
+        let mut state = SEED;
+
+        for case in 0..24 {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            let score = (state % 20).to_string();
+            let color = if state & 1 == 0 { "blue" } else { "red" };
+            let mut properties = HashMap::with_hasher(RandomState::default());
+            properties.insert(
+                CheetahString::from_static_str("score"),
+                CheetahString::from_string(score),
+            );
+            properties.insert(
+                CheetahString::from_static_str("color"),
+                CheetahString::from_slice(color),
+            );
+            let context = MessageEvaluationContext::from_properties(properties);
+            let left_value = left
+                .evaluate(&context)
+                .unwrap_or_else(|error| panic!("seed={SEED:#018x} case={case} left failed: {error}"));
+            let right_value = right
+                .evaluate(&context)
+                .unwrap_or_else(|error| panic!("seed={SEED:#018x} case={case} right failed: {error}"));
+            let complement_value = complement
+                .evaluate(&context)
+                .unwrap_or_else(|error| panic!("seed={SEED:#018x} case={case} complement failed: {error}"));
+
+            assert_eq!(left_value, right_value, "seed={SEED:#018x} case={case}");
+            assert_eq!(
+                complement_value,
+                Value::Boolean(!left_value.as_bool()),
+                "seed={SEED:#018x} case={case}"
+            );
+        }
+    }
 }

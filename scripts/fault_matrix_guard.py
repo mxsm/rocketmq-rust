@@ -30,9 +30,18 @@ SERVICES = ("broker", "namesrv", "controller", "proxy", "mcp")
 SCENARIOS = (
     "rolling_upgrade",
     "node_eviction",
+    "nameserver_minority_partition",
+    "nameserver_majority_unavailable",
     "collector_outage",
     "disk_pressure",
+    "disk_full",
+    "slow_disk_fsync_jitter",
     "controller_leader_failure",
+    "controller_quorum_loss",
+    "network_impairment",
+    "ha_replication_lag",
+    "snapshot_install_interruption",
+    "proxy_slow_broker_overload",
     "secret_rotation",
     "acknowledged_message_recovery",
 )
@@ -142,6 +151,7 @@ def validate_policy(guard: Guard, policy: dict[str, Any]) -> None:
     cluster = policy.get("cluster", {})
     guard.require(cluster.get("control_plane_nodes") == 1, "fault cluster must have one control-plane node")
     guard.require(cluster.get("worker_nodes") == 3, "fault cluster must have three worker nodes")
+    guard.require(cluster.get("broker_replicas") == 3, "fault cluster must have three Broker replicas")
     guard.require(cluster.get("controller_replicas") == 3, "fault cluster must have three Controller replicas")
     guard.require(cluster.get("controller_quorum") == 2, "Controller quorum must remain two")
     guard.require(
@@ -161,15 +171,30 @@ def validate_policy(guard: Guard, policy: dict[str, Any]) -> None:
     scenarios = policy.get("scenarios", [])
     guard.require(isinstance(scenarios, list), "scenarios must be a list")
     scenario_ids = [item.get("id") for item in scenarios if isinstance(item, dict)]
-    guard.require(scenario_ids == list(SCENARIOS), "fault policy must define the exact ordered seven scenarios")
+    guard.require(
+        scenario_ids == list(SCENARIOS),
+        f"fault policy must define the exact ordered {len(SCENARIOS)} scenarios",
+    )
     for item in scenarios if isinstance(scenarios, list) else []:
         if not isinstance(item, dict):
             guard.errors.append("every fault scenario must be an object")
             continue
         scenario = item.get("id", "unknown")
         guard.require(isinstance(item.get("timeout_seconds"), int) and item["timeout_seconds"] > 0, f"{scenario}: timeout must be positive")
+        guard.require(bool(item.get("precondition")), f"{scenario}: precondition contract missing")
         guard.require(bool(item.get("injection")), f"{scenario}: injection contract missing")
-        guard.require(bool(item.get("recovery")), f"{scenario}: recovery contract missing")
+        guard.require(bool(item.get("observable")), f"{scenario}: observable contract missing")
+        guard.require(
+            isinstance(item.get("rpo_seconds"), int) and item["rpo_seconds"] >= 0,
+            f"{scenario}: RPO must be a non-negative integer",
+        )
+        guard.require(
+            isinstance(item.get("rto_seconds"), int) and 0 < item["rto_seconds"] <= item["timeout_seconds"],
+            f"{scenario}: RTO must be positive and no greater than timeout",
+        )
+        guard.require(bool(item.get("abort_condition")), f"{scenario}: abort condition missing")
+        guard.require(bool(item.get("cleanup")), f"{scenario}: cleanup contract missing")
+        guard.require(bool(item.get("cleanup_verification")), f"{scenario}: cleanup verification missing")
         assertions = item.get("required_assertions")
         evidence = item.get("required_evidence")
         guard.require(isinstance(assertions, list) and len(assertions) >= 4, f"{scenario}: insufficient assertions")
@@ -202,9 +227,18 @@ def validate_sources(guard: Guard) -> None:
         "dynamic_execution",
         "rolling_upgrade",
         "node_eviction",
+        "nameserver_minority_partition",
+        "nameserver_majority_unavailable",
         "collector_outage",
         "disk_pressure",
+        "disk_full",
+        "slow_disk_fsync_jitter",
         "controller_leader_failure",
+        "controller_quorum_loss",
+        "network_impairment",
+        "ha_replication_lag",
+        "snapshot_install_interruption",
+        "proxy_slow_broker_overload",
         "secret_rotation",
         "acknowledged_message_recovery",
         "Invoke-Native kubectl @('drain'",
@@ -221,6 +255,18 @@ def validate_sources(guard: Guard) -> None:
         "stateless_pod_rescheduled = $null -ne $replacementProxyPod",
         "Get-ControllerLeaderOrdinal",
         "leader_changed = $leaderAfterOrdinal -ne $leaderBeforeOrdinal",
+        "Set-StatefulSetReplicas 'rocketmq-namesrv' 1",
+        "Set-StatefulSetReplicas 'rocketmq-controller' 1",
+        "Set-NodeNetworkImpairment $minorityNode @('loss', '100%')",
+        "Set-NodeNetworkImpairment $networkNode @('delay', '200ms', '50ms', 'loss', '10%')",
+        "disk_full_state_rejects_new_writes_without_losing_acknowledged_data",
+        "sync_master_without_slave_ack_returns_flush_slave_timeout",
+        "three_controller_two_broker_controller_mode_failover_and_rejoin",
+        "interrupted_snapshot_install_is_rejected_and_full_retry_recovers",
+        "unrelated_route_progresses_while_pull_is_blocked",
+        "same_consumer_key_is_fifo_without_serializing_distinct_keys",
+        "data_saturation_preserves_readiness_capacity_and_releases_all_permits",
+        "leaked=0 detached_still_running=0",
         "Invoke-Native docker @('pull', $image)",
         "Invoke-Native kind (@('load', 'docker-image') + $clusterImages",
         "Invoke-Native k3d (@('image', 'import') + $clusterImages",
@@ -310,6 +356,7 @@ def validate_evidence(guard: Guard, policy: dict[str, Any], evidence_dir: Path, 
     if isinstance(profile, dict):
         guard.require(profile.get("control_plane_nodes") == 1, "cluster profile must record one control plane")
         guard.require(profile.get("worker_nodes") == 3, "cluster profile must record three workers")
+        guard.require(profile.get("broker_replicas") == 3, "cluster profile must record three Brokers")
         guard.require(profile.get("controller_replicas") == 3, "cluster profile must record three Controllers")
         guard.require(bool(profile.get("storage_class")), "cluster profile storage class missing")
         guard.require(isinstance(profile.get("nodes"), list) and len(profile["nodes"]) == 4, "cluster profile must record four nodes")
@@ -334,7 +381,10 @@ def validate_evidence(guard: Guard, policy: dict[str, Any], evidence_dir: Path, 
     scenario_records = run.get("scenarios")
     guard.require(isinstance(scenario_records, list), "scenarios evidence must be a list")
     observed_ids = [item.get("id") for item in scenario_records or [] if isinstance(item, dict)]
-    guard.require(observed_ids == list(SCENARIOS), "evidence must contain exact ordered seven scenarios")
+    guard.require(
+        observed_ids == list(SCENARIOS),
+        f"evidence must contain exact ordered {len(SCENARIOS)} scenarios",
+    )
     for record in scenario_records or []:
         if not isinstance(record, dict):
             guard.errors.append("scenario evidence must be an object")

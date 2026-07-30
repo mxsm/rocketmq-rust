@@ -45,26 +45,31 @@ impl CliErrorView {
     }
 
     #[inline]
+    /// Returns the exit code.
     pub const fn exit_code(&self) -> CliExitCode {
         self.exit_code
     }
 
     #[inline]
+    /// Returns the code.
     pub const fn code(&self) -> ErrorCode {
         self.code
     }
 
     #[inline]
+    /// Returns the category.
     pub const fn category(&self) -> ErrorCategory {
         self.category
     }
 
     #[inline]
+    /// Returns the message.
     pub const fn message(&self) -> &'static str {
         self.message
     }
 
     #[inline]
+    /// Returns the context.
     pub const fn context(&self) -> &ErrorContext {
         &self.context
     }

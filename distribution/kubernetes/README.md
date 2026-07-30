@@ -91,6 +91,23 @@ commit SHA. Generated evidence credentials are never production credentials and
 are never uploaded. A skipped dynamic job or a fixture-only report is not release
 evidence.
 
+The committed policy currently requires 16 ordered scenarios: rolling upgrade,
+node eviction, NameServer minority partition and majority unavailability,
+collector outage, disk pressure, disk-full admission, synchronous-write
+contention, Controller leader and quorum loss, latency/loss/half-open network
+impairment, HA lag and promotion, interrupted Raft snapshot install, Proxy
+long-poll/slow-Broker overload, secret rotation, and acknowledged-message
+recovery. Every scenario declares a precondition, observable, RPO/RTO, abort
+condition, cleanup action, and cleanup verification. Production promotion
+accepts only the dynamic report for the current candidate; the committed
+fixture exists solely to test the guard.
+
+For local-only validation, build and load the candidate images with
+`scripts/build-production-images.ps1 -Load`, use a loopback registry (or
+digest-pinned images already present in the Docker Engine), and pass those local
+digest references to `kind-architecture-refactor-e2e.ps1`. This route does not
+log in to, push to, or publish an external registry.
+
 To update `base/manifest.yaml`, render the production profile as UTF-8 and
 replace the file only after the local lint and schema checks pass. The committed
 base remains a non-deployable local rendering fixture. A deployable render must

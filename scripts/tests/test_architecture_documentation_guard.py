@@ -82,6 +82,20 @@ class ArchitectureDocumentationGuardTest(unittest.TestCase):
                 "ci": {"guards": "guards", "contracts": "contracts"},
                 "entries": [],
             },
+            "coverage": {"patch_target": "70%"},
+            "evidence_governance": {
+                "risk_matrix": "risk.json",
+                "property_registry": "property.json",
+                "fuzz_registry": "fuzz.json",
+                "guard": "guard.py",
+            },
+            "documentation_contracts": {
+                "core_capabilities": "core.md",
+                "acknowledgement_adr": "ack.md",
+                "regional_dr_adr": "dr.md",
+                "acknowledgement_evidence_schema": "ack.json",
+                "missing_docs_crates": [],
+            },
         }
         facts = guard.Facts(
             formal_toolchain="1.95.0",

@@ -115,7 +115,7 @@ class ArchitecturePerformanceGuardTest(unittest.TestCase):
         workflow = guard.DEFAULT_WORKFLOW.read_text(encoding="utf-8")
         self.assertEqual([], guard.validate_workflow_contract(workflow))
         self.assertEqual(guard.REQUIRED_PROFILE_IDS, {profile["id"] for profile in self.policy["profiles"]})
-        self.assertEqual(11, sum(len(profile["variants"]) for profile in self.policy["profiles"]))
+        self.assertEqual(13, sum(len(profile["variants"]) for profile in self.policy["profiles"]))
 
         result = subprocess.run(
             [sys.executable, str(SCRIPTS / "architecture_performance_guard.py"), "--validate-profiles"],
@@ -127,7 +127,7 @@ class ArchitecturePerformanceGuardTest(unittest.TestCase):
             check=False,
         )
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        self.assertIn("profiles=8 variants=11 metric_contracts=50", result.stdout)
+        self.assertIn("profiles=10 variants=13 metric_contracts=60", result.stdout)
 
     def test_workflow_contract_rejects_candidate_only_or_optional_comparison(self) -> None:
         workflow = guard.DEFAULT_WORKFLOW.read_text(encoding="utf-8")
@@ -181,7 +181,7 @@ class ArchitecturePerformanceGuardTest(unittest.TestCase):
 
         result = self.evaluate(baseline, candidate)
         self.assertEqual("pass", result["status"], result["failures"])
-        self.assertEqual(66, len(result["comparisons"]))
+        self.assertEqual(76, len(result["comparisons"]))
         self.assertTrue(any(item["status"] == "missed" for item in result["hypotheses"]))
         self.assertTrue(all(item["gate"] is False for item in result["hypotheses"]))
 

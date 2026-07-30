@@ -19,16 +19,24 @@ use serde::Serializer;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 #[repr(u8)]
+/// Identifies the resource type state.
 pub enum ResourceType {
+    /// Represents the unknown case.
     Unknown = 0,
+    /// Represents the any case.
     Any = 1,
+    /// Represents the cluster case.
     Cluster = 2,
+    /// Represents the namespace case.
     Namespace = 3,
+    /// Represents the topic case.
     Topic = 4,
+    /// Represents the group case.
     Group = 5,
 }
 
 impl ResourceType {
+    /// Returns by name.
     pub fn get_by_name(name: &str) -> Option<Self> {
         if name.eq_ignore_ascii_case("Unknown") {
             Some(Self::Unknown)
@@ -48,11 +56,13 @@ impl ResourceType {
     }
 
     #[inline]
+    /// Returns the code.
     pub fn code(self) -> u8 {
         self as u8
     }
 
     #[inline]
+    /// Returns the name.
     pub fn name(self) -> &'static str {
         match self {
             Self::Unknown => "Unknown",

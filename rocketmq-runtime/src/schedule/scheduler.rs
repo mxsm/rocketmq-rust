@@ -42,11 +42,17 @@ const SCHEDULER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 /// Scheduler configuration
 #[derive(Debug, Clone)]
 pub struct SchedulerConfig {
+    /// The executor config value.
     pub executor_config: ExecutorConfig,
+    /// The executor pool size value.
     pub executor_pool_size: usize,
+    /// The check interval value.
     pub check_interval: Duration,
+    /// The max scheduler threads value.
     pub max_scheduler_threads: usize,
+    /// Whether enable persistence.
     pub enable_persistence: bool,
+    /// The persistence interval value.
     pub persistence_interval: Duration,
 }
 
@@ -66,16 +72,24 @@ impl Default for SchedulerConfig {
 /// Scheduled job containing task and trigger
 #[derive(Clone)]
 pub struct ScheduledJob {
+    /// The id identifier.
     pub id: String,
+    /// The task value.
     pub task: Arc<Task>,
+    /// The trigger value.
     pub trigger: Arc<dyn Trigger>,
+    /// The next execution value.
     pub next_execution: Option<SystemTime>,
+    /// Whether enabled.
     pub enabled: bool,
+    /// The created at value.
     pub created_at: SystemTime,
+    /// The last execution value.
     pub last_execution: Option<SystemTime>,
 }
 
 impl ScheduledJob {
+    /// Creates a new `ScheduledJob`.
     pub fn new(task: Arc<Task>, trigger: Arc<dyn Trigger>) -> Self {
         let next_execution = trigger.next_execution_time(SystemTime::now());
 
@@ -90,21 +104,25 @@ impl ScheduledJob {
         }
     }
 
+    /// Sets id and returns the updated value.
     pub fn with_id(mut self, id: impl Into<String>) -> Self {
         self.id = id.into();
         self
     }
 
+    /// Returns the enabled.
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
         self
     }
 
+    /// Updates next execution.
     pub fn update_next_execution(&mut self) {
         let after = self.last_execution.unwrap_or_else(SystemTime::now);
         self.next_execution = self.trigger.next_execution_time(after);
     }
 
+    /// Returns the should execute.
     pub fn should_execute(&self, now: SystemTime) -> bool {
         self.enabled && self.next_execution.is_some_and(|next| next <= now)
     }
@@ -152,6 +170,7 @@ impl TaskScheduler {
         Self::new_legacy_compatibility(config)
     }
 
+    /// Creates with task group.
     pub fn new_with_task_group(config: SchedulerConfig, parent_task_group: TaskGroup) -> Self {
         Self::new_with_optional_task_group(config, Some(parent_task_group))
     }
@@ -620,9 +639,13 @@ impl TaskSchedulerInternal {
 /// Scheduler status information
 #[derive(Debug, Clone)]
 pub struct SchedulerStatus {
+    /// Whether running.
     pub running: bool,
+    /// The total jobs value.
     pub total_jobs: usize,
+    /// The enabled jobs value.
     pub enabled_jobs: usize,
+    /// The running tasks value.
     pub running_tasks: usize,
 }
 

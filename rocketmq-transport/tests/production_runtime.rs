@@ -71,7 +71,7 @@ async fn canonical_client_connect_builds_the_framed_transport() {
     accept.await.unwrap();
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn canonical_listener_uses_idle_timeout_for_a_silent_tls_peek() {
     let runtime = RuntimeContext::from_current("transport-listener-test");
     let service = runtime.service_context("listener");
@@ -104,7 +104,7 @@ async fn canonical_listener_uses_idle_timeout_for_a_silent_tls_peek() {
     assert_eq!(admission.snapshot().connections.current_count, 1);
 
     let mut byte = [0u8; 1];
-    let read = tokio::time::timeout(Duration::from_millis(100), silent.read(&mut byte))
+    let read = tokio::time::timeout(Duration::from_millis(500), silent.read(&mut byte))
         .await
         .expect("silent connection should reach the idle timeout")
         .expect("read idle close");

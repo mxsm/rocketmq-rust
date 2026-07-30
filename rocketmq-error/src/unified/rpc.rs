@@ -21,25 +21,43 @@ use thiserror::Error;
 pub enum RpcClientError {
     /// Broker address not found in client metadata
     #[error("Broker '{broker_name}' address not found in client metadata")]
-    BrokerNotFound { broker_name: String },
+    /// The broker not found value.
+    BrokerNotFound {
+        /// The broker name value.
+        broker_name: String,
+    },
 
     /// RPC request failed
     #[error("RPC request failed: addr={addr}, request_code={request_code}, timeout={timeout_ms}ms")]
     RequestFailed {
+        /// The struct field value.
         addr: String,
+        /// The struct field value.
         request_code: i32,
+        /// The struct field value.
         timeout_ms: u64,
         #[source]
+        /// The struct field value.
         source: Box<dyn std::error::Error + Send + Sync>,
     },
 
     /// Unexpected response code received
     #[error("Unexpected response code: {code} ({code_name})")]
-    UnexpectedResponseCode { code: i32, code_name: String },
+    /// The unexpected response code value.
+    UnexpectedResponseCode {
+        /// The code value.
+        code: i32,
+        /// The code name value.
+        code_name: String,
+    },
 
     /// Request code not supported by the handler
     #[error("Request code not supported: {code}")]
-    UnsupportedRequestCode { code: i32 },
+    /// The unsupported request code value.
+    UnsupportedRequestCode {
+        /// The code value.
+        code: i32,
+    },
 
     /// RPC error from remote server
     #[error("RPC error from remote: code={0}, message={1}")]

@@ -42,18 +42,28 @@ pub enum ControllerError {
     /// Raft consensus errors with preserved source.
     #[error("Raft error: {message}")]
     RaftSource {
+        /// The struct field value.
         message: String,
         #[source]
+        /// The struct field value.
         source: Box<dyn StdError + Send + Sync>,
     },
 
     /// Not the leader error
     #[error("Not leader, current leader is: {}", leader_id.map(|id| id.to_string()).unwrap_or_else(|| "unknown".to_string()))]
-    NotLeader { leader_id: Option<u64> },
+    /// The not leader value.
+    NotLeader {
+        /// The leader identifier.
+        leader_id: Option<u64>,
+    },
 
     /// Metadata not found
     #[error("Metadata not found: {key}")]
-    MetadataNotFound { key: String },
+    /// The metadata not found value.
+    MetadataNotFound {
+        /// The key value.
+        key: String,
+    },
 
     /// Invalid request
     #[error("Invalid request: {0}")]
@@ -62,8 +72,10 @@ pub enum ControllerError {
     /// Invalid request with preserved decode or validation source.
     #[error("Invalid request: {message}")]
     InvalidRequestSource {
+        /// The struct field value.
         message: String,
         #[source]
+        /// The struct field value.
         source: Box<dyn StdError + Send + Sync>,
     },
 
@@ -90,8 +102,10 @@ pub enum ControllerError {
     /// Serialization error with preserved source.
     #[error("Serialization error: {message}")]
     SerializationSource {
+        /// The struct field value.
         message: String,
         #[source]
+        /// The struct field value.
         source: Box<dyn StdError + Send + Sync>,
     },
 
@@ -102,8 +116,10 @@ pub enum ControllerError {
     /// Storage error with preserved source.
     #[error("Storage error: {message}")]
     StorageSource {
+        /// The struct field value.
         message: String,
         #[source]
+        /// The struct field value.
         source: Box<dyn StdError + Send + Sync>,
     },
 
@@ -113,7 +129,11 @@ pub enum ControllerError {
 
     /// Timeout error
     #[error("Operation timeout after {timeout_ms}ms")]
-    Timeout { timeout_ms: u64 },
+    /// The timeout value.
+    Timeout {
+        /// The timeout duration in milliseconds.
+        timeout_ms: u64,
+    },
 
     /// Controller runtime or task lifecycle error.
     #[error("Runtime error: {0}")]
@@ -122,8 +142,10 @@ pub enum ControllerError {
     /// Runtime operation failed with a preserved typed source.
     #[error("Runtime operation {operation} failed")]
     RuntimeSource {
+        /// The struct field value.
         operation: &'static str,
         #[source]
+        /// The struct field value.
         source: Box<dyn StdError + Send + Sync>,
     },
 
@@ -134,6 +156,7 @@ pub enum ControllerError {
 
 impl ControllerError {
     #[inline]
+    /// Creates the raft source value.
     pub fn raft_source(message: impl Into<String>, source: impl StdError + Send + Sync + 'static) -> Self {
         Self::RaftSource {
             message: message.into(),
@@ -142,6 +165,7 @@ impl ControllerError {
     }
 
     #[inline]
+    /// Creates the invalid request source value.
     pub fn invalid_request_source(message: impl Into<String>, source: impl StdError + Send + Sync + 'static) -> Self {
         Self::InvalidRequestSource {
             message: message.into(),
@@ -150,6 +174,7 @@ impl ControllerError {
     }
 
     #[inline]
+    /// Creates the serialization source value.
     pub fn serialization_source(message: impl Into<String>, source: impl StdError + Send + Sync + 'static) -> Self {
         Self::SerializationSource {
             message: message.into(),
@@ -158,6 +183,7 @@ impl ControllerError {
     }
 
     #[inline]
+    /// Creates the storage source value.
     pub fn storage_source(message: impl Into<String>, source: impl StdError + Send + Sync + 'static) -> Self {
         Self::StorageSource {
             message: message.into(),
@@ -166,11 +192,13 @@ impl ControllerError {
     }
 
     #[inline]
+    /// Creates the runtime error value.
     pub fn runtime_error(message: impl Into<String>) -> Self {
         Self::RuntimeError(message.into())
     }
 
     #[inline]
+    /// Creates the runtime source value.
     pub fn runtime_source(operation: &'static str, source: impl StdError + Send + Sync + 'static) -> Self {
         Self::RuntimeSource {
             operation,

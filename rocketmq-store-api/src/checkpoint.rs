@@ -162,12 +162,19 @@ impl CheckpointArtifact {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CheckpointRequest {
+    /// The checkpoint identifier.
     pub checkpoint_id: String,
+    /// The checkpoint set identifier.
     pub checkpoint_set_id: String,
+    /// The generation value.
     pub generation: u64,
+    /// The barrier identifier.
     pub barrier_id: String,
+    /// The member identifier.
     pub member_id: String,
+    /// The offsets value.
     pub offsets: CheckpointOffsets,
+    /// The storage identity value.
     pub storage_identity: CheckpointStorageIdentity,
 }
 
@@ -234,13 +241,21 @@ impl CheckpointManifest {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CheckpointRestoreVerification {
+    /// The checkpoint identifier.
     pub checkpoint_id: String,
+    /// The generation value.
     pub generation: u64,
+    /// The verified at unix duration in milliseconds.
     pub verified_at_unix_millis: u64,
+    /// Whether checksum verified.
     pub checksum_verified: bool,
+    /// Whether offsets verified.
     pub offsets_verified: bool,
+    /// Whether storage identity verified.
     pub storage_identity_verified: bool,
+    /// Whether wal retained.
     pub wal_retained: bool,
+    /// Whether persistent volume retained.
     pub persistent_volume_retained: bool,
 }
 
@@ -271,10 +286,25 @@ impl CheckpointRestoreVerification {
 /// Store checkpoint domain invariant violation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CheckpointValidationError {
-    SchemaVersion { expected: u16, actual: u16 },
-    InvalidField { field: &'static str, reason: String },
+    /// Represents the schema version case.
+    SchemaVersion {
+        /// The expected value.
+        expected: u16,
+        /// The actual value.
+        actual: u16,
+    },
+    /// Represents the invalid field case.
+    InvalidField {
+        /// The field value.
+        field: &'static str,
+        /// The reason value.
+        reason: String,
+    },
+    /// Represents the invalid offsets case.
     InvalidOffsets(String),
+    /// Represents the destructive rollback case.
     DestructiveRollback,
+    /// Represents the restore verification incomplete case.
     RestoreVerificationIncomplete,
 }
 

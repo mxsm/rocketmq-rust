@@ -17,8 +17,11 @@ use std::future::Future;
 
 /// Replication control capability with implementation-owned command and state values.
 pub trait ReplicationControl: Send + Sync {
+    /// Value type used for command.
     type Command: Send;
+    /// Value type used for state.
     type State: Send;
+    /// Value type used for error.
     type Error: StdError + Send + Sync + 'static;
 
     /// Returns current replication state.

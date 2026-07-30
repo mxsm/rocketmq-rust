@@ -31,6 +31,7 @@ use crate::TaskId;
 use crate::TaskKind;
 use tokio::runtime::Handle;
 
+/// Represents tokio executor service.
 pub struct TokioExecutorService {
     inner: RuntimeOwner,
     task_group: TaskGroup,
@@ -43,10 +44,12 @@ impl Default for TokioExecutorService {
 }
 
 impl TokioExecutorService {
+    /// Shuts down the owned service.
     pub fn shutdown(self) {
         self.inner.shutdown_background();
     }
 
+    /// Shuts down timeout.
     pub fn shutdown_timeout(self, timeout: Duration) {
         if let Err(error) = self.inner.shutdown_runtime_blocking_with_timeout(timeout) {
             tracing::warn!(%error, "failed to shut down TokioExecutorService runtime");
@@ -55,10 +58,12 @@ impl TokioExecutorService {
 }
 
 impl TokioExecutorService {
+    /// Creates a new `TokioExecutorService`.
     pub fn new() -> TokioExecutorService {
         Self::try_new().unwrap_or_else(|error| panic!("failed to create TokioExecutorService: {error:#}"))
     }
 
+    /// Attempts to new.
     pub fn try_new() -> RuntimeResult<TokioExecutorService> {
         Self::from_config(common_runtime_config(
             num_cpus::get(),
@@ -68,6 +73,7 @@ impl TokioExecutorService {
         ))
     }
 
+    /// Creates with config.
     pub fn new_with_config(
         thread_num: usize,
         thread_prefix: Option<impl Into<String>>,
@@ -78,6 +84,7 @@ impl TokioExecutorService {
             .unwrap_or_else(|error| panic!("failed to create TokioExecutorService: {error:#}"))
     }
 
+    /// Attempts to new with config.
     pub fn try_new_with_config(
         thread_num: usize,
         thread_prefix: Option<impl Into<String>>,
@@ -107,6 +114,7 @@ impl TokioExecutorService {
 }
 
 impl TokioExecutorService {
+    /// Spawns the supplied task.
     pub fn spawn<F>(&self, future: F) -> TaskId
     where
         F: Future<Output = ()> + Send + 'static,
@@ -125,27 +133,33 @@ impl TokioExecutorService {
             .expect("TokioExecutorService task group should be open")
     }
 
+    /// Returns the wait task.
     pub async fn wait_task(&self, task_id: TaskId, timeout: Duration) -> bool {
         self.task_group.wait_task(task_id, timeout).await
     }
 
+    /// Returns the task count.
     pub fn task_count(&self) -> usize {
         self.task_group.task_count()
     }
 
+    /// Returns handle.
     pub fn get_handle(&self) -> &Handle {
         self.inner.root_context().runtime().tokio_handle()
     }
 
+    /// Returns the block on.
     pub fn block_on<F: Future>(&self, future: F) -> F::Output {
         self.inner.block_on(future)
     }
 }
 
+/// Represents futures executor service.
 pub struct FuturesExecutorService {
     inner: futures::executor::ThreadPool,
 }
 impl FuturesExecutorService {
+    /// Spawns the supplied task.
     pub fn spawn<F>(&self, future: F)
     where
         F: Future<Output = ()> + Send + 'static,
@@ -155,6 +169,7 @@ impl FuturesExecutorService {
 }
 
 #[derive(Debug, Default)]
+/// Represents futures executor service builder.
 pub struct FuturesExecutorServiceBuilder {
     pool_size: usize,
     stack_size: usize,
@@ -162,6 +177,7 @@ pub struct FuturesExecutorServiceBuilder {
 }
 
 impl FuturesExecutorServiceBuilder {
+    /// Creates a new `FuturesExecutorServiceBuilder`.
     pub fn new() -> FuturesExecutorServiceBuilder {
         FuturesExecutorServiceBuilder {
             pool_size: cmp::max(1, num_cpus::get()),
@@ -170,16 +186,19 @@ impl FuturesExecutorServiceBuilder {
         }
     }
 
+    /// Returns the pool size.
     pub fn pool_size(mut self, pool_size: usize) -> Self {
         self.pool_size = pool_size;
         self
     }
 
+    /// Returns the stack size.
     pub fn stack_size(mut self, stack_size: usize) -> Self {
         self.stack_size = stack_size;
         self
     }
 
+    /// Returns the create.
     pub fn create(&mut self) -> RuntimeResult<FuturesExecutorService> {
         let name_prefix = self.thread_name_prefix.as_deref().unwrap_or("Default-Executor");
         let thread_pool = futures::executor::ThreadPool::builder()
@@ -192,6 +211,7 @@ impl FuturesExecutorServiceBuilder {
     }
 }
 
+/// Represents scheduled executor service.
 pub struct ScheduledExecutorService {
     inner: RuntimeOwner,
     scheduled_tasks: ScheduledTaskGroup,
@@ -203,10 +223,12 @@ impl Default for ScheduledExecutorService {
     }
 }
 impl ScheduledExecutorService {
+    /// Creates a new `ScheduledExecutorService`.
     pub fn new() -> ScheduledExecutorService {
         Self::try_new().unwrap_or_else(|error| panic!("failed to create ScheduledExecutorService: {error:#}"))
     }
 
+    /// Attempts to new.
     pub fn try_new() -> RuntimeResult<ScheduledExecutorService> {
         Self::from_config(common_runtime_config(
             num_cpus::get(),
@@ -216,6 +238,7 @@ impl ScheduledExecutorService {
         ))
     }
 
+    /// Creates with config.
     pub fn new_with_config(
         thread_num: usize,
         thread_prefix: Option<impl Into<String>>,
@@ -226,6 +249,7 @@ impl ScheduledExecutorService {
             .unwrap_or_else(|error| panic!("failed to create ScheduledExecutorService: {error:#}"))
     }
 
+    /// Attempts to new with config.
     pub fn try_new_with_config(
         thread_num: usize,
         thread_prefix: Option<impl Into<String>>,
@@ -246,6 +270,7 @@ impl ScheduledExecutorService {
         ))
     }
 
+    /// Executes schedule at fixed rate.
     pub fn schedule_at_fixed_rate<F>(&self, task: F, initial_delay: Option<Duration>, period: Duration)
     where
         F: FnMut() + Send + 'static,
@@ -368,10 +393,12 @@ mod runtime_config_tests {
 }
 
 impl ScheduledExecutorService {
+    /// Shuts down the owned service.
     pub fn shutdown(self) {
         self.shutdown_timeout(Duration::from_secs(30));
     }
 
+    /// Shuts down timeout.
     pub fn shutdown_timeout(self, timeout: Duration) {
         let ScheduledExecutorService {
             inner,

@@ -44,6 +44,8 @@ REQUIRED_PROFILE_IDS = {
     "tiered-pull",
     "connection-soak",
     "overload",
+    "proxy-mixed-execution",
+    "transaction-queue-io",
 }
 REQUIRED_CORE_METRICS = {
     "throughput_per_second",
