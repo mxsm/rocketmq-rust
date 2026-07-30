@@ -398,10 +398,20 @@ impl SupervisedExecutionService {
                     }),
                     rejected_at,
                 );
-                self.repository
+                match self
+                    .repository
                     .persist_execution_dispatch_rejection(id, rejected_at, &rejection_audit)
-                    .await?;
-                self.publish_audits(std::slice::from_ref(&rejection_audit));
+                    .await
+                {
+                    Ok(()) => self.publish_audits(std::slice::from_ref(&rejection_audit)),
+                    Err(persistence_error) if execution_advanced_during_dispatch(&persistence_error) => {
+                        // The Executor may have durably advanced the shared
+                        // execution before its HTTP response became an error.
+                        // Preserve that newer state and return the original
+                        // sanitized Executor failure.
+                    }
+                    Err(persistence_error) => return Err(persistence_error),
+                }
                 return Err(error);
             }
             Err(error) => return Err(error),
@@ -578,4 +588,32 @@ fn definitive_executor_rejection(error: &ControlPlaneError) -> bool {
             ..
         }
     )
+}
+
+fn execution_advanced_during_dispatch(error: &ControlPlaneError) -> bool {
+    matches!(
+        error,
+        ControlPlaneError::Conflict {
+            code: "execution_state_changed",
+            ..
+        }
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::execution_advanced_during_dispatch;
+    use crate::ControlPlaneError;
+
+    #[test]
+    fn only_a_durable_execution_state_race_preserves_the_executor_error() {
+        assert!(execution_advanced_during_dispatch(&ControlPlaneError::conflict_code(
+            "execution_state_changed",
+            "execution advanced"
+        )));
+        assert!(!execution_advanced_during_dispatch(&ControlPlaneError::conflict_code(
+            "database_write_failed",
+            "persistence failed"
+        )));
+    }
 }
