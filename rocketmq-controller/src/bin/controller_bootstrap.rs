@@ -33,6 +33,7 @@ use rocketmq_model::common::mq_version::CURRENT_VERSION;
 use rocketmq_protocol::protocol::remoting_command_facade::initialize_remoting_version;
 use rocketmq_runtime::common::parse_config_file;
 use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::RuntimeComponent;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ServiceLifecycle;
@@ -180,6 +181,25 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         return Err(
             ControllerError::ConfigError(format!("failed to start Controller lifecycle boundary: {error}")).into(),
         );
+    }
+    if let Err(error) = rocketmq_observability::start_runtime_diagnostics_endpoint_from_env(
+        &service_context,
+        RuntimeComponent::Controller,
+    )
+    .await
+    {
+        lifecycle.mark_failed();
+        let request = lifecycle.request_shutdown(ShutdownReason::Internal);
+        if let Err(shutdown_error) = telemetry_guard
+            .shutdown_with_timeout(request.deadline.remaining())
+            .into_result()
+        {
+            tracing::warn!(error = %shutdown_error, "controller telemetry cleanup after diagnostics startup failure was unhealthy");
+        }
+        return Err(ControllerError::ConfigError(format!(
+            "failed to start protected Controller runtime diagnostics: {error}"
+        ))
+        .into());
     }
 
     println!("{}", LOGO);
