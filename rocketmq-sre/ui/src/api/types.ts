@@ -49,6 +49,10 @@ export type HealthOperationalState =
   ApiSchemas["ClusterHealthReport__HealthOperationalState"];
 export type SloDimension =
   ApiSchemas["ClusterHealthReport__SloDimension"];
+export type ConfirmDiagnosisExecutionRequest =
+  ApiSchemas["ConfirmDiagnosisExecutionRequest"];
+export type DiagnosisExecutionConfirmation =
+  ApiSchemas["DiagnosisExecutionConfirmation"];
 export type CreatePlanRequest = ApiSchemas["CreatePlanRequest"];
 export type CreatePlanResponse = ApiSchemas["CreatePlanResponse"];
 export type ActionPlanView = ApiSchemas["ActionPlanView"];
