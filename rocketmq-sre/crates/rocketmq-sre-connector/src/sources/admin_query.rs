@@ -36,6 +36,7 @@ use rocketmq_admin_core::read_client_adapter::ClientRuntime;
 use rocketmq_admin_core::read_client_adapter::ClientRuntimeConfig;
 use rocketmq_admin_core::read_client_adapter::ReadAdminBuilder;
 use rocketmq_admin_core::read_client_adapter::ReadAdminSession;
+use rocketmq_admin_core::read_client_adapter::TelemetryHandle;
 use rocketmq_runtime::ChildServiceContext;
 use serde::Serialize;
 use serde_json::Value;
@@ -91,12 +92,15 @@ impl AdminQuerySource {
         let Some(config) = &self.config else {
             return Ok(());
         };
-        let runtime = ClientRuntime::new(
+        let runtime = ClientRuntime::try_new(
             context.child("rocketmq-read-admin-client"),
             ClientRuntimeConfig {
                 shutdown_timeout: config.shutdown_timeout,
+                ..ClientRuntimeConfig::default()
             },
-        );
+            TelemetryHandle::noop(),
+        )
+        .map_err(|_| ConnectorError::source("read-only Admin client runtime failed to start"))?;
         let mut builder = ReadAdminBuilder::new(runtime.clone())
             .namesrv_addr(config.namesrv_addr.clone())
             .admin_group("rocketmq-sre-read-admin")
