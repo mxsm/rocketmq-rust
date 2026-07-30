@@ -1199,6 +1199,7 @@ mod tests {
             tempo_url: None,
             admin_source: None,
             kubernetes_source: None,
+            runtime_diagnostics_source: None,
             source_limits: crate::config::test_source_limits(1, 4096),
             internal_token_env: "TEST_INTERNAL_TOKEN".to_owned(),
             internal_token: SecretValue::new("internal-token".to_owned()),
