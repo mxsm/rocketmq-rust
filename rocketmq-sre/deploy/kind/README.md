@@ -88,11 +88,12 @@ Broker, NameServer, Controller, and Proxy each expose the fixed
 `/internal/v1/runtime/diagnostics` contract on port `8087`. This listener is
 separate from `/livez` and `/readyz`, requires both the mounted bearer
 credential and the `rocketmq:diagnose` scope, returns only the bounded
-`RuntimeDiagnosticsViewV1`, and is reachable only from the Connector under the
-Kind NetworkPolicy. The Kind profile explicitly opts into non-loopback HTTP
-for this local network-isolated fixture. Production deployments must terminate
-TLS before the listener and production-verify credential rotation and
-multi-replica discovery.
+`RuntimeDiagnosticsViewV1`. When chart network policies are enabled, the chart
+renders a Connector-only ingress policy for this listener. The local Kind
+profile validates bearer/scope enforcement but does not claim CNI-level
+NetworkPolicy enforcement. It explicitly opts into non-loopback HTTP for this
+local fixture. Production deployments must terminate TLS before the listener
+and production-verify credential rotation and multi-replica discovery.
 
 After `kind.ps1 Up`, validate the four protected endpoints and all six required
 Runtime metric families with:
