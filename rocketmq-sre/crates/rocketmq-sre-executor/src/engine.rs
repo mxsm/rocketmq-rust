@@ -24,6 +24,8 @@ use chrono::TimeDelta;
 use chrono::Utc;
 use rocketmq_sre_contracts::ActivateLeaseRequest;
 use rocketmq_sre_contracts::AdvanceFenceRequest;
+use rocketmq_sre_contracts::AgentReadRequest;
+use rocketmq_sre_contracts::AgentReadResult;
 use rocketmq_sre_contracts::AuditEvent;
 use rocketmq_sre_contracts::AuditEventId;
 use rocketmq_sre_contracts::AuditEventKind;
@@ -44,6 +46,7 @@ use rocketmq_sre_contracts::ResourceLockId;
 use rocketmq_sre_contracts::StepIntent;
 use rocketmq_sre_contracts::StepResult;
 use rocketmq_sre_contracts::VerifyExecutionRequest;
+use rocketmq_sre_contracts::is_sha256_digest;
 use serde::Serialize;
 use serde_json::json;
 use tokio::sync::Mutex;
@@ -175,6 +178,21 @@ impl ChangeExecutor {
     #[must_use]
     pub fn metrics(&self) -> ExecutorMetricsSnapshot {
         self.metrics.snapshot()
+    }
+
+    /// Captures a current, typed Agent precondition without entering the
+    /// mutation or execution-journal paths.
+    ///
+    /// # Errors
+    ///
+    /// Rejects Agent transport failures, malformed hashes, non-ready state,
+    /// and any non-empty reason-code set.
+    pub async fn read_precondition(&self, request: &AgentReadRequest) -> Result<AgentReadResult, ExecutorError> {
+        let result = self.agent.precheck(request).await?;
+        if !result.ready || !result.reason_codes.is_empty() || !is_sha256_digest(&result.precondition_hash) {
+            return Err(ExecutorError::PreconditionChanged);
+        }
+        Ok(result)
     }
 
     /// Executes every approved step in order and stops before Phase 3 generic
