@@ -43,6 +43,7 @@ use rocketmq_admin_core::read_client_adapter::ClientRuntime;
 use rocketmq_admin_core::read_client_adapter::ClientRuntimeConfig;
 use rocketmq_admin_core::read_client_adapter::ReadAdminBuilder;
 use rocketmq_admin_core::read_client_adapter::ReadAdminSession;
+use rocketmq_admin_core::read_client_adapter::TelemetryHandle;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_sre_contracts::CorrelationId;
 use rocketmq_sre_contracts::EXECUTION_VERIFICATION_SCHEMA_VERSION;
@@ -127,12 +128,15 @@ impl ProductionProxyRestartClient {
         kube_config.proxy_url = None;
         let kube = Client::try_from(kube_config).map_err(|_| ExecutionAgentError::Configuration)?;
 
-        let client_runtime = ClientRuntime::new(
+        let client_runtime = ClientRuntime::try_new(
             context.child("proxy-restart-admin-client"),
             ClientRuntimeConfig {
                 shutdown_timeout: admin_config.shutdown_timeout,
+                ..ClientRuntimeConfig::default()
             },
-        );
+            TelemetryHandle::noop(),
+        )
+        .map_err(|_| ExecutionAgentError::Configuration)?;
         let timeout_millis = duration_millis(admin_config.request_timeout)?;
         let mut read_builder = ReadAdminBuilder::new(Arc::clone(&client_runtime))
             .namesrv_addr(admin_config.namesrv_addr.clone())
