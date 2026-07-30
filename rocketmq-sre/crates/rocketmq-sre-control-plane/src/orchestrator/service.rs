@@ -553,10 +553,18 @@ fn requirement_resource(requirement: EvidenceRequirement, incident: &IncidentVie
         .investigation
         .as_ref()
         .and_then(|value| value.resource.as_deref())
+        .or(incident.incident.resource.as_deref())
         .unwrap_or("cluster");
     if context.starts_with(requirement.resource_prefix) {
         context.to_owned()
     } else {
+        let context = context.split_once(':').map_or(context, |(kind, value)| {
+            if kind.bytes().all(|byte| byte.is_ascii_lowercase() || byte == b'_') {
+                value
+            } else {
+                context
+            }
+        });
         format!("{}{}", requirement.resource_prefix, context.trim_matches('/'))
     }
 }
@@ -755,6 +763,30 @@ mod tests {
             });
             assert_eq!(pack, expected, "{symptom}");
         }
+    }
+
+    #[test]
+    fn alert_resource_is_normalized_for_evidence_queries() {
+        let mut incident = rocketmq_sre_contracts::Incident::new(
+            rocketmq_sre_contracts::TenantId::new(),
+            rocketmq_sre_contracts::ClusterId::new(),
+            "consumer lag is rising",
+            chrono::Utc::now(),
+        );
+        incident.resource = Some("consumer_group:group-a/topic-a".to_owned());
+        let requirement = full_registry()
+            .expect("built-in registry")
+            .resolve("consumer-lag.v2")
+            .expect("consumer lag pack")
+            .required_evidence()[0];
+        let view = IncidentView {
+            incident,
+            investigation: None,
+            timeline: Vec::new(),
+            diagnosis_revisions: Vec::new(),
+        };
+
+        assert_eq!(requirement_resource(requirement, &view), "consumer-lag/group-a/topic-a");
     }
 
     #[test]
