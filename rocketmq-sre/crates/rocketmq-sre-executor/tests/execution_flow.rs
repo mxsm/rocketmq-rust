@@ -38,6 +38,7 @@ use rocketmq_sre_contracts::AgentDispatchResponse;
 use rocketmq_sre_contracts::AgentReadRequest;
 use rocketmq_sre_contracts::AgentReadResult;
 use rocketmq_sre_contracts::AgentStepResult;
+use rocketmq_sre_contracts::AuditEventKind;
 use rocketmq_sre_contracts::AutonomyCohortId;
 use rocketmq_sre_contracts::AutonomyGrant;
 use rocketmq_sre_contracts::AutonomyPolicyId;
@@ -56,6 +57,7 @@ use rocketmq_sre_contracts::EvidenceQuery;
 use rocketmq_sre_contracts::ExecutionAction;
 use rocketmq_sre_contracts::ExecutionAgentCapabilities;
 use rocketmq_sre_contracts::ExecutionState;
+use rocketmq_sre_contracts::ExecutionTransition;
 use rocketmq_sre_contracts::ExecutorLease;
 use rocketmq_sre_contracts::FenceAck;
 use rocketmq_sre_contracts::GrantVerification;
@@ -67,7 +69,9 @@ use rocketmq_sre_contracts::ReconcileEffectRequest;
 use rocketmq_sre_contracts::ReconcileEffectResponse;
 use rocketmq_sre_contracts::ReconcileEffectState;
 use rocketmq_sre_contracts::ReconcileGrant;
+use rocketmq_sre_contracts::ResourceLockId;
 use rocketmq_sre_contracts::Sensitivity;
+use rocketmq_sre_contracts::StepResult;
 use rocketmq_sre_contracts::TimeRange;
 use rocketmq_sre_contracts::VerifyExecutionRequest;
 use rocketmq_sre_contracts::current_evidence_schema;
@@ -81,6 +85,7 @@ use rocketmq_sre_executor::ExecutorActionRegistry;
 use rocketmq_sre_executor::ExecutorAuthorityClient;
 use rocketmq_sre_executor::ExecutorError;
 use rocketmq_sre_executor::LeaseCoordinator;
+use rocketmq_sre_executor::ResourceLockRequest;
 use rocketmq_sre_executor::ResourceSafetyStore;
 use rocketmq_sre_executor::VerificationCaptureRequest;
 use rocketmq_sre_executor::VerificationFuture;
@@ -90,12 +95,14 @@ use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use support::audit;
 use support::cleanup_schema;
 use support::isolated_pool;
 use support::seed_fixture;
 use support::seed_logger_fixture;
 use support::seed_proxy_restart_fixture;
 use support::seed_telemetry_collector_restart_fixture;
+use support::step_intent;
 
 type TestFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ExecutorError>> + Send + 'a>>;
 
@@ -233,6 +240,7 @@ struct TestAgent {
     action: ExecutionAction,
     precondition_hash: Arc<str>,
     dispatches: Arc<Mutex<Vec<bool>>>,
+    reconcile_state: ReconcileEffectState,
 }
 
 impl ExecutionAgentClient for TestAgent {
@@ -290,10 +298,10 @@ impl ExecutionAgentClient for TestAgent {
     }
 
     fn reconcile<'a>(&'a self, _request: &'a ReconcileEffectRequest) -> TestFuture<'a, ReconcileEffectResponse> {
-        Box::pin(async {
+        Box::pin(async move {
             Ok(ReconcileEffectResponse {
                 schema_version: EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
-                state: ReconcileEffectState::Applied,
+                state: self.reconcile_state,
                 outcome_code: "test_effect_applied".to_owned(),
                 sanitized_summary: "bounded test reconciliation".to_owned(),
                 observed_at: Utc::now(),
@@ -399,6 +407,214 @@ async fn successful_verification_reaches_succeeded_and_releases_lock() {
     assert_eq!(run.active_locks, 0);
     assert_eq!(run.compensation_intents, 0);
     cleanup_schema(&run.pool, &run.schema).await;
+}
+
+#[tokio::test]
+#[ignore = "requires ROCKETMQ_SRE_TEST_DATABASE_URL pointing to Docker PostgreSQL"]
+async fn interrupted_compensation_recovers_only_after_effect_is_proven_absent() {
+    let database_url = std::env::var("ROCKETMQ_SRE_TEST_DATABASE_URL").expect("test database URL must be explicit");
+    let schema = format!("phase3_recovery_{}", Uuid::new_v4().simple());
+    let pool = isolated_pool(&database_url, &schema).await;
+    sqlx::migrate!("../../migrations")
+        .run(&pool)
+        .await
+        .expect("empty-schema migrations");
+    let fixture = seed_fixture(&pool).await;
+    let journal = ExecutionJournal::new(pool.clone(), "rocketmq-sre-executor");
+    let now = Utc::now();
+    journal
+        .create_execution(
+            &fixture.request,
+            &fixture.plan.steps[0].resource,
+            fixture.plan.steps[0].action,
+            now,
+        )
+        .await
+        .expect("interrupted execution");
+    transition_execution(
+        &journal,
+        &fixture,
+        ExecutionState::Pending,
+        ExecutionState::Prechecking,
+        "recovery_fixture_prechecking",
+        now,
+    )
+    .await;
+
+    let dynamic_safety_calls = Arc::new(AtomicUsize::new(0));
+    let authority = Arc::new(TestAuthority {
+        leases: LeaseCoordinator::new(pool.clone()),
+        owner: Arc::from("spiffe://rocketmq-sre/executor"),
+        action: fixture.plan.steps[0].action,
+        resource: Arc::from(fixture.plan.steps[0].resource.as_str()),
+        dynamic_safety_calls,
+    });
+    let agent = Arc::new(TestAgent {
+        effects: AgentEffectStore::new(pool.clone()),
+        action: fixture.plan.steps[0].action,
+        precondition_hash: Arc::from(fixture.plan.steps[0].precondition_hash.as_str()),
+        dispatches: Arc::new(Mutex::new(Vec::new())),
+        reconcile_state: ReconcileEffectState::NotApplied,
+    });
+    let takeover = authority
+        .begin_takeover(&BeginLeaseTakeoverRequest {
+            schema_version: LEASE_AUTHORITY_SCHEMA_VERSION.to_owned(),
+            tenant_id: fixture.tenant_id,
+            cluster_id: fixture.cluster_id,
+            requested_ttl_seconds: 120,
+        })
+        .await
+        .expect("fixture lease takeover");
+    let fence = agent
+        .advance_fence(&AdvanceFenceRequest {
+            schema_version: EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
+            tenant_id: fixture.tenant_id,
+            reconcile_grant: takeover.reconcile_grant,
+        })
+        .await
+        .expect("fixture fence advance");
+    let active = authority
+        .activate(
+            fixture.tenant_id,
+            fixture.cluster_id,
+            &ActivateLeaseRequest {
+                schema_version: LEASE_AUTHORITY_SCHEMA_VERSION.to_owned(),
+                tenant_id: fixture.tenant_id,
+                lease_id: takeover.lease.id,
+                fence_ack: fence.fence_ack,
+            },
+        )
+        .await
+        .expect("fixture lease activation");
+    let intent = step_intent(
+        &fixture,
+        active.id,
+        active.epoch,
+        &active.owner,
+        active.expires_at,
+        "interrupted-forward-effect",
+        now + TimeDelta::seconds(1),
+    );
+    journal
+        .append_intent_with_audit(
+            &intent,
+            &audit(
+                &fixture,
+                AuditEventKind::StepIntentPersisted,
+                "recovery_fixture_intent",
+                now + TimeDelta::seconds(1),
+            ),
+        )
+        .await
+        .expect("forward intent");
+    transition_execution(
+        &journal,
+        &fixture,
+        ExecutionState::Prechecking,
+        ExecutionState::IntentPersisted,
+        "recovery_fixture_intent_persisted",
+        now + TimeDelta::seconds(2),
+    )
+    .await;
+    transition_execution(
+        &journal,
+        &fixture,
+        ExecutionState::IntentPersisted,
+        ExecutionState::Applying,
+        "recovery_fixture_applying",
+        now + TimeDelta::seconds(3),
+    )
+    .await;
+    journal
+        .append_result_with_audit(
+            fixture.request.id,
+            intent.attempt,
+            &StepResult {
+                step_id: intent.step_id,
+                state: ExecutionState::Verifying,
+                agent_result: None,
+                verification: None,
+                reason_code: "forward_effect_applied".to_owned(),
+                completed_at: now + TimeDelta::seconds(4),
+            },
+            &audit(
+                &fixture,
+                AuditEventKind::StepResultPersisted,
+                "recovery_fixture_result",
+                now + TimeDelta::seconds(4),
+            ),
+        )
+        .await
+        .expect("forward result");
+    transition_execution(
+        &journal,
+        &fixture,
+        ExecutionState::Applying,
+        ExecutionState::Verifying,
+        "recovery_fixture_verifying",
+        now + TimeDelta::seconds(5),
+    )
+    .await;
+    transition_execution(
+        &journal,
+        &fixture,
+        ExecutionState::Verifying,
+        ExecutionState::Compensating,
+        "recovery_fixture_interrupted",
+        now + TimeDelta::seconds(6),
+    )
+    .await;
+    let safety = ResourceSafetyStore::new(pool.clone());
+    safety
+        .acquire(&ResourceLockRequest {
+            id: ResourceLockId::new(),
+            tenant_id: fixture.tenant_id,
+            cluster_id: fixture.cluster_id,
+            resource_key: fixture.plan.steps[0].resource.clone(),
+            action: fixture.plan.steps[0].action,
+            holder_execution_id: fixture.request.id,
+            acquired_at: now,
+            expires_at: now + TimeDelta::minutes(5),
+        })
+        .await
+        .expect("interrupted execution lock");
+
+    let mut descriptor: rocketmq_sre_contracts::ActionDescriptor =
+        serde_yaml::from_str(include_str!("../../../config/actions/proxy.scale_out_one.v1.yaml"))
+            .expect("R1 action descriptor");
+    descriptor.execution_supported = true;
+    let registry = Arc::new(ExecutorActionRegistry::from_descriptors([descriptor]).expect("test registry"));
+    let executor = ChangeExecutor::new(
+        journal.clone(),
+        safety.clone(),
+        authority,
+        agent.clone(),
+        ExecutionPrechecker::new(registry, agent),
+        "spiffe://rocketmq-sre/executor",
+        120,
+        Duration::from_secs(300),
+    );
+    let outcome = executor
+        .recover_execution(fixture.request.id)
+        .await
+        .expect("effect-absent recovery");
+    assert_eq!(outcome.state, ExecutionState::RolledBack);
+    assert!(outcome.replayed);
+    assert_eq!(
+        journal
+            .execution_state(fixture.request.id)
+            .await
+            .expect("recovered state"),
+        ExecutionState::RolledBack
+    );
+    assert!(
+        safety
+            .unreleased_for_execution(fixture.request.id)
+            .await
+            .expect("recovered locks")
+            .is_empty()
+    );
+    cleanup_schema(&pool, &schema).await;
 }
 
 #[tokio::test]
@@ -631,6 +847,7 @@ async fn run_execution_for_action(signals: &[Signal], autonomous: bool, action: 
         action,
         precondition_hash: Arc::from(fixture.plan.steps[0].precondition_hash.as_str()),
         dispatches: Arc::clone(&dispatches),
+        reconcile_state: ReconcileEffectState::Applied,
     });
     let dynamic_safety_calls = Arc::new(AtomicUsize::new(0));
     let authority = Arc::new(TestAuthority {
@@ -695,6 +912,31 @@ async fn run_execution_for_action(signals: &[Signal], autonomous: bool, action: 
         compensation_intents,
         dynamic_safety_calls: dynamic_safety_calls.load(Ordering::Relaxed),
     }
+}
+
+async fn transition_execution(
+    journal: &ExecutionJournal,
+    fixture: &support::Fixture,
+    from: ExecutionState,
+    to: ExecutionState,
+    reason: &str,
+    occurred_at: chrono::DateTime<Utc>,
+) {
+    assert!(
+        journal
+            .transition_with_audit(
+                fixture.request.id,
+                &ExecutionTransition {
+                    from,
+                    to,
+                    reason_code: reason.to_owned(),
+                    occurred_at,
+                },
+                &audit(fixture, AuditEventKind::StateChanged, reason, occurred_at),
+            )
+            .await
+            .expect("execution transition")
+    );
 }
 
 const fn signal(offset_seconds: i64, healthy: bool) -> Signal {
