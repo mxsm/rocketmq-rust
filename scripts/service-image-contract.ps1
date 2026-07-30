@@ -248,7 +248,9 @@ try {
         $previousErrorActionPreference = $ErrorActionPreference
         try {
             $ErrorActionPreference = "Continue"
-            & docker run --rm --network none --read-only --tmpfs $tmpfsOptions $imageRef 2> $null | Out-Null
+            & docker run --rm --network none --read-only --tmpfs $tmpfsOptions `
+                --env "ROCKETMQ_SECURITY_PROFILE=development-insecure-loopback" `
+                $imageRef 2> $null | Out-Null
             $missingConfigExitCode = $LASTEXITCODE
         }
         finally {
@@ -294,6 +296,35 @@ try {
         Invoke-Checked docker @permissionArguments --entrypoint /usr/bin/touch $imageRef `
             "$($service.data_path)/data-write" `
             "$($policy.runtime.tmpfs_path)/tmp-write"
+
+        $containerId = ""
+        try {
+            $containerId = (
+                Invoke-Captured docker run --detach --interactive --network none --read-only `
+                    --mount "type=volume,destination=$($policy.runtime.writable_data_path)" `
+                    --mount "type=bind,source=$smokeConfigPath,target=/etc/rocketmq,readonly" `
+                    --tmpfs $tmpfsOptions `
+                    --env "ROCKETMQ_SECURITY_PROFILE=development-insecure-loopback" `
+                    $imageRef
+            ).Trim()
+            Start-Sleep -Seconds 5
+            $running = (Invoke-Captured docker inspect --format "{{.State.Running}}" $containerId).Trim()
+            if ($running -ne "true") {
+                $logs = Invoke-Captured docker logs $containerId
+                throw "$serviceName exited before SIGTERM smoke: $logs"
+            }
+            Invoke-Checked docker stop --signal SIGTERM --timeout $($policy.runtime.stop_grace_period_seconds) $containerId
+            $exitCode = [int](Invoke-Captured docker inspect --format "{{.State.ExitCode}}" $containerId).Trim()
+            if ($exitCode -ne 0) {
+                $logs = Invoke-Captured docker logs $containerId
+                throw "$serviceName SIGTERM exit code was $exitCode`: $logs"
+            }
+        }
+        finally {
+            if ($containerId) {
+                & docker rm --force $containerId *> $null
+            }
+        }
 
         $sbomPath = Join-Path $outputPath "$serviceName.cdx.json"
         $trivyPath = Join-Path $outputPath "$serviceName.trivy.json"
