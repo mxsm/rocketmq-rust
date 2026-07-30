@@ -19,9 +19,9 @@
 `G:`：
 
 ```powershell
-$env:CARGO_HOME = 'G:\rocketmq-sre-phase1-cargo-home'
-$env:CARGO_TARGET_DIR = 'G:\rocketmq-sre-phase2-cargo-target'
-$env:TEMP = 'G:\rocketmq-sre-phase2-temp'
+$env:CARGO_HOME = 'D:\BuildCache\rocketmq-sre-cargo-home'
+$env:CARGO_TARGET_DIR = 'D:\BuildCache\rocketmq-sre-target'
+$env:TEMP = 'D:\BuildCache\rocketmq-sre-temp'
 $env:TMP = $env:TEMP
 ```
 
@@ -37,7 +37,7 @@ npm --prefix .\rocketmq-sre\ui run check:api
 ```powershell
 cargo clean `
   --manifest-path D:\Github\Rust\rocketmq-rust-phase00-ai-sre\rocketmq-sre\Cargo.toml `
-  --target-dir G:\rocketmq-sre-phase2-cargo-target
+  --target-dir D:\BuildCache\rocketmq-sre-target
 ```
 
 ## 3. 启动 PostgreSQL 和 Kind
@@ -67,7 +67,7 @@ docker compose `
 
 ```powershell
 $env:KUBECONFIG =
-  'G:\rocketmq-sre-phase2-temp\kind-access\rocketmq-sre-phase00.kubeconfig'
+  'D:\BuildCache\rocketmq-sre-temp\kind\phase00-kubeconfig'
 kubectl config current-context
 kubectl -n rocketmq-system get pods
 kubectl -n rocketmq-sre get pods
@@ -126,7 +126,7 @@ PHASE05_ENTERPRISE_SMOKE_OK
 结果位于：
 
 ```text
-G:\rocketmq-sre-phase2-temp\phase05-enterprise-smoke.json
+D:\BuildCache\rocketmq-sre-temp\phase05-enterprise-smoke.json
 ```
 
 应确认：
