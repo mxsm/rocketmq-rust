@@ -8,6 +8,7 @@ import type {
   ConfirmDiagnosisExecutionRequest,
   CreatePlanRequest,
   CriticReviewRequest,
+  PrepareExecutionPreconditionRequest,
   SubmitExecutionRequest,
 } from "./types";
 
@@ -39,6 +40,14 @@ describe("createSupervisedSreApi", () => {
       human_confirmed: true,
       reason: "Evidence and root cause reviewed",
     } as ConfirmDiagnosisExecutionRequest;
+    const precondition = {
+      cluster_id: "cluster/one",
+      diagnosis_revision_id: "diagnosis/confirmed",
+      action_id: "observability.logger_level_ttl.v1",
+      descriptor_version: "1.0.0",
+      resource: "broker/one",
+      parameters: {},
+    } as PrepareExecutionPreconditionRequest;
     const decision = {
       plan_hash: "sha256:plan",
       precondition_hash: "sha256:precondition",
@@ -60,6 +69,7 @@ describe("createSupervisedSreApi", () => {
       "revision/one",
       confirmation,
     );
+    await api.prepareExecutionPrecondition("incident/one", precondition);
     await api.createPlan(plan);
     await api.getPlan("plan/one");
     await api.reviewPlanWithCritic("plan/one", critic);
@@ -73,6 +83,7 @@ describe("createSupervisedSreApi", () => {
 
     expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
       "/v1/incidents/incident%2Fone/diagnosis-revisions/revision%2Fone/confirm-execution",
+      "/v1/incidents/incident%2Fone/execution-preconditions",
       "/v1/plans",
       "/v1/plans/plan%2Fone",
       "/v1/plans/plan%2Fone/critic",
@@ -92,11 +103,14 @@ describe("createSupervisedSreApi", () => {
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual(
       confirmation,
     );
-    expect(fetchMock.mock.calls[2]?.[1]?.method).toBe("GET");
-    expect(JSON.parse(String(fetchMock.mock.calls[3]?.[1]?.body))).toEqual(
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual(
+      precondition,
+    );
+    expect(fetchMock.mock.calls[3]?.[1]?.method).toBe("GET");
+    expect(JSON.parse(String(fetchMock.mock.calls[4]?.[1]?.body))).toEqual(
       critic,
     );
-    expect(JSON.parse(String(fetchMock.mock.calls[4]?.[1]?.body))).toEqual(
+    expect(JSON.parse(String(fetchMock.mock.calls[5]?.[1]?.body))).toEqual(
       decision,
     );
   });
