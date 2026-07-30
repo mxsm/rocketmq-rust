@@ -333,8 +333,9 @@ async fn read_request(stream: &mut TcpStream) -> Result<Vec<u8>, HttpStatus> {
         }
         let remaining = MAX_REQUEST_BYTES - request.len();
         let mut buffer = [0_u8; 1024];
+        let read_capacity = remaining.min(buffer.len());
         let read = stream
-            .read(&mut buffer[..remaining.min(buffer.len())])
+            .read(&mut buffer[..read_capacity])
             .await
             .map_err(|_| HttpStatus::BadRequest)?;
         if read == 0 {
