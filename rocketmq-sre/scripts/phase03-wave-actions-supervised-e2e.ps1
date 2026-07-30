@@ -6,11 +6,11 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Kubeconfig,
 
-    [string]$CargoHome = 'G:\rocketmq-sre-phase1-cargo-home',
+    [string]$CargoHome = 'D:\BuildCache\rocketmq-sre-cargo-home',
 
-    [string]$CargoTargetDir = 'G:\rocketmq-sre-phase2-cargo-target',
+    [string]$CargoTargetDir = 'D:\BuildCache\rocketmq-sre-target',
 
-    [string]$TemporaryRoot = 'G:\rocketmq-sre-phase2-temp',
+    [string]$TemporaryRoot = 'D:\BuildCache\rocketmq-sre-temp',
 
     [ValidateRange(1024, 65535)]
     [int]$PostgresLocalPort = 35432,
