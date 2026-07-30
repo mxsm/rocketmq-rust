@@ -23,6 +23,14 @@ RUNTIME_AUDIT = ROOT / "scripts" / "runtime-audit.ps1"
 
 
 class RuntimeAuditSreContractTest(unittest.TestCase):
+    def test_source_test_modules_are_never_classified_as_production(self) -> None:
+        script = RUNTIME_AUDIT.read_text(encoding="utf-8-sig")
+
+        self.assertIn(
+            'if ($normalized -match "(^|/)[^/]+_tests\\.rs$")',
+            script,
+        )
+
     def test_executor_verification_poll_has_a_narrow_bounded_disposition(self) -> None:
         script = RUNTIME_AUDIT.read_text(encoding="utf-8-sig")
 
