@@ -16,7 +16,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use rocketmq_sre_contracts::CorrelationId;
+use rocketmq_sre_contracts::CoverageStatus;
 use rocketmq_sre_contracts::DiagnosisRevision;
+use rocketmq_sre_contracts::EvidenceContent;
 use rocketmq_sre_contracts::EvidenceQuery;
 use rocketmq_sre_contracts::EvidenceRelation;
 use rocketmq_sre_contracts::HypothesisStatus;
@@ -313,7 +315,9 @@ impl OrchestratorService {
             .iter()
             .chain(pack.optional_evidence())
             .copied()
-            .filter(|requirement| !has_matching_evidence(&evidence.items, requirement))
+            .filter(|requirement| {
+                !has_complete_evidence(&evidence.items, requirement, pack.max_evidence_freshness_seconds())
+            })
             .take(usize::from(self.limits.max_tool_calls.saturating_sub(1)))
             .collect::<Vec<_>>();
         let mut tool_calls_used = 1_u8;
@@ -539,12 +543,18 @@ fn select_pack(incident: &IncidentView) -> &'static str {
     }
 }
 
-fn has_matching_evidence(
+fn has_complete_evidence(
     evidence: &[rocketmq_sre_contracts::EvidenceSnapshot],
     requirement: &EvidenceRequirement,
+    max_freshness_seconds: u64,
 ) -> bool {
     evidence.iter().any(|snapshot| {
-        snapshot.source == requirement.source && snapshot.resource.starts_with(requirement.resource_prefix)
+        snapshot.source == requirement.source
+            && snapshot.resource.starts_with(requirement.resource_prefix)
+            && snapshot.freshness_seconds <= max_freshness_seconds
+            && !snapshot.partial
+            && snapshot.coverage == CoverageStatus::Available
+            && matches!(snapshot.content, EvidenceContent::Inline(_))
     })
 }
 
@@ -737,7 +747,44 @@ const fn evidence_relation_name(relation: EvidenceRelation) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use rocketmq_sre_contracts::ClusterId;
+    use rocketmq_sre_contracts::EvidenceSnapshot;
+    use rocketmq_sre_contracts::TenantId;
+    use rocketmq_sre_contracts::current_evidence_schema;
+    use serde_json::json;
+
     use super::*;
+
+    fn evidence_for_requirement(
+        requirement: EvidenceRequirement,
+        freshness_seconds: u64,
+        partial: bool,
+    ) -> EvidenceSnapshot {
+        let at = chrono::Utc::now();
+        let mut snapshot = EvidenceSnapshot::capture(
+            EvidenceQuery {
+                query_id: QueryId::new(),
+                correlation_id: CorrelationId::new(),
+                tenant_id: TenantId::new(),
+                cluster_id: ClusterId::new(),
+                source: requirement.source.to_owned(),
+                resource: format!("{}group/topic", requirement.resource_prefix),
+                time_range: TimeRange::new(at, at).expect("time range"),
+            },
+            current_evidence_schema(),
+            at,
+            EvidenceContent::Inline(json!({"total_lag": 10})),
+        )
+        .expect("evidence");
+        snapshot.freshness_seconds = freshness_seconds;
+        snapshot.partial = partial;
+        snapshot.coverage = if partial {
+            CoverageStatus::Partial
+        } else {
+            CoverageStatus::Available
+        };
+        snapshot
+    }
 
     #[test]
     fn pack_selection_is_deterministic_and_read_only() {
@@ -787,6 +834,22 @@ mod tests {
         };
 
         assert_eq!(requirement_resource(requirement, &view), "consumer-lag/group-a/topic-a");
+    }
+
+    #[test]
+    fn partial_or_stale_evidence_is_refreshed_before_rediagnosis() {
+        let requirement = full_registry()
+            .expect("built-in registry")
+            .resolve("consumer-lag.v2")
+            .expect("consumer lag pack")
+            .required_evidence()[0];
+        let partial = evidence_for_requirement(requirement, 0, true);
+        let stale = evidence_for_requirement(requirement, 301, false);
+        let complete = evidence_for_requirement(requirement, 0, false);
+
+        assert!(!has_complete_evidence(&[partial], &requirement, 300));
+        assert!(!has_complete_evidence(&[stale], &requirement, 300));
+        assert!(has_complete_evidence(&[complete], &requirement, 300));
     }
 
     #[test]
