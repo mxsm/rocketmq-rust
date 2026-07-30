@@ -453,6 +453,22 @@ try {
     $incidentId = [string]$eventEntry.target_id
     Assert-Guid $incidentId 'Unified event Incident'
 
+    $warmupDiagnosis = Invoke-Api `
+        Post `
+        "/v1/incidents/$incidentId/diagnose" `
+        $null `
+        $operatorSubject `
+        120
+    Assert-Equal $warmupDiagnosis.schema_version 'rocketmq-sre.diagnosis.v1' `
+        'Warm-up diagnosis schema drifted.'
+    Assert-Equal $warmupDiagnosis.mode 'model_assisted' `
+        'Configured model-assisted warm-up diagnosis was not used.'
+    Assert-Equal $warmupDiagnosis.execution_eligible $false `
+        'Warm-up model output bypassed explicit human confirmation.'
+    Assert-True (@($warmupDiagnosis.revision.evidence_ids).Count -gt 0) `
+        'Warm-up diagnosis did not capture the first bounded lag sample.'
+    Start-Sleep -Seconds 2
+
     $diagnosis = Invoke-Api `
         Post `
         "/v1/incidents/$incidentId/diagnose" `
@@ -465,6 +481,10 @@ try {
         'Configured model-assisted diagnosis was not used.'
     Assert-Equal $diagnosis.execution_eligible $false `
         'Model output bypassed explicit human confirmation.'
+    Assert-Equal $diagnosis.revision.partial $false `
+        'Two bounded lag samples did not produce complete diagnostic Evidence.'
+    Assert-Equal $diagnosis.revision.status 'monitoring' `
+        'Complete diagnostic Evidence did not advance the Incident to monitoring.'
     $diagnosisRevisionId = [string]$diagnosis.revision.id
     Assert-Guid $diagnosisRevisionId 'Diagnosis revision'
     $diagnosisEvidenceIds = @(
@@ -620,6 +640,7 @@ try {
         target = 'kind'
         source_kind = [string]$eventEntry.source_kind
         incident_id = $incidentId
+        warmup_diagnosis_revision_id = [string]$warmupDiagnosis.revision.id
         diagnosis_mode = [string]$diagnosis.mode
         diagnosis_revision_id = $diagnosisRevisionId
         confirmed_revision_id = $confirmedRevisionId
