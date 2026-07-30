@@ -110,6 +110,7 @@ impl RequiredSignalsSource {
         loki: &LokiSource,
         tempo: &TempoSource,
         mcp: &McpSource<G>,
+        runtime: &RuntimeDiagnosticsSource,
         external_cluster: &str,
         resource: &str,
         start: DateTime<Utc>,
@@ -199,10 +200,7 @@ impl RequiredSignalsSource {
                     observation_from_read(signal, read)
                 }
                 FixedQuery::Runtime(runtime_resource) => {
-                    let read = normalize_read(
-                        "runtime",
-                        RuntimeDiagnosticsSource::query(mcp, runtime_resource, deadline, cancel).await,
-                    )?;
+                    let read = normalize_read("runtime", runtime.query(mcp, runtime_resource, deadline, cancel).await)?;
                     observation_from_read(signal, read)
                 }
             };
