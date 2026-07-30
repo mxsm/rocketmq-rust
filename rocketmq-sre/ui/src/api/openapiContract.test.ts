@@ -107,6 +107,21 @@ describe("checked-in Phase 5 OpenAPI", () => {
     expect(specification.components.schemas.PolicyDecision).toBeDefined();
     expect(specification.components.schemas.ExecutionRequest).toBeDefined();
     expect(specification.components.schemas.ResourceQuarantine).toBeDefined();
+    expect(
+      specification.components.schemas.PrepareExecutionPreconditionRequest,
+    ).toBeDefined();
+    expect(
+      specification.components.schemas.ExecutionPreconditionEvidenceView,
+    ).toBeDefined();
+    expect(
+      specification.components.schemas.EvidenceSnapshot__EvidenceExposure
+        .oneOf[0].enum,
+    ).toContain("execution_agent_api");
+    expect(
+      specification.paths[
+        "/v1/incidents/{incident_id}/execution-preconditions"
+      ]?.post,
+    ).toBeDefined();
     expect(specification.paths["/v1/plans"]?.post).toBeDefined();
     expect(specification.paths["/v1/plans/{id}/approve"]?.post).toBeDefined();
     expect(specification.paths["/v1/executions"]?.post).toBeDefined();
