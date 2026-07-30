@@ -4,6 +4,9 @@ global:
   otelEndpoint: http://otel-collector.observability.svc.cluster.local:4317
   secretRefs:
     existingSecret: rocketmq-runtime-secrets
+  runtimeDiagnostics:
+    enabled: true
+    allowInsecureHttp: true
 
 namespace:
   # The runner creates the namespace first so it can provision the development
