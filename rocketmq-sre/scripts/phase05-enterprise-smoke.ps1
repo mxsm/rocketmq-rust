@@ -16,12 +16,12 @@
 param(
     [string]$DatabaseUrl = 'postgres://rocketmq_sre:rocketmq_sre@127.0.0.1:5432/rocketmq_sre',
     [string]$PostgresContainer = 'rocketmq-rust-ai-sre-phase00-postgres-1',
-    [string]$Kubeconfig = 'G:\rocketmq-sre-phase2-temp\kind-access\rocketmq-sre-phase00.kubeconfig',
+    [string]$Kubeconfig = 'D:\BuildCache\rocketmq-sre-temp\kind\phase00-kubeconfig',
     [string]$ExpectedContext = 'kubernetes-admin@rocketmq-sre-phase00',
-    [string]$CargoTargetDir = 'G:\rocketmq-sre-phase2-cargo-target',
-    [string]$CargoHome = 'G:\rocketmq-sre-phase1-cargo-home',
-    [string]$TemporaryRoot = 'G:\rocketmq-sre-phase2-temp',
-    [string]$EvidenceOutput = 'G:\rocketmq-sre-phase2-temp\phase05-enterprise-smoke.json'
+    [string]$CargoTargetDir = 'D:\BuildCache\rocketmq-sre-target',
+    [string]$CargoHome = 'D:\BuildCache\rocketmq-sre-cargo-home',
+    [string]$TemporaryRoot = 'D:\BuildCache\rocketmq-sre-temp',
+    [string]$EvidenceOutput = 'D:\BuildCache\rocketmq-sre-temp\phase05-enterprise-smoke.json'
 )
 
 $ErrorActionPreference = 'Stop'
