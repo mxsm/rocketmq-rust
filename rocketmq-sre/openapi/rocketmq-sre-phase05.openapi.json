@@ -13197,6 +13197,105 @@
           }
         }
       }
+    },
+    "/v1/incidents/{incident_id}/execution-preconditions": {
+      "post": {
+        "operationId": "prepareExecutionPreconditionEvidenceV1",
+        "summary": "Capture a current read-only Execution Agent precondition as incident-linked Evidence",
+        "parameters": [
+          {
+            "name": "incident_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrepareExecutionPreconditionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionPreconditionEvidenceView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable sanitized error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Stable sanitized error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Stable sanitized error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Stable sanitized error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Stable sanitized error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Stable sanitized error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -29255,6 +29354,77 @@
           "confirmed_at": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "PrepareExecutionPreconditionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "cluster_id",
+          "diagnosis_revision_id",
+          "action_id",
+          "descriptor_version",
+          "resource",
+          "parameters"
+        ],
+        "properties": {
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "diagnosis_revision_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "action_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "descriptor_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "resource": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "parameters": {
+            "type": "object"
+          }
+        }
+      },
+      "ExecutionPreconditionEvidenceView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "incident_id",
+          "diagnosis_revision_id",
+          "evidence",
+          "precondition_hash"
+        ],
+        "properties": {
+          "schema_version": {
+            "const": "rocketmq-sre.execution-precondition-evidence.v1"
+          },
+          "incident_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "diagnosis_revision_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/EvidenceSnapshot"
+          },
+          "precondition_hash": {
+            "type": "string",
+            "pattern": "^sha256:[0-9A-Fa-f]{64}$"
           }
         }
       }
