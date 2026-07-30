@@ -15,6 +15,11 @@ The runner uses the repository-pinned versions:
 PostgreSQL runs inside the cluster with an ephemeral `emptyDir`. The overlay
 also starts the SRE Control Plane and UI, places the Connector beside MCP as a
 loopback-only sidecar, and adds OTel Collector, Prometheus, Loki, and Tempo.
+The Broker uses a 10 GiB `standard` StorageClass PVC named
+`data-rocketmq-broker-0`. Its StatefulSet retains the claim across Pod
+replacement so the DR acceptance can verify message-history RPO and RTO.
+This single-node local-path fixture does not claim node-loss, Kind-cluster
+recreation, replicated commit-log, or production backup/restore coverage.
 The development Control Plane alone mounts a private 1 GiB `emptyDir` for
 large Evidence objects. It survives a Control Plane container restart within
 the Pod, but is intentionally ephemeral with the Kind cluster; production
