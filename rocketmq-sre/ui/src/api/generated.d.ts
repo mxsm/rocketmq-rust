@@ -2621,6 +2621,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/event-entries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["ingestUnifiedEventEntry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -7033,6 +7049,132 @@ export interface components {
             warnings: string[];
             /** Format: date-time */
             generated_at: string;
+        };
+        /** @enum {string} */
+        UnifiedAlertSource: "alertmanager" | "kubernetes_event" | "health_probe" | "synthetic_probe";
+        /** @enum {string} */
+        EventEntryWorkflowTarget: "investigation" | "incident";
+        /** @enum {string} */
+        ChangeEventKind: "release" | "deployment" | "configuration";
+        /** @enum {string} */
+        ExternalEventChannel: "itsm" | "chat_ops";
+        /** @enum {string} */
+        EventEntrySourceKind: "alert" | "manual_issue" | "scheduled_inspection" | "change_event" | "external_integration";
+        /** @enum {string} */
+        EventEntryTargetKind: "investigation" | "incident" | "inspection_run";
+        AlertEventEntryRequest: {
+            /** @constant */
+            schema_version: "rocketmq-sre.event-entry.v1";
+            /** Format: uuid */
+            cluster_id: string;
+            idempotency_key: string;
+            occurred_at?: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            source_kind: "alert";
+            source: components["schemas"]["UnifiedAlertSource"];
+            source_event_id: string;
+            resource_kind: components["schemas"]["AlertEvent__ResourceKind"];
+            resource_key: string;
+            display_name?: string | null;
+            symptom_family: string;
+            severity: components["schemas"]["AlertEvent__AlertSeverity"];
+            status: components["schemas"]["AlertEvent__AlertStatus"];
+            summary: string;
+            labels?: {
+                [key: string]: string;
+            };
+            evidence_ids?: string[];
+            /** Format: uint64 */
+            sequence: number;
+        };
+        ManualIssueEventEntryRequest: {
+            /** @constant */
+            schema_version: "rocketmq-sre.event-entry.v1";
+            /** Format: uuid */
+            cluster_id: string;
+            idempotency_key: string;
+            occurred_at?: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            source_kind: "manual_issue";
+            title: string;
+            resource?: string | null;
+            symptom_family: string;
+        };
+        ScheduledInspectionEventEntryRequest: {
+            /** @constant */
+            schema_version: "rocketmq-sre.event-entry.v1";
+            /** Format: uuid */
+            cluster_id: string;
+            idempotency_key: string;
+            occurred_at?: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            source_kind: "scheduled_inspection";
+            /** @enum {string} */
+            template: "cluster_health" | "consumer" | "broker" | "telemetry" | "full_cluster" | "producer_consumer" | "store_ha" | "routing_proxy" | "security" | "upgrade" | "disaster_recovery";
+            schedule?: string | null;
+        };
+        ChangeEventEntryRequest: {
+            /** @constant */
+            schema_version: "rocketmq-sre.event-entry.v1";
+            /** Format: uuid */
+            cluster_id: string;
+            idempotency_key: string;
+            occurred_at?: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            source_kind: "change_event";
+            change_kind: components["schemas"]["ChangeEventKind"];
+            /** @default investigation */
+            target: components["schemas"]["EventEntryWorkflowTarget"];
+            title: string;
+            resource?: string | null;
+            symptom_family: string;
+        };
+        ExternalIntegrationEventEntryRequest: {
+            /** @constant */
+            schema_version: "rocketmq-sre.event-entry.v1";
+            /** Format: uuid */
+            cluster_id: string;
+            idempotency_key: string;
+            occurred_at?: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            source_kind: "external_integration";
+            channel: components["schemas"]["ExternalEventChannel"];
+            target: components["schemas"]["EventEntryWorkflowTarget"];
+            title: string;
+            resource?: string | null;
+            symptom_family: string;
+        };
+        UnifiedEventEntryRequest: components["schemas"]["AlertEventEntryRequest"] | components["schemas"]["ManualIssueEventEntryRequest"] | components["schemas"]["ScheduledInspectionEventEntryRequest"] | components["schemas"]["ChangeEventEntryRequest"] | components["schemas"]["ExternalIntegrationEventEntryRequest"];
+        UnifiedEventEntryResult: {
+            /** @constant */
+            schema_version: "rocketmq-sre.event-entry-result.v1";
+            /** Format: uuid */
+            entry_id: string;
+            source_kind: components["schemas"]["EventEntrySourceKind"];
+            target_kind: components["schemas"]["EventEntryTargetKind"];
+            /** Format: uuid */
+            target_id: string;
+            created: boolean;
+            replayed: boolean;
+            /** Format: uuid */
+            correlation_id: string;
+            /** Format: date-time */
+            accepted_at: string;
         };
     };
     responses: {
@@ -16848,6 +16990,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    ingestUnifiedEventEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UnifiedEventEntryRequest"];
+            };
+        };
+        responses: {
+            /** @description Idempotent workflow target created from one of five event sources */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnifiedEventEntryResult"];
                 };
             };
         };
