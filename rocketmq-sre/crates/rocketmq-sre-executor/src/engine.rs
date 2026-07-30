@@ -189,6 +189,123 @@ impl ChangeExecutor {
         result
     }
 
+    /// Recovers an interrupted compensating execution from its immutable
+    /// journal snapshot.
+    ///
+    /// The original dispatch signature may have expired, so this path never
+    /// authorizes a new mutation from that request. It obtains a fresh fenced
+    /// takeover grant and performs only Agent reconciliation. The execution is
+    /// closed as rolled back only when every recorded forward effect is
+    /// confirmed absent; any applied, failed, or unknown effect remains
+    /// fail-closed in `compensating`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed failure when the execution is not recoverable, durable
+    /// state cannot be loaded, fencing fails, or an effect is not proven
+    /// absent.
+    pub async fn recover_execution(&self, id: ExecutionId) -> Result<ExecuteOutcome, ExecutorError> {
+        self.metrics.execution_total.fetch_add(1, Ordering::Relaxed);
+        self.metrics.replay_total.fetch_add(1, Ordering::Relaxed);
+        self.metrics.active_executions.fetch_add(1, Ordering::Relaxed);
+        let result = self.recover_execution_inner(id).await;
+        self.metrics.active_executions.fetch_sub(1, Ordering::Relaxed);
+        result
+    }
+
+    async fn recover_execution_inner(&self, id: ExecutionId) -> Result<ExecuteOutcome, ExecutorError> {
+        let request = self.journal.execution_request(id).await?;
+        let state = self.journal.execution_state(id).await?;
+        if matches!(
+            state,
+            ExecutionState::Succeeded | ExecutionState::RolledBack | ExecutionState::Escalated
+        ) {
+            return Ok(ExecuteOutcome {
+                execution_id: id,
+                state,
+                replayed: true,
+                accepted_steps: request.plan.steps.len(),
+            });
+        }
+        if state != ExecutionState::Compensating {
+            return Err(ExecutorError::ReconcileBlocked);
+        }
+        let forward_intents = self.journal.forward_intents_for_execution(id).await?;
+        if forward_intents.is_empty() {
+            return Err(ExecutorError::ReconcileBlocked);
+        }
+
+        let mut leases = self.leases.lock().await;
+        leases.remove(&request.cluster_id);
+        let takeover = self
+            .authority
+            .begin_takeover(&BeginLeaseTakeoverRequest {
+                schema_version: LEASE_AUTHORITY_SCHEMA_VERSION.to_owned(),
+                tenant_id: request.tenant_id,
+                cluster_id: request.cluster_id,
+                requested_ttl_seconds: self.lease_ttl_seconds,
+            })
+            .await?;
+        self.reconcile_old_effects(&request, &takeover.reconcile_grant).await?;
+
+        let mut every_effect_absent = true;
+        for intent in &forward_intents {
+            let response = self
+                .agent
+                .reconcile(&ReconcileEffectRequest {
+                    schema_version: EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
+                    tenant_id: request.tenant_id,
+                    reconcile_grant: takeover.reconcile_grant.clone(),
+                    idempotency_key: intent.idempotency_key.clone(),
+                })
+                .await?;
+            every_effect_absent &= response.state == ReconcileEffectState::NotApplied;
+        }
+        let response = self
+            .agent
+            .advance_fence(&AdvanceFenceRequest {
+                schema_version: EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
+                tenant_id: request.tenant_id,
+                reconcile_grant: takeover.reconcile_grant,
+            })
+            .await?;
+        let active = self
+            .authority
+            .activate(
+                request.tenant_id,
+                request.cluster_id,
+                &ActivateLeaseRequest {
+                    schema_version: LEASE_AUTHORITY_SCHEMA_VERSION.to_owned(),
+                    tenant_id: request.tenant_id,
+                    lease_id: takeover.lease.id,
+                    fence_ack: response.fence_ack,
+                },
+            )
+            .await?;
+        leases.insert(request.cluster_id, active);
+        drop(leases);
+
+        if !every_effect_absent || self.journal.execution_state(id).await? != ExecutionState::Compensating {
+            self.metrics.reconcile_blocks_total.fetch_add(1, Ordering::Relaxed);
+            return Err(ExecutorError::ReconcileBlocked);
+        }
+        self.transition(
+            &request,
+            ExecutionState::Compensating,
+            ExecutionState::RolledBack,
+            "recovery_confirmed_forward_effects_absent",
+        )
+        .await?;
+        let locks = self.safety.unreleased_for_execution(id).await?;
+        self.release_locks(&locks, id, "recovery_confirmed_rolled_back").await;
+        Ok(ExecuteOutcome {
+            execution_id: id,
+            state: ExecutionState::RolledBack,
+            replayed: true,
+            accepted_steps: request.plan.steps.len(),
+        })
+    }
+
     async fn execute_inner(&self, request: &ExecutionRequest) -> Result<ExecuteOutcome, ExecutorError> {
         self.authority
             .verify_execution(&VerifyExecutionRequest {
