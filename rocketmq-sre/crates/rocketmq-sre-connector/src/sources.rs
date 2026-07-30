@@ -168,6 +168,7 @@ pub(crate) struct SourceManager<G> {
     loki: LokiSource,
     tempo: TempoSource,
     kubernetes: KubernetesSource,
+    runtime: RuntimeDiagnosticsSource,
     admission: QueryAdmission,
     cache: Mutex<BTreeMap<String, CacheEntry>>,
     consumer_lag_history: Mutex<BTreeMap<String, ConsumerLagSample>>,
@@ -204,11 +205,12 @@ where
             config.source_limits.label_allowlist.clone(),
         );
         let tempo = TempoSource::new(
-            http,
+            http.clone(),
             config.tempo_url.clone(),
             config.source_limits.label_allowlist.clone(),
         );
         let kubernetes = KubernetesSource::new(config.kubernetes_source.clone(), config.pseudonymization_key())?;
+        let runtime = RuntimeDiagnosticsSource::new(http, &config);
         let mut state = BTreeMap::new();
         state.insert("rocketmq-mcp", initial_state(true));
         state.insert("admin-query", initial_state(admin.configured()));
@@ -232,6 +234,7 @@ where
             loki,
             tempo,
             kubernetes,
+            runtime,
             cache: Mutex::new(BTreeMap::new()),
             consumer_lag_history: Mutex::new(BTreeMap::new()),
             state: Mutex::new(state),
@@ -454,9 +457,7 @@ where
                     )
                     .await
             }
-            CanonicalQuery::Runtime(resource) => {
-                RuntimeDiagnosticsSource::query(&self.mcp, &resource, deadline, cancel).await
-            }
+            CanonicalQuery::Runtime(resource) => self.runtime.query(&self.mcp, &resource, deadline, cancel).await,
         }
         .inspect_err(|error| {
             tracing::warn!(
@@ -646,13 +647,14 @@ where
                     )
                     .await
             }
-            "runtime" => RuntimeDiagnosticsSource::query(&self.mcp, &query.resource, deadline, cancel).await,
+            "runtime" => self.runtime.query(&self.mcp, &query.resource, deadline, cancel).await,
             "required-signals" => {
                 RequiredSignalsSource::query(
                     &self.prometheus,
                     &self.loki,
                     &self.tempo,
                     &self.mcp,
+                    &self.runtime,
                     external_cluster,
                     &query.resource,
                     query.time_range.start,
