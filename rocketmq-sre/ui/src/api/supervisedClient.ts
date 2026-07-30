@@ -7,10 +7,12 @@ import type {
   ApprovalDecisionResponse,
   AuditPage,
   ClearQuarantineRequest,
+  ConfirmDiagnosisExecutionRequest,
   CreatePlanRequest,
   CreatePlanResponse,
   CriticReviewRequest,
   CriticReviewResponse,
+  DiagnosisExecutionConfirmation,
   ExecutionSubmissionView,
   QuarantinePage,
   ResourceQuarantine,
@@ -18,6 +20,12 @@ import type {
 } from "./types";
 
 export interface SupervisedSreApi {
+  confirmDiagnosisExecution: (
+    incidentId: string,
+    revisionId: string,
+    input: ConfirmDiagnosisExecutionRequest,
+    signal?: AbortSignal,
+  ) => Promise<DiagnosisExecutionConfirmation>;
   createPlan: (
     input: CreatePlanRequest,
     signal?: AbortSignal,
@@ -77,6 +85,12 @@ export function createSupervisedSreApi(
   ) => supervisedRequest<T>(path, auth, "POST", body, signal);
 
   return {
+    confirmDiagnosisExecution: (incidentId, revisionId, input, signal) =>
+      post<DiagnosisExecutionConfirmation>(
+        `/v1/incidents/${encodeURIComponent(incidentId)}/diagnosis-revisions/${encodeURIComponent(revisionId)}/confirm-execution`,
+        input,
+        signal,
+      ),
     createPlan: (input, signal) =>
       post<CreatePlanResponse>("/v1/plans", input, signal),
     getPlan: (id, signal) =>
