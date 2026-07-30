@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
+import type { MockInstance } from "vitest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { DiagnosisRevision, Incident } from "@/api/types";
@@ -182,7 +183,7 @@ function jsonResponse(body: unknown) {
 }
 
 function requestBody(
-  fetchMock: ReturnType<typeof vi.spyOn>,
+  fetchMock: MockInstance<typeof globalThis.fetch>,
   index: number,
 ) {
   return JSON.parse(
