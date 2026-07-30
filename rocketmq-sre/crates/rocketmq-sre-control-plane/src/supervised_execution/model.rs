@@ -25,6 +25,7 @@ use rocketmq_sre_contracts::CriticGateState;
 use rocketmq_sre_contracts::CriticReview;
 use rocketmq_sre_contracts::DiagnosisRevisionId;
 use rocketmq_sre_contracts::EvidenceId;
+use rocketmq_sre_contracts::EvidenceSnapshot;
 use rocketmq_sre_contracts::ExecutionId;
 use rocketmq_sre_contracts::ExecutionRequest;
 use rocketmq_sre_contracts::ExecutionState;
@@ -58,6 +59,26 @@ pub(crate) struct CandidatePlanStep {
     pub(crate) resource: String,
     pub(crate) parameters: Value,
     pub(crate) evidence_ids: Vec<EvidenceId>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PrepareExecutionPreconditionRequest {
+    pub(crate) cluster_id: ClusterId,
+    pub(crate) diagnosis_revision_id: DiagnosisRevisionId,
+    pub(crate) action_id: String,
+    pub(crate) descriptor_version: String,
+    pub(crate) resource: String,
+    pub(crate) parameters: Value,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct ExecutionPreconditionEvidenceView {
+    pub(crate) schema_version: &'static str,
+    pub(crate) incident_id: IncidentId,
+    pub(crate) diagnosis_revision_id: DiagnosisRevisionId,
+    pub(crate) evidence: EvidenceSnapshot,
+    pub(crate) precondition_hash: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
