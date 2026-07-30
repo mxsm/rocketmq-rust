@@ -112,6 +112,50 @@ describe("AutonomyOperationsPage", () => {
       screen.getAllByText("verification_passed"),
     ).not.toHaveLength(0);
   });
+
+  it("queries operating quality and cost across scenario model and action dimensions", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(
+      await screen.findByText("多维运维分析"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("MTTD")).toBeInTheDocument();
+    expect(screen.getByText("建议采纳率")).toBeInTheDocument();
+    expect(screen.getAllByText("执行成功率")).not.toHaveLength(0);
+    expect(screen.getByText("自治节省工时")).toBeInTheDocument();
+    expect(screen.getByText("90.0%")).toBeInTheDocument();
+    expect(screen.getByText("4.5 小时")).toBeInTheDocument();
+
+    await user.type(
+      screen.getByRole("textbox", { name: "运维场景" }),
+      "consumer_lag",
+    );
+    await user.type(
+      screen.getByRole("textbox", { name: "模型 Provider" }),
+      "deepseek",
+    );
+    await user.type(
+      screen.getByRole("textbox", { name: "模型族" }),
+      "deepseek",
+    );
+    await user.type(
+      screen.getByRole("textbox", { name: "动作 ID" }),
+      "observability.logger_level_ttl.v1",
+    );
+    await user.click(
+      screen.getByRole("button", { name: "应用维度" }),
+    );
+
+    expect(
+      await screen.findByText("场景 consumer_lag"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "动作 observability.logger_level_ttl.v1",
+      ),
+    ).toBeInTheDocument();
+  });
 });
 
 function renderPage() {
