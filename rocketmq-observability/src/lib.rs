@@ -27,6 +27,7 @@ pub mod metrics;
 mod noop;
 mod propagation;
 mod resource;
+mod runtime_diagnostics;
 mod sampling;
 pub mod semantic;
 pub mod statistics;
@@ -97,8 +98,19 @@ pub use logging::FileLogLayer;
 pub use logging::LoggingGuard;
 pub use logging::TelemetryRuntimeGuard;
 pub use logging::TelemetryShutdownReport;
-pub use metrics::labels::MetricLabelPolicy;
-pub use metrics::labels::METRIC_LABEL_SENTINEL;
+pub use runtime_diagnostics::RUNTIME_DIAGNOSTICS_ALLOW_INSECURE_HTTP_ENV;
+pub use runtime_diagnostics::RUNTIME_DIAGNOSTICS_BIND_ADDR_ENV;
+pub use runtime_diagnostics::RUNTIME_DIAGNOSTICS_ENDPOINT_SCHEMA;
+pub use runtime_diagnostics::RUNTIME_DIAGNOSTICS_PATH;
+pub use runtime_diagnostics::RUNTIME_DIAGNOSTICS_SAMPLE_INTERVAL_SECONDS_ENV;
+pub use runtime_diagnostics::RUNTIME_DIAGNOSTICS_SCOPE;
+pub use runtime_diagnostics::RUNTIME_DIAGNOSTICS_TOKEN_FILE_ENV;
+pub use runtime_diagnostics::RuntimeDiagnosticsEndpointConfig;
+pub use runtime_diagnostics::RuntimeDiagnosticsEndpointHandle;
+pub use runtime_diagnostics::start_runtime_diagnostics_endpoint;
+pub use runtime_diagnostics::start_runtime_diagnostics_endpoint_from_env;
+#[cfg(feature = "otel-traces")]
+pub use propagation::add_current_span_event;
 #[cfg(feature = "otel-traces")]
 pub use propagation::add_current_span_event_with_status;
 #[cfg(feature = "otel-traces")]
