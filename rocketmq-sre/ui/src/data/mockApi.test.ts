@@ -192,6 +192,14 @@ describe("mock SRE API", () => {
       period: "monthly",
       clusterId: DEMO_CLUSTER_ID,
     });
+    const analytics = await api.getOperationsAnalytics({
+      period: "weekly",
+      clusterId: DEMO_CLUSTER_ID,
+      scenario: "consumer_lag",
+      providerFamily: "deepseek",
+      modelFamily: "deepseek",
+      actionId: "observability.logger_level_ttl.v1",
+    });
 
     expect(outcomes.items).toHaveLength(1);
     expect(outcomes.items[0]?.class).toBe("success");
@@ -199,6 +207,14 @@ describe("mock SRE API", () => {
     expect(report.outcomes.candidates).toBe(186);
     expect(report.model_usage.cost_micros).toBeGreaterThan(0);
     expect(report.model_usage.calls_missing_cost).toBeGreaterThan(0);
+    expect(analytics.filters.scenario).toBe("consumer_lag");
+    expect(analytics.model_usage.cost_micros).toBeGreaterThan(0);
+    expect(analytics.recommendation_feedback.adoption_basis_points).toBe(
+      7_391,
+    );
+    expect(analytics.executions.success_basis_points).toBe(9_000);
+    expect(analytics.savings.successful_autonomous_actions).toBe(18);
+    expect(analytics.savings.estimated_minutes_saved).toBe(270);
     expect(report.budget_alerts).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
