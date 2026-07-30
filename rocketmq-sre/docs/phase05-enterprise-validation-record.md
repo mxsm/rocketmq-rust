@@ -21,7 +21,7 @@ Run the complete scenario from the repository worktree:
 The machine-readable, redacted result is written outside the repository to:
 
 ```text
-G:\rocketmq-sre-phase2-temp\phase05-enterprise-smoke.json
+D:\BuildCache\rocketmq-sre-temp\phase05-enterprise-smoke.json
 ```
 
 No token, secret, database password, private key, ACL material, message body,
