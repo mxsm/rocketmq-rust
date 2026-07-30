@@ -29,6 +29,7 @@
         "imagePullSecrets",
         "otelEndpoint",
         "secretRefs",
+        "runtimeDiagnostics",
         "podSecurity"
       ],
       "properties": {
@@ -81,6 +82,44 @@
               }
             }
           ]
+        },
+        "runtimeDiagnostics": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "bindAddress",
+            "port",
+            "tokenFile",
+            "sampleIntervalSeconds",
+            "allowInsecureHttp"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "bindAddress": {
+              "type": "string",
+              "pattern": "^([^\\s:]+|\\[[0-9A-Fa-f:]+\\]):[0-9]{1,5}$"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "tokenFile": {
+              "type": "string",
+              "pattern": "^/[^\\s]+$"
+            },
+            "sampleIntervalSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 300
+            },
+            "allowInsecureHttp": {
+              "type": "boolean"
+            }
+          }
         },
         "podSecurity": {
           "type": "object",
