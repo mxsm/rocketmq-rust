@@ -14,10 +14,10 @@
 
 [CmdletBinding()]
 param(
-    [string]$Kubeconfig = 'G:\rocketmq-sre-phase2-temp\kind-access\rocketmq-sre-phase00.kubeconfig',
-    [string]$CargoHome = 'G:\rocketmq-sre-phase1-cargo-home',
-    [string]$CargoTargetDir = 'G:\rocketmq-sre-phase2-cargo-target',
-    [string]$TempDir = 'G:\rocketmq-sre-phase2-temp',
+    [string]$Kubeconfig = 'D:\BuildCache\rocketmq-sre-temp\kind\phase00-kubeconfig',
+    [string]$CargoHome = 'D:\BuildCache\rocketmq-sre-cargo-home',
+    [string]$CargoTargetDir = 'D:\BuildCache\rocketmq-sre-target',
+    [string]$TempDir = 'D:\BuildCache\rocketmq-sre-temp',
     [string]$AdminCliPath = '',
     [ValidateRange(1024, 65535)]
     [int]$PostgresLocalPort = 60032,
