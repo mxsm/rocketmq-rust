@@ -28,6 +28,7 @@ use rocketmq_proxy::ProxyRuntime;
 #[cfg(test)]
 use rocketmq_proxy::RemotingConfig;
 use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::RuntimeComponent;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ServiceLifecycle;
@@ -155,6 +156,22 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
             request.deadline,
         )
         .await;
+    }
+    if let Err(error) =
+        rocketmq_observability::start_runtime_diagnostics_endpoint_from_env(&service_context, RuntimeComponent::Proxy)
+            .await
+    {
+        lifecycle.mark_failed();
+        let request = lifecycle.request_shutdown(ShutdownReason::Internal);
+        if let Err(shutdown_error) = telemetry_guard
+            .shutdown_with_timeout(request.deadline.remaining())
+            .into_result()
+        {
+            tracing::warn!(error = %shutdown_error, "proxy telemetry cleanup after diagnostics startup failure was unhealthy");
+        }
+        return Err(ProxyError::Transport {
+            message: format!("failed to start protected Proxy runtime diagnostics: {error}"),
+        });
     }
 
     info!(
