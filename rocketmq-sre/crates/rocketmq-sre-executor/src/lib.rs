@@ -46,6 +46,7 @@ pub use config::ExecutorConfig;
 pub use engine::ChangeExecutor;
 pub use engine::ExecuteOutcome;
 pub use engine::ExecutorMetricsSnapshot;
+pub use engine::RecoverySweepOutcome;
 pub use error::ExecutorError;
 pub use error::JournalError;
 pub use journal::ExecutionCreation;
