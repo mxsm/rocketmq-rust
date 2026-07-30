@@ -20,7 +20,7 @@
 - [ ] 已确认 OAuth2 audience、scope、tenant 和 cluster allowlist。
 - [ ] 已确认当前 Kind context 是
       `kubernetes-admin@rocketmq-sre-phase00`，且脚本使用独立 kubeconfig。
-- [ ] 已确认 D: 和 G: 盘有足够空间，Cargo target 不写入源码目录。
+- [ ] 已确认所选 D/F 目标盘有足够空间，Cargo target 不写入源码目录或 C/G 盘。
 
 ## 3. 启动和只读检查
 
@@ -77,9 +77,12 @@
     -Kubeconfig D:\BuildCache\rocketmq-sre-temp\kind\phase00-kubeconfig
   ```
 
-- [ ] 核对 Broker Pod UID 已变化，重建后 send/consume/query 均成功。
+- [ ] 核对 `data-rocketmq-broker-0` PVC 为 Bound，且 Broker Pod 替换前后 PVC/PV UID 不变。
+- [ ] 核对 Broker Pod UID 已变化，历史消息 expected/recovered 均为 10、RPO 为 0，并记录 RTO。
+- [ ] 核对恢复后的 send/consume/query 仍成功。
 - [ ] 确认 Control Plane PostgreSQL 状态在测试集群恢复后仍可读。
-- [ ] 理解当前 Kind Broker 使用 `emptyDir`：该演练证明组件重建与控制面恢复，不证明历史消息恢复。
+- [ ] 理解当前 Kind Broker 使用单节点 local-path PVC：已证明 Pod 替换下的历史消息恢复，
+      但未证明节点丢失、Kind 集群重建、复制 CommitLog 或生产备份恢复。
 - [ ] 如 Broker 重建后的第一次探针处于瞬时启动窗口，确认脚本只进行一次有界重试并记录该事实。
 
 ## 8. 扩展和验证
