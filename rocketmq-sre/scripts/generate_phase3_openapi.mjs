@@ -223,10 +223,17 @@ schemas.CreatePlanResponse = {
     {
       type: "object",
       additionalProperties: false,
-      required: ["kind", "plan", "risk", "policy_decision"],
+      required: [
+        "kind",
+        "plan",
+        "precondition_hash",
+        "risk",
+        "policy_decision",
+      ],
       properties: {
         kind: { const: "action_plan" },
         plan: { $ref: "#/components/schemas/ActionPlan" },
+        precondition_hash: digest,
         risk: { $ref: "#/components/schemas/ActionRisk" },
         policy_decision: { $ref: "#/components/schemas/PolicyDecision" },
       },
@@ -246,6 +253,7 @@ schemas.ActionPlanView = {
   type: "object",
   required: [
     "plan",
+    "precondition_hash",
     "risk",
     "critic_state",
     "latest_critic_review",
@@ -254,6 +262,7 @@ schemas.ActionPlanView = {
   ],
   properties: {
     plan: { $ref: "#/components/schemas/ActionPlan" },
+    precondition_hash: digest,
     risk: { $ref: "#/components/schemas/ActionRisk" },
     critic_state: { $ref: "#/components/schemas/CriticGateState" },
     latest_critic_review: {
@@ -274,6 +283,56 @@ schemas.ActionPlanView = {
         { type: "null" },
       ],
     },
+  },
+};
+schemas.ConfirmDiagnosisExecutionRequest = {
+  type: "object",
+  additionalProperties: false,
+  required: ["human_confirmed", "reason"],
+  properties: {
+    human_confirmed: { const: true },
+    reason: { type: "string", minLength: 8, maxLength: 2048 },
+  },
+};
+schemas.DiagnosisExecutionConfirmation = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "schema_version",
+    "incident_id",
+    "source_revision_id",
+    "confirmed_revision_id",
+    "revision",
+    "cluster_id",
+    "primary_model_invocation_id",
+    "evidence_ids",
+    "execution_eligible",
+    "confirmed_by",
+    "reason",
+    "correlation_id",
+    "confirmed_at",
+  ],
+  properties: {
+    schema_version: {
+      const: "rocketmq-sre.diagnosis-execution-confirmation.v1",
+    },
+    incident_id: uuid,
+    source_revision_id: uuid,
+    confirmed_revision_id: uuid,
+    revision: { type: "integer", format: "uint32", minimum: 1 },
+    cluster_id: uuid,
+    primary_model_invocation_id: uuid,
+    evidence_ids: {
+      type: "array",
+      minItems: 1,
+      maxItems: 32,
+      items: uuid,
+    },
+    execution_eligible: { const: true },
+    confirmed_by: { type: "string", minLength: 1, maxLength: 512 },
+    reason: { type: "string", minLength: 8, maxLength: 2048 },
+    correlation_id: uuid,
+    confirmed_at: { type: "string", format: "date-time" },
   },
 };
 schemas.CriticReviewRequest = {
@@ -536,6 +595,21 @@ document.paths["/v1/plans"] = {
     summary: "Create an immutable supervised plan or manual-only runbook",
     bodySchema: "CreatePlanRequest",
     responseSchema: "CreatePlanResponse",
+  }),
+};
+document.paths[
+  "/v1/incidents/{incident_id}/diagnosis-revisions/{revision_id}/confirm-execution"
+] = {
+  post: operation({
+    operationId: "confirmDiagnosisForSupervisedExecutionV1",
+    summary:
+      "Create an immutable execution-eligible revision from the latest complete model-assisted diagnosis",
+    bodySchema: "ConfirmDiagnosisExecutionRequest",
+    responseSchema: "DiagnosisExecutionConfirmation",
+    parameters: [
+      pathParameter("incident_id"),
+      pathParameter("revision_id"),
+    ],
   }),
 };
 document.paths["/v1/plans/{id}"] = {
