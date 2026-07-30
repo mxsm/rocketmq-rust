@@ -314,8 +314,7 @@ mod tests {
             serde_json::json!(["rocketmq:read"])
         );
         assert_eq!(
-            document["paths"]["/v1/fleet/releases"]["post"]["requestBody"]["content"]["application/json"]["schema"]
-                ["$ref"],
+            document["paths"]["/v1/fleet/releases"]["post"]["requestBody"]["content"]["application/json"]["schema"]["$ref"],
             "#/components/schemas/CreateFleetReleaseRequest"
         );
         assert_eq!(
@@ -407,13 +406,13 @@ mod tests {
             "#/components/schemas/ApprovalDecisionRequest"
         );
         assert_eq!(
-            document["paths"]["/v1/resource-quarantines/{id}/clear"]["post"]["requestBody"]["content"]
-                ["application/json"]["schema"]["$ref"],
+            document["paths"]["/v1/resource-quarantines/{id}/clear"]["post"]["requestBody"]["content"]["application/json"]
+                ["schema"]["$ref"],
             "#/components/schemas/ClearQuarantineRequest"
         );
         assert_eq!(
-            document["paths"]["/v1/integrations/approvals/external"]["post"]["requestBody"]["content"]
-                ["application/json"]["schema"]["$ref"],
+            document["paths"]["/v1/integrations/approvals/external"]["post"]["requestBody"]["content"]["application/json"]
+                ["schema"]["$ref"],
             "#/components/schemas/ExternalApprovalRequest"
         );
         assert_eq!(
@@ -421,8 +420,8 @@ mod tests {
             "#/components/schemas/CreateReleaseRequest"
         );
         assert_eq!(
-            document["paths"]["/v1/releases/{id}/rollback/complete"]["post"]["requestBody"]["content"]
-                ["application/json"]["schema"]["$ref"],
+            document["paths"]["/v1/releases/{id}/rollback/complete"]["post"]["requestBody"]["content"]["application/json"]
+                ["schema"]["$ref"],
             "#/components/schemas/CompleteRollbackRequest"
         );
         assert!(
@@ -508,8 +507,8 @@ mod tests {
         let paths = document["paths"].as_object().expect("OpenAPI paths must be an object");
 
         assert_eq!(
-            paths["/v1/integrations/alertmanager/events"]["post"]["requestBody"]["content"]["application/json"]
-                ["schema"]["$ref"],
+            paths["/v1/integrations/alertmanager/events"]["post"]["requestBody"]["content"]["application/json"]["schema"]
+                ["$ref"],
             "#/components/schemas/AlertmanagerWebhookRequest"
         );
         assert_eq!(
@@ -521,13 +520,11 @@ mod tests {
             "#/components/schemas/IntegrationEventRequest"
         );
         assert_eq!(
-            paths["/v1/incidents/{id}/topology"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
-                ["$ref"],
+            paths["/v1/incidents/{id}/topology"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
             "#/components/schemas/IncidentTopologyView"
         );
         assert_eq!(
-            paths["/v1/clusters/{id}/health"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
-                ["$ref"],
+            paths["/v1/clusters/{id}/health"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
             "#/components/schemas/ClusterHealthReport"
         );
 
