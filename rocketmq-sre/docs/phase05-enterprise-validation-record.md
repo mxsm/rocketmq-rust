@@ -9,8 +9,9 @@ Evidence schema: `rocketmq-sre.phase05-enterprise-smoke.v1`
 The validation used Docker PostgreSQL and the dedicated
 `rocketmq-sre-phase00` Kind cluster. It exercised logical multi-region
 isolation, a 100-cluster Fleet, representative enterprise integrations,
-current/N-1 component compatibility, a two-cluster Fleet release, Control
-Plane database restore, and a supervised RocketMQ test-cluster rebuild.
+current/N-1 protocol and capability handshake behavior, a two-cluster Fleet
+release, Control Plane database restore, and a supervised RocketMQ
+test-cluster rebuild.
 
 Run the complete scenario from the repository worktree:
 
@@ -33,12 +34,21 @@ or full service configuration is included in the result.
 | --- | --- | --- |
 | Fleet scale | Passed | 100 clusters, four 25-item pages, no duplicates, worst health visible, inspection concurrency 8, quota backpressure enforced |
 | Multi-region | Passed | Two logical regions, cluster allowlist isolation, residency filtering, local-region disconnect degradation |
-| Runtime compatibility | Passed | Connector, Execution Agent, and MCP: current is full, N-1 is read-only degraded, incompatible protocol/capability is denied |
+| Runtime handshake compatibility | Passed | Persisted Connector, Execution Agent, and MCP handshake records: current is full, N-1 is read-only degraded, incompatible protocol/capability is denied |
 | Enterprise integration | Passed | ITSM, ChatOps, Pager, CMDB, GitOps, and CI/CD; idempotency and stale outbox claim recovery verified |
 | Fleet release | Passed | Two regions and two targets; one readiness denial, out-of-order batch denial, canary regression, pause, and rollback |
 | Control Plane restore | Passed | PostgreSQL custom-format backup restored into an isolated database; all sampled counts matched; current Control Plane health and readiness succeeded |
 | RocketMQ test-cluster DR | Passed | 10 GiB PVC/PV retained across Broker Pod replacement; 10/10 historical messages recovered, RPO 0, RTO 13 seconds; pre/post synthetic probes both reached 10/10/10 |
 | Container supply chain | Passed locally | Runtime base plus Broker, NameServer, Controller, Proxy, and MCP produced CycloneDX SBOMs, zero Critical findings, verified Cosign blob bundles, and provenance |
+
+The runtime compatibility scenario exercises the production routing and
+fail-closed code against persisted handshake records. It does not start an
+older Connector, Execution Agent, or MCP binary. Repository tags `v0.1.0`
+through `v0.9.0` predate both standalone projects and contain no
+`rocketmq-sre/` or `rocketmq-tools/rocketmq-mcp/` source, so there is currently
+no published N-1 artifact from which that binary matrix can be run. Actual
+current/N-1 binary acceptance begins after the first versioned SRE/MCP release
+is retained in the artifact registry.
 
 ## Container supply-chain evidence
 
