@@ -467,7 +467,7 @@ def audit_foundation(
         "$policy.smoke_network.namesrv_alias",
         "$policy.smoke_network.dependency_chain",
         "$service.data_path",
-        "find /usr/local/bin",
+        "--entrypoint /usr/bin/find",
         "cyclonedx-json",
         "--severity CRITICAL",
         "--exit-code 0",
