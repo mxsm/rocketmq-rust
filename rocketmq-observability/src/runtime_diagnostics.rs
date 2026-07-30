@@ -36,14 +36,13 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 
-use crate::ObservabilityError;
 use crate::metrics::runtime::RuntimeLifecycleReason;
 use crate::metrics::runtime::RuntimeLifecycleState;
+use crate::ObservabilityError;
 
 pub const RUNTIME_DIAGNOSTICS_BIND_ADDR_ENV: &str = "ROCKETMQ_RUNTIME_DIAGNOSTICS_BIND_ADDR";
 pub const RUNTIME_DIAGNOSTICS_TOKEN_FILE_ENV: &str = "ROCKETMQ_RUNTIME_DIAGNOSTICS_TOKEN_FILE";
-pub const RUNTIME_DIAGNOSTICS_ALLOW_INSECURE_HTTP_ENV: &str =
-    "ROCKETMQ_RUNTIME_DIAGNOSTICS_ALLOW_INSECURE_HTTP";
+pub const RUNTIME_DIAGNOSTICS_ALLOW_INSECURE_HTTP_ENV: &str = "ROCKETMQ_RUNTIME_DIAGNOSTICS_ALLOW_INSECURE_HTTP";
 pub const RUNTIME_DIAGNOSTICS_SAMPLE_INTERVAL_SECONDS_ENV: &str =
     "ROCKETMQ_RUNTIME_DIAGNOSTICS_SAMPLE_INTERVAL_SECONDS";
 pub const RUNTIME_DIAGNOSTICS_SCOPE: &str = "rocketmq:diagnose";
@@ -220,7 +219,14 @@ pub async fn start_runtime_diagnostics_endpoint(
     let server_cancellation = service_context.task_group().cancellation_token();
     service_context
         .spawn_service("runtime-diagnostics.endpoint", async move {
-            serve(listener, server_context, component, config.token_file, server_cancellation).await;
+            serve(
+                listener,
+                server_context,
+                component,
+                config.token_file,
+                server_cancellation,
+            )
+            .await;
         })
         .map_err(|_| ObservabilityError::invalid_config("runtime diagnostics endpoint cannot start"))?;
 
@@ -341,10 +347,7 @@ async fn read_request(stream: &mut TcpStream) -> Result<Vec<u8>, HttpStatus> {
     }
 }
 
-async fn read_token(
-    service_context: &ChildServiceContext,
-    token_file: PathBuf,
-) -> Result<String, ObservabilityError> {
+async fn read_token(service_context: &ChildServiceContext, token_file: PathBuf) -> Result<String, ObservabilityError> {
     service_context
         .metadata_io()
         .spawn_io("runtime-diagnostics.read-token", move || read_token_file(&token_file))
@@ -424,9 +427,7 @@ fn parse_sample_interval() -> Result<Duration, ObservabilityError> {
         return Ok(DEFAULT_SAMPLE_INTERVAL);
     };
     let seconds = raw.parse::<u64>().map_err(|_| {
-        ObservabilityError::invalid_config(
-            "runtime diagnostics sampling interval must be an integer number of seconds",
-        )
+        ObservabilityError::invalid_config("runtime diagnostics sampling interval must be an integer number of seconds")
     })?;
     Ok(Duration::from_secs(seconds))
 }
@@ -584,7 +585,8 @@ fn error_response(status: HttpStatus) -> Vec<u8> {
 
 fn response(status: HttpStatus, body: &[u8]) -> Vec<u8> {
     let headers = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n\r\n",
+        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: \
+         close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n\r\n",
         status.code(),
         status.reason(),
         body.len()
@@ -610,15 +612,13 @@ mod tests {
     #[test]
     fn endpoint_config_rejects_implicit_non_loopback_plaintext() {
         let token_file = test_token_path();
-        assert!(
-            RuntimeDiagnosticsEndpointConfig::try_new(
-                "0.0.0.0:8087".parse().expect("address"),
-                token_file,
-                Duration::from_secs(10),
-                false,
-            )
-            .is_err()
-        );
+        assert!(RuntimeDiagnosticsEndpointConfig::try_new(
+            "0.0.0.0:8087".parse().expect("address"),
+            token_file,
+            Duration::from_secs(10),
+            false,
+        )
+        .is_err());
     }
 
     #[tokio::test]
@@ -634,20 +634,14 @@ mod tests {
             false,
         )
         .expect("config");
-        let endpoint =
-            start_runtime_diagnostics_endpoint(&service_context, RuntimeComponent::Broker, config)
-                .await
-                .expect("endpoint");
+        let endpoint = start_runtime_diagnostics_endpoint(&service_context, RuntimeComponent::Broker, config)
+            .await
+            .expect("endpoint");
 
         let missing_scope = request(endpoint.local_addr(), "first-token", None).await;
         assert!(missing_scope.starts_with("HTTP/1.1 403 Forbidden"));
 
-        let accepted = request(
-            endpoint.local_addr(),
-            "first-token",
-            Some(RUNTIME_DIAGNOSTICS_SCOPE),
-        )
-        .await;
+        let accepted = request(endpoint.local_addr(), "first-token", Some(RUNTIME_DIAGNOSTICS_SCOPE)).await;
         assert!(accepted.starts_with("HTTP/1.1 200 OK"), "{accepted}");
         assert!(accepted.contains(RUNTIME_DIAGNOSTICS_ENDPOINT_SCHEMA));
         assert!(accepted.contains(r#""component":"broker""#));
@@ -655,19 +649,9 @@ mod tests {
         assert!(!accepted.contains("runtime-diagnostics.endpoint"));
 
         fs::write(&token_file, "second-token").expect("rotate token fixture");
-        let rejected = request(
-            endpoint.local_addr(),
-            "first-token",
-            Some(RUNTIME_DIAGNOSTICS_SCOPE),
-        )
-        .await;
+        let rejected = request(endpoint.local_addr(), "first-token", Some(RUNTIME_DIAGNOSTICS_SCOPE)).await;
         assert!(rejected.starts_with("HTTP/1.1 401 Unauthorized"));
-        let rotated = request(
-            endpoint.local_addr(),
-            "second-token",
-            Some(RUNTIME_DIAGNOSTICS_SCOPE),
-        )
-        .await;
+        let rotated = request(endpoint.local_addr(), "second-token", Some(RUNTIME_DIAGNOSTICS_SCOPE)).await;
         assert!(rotated.starts_with("HTTP/1.1 200 OK"));
 
         let report = context.shutdown_tasks(Duration::from_secs(2)).await;
@@ -689,7 +673,8 @@ mod tests {
             .map(|scope| format!("X-RocketMQ-SRE-Scope: {scope}\r\n"))
             .unwrap_or_default();
         let request = format!(
-            "GET {RUNTIME_DIAGNOSTICS_PATH} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {token}\r\n{scope}Connection: close\r\n\r\n"
+            "GET {RUNTIME_DIAGNOSTICS_PATH} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer \
+             {token}\r\n{scope}Connection: close\r\n\r\n"
         );
         stream.write_all(request.as_bytes()).await.expect("write request");
         let mut response = Vec::new();
