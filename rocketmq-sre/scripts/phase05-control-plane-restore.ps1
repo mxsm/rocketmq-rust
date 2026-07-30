@@ -77,10 +77,14 @@ function Assert-SafeIdentifier([string]$Value, [string]$Description) {
     }
 }
 
-function Assert-NonSystemPath([string]$Path, [string]$Description) {
+function Assert-DataPath([string]$Path, [string]$Description) {
     $fullPath = [IO.Path]::GetFullPath($Path)
-    if ([IO.Path]::GetPathRoot($fullPath).Equals('C:\', [StringComparison]::OrdinalIgnoreCase)) {
-        throw "$Description must not use the C drive."
+    $root = [IO.Path]::GetPathRoot($fullPath)
+    if (
+        -not $root.Equals('D:\', [StringComparison]::OrdinalIgnoreCase) -and
+        -not $root.Equals('F:\', [StringComparison]::OrdinalIgnoreCase)
+    ) {
+        throw "$Description must use the D or F drive."
     }
 }
 
@@ -125,7 +129,7 @@ foreach ($path in @(
     @{ Value = $TemporaryRoot; Description = 'temporary directory' },
     @{ Value = $EvidenceOutput; Description = 'restore evidence output' }
 )) {
-    Assert-NonSystemPath $path.Value $path.Description
+    Assert-DataPath $path.Value $path.Description
 }
 if ($PublicPort -lt 1024 -or $PublicPort -gt 65535 -or $ConnectorPort -lt 1024 -or $ConnectorPort -gt 65535) {
     throw 'Control Plane restore ports must be between 1024 and 65535.'
@@ -207,11 +211,12 @@ try {
         }
     }
 
-    $dFreeGiB = (Get-PSDrive -Name D).Free / 1GB
-    $gFreeGiB = (Get-PSDrive -Name G).Free / 1GB
-    Write-Host "D_FREE_GIB=$([Math]::Round($dFreeGiB, 2))"
-    Write-Host "G_FREE_GIB=$([Math]::Round($gFreeGiB, 2))"
-    if ($dFreeGiB -lt 15 -or $gFreeGiB -lt 15) {
+    $targetDriveName = [IO.Path]::GetPathRoot(
+        [IO.Path]::GetFullPath($CargoTargetDir)
+    ).TrimEnd('\').TrimEnd(':')
+    $targetFreeGiB = (Get-PSDrive -Name $targetDriveName).Free / 1GB
+    Write-Host "${targetDriveName}_FREE_GIB=$([Math]::Round($targetFreeGiB, 2))"
+    if ($targetFreeGiB -lt 15) {
         Invoke-Native cargo @(
             'clean',
             '--manifest-path', $manifestPath,
@@ -231,7 +236,7 @@ try {
         '--bin', 'rocketmq-sre-control-plane'
     ) 'current Control Plane build'
     if (-not (Test-Path -LiteralPath $controlPlaneExecutable -PathType Leaf)) {
-        throw 'Current Control Plane executable was not produced in the required G: target directory.'
+        throw 'Current Control Plane executable was not produced in the selected D/F target directory.'
     }
 
     $encodedPassword = [Uri]::EscapeDataString($DatabasePassword)
