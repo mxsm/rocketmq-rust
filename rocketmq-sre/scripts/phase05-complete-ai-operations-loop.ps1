@@ -636,8 +636,8 @@ try {
         'Postmortem must remain human-reviewable.'
     Assert-True (@($postmortem.revisions).Count -gt 0) `
         'Postmortem did not persist an immutable revision.'
-    Assert-Equal $postmortem.execution_journal_empty $false `
-        'Postmortem did not include the supervised execution journal.'
+    Assert-Equal $postmortem.execution_journal_empty $true `
+        'Postmortem action items must not embed the supervised execution journal.'
 
     $result = [ordered]@{
         marker = 'COMPLETE_AI_OPERATIONS_LOOP_OK'
