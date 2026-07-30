@@ -2,6 +2,7 @@ import type {
   AutonomyOperationalReport,
   AutonomyOutcomePage,
   AutonomyReportPeriod,
+  OperationsAnalyticsReport,
 } from "@/api/types";
 
 import { DEMO_CLUSTER_ID, DEMO_TENANT_ID } from "./phase1Demo";
@@ -497,6 +498,77 @@ export const phase4AutonomyReports: Record<
 > = {
   weekly: weeklyReport,
   monthly: monthlyReport,
+};
+
+export const phase4OperationsAnalytics: OperationsAnalyticsReport = {
+  schema_version: "rocketmq-sre.operations-analytics.v1",
+  tenant_id: DEMO_TENANT_ID,
+  filters: {
+    cluster_ids: [DEMO_CLUSTER_ID],
+    scenario: "consumer_lag",
+    provider_family: "deepseek",
+    model_family: "deepseek",
+    action_id: "observability.logger_level_ttl.v1",
+  },
+  window: {
+    period: "weekly",
+    start: "2026-07-27T00:00:00Z",
+    end: "2026-08-03T00:00:00Z",
+    complete: false,
+  },
+  incidents: {
+    total: 18,
+    diagnosed: 17,
+    terminal: 14,
+    recurrent: 2,
+    mean_time_to_detect_seconds: 108,
+    mean_time_to_resolve_seconds: 2_540,
+  },
+  model_usage: {
+    calls: 96,
+    input_tokens: 842_100,
+    output_tokens: 151_400,
+    cost_micros: 12_460_000,
+    calls_missing_tokens: 2,
+    calls_missing_cost: 3,
+    failed_calls: 4,
+    fallback_calls: 7,
+    usage_coverage_basis_points: 9_791,
+    cost_coverage_basis_points: 9_687,
+  },
+  recommendation_feedback: {
+    total: 23,
+    adopted: 17,
+    modified: 4,
+    rejected: 2,
+    adoption_basis_points: 7_391,
+    modification_basis_points: 1_739,
+    rejection_basis_points: 869,
+  },
+  executions: {
+    total: 21,
+    terminal: 20,
+    succeeded: 18,
+    rolled_back: 1,
+    escalated: 1,
+    success_basis_points: 9_000,
+  },
+  savings: {
+    successful_no_side_effect_runs: 0,
+    successful_preventive_runs: 0,
+    successful_autonomous_actions: 18,
+    estimated_minutes_saved: 270,
+    estimate_method:
+      "fixed conservative estimate: successful autonomous action 15m",
+  },
+  mttd_definition:
+    "mean seconds from incident creation to the first persisted diagnosis revision in the selected scope",
+  mttr_definition:
+    "mean seconds from incident creation to terminal resolved or escalated update in the selected scope",
+  savings_definition:
+    "fixed conservative estimate with successful autonomous action at 15m",
+  warnings: [],
+  observed_at: GENERATED_AT,
 };
 
 export function emptyAutonomyReport(
