@@ -69,6 +69,7 @@ pub enum EvidenceExposure {
     TempoApi,
     KubernetesApi,
     RuntimeDiagnostics,
+    ExecutionAgentApi,
     /// Connector-owned composition of fixed, bounded Required Signal reads.
     RequiredSignals,
     Synthetic,
