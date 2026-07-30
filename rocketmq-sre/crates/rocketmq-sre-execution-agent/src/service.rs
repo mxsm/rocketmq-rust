@@ -330,21 +330,10 @@ impl ExecutionAgent {
         {
             return Err(ExecutionAgentError::AuthorityRejected);
         }
-        if effect.state == EffectState::Confirmed {
-            return Ok(ReconcileEffectResponse {
-                schema_version: EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
-                state: ReconcileEffectState::Applied,
-                outcome_code: effect
-                    .outcome_code
-                    .filter(|value| valid_bounded(value, 96))
-                    .ok_or(ExecutionAgentError::UnresolvedEffect)?,
-                sanitized_summary: effect
-                    .sanitized_summary
-                    .filter(|value| valid_bounded(value, MAX_SUMMARY_BYTES))
-                    .ok_or(ExecutionAgentError::UnresolvedEffect)?,
-                observed_at: effect.confirmed_at.ok_or(ExecutionAgentError::UnresolvedEffect)?,
-            });
-        }
+        // A confirmed dispatch result proves what happened at dispatch time,
+        // not what is live during takeover. TTL actions and external
+        // operators can legitimately remove an effect later, so every
+        // recovery reconcile must consult the typed read-only driver.
         let stored = self.store.request(&request.idempotency_key).await?;
         let read = read_request(request.tenant_id, &stored);
         self.registry.validate_read(&read)?;
