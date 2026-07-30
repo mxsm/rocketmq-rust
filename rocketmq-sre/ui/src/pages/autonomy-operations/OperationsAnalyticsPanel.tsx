@@ -270,7 +270,10 @@ function formatBasisPoints(value: number | null) {
 }
 
 function formatCost(value: number) {
-  return `¥${(value / 1_000_000).toFixed(2)}`;
+  return new Intl.NumberFormat("zh-CN", {
+    style: "currency",
+    currency: "USD",
+  }).format(value / 1_000_000);
 }
 
 function formatMinutes(value: number) {
