@@ -390,7 +390,38 @@ pub(super) async fn seed_execution_fixture(
     target: &str,
     agent_state: &AgentReadResult,
 ) -> ExecutionFixture {
-    repository.get(cluster_id).await.expect("onboarded Kind cluster");
+    let default_fleet_id =
+        Uuid::parse_str("00000000-0000-4000-8000-000000000005").expect("deterministic default Fleet identifier");
+    sqlx::query(
+        "INSERT INTO fleet_tenants (id, fleet_id, name, owner_name)
+         VALUES ($1, $2, $3, 'phase3-supervised-e2e')
+         ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(tenant_id.as_uuid())
+    .bind(default_fleet_id)
+    .bind(format!("phase3-supervised-kind-{tenant_id}"))
+    .execute(&repository.pool)
+    .await
+    .expect("self-contained Kind tenant fixture");
+    let persisted_fleet_id = sqlx::query_scalar::<_, Uuid>(
+        "SELECT fleet_id
+         FROM fleet_tenants
+         WHERE id = $1",
+    )
+    .bind(tenant_id.as_uuid())
+    .fetch_one(&repository.pool)
+    .await
+    .expect("persisted Kind tenant fixture");
+    assert_eq!(
+        persisted_fleet_id, default_fleet_id,
+        "the fixed Kind tenant must remain in the deterministic default Fleet"
+    );
+    let cluster = repository.get(cluster_id).await.expect("onboarded Kind cluster");
+    assert_eq!(
+        cluster.tenant_id,
+        tenant_id.to_string(),
+        "the fixed Kind cluster must remain owned by the supervised E2E tenant"
+    );
     let incident_id = IncidentId::new();
     let diagnosis_id = DiagnosisRevisionId::new();
     let model_profile_id = Uuid::new_v4();
