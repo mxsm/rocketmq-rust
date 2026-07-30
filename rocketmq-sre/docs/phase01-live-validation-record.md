@@ -107,6 +107,41 @@ UI tests, and the production build. The Rust workspace format check, Clippy,
 workspace tests, and the 12-test Provider contract suite also passed after
 synchronizing the committed generated schemas with the public contracts.
 
+## Live mTLS certificate rotation
+
+On 2026-07-31, the deployed Connector-to-Control Plane channel was rotated in
+the same Kind cluster:
+
+```powershell
+.\rocketmq-sre\scripts\phase01-mtls-rotation-smoke.ps1 `
+  -ClusterName rocketmq-sre-phase00 `
+  -Kubeconfig D:\BuildCache\rocketmq-sre-temp\kind\phase00-kubeconfig
+```
+
+The run returned:
+
+```text
+PHASE01_MTLS_ROTATION_OK cluster=rocketmq-sre-phase00 old_rejected=true connector_ready=true
+```
+
+The smoke generated a new server CA/certificate and a new Connector client
+CA/identity, updated the two Kubernetes Secrets without writing their values to
+logs, and restarted both owning Deployments. It then proved:
+
+- both Control Plane and MCP/Connector Pod UIDs changed;
+- the new client identity reached the mTLS proxy;
+- the retired client identity was rejected before the protected route;
+- Connector readiness recovered after rotation;
+- the evidence record contains only Secret resource versions, Pod UIDs,
+  certificate SHA-256 fingerprints, and boolean outcomes;
+- temporary copies of the retired identity and CA were removed.
+
+The redacted result is written to
+`target/phase01-mtls-rotation/evidence.json`. The certificate fixtures are
+seven-day local development CAs. This check proves the deployment and rotation
+mechanism, not integration with a production certificate issuer or production
+Secret manager.
+
 ## Scope statement
 
 This record proves the Phase 01 read-only AI SRE baseline on a local Kind test
