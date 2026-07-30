@@ -4475,6 +4475,7 @@ dependencies = [
  "thiserror 2.0.19",
  "time",
  "tokio",
+ "tokio-util",
  "tonic",
  "tracing",
  "tracing-appender",
