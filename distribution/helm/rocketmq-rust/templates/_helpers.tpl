@@ -158,25 +158,14 @@ rocketmq.apache.org/architecture-milestone: P0-05
 - {name: ROCKETMQ_SECURITY_REQUEST_POLICY, value: "/var/run/secrets/rocketmq/request-policy.json"}
 {{- end -}}
 
-{{/* Release identity and the local pull-based metrics listener are process-root inputs. */}}
-{{- define "rocketmq.telemetryEnv" -}}
-- {name: ROCKETMQ_RELEASE_COMMIT, value: {{ required "releaseIdentity.commit is required" .Values.releaseIdentity.commit | quote }}}
-- {name: ROCKETMQ_RELEASE_NONCE, value: {{ required "releaseIdentity.nonce is required" .Values.releaseIdentity.nonce | quote }}}
-- {name: ROCKETMQ_RELEASE_CONFIG_DIGEST, value: {{ required "releaseIdentity.configDigest is required" .Values.releaseIdentity.configDigest | quote }}}
-- {name: ROCKETMQ_RELEASE_SECRET_VERSION, value: {{ required "releaseIdentity.secretVersion is required" .Values.releaseIdentity.secretVersion | quote }}}
-- {name: ROCKETMQ_STORAGE_GENERATION, value: {{ .Values.releaseIdentity.storageGeneration | quote }}}
-- {name: ROCKETMQ_METRICS_ENABLED, value: {{ .Values.metrics.enabled | quote }}}
-- {name: ROCKETMQ_METRICS_EXPORTER, value: {{ ternary "prometheus" "disable" .Values.metrics.enabled | quote }}}
-- {name: ROCKETMQ_METRICS_BIND_ADDR, value: {{ printf "0.0.0.0:%d" (int .Values.metrics.port) | quote }}}
-- {name: ROCKETMQ_METRICS_PATH, value: {{ .Values.metrics.path | quote }}}
-{{- end -}}
-
-{{- define "rocketmq.releaseAnnotations" -}}
-rocketmq.apache.org/release-commit: {{ .Values.releaseIdentity.commit | quote }}
-rocketmq.apache.org/release-nonce: {{ .Values.releaseIdentity.nonce | quote }}
-rocketmq.apache.org/release-config-digest: {{ .Values.releaseIdentity.configDigest | quote }}
-rocketmq.apache.org/release-secret-version: {{ .Values.releaseIdentity.secretVersion | quote }}
-rocketmq.apache.org/storage-generation: {{ .Values.releaseIdentity.storageGeneration | quote }}
+{{/* Protected diagnostics are separate from the anonymous health listener and disabled by default. */}}
+{{- define "rocketmq.runtimeDiagnosticsEnv" -}}
+{{- if .Values.global.runtimeDiagnostics.enabled }}
+- {name: ROCKETMQ_RUNTIME_DIAGNOSTICS_BIND_ADDR, value: {{ .Values.global.runtimeDiagnostics.bindAddress | quote }}}
+- {name: ROCKETMQ_RUNTIME_DIAGNOSTICS_TOKEN_FILE, value: {{ .Values.global.runtimeDiagnostics.tokenFile | quote }}}
+- {name: ROCKETMQ_RUNTIME_DIAGNOSTICS_SAMPLE_INTERVAL_SECONDS, value: {{ .Values.global.runtimeDiagnostics.sampleIntervalSeconds | quote }}}
+- {name: ROCKETMQ_RUNTIME_DIAGNOSTICS_ALLOW_INSECURE_HTTP, value: {{ .Values.global.runtimeDiagnostics.allowInsecureHttp | quote }}}
+{{- end }}
 {{- end -}}
 
 {{- define "rocketmq.lifecycleProbes" -}}
