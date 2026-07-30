@@ -594,12 +594,13 @@ async fn interrupted_compensation_recovers_only_after_effect_is_proven_absent() 
         120,
         Duration::from_secs(300),
     );
-    let outcome = executor
-        .recover_execution(fixture.request.id)
+    let recovery = executor
+        .recover_interrupted_executions(100)
         .await
-        .expect("effect-absent recovery");
-    assert_eq!(outcome.state, ExecutionState::RolledBack);
-    assert!(outcome.replayed);
+        .expect("effect-absent recovery sweep");
+    assert_eq!(recovery.attempted, 1);
+    assert_eq!(recovery.recovered, 1);
+    assert_eq!(recovery.blocked, 0);
     assert_eq!(
         journal
             .execution_state(fixture.request.id)
