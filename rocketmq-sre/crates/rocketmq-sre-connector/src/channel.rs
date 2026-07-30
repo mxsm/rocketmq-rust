@@ -564,13 +564,6 @@ impl ChannelCommand {
                 if envelope.session_id != expected_session {
                     return Err(session_mismatch());
                 }
-                if envelope.deadline <= Utc::now() {
-                    return Err(ConnectorError::new(
-                        ConnectorErrorCode::DeadlineExceeded,
-                        true,
-                        "control-plane query deadline has elapsed",
-                    ));
-                }
             }
             Self::Cancel { schema, session_id, .. } => {
                 validate_schema(schema)?;
@@ -621,6 +614,35 @@ fn validate_schema(schema: &SchemaVersion) -> Result<(), ConnectorError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expired_query_remains_a_valid_durable_channel_command() {
+        let session_id = ConnectorSessionId::new();
+        let now = Utc::now();
+        let correlation_id = CorrelationId::new();
+        let command = ChannelCommand::Query {
+            envelope: ConnectorQueryEnvelope {
+                schema: channel_schema(),
+                session_id,
+                correlation_id,
+                sequence: 1,
+                deadline: now - chrono::Duration::seconds(1),
+                query: rocketmq_sre_contracts::EvidenceQuery {
+                    query_id: rocketmq_sre_contracts::QueryId::new(),
+                    correlation_id,
+                    tenant_id: rocketmq_sre_contracts::TenantId::new(),
+                    cluster_id: rocketmq_sre_contracts::ClusterId::new(),
+                    source: "rocketmq-mcp".to_owned(),
+                    resource: "consumer-lag/example".to_owned(),
+                    time_range: rocketmq_sre_contracts::TimeRange::new(now, now).expect("test range is valid"),
+                },
+            },
+        };
+
+        command
+            .validate(session_id)
+            .expect("expired work must reach the query worker and produce a terminal response");
+    }
 
     #[test]
     fn cancel_command_fails_closed_on_cross_session_use() {
