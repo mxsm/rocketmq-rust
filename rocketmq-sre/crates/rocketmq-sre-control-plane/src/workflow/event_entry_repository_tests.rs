@@ -63,7 +63,7 @@ async fn five_event_sources_create_replay_and_isolate_workflow_targets() {
     let service = UnifiedEventEntryService::new(repository.clone(), workflow, alerting);
     let suffix = Uuid::new_v4();
     let occurred_at = Utc::now();
-    let requests = vec![
+    let requests = [
         UnifiedEventEntryRequest {
             schema_version: EVENT_ENTRY_SCHEMA.to_owned(),
             cluster_id,
