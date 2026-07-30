@@ -457,6 +457,7 @@ const fn exposure_name(exposure: EvidenceExposure) -> &'static str {
         EvidenceExposure::TempoApi => "tempo_api",
         EvidenceExposure::KubernetesApi => "kubernetes_api",
         EvidenceExposure::RuntimeDiagnostics => "runtime_diagnostics",
+        EvidenceExposure::ExecutionAgentApi => "execution_agent_api",
         EvidenceExposure::RequiredSignals => "required_signals",
         EvidenceExposure::Synthetic => "synthetic",
         EvidenceExposure::Unsupported => "unsupported",
@@ -475,6 +476,7 @@ fn parse_exposure(value: &str) -> Result<EvidenceExposure, ControlPlaneError> {
         "tempo_api" => Ok(EvidenceExposure::TempoApi),
         "kubernetes_api" => Ok(EvidenceExposure::KubernetesApi),
         "runtime_diagnostics" => Ok(EvidenceExposure::RuntimeDiagnostics),
+        "execution_agent_api" => Ok(EvidenceExposure::ExecutionAgentApi),
         "required_signals" => Ok(EvidenceExposure::RequiredSignals),
         "synthetic" => Ok(EvidenceExposure::Synthetic),
         "unsupported" => Ok(EvidenceExposure::Unsupported),
@@ -517,6 +519,17 @@ mod tests {
         assert_eq!(
             parse_exposure(stored).expect("required signal exposure should remain readable"),
             EvidenceExposure::RequiredSignals
+        );
+    }
+
+    #[test]
+    fn execution_agent_exposure_round_trips_through_storage() {
+        let stored = exposure_name(EvidenceExposure::ExecutionAgentApi);
+
+        assert_eq!(stored, "execution_agent_api");
+        assert_eq!(
+            parse_exposure(stored).expect("Execution Agent exposure should remain readable"),
+            EvidenceExposure::ExecutionAgentApi
         );
     }
 }
