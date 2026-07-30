@@ -42,6 +42,9 @@ const DEFAULT_SOURCE_CACHE_TTL_SECONDS: u64 = 15;
 const DEFAULT_CHANNEL_POLL_SECONDS: u64 = 25;
 const DEFAULT_CHANNEL_HEARTBEAT_SECONDS: u64 = 15;
 const MAX_SECRET_FILE_BYTES: u64 = 64 * 1024;
+const RUNTIME_DIAGNOSTICS_ENDPOINTS_ENV: &str = "ROCKETMQ_SRE_RUNTIME_DIAGNOSTICS_ENDPOINTS";
+const RUNTIME_DIAGNOSTICS_ALLOW_INSECURE_HTTP_ENV: &str = "ROCKETMQ_SRE_RUNTIME_DIAGNOSTICS_ALLOW_INSECURE_HTTP";
+const RUNTIME_DIAGNOSTICS_COMPONENTS: [&str; 4] = ["broker", "name_server", "controller", "proxy"];
 
 /// Secret value whose `Debug` implementation never reveals its contents.
 #[derive(Clone)]
@@ -196,6 +199,20 @@ pub(crate) struct AdminSourceConfig {
 }
 
 #[derive(Clone)]
+pub(crate) struct RuntimeDiagnosticsSourceConfig {
+    pub endpoints: BTreeMap<String, Url>,
+}
+
+impl fmt::Debug for RuntimeDiagnosticsSourceConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RuntimeDiagnosticsSourceConfig")
+            .field("components", &self.endpoints.keys().collect::<Vec<_>>())
+            .finish()
+    }
+}
+
+#[derive(Clone)]
 pub(crate) struct ProjectedTokenFile {
     path: PathBuf,
     mount_root: PathBuf,
@@ -317,6 +334,7 @@ pub struct ConnectorConfig {
     pub tempo_url: Option<Url>,
     pub(crate) admin_source: Option<AdminSourceConfig>,
     pub(crate) kubernetes_source: Option<KubernetesSourceConfig>,
+    pub(crate) runtime_diagnostics_source: Option<RuntimeDiagnosticsSourceConfig>,
     pub(crate) source_limits: SourceLimits,
     pub internal_token_env: String,
     pub(crate) internal_token: SecretValue,
@@ -350,6 +368,7 @@ impl fmt::Debug for ConnectorConfig {
             .field("tempo_url", &self.tempo_url.as_ref().map(|_| "[CONFIGURED]"))
             .field("admin_source", &self.admin_source)
             .field("kubernetes_source", &self.kubernetes_source)
+            .field("runtime_diagnostics_source", &self.runtime_diagnostics_source)
             .field("source_limits", &self.source_limits)
             .field("internal_token_env", &self.internal_token_env)
             .field("internal_token", &"[REDACTED]")
@@ -446,6 +465,7 @@ impl ConnectorConfig {
         let source_limits = load_source_limits(request_timeout, max_concurrency, max_response_bytes)?;
         let admin_source = load_admin_source(request_timeout, shutdown_timeout)?;
         let kubernetes_source = load_kubernetes_source(request_timeout, &source_limits.label_allowlist)?;
+        let runtime_diagnostics_source = load_runtime_diagnostics_source()?;
         let internal_token_env =
             env::var("ROCKETMQ_SRE_INTERNAL_TOKEN_ENV").unwrap_or_else(|_| DEFAULT_INTERNAL_TOKEN_ENV.to_owned());
         let internal_token = SecretValue::from_env(&internal_token_env)?;
@@ -472,6 +492,7 @@ impl ConnectorConfig {
             tempo_url,
             admin_source,
             kubernetes_source,
+            runtime_diagnostics_source,
             source_limits,
             internal_token_env,
             internal_token,
@@ -486,6 +507,74 @@ impl ConnectorConfig {
     pub(crate) fn pseudonymization_key(&self) -> &[u8] {
         self.internal_token.expose().as_bytes()
     }
+}
+
+fn load_runtime_diagnostics_source() -> Result<Option<RuntimeDiagnosticsSourceConfig>, ConnectorError> {
+    let Some(raw) = optional_non_empty(RUNTIME_DIAGNOSTICS_ENDPOINTS_ENV) else {
+        return Ok(None);
+    };
+    let allow_insecure_http = parse_env(RUNTIME_DIAGNOSTICS_ALLOW_INSECURE_HTTP_ENV, false)?;
+    parse_runtime_diagnostics_endpoints(&raw, allow_insecure_http).map(Some)
+}
+
+fn parse_runtime_diagnostics_endpoints(
+    raw: &str,
+    allow_insecure_http: bool,
+) -> Result<RuntimeDiagnosticsSourceConfig, ConnectorError> {
+    let mut endpoints = BTreeMap::new();
+    for entry in raw.split(';') {
+        let (component, raw_url) = entry.split_once('=').ok_or_else(|| {
+            ConnectorError::configuration(
+                "runtime diagnostics endpoints must use component=URL entries separated by semicolons",
+            )
+        })?;
+        let component = component.trim();
+        if !RUNTIME_DIAGNOSTICS_COMPONENTS.contains(&component) {
+            return Err(ConnectorError::configuration(
+                "runtime diagnostics endpoint has an unsupported component",
+            ));
+        }
+        let url = Url::parse(raw_url.trim())
+            .map_err(|_| ConnectorError::configuration("runtime diagnostics endpoint must be an absolute URL"))?;
+        validate_runtime_diagnostics_url(&url, allow_insecure_http)?;
+        if endpoints.insert(component.to_owned(), url).is_some() {
+            return Err(ConnectorError::configuration(
+                "runtime diagnostics endpoint component is configured more than once",
+            ));
+        }
+    }
+    if endpoints.is_empty() {
+        return Err(ConnectorError::configuration(
+            "runtime diagnostics endpoint configuration is empty",
+        ));
+    }
+    Ok(RuntimeDiagnosticsSourceConfig { endpoints })
+}
+
+fn validate_runtime_diagnostics_url(url: &Url, allow_insecure_http: bool) -> Result<(), ConnectorError> {
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || url.cannot_be_a_base()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(ConnectorError::configuration(
+            "runtime diagnostics endpoint must be an HTTP(S) URL without credentials, query, or fragment",
+        ));
+    }
+    if url.path() != rocketmq_observability::RUNTIME_DIAGNOSTICS_PATH {
+        return Err(ConnectorError::configuration(
+            "runtime diagnostics endpoint must use the fixed protected diagnostics path",
+        ));
+    }
+    if url.scheme() == "http" && !is_loopback_url(url) && !allow_insecure_http {
+        return Err(ConnectorError::configuration(
+            "non-loopback runtime diagnostics endpoints must use HTTPS unless the development-only opt-in is enabled",
+        ));
+    }
+    Ok(())
 }
 
 fn load_auth(mcp_url: &Url) -> Result<ConnectorAuth, ConnectorError> {
@@ -1007,6 +1096,12 @@ mod tests {
             tempo_url: None,
             admin_source: None,
             kubernetes_source: None,
+            runtime_diagnostics_source: Some(RuntimeDiagnosticsSourceConfig {
+                endpoints: BTreeMap::from([(
+                    "broker".to_owned(),
+                    Url::parse("https://broker.internal.example/internal/v1/runtime/diagnostics").expect("runtime URL"),
+                )]),
+            }),
             source_limits: test_source_limits(8, 1024),
             internal_token_env: "TEST_INTERNAL_TOKEN".to_owned(),
             internal_token: SecretValue("internal-token-value".to_owned()),
@@ -1017,7 +1112,37 @@ mod tests {
         assert!(!output.contains("client-secret-value"));
         assert!(!output.contains("internal-token-value"));
         assert!(!output.contains("private-ca-material"));
+        assert!(!output.contains("broker.internal.example"));
         assert!(output.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn runtime_diagnostics_endpoints_are_fixed_and_fail_closed() {
+        let endpoints = parse_runtime_diagnostics_endpoints(
+            "broker=https://broker.example/internal/v1/runtime/diagnostics;\
+             name_server=https://namesrv.example/internal/v1/runtime/diagnostics",
+            false,
+        )
+        .expect("protected endpoints");
+        assert_eq!(
+            endpoints.endpoints.keys().cloned().collect::<Vec<_>>(),
+            vec!["broker".to_owned(), "name_server".to_owned()]
+        );
+        assert!(
+            parse_runtime_diagnostics_endpoints(
+                "broker=http://broker.internal/internal/v1/runtime/diagnostics",
+                false,
+            )
+            .is_err()
+        );
+        assert!(
+            parse_runtime_diagnostics_endpoints(
+                "unknown=https://runtime.example/internal/v1/runtime/diagnostics",
+                false,
+            )
+            .is_err()
+        );
+        assert!(parse_runtime_diagnostics_endpoints("broker=https://runtime.example/readyz", false,).is_err());
     }
 
     #[test]
