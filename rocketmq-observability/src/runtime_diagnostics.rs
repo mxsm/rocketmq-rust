@@ -30,6 +30,7 @@ use std::time::Duration;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeComponent;
 use rocketmq_runtime::RuntimeDiagnosticsViewV1;
+use rocketmq_runtime::ScheduledTaskConfig;
 use serde::Serialize;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
@@ -192,21 +193,18 @@ pub async fn start_runtime_diagnostics_endpoint(
         .map_err(|_| ObservabilityError::invalid_config("runtime diagnostics listener address is unavailable"))?;
 
     let sampler_context = service_context.clone();
-    let sampler_cancellation = service_context.task_group().cancellation_token();
-    let sample_interval = config.sample_interval;
     service_context
-        .spawn_service("runtime-diagnostics.sampler", async move {
-            let mut interval = tokio::time::interval(sample_interval);
-            loop {
-                tokio::select! {
-                    _ = sampler_cancellation.cancelled() => break,
-                    _ = interval.tick() => {
-                        let view = sampler_context.diagnostics_view_v1(component);
-                        crate::metrics::runtime::record_snapshot(&view);
-                    }
+        .scheduled_tasks("runtime-diagnostics.sampler")
+        .schedule_fixed_delay(
+            ScheduledTaskConfig::fixed_delay("runtime-diagnostics.sample", config.sample_interval),
+            move || {
+                let sampler_context = sampler_context.clone();
+                async move {
+                    let view = sampler_context.diagnostics_view_v1(component);
+                    crate::metrics::runtime::record_snapshot(&view);
                 }
-            }
-        })
+            },
+        )
         .map_err(|_| ObservabilityError::invalid_config("runtime diagnostics sampler cannot start"))?;
 
     crate::metrics::runtime::record_lifecycle(
