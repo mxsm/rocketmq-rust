@@ -57,6 +57,7 @@ import {
   incidentOwnerOptions,
   incidentStatusLabels,
 } from "@/features/incidents/incidentPresentation";
+import { SupervisedDiagnosisPanel } from "@/features/incidents/SupervisedDiagnosisPanel";
 import { useAsyncResource } from "@/hooks/useAsyncResource";
 import { useClusterScope } from "@/hooks/useClusterScope";
 import { useWorkflowProgress } from "@/hooks/useWorkflowProgress";
@@ -797,10 +798,21 @@ export function IncidentDetailPage() {
             />
             <Summary
               label="执行资格"
-              value="false"
-              safe
+              value={String(
+                resource.data.diagnosis_revisions.at(-1)
+                  ?.execution_eligible ?? false,
+              )}
+              safe={Boolean(
+                resource.data.diagnosis_revisions.at(-1)
+                  ?.execution_eligible,
+              )}
             />
           </section>
+          <SupervisedDiagnosisPanel
+            incident={resource.data.incident}
+            onChanged={resource.reload}
+            revisions={resource.data.diagnosis_revisions}
+          />
           <div className="phase1-two-column detail-balance">
             <DataSurface
               title="诊断 Revision"
