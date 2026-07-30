@@ -5,6 +5,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { extendOperationsAnalytics } from "./openapi/operations_analytics.mjs";
 import { extendPhase5FleetAndDr } from "./openapi/phase5_fleet_dr.mjs";
 import { extendPhase5GovernanceAndFinOps } from "./openapi/phase5_governance_finops.mjs";
 
@@ -93,6 +94,12 @@ extendPhase5GovernanceAndFinOps({
   pathParameter,
   uuid,
   digest,
+});
+extendOperationsAnalytics({
+  document,
+  schemas,
+  operation,
+  uuid,
 });
 
 const phase5Prefixes = [
