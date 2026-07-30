@@ -82,6 +82,19 @@ describe("checked-in Phase 5 OpenAPI", () => {
     expect(
       specification.paths["/v1/incidents/{id}/operations"],
     ).toBeDefined();
+    expect(specification.paths["/v1/event-entries"]?.post).toBeDefined();
+    expect(
+      specification.components.schemas.UnifiedEventEntryRequest.oneOf,
+    ).toHaveLength(5);
+    expect(
+      specification.components.schemas.EventEntrySourceKind.enum,
+    ).toEqual([
+      "alert",
+      "manual_issue",
+      "scheduled_inspection",
+      "change_event",
+      "external_integration",
+    ]);
     expect(
       specification.paths["/v1/operations/shift-handoff"],
     ).toBeDefined();
