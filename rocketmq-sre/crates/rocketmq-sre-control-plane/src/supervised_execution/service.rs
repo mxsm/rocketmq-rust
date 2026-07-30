@@ -18,11 +18,13 @@ use std::sync::Arc;
 
 use chrono::DateTime;
 use chrono::Duration;
+use chrono::Timelike;
 use chrono::Utc;
 use rocketmq_sre_contracts::ActionPlan;
 use rocketmq_sre_contracts::ActionPlanDraft;
 use rocketmq_sre_contracts::ActionPlanId;
 use rocketmq_sre_contracts::ActionRisk;
+use rocketmq_sre_contracts::AgentReadRequest;
 use rocketmq_sre_contracts::ApprovalDecision;
 use rocketmq_sre_contracts::ApprovalGrant;
 use rocketmq_sre_contracts::ApprovalId;
@@ -33,7 +35,11 @@ use rocketmq_sre_contracts::AuditEventKind;
 use rocketmq_sre_contracts::CompensationMode;
 use rocketmq_sre_contracts::CorrelationId;
 use rocketmq_sre_contracts::CoverageStatus;
+use rocketmq_sre_contracts::EXECUTION_AGENT_SCHEMA_VERSION;
+use rocketmq_sre_contracts::EvidenceContent;
+use rocketmq_sre_contracts::EvidenceExposure;
 use rocketmq_sre_contracts::EvidenceId;
+use rocketmq_sre_contracts::EvidenceQuery;
 use rocketmq_sre_contracts::EvidenceSnapshot;
 use rocketmq_sre_contracts::ExecutionId;
 use rocketmq_sre_contracts::ExecutionRequest;
@@ -43,11 +49,17 @@ use rocketmq_sre_contracts::PlanStatus;
 use rocketmq_sre_contracts::PlanStep;
 use rocketmq_sre_contracts::PlanStepId;
 use rocketmq_sre_contracts::PolicyEffect;
+use rocketmq_sre_contracts::QueryId;
 use rocketmq_sre_contracts::ResourceQuarantine;
 use rocketmq_sre_contracts::ResourceQuarantineId;
+use rocketmq_sre_contracts::Sensitivity;
+use rocketmq_sre_contracts::TimeRange;
 use rocketmq_sre_contracts::canonical_precondition_hash;
 use rocketmq_sre_contracts::canonical_sha256;
+use rocketmq_sre_contracts::current_evidence_schema;
 use serde_json::json;
+use sha2::Digest;
+use sha2::Sha256;
 use uuid::Uuid;
 
 use super::catalog::ActionCatalog;
@@ -64,9 +76,11 @@ use super::model::ClearQuarantineRequest;
 use super::model::CreatePlanRequest;
 use super::model::CreatePlanResponse;
 use super::model::EvidenceBinding;
+use super::model::ExecutionPreconditionEvidenceView;
 use super::model::ExecutionSubmissionView;
 use super::model::ExternalApprovalSource;
 use super::model::NewExecutionProjection;
+use super::model::PrepareExecutionPreconditionRequest;
 use super::model::QuarantineListQuery;
 use super::model::QuarantinePage;
 use super::model::SubmitExecutionRequest;
@@ -95,6 +109,8 @@ const MAX_PLAN_STEPS: usize = 16;
 const MAX_STEP_EVIDENCE: usize = 32;
 const MAX_AUDIT_EVENTS: i64 = 501;
 const MAX_QUARANTINES: u32 = 200;
+const EXECUTION_PRECONDITION_EVIDENCE_SCHEMA: &str = "rocketmq-sre.execution-precondition-evidence.v1";
+const EXECUTION_PRECONDITION_FRESHNESS_SECONDS: u64 = 120;
 const CONTROL_PLANE_ISSUER: &str = "rocketmq-sre-control-plane";
 type Clock = Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>;
 
@@ -197,6 +213,134 @@ impl SupervisedExecutionService {
 
     fn now(&self) -> DateTime<Utc> {
         (self.clock)()
+    }
+
+    pub(crate) async fn prepare_execution_precondition(
+        &self,
+        auth: &AuthContext,
+        incident_id: rocketmq_sre_contracts::IncidentId,
+        request: &PrepareExecutionPreconditionRequest,
+        correlation_id: CorrelationId,
+    ) -> Result<ExecutionPreconditionEvidenceView, ControlPlaneError> {
+        self.policy.require_operator(auth)?;
+        require_cluster(auth, request.cluster_id)?;
+        if request.action_id.trim().is_empty()
+            || request.descriptor_version.trim().is_empty()
+            || request.resource.trim().is_empty()
+            || request.resource.chars().count() > 512
+            || request.resource.chars().any(char::is_control)
+        {
+            return Err(ControlPlaneError::validation(
+                "invalid_execution_precondition",
+                "action, descriptor version, and bounded resource are required",
+            ));
+        }
+        let context = self
+            .repository
+            .diagnosis_plan_context(auth, request.cluster_id, incident_id, request.diagnosis_revision_id)
+            .await?;
+        if context.status != "confirmed"
+            || !context.execution_eligible
+            || context.partial
+            || context.primary_model_invocation_id.is_none()
+        {
+            return Err(ControlPlaneError::conflict_code(
+                "diagnosis_not_execution_ready",
+                "a confirmed, complete, model-assisted diagnosis is required before a live precondition read",
+            ));
+        }
+        let CatalogResolution::Supervised(action, descriptor) = self.catalog.resolve(&request.action_id)? else {
+            return Err(ControlPlaneError::validation(
+                "action_not_executable",
+                "manual-only actions cannot request an Execution Agent precondition",
+            ));
+        };
+        if descriptor.version != request.descriptor_version || !descriptor.execution_supported {
+            return Err(ControlPlaneError::validation(
+                "action_version_mismatch",
+                "precondition request does not match an enabled exact action descriptor",
+            ));
+        }
+        validate_parameters(descriptor, &request.parameters)?;
+        let mut result = self
+            .executor
+            .read_precondition(&AgentReadRequest {
+                schema_version: EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
+                tenant_id: auth.tenant_id,
+                cluster_id: request.cluster_id,
+                execution_id: ExecutionId::new(),
+                plan_step_id: PlanStepId::new(),
+                action,
+                descriptor_version: request.descriptor_version.clone(),
+                target: request.resource.clone(),
+                parameters: request.parameters.clone(),
+            })
+            .await?;
+        let observed_at = result
+            .observed_at
+            .with_nanosecond((result.observed_at.nanosecond() / 1_000) * 1_000)
+            .ok_or_else(|| {
+                ControlPlaneError::validation(
+                    "invalid_execution_precondition",
+                    "Execution Agent timestamp is outside the supported range",
+                )
+            })?;
+        result.observed_at = observed_at;
+        let content = serde_json::to_value(&result).map_err(|_| {
+            ControlPlaneError::validation(
+                "invalid_execution_precondition",
+                "Execution Agent result cannot be represented as Evidence",
+            )
+        })?;
+        let content_digest = format!(
+            "sha256:{:x}",
+            Sha256::digest(serde_json::to_vec(&content).map_err(|_| {
+                ControlPlaneError::validation(
+                    "invalid_execution_precondition",
+                    "Execution Agent Evidence cannot be encoded",
+                )
+            })?)
+        );
+        let mut evidence = EvidenceSnapshot::capture(
+            EvidenceQuery {
+                query_id: QueryId::new(),
+                correlation_id,
+                tenant_id: auth.tenant_id,
+                cluster_id: request.cluster_id,
+                source: "execution-agent".to_owned(),
+                resource: request.resource.clone(),
+                time_range: TimeRange::new(observed_at, observed_at).map_err(|_| {
+                    ControlPlaneError::validation(
+                        "invalid_execution_precondition",
+                        "Execution Agent timestamp cannot form an Evidence range",
+                    )
+                })?,
+            },
+            current_evidence_schema(),
+            observed_at,
+            EvidenceContent::Inline(content),
+        )
+        .map_err(|_| {
+            ControlPlaneError::validation(
+                "invalid_execution_precondition",
+                "Execution Agent result cannot be sealed as Evidence",
+            )
+        })?;
+        evidence.freshness_seconds = EXECUTION_PRECONDITION_FRESHNESS_SECONDS;
+        evidence.sensitivity = Sensitivity::Internal;
+        evidence.coverage = CoverageStatus::Available;
+        evidence.exposure = EvidenceExposure::ExecutionAgentApi;
+        let evidence = self
+            .repository
+            .persist_evidence(auth, &evidence, None, Some(incident_id), &content_digest)
+            .await?;
+        Ok(ExecutionPreconditionEvidenceView {
+            schema_version: EXECUTION_PRECONDITION_EVIDENCE_SCHEMA,
+            incident_id,
+            diagnosis_revision_id: request.diagnosis_revision_id,
+            precondition_hash: result.precondition_hash,
+            evidence,
+        })
     }
 
     pub(crate) async fn create_plan(
