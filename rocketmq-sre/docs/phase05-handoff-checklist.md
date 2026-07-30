@@ -74,7 +74,7 @@
 
   ```powershell
   .\rocketmq-sre\scripts\phase05-test-cluster-dr.ps1 `
-    -Kubeconfig G:\rocketmq-sre-phase2-temp\kind-access\rocketmq-sre-phase00.kubeconfig
+    -Kubeconfig D:\BuildCache\rocketmq-sre-temp\kind\phase00-kubeconfig
   ```
 
 - [ ] 核对 Broker Pod UID 已变化，重建后 send/consume/query 均成功。
@@ -95,7 +95,7 @@
 
   ```powershell
   .\rocketmq-sre\scripts\phase05-enterprise-smoke.ps1 `
-    -Kubeconfig G:\rocketmq-sre-phase2-temp\kind-access\rocketmq-sre-phase00.kubeconfig
+    -Kubeconfig D:\BuildCache\rocketmq-sre-temp\kind\phase00-kubeconfig
   ```
 
 - [ ] 对照 `docs/phase05-enterprise-validation-record.md` 检查本次结果，没有把降级或重试隐藏为成功。
