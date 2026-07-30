@@ -3,7 +3,7 @@ component: runtime
 exposure:
   implementation: implemented_local
   observable: true
-  remote_queryable: false
+  remote_queryable: protected_component_endpoints_and_prometheus
 signals:
   - requirement_id: runtime.task_groups
     purpose: Detect unexpected lifecycle scope growth.
@@ -11,8 +11,9 @@ signals:
     source_symbol: RUNTIME_TASK_GROUPS
     registry_reference: rocketmq_runtime_task_groups
     signal_type: metric
-    status: in_process_only
-    query: null
+    status: queryable
+    query: max by (component) (rocketmq_runtime_task_groups)
+    query_resource: metrics/rocketmq_runtime_task_groups
     freshness_seconds: 30
     expected_attributes: [component]
     sensitivity: operational
@@ -24,8 +25,9 @@ signals:
     source_symbol: RUNTIME_TASKS
     registry_reference: rocketmq_runtime_tasks
     signal_type: metric
-    status: in_process_only
-    query: null
+    status: queryable
+    query: max by (component, task_type) (rocketmq_runtime_tasks)
+    query_resource: metrics/rocketmq_runtime_tasks
     freshness_seconds: 30
     expected_attributes: [component, task_type]
     sensitivity: operational
@@ -37,8 +39,9 @@ signals:
     source_symbol: RUNTIME_LONG_RUNNING_TASKS
     registry_reference: rocketmq_runtime_long_running_tasks
     signal_type: metric
-    status: in_process_only
-    query: null
+    status: queryable
+    query: max by (component, task_type) (rocketmq_runtime_long_running_tasks)
+    query_resource: metrics/rocketmq_runtime_long_running_tasks
     freshness_seconds: 30
     expected_attributes: [component, task_type]
     sensitivity: operational
@@ -50,8 +53,9 @@ signals:
     source_symbol: RUNTIME_BLOCKING_QUEUED
     registry_reference: rocketmq_runtime_blocking_queued
     signal_type: metric
-    status: in_process_only
-    query: null
+    status: queryable
+    query: max by (component, blocking_lane) (rocketmq_runtime_blocking_queued)
+    query_resource: metrics/rocketmq_runtime_blocking_queued
     freshness_seconds: 30
     expected_attributes: [component, blocking_lane]
     sensitivity: operational
@@ -63,8 +67,9 @@ signals:
     source_symbol: RUNTIME_BLOCKING_TIMEOUTS
     registry_reference: rocketmq_runtime_blocking_timeouts
     signal_type: metric
-    status: in_process_only
-    query: null
+    status: queryable
+    query: max by (component, blocking_lane) (rocketmq_runtime_blocking_timeouts)
+    query_resource: metrics/rocketmq_runtime_blocking_timeouts
     freshness_seconds: 30
     expected_attributes: [component, blocking_lane]
     sensitivity: operational
@@ -76,8 +81,9 @@ signals:
     source_symbol: RUNTIME_LIFECYCLE_TRANSITIONS_TOTAL
     registry_reference: rocketmq_runtime_lifecycle_transitions_total
     signal_type: metric
-    status: in_process_only
-    query: null
+    status: queryable
+    query: sum by (component, state, result, reason) (increase(rocketmq_runtime_lifecycle_transitions_total[5m]))
+    query_resource: metrics/rocketmq_runtime_lifecycle_transitions_total
     freshness_seconds: 30
     expected_attributes: [component, state, result, reason]
     sensitivity: operational
@@ -89,8 +95,8 @@ signals:
     source_symbol: RuntimeDiagnosticsViewV1
     registry_reference: rocketmq.runtime-diagnostics.v1
     signal_type: resource
-    status: in_process_only
-    query: null
+    status: queryable
+    query: runtime/components
     freshness_seconds: null
     expected_attributes: [component]
     sensitivity: operational
