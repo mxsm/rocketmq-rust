@@ -31,19 +31,24 @@ function Invoke-Native {
     }
 }
 
-function Assert-NonSystemPath([string]$Path, [string]$Description) {
+function Assert-DataPath([string]$Path, [string]$Description) {
     $fullPath = [IO.Path]::GetFullPath($Path)
-    if ([IO.Path]::GetPathRoot($fullPath).Equals('C:\', [StringComparison]::OrdinalIgnoreCase)) {
-        throw "$Description must not use the C drive."
+    $root = [IO.Path]::GetPathRoot($fullPath)
+    if (
+        -not $root.Equals('D:\', [StringComparison]::OrdinalIgnoreCase) -and
+        -not $root.Equals('F:\', [StringComparison]::OrdinalIgnoreCase)
+    ) {
+        throw "$Description must use the D or F drive."
     }
 }
 
 function Ensure-CargoCapacity {
-    $dDrive = Get-PSDrive -Name D
-    $gDrive = Get-PSDrive -Name G
-    Write-Host "D_FREE_GIB=$([Math]::Round($dDrive.Free / 1GB, 2))"
-    Write-Host "G_FREE_GIB=$([Math]::Round($gDrive.Free / 1GB, 2))"
-    if (($dDrive.Free / 1GB) -lt 15 -or ($gDrive.Free / 1GB) -lt 15) {
+    $targetDriveName = [IO.Path]::GetPathRoot(
+        [IO.Path]::GetFullPath($CargoTargetDir)
+    ).TrimEnd('\').TrimEnd(':')
+    $targetFreeGiB = (Get-PSDrive -Name $targetDriveName).Free / 1GB
+    Write-Host "${targetDriveName}_FREE_GIB=$([Math]::Round($targetFreeGiB, 2))"
+    if ($targetFreeGiB -lt 15) {
         Invoke-Native cargo @(
             '+1.95.0', 'clean',
             '--manifest-path', $manifestPath,
@@ -58,7 +63,7 @@ foreach ($path in @(
     @{ Value = $TemporaryRoot; Description = 'temporary directory' },
     @{ Value = $Kubeconfig; Description = 'Kubernetes test kubeconfig' }
 )) {
-    Assert-NonSystemPath $path.Value $path.Description
+    Assert-DataPath $path.Value $path.Description
 }
 if (-not (Test-Path -LiteralPath $Kubeconfig -PathType Leaf)) {
     throw "Kubernetes test kubeconfig does not exist: $Kubeconfig"
