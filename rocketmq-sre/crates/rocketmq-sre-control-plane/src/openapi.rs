@@ -127,6 +127,7 @@ mod tests {
         "/v1/incidents/{id}",
         "/v1/incidents/{id}/diagnose",
         "/v1/incidents/{incident_id}/diagnosis-revisions/{revision_id}/confirm-execution",
+        "/v1/incidents/{incident_id}/execution-preconditions",
         "/v1/incidents/{id}/notes",
         "/v1/incidents/{id}/operations",
         "/v1/incidents/{id}/postmortems",
@@ -397,6 +398,8 @@ mod tests {
             "ReleaseDetail",
             "ReleasePreparationView",
             "ReleaseExecutionView",
+            "PrepareExecutionPreconditionRequest",
+            "ExecutionPreconditionEvidenceView",
         ] {
             assert!(schemas.contains_key(required), "missing Phase 3 schema {required}");
         }
@@ -404,6 +407,11 @@ mod tests {
             document["paths"]["/v1/incidents/{incident_id}/diagnosis-revisions/{revision_id}/confirm-execution"]["post"]
                 ["requestBody"]["content"]["application/json"]["schema"]["$ref"],
             "#/components/schemas/ConfirmDiagnosisExecutionRequest"
+        );
+        assert_eq!(
+            document["paths"]["/v1/incidents/{incident_id}/execution-preconditions"]["post"]["requestBody"]["content"]
+                ["application/json"]["schema"]["$ref"],
+            "#/components/schemas/PrepareExecutionPreconditionRequest"
         );
         assert_eq!(
             document["paths"]["/v1/plans/{id}/critic"]["post"]["requestBody"]["content"]["application/json"]["schema"]
@@ -492,6 +500,11 @@ mod tests {
             schemas["EvidenceSnapshot__EvidenceExposure"]
                 .to_string()
                 .contains("runtime_diagnostics")
+        );
+        assert!(
+            schemas["EvidenceSnapshot__EvidenceExposure"]
+                .to_string()
+                .contains("execution_agent_api")
         );
     }
 
