@@ -225,5 +225,21 @@ describe("checked-in Phase 5 OpenAPI", () => {
         }),
       ]),
     );
+    const analytics =
+      specification.paths["/v1/operations/analytics"];
+    expect(analytics?.get).toBeDefined();
+    expect(analytics.get.parameters).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "cluster_id" }),
+        expect.objectContaining({ name: "scenario" }),
+        expect.objectContaining({ name: "provider_family" }),
+        expect.objectContaining({ name: "model_family" }),
+        expect.objectContaining({ name: "action_id" }),
+      ]),
+    );
+    expect(
+      specification.components.schemas.OperationsAnalyticsReport
+        .properties.schema_version.const,
+    ).toBe("rocketmq-sre.operations-analytics.v1");
   });
 });
