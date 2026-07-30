@@ -345,7 +345,10 @@ impl ExecutionAgent {
         .await
         .map_err(|_| ExecutionAgentError::DriverUnknown)??;
         validate_reconcile_result(&reconciled)?;
-        if reconciled.state != ReconcileEffectState::Unknown {
+        // Confirmed is the immutable dispatch-time journal terminal. Recovery
+        // still returns the current live observation, but must not rewrite
+        // that terminal record when a TTL or operator removed the effect.
+        if reconciliation_requires_store_confirmation(effect.state, reconciled.state) {
             if effect.state == EffectState::Prepared {
                 self.store.mark_unknown(&request.idempotency_key, Utc::now()).await?;
             }
@@ -490,6 +493,13 @@ fn validate_reconcile_result(result: &ReconcileEffectResponse) -> Result<(), Exe
     } else {
         Err(ExecutionAgentError::InvalidRequest)
     }
+}
+
+const fn reconciliation_requires_store_confirmation(
+    effect_state: EffectState,
+    reconciliation_state: ReconcileEffectState,
+) -> bool {
+    !matches!(reconciliation_state, ReconcileEffectState::Unknown) && !matches!(effect_state, EffectState::Confirmed)
 }
 
 fn valid_bounded(value: &str, max_bytes: usize) -> bool {
