@@ -53,9 +53,9 @@ Regenerate the JSON Schema, Phase 02 OpenAPI document and UI client in this
 order:
 
 ```powershell
-$env:CARGO_TARGET_DIR = 'G:\rocketmq-sre-phase2-cargo-target'
-$env:TEMP = 'G:\rocketmq-sre-phase2-temp'
-$env:TMP = 'G:\rocketmq-sre-phase2-temp'
+$env:CARGO_TARGET_DIR = 'D:\BuildCache\rocketmq-sre-target'
+$env:TEMP = 'D:\BuildCache\rocketmq-sre-temp'
+$env:TMP = 'D:\BuildCache\rocketmq-sre-temp'
 cargo +1.95.0 run --locked -p rocketmq-sre-eval --bin schema-export -- schemas
 node scripts/export_phase2_openapi.mjs
 npm --prefix ui run generate:api
