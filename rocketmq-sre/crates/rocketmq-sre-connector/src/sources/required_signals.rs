@@ -547,7 +547,10 @@ mod tests {
                         assert!(resource.starts_with("traces/service/rocketmq-"));
                     }
                     FixedQuery::Runtime(resource) => {
-                        assert!(matches!(resource.as_str(), "runtime" | "observability"));
+                        assert!(matches!(
+                            resource.as_str(),
+                            "runtime" | "runtime/components" | "observability"
+                        ));
                     }
                     FixedQuery::NotProductionVerified(reason_code) => {
                         assert!(!reason_code.is_empty());
