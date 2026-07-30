@@ -163,6 +163,7 @@ mod tests {
         "/v1/models/profiles/{id}/smoke",
         "/v1/models/status",
         "/v1/openapi.json",
+        "/v1/operations/analytics",
         "/v1/operations/reports",
         "/v1/operations/shift-handoff",
         "/v1/postmortems/{id}",
@@ -500,6 +501,25 @@ mod tests {
             .expect("report period");
         assert_eq!(period["schema"]["enum"], serde_json::json!(["weekly", "monthly"]));
         assert_eq!(period["schema"]["default"], "weekly");
+
+        let analytics = &document["paths"]["/v1/operations/analytics"]["get"];
+        let analytics_parameters = analytics["parameters"].as_array().expect("analytics query parameters");
+        for dimension in ["cluster_id", "scenario", "provider_family", "model_family", "action_id"] {
+            assert!(
+                analytics_parameters
+                    .iter()
+                    .any(|parameter| parameter["name"] == dimension),
+                "missing operations analytics dimension {dimension}"
+            );
+        }
+        assert_eq!(
+            analytics["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/OperationsAnalyticsReport"
+        );
+        assert_eq!(
+            document["components"]["schemas"]["OperationsAnalyticsReport"]["properties"]["schema_version"]["const"],
+            "rocketmq-sre.operations-analytics.v1"
+        );
     }
 
     #[test]
