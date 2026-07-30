@@ -147,12 +147,31 @@ pub(crate) struct IntegrationEventRequest {
 
 impl IntegrationEventRequest {
     pub(crate) fn validate(&self) -> Result<(), ControlPlaneError> {
+        self.validate_common()?;
         if self.source == AlertSource::Alertmanager {
             return Err(ControlPlaneError::validation(
                 "invalid_alert_source",
                 "Alertmanager events must use the Alertmanager webhook endpoint",
             ));
         }
+        Ok(())
+    }
+
+    pub(crate) fn validate_unified_alert(&self) -> Result<(), ControlPlaneError> {
+        self.validate_common()?;
+        if matches!(
+            self.source,
+            AlertSource::OperatorQuery | AlertSource::Inspection | AlertSource::Deployment
+        ) {
+            return Err(ControlPlaneError::validation(
+                "invalid_alert_source",
+                "operator, inspection, and deployment events must use their dedicated unified entry kind",
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_common(&self) -> Result<(), ControlPlaneError> {
         validate_bounded_text("source_event_id", &self.source_event_id, 512, false)?;
         validate_bounded_text("resource_key", &self.resource_key, 512, false)?;
         validate_bounded_text("symptom_family", &self.symptom_family, 128, false)?;
@@ -512,5 +531,30 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+
+    #[test]
+    fn unified_alert_accepts_alertmanager_but_rejects_other_entry_kinds() {
+        let mut request = IntegrationEventRequest {
+            cluster_id: ClusterId::new(),
+            source: AlertSource::Alertmanager,
+            source_event_id: "alertmanager:broker-down".into(),
+            resource_kind: ResourceKind::Broker,
+            resource_key: "broker-a".into(),
+            display_name: None,
+            symptom_family: "broker_unavailable".into(),
+            severity: AlertSeverity::Critical,
+            status: AlertStatus::Firing,
+            summary: "Broker unavailable".into(),
+            labels: BTreeMap::new(),
+            evidence_ids: Vec::new(),
+            sequence: 1,
+            occurred_at: Utc::now(),
+        };
+
+        assert!(request.validate().is_err());
+        assert!(request.validate_unified_alert().is_ok());
+        request.source = AlertSource::Deployment;
+        assert!(request.validate_unified_alert().is_err());
     }
 }
