@@ -568,7 +568,9 @@ pub(super) async fn seed_complete_slo_evidence(repository: &PostgresRepository, 
     for (sli, dimension) in [
         ("delivery_ratio", "traffic"),
         ("broker_runtime", "broker"),
+        ("flush_dispatch", "broker"),
         ("proxy_connection", "routing_proxy"),
+        ("runtime_saturation", "runtime"),
         ("telemetry_freshness", "platform"),
     ] {
         for window in ["fast", "medium", "slow"] {
