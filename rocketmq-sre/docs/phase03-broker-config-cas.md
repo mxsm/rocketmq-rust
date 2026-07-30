@@ -65,7 +65,7 @@ feature checks prove the new capability is available in a
 
 The production adapter was accepted on 2026-07-29 with a real loopback
 NameServer and Broker, Docker PostgreSQL, and build artifacts isolated on
-`G:`:
+the selected D/F data drive (D by default):
 
 ```powershell
 .\rocketmq-sre\scripts\phase03-broker-cas-smoke.ps1
