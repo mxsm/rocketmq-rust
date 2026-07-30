@@ -61,7 +61,7 @@ impl ModelGatewayService {
                 None,
             );
         }
-        let profiles = self.configured_profiles(auth).await?;
+        let profiles = self.routable_profiles(auth).await?;
         let configured = profiles
             .iter()
             .map(|profile| profile.profile.clone())
