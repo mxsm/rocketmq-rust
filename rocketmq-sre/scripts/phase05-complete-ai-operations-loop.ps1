@@ -44,6 +44,8 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $namespace = 'rocketmq-sre'
+$rocketmqNamespace = 'rocketmq-system'
+$probeJob = 'rocketmq-sre-phase01-live-probe'
 $actionId = 'observability.logger_level_ttl.v1'
 $descriptorVersion = '1.0.0'
 $operatorSubject = 'phase05-complete-loop-operator'
@@ -277,6 +279,10 @@ $resolvedTemporaryRoot = Assert-AllowedStoragePath `
 $resolvedCargoTargetDir = Assert-AllowedStoragePath `
     $CargoTargetDir `
     'Cargo target directory'
+$scriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
+$probeManifest = [IO.Path]::GetFullPath(
+    (Join-Path $scriptDirectory '..\deploy\kind\phase01-live-probe-job.yaml')
+)
 Assert-StorageReserve $resolvedTemporaryRoot $false
 Assert-StorageReserve $resolvedCargoTargetDir $true
 Assert-Guid $TenantId 'TenantId'
@@ -288,6 +294,9 @@ if (-not (Test-Path -LiteralPath $resolvedKubeconfig -PathType Leaf)) {
 }
 if ($BrokerResource -notmatch '^broker/.+:[0-9]+$') {
     throw 'BrokerResource must use the typed broker/<host>:<port> format.'
+}
+if (-not (Test-Path -LiteralPath $probeManifest -PathType Leaf)) {
+    throw "The bounded synthetic probe manifest does not exist: $probeManifest"
 }
 
 New-Item -ItemType Directory -Force -Path $resolvedTemporaryRoot | Out-Null
@@ -315,6 +324,31 @@ try {
         'deployment/sre-execution-agent',
         '--timeout=180s'
     ) | Out-Null
+
+    Invoke-Kubectl @(
+        '-n', $rocketmqNamespace,
+        'delete', "job/$probeJob",
+        '--ignore-not-found=true',
+        '--wait=true'
+    ) | Out-Null
+    Invoke-Kubectl @('apply', '--filename', $probeManifest) | Out-Null
+    Invoke-Kubectl @(
+        '-n', $rocketmqNamespace,
+        'wait',
+        '--for=condition=complete',
+        "job/$probeJob",
+        '--timeout=180s'
+    ) | Out-Null
+    $probeLog = Invoke-Kubectl @(
+        '-n', $rocketmqNamespace,
+        'logs', "job/$probeJob",
+        '--container=bounded-probe',
+        '--tail=80'
+    )
+    Assert-True (
+        $probeLog.Contains('probe_result command=register cleanup_partial=false') -and
+        $probeLog.Contains('probe_result command=send cleanup_partial=false')
+    ) 'The bounded synthetic Topic/Consumer Group probe did not complete.'
 
     $internalToken = Get-InternalToken
     $portForwardOut = Join-Path $runRoot 'control-plane-port-forward.out.log'
@@ -346,7 +380,7 @@ try {
         resource_kind = 'consumer_group'
         resource_key = "$ConsumerGroup/$Topic"
         display_name = 'Phase 5 complete AI operations loop'
-        symptom_family = 'consumer_lag'
+        symptom_family = "consumer_lag_phase05_$runSuffix"
         severity = 'warning'
         status = 'firing'
         summary = 'Synthetic bounded consumer lag signal for the complete AI operations loop.'
