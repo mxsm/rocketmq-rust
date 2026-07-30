@@ -110,7 +110,7 @@ const MAX_STEP_EVIDENCE: usize = 32;
 const MAX_AUDIT_EVENTS: i64 = 501;
 const MAX_QUARANTINES: u32 = 200;
 const EXECUTION_PRECONDITION_EVIDENCE_SCHEMA: &str = "rocketmq-sre.execution-precondition-evidence.v1";
-const EXECUTION_PRECONDITION_FRESHNESS_SECONDS: u64 = 120;
+const EXECUTION_PRECONDITION_VALIDITY_SECONDS: u64 = 120;
 const CONTROL_PLANE_ISSUER: &str = "rocketmq-sre-control-plane";
 type Clock = Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>;
 
@@ -326,7 +326,7 @@ impl SupervisedExecutionService {
                 "Execution Agent result cannot be sealed as Evidence",
             )
         })?;
-        evidence.freshness_seconds = EXECUTION_PRECONDITION_FRESHNESS_SECONDS;
+        evidence.freshness_seconds = 0;
         evidence.sensitivity = Sensitivity::Internal;
         evidence.coverage = CoverageStatus::Available;
         evidence.exposure = EvidenceExposure::ExecutionAgentApi;
@@ -715,14 +715,18 @@ impl SupervisedExecutionService {
     }
 
     fn evidence_is_current(&self, snapshot: &EvidenceSnapshot, now: DateTime<Utc>) -> Result<bool, ControlPlaneError> {
-        if snapshot.observed_at > now
-            || snapshot.partial
-            || snapshot.coverage != CoverageStatus::Available
-            || snapshot.freshness_seconds == 0
-        {
+        if snapshot.observed_at > now || snapshot.partial || snapshot.coverage != CoverageStatus::Available {
             return Ok(false);
         }
-        let allowed_seconds = snapshot.freshness_seconds.min(self.policy.max_evidence_age_seconds());
+        let maximum_age_seconds = self.policy.max_evidence_age_seconds();
+        if snapshot.freshness_seconds > maximum_age_seconds {
+            return Ok(false);
+        }
+        let allowed_seconds = if snapshot.source == "execution-agent" {
+            EXECUTION_PRECONDITION_VALIDITY_SECONDS.min(maximum_age_seconds)
+        } else {
+            maximum_age_seconds
+        };
         let allowed = duration_seconds(allowed_seconds)?;
         Ok(now <= snapshot.observed_at + allowed)
     }
