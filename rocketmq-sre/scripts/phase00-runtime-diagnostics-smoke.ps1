@@ -15,6 +15,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+Add-Type -AssemblyName System.Net.Http
 $thisScript = $MyInvocation.MyCommand.Path
 $scriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
 $sreRoot = [IO.Path]::GetFullPath((Join-Path $scriptDirectory '..'))
