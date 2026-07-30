@@ -206,6 +206,7 @@ async fn execute_r2_case(environment: &LiveEnvironment, case: DiscoveredActionCa
     fixture.agent_evidence_id = persist_agent_evidence(&repository, &fixture, &case.target, &refreshed).await;
 
     let profile = critic_profile();
+    let profile_id = profile.id.clone();
     let critic_family = profile.model_family.clone();
     let model_gateway = ModelGatewayService::for_tests(
         repository.clone(),
@@ -214,6 +215,16 @@ async fn execute_r2_case(environment: &LiveEnvironment, case: DiscoveredActionCa
             fixture.agent_evidence_id,
         ))])),
     );
+    let governance = auth(
+        environment.tenant_id,
+        environment.cluster_id,
+        "phase3-wave-admin-model-governance",
+        &["model-governance"],
+    );
+    model_gateway
+        .certify_profile_for_tests(&governance, &profile_id, CorrelationId::new())
+        .await
+        .unwrap_or_else(|error| panic!("certify {} Critic profile: {error}", case.action.id()));
     let workflow = WorkflowService::new(repository.clone(), WorkflowEventBus::new(64));
     let executor = ExecutorSubmissionClient::http(
         environment.executor_url.parse::<Url>().expect("Executor URL"),
