@@ -335,6 +335,46 @@ schemas.DiagnosisExecutionConfirmation = {
     confirmed_at: { type: "string", format: "date-time" },
   },
 };
+schemas.PrepareExecutionPreconditionRequest = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "cluster_id",
+    "diagnosis_revision_id",
+    "action_id",
+    "descriptor_version",
+    "resource",
+    "parameters",
+  ],
+  properties: {
+    cluster_id: uuid,
+    diagnosis_revision_id: uuid,
+    action_id: { type: "string", minLength: 1, maxLength: 255 },
+    descriptor_version: { type: "string", minLength: 1, maxLength: 64 },
+    resource: { type: "string", minLength: 1, maxLength: 512 },
+    parameters: { type: "object" },
+  },
+};
+schemas.ExecutionPreconditionEvidenceView = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "schema_version",
+    "incident_id",
+    "diagnosis_revision_id",
+    "evidence",
+    "precondition_hash",
+  ],
+  properties: {
+    schema_version: {
+      const: "rocketmq-sre.execution-precondition-evidence.v1",
+    },
+    incident_id: uuid,
+    diagnosis_revision_id: uuid,
+    evidence: { $ref: "#/components/schemas/EvidenceSnapshot" },
+    precondition_hash: digest,
+  },
+};
 schemas.CriticReviewRequest = {
   type: "object",
   additionalProperties: false,
@@ -610,6 +650,16 @@ document.paths[
       pathParameter("incident_id"),
       pathParameter("revision_id"),
     ],
+  }),
+};
+document.paths["/v1/incidents/{incident_id}/execution-preconditions"] = {
+  post: operation({
+    operationId: "prepareExecutionPreconditionEvidenceV1",
+    summary:
+      "Capture a current read-only Execution Agent precondition as incident-linked Evidence",
+    bodySchema: "PrepareExecutionPreconditionRequest",
+    responseSchema: "ExecutionPreconditionEvidenceView",
+    parameters: [pathParameter("incident_id")],
   }),
 };
 document.paths["/v1/plans/{id}"] = {
