@@ -12910,6 +12910,34 @@
           }
         ]
       }
+    },
+    "/v1/event-entries": {
+      "post": {
+        "operationId": "ingestUnifiedEventEntry",
+        "x-max-body-bytes": 65536,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnifiedEventEntryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Idempotent workflow target created from one of five event sources",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnifiedEventEntryResult"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -27847,6 +27875,533 @@
             }
           },
           "generated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "UnifiedAlertSource": {
+        "type": "string",
+        "enum": [
+          "alertmanager",
+          "kubernetes_event",
+          "health_probe",
+          "synthetic_probe"
+        ]
+      },
+      "EventEntryWorkflowTarget": {
+        "type": "string",
+        "enum": [
+          "investigation",
+          "incident"
+        ]
+      },
+      "ChangeEventKind": {
+        "type": "string",
+        "enum": [
+          "release",
+          "deployment",
+          "configuration"
+        ]
+      },
+      "ExternalEventChannel": {
+        "type": "string",
+        "enum": [
+          "itsm",
+          "chat_ops"
+        ]
+      },
+      "EventEntrySourceKind": {
+        "type": "string",
+        "enum": [
+          "alert",
+          "manual_issue",
+          "scheduled_inspection",
+          "change_event",
+          "external_integration"
+        ]
+      },
+      "EventEntryTargetKind": {
+        "type": "string",
+        "enum": [
+          "investigation",
+          "incident",
+          "inspection_run"
+        ]
+      },
+      "AlertEventEntryRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "cluster_id",
+          "idempotency_key",
+          "source_kind",
+          "source",
+          "source_event_id",
+          "resource_kind",
+          "resource_key",
+          "symptom_family",
+          "severity",
+          "status",
+          "summary",
+          "sequence"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "rocketmq-sre.event-entry.v1"
+          },
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[A-Za-z0-9._:/#-]+$"
+          },
+          "occurred_at": {
+            "oneOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source_kind": {
+            "type": "string",
+            "const": "alert"
+          },
+          "source": {
+            "$ref": "#/components/schemas/UnifiedAlertSource"
+          },
+          "source_event_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "resource_kind": {
+            "$ref": "#/components/schemas/AlertEvent__ResourceKind"
+          },
+          "resource_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "display_name": {
+            "oneOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "symptom_family": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "severity": {
+            "$ref": "#/components/schemas/AlertEvent__AlertSeverity"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AlertEvent__AlertStatus"
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "labels": {
+            "type": "object",
+            "maxProperties": 64,
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 512
+            }
+          },
+          "evidence_ids": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "sequence": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        }
+      },
+      "ManualIssueEventEntryRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "cluster_id",
+          "idempotency_key",
+          "source_kind",
+          "title",
+          "symptom_family"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "rocketmq-sre.event-entry.v1"
+          },
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[A-Za-z0-9._:/#-]+$"
+          },
+          "occurred_at": {
+            "oneOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source_kind": {
+            "type": "string",
+            "const": "manual_issue"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "resource": {
+            "oneOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "symptom_family": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      },
+      "ScheduledInspectionEventEntryRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "cluster_id",
+          "idempotency_key",
+          "source_kind",
+          "template"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "rocketmq-sre.event-entry.v1"
+          },
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[A-Za-z0-9._:/#-]+$"
+          },
+          "occurred_at": {
+            "oneOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source_kind": {
+            "type": "string",
+            "const": "scheduled_inspection"
+          },
+          "template": {
+            "type": "string",
+            "enum": [
+              "cluster_health",
+              "consumer",
+              "broker",
+              "telemetry",
+              "full_cluster",
+              "producer_consumer",
+              "store_ha",
+              "routing_proxy",
+              "security",
+              "upgrade",
+              "disaster_recovery"
+            ]
+          },
+          "schedule": {
+            "oneOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "ChangeEventEntryRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "cluster_id",
+          "idempotency_key",
+          "source_kind",
+          "change_kind",
+          "title",
+          "symptom_family"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "rocketmq-sre.event-entry.v1"
+          },
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[A-Za-z0-9._:/#-]+$"
+          },
+          "occurred_at": {
+            "oneOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source_kind": {
+            "type": "string",
+            "const": "change_event"
+          },
+          "change_kind": {
+            "$ref": "#/components/schemas/ChangeEventKind"
+          },
+          "target": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/EventEntryWorkflowTarget"
+              }
+            ],
+            "default": "investigation"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "resource": {
+            "oneOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "symptom_family": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      },
+      "ExternalIntegrationEventEntryRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "cluster_id",
+          "idempotency_key",
+          "source_kind",
+          "channel",
+          "target",
+          "title",
+          "symptom_family"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "rocketmq-sre.event-entry.v1"
+          },
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[A-Za-z0-9._:/#-]+$"
+          },
+          "occurred_at": {
+            "oneOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source_kind": {
+            "type": "string",
+            "const": "external_integration"
+          },
+          "channel": {
+            "$ref": "#/components/schemas/ExternalEventChannel"
+          },
+          "target": {
+            "$ref": "#/components/schemas/EventEntryWorkflowTarget"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "resource": {
+            "oneOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "symptom_family": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      },
+      "UnifiedEventEntryRequest": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/AlertEventEntryRequest"
+          },
+          {
+            "$ref": "#/components/schemas/ManualIssueEventEntryRequest"
+          },
+          {
+            "$ref": "#/components/schemas/ScheduledInspectionEventEntryRequest"
+          },
+          {
+            "$ref": "#/components/schemas/ChangeEventEntryRequest"
+          },
+          {
+            "$ref": "#/components/schemas/ExternalIntegrationEventEntryRequest"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "source_kind",
+          "mapping": {
+            "alert": "#/components/schemas/AlertEventEntryRequest",
+            "manual_issue": "#/components/schemas/ManualIssueEventEntryRequest",
+            "scheduled_inspection": "#/components/schemas/ScheduledInspectionEventEntryRequest",
+            "change_event": "#/components/schemas/ChangeEventEntryRequest",
+            "external_integration": "#/components/schemas/ExternalIntegrationEventEntryRequest"
+          }
+        }
+      },
+      "UnifiedEventEntryResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "entry_id",
+          "source_kind",
+          "target_kind",
+          "target_id",
+          "created",
+          "replayed",
+          "correlation_id",
+          "accepted_at"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "rocketmq-sre.event-entry-result.v1"
+          },
+          "entry_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "source_kind": {
+            "$ref": "#/components/schemas/EventEntrySourceKind"
+          },
+          "target_kind": {
+            "$ref": "#/components/schemas/EventEntryTargetKind"
+          },
+          "target_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "created": {
+            "type": "boolean"
+          },
+          "replayed": {
+            "type": "boolean"
+          },
+          "correlation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "accepted_at": {
             "type": "string",
             "format": "date-time"
           }
