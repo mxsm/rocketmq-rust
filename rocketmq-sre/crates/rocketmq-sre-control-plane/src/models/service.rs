@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -67,6 +68,7 @@ use tracing::Instrument as _;
 
 use super::config::ModelRuntimeConfig;
 use super::config::ModelSecretProviderConfig;
+use super::lifecycle::ModelProfileLifecycleState;
 use super::model::DIAGNOSIS_OUTPUT_SCHEMA_VERSION;
 use super::model::DIAGNOSIS_PROMPT_VERSION;
 use super::model::DIAGNOSIS_REPAIR_PROMPT_VERSION;
@@ -912,9 +914,22 @@ impl ModelGatewayService {
         if !self.config.enabled {
             return Ok(Vec::new());
         }
-        self.repository
+        let profiles = self
+            .repository
             .ensure_model_profiles(auth.tenant_id, &self.config.profiles)
-            .await
+            .await?;
+        let routable_profile_ids = self
+            .repository
+            .model_profile_lifecycles(auth.tenant_id)
+            .await?
+            .into_iter()
+            .filter(|lifecycle| lifecycle_allows_routing(lifecycle.state))
+            .map(|lifecycle| lifecycle.profile_id)
+            .collect::<BTreeSet<_>>();
+        Ok(profiles
+            .into_iter()
+            .filter(|profile| routable_profile_ids.contains(&profile.id))
+            .collect())
     }
 
     async fn resolve_credential(&self, profile: &ProviderProfile) -> Result<Option<SecretMaterial>, ProviderError> {
@@ -1419,6 +1434,13 @@ fn eligible(profile: &RuntimeModelProfile, data_class: DataClass) -> bool {
             .capabilities
             .supported
             .contains(&ProviderCapability::JsonSchema)
+}
+
+const fn lifecycle_allows_routing(state: ModelProfileLifecycleState) -> bool {
+    matches!(
+        state,
+        ModelProfileLifecycleState::Certified | ModelProfileLifecycleState::Promoted
+    )
 }
 
 fn cost_aware_profile_order(profile: &RuntimeModelProfile) -> (u16, u64, String) {
@@ -2030,6 +2052,15 @@ mod tests {
         assert_eq!(samples[0].family, crate::observability::ProviderFamilyLabel::DeepSeek);
         assert_eq!(samples[0].status, DependencyStatus::Unknown);
         assert_eq!(samples[0].reason, Some(HealthReasonCode::Unknown));
+    }
+
+    #[test]
+    fn model_routing_requires_operator_certification() {
+        assert!(!lifecycle_allows_routing(ModelProfileLifecycleState::Draft));
+        assert!(lifecycle_allows_routing(ModelProfileLifecycleState::Certified));
+        assert!(lifecycle_allows_routing(ModelProfileLifecycleState::Promoted));
+        assert!(!lifecycle_allows_routing(ModelProfileLifecycleState::Quarantined));
+        assert!(!lifecycle_allows_routing(ModelProfileLifecycleState::Retired));
     }
 
     #[test]
