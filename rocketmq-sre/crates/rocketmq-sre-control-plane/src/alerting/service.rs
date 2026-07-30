@@ -124,6 +124,23 @@ impl AlertingService {
         self.persist_and_correlate(auth, event, correlation_id).await
     }
 
+    pub(crate) async fn ingest_unified_alert_event(
+        &self,
+        auth: &AuthContext,
+        request: &IntegrationEventRequest,
+        correlation_id: CorrelationId,
+    ) -> Result<AlertIngestionOutcome, ControlPlaneError> {
+        request.validate_unified_alert()?;
+        if !auth.clusters.contains(&request.cluster_id) {
+            return Err(ControlPlaneError::forbidden(
+                "cluster_not_allowed",
+                "unified alert cluster is outside the authenticated scope",
+            ));
+        }
+        let event = normalize_integration_event(auth, request)?;
+        self.persist_and_correlate(auth, event, correlation_id).await
+    }
+
     pub(crate) async fn timeline(
         &self,
         auth: &AuthContext,
