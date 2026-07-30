@@ -29,10 +29,14 @@ $sreRoot = [IO.Path]::GetFullPath((Join-Path $scriptDirectory '..'))
 $manifestPath = Join-Path $sreRoot 'Cargo.toml'
 $bootstrapManifest = Join-Path $sreRoot 'deploy\kind\phase03-wave-admin-bootstrap-job.yaml'
 
-function Assert-NonSystemPath([string]$Path, [string]$Description) {
+function Assert-DataPath([string]$Path, [string]$Description) {
     $fullPath = [IO.Path]::GetFullPath($Path)
-    if ([IO.Path]::GetPathRoot($fullPath).Equals('C:\', [StringComparison]::OrdinalIgnoreCase)) {
-        throw "$Description must not use the C drive."
+    $root = [IO.Path]::GetPathRoot($fullPath)
+    if (
+        -not $root.Equals('D:\', [StringComparison]::OrdinalIgnoreCase) -and
+        -not $root.Equals('F:\', [StringComparison]::OrdinalIgnoreCase)
+    ) {
+        throw "$Description must use the D or F drive."
     }
 }
 
@@ -138,7 +142,7 @@ foreach ($path in @(
     @{ Value = $TemporaryRoot; Description = 'temporary directory' },
     @{ Value = $Kubeconfig; Description = 'Kubernetes kubeconfig' }
 )) {
-    Assert-NonSystemPath $path.Value $path.Description
+    Assert-DataPath $path.Value $path.Description
 }
 foreach ($port in @($PostgresLocalPort, $ExecutorLocalPort, $AgentLocalPort)) {
     Assert-PortAvailable $port
@@ -150,9 +154,12 @@ if (-not (Test-Path -LiteralPath $resolvedKubeconfig -PathType Leaf)) {
 }
 $resolvedTemporaryRoot = [IO.Path]::GetFullPath($TemporaryRoot)
 New-Item -ItemType Directory -Force -Path $CargoHome, $CargoTargetDir, $resolvedTemporaryRoot | Out-Null
-$gDrive = Get-PSDrive -Name G
-Write-Host "G_FREE_GIB=$([Math]::Round($gDrive.Free / 1GB, 2))"
-if (($gDrive.Free / 1GB) -lt 15) {
+$targetDriveName = [IO.Path]::GetPathRoot(
+    [IO.Path]::GetFullPath($CargoTargetDir)
+).TrimEnd('\').TrimEnd(':')
+$targetFreeGiB = (Get-PSDrive -Name $targetDriveName).Free / 1GB
+Write-Host "${targetDriveName}_FREE_GIB=$([Math]::Round($targetFreeGiB, 2))"
+if ($targetFreeGiB -lt 15) {
     & cargo +1.95.0 clean --manifest-path $manifestPath --target-dir $CargoTargetDir
     if ($LASTEXITCODE -ne 0) {
         throw 'Low-space Cargo cleanup failed.'
