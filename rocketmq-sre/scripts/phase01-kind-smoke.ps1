@@ -67,6 +67,10 @@ function Assert-StaticContract {
         @{ Text = $smokeText; Value = 'Assert-ReadOnlyCapabilityBoundary' }
         @{ Text = $smokeText; Value = 'Assert-CrossClusterDenied' }
         @{ Text = $smokeText; Value = 'Wait-ConnectorOnline' }
+        @{ Text = $smokeText; Value = 'Ensure-CertifiedLocalModelProfile' }
+        @{ Text = $smokeText; Value = '"/v1/models/profiles/$($profile.profile_id)/smoke"' }
+        @{ Text = $smokeText; Value = "target_state = 'certified'" }
+        @{ Text = $smokeText; Value = 'operator_confirmed = $true' }
         @{ Text = $smokeText; Value = '"/v1/evidence/$evidenceId/content"' }
         @{ Text = $smokeText; Value = 'positive live Consumer Lag Evidence returned through the mTLS Connector channel' }
         @{ Text = $smokeText; Value = "mode -ne 'model_assisted'" }
