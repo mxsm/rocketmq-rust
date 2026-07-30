@@ -25,6 +25,7 @@ $requiredBaseDevelopmentMaterial = @(
     'server-key.pem',
     'admin.identity',
     'request-policy.json',
+    'runtime-diagnostics-token',
     'broker-acl.yml',
     'mcp-rmq-credentials.yml',
     'admin-read.env',
@@ -368,6 +369,11 @@ function New-DevelopmentCertificates {
         "{`"profile`":`"phase00-compose-read-only`"}`n",
         [Text.UTF8Encoding]::new($false)
     )
+    [IO.File]::WriteAllText(
+        (Join-Path $certificateDirectory 'runtime-diagnostics-token'),
+        "phase00-internal-token`n",
+        [Text.UTF8Encoding]::new($false)
+    )
     $mcpAccessKey = 'phase00-compose-mcp-reader'
     $mcpSecretKey = New-RandomSecret
     $probeAccessKey = 'phase00-compose-probe'
@@ -465,7 +471,7 @@ function New-DevelopmentCertificates {
         '--entrypoint', '/bin/sh',
         $opensslImage,
         '-ec',
-        'chown 10001:10001 /certs/ca-cert.pem /certs/server-cert.pem /certs/server-key.pem /certs/control-plane-server-ca-cert.pem /certs/control-plane-server-cert.pem /certs/control-plane-server-key.pem /certs/connector-client-ca-cert.pem /certs/connector-client-cert.pem /certs/connector-client-key.pem /certs/connector-client-identity.pem /certs/admin.identity /certs/request-policy.json /certs/broker-acl.yml /certs/mcp-rmq-credentials.yml /certs/admin-read.env /certs/agent-broker.env /certs/probe-secret-key; chmod 0444 /certs/ca-cert.pem /certs/server-cert.pem /certs/control-plane-server-ca-cert.pem /certs/control-plane-server-cert.pem /certs/connector-client-ca-cert.pem /certs/connector-client-cert.pem /certs/admin.identity /certs/request-policy.json; chmod 0400 /certs/server-key.pem /certs/control-plane-server-key.pem /certs/connector-client-key.pem /certs/connector-client-identity.pem /certs/broker-acl.yml /certs/mcp-rmq-credentials.yml /certs/admin-read.env /certs/agent-broker.env /certs/probe-secret-key'
+        'chown 10001:10001 /certs/ca-cert.pem /certs/server-cert.pem /certs/server-key.pem /certs/control-plane-server-ca-cert.pem /certs/control-plane-server-cert.pem /certs/control-plane-server-key.pem /certs/connector-client-ca-cert.pem /certs/connector-client-cert.pem /certs/connector-client-key.pem /certs/connector-client-identity.pem /certs/admin.identity /certs/request-policy.json /certs/runtime-diagnostics-token /certs/broker-acl.yml /certs/mcp-rmq-credentials.yml /certs/admin-read.env /certs/agent-broker.env /certs/probe-secret-key; chmod 0444 /certs/ca-cert.pem /certs/server-cert.pem /certs/control-plane-server-ca-cert.pem /certs/control-plane-server-cert.pem /certs/connector-client-ca-cert.pem /certs/connector-client-cert.pem /certs/admin.identity /certs/request-policy.json; chmod 0400 /certs/server-key.pem /certs/control-plane-server-key.pem /certs/connector-client-key.pem /certs/connector-client-identity.pem /certs/runtime-diagnostics-token /certs/broker-acl.yml /certs/mcp-rmq-credentials.yml /certs/admin-read.env /certs/agent-broker.env /certs/probe-secret-key'
     )
     foreach ($temporaryFile in @(
         'server.csr',
