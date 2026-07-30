@@ -35,9 +35,9 @@ const MTTD_DEFINITION: &str =
     "mean seconds from incident creation to the first persisted diagnosis revision in the selected scope";
 const MTTR_DEFINITION: &str =
     "mean seconds from incident creation to terminal resolved or escalated update in the selected scope";
-const SAVINGS_DEFINITION: &str = "fixed conservative estimate: alert correlation 3m, owner/severity 4m, evidence \
-                                  10m, shift summary 15m, notification 2m, postmortem draft 30m, preventive \
-                                  inspection 20m, successful autonomous action 15m";
+const SAVINGS_DEFINITION: &str = "fixed conservative estimate: alert correlation 3m, owner/severity 4m, evidence 10m, \
+                                  shift summary 15m, notification 2m, postmortem draft 30m, preventive inspection \
+                                  20m, successful autonomous action 15m";
 
 impl PostgresRepository {
     pub(super) async fn operations_analytics(
