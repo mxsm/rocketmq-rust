@@ -54,6 +54,8 @@ use super::operations::AutonomyOperationalReport;
 use super::operations::AutonomyOperationalReportQuery;
 use super::operations::AutonomyOutcomeListQuery;
 use super::operations::AutonomyOutcomePage;
+use super::operations::OperationsAnalyticsQuery;
+use super::operations::OperationsAnalyticsReport;
 use crate::ControlPlaneError;
 use crate::api::AppState;
 
@@ -97,6 +99,7 @@ pub(crate) fn routes() -> Router<AppState> {
         )
         .route("/v1/autonomy/outcomes", get(list_outcomes))
         .route("/v1/autonomy/reports", get(operational_report))
+        .route("/v1/operations/analytics", get(operations_analytics))
         .route(
             "/internal/v1/autonomy/grants",
             post(issue_grant).layer(DefaultBodyLimit::max(64 * 1024)),
@@ -247,6 +250,15 @@ async fn operational_report(
 ) -> Result<Json<AutonomyOperationalReport>, ControlPlaneError> {
     let auth = state.auth.authorize(&headers, query.cluster_id).await?;
     state.autonomy_operations.report(&auth, &query).await.map(Json)
+}
+
+async fn operations_analytics(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<OperationsAnalyticsQuery>,
+) -> Result<Json<OperationsAnalyticsReport>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, query.cluster_id).await?;
+    state.autonomy_operations.analytics(&auth, &query).await.map(Json)
 }
 
 async fn issue_grant(
