@@ -198,13 +198,17 @@ try {
             throw "$serviceName runtime image user mismatch: $configuredUser"
         }
 
-        $entrypoint = @((Invoke-Captured docker image inspect --format "{{json .Config.Entrypoint}}" $imageRef) | ConvertFrom-Json)
+        $entrypointValue =
+            (Invoke-Captured docker image inspect --format "{{json .Config.Entrypoint}}" $imageRef) | ConvertFrom-Json
+        $entrypoint = @($entrypointValue)
         $expectedEntrypoint = "/usr/local/bin/$($service.binary)"
         if ($entrypoint.Count -ne 1 -or $entrypoint[0] -ne $expectedEntrypoint) {
             throw "$serviceName entrypoint mismatch: $($entrypoint -join ',')"
         }
 
-        $command = @((Invoke-Captured docker image inspect --format "{{json .Config.Cmd}}" $imageRef) | ConvertFrom-Json)
+        $commandValue =
+            (Invoke-Captured docker image inspect --format "{{json .Config.Cmd}}" $imageRef) | ConvertFrom-Json
+        $command = @($commandValue)
         $expectedCommand = @($service.command)
         if (($command -join "`n") -ne ($expectedCommand -join "`n")) {
             throw "$serviceName command mismatch"
