@@ -15,6 +15,7 @@
 mod api;
 mod model;
 mod operations;
+mod operations_analytics_repository;
 mod operations_repository;
 mod operations_service;
 mod reconciler;
