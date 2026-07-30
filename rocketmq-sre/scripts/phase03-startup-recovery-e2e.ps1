@@ -140,10 +140,10 @@ BEGIN
     IF NOT EXISTS (
         SELECT 1
         FROM executor_leases
-        WHERE state = 'active'
-          AND expires_at > CURRENT_TIMESTAMP + INTERVAL '30 seconds'
+        WHERE activated_at IS NOT NULL
+          AND fence_ack_snapshot IS NOT NULL
     ) THEN
-        RAISE EXCEPTION 'startup_recovery_fresh_active_lease_missing';
+        RAISE EXCEPTION 'startup_recovery_activated_lease_missing';
     END IF;
 END
 $fixture_guard$;
@@ -155,24 +155,29 @@ WITH source AS (
       AND execution.state = 'succeeded'
     ORDER BY execution.completed_at DESC, execution.id DESC
     LIMIT 1
-), active_lease AS (
+), source_lease AS (
     SELECT lease.*
     FROM executor_leases lease
     JOIN source ON source.cluster_id = lease.cluster_id
-    WHERE lease.state = 'active'
-      AND lease.expires_at > CURRENT_TIMESTAMP + INTERVAL '30 seconds'
+    WHERE lease.activated_at IS NOT NULL
+      AND lease.fence_ack_snapshot IS NOT NULL
       AND lease.epoch = (
           SELECT MAX(latest.epoch)
           FROM executor_leases latest
           WHERE latest.cluster_id = source.cluster_id
+            AND latest.activated_at IS NOT NULL
+            AND latest.fence_ack_snapshot IS NOT NULL
       )
     LIMIT 1
 ), fixture AS (
     SELECT
         source.*,
-        GREATEST(active_lease.activated_at + INTERVAL '1 millisecond', CURRENT_TIMESTAMP) AS fixture_at
+        GREATEST(
+            source_lease.activated_at + INTERVAL '1 millisecond',
+            LEAST(CURRENT_TIMESTAMP, source_lease.expires_at - INTERVAL '1 millisecond')
+        ) AS fixture_at
     FROM source
-    CROSS JOIN active_lease
+    CROSS JOIN source_lease
 )
 INSERT INTO executions (
     id,
@@ -240,28 +245,33 @@ WITH source_execution AS (
       AND NOT step.compensation
     ORDER BY step.sequence_id
     LIMIT 1
-), active_lease AS (
+), source_lease AS (
     SELECT lease.*
     FROM executor_leases lease
     JOIN source_execution ON source_execution.cluster_id = lease.cluster_id
-    WHERE lease.state = 'active'
-      AND lease.expires_at > CURRENT_TIMESTAMP + INTERVAL '30 seconds'
+    WHERE lease.activated_at IS NOT NULL
+      AND lease.fence_ack_snapshot IS NOT NULL
       AND lease.epoch = (
           SELECT MAX(latest.epoch)
           FROM executor_leases latest
           WHERE latest.cluster_id = source_execution.cluster_id
+            AND latest.activated_at IS NOT NULL
+            AND latest.fence_ack_snapshot IS NOT NULL
       )
     LIMIT 1
 ), fixture AS (
     SELECT
         source_intent.*,
-        active_lease.id AS active_lease_id,
-        active_lease.epoch AS active_lease_epoch,
-        active_lease.owner AS active_lease_owner,
-        GREATEST(active_lease.activated_at + INTERVAL '1 millisecond', CURRENT_TIMESTAMP) AS fixture_at,
-        active_lease.expires_at AS lease_expires_at
+        source_lease.id AS source_lease_id,
+        source_lease.epoch AS source_lease_epoch,
+        source_lease.owner AS source_lease_owner,
+        GREATEST(
+            source_lease.activated_at + INTERVAL '1 millisecond',
+            LEAST(CURRENT_TIMESTAMP, source_lease.expires_at - INTERVAL '1 millisecond')
+        ) AS fixture_at,
+        source_lease.expires_at AS lease_expires_at
     FROM source_intent
-    CROSS JOIN active_lease
+    CROSS JOIN source_lease
 )
 INSERT INTO execution_steps (
     execution_id,
@@ -281,8 +291,8 @@ SELECT
     :'runtime_step_id'::UUID,
     1,
     'intent',
-    fixture.active_lease_id,
-    fixture.active_lease_epoch,
+    fixture.source_lease_id,
+    fixture.source_lease_epoch,
     FALSE,
     fixture.intent_snapshot || jsonb_build_object(
         'execution_id', :'execution_id'::TEXT,
@@ -290,11 +300,11 @@ SELECT
         'idempotency_key', :'intent_idempotency_key'::TEXT,
         'intended_at', fixture.fixture_at,
         'fence_grant', (fixture.intent_snapshot -> 'fence_grant') || jsonb_build_object(
-            'epoch', fixture.active_lease_epoch,
+            'epoch', fixture.source_lease_epoch,
             'nonce', :'fence_nonce'::TEXT,
-            'owner', fixture.active_lease_owner,
+            'owner', fixture.source_lease_owner,
             'step_id', :'runtime_step_id'::TEXT,
-            'lease_id', fixture.active_lease_id::TEXT,
+            'lease_id', fixture.source_lease_id::TEXT,
             'execution_id', :'execution_id'::TEXT,
             'issued_at', fixture.fixture_at,
             'expires_at', fixture.lease_expires_at
@@ -324,16 +334,18 @@ WITH source_execution AS (
     WHERE step.execution_id = :'execution_id'::UUID
       AND step.record_kind = 'intent'
     LIMIT 1
-), active_lease AS (
+), source_lease AS (
     SELECT lease.*
     FROM executor_leases lease
     JOIN source_execution ON source_execution.cluster_id = lease.cluster_id
-    WHERE lease.state = 'active'
-      AND lease.expires_at > CURRENT_TIMESTAMP + INTERVAL '30 seconds'
+    WHERE lease.activated_at IS NOT NULL
+      AND lease.fence_ack_snapshot IS NOT NULL
       AND lease.epoch = (
           SELECT MAX(latest.epoch)
           FROM executor_leases latest
           WHERE latest.cluster_id = source_execution.cluster_id
+            AND latest.activated_at IS NOT NULL
+            AND latest.fence_ack_snapshot IS NOT NULL
       )
     LIMIT 1
 )
@@ -364,8 +376,8 @@ SELECT
     source_effect.cluster_id,
     :'execution_id'::UUID,
     :'runtime_step_id'::UUID,
-    active_lease.id,
-    active_lease.epoch,
+    source_lease.id,
+    source_lease.epoch,
     :'intent_idempotency_key',
     source_effect.action_id,
     source_effect.target,
@@ -382,7 +394,7 @@ SELECT
     new_intent.occurred_at + INTERVAL '1 millisecond'
 FROM source_effect
 CROSS JOIN new_intent
-CROSS JOIN active_lease;
+CROSS JOIN source_lease;
 
 UPDATE execution_agent_effects
 SET state = 'dispatched',
