@@ -69,6 +69,14 @@ pub struct ExecuteOutcome {
     pub accepted_steps: usize,
 }
 
+/// Bounded startup recovery summary.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct RecoverySweepOutcome {
+    pub attempted: u32,
+    pub recovered: u32,
+    pub blocked: u32,
+}
+
 /// Low-cardinality process counters.
 #[derive(Default)]
 pub struct ExecutorMetrics {
@@ -211,6 +219,35 @@ impl ChangeExecutor {
         let result = self.recover_execution_inner(id).await;
         self.metrics.active_executions.fetch_sub(1, Ordering::Relaxed);
         result
+    }
+
+    /// Reconciles a bounded set of interrupted compensation records during
+    /// service startup.
+    ///
+    /// Effects that cannot be proven absent remain blocked without preventing
+    /// other records from being examined. Dependency and persistence failures
+    /// stop the sweep so the caller can expose degraded readiness.
+    ///
+    /// # Errors
+    ///
+    /// Returns dependency, fencing, or journal failures other than the
+    /// expected fail-closed unresolved-effect result.
+    pub async fn recover_interrupted_executions(&self, limit: u32) -> Result<RecoverySweepOutcome, ExecutorError> {
+        let ids = self.journal.compensating_execution_ids(limit).await?;
+        let mut summary = RecoverySweepOutcome::default();
+        for id in ids {
+            summary.attempted = summary.attempted.saturating_add(1);
+            match self.recover_execution(id).await {
+                Ok(outcome) if outcome.state == ExecutionState::RolledBack => {
+                    summary.recovered = summary.recovered.saturating_add(1);
+                }
+                Ok(_) | Err(ExecutorError::ReconcileBlocked) => {
+                    summary.blocked = summary.blocked.saturating_add(1);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(summary)
     }
 
     async fn recover_execution_inner(&self, id: ExecutionId) -> Result<ExecuteOutcome, ExecutorError> {
