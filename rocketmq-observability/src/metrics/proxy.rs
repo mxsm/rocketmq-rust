@@ -228,6 +228,11 @@ fn decrement_saturating(counter: &AtomicU64) {
     });
 }
 
+#[inline]
+fn duration_millis_u64(duration: Duration) -> u64 {
+    duration.as_millis().clamp(0, u128::from(u64::MAX)) as u64
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProxyUpAttributes {
     pub node_type: String,
