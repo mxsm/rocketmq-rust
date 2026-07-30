@@ -99,6 +99,15 @@ describe("stateLabel", () => {
       anchor: "2026-07-15T08:30:00Z",
       clusterId: "cluster/id",
     });
+    await api.getOperationsAnalytics({
+      period: "monthly",
+      anchor: "2026-07-15T08:30:00Z",
+      clusterId: "cluster/id",
+      scenario: "consumer_lag",
+      providerFamily: "deepseek",
+      modelFamily: "deepseek-chat",
+      actionId: "proxy.restart_one.v1",
+    });
 
     expect(
       fetchMock.mock.calls.map(([input]) => String(input)),
@@ -126,6 +135,7 @@ describe("stateLabel", () => {
       "/v1/models/profiles/profile%2Fid/smoke",
       "/v1/autonomy/outcomes?cluster_id=cluster%2Fid&action=proxy.restart_one.v1&class=success&from=2026-07-01T00%3A00%3A00Z&until=2026-08-01T00%3A00%3A00Z&limit=25",
       "/v1/autonomy/reports?period=monthly&anchor=2026-07-15T08%3A30%3A00Z&cluster_id=cluster%2Fid",
+      "/v1/operations/analytics?period=monthly&anchor=2026-07-15T08%3A30%3A00Z&cluster_id=cluster%2Fid&scenario=consumer_lag&provider_family=deepseek&model_family=deepseek-chat&action_id=proxy.restart_one.v1",
     ]);
     const healthHeaders = new Headers(
       fetchMock.mock.calls[9]?.[1]?.headers,
