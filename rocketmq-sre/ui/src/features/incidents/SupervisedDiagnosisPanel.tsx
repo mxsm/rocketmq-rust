@@ -294,7 +294,7 @@ export function SupervisedDiagnosisPanel({
               <span>TTL（秒）</span>
               <Input
                 max={300}
-                min={30}
+                min={60}
                 onChange={(event) =>
                   setTtlSeconds(Number(event.target.value))
                 }
@@ -310,7 +310,7 @@ export function SupervisedDiagnosisPanel({
               !confirmedRevisionId ||
               !resource.trim() ||
               !logger.trim() ||
-              ttlSeconds < 30 ||
+              ttlSeconds < 60 ||
               ttlSeconds > 300 ||
               Boolean(busy)
             }
