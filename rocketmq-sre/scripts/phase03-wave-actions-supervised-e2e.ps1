@@ -259,6 +259,7 @@ try {
         --manifest-path $manifestPath `
         --locked `
         -p rocketmq-sre-control-plane `
+        --lib `
         supervised_execution::wave_actions_e2e_tests::real_kind_wave_one_r1_actions_share_the_supervised_execution_chain `
         -- `
         --ignored `
@@ -278,6 +279,7 @@ try {
         --manifest-path $manifestPath `
         --locked `
         -p rocketmq-sre-control-plane `
+        --lib `
         supervised_execution::wave_admin_actions_e2e_tests::real_kind_wave_admin_actions_share_r2_critic_approval_and_verification `
         -- `
         --ignored `
