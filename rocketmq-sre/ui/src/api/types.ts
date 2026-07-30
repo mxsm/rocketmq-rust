@@ -53,6 +53,10 @@ export type ConfirmDiagnosisExecutionRequest =
   ApiSchemas["ConfirmDiagnosisExecutionRequest"];
 export type DiagnosisExecutionConfirmation =
   ApiSchemas["DiagnosisExecutionConfirmation"];
+export type PrepareExecutionPreconditionRequest =
+  ApiSchemas["PrepareExecutionPreconditionRequest"];
+export type ExecutionPreconditionEvidenceView =
+  ApiSchemas["ExecutionPreconditionEvidenceView"];
 export type CreatePlanRequest = ApiSchemas["CreatePlanRequest"];
 export type CreatePlanResponse = ApiSchemas["CreatePlanResponse"];
 export type ActionPlanView = ApiSchemas["ActionPlanView"];
