@@ -232,25 +232,64 @@ try {
             }
         }
 
-        $ownedBinaries = (Invoke-Captured docker run --rm --entrypoint /bin/sh $imageRef -c "find /usr/local/bin -maxdepth 1 -type f -name 'rocketmq-*' -printf '%f\n' | sort").Split("`n", [System.StringSplitOptions]::RemoveEmptyEntries)
+        $ownedBinaries = (
+            Invoke-Captured docker run --rm --network none --entrypoint /usr/bin/find $imageRef `
+                /usr/local/bin -maxdepth 1 -type f -name "rocketmq-*" -printf '%f\n'
+        ).Split("`n", [System.StringSplitOptions]::RemoveEmptyEntries)
         if ($ownedBinaries.Count -ne 1 -or $ownedBinaries[0] -ne $service.binary) {
             throw "$serviceName runtime image contains binaries outside its owner boundary: $($ownedBinaries -join ',')"
         }
 
-        & docker run --rm --network none --read-only --tmpfs $tmpfsOptions $imageRef *> $null
-        if ($LASTEXITCODE -eq 0) {
+        $missingConfigExitCode = 0
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            & docker run --rm --network none --read-only --tmpfs $tmpfsOptions $imageRef 2> $null | Out-Null
+            $missingConfigExitCode = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+        if ($missingConfigExitCode -eq 0) {
             throw "$serviceName must fail closed when its required config mount is absent"
         }
 
-        $permissionSmoke = @(
-            "set -eu",
-            ('test "$(id -u)" = {0}' -f $policy.runtime.uid),
-            ('test "$(id -g)" = {0}' -f $policy.runtime.gid),
-            "! touch /opt/rocketmq/rootfs-must-stay-read-only 2>/dev/null",
-            "touch $($service.data_path)/data-write",
-            "touch $($policy.runtime.tmpfs_path)/tmp-write"
-        ) -join "; "
-        Invoke-Checked docker run --rm --network none --read-only --mount "type=volume,destination=$($policy.runtime.writable_data_path)" --tmpfs $tmpfsOptions --entrypoint /bin/sh $imageRef -c $permissionSmoke
+        $permissionArguments = @(
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "--read-only",
+            "--mount",
+            "type=volume,destination=$($policy.runtime.writable_data_path)",
+            "--tmpfs",
+            $tmpfsOptions
+        )
+        $runtimeUid = (Invoke-Captured docker @permissionArguments --entrypoint /usr/bin/id $imageRef -u).Trim()
+        if ($runtimeUid -ne [string]$policy.runtime.uid) {
+            throw "$serviceName effective uid mismatch: $runtimeUid"
+        }
+        $runtimeGid = (Invoke-Captured docker @permissionArguments --entrypoint /usr/bin/id $imageRef -g).Trim()
+        if ($runtimeGid -ne [string]$policy.runtime.gid) {
+            throw "$serviceName effective gid mismatch: $runtimeGid"
+        }
+        $rootfsWriteExitCode = 0
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            & docker @permissionArguments --entrypoint /usr/bin/touch $imageRef `
+                /opt/rocketmq/rootfs-must-stay-read-only 2> $null | Out-Null
+            $rootfsWriteExitCode = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+        if ($rootfsWriteExitCode -eq 0) {
+            throw "$serviceName runtime image root filesystem must remain read-only"
+        }
+        Invoke-Checked docker @permissionArguments --entrypoint /usr/bin/touch $imageRef `
+            "$($service.data_path)/data-write" `
+            "$($policy.runtime.tmpfs_path)/tmp-write"
 
         $sbomPath = Join-Path $outputPath "$serviceName.cdx.json"
         $trivyPath = Join-Path $outputPath "$serviceName.trivy.json"
