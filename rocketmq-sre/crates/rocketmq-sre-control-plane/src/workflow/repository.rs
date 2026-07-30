@@ -1967,7 +1967,7 @@ fn diagnosis_revision_from_row(row: &PgRow) -> Result<DiagnosisRevision, Control
         incident_id: IncidentId::from_uuid(row.try_get("incident_id")?),
         revision: u32::try_from(row.try_get::<i32, _>("revision")?)
             .map_err(|_| ControlPlaneError::validation("source_unavailable", "diagnosis revision is invalid"))?,
-        status: parse_incident_status(row.try_get("status")?)?,
+        status: parse_diagnosis_revision_status(row.try_get("status")?)?,
         rule_result: row.try_get("rule_result")?,
         hypotheses: row.try_get("hypotheses")?,
         evidence_ids: row
@@ -2016,6 +2016,16 @@ fn parse_incident_status(value: &str) -> Result<IncidentStatus, ControlPlaneErro
         "resolved" => Ok(IncidentStatus::Resolved),
         "escalated" => Ok(IncidentStatus::Escalated),
         _ => Err(invalid_database_enum("incident status")),
+    }
+}
+
+fn parse_diagnosis_revision_status(value: &str) -> Result<IncidentStatus, ControlPlaneError> {
+    if value == "confirmed" {
+        // Confirmation is carried by `execution_eligible`; the public
+        // diagnosis contract still exposes the owning Incident lifecycle.
+        Ok(IncidentStatus::Monitoring)
+    } else {
+        parse_incident_status(value)
     }
 }
 
@@ -2200,5 +2210,14 @@ mod tests {
             fingerprint(tenant, cluster, Some("group/orders"), "consumer_lag", first),
             fingerprint(tenant, cluster, Some("group/orders"), "consumer_lag", second)
         );
+    }
+
+    #[test]
+    fn confirmed_diagnosis_projects_to_monitoring_without_widening_incident_status() {
+        assert_eq!(
+            parse_diagnosis_revision_status("confirmed").expect("confirmed diagnosis"),
+            IncidentStatus::Monitoring
+        );
+        assert!(parse_incident_status("confirmed").is_err());
     }
 }
