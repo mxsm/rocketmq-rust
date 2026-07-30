@@ -92,6 +92,7 @@ $env:TMP = $env:TEMP
     --manifest-path $manifestPath `
     --locked `
     -p rocketmq-sre-control-plane `
+    --lib `
     supervised_execution::proxy_restart_e2e_tests::real_kind_supervised_proxy_restart_reaches_verified_success `
     -- `
     --ignored `
