@@ -17,6 +17,10 @@ services:
   broker:
     autoCreateTopicEnable: true
     logFilterReloadEnabled: true
+    persistence:
+      enabled: true
+      storageClassName: standard
+      size: 10Gi
     resources:
       requests: {cpu: 100m, memory: 256Mi}
       limits: {cpu: 1000m, memory: 2Gi}
