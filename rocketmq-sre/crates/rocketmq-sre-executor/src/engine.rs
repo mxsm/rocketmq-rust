@@ -695,16 +695,6 @@ impl ChangeExecutor {
         }
     }
 
-    async fn current_lease(&self, cluster_id: ClusterId) -> Result<ExecutorLease, ExecutorError> {
-        self.leases
-            .lock()
-            .await
-            .get(&cluster_id)
-            .filter(|lease| lease.state == LeaseState::Active && lease.expires_at > Utc::now() + TimeDelta::seconds(2))
-            .cloned()
-            .ok_or(ExecutorError::AuthorityRejected)
-    }
-
     async fn transition(
         &self,
         request: &ExecutionRequest,
