@@ -2637,6 +2637,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/operations/analytics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Query quality, cost, latency, adoption, execution and savings by authenticated dimensions */
+        get: operations["getDimensionalOperationsAnalytics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -7175,6 +7192,110 @@ export interface components {
             correlation_id: string;
             /** Format: date-time */
             accepted_at: string;
+        };
+        OperationsAnalyticsFilters: {
+            cluster_ids: string[];
+            scenario: string | null;
+            provider_family: string | null;
+            model_family: string | null;
+            action_id: string | null;
+        };
+        OperationsAnalyticsWindow: {
+            /** @enum {string} */
+            period: "weekly" | "monthly";
+            /** Format: date-time */
+            start: string;
+            /** Format: date-time */
+            end: string;
+            complete: boolean;
+        };
+        IncidentOperationsMetrics: {
+            /** Format: uint64 */
+            total: number;
+            /** Format: uint64 */
+            diagnosed: number;
+            /** Format: uint64 */
+            terminal: number;
+            /** Format: uint64 */
+            recurrent: number;
+            mean_time_to_detect_seconds: number | null;
+            mean_time_to_resolve_seconds: number | null;
+        };
+        OperationsAnalyticsModelUsage: {
+            /** Format: uint64 */
+            calls: number;
+            /** Format: uint64 */
+            input_tokens: number;
+            /** Format: uint64 */
+            output_tokens: number;
+            /** Format: uint64 */
+            cost_micros: number;
+            /** Format: uint64 */
+            calls_missing_tokens: number;
+            /** Format: uint64 */
+            calls_missing_cost: number;
+            /** Format: uint64 */
+            failed_calls: number;
+            /** Format: uint64 */
+            fallback_calls: number;
+            usage_coverage_basis_points: number | null;
+            cost_coverage_basis_points: number | null;
+        };
+        OperationsAnalyticsFeedback: {
+            /** Format: uint64 */
+            total: number;
+            /** Format: uint64 */
+            adopted: number;
+            /** Format: uint64 */
+            modified: number;
+            /** Format: uint64 */
+            rejected: number;
+            adoption_basis_points: number | null;
+            modification_basis_points: number | null;
+            rejection_basis_points: number | null;
+        };
+        ExecutionOperationsMetrics: {
+            /** Format: uint64 */
+            total: number;
+            /** Format: uint64 */
+            terminal: number;
+            /** Format: uint64 */
+            succeeded: number;
+            /** Format: uint64 */
+            rolled_back: number;
+            /** Format: uint64 */
+            escalated: number;
+            success_basis_points: number | null;
+        };
+        AttributedAutomationSavingsMetrics: {
+            /** Format: uint64 */
+            successful_no_side_effect_runs: number;
+            /** Format: uint64 */
+            successful_preventive_runs: number;
+            /** Format: uint64 */
+            successful_autonomous_actions: number;
+            /** Format: uint64 */
+            estimated_minutes_saved: number;
+            estimate_method: string;
+        };
+        OperationsAnalyticsReport: {
+            /** @constant */
+            schema_version: "rocketmq-sre.operations-analytics.v1";
+            /** Format: uuid */
+            tenant_id: string;
+            filters: components["schemas"]["OperationsAnalyticsFilters"];
+            window: components["schemas"]["OperationsAnalyticsWindow"];
+            incidents: components["schemas"]["IncidentOperationsMetrics"];
+            model_usage: components["schemas"]["OperationsAnalyticsModelUsage"];
+            recommendation_feedback: components["schemas"]["OperationsAnalyticsFeedback"];
+            executions: components["schemas"]["ExecutionOperationsMetrics"];
+            savings: components["schemas"]["AttributedAutomationSavingsMetrics"];
+            mttd_definition: string;
+            mttr_definition: string;
+            savings_definition: string;
+            warnings: string[];
+            /** Format: date-time */
+            observed_at: string;
         };
     };
     responses: {
@@ -17014,6 +17135,88 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UnifiedEventEntryResult"];
+                };
+            };
+        };
+    };
+    getDimensionalOperationsAnalytics: {
+        parameters: {
+            query?: {
+                cluster_id?: string;
+                period?: "weekly" | "monthly";
+                anchor?: string;
+                scenario?: string;
+                provider_family?: string;
+                model_family?: string;
+                action_id?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationsAnalyticsReport"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
         };
