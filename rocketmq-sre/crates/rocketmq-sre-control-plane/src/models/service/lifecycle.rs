@@ -15,14 +15,20 @@
 use chrono::Utc;
 use rocketmq_sre_contracts::CorrelationId;
 use rocketmq_sre_contracts::ModelProfileId;
+#[cfg(test)]
+use serde_json::json;
 
 use super::ModelGatewayService;
 use crate::ControlPlaneError;
 use crate::auth::AuthContext;
 use crate::models::lifecycle::ModelProfileLifecyclePage;
+#[cfg(test)]
+use crate::models::lifecycle::ModelProfileLifecycleState;
 use crate::models::lifecycle::ModelProfileLifecycleTransitionRequest;
 use crate::models::lifecycle::ModelProfileLifecycleView;
 use crate::models::lifecycle::ModelProfileRollbackRequest;
+#[cfg(test)]
+use crate::models::smoke_repository::PersistProviderSmokeResult;
 
 impl ModelGatewayService {
     pub(crate) async fn profile_lifecycles(
@@ -94,6 +100,66 @@ impl ModelGatewayService {
         self.repository
             .model_profile_lifecycle(auth.tenant_id, active_profile_id)
             .await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn certify_profile_for_tests(
+        &self,
+        auth: &AuthContext,
+        profile_name: &str,
+        correlation_id: CorrelationId,
+    ) -> Result<ModelProfileLifecycleView, ControlPlaneError> {
+        require_model_governance(auth)?;
+        let profile = self
+            .configured_profiles(auth)
+            .await?
+            .into_iter()
+            .find(|profile| profile.profile.id == profile_name)
+            .ok_or(ControlPlaneError::NotFound)?;
+        let lifecycle = self
+            .repository
+            .model_profile_lifecycle(auth.tenant_id, profile.id)
+            .await?;
+        if matches!(
+            lifecycle.state,
+            ModelProfileLifecycleState::Certified | ModelProfileLifecycleState::Promoted
+        ) {
+            return Ok(lifecycle);
+        }
+        self.repository
+            .persist_provider_smoke_result(
+                auth.tenant_id,
+                profile.id,
+                &PersistProviderSmokeResult {
+                    connectivity_ok: true,
+                    structured_output_ok: true,
+                    tool_arguments_ok: true,
+                    evidence_citation_ok: true,
+                    latency_ms: Some(1),
+                    failure_codes: Vec::new(),
+                    result_snapshot: json!({
+                        "fixture": "model-profile-certification",
+                        "network_call": false,
+                    }),
+                    observed_at: Utc::now(),
+                },
+                &auth.subject,
+                correlation_id,
+            )
+            .await?;
+        self.transition_profile_lifecycle(
+            auth,
+            profile.id,
+            &ModelProfileLifecycleTransitionRequest {
+                target_state: ModelProfileLifecycleState::Certified,
+                expected_revision: lifecycle.revision,
+                rollback_profile_id: None,
+                reason_code: "test_fixture_certified".to_owned(),
+                operator_confirmed: true,
+            },
+            correlation_id,
+        )
+        .await
     }
 }
 
