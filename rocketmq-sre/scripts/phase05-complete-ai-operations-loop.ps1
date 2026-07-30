@@ -400,9 +400,13 @@ try {
         '--tail=80'
     )
     Assert-True (
-        $probeLog.Contains('probe_result command=register cleanup_partial=false') -and
+        $probeLog.Contains(
+            'probe_stage command=register stage=consumer_start status=end'
+        ) -and
+        $probeLog.Contains("registered topic=$Topic group=$ConsumerGroup") -and
+        $probeLog.Contains('probe_result command=register cleanup_partial=') -and
         $probeLog.Contains('probe_result command=send cleanup_partial=false')
-    ) 'The bounded synthetic Topic/Consumer Group probe did not complete.'
+    ) 'The bounded synthetic Topic/Consumer Group probe did not register and send.'
 
     $internalToken = Get-InternalToken
     $portForwardOut = Join-Path $runRoot 'control-plane-port-forward.out.log'
