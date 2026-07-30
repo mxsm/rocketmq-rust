@@ -13089,6 +13089,114 @@
           }
         }
       }
+    },
+    "/v1/incidents/{incident_id}/diagnosis-revisions/{revision_id}/confirm-execution": {
+      "post": {
+        "operationId": "confirmDiagnosisForSupervisedExecutionV1",
+        "summary": "Create an immutable execution-eligible revision from the latest complete model-assisted diagnosis",
+        "parameters": [
+          {
+            "name": "incident_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "revision_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmDiagnosisExecutionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosisExecutionConfirmation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sanitized stable error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -22287,6 +22395,7 @@
             "required": [
               "kind",
               "plan",
+              "precondition_hash",
               "risk",
               "policy_decision"
             ],
@@ -22302,6 +22411,10 @@
               },
               "policy_decision": {
                 "$ref": "#/components/schemas/PolicyDecision"
+              },
+              "precondition_hash": {
+                "type": "string",
+                "pattern": "^sha256:[0-9A-Fa-f]{64}$"
               }
             }
           },
@@ -22327,6 +22440,7 @@
         "type": "object",
         "required": [
           "plan",
+          "precondition_hash",
           "risk",
           "critic_state",
           "latest_critic_review",
@@ -22372,6 +22486,10 @@
                 "type": "null"
               }
             ]
+          },
+          "precondition_hash": {
+            "type": "string",
+            "pattern": "^sha256:[0-9A-Fa-f]{64}$"
           }
         }
       },
@@ -29038,6 +29156,103 @@
             }
           },
           "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ConfirmDiagnosisExecutionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "human_confirmed",
+          "reason"
+        ],
+        "properties": {
+          "human_confirmed": {
+            "const": true
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 2048
+          }
+        }
+      },
+      "DiagnosisExecutionConfirmation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "incident_id",
+          "source_revision_id",
+          "confirmed_revision_id",
+          "revision",
+          "cluster_id",
+          "primary_model_invocation_id",
+          "evidence_ids",
+          "execution_eligible",
+          "confirmed_by",
+          "reason",
+          "correlation_id",
+          "confirmed_at"
+        ],
+        "properties": {
+          "schema_version": {
+            "const": "rocketmq-sre.diagnosis-execution-confirmation.v1"
+          },
+          "incident_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "source_revision_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "confirmed_revision_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 1
+          },
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "primary_model_invocation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "evidence_ids": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 32,
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "execution_eligible": {
+            "const": true
+          },
+          "confirmed_by": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 2048
+          },
+          "correlation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "confirmed_at": {
             "type": "string",
             "format": "date-time"
           }
