@@ -32,7 +32,7 @@ EXPECTED_SERVICES: dict[str, dict[str, Any]] = {
         "binary": "rocketmq-broker-rust",
         "config_path": "/etc/rocketmq/broker.toml",
         "data_path": "/var/lib/rocketmq/broker",
-        "ports": [5557, 8088, 10911, 10912],
+        "ports": [8087, 8088, 10911, 10912],
         "command": ["--configFile", "/etc/rocketmq/broker.toml"],
     },
     "namesrv": {
@@ -41,7 +41,7 @@ EXPECTED_SERVICES: dict[str, dict[str, Any]] = {
         "binary": "rocketmq-namesrv-rust",
         "config_path": "/etc/rocketmq/namesrv.toml",
         "data_path": "/var/lib/rocketmq/namesrv",
-        "ports": [5557, 8088, 9876],
+        "ports": [8087, 8088, 9876],
         "command": ["--configFile", "/etc/rocketmq/namesrv.toml"],
     },
     "controller": {
@@ -50,7 +50,7 @@ EXPECTED_SERVICES: dict[str, dict[str, Any]] = {
         "binary": "rocketmq-controller-rust",
         "config_path": "/etc/rocketmq/controller.toml",
         "data_path": "/var/lib/rocketmq/controller",
-        "ports": [5557, 8088, 60109, 60110],
+        "ports": [8087, 8088, 60109, 60110],
         "command": ["--config-file", "/etc/rocketmq/controller.toml"],
     },
     "proxy": {
@@ -59,7 +59,7 @@ EXPECTED_SERVICES: dict[str, dict[str, Any]] = {
         "binary": "rocketmq-proxy-rust",
         "config_path": "/etc/rocketmq/proxy.toml",
         "data_path": "/var/lib/rocketmq/proxy",
-        "ports": [5557, 8080, 8081, 8088],
+        "ports": [8080, 8081, 8087, 8088],
         "command": ["--config", "/etc/rocketmq/proxy.toml"],
     },
     "mcp": {
