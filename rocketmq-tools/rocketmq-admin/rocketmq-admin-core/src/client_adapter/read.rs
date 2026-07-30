@@ -82,6 +82,7 @@ use crate::core::AdminResult;
 
 pub use rocketmq_client_rust::ClientRuntime;
 pub use rocketmq_client_rust::ClientRuntimeConfig;
+pub use rocketmq_client_rust::TelemetryHandle;
 
 #[derive(Clone)]
 pub struct ReadAdminBuilder {
