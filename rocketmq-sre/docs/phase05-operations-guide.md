@@ -11,12 +11,13 @@
 - R3、raw shell、任意 Admin patch、生产 DR cutover 在 Agent 中不可达。
 - 测试集群 DR 会删除并重建 Kind 中精确命名的 `rocketmq-broker-0` Pod，不可指向生产
   Kubernetes context。
-- Kind Broker 使用临时卷；演练不证明历史消息恢复。
+- Kind Broker 使用 10 GiB `standard` PVC；演练验证单节点 Pod 替换下的历史消息
+  RPO/RTO，但不等同于节点丢失、Kind 集群重建、复制 CommitLog 或生产备份恢复。
 
 ## 2. 准备环境
 
-需要 Docker Desktop、Rust 1.95+、Node.js、PowerShell、Kind 和 `kubectl`。构建输出和临时文件使用
-`G:`：
+需要 Docker Desktop、Rust 1.95+、Node.js、PowerShell、Kind 和 `kubectl`。构建输出和临时文件
+默认使用 `D:`；空间规划需要时可整体切换到 `F:`，不得使用系统盘或 G 盘：
 
 ```powershell
 $env:CARGO_HOME = 'D:\BuildCache\rocketmq-sre-cargo-home'
@@ -32,7 +33,7 @@ cargo metadata --manifest-path .\rocketmq-sre\Cargo.toml --locked --no-deps
 npm --prefix .\rocketmq-sre\ui run check:api
 ```
 
-任何 Cargo 编译前检查 `D:`、`G:` 剩余空间。任一分区低于 15 GiB 时执行：
+任何 Cargo 编译前检查所选 D/F 目标盘的剩余空间。低于 15 GiB 时仅清理该 SRE target：
 
 ```powershell
 cargo clean `
@@ -136,7 +137,10 @@ D:\BuildCache\rocketmq-sre-temp\phase05-enterprise-smoke.json
 - `control_plane_restore.status` 为 `passed`；
 - `test_cluster_dr.status` 为 `passed`；
 - 恢复前后 probe 均为 10/10/10；
-- `message_history_restore_claimed` 和 `secrets_recorded` 都为 `false`。
+- `test_cluster_dr.persistent_storage.retained_across_pod_replacement` 为 `true`；
+- `test_cluster_dr.message_history.expected_messages` 与 `recovered_messages` 都为 `10`；
+- `test_cluster_dr.message_history.rpo_messages` 为 `0`，并记录实际 `rto_seconds`；
+- `message_history_restore_claimed` 为 `true`，`secrets_recorded` 为 `false`。
 
 ## 7. 单独执行恢复
 
@@ -155,9 +159,10 @@ RocketMQ 测试集群 DR：
 .\rocketmq-sre\scripts\phase05-test-cluster-dr.ps1
 ```
 
-脚本先完成 10/10/10 probe，再重建精确的 Kind Broker Pod，重建专用合成 Topic，完成恢复后
-10/10/10 probe，并在 DR Center PostgreSQL 契约中记录 supervised test、checkpoint、Finding 和
-Action Item。
+脚本先确认 Broker PVC/PV 已 Bound，完成 10/10/10 probe，再以独立 run_id 发送 10 条有界
+历史消息。随后删除精确的 Kind Broker Pod，确认替换前后的 PVC/PV UID 不变，消费同一 run_id
+的 10 条历史消息并计算 RPO/RTO，最后完成恢复后 10/10/10 probe。DR Center PostgreSQL
+契约同时记录 supervised test、checkpoint、Finding 和 Action Item。
 
 ## 8. 常见问题
 
@@ -166,7 +171,7 @@ Action Item。
 | Docker PostgreSQL 不健康 | `docker logs rocketmq-rust-ai-sre-phase00-postgres-1`，确认 5432 未被其他进程占用 |
 | Kind context 不匹配 | 设置本指南中的 `KUBECONFIG`；不要绕过 context 检查 |
 | 恢复后首次 probe 超时 | 脚本会进行一次有界重试；仍失败时保留 Job，检查 init container、Broker 和 NameServer 日志 |
-| Cargo 链接失败或磁盘不足 | 检查 D/G 空间并按空间规则清理指定 SRE target |
+| Cargo 链接失败或磁盘不足 | 检查所选 D/F 目标盘并按空间规则清理指定 SRE target |
 | UI 类型不一致 | 运行 `node .\rocketmq-sre\scripts\generate_phase5_openapi.mjs` 和 `npm --prefix .\rocketmq-sre\ui run generate:api` |
 | OpenAPI 路径缺失 | 运行 Control Plane `openapi::tests`，不要手改生成的 TypeScript 类型 |
 
@@ -182,4 +187,4 @@ docker exec rocketmq-rust-ai-sre-phase00-postgres-1 `
   --command "SELECT COUNT(*) FROM pg_database WHERE datname LIKE 'rocketmq_sre_restore_%'"
 ```
 
-最后一条查询必须为 `0`。不要删除用户未提交的文件，也不要把 `G:` 下的运行证据提交为源码。
+最后一条查询必须为 `0`。不要删除用户未提交的文件，也不要把 D/F 临时目录中的运行证据提交为源码。
