@@ -181,9 +181,10 @@ See:
 ## Phase 05 enterprise acceptance
 
 The reproducible Phase 05 acceptance combines a 100-cluster/two-region
-PostgreSQL scale scenario, current/N-1 component compatibility, enterprise
-integration idempotency, regional Fleet release orchestration, an isolated
-Control Plane database restore, and a bounded Kind Broker rebuild exercise:
+PostgreSQL scale scenario, current/N-1 protocol and capability behavior,
+enterprise integration idempotency, regional Fleet release orchestration, an
+isolated Control Plane database restore, and a bounded Kind Broker rebuild
+exercise:
 
 ```powershell
 .\scripts\phase05-enterprise-smoke.ps1 `
@@ -192,9 +193,41 @@ Control Plane database restore, and a bounded Kind Broker rebuild exercise:
 
 The smoke writes a redacted machine-readable result outside the repository.
 The committed validation record states the exact tested boundary: the Kind
-exercise proves component rebuild and live send/consume/query recovery, but
-the development Broker uses `emptyDir`, so it does not claim historical
-message restoration.
+Broker uses a host-local persistent PVC and the exercise proves message-history
+RPO 0 for a Pod replacement. It is not a physical multi-node or multi-region
+disaster-recovery claim. The current/N-1 check exercises persisted runtime
+handshake behavior; an actual N-1 binary run additionally requires a previously
+published SRE/MCP release artifact.
+
+The bounded soak/Chaos runner samples all SRE, RocketMQ, PostgreSQL, and
+observability workloads while replacing the MCP/Connector, Control Plane, and
+Broker Pods and interrupting the OTel Collector:
+
+```powershell
+# Short qualification of the runner and recovery paths.
+.\scripts\phase05-soak-chaos.ps1 `
+  -Mode Run `
+  -DurationSeconds 90 `
+  -SampleIntervalSeconds 5 `
+  -CollectorOutageSeconds 3 `
+  -InjectFaults
+
+# Six-hour release qualification.
+.\scripts\phase05-soak-chaos.ps1 `
+  -Mode Run `
+  -DurationSeconds 21600 `
+  -SampleIntervalSeconds 60 `
+  -CollectorOutageSeconds 30 `
+  -InjectFaults `
+  -FullDurationQualification
+```
+
+The runner refuses an unexpected Kubernetes context, restricts kubeconfig and
+evidence paths to D or F, restores the Collector in `finally`, preserves the
+Broker PVC UID set, and records no configuration or Secret values. A full
+qualification is accepted only when its evidence reports the complete duration,
+all four recovered faults, at least 99% sampled readiness, and an empty
+unresolved-fault set.
 
 ## Kind acceptance
 
