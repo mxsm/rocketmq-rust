@@ -1593,7 +1593,7 @@ fn finding_reason_codes(output: &Value) -> BTreeSet<String> {
         .collect()
 }
 
-async fn ensure_cluster_scope(
+pub(super) async fn ensure_cluster_scope(
     transaction: &mut Transaction<'_, Postgres>,
     tenant_id: TenantId,
     cluster_id: ClusterId,
@@ -1631,7 +1631,7 @@ fn enforce_auth_cluster(auth: &AuthContext, cluster_id: ClusterId) -> Result<(),
     clippy::too_many_arguments,
     reason = "the persisted aggregate fields are explicit at the SQL boundary"
 )]
-async fn insert_investigation(
+pub(super) async fn insert_investigation(
     transaction: &mut Transaction<'_, Postgres>,
     auth: &AuthContext,
     cluster_id: ClusterId,
@@ -1708,7 +1708,7 @@ async fn insert_investigation(
     clippy::too_many_arguments,
     reason = "the persisted aggregate fields are explicit at the SQL boundary"
 )]
-async fn insert_incident(
+pub(super) async fn insert_incident(
     transaction: &mut Transaction<'_, Postgres>,
     auth: &AuthContext,
     id: IncidentId,
@@ -1745,7 +1745,7 @@ async fn insert_incident(
     clippy::too_many_arguments,
     reason = "timeline persistence intentionally records the full audit tuple"
 )]
-async fn append_timeline(
+pub(super) async fn append_timeline(
     transaction: &mut Transaction<'_, Postgres>,
     auth: &AuthContext,
     cluster_id: ClusterId,
@@ -1783,7 +1783,7 @@ async fn append_timeline(
     clippy::too_many_arguments,
     reason = "event persistence intentionally records the full audit tuple"
 )]
-async fn append_workflow_event(
+pub(super) async fn append_workflow_event(
     transaction: &mut Transaction<'_, Postgres>,
     auth: &AuthContext,
     cluster_id: ClusterId,
@@ -2031,7 +2031,7 @@ const fn incident_status_name(value: IncidentStatus) -> &'static str {
     }
 }
 
-fn inspection_template_name(value: InspectionTemplate) -> &'static str {
+pub(super) fn inspection_template_name(value: InspectionTemplate) -> &'static str {
     match value {
         InspectionTemplate::ClusterHealth => "cluster_health",
         InspectionTemplate::Consumer => "consumer",
@@ -2064,7 +2064,7 @@ fn parse_inspection_template(value: &str) -> Result<InspectionTemplate, ControlP
     }
 }
 
-fn inspection_status_name(value: InspectionStatus) -> &'static str {
+pub(super) fn inspection_status_name(value: InspectionStatus) -> &'static str {
     match value {
         InspectionStatus::Scheduled => "scheduled",
         InspectionStatus::Running => "running",
@@ -2142,7 +2142,7 @@ fn bounded_title(question: &str) -> String {
     question.trim().chars().take(512).collect()
 }
 
-fn fingerprint(
+pub(super) fn fingerprint(
     tenant_id: TenantId,
     cluster_id: ClusterId,
     resource: Option<&str>,
