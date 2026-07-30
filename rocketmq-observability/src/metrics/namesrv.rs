@@ -131,7 +131,6 @@ pub fn record_active_broker_count(active_brokers: usize) {
 }
 
 #[inline]
-#[cfg(feature = "otel-metrics")]
 fn duration_millis_u64(duration: Duration) -> u64 {
     duration.as_millis().clamp(0, u128::from(u64::MAX)) as u64
 }
