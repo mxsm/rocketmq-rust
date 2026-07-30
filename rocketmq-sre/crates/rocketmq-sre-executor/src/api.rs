@@ -146,6 +146,18 @@ pub async fn run(config: ExecutorConfig, service_context: ChildServiceContext) -
         config.resource_lock_ttl,
     )
     .with_verifier(verifier);
+    match executor.recover_interrupted_executions(100).await {
+        Ok(summary) => tracing::info!(
+            attempted = summary.attempted,
+            recovered = summary.recovered,
+            blocked = summary.blocked,
+            "bounded interrupted-execution recovery sweep completed"
+        ),
+        Err(error) => tracing::warn!(
+            error = %error,
+            "interrupted-execution recovery sweep is deferred to the authenticated recovery endpoint"
+        ),
+    }
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
     let local_addr = listener.local_addr()?;
     tracing::info!(
