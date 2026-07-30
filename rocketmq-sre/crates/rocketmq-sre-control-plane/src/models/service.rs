@@ -226,7 +226,7 @@ impl ModelGatewayService {
         &self,
         auth: &AuthContext,
     ) -> Result<ModelCapabilitiesStatus, ControlPlaneError> {
-        let profiles = self.configured_profiles(auth).await?;
+        let profiles = self.routable_profiles(auth).await?;
         let statuses = self.repository.model_profile_statuses(auth.tenant_id).await?;
         Ok(ModelCapabilitiesStatus {
             schema_version: "rocketmq-sre.model-capabilities.v1",
@@ -368,7 +368,7 @@ impl ModelGatewayService {
         if !self.config.enabled {
             return Ok(ModelDiagnosisDecision::rules_only());
         }
-        let profiles = self.configured_profiles(auth).await?;
+        let profiles = self.routable_profiles(auth).await?;
         let (evidence_prompt, evidence_class) = summarize_evidence(evidence);
         let (knowledge_prompt, knowledge_class) = self
             .validated_knowledge(auth, cluster_id, incident_title, pack_id)
@@ -914,10 +914,13 @@ impl ModelGatewayService {
         if !self.config.enabled {
             return Ok(Vec::new());
         }
-        let profiles = self
-            .repository
+        self.repository
             .ensure_model_profiles(auth.tenant_id, &self.config.profiles)
-            .await?;
+            .await
+    }
+
+    async fn routable_profiles(&self, auth: &AuthContext) -> Result<Vec<RuntimeModelProfile>, ControlPlaneError> {
+        let profiles = self.configured_profiles(auth).await?;
         let routable_profile_ids = self
             .repository
             .model_profile_lifecycles(auth.tenant_id)
