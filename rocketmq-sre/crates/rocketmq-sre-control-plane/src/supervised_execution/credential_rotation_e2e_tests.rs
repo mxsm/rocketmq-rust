@@ -283,14 +283,13 @@ async fn ensure_kind_cluster(
             rocketmq_version, deployment_mode, owner_name,
             requested_access_profile, effective_access_profile, onboarding_state
          ) VALUES (
-            $1, $2, $3, 'test', 'kind', 'phase03', 'kind',
+            $1, $2, 'rocketmq-rust', 'test', 'kind', 'phase03', 'kind',
             'phase3-credential-e2e', 'read_only', 'read_only', 'ready_read_only'
          )
          ON CONFLICT (id) DO NOTHING",
     )
     .bind(cluster_id.as_uuid())
     .bind(tenant_id.as_uuid())
-    .bind(format!("phase3-credential-kind-{cluster_id}"))
     .execute(&repository.pool)
     .await
     .expect("self-contained Kind cluster fixture");
@@ -299,6 +298,10 @@ async fn ensure_kind_cluster(
         cluster.tenant_id,
         tenant_id.to_string(),
         "the fixed Kind cluster must remain owned by the test tenant"
+    );
+    assert_eq!(
+        cluster.external_cluster_key, "rocketmq-rust",
+        "the fixed Kind cluster must remain compatible with the Connector allowlist"
     );
 }
 
