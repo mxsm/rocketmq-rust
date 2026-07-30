@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::Router;
+use axum::extract::Path;
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::http::StatusCode;
@@ -26,9 +27,11 @@ use axum::routing::post;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::wait_for_signal_result;
 use rocketmq_sre_contracts::CorrelationId;
+use rocketmq_sre_contracts::ExecutionId;
 use rocketmq_sre_contracts::ExecutionRequest;
 use serde::Serialize;
 use subtle::ConstantTimeEq;
+use uuid::Uuid;
 
 use crate::ChangeExecutor;
 use crate::ExecutionJournal;
@@ -87,6 +90,7 @@ pub fn build_router(
         .route("/readyz", get(ready))
         .route("/internal/v1/executor/status", get(status))
         .route("/internal/v1/executor/executions", post(execute))
+        .route("/internal/v1/executor/executions/{id}/recover", post(recover_execution))
         .with_state(AppState {
             executor,
             control_plane_token: control_plane_token.into(),
@@ -218,6 +222,25 @@ async fn execute(
     state.executor.execute(&request).await.map(Json)
 }
 
+async fn recover_execution(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<crate::ExecuteOutcome>, ExecutorError> {
+    authorize(&state, &headers)?;
+    state
+        .executor
+        .recover_execution(parse_execution_id(&id)?)
+        .await
+        .map(Json)
+}
+
+fn parse_execution_id(value: &str) -> Result<ExecutionId, ExecutorError> {
+    Uuid::parse_str(value)
+        .map(ExecutionId::from_uuid)
+        .map_err(|_| ExecutorError::InvalidRequest)
+}
+
 fn authorize(state: &AppState, headers: &HeaderMap) -> Result<(), ExecutorError> {
     let bearer = headers
         .get(axum::http::header::AUTHORIZATION)
@@ -288,6 +311,7 @@ impl IntoResponse for ExecutorError {
 #[cfg(test)]
 mod tests {
     use super::has_spiffe_identity;
+    use super::parse_execution_id;
 
     #[test]
     fn forwarded_identity_requires_an_exact_spiffe_uri() {
@@ -299,5 +323,10 @@ mod tests {
             "URI=spiffe://rocketmq-sre/control-plane-evil",
             "spiffe://rocketmq-sre/control-plane"
         ));
+    }
+
+    #[test]
+    fn recovery_path_rejects_invalid_execution_ids() {
+        assert!(parse_execution_id("not-an-execution-id").is_err());
     }
 }
