@@ -33,6 +33,7 @@ use super::AutonomyOperationsService;
 use super::operations::AutonomyOperationalReportQuery;
 use super::operations::AutonomyOutcomeListQuery;
 use super::operations::AutonomyReportPeriod;
+use super::operations::OperationsAnalyticsQuery;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
 
@@ -100,6 +101,63 @@ async fn postgres_outcomes_cost_and_operational_report_are_scoped_and_idempotent
     assert_eq!(report.action_breakdown.len(), 1);
     assert_eq!(report.incident_costs.len(), 1);
     assert!(report.budget_alerts.is_empty());
+
+    let analytics = service
+        .analytics(
+            &auth,
+            &OperationsAnalyticsQuery {
+                period: AutonomyReportPeriod::Monthly,
+                anchor: Some(fixture.now),
+                cluster_id: Some(fixture.cluster_id),
+                scenario: Some("consumer_lag".to_owned()),
+                provider_family: Some("deepseek".to_owned()),
+                model_family: Some("deepseek".to_owned()),
+                action_id: Some(ExecutionAction::ObservabilityLoggerLevelTtl.id().to_owned()),
+            },
+        )
+        .await
+        .expect("cross-dimensional operations analytics");
+    assert_eq!(analytics.tenant_id, fixture.tenant_id);
+    assert_eq!(analytics.filters.cluster_ids, vec![fixture.cluster_id]);
+    assert_eq!(analytics.filters.scenario.as_deref(), Some("consumer_lag"));
+    assert_eq!(analytics.incidents.total, 1);
+    assert_eq!(analytics.incidents.diagnosed, 1);
+    assert_eq!(analytics.incidents.terminal, 1);
+    assert_eq!(analytics.incidents.mean_time_to_detect_seconds, Some(300.0));
+    assert_eq!(analytics.incidents.mean_time_to_resolve_seconds, Some(1_080.0));
+    assert_eq!(analytics.model_usage.calls, 1);
+    assert_eq!(analytics.model_usage.input_tokens, 80);
+    assert_eq!(analytics.model_usage.output_tokens, 20);
+    assert_eq!(analytics.model_usage.cost_micros, 4_000);
+    assert_eq!(analytics.recommendation_feedback.adopted, 1);
+    assert_eq!(analytics.executions.total, 1);
+    assert_eq!(analytics.executions.succeeded, 1);
+    assert_eq!(analytics.executions.success_basis_points, Some(10_000));
+    assert_eq!(analytics.savings.successful_autonomous_actions, 1);
+    assert_eq!(analytics.savings.estimated_minutes_saved, 15);
+    assert!(analytics.warnings.is_empty());
+
+    let empty_scenario = service
+        .analytics(
+            &auth,
+            &OperationsAnalyticsQuery {
+                period: AutonomyReportPeriod::Monthly,
+                anchor: Some(fixture.now),
+                cluster_id: Some(fixture.cluster_id),
+                scenario: Some("broker_unavailable".to_owned()),
+                provider_family: Some("deepseek".to_owned()),
+                model_family: Some("deepseek".to_owned()),
+                action_id: Some(ExecutionAction::ObservabilityLoggerLevelTtl.id().to_owned()),
+            },
+        )
+        .await
+        .expect("empty dimensions are explicit");
+    assert_eq!(empty_scenario.incidents.total, 0);
+    assert_eq!(empty_scenario.model_usage.calls, 0);
+    assert_eq!(empty_scenario.executions.total, 0);
+    assert_eq!(empty_scenario.executions.success_basis_points, None);
+    assert_eq!(empty_scenario.savings.estimated_minutes_saved, 0);
+    assert_eq!(empty_scenario.warnings.len(), 4);
 
     let mut completed = report;
     completed.window.start = fixture.now - Duration::days(8);
