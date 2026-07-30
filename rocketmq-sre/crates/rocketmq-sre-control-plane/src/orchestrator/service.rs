@@ -192,7 +192,7 @@ impl OrchestratorService {
         let report = self.evaluate(pack_id, &evidence.items, correlation)?;
         let evidence_ids = validate_report_citations(&report, &evidence.items)?;
         let next_status = terminal_status(&report);
-        let partial = evidence.partial
+        let partial = !required_evidence_is_complete(pack_id, &evidence.items)?
             || !report.missing_required_evidence.is_empty()
             || matches!(
                 report.status,
@@ -558,6 +558,22 @@ fn has_complete_evidence(
     })
 }
 
+fn required_evidence_is_complete(
+    pack_id: &str,
+    evidence: &[rocketmq_sre_contracts::EvidenceSnapshot],
+) -> Result<bool, ControlPlaneError> {
+    let registry = full_registry().map_err(|error| {
+        ControlPlaneError::configuration(format!("built-in diagnostic registry is invalid: {error}"))
+    })?;
+    let pack = registry
+        .resolve(pack_id)
+        .ok_or_else(|| ControlPlaneError::configuration(format!("diagnostic pack `{pack_id}` is not registered")))?;
+    Ok(pack
+        .required_evidence()
+        .iter()
+        .all(|requirement| has_complete_evidence(evidence, requirement, pack.max_evidence_freshness_seconds())))
+}
+
 fn requirement_resource(requirement: EvidenceRequirement, incident: &IncidentView) -> String {
     let context = incident
         .investigation
@@ -850,6 +866,21 @@ mod tests {
         assert!(!has_complete_evidence(&[partial], &requirement, 300));
         assert!(!has_complete_evidence(&[stale], &requirement, 300));
         assert!(has_complete_evidence(&[complete], &requirement, 300));
+    }
+
+    #[test]
+    fn optional_unavailable_evidence_does_not_mark_complete_required_evidence_partial() {
+        let registry = full_registry().expect("built-in registry");
+        let pack = registry.resolve("consumer-lag.v2").expect("consumer lag pack");
+        let required = pack.required_evidence()[0];
+        let optional = pack.optional_evidence()[0];
+        let complete = evidence_for_requirement(required, 0, false);
+        let unavailable_optional = evidence_for_requirement(optional, 0, true);
+
+        assert!(
+            required_evidence_is_complete("consumer-lag.v2", &[complete, unavailable_optional])
+                .expect("required evidence completeness")
+        );
     }
 
     #[test]
