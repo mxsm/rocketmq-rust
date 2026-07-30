@@ -27,6 +27,7 @@ Set-StrictMode -Version Latest
 $scriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
 $sreRoot = [IO.Path]::GetFullPath((Join-Path $scriptDirectory '..'))
 $manifestPath = Join-Path $sreRoot 'Cargo.toml'
+$bootstrapManifest = Join-Path $sreRoot 'deploy\kind\phase03-wave-admin-bootstrap-job.yaml'
 
 function Assert-NonSystemPath([string]$Path, [string]$Description) {
     $fullPath = [IO.Path]::GetFullPath($Path)
@@ -188,6 +189,36 @@ $postgresForward = $null
 $executorForward = $null
 $agentForward = $null
 try {
+    & kubectl `
+        --kubeconfig $resolvedKubeconfig `
+        -n rocketmq-system `
+        delete job rocketmq-sre-phase03-wave-admin-bootstrap `
+        --ignore-not-found=true `
+        --wait=true
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Unable to clear the previous bounded wave Admin bootstrap Job.'
+    }
+    & kubectl --kubeconfig $resolvedKubeconfig apply -f $bootstrapManifest
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Unable to create the bounded wave Admin bootstrap Job.'
+    }
+    & kubectl `
+        --kubeconfig $resolvedKubeconfig `
+        -n rocketmq-system `
+        wait `
+        --for=condition=complete `
+        job/rocketmq-sre-phase03-wave-admin-bootstrap `
+        --timeout=180s
+    if ($LASTEXITCODE -ne 0) {
+        & kubectl `
+            --kubeconfig $resolvedKubeconfig `
+            -n rocketmq-system `
+            logs job/rocketmq-sre-phase03-wave-admin-bootstrap `
+            --all-containers=true `
+            --tail=80
+        throw 'The bounded wave Admin bootstrap Job did not complete.'
+    }
+
     $postgresForward = Start-PortForward `
         'rocketmq-sre' 'service/postgres' $PostgresLocalPort 5432 'postgres'
     $executorForward = Start-PortForward `
@@ -240,6 +271,26 @@ try {
     Write-Host (
         'PHASE03_WAVE1_R1_SUPERVISED_E2E_OK ' +
         'actions=observability.logger_level_ttl.v1,proxy.scale_out_one.v1 ' +
+        'approval=independent executor=true agent=true verification=true audit=correlated'
+    )
+
+    & cargo +1.95.0 test `
+        --manifest-path $manifestPath `
+        --locked `
+        -p rocketmq-sre-control-plane `
+        supervised_execution::wave_admin_actions_e2e_tests::real_kind_wave_admin_actions_share_r2_critic_approval_and_verification `
+        -- `
+        --ignored `
+        --exact `
+        --nocapture
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Wave Admin R2 formal supervised E2E failed.'
+    }
+
+    Write-Host (
+        'PHASE03_WAVE_ADMIN_R2_SUPERVISED_E2E_OK ' +
+        'actions=broker.config.patch_allowlisted.v1,topic.config.patch_allowlisted.v1,' +
+        'subscription_group.patch_allowlisted.v1 critic=kimi-moonshot ' +
         'approval=independent executor=true agent=true verification=true audit=correlated'
     )
 }
