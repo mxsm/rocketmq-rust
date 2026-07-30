@@ -177,14 +177,17 @@ where
                 .logger_level_state(&parameters.component, broker_addr, &parameters.logger)
                 .await?;
             let reconciliation_state = match operation_id.as_deref() {
-                Some(expected)
-                    if state.active_operation_id.as_deref() == Some(expected)
-                        || state.last_completed_operation_id.as_deref() == Some(expected) =>
-                {
+                Some(expected) if state.active_operation_id.as_deref() == Some(expected) => {
                     ReconcileEffectState::Applied
                 }
                 Some(_) if state.active_operation_id.is_none() && state.level != parameters.level => {
                     ReconcileEffectState::NotApplied
+                }
+                Some(expected)
+                    if state.last_completed_operation_id.as_deref() == Some(expected)
+                        && state.level == parameters.level =>
+                {
+                    ReconcileEffectState::Applied
                 }
                 _ => ReconcileEffectState::Unknown,
             };
