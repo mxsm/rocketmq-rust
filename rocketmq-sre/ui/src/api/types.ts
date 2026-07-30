@@ -39,6 +39,8 @@ export type ShiftHandoffSummary =
 export type OperationsReport = ApiSchemas["OperationsReport"];
 export type OperationsReportWindow =
   ApiSchemas["OperationsReport__OperationsReportWindow"];
+export type OperationsAnalyticsReport =
+  ApiSchemas["OperationsAnalyticsReport"];
 export type HealthStatus =
   ApiSchemas["ClusterHealthReport__HealthStatus"];
 export type HealthDataQuality =
@@ -712,6 +714,16 @@ export interface AutonomyOperationalReportQuery {
   period: AutonomyReportPeriod;
   anchor?: string;
   clusterId?: string;
+}
+
+export interface OperationsAnalyticsQuery {
+  period: AutonomyReportPeriod;
+  anchor?: string;
+  clusterId?: string;
+  scenario?: string;
+  providerFamily?: string;
+  modelFamily?: string;
+  actionId?: string;
 }
 
 export interface AutonomyReportWindow {
