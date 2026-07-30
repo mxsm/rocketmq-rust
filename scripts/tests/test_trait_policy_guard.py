@@ -59,6 +59,32 @@ mod tests {
         self.assertEqual("remove-in-P2.4", entries[0]["decision"])
         self.assertEqual("client", entries[0]["owner"])
 
+    def test_identity_is_stable_across_line_moves(self) -> None:
+        entry = {
+            "kind": "async_trait",
+            "path": "crate/src/lib.rs",
+            "line": 10,
+            "item": "trait Service",
+            "owner": "crate",
+            "decision": "migrate-on-touch",
+        }
+        moved = dict(entry, line=200)
+        self.assertEqual(guard.identity(entry), guard.identity(moved))
+
+    def test_duplicate_identity_growth_is_rejected(self) -> None:
+        entry = {
+            "kind": "async_trait",
+            "path": "crate/src/lib.rs",
+            "line": 10,
+            "item": "trait Service",
+            "owner": "crate",
+            "decision": "migrate-on-touch",
+        }
+        duplicate = dict(entry, line=200)
+        additions, removed = guard.compare_entries([entry], [entry, duplicate])
+        self.assertEqual([duplicate], additions)
+        self.assertEqual(0, removed)
+
     def test_live_inventory_does_not_grow(self) -> None:
         result = subprocess.run(
             [sys.executable, str(SCRIPTS / "trait_policy_guard.py")],

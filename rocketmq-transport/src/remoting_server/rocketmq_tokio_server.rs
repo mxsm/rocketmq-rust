@@ -634,13 +634,15 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> RocketMQServer<RP> {
             Some(notify_conn_disconnect),
             rpc_hooks,
             channel_event_listener,
-            tls_runtime,
-            task_group,
-            self.transport_security.clone(),
-            self.transport_principal.clone(),
-            self.admission.clone(),
-            command_interceptor,
-            self.telemetry.clone(),
+            RemotingServerRunCapabilities {
+                tls_runtime,
+                task_group,
+                transport_security: self.transport_security.clone(),
+                transport_principal: self.transport_principal.clone(),
+                admission: self.admission.clone(),
+                command_interceptor,
+                telemetry: self.telemetry.clone(),
+            },
         )
         .await
     }
@@ -753,15 +755,27 @@ pub async fn run_with_report_with_service_context_and_telemetry<RP: RequestProce
         conn_disconnect_notify,
         rpc_hooks,
         channel_event_listener,
-        tls_runtime,
-        remoting_context.task_group().clone(),
-        None,
-        None,
-        None,
-        Arc::new(()),
-        telemetry,
+        RemotingServerRunCapabilities {
+            tls_runtime,
+            task_group: remoting_context.task_group().clone(),
+            transport_security: None,
+            transport_principal: None,
+            admission: None,
+            command_interceptor: Arc::new(()),
+            telemetry,
+        },
     )
     .await
+}
+
+struct RemotingServerRunCapabilities {
+    tls_runtime: TlsServerRuntime,
+    task_group: TaskGroup,
+    transport_security: Option<Arc<TransportSecurity>>,
+    transport_principal: Option<Principal>,
+    admission: Option<Arc<AdmissionController>>,
+    command_interceptor: Arc<dyn SessionCommandInterceptor>,
+    telemetry: TransportTelemetry,
 }
 
 async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clone>(
@@ -771,14 +785,17 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
     conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
     rpc_hooks: Vec<Arc<dyn RPCHook>>,
     channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
-    tls_runtime: TlsServerRuntime,
-    task_group: TaskGroup,
-    transport_security: Option<Arc<TransportSecurity>>,
-    transport_principal: Option<Principal>,
-    admission: Option<Arc<AdmissionController>>,
-    command_interceptor: Arc<dyn SessionCommandInterceptor>,
-    telemetry: TransportTelemetry,
+    capabilities: RemotingServerRunCapabilities,
 ) -> Option<ShutdownReport> {
+    let RemotingServerRunCapabilities {
+        tls_runtime,
+        task_group,
+        transport_security,
+        transport_principal,
+        admission,
+        command_interceptor,
+        telemetry,
+    } = capabilities;
     let (notify_shutdown, _) = broadcast::channel(1);
     let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::channel(1);
     // Initialize the connection listener state
@@ -1699,13 +1716,15 @@ mod tests {
             None,
             Vec::new(),
             None,
-            tls_runtime,
-            service.task_group().child("remoting-server"),
-            None,
-            None,
-            None,
-            Arc::new(()),
-            TransportTelemetry::noop(),
+            RemotingServerRunCapabilities {
+                tls_runtime,
+                task_group: service.task_group().child("remoting-server"),
+                transport_security: None,
+                transport_principal: None,
+                admission: None,
+                command_interceptor: Arc::new(()),
+                telemetry: TransportTelemetry::noop(),
+            },
         );
         let server_task = tokio::spawn(report);
 

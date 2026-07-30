@@ -273,17 +273,34 @@ pub enum ServiceLifecycle {
 }
 
 impl<T: ServiceTask + 'static> ServiceManager<T> {
-    /// Create new service thread implementation
-    pub fn new(service: T) -> Self {
+    /// Creates a service manager that discovers the current runtime when started.
+    ///
+    /// This compatibility constructor exists for callers that have not yet
+    /// received an injected [`TaskGroup`]. New production code must use
+    /// [`Self::new_with_task_group`].
+    pub fn new_legacy_compatibility(service: T) -> Self {
         Self::new_with_optional_task_group(Arc::new(service), None)
+    }
+
+    /// Create new service thread implementation.
+    #[deprecated(note = "use ServiceManager::new_with_task_group; the ambient-runtime adapter is removed in 2.0.0")]
+    pub fn new(service: T) -> Self {
+        Self::new_legacy_compatibility(service)
     }
 
     pub fn new_with_task_group(service: T, parent_task_group: TaskGroup) -> Self {
         Self::new_with_optional_task_group(Arc::new(service), Some(parent_task_group))
     }
 
-    pub fn new_arc(service: Arc<T>) -> Self {
+    /// Creates an Arc-backed compatibility manager that discovers the current
+    /// runtime when started.
+    pub fn new_arc_legacy_compatibility(service: Arc<T>) -> Self {
         Self::new_with_optional_task_group(service, None)
+    }
+
+    #[deprecated(note = "use ServiceManager::new_arc_with_task_group; the ambient-runtime adapter is removed in 2.0.0")]
+    pub fn new_arc(service: Arc<T>) -> Self {
+        Self::new_arc_legacy_compatibility(service)
     }
 
     pub fn new_arc_with_task_group(service: Arc<T>, parent_task_group: TaskGroup) -> Self {
@@ -608,7 +625,7 @@ impl ServiceTask for LifecycleProbeService {
 
 #[doc(hidden)]
 pub async fn run_service_manager_lifecycle_probe() -> ServiceManagerLifecycleProbe {
-    let manager = ServiceManager::new(LifecycleProbeService);
+    let manager = ServiceManager::new_legacy_compatibility(LifecycleProbeService);
     let start_result = manager.start().await;
     let task_count_before_shutdown = manager.task_count().await;
     let task_group_count_before_shutdown = task_count_before_shutdown;
@@ -898,7 +915,7 @@ mod tests {
     #[tokio::test]
     async fn shutdown_timeout_aborts_service_task() {
         let dropped = Arc::new(AtomicBool::new(false));
-        let service_thread = ServiceManager::new(PendingService {
+        let service_thread = ServiceManager::new_legacy_compatibility(PendingService {
             dropped: Arc::clone(&dropped),
         });
 

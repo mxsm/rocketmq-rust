@@ -12,16 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use rocketmq_model::common::message::message_queue_assignment::MessageQueueAssignment;
 use rocketmq_model::result::SendResult;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 
 use crate::context::ProxyContext;
 use crate::context::ResolvedEndpoint;
+use crate::contracts::ProxyServiceFuture;
 use crate::contracts::ProxyTopicMessageType;
 use crate::contracts::ServiceManager;
 use crate::contracts::SubscriptionGroupMetadata;
@@ -294,7 +295,6 @@ pub struct EndTransactionPlan {
     pub status: ProxyPayloadStatus,
 }
 
-#[async_trait]
 pub trait MessagingProcessor: Send + Sync {
     /// Returns the opaque producer group selected by the active transaction
     /// adapter, if transactional sends are supported.
@@ -302,59 +302,285 @@ pub trait MessagingProcessor: Send + Sync {
         None
     }
 
-    async fn query_route(&self, context: &ProxyContext, request: QueryRouteRequest) -> ProxyResult<QueryRoutePlan>;
+    fn query_route(
+        &self,
+        context: &ProxyContext,
+        request: QueryRouteRequest,
+    ) -> impl Future<Output = ProxyResult<QueryRoutePlan>> + Send;
 
-    async fn query_assignment(
+    fn query_assignment(
         &self,
         context: &ProxyContext,
         request: QueryAssignmentRequest,
-    ) -> ProxyResult<QueryAssignmentPlan>;
+    ) -> impl Future<Output = ProxyResult<QueryAssignmentPlan>> + Send;
 
-    async fn send_message(&self, context: &ProxyContext, request: SendMessageRequest) -> ProxyResult<SendMessagePlan>;
+    fn send_message(
+        &self,
+        context: &ProxyContext,
+        request: SendMessageRequest,
+    ) -> impl Future<Output = ProxyResult<SendMessagePlan>> + Send;
 
-    async fn recall_message(
+    fn recall_message(
         &self,
         context: &ProxyContext,
         request: RecallMessageRequest,
-    ) -> ProxyResult<RecallMessagePlan>;
+    ) -> impl Future<Output = ProxyResult<RecallMessagePlan>> + Send;
 
-    async fn receive_message(
+    fn receive_message(
         &self,
         context: &ProxyContext,
         request: ReceiveMessageRequest,
-    ) -> ProxyResult<ReceiveMessagePlan>;
+    ) -> impl Future<Output = ProxyResult<ReceiveMessagePlan>> + Send;
 
-    async fn pull_message(&self, context: &ProxyContext, request: PullMessageRequest) -> ProxyResult<PullMessagePlan>;
+    fn pull_message(
+        &self,
+        context: &ProxyContext,
+        request: PullMessageRequest,
+    ) -> impl Future<Output = ProxyResult<PullMessagePlan>> + Send;
 
-    async fn ack_message(&self, context: &ProxyContext, request: AckMessageRequest) -> ProxyResult<AckMessagePlan>;
+    fn ack_message(
+        &self,
+        context: &ProxyContext,
+        request: AckMessageRequest,
+    ) -> impl Future<Output = ProxyResult<AckMessagePlan>> + Send;
 
-    async fn forward_message_to_dead_letter_queue(
+    fn forward_message_to_dead_letter_queue(
         &self,
         context: &ProxyContext,
         request: ForwardMessageToDeadLetterQueueRequest,
-    ) -> ProxyResult<ForwardMessageToDeadLetterQueuePlan>;
+    ) -> impl Future<Output = ProxyResult<ForwardMessageToDeadLetterQueuePlan>> + Send;
 
-    async fn change_invisible_duration(
+    fn change_invisible_duration(
         &self,
         context: &ProxyContext,
         request: ChangeInvisibleDurationRequest,
-    ) -> ProxyResult<ChangeInvisibleDurationPlan>;
+    ) -> impl Future<Output = ProxyResult<ChangeInvisibleDurationPlan>> + Send;
 
-    async fn update_offset(
+    fn update_offset(
         &self,
         context: &ProxyContext,
         request: UpdateOffsetRequest,
-    ) -> ProxyResult<UpdateOffsetPlan>;
+    ) -> impl Future<Output = ProxyResult<UpdateOffsetPlan>> + Send;
 
-    async fn get_offset(&self, context: &ProxyContext, request: GetOffsetRequest) -> ProxyResult<GetOffsetPlan>;
+    fn get_offset(
+        &self,
+        context: &ProxyContext,
+        request: GetOffsetRequest,
+    ) -> impl Future<Output = ProxyResult<GetOffsetPlan>> + Send;
 
-    async fn query_offset(&self, context: &ProxyContext, request: QueryOffsetRequest) -> ProxyResult<QueryOffsetPlan>;
+    fn query_offset(
+        &self,
+        context: &ProxyContext,
+        request: QueryOffsetRequest,
+    ) -> impl Future<Output = ProxyResult<QueryOffsetPlan>> + Send;
 
-    async fn end_transaction(
+    fn end_transaction(
         &self,
         context: &ProxyContext,
         request: EndTransactionRequest,
-    ) -> ProxyResult<EndTransactionPlan>;
+    ) -> impl Future<Output = ProxyResult<EndTransactionPlan>> + Send;
+}
+
+/// Object-safe boundary for dynamically selected Proxy processor plugins.
+///
+/// Static gRPC and remoting paths use [`MessagingProcessor`] directly and do
+/// not pay for boxed futures. Only callers that explicitly select a dynamic
+/// plugin use this adapter.
+pub trait MessagingProcessorPlugin: Send + Sync {
+    fn transaction_producer_group(&self, context: &ProxyContext) -> Option<String>;
+
+    fn query_route<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: QueryRouteRequest,
+    ) -> ProxyServiceFuture<'a, QueryRoutePlan>;
+
+    fn query_assignment<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: QueryAssignmentRequest,
+    ) -> ProxyServiceFuture<'a, QueryAssignmentPlan>;
+
+    fn send_message<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: SendMessageRequest,
+    ) -> ProxyServiceFuture<'a, SendMessagePlan>;
+
+    fn recall_message<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: RecallMessageRequest,
+    ) -> ProxyServiceFuture<'a, RecallMessagePlan>;
+
+    fn receive_message<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: ReceiveMessageRequest,
+    ) -> ProxyServiceFuture<'a, ReceiveMessagePlan>;
+
+    fn pull_message<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: PullMessageRequest,
+    ) -> ProxyServiceFuture<'a, PullMessagePlan>;
+
+    fn ack_message<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: AckMessageRequest,
+    ) -> ProxyServiceFuture<'a, AckMessagePlan>;
+
+    fn forward_message_to_dead_letter_queue<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: ForwardMessageToDeadLetterQueueRequest,
+    ) -> ProxyServiceFuture<'a, ForwardMessageToDeadLetterQueuePlan>;
+
+    fn change_invisible_duration<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: ChangeInvisibleDurationRequest,
+    ) -> ProxyServiceFuture<'a, ChangeInvisibleDurationPlan>;
+
+    fn update_offset<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: UpdateOffsetRequest,
+    ) -> ProxyServiceFuture<'a, UpdateOffsetPlan>;
+
+    fn get_offset<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: GetOffsetRequest,
+    ) -> ProxyServiceFuture<'a, GetOffsetPlan>;
+
+    fn query_offset<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: QueryOffsetRequest,
+    ) -> ProxyServiceFuture<'a, QueryOffsetPlan>;
+
+    fn end_transaction<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: EndTransactionRequest,
+    ) -> ProxyServiceFuture<'a, EndTransactionPlan>;
+}
+
+impl<T> MessagingProcessorPlugin for T
+where
+    T: MessagingProcessor + 'static,
+{
+    fn transaction_producer_group(&self, context: &ProxyContext) -> Option<String> {
+        MessagingProcessor::transaction_producer_group(self, context)
+    }
+
+    fn query_route<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: QueryRouteRequest,
+    ) -> ProxyServiceFuture<'a, QueryRoutePlan> {
+        Box::pin(MessagingProcessor::query_route(self, context, request))
+    }
+
+    fn query_assignment<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: QueryAssignmentRequest,
+    ) -> ProxyServiceFuture<'a, QueryAssignmentPlan> {
+        Box::pin(MessagingProcessor::query_assignment(self, context, request))
+    }
+
+    fn send_message<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: SendMessageRequest,
+    ) -> ProxyServiceFuture<'a, SendMessagePlan> {
+        Box::pin(MessagingProcessor::send_message(self, context, request))
+    }
+
+    fn recall_message<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: RecallMessageRequest,
+    ) -> ProxyServiceFuture<'a, RecallMessagePlan> {
+        Box::pin(MessagingProcessor::recall_message(self, context, request))
+    }
+
+    fn receive_message<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: ReceiveMessageRequest,
+    ) -> ProxyServiceFuture<'a, ReceiveMessagePlan> {
+        Box::pin(MessagingProcessor::receive_message(self, context, request))
+    }
+
+    fn pull_message<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: PullMessageRequest,
+    ) -> ProxyServiceFuture<'a, PullMessagePlan> {
+        Box::pin(MessagingProcessor::pull_message(self, context, request))
+    }
+
+    fn ack_message<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: AckMessageRequest,
+    ) -> ProxyServiceFuture<'a, AckMessagePlan> {
+        Box::pin(MessagingProcessor::ack_message(self, context, request))
+    }
+
+    fn forward_message_to_dead_letter_queue<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: ForwardMessageToDeadLetterQueueRequest,
+    ) -> ProxyServiceFuture<'a, ForwardMessageToDeadLetterQueuePlan> {
+        Box::pin(MessagingProcessor::forward_message_to_dead_letter_queue(
+            self, context, request,
+        ))
+    }
+
+    fn change_invisible_duration<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: ChangeInvisibleDurationRequest,
+    ) -> ProxyServiceFuture<'a, ChangeInvisibleDurationPlan> {
+        Box::pin(MessagingProcessor::change_invisible_duration(self, context, request))
+    }
+
+    fn update_offset<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: UpdateOffsetRequest,
+    ) -> ProxyServiceFuture<'a, UpdateOffsetPlan> {
+        Box::pin(MessagingProcessor::update_offset(self, context, request))
+    }
+
+    fn get_offset<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: GetOffsetRequest,
+    ) -> ProxyServiceFuture<'a, GetOffsetPlan> {
+        Box::pin(MessagingProcessor::get_offset(self, context, request))
+    }
+
+    fn query_offset<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: QueryOffsetRequest,
+    ) -> ProxyServiceFuture<'a, QueryOffsetPlan> {
+        Box::pin(MessagingProcessor::query_offset(self, context, request))
+    }
+
+    fn end_transaction<'a>(
+        &'a self,
+        context: &'a ProxyContext,
+        request: EndTransactionRequest,
+    ) -> ProxyServiceFuture<'a, EndTransactionPlan> {
+        Box::pin(MessagingProcessor::end_transaction(self, context, request))
+    }
 }
 
 #[derive(Clone)]
@@ -372,7 +598,6 @@ impl DefaultMessagingProcessor {
     }
 }
 
-#[async_trait]
 impl MessagingProcessor for DefaultMessagingProcessor {
     fn transaction_producer_group(&self, context: &ProxyContext) -> Option<String> {
         self.service_manager
@@ -503,5 +728,17 @@ impl MessagingProcessor for DefaultMessagingProcessor {
     ) -> ProxyResult<EndTransactionPlan> {
         let transaction_service = self.service_manager.transaction_service();
         transaction_service.end_transaction(context, &request).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MessagingProcessorPlugin;
+
+    #[test]
+    fn dynamic_processor_plugin_boundary_remains_object_safe() {
+        fn accepts_plugin(_: Option<&dyn MessagingProcessorPlugin>) {}
+
+        accepts_plugin(None);
     }
 }

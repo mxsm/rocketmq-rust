@@ -12,9 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(dead_code)]
-#![allow(unused_variables)]
-#![allow(clippy::result_large_err)]
+#![allow(
+    dead_code,
+    reason = "legacy private Client items remain under the non-growth lint debt registry"
+)]
+#![allow(
+    clippy::result_large_err,
+    reason = "Client error payload migration remains under the non-growth lint debt registry"
+)]
 #![recursion_limit = "256"]
 
 extern crate core;
@@ -79,7 +84,9 @@ mod implementation;
 mod latency;
 mod legacy;
 mod lock;
+pub mod prelude;
 mod producer;
+mod public_api;
 mod runtime;
 mod stat;
 mod trace;
@@ -89,7 +96,6 @@ mod utils;
 pub use crate::admin::DefaultMQAdminExt;
 pub use crate::admin::DefaultMQAdminExtImpl;
 pub use crate::admin::MQAdminExt;
-pub use crate::base::client_config::ClientConfig;
 pub use crate::base::query_result::QueryResult;
 pub use crate::base::MQAdmin;
 pub use crate::base::MqClientAdmin;
@@ -887,9 +893,7 @@ pub use crate::consumer::ConsumeOrderlyContext;
 pub use crate::consumer::ConsumeOrderlyStatus;
 pub use crate::consumer::ConsumerTuningProfile;
 pub use crate::consumer::ControllableOffset;
-pub use crate::consumer::DefaultLitePullConsumer;
 pub use crate::consumer::DefaultLitePullConsumerBuilder;
-pub use crate::consumer::DefaultMQPushConsumer;
 pub use crate::consumer::DefaultMQPushConsumerBuilder;
 pub use crate::consumer::HashFunction;
 pub use crate::consumer::LitePullConsumer;
@@ -1026,14 +1030,10 @@ pub use crate::producer::send_callback::ArcSendCallback;
 pub use crate::producer::transaction_listener::ArcTransactionListener;
 pub use crate::producer::BatchSendCallbackRequest;
 pub use crate::producer::BatchSendRequest;
-pub use crate::producer::DefaultMQProducer;
 pub use crate::producer::JavaHashCode;
 pub use crate::producer::LocalTransactionState;
-pub use crate::producer::MQProducer;
-pub use crate::producer::MessageProducer;
 pub use crate::producer::MessageQueueSelector;
 pub use crate::producer::MessageQueueSelectorFn;
-pub use crate::producer::ProducerConfig;
 pub use crate::producer::ProducerLifecycle;
 pub use crate::producer::ProducerQuery;
 pub use crate::producer::ProducerQueryRequest;
@@ -1065,6 +1065,7 @@ pub use crate::producer::TransactionMQProducerBuilder;
 pub use crate::producer::TransactionSendRequest;
 pub use crate::producer::TransactionSendResult;
 pub use crate::producer::TransactionalProducer;
+pub use crate::public_api::*;
 #[doc(hidden)]
 pub use crate::trace::async_trace_dispatcher::run_trace_queue_depth_accounting_probe;
 #[doc(hidden)]

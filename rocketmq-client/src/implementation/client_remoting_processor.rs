@@ -155,7 +155,7 @@ impl ClientRemotingProcessor {
 
     async fn receive_reply_message(
         &mut self,
-        ctx: ConnectionHandlerContext,
+        _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let receive_time = current_millis();
@@ -269,7 +269,7 @@ impl ClientRemotingProcessor {
     fn notify_consumer_ids_changed(
         &mut self,
         channel: Channel,
-        ctx: ConnectionHandlerContext,
+        _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = match request.decode_command_custom_header::<NotifyConsumerIdsChangedRequestHeader>() {
@@ -419,7 +419,7 @@ impl ClientRemotingProcessor {
     async fn check_transaction_state(
         &mut self,
         channel: Channel,
-        ctx: ConnectionHandlerContext,
+        _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = match request.decode_command_custom_header::<CheckTransactionStateRequestHeader>() {

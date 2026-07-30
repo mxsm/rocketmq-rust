@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import json
 import os
 import re
@@ -182,7 +183,27 @@ def current_inventory(root: Path = ROOT) -> list[dict[str, Any]]:
 
 
 def identity(entry: dict[str, Any]) -> tuple[object, ...]:
-    return tuple(entry[key] for key in ("kind", "path", "line", "item", "owner", "decision"))
+    # Line numbers are report metadata, not debt identity: moving an unchanged
+    # trait into a narrower module boundary must not manufacture new debt.
+    return tuple(entry[key] for key in ("kind", "path", "item", "owner", "decision"))
+
+
+def compare_entries(
+    baseline: list[dict[str, Any]],
+    current: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    baseline_counts = Counter(identity(entry) for entry in baseline)
+    remaining = baseline_counts.copy()
+    additions: list[dict[str, Any]] = []
+    for entry in current:
+        entry_identity = identity(entry)
+        if remaining[entry_identity] > 0:
+            remaining[entry_identity] -= 1
+        else:
+            additions.append(entry)
+    current_counts = Counter(identity(entry) for entry in current)
+    removed = sum((baseline_counts - current_counts).values())
+    return additions, removed
 
 
 def load_baseline() -> dict[str, Any]:
@@ -224,8 +245,7 @@ def main() -> int:
             print(f"TRAIT_POLICY_BASELINE_WRITTEN entries={len(current)}")
             return 0
         baseline = load_baseline()["entries"]
-        approved = {identity(entry) for entry in baseline}
-        additions = [entry for entry in current if identity(entry) not in approved]
+        additions, removed = compare_entries(baseline, current)
         for entry in additions:
             print(
                 "TRAIT_POLICY_FINDING "
@@ -235,10 +255,9 @@ def main() -> int:
         if additions:
             print(f"TRAIT_POLICY_GUARD_FAILED additions={len(additions)}")
             return 1
-        removed = len(approved - {identity(entry) for entry in current})
         print(
             f"TRAIT_POLICY_GUARD_OK current={len(current)} "
-            f"baseline={len(approved)} removed={removed}"
+            f"baseline={len(baseline)} removed={removed}"
         )
         return 0
     except (OSError, UnicodeDecodeError, ValueError) as error:

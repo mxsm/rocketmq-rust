@@ -1458,7 +1458,7 @@ impl DefaultMQPushConsumerImpl {
             return;
         };
         let begin_timestamp = Instant::now();
-        let topic = message_queue.topic_str().to_string();
+        let _topic = message_queue.topic_str().to_string();
 
         let message_queue_inner = message_queue.clone();
         let next_offset = pull_request.next_offset;

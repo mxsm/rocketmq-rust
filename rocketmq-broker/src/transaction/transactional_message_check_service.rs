@@ -88,7 +88,7 @@ impl<MS: MessageStore> TransactionalMessageCheckService<MS> {
         transactional_message_service: Arc<DefaultTransactionalMessageService<MS>>,
         transactional_message_check_listener: DefaultTransactionalMessageCheckListener,
     ) -> Self {
-        let task_impl = ServiceManager::new(TransactionalMessageCheckServiceInner {
+        let task_impl = ServiceManager::new_legacy_compatibility(TransactionalMessageCheckServiceInner {
             broker_config,
             transactional_message_service,
             transactional_message_check_listener,

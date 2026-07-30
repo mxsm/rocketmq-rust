@@ -35,7 +35,6 @@ rocketmq-protocol = { workspace = true }
 rocketmq-runtime = { workspace = true }
 rocketmq-transport = { workspace = true, default-features = false }
 
-async-trait = "0.1"
 dashmap.workspace = true
 serde.workspace = true
 thiserror.workspace = true

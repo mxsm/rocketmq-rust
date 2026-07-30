@@ -512,7 +512,7 @@ impl MQClientAPIImpl {
 
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => {
-                let body = response.get_body();
+                let _body = response.get_body();
                 if let Some(body) = response.get_body() {
                     let user_info = UserInfo::decode(body)?;
                     Ok(Some(user_info))
@@ -2007,7 +2007,7 @@ impl MQClientAPIImpl {
                         None => return Err(mq_client_err!("Body is empty".to_string())),
                     }
                 }
-                code => {
+                _code => {
                     return Err(mq_client_err!(
                         response.code(),
                         response.remark().map_or("".to_string(), |s| s.to_string())

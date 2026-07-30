@@ -26,6 +26,7 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
+PUBLIC_API_INTENT = ROOT / "scripts" / "public-api-intent.json"
 SCHEMA_VERSION = 1
 LIB_KINDS = {"lib", "rlib", "proc-macro"}
 RUSTDOC_TOOLCHAIN = "nightly-2026-07-05"
@@ -167,12 +168,21 @@ def generate_snapshot(*, refresh: bool = True) -> dict[str, Any]:
     for index, (package, target) in enumerate(targets, start=1):
         print(f"PUBLIC_API_SNAPSHOT_PACKAGE {index}/{len(targets)} {package}", flush=True)
         packages[package] = snapshot_package(package, target, refresh=refresh)
+    intent = json.loads(PUBLIC_API_INTENT.read_text(encoding="utf-8"))
+    intent_counts = {
+        package: {
+            category: sum(entry["category"] == category for entry in spec["entries"])
+            for category in ("stable", "experimental", "compat")
+        }
+        for package, spec in intent["crates"].items()
+    }
     return {
         "schema_version": SCHEMA_VERSION,
         "source_commit": run(["git", "rev-parse", "HEAD"]),
         "feature_profile": "default",
         "toolchain": toolchain(),
         "packages": packages,
+        "public_api_intent": intent_counts,
     }
 
 

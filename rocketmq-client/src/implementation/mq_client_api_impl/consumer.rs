@@ -98,11 +98,11 @@ impl MQClientAPIImpl {
             .await?;
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => {
-                let body = response.body();
+                let _body = response.body();
                 if let Some(body) = response.body() {
                     return match GetConsumerListByGroupResponseBody::decode(body) {
                         Ok(value) => Ok(value.consumer_id_list),
-                        Err(e) => Err(mq_client_err!(response
+                        Err(_e) => Err(mq_client_err!(response
                             .remark()
                             .map_or("".to_string(), |s| s.to_string()))),
                     };

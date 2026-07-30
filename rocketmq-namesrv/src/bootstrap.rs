@@ -19,9 +19,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::net::IpAddr;
-use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicU8;
-use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -55,6 +53,7 @@ use rocketmq_transport::ChannelEventListener;
 use rocketmq_transport::DefaultRemotingRequestProcessor;
 use rocketmq_transport::NetworkUtil;
 use rocketmq_transport::RemotingClient;
+#[cfg(test)]
 use rocketmq_transport::RemotingClientShutdownReport;
 use rocketmq_transport::RemotingService;
 use rocketmq_transport::RocketMQServer;
@@ -62,11 +61,8 @@ use rocketmq_transport::RocketmqDefaultClient;
 use rocketmq_transport::ServerConfig;
 use rocketmq_transport::TokioClientConfig;
 use rocketmq_transport::TransportTelemetry;
-use serde::Serialize;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
-use tokio::sync::Notify;
-use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -85,90 +81,14 @@ use crate::route_info::broker_housekeeping_service::BrokerHousekeepingService;
 use crate::KVConfigManager;
 use crate::NamesrvConfig;
 
-/// Runtime lifecycle states for NameServer
-///
-/// State transitions:
-/// ```text
-/// Created -> Initialized -> Running -> ShuttingDown -> Stopped
-///   |                                       ^
-///   +---------------------------------------+
-///              (on error during init/start)
-/// ```
-#[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RuntimeState {
-    /// Initial state after construction
-    Created = 0,
-    /// Configuration loaded, components initialized
-    Initialized = 1,
-    /// Server running and accepting requests
-    Running = 2,
-    /// Graceful shutdown in progress
-    ShuttingDown = 3,
-    /// Fully stopped, resources released
-    Stopped = 4,
-}
+mod lifecycle;
+mod signals;
 
-impl RuntimeState {
-    /// Convert u8 to RuntimeState
-    #[inline]
-    fn from_u8(value: u8) -> Option<Self> {
-        match value {
-            0 => Some(Self::Created),
-            1 => Some(Self::Initialized),
-            2 => Some(Self::Running),
-            3 => Some(Self::ShuttingDown),
-            4 => Some(Self::Stopped),
-            _ => None,
-        }
-    }
-
-    /// Get human-readable state name
-    #[inline]
-    fn name(&self) -> &'static str {
-        match self {
-            Self::Created => "Created",
-            Self::Initialized => "Initialized",
-            Self::Running => "Running",
-            Self::ShuttingDown => "ShuttingDown",
-            Self::Stopped => "Stopped",
-        }
-    }
-
-    /// Check if state transition is valid
-    #[inline]
-    fn can_transition_to(&self, next: RuntimeState) -> bool {
-        match (self, next) {
-            // Created can initialize normally or enter cleanup after partial startup.
-            (Self::Created, Self::Initialized) => true,
-            (Self::Created, Self::ShuttingDown) => true,
-            (Self::Created, Self::Stopped) => true,
-
-            // Initialized can run normally or enter cleanup after startup failure.
-            (Self::Initialized, Self::Running) => true,
-            (Self::Initialized, Self::ShuttingDown) => true,
-            (Self::Initialized, Self::Stopped) => true,
-
-            // Running can only go to ShuttingDown
-            (Self::Running, Self::ShuttingDown) => true,
-
-            // ShuttingDown can only go to Stopped
-            (Self::ShuttingDown, Self::Stopped) => true,
-
-            // Stopped is terminal
-            (Self::Stopped, _) => false,
-
-            // All other transitions are invalid
-            _ => false,
-        }
-    }
-}
-
-impl std::fmt::Display for RuntimeState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.name())
-    }
-}
+pub(crate) use lifecycle::InFlightRequestGuard;
+pub(crate) use lifecycle::InFlightRequestTracker;
+pub use lifecycle::NameServerInFlightDrainReport;
+pub use lifecycle::NameServerShutdownReport;
+use lifecycle::RuntimeState;
 
 pub struct NameServerBootstrap {
     name_server_runtime: NameServerRuntime,
@@ -177,122 +97,6 @@ pub struct NameServerBootstrap {
 #[derive(Default)]
 struct NameServerStartupJournal {
     shutdown_relay: Option<TaskGroup>,
-}
-
-#[doc(hidden)]
-#[derive(Debug, Clone, Default, Serialize)]
-pub struct NameServerInFlightDrainReport {
-    pub elapsed_ms: u64,
-    pub timeout_ms: u64,
-    pub completed: u64,
-    pub remaining: usize,
-    pub timed_out: bool,
-}
-
-impl NameServerInFlightDrainReport {
-    #[doc(hidden)]
-    pub fn is_healthy(&self) -> bool {
-        !self.timed_out && self.remaining == 0
-    }
-}
-
-#[doc(hidden)]
-#[derive(Debug, Clone, Default, Serialize)]
-pub struct NameServerShutdownReport {
-    pub elapsed_ms: u64,
-    pub deadline_expired: bool,
-    pub shutdown_relay: Option<ShutdownReport>,
-    pub in_flight: NameServerInFlightDrainReport,
-    pub scheduled: Option<ShutdownReport>,
-    pub embedded_controller_healthy: Option<bool>,
-    pub route_unregistration: Option<ShutdownReport>,
-    pub cluster_test_route_lookup_healthy: Option<bool>,
-    pub server: Option<ShutdownReport>,
-    pub remoting_server: Option<ShutdownReport>,
-    pub remoting_client: Option<RemotingClientShutdownReport>,
-    pub metadata_io_healthy: Option<bool>,
-    pub root: Option<ShutdownReport>,
-}
-
-impl NameServerShutdownReport {
-    #[doc(hidden)]
-    pub fn is_healthy(&self) -> bool {
-        !self.deadline_expired
-            && self.shutdown_relay.as_ref().is_none_or(ShutdownReport::is_healthy)
-            && self.in_flight.is_healthy()
-            && self.scheduled.as_ref().is_none_or(ShutdownReport::is_healthy)
-            && self.embedded_controller_healthy.unwrap_or(true)
-            && self
-                .route_unregistration
-                .as_ref()
-                .is_none_or(ShutdownReport::is_healthy)
-            && self.cluster_test_route_lookup_healthy.unwrap_or(true)
-            && self.server.as_ref().is_none_or(ShutdownReport::is_healthy)
-            && self.remoting_server.as_ref().is_none_or(ShutdownReport::is_healthy)
-            && self
-                .remoting_client
-                .as_ref()
-                .is_none_or(RemotingClientShutdownReport::is_healthy)
-            && self.metadata_io_healthy.unwrap_or(true)
-            && self.root.as_ref().is_none_or(ShutdownReport::is_healthy)
-    }
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct InFlightRequestTracker {
-    active: AtomicUsize,
-    completed: AtomicU64,
-    notify: Notify,
-}
-
-impl InFlightRequestTracker {
-    pub(crate) fn enter(self: &Arc<Self>) -> InFlightRequestGuard {
-        self.active.fetch_add(1, Ordering::AcqRel);
-        InFlightRequestGuard {
-            tracker: Arc::clone(self),
-        }
-    }
-
-    async fn drain(&self, timeout: Duration) -> NameServerInFlightDrainReport {
-        let started_at = Instant::now();
-        let timed_out = if self.active.load(Ordering::Acquire) == 0 {
-            false
-        } else {
-            tokio::time::timeout(timeout, async {
-                loop {
-                    let notified = self.notify.notified();
-                    if self.active.load(Ordering::Acquire) == 0 {
-                        break;
-                    }
-                    notified.await;
-                }
-            })
-            .await
-            .is_err()
-        };
-
-        NameServerInFlightDrainReport {
-            elapsed_ms: started_at.elapsed().as_millis() as u64,
-            timeout_ms: timeout.as_millis() as u64,
-            completed: self.completed.load(Ordering::Acquire),
-            remaining: self.active.load(Ordering::Acquire),
-            timed_out,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct InFlightRequestGuard {
-    tracker: Arc<InFlightRequestTracker>,
-}
-
-impl Drop for InFlightRequestGuard {
-    fn drop(&mut self) {
-        let previous = self.tracker.active.fetch_sub(1, Ordering::AcqRel);
-        debug_assert!(previous > 0, "in-flight request counter underflow");
-        self.tracker.completed.fetch_add(1, Ordering::AcqRel);
-        self.tracker.notify.notify_waiters();
-    }
 }
 
 /// Builder for creating NameServerBootstrap with custom configuration
@@ -429,7 +233,7 @@ impl NameServerBootstrap {
                 relay_group
                     .spawn_service(
                         "namesrv.shutdown-relay",
-                        relay_shutdown_signal(shutdown_tx, shutdown_signal, relay_cancellation),
+                        signals::relay(shutdown_tx, shutdown_signal, relay_cancellation),
                     )
                     .map_err(|error| namesrv_startup_failed("spawn shutdown relay", error))
             }
@@ -530,35 +334,6 @@ async fn shutdown_startup_relay_until(
 ) -> Option<ShutdownReport> {
     let relay_group = startup_journal.shutdown_relay.take()?;
     Some(relay_group.shutdown_until(deadline).await)
-}
-
-#[inline]
-async fn relay_shutdown_signal<F>(shutdown_tx: watch::Sender<bool>, shutdown_signal: F, cancellation: CancellationToken)
-where
-    F: Future<Output = ()>,
-{
-    tokio::select! {
-        _ = shutdown_signal => {
-            info!("Shutdown signal received, broadcasting to all components...");
-            if let Err(error) = shutdown_tx.send(true) {
-                error!("Failed to broadcast shutdown signal: {error}");
-            }
-        }
-        _ = cancellation.cancelled() => {
-            debug!("NameServer shutdown relay cancelled by its lifecycle owner");
-        }
-    }
-}
-
-async fn wait_for_shutdown_notification(shutdown_rx: &mut watch::Receiver<bool>) {
-    if *shutdown_rx.borrow() {
-        return;
-    }
-    while shutdown_rx.changed().await.is_ok() {
-        if *shutdown_rx.borrow() {
-            return;
-        }
-    }
 }
 
 fn namesrv_startup_failed(operation: &'static str, error: impl std::fmt::Display) -> RocketMQError {
@@ -880,7 +655,7 @@ impl NameServerRuntime {
                 debug!("Server task started");
                 let report = server
                     .run_with_shutdown_report(request_processor, channel_event_listener, async move {
-                        wait_for_shutdown_notification(&mut server_shutdown_rx).await;
+                        signals::wait(&mut server_shutdown_rx).await;
                     })
                     .await;
                 if let Some(report) = report.as_ref() {
@@ -932,7 +707,11 @@ impl NameServerRuntime {
         }
 
         // Wait for shutdown signal
-        wait_for_shutdown_notification(self.shutdown_rx.as_mut().expect("Shutdown channel not initialized")).await;
+        let shutdown_rx = self
+            .shutdown_rx
+            .as_mut()
+            .ok_or_else(|| namesrv_runtime_state_error("shutdown channel is not initialized"))?;
+        signals::wait(shutdown_rx).await;
         info!("Shutdown signal received, initiating graceful shutdown...");
         let deadline = lifecycle
             .and_then(ServiceLifecycle::shutdown_request)

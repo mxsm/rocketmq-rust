@@ -1136,7 +1136,10 @@ async fn panicked_lane_is_reclaimed_and_closes_without_leaks() {
         .query_route(ResourceIdentity::new("", "RecoveredTopic"))
         .await
         .expect_err("a lane panic cancels the owning execution task group");
-    assert!(matches!(closed, ProxyError::Transport { .. }));
+    assert!(
+        matches!(closed, ProxyError::Transport { .. }),
+        "unexpected post-panic lane error: {closed:?}"
+    );
     cancellation.cancel();
     let report = service.task_group().shutdown(Duration::from_secs(1)).await;
     assert_eq!(report.leaked, 0, "{}", report.to_json());

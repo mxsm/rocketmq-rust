@@ -740,6 +740,10 @@ where
         }
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "existing POP topic execution context is tracked by the lint debt registry"
+    )]
     async fn pop_msg_from_topic(
         &self,
         topic_config: &TopicConfig,
@@ -780,6 +784,10 @@ where
         rest_num
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "existing POP topic lookup context is tracked by the lint debt registry"
+    )]
     async fn pop_msg_from_topic_by_name(
         &self,
         topic: &CheetahString,
@@ -818,6 +826,10 @@ where
         .await
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "existing POP queue execution context is tracked by the lint debt registry"
+    )]
     async fn pop_msg_from_queue(
         &self,
         topic: &CheetahString,

@@ -103,8 +103,15 @@ where
 }
 
 impl TaskExecutor {
-    pub fn new(config: ExecutorConfig) -> Self {
+    /// Creates an executor that discovers the current runtime when it first
+    /// executes work. New production code must use [`Self::new_with_task_group`].
+    pub fn new_legacy_compatibility(config: ExecutorConfig) -> Self {
         Self::new_with_optional_task_group(config, None)
+    }
+
+    #[deprecated(note = "use TaskExecutor::new_with_task_group; the ambient-runtime adapter is removed in 2.0.0")]
+    pub fn new(config: ExecutorConfig) -> Self {
+        Self::new_legacy_compatibility(config)
     }
 
     pub fn new_with_task_group(config: ExecutorConfig, parent_task_group: TaskGroup) -> Self {
@@ -473,7 +480,7 @@ pub struct ExecutorPool {
 impl ExecutorPool {
     pub fn new(pool_size: usize, config: ExecutorConfig) -> Self {
         let executors = (0..pool_size)
-            .map(|_| Arc::new(TaskExecutor::new(config.clone())))
+            .map(|_| Arc::new(TaskExecutor::new_legacy_compatibility(config.clone())))
             .collect();
 
         Self {
@@ -577,7 +584,7 @@ mod tests {
 
     #[tokio::test]
     async fn store_running_task_drops_already_finished_task() {
-        let executor = TaskExecutor::new(ExecutorConfig::default());
+        let executor = TaskExecutor::new_legacy_compatibility(ExecutorConfig::default());
         let task_group = executor
             .task_group("test-store-running-task-handle")
             .await
@@ -630,7 +637,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancel_task_waits_until_future_is_dropped() {
-        let executor = TaskExecutor::new(ExecutorConfig::default());
+        let executor = TaskExecutor::new_legacy_compatibility(ExecutorConfig::default());
         let started = Arc::new(AtomicBool::new(false));
         let dropped = Arc::new(AtomicBool::new(false));
         let task = Arc::new(Task::new("pending-task", "pending-task", {
@@ -680,7 +687,7 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_all_aborts_and_waits_for_running_tasks() {
-        let executor = TaskExecutor::new(ExecutorConfig::default());
+        let executor = TaskExecutor::new_legacy_compatibility(ExecutorConfig::default());
         let started = Arc::new(AtomicBool::new(false));
         let dropped = Arc::new(AtomicBool::new(false));
         let task = Arc::new(Task::new("pending-task", "pending-task", {

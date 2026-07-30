@@ -208,6 +208,10 @@ impl BrokerOuterAPI {
         self.remoting_client.update_name_server_address_list(address_list).await;
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "existing broker registration wire composition is tracked by the lint debt registry"
+    )]
     pub async fn register_broker_all(
         &self,
         cluster_name: CheetahString,

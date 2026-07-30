@@ -564,7 +564,7 @@ impl Rebalance for RebalancePushImpl {
     ///
     /// * `true` if the client should perform rebalancing.
     /// * `false` otherwise.
-    fn client_rebalance(&self, topic: &str) -> bool {
+    fn client_rebalance(&self, _topic: &str) -> bool {
         //Pop message mode, order message consumer not implement, it's use
         // ConsumeMessageOrderlyService to consume
         self.consumer_config.load_full().client_rebalance

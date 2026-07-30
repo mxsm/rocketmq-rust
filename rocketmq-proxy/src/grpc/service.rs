@@ -20,16 +20,11 @@ use std::time::SystemTime;
 use futures::stream;
 use futures::Stream;
 use futures::StreamExt;
-use rocketmq_runtime::BudgetedQueue;
-use rocketmq_runtime::ResourcePermit;
 use rocketmq_runtime::TaskGroup;
 use tonic::Request;
 use tonic::Response;
 use tonic::Status;
-use tracing::field;
-use tracing::info_span;
 use tracing::Instrument;
-use tracing::Span;
 
 use crate::auth;
 use crate::auth::AuthenticatedPrincipal;
@@ -59,6 +54,12 @@ use rocketmq_proxy_core::ingress::grpc::service::ReapSchedule;
 
 type ResponseStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send + 'static>>;
 
+mod observation;
+mod stream_status;
+
+use observation::RequestObservation;
+use observation::TelemetryStreamState;
+
 // Kept as private facade aliases for the existing behavior tests while Core
 // owns the canonical policy values.
 #[cfg(test)]
@@ -71,68 +72,6 @@ const DEFAULT_CONSUMER_MAX_ATTEMPTS: i32 = telemetry::DEFAULT_CONSUMER_MAX_ATTEM
 const DEFAULT_CONSUMER_RECEIVE_BATCH_SIZE: i32 = telemetry::DEFAULT_CONSUMER_RECEIVE_BATCH_SIZE;
 #[cfg(test)]
 const DEFAULT_CONSUMER_CUSTOMIZED_BACKOFF_MS: [u64; 18] = telemetry::DEFAULT_CONSUMER_CUSTOMIZED_BACKOFF_MS;
-
-#[derive(Clone)]
-struct RequestObservation {
-    context: ProxyContext,
-    started_at: std::time::Instant,
-    span: Span,
-}
-
-impl RequestObservation {
-    fn new(context: ProxyContext) -> Self {
-        let span = info_span!(
-            "rocketmq_proxy.rpc",
-            rpc = context.rpc_name(),
-            request_id = %context.request_id(),
-            client_id = context.client_id().unwrap_or(""),
-            remote_addr = context.remote_addr().unwrap_or(""),
-            local_addr = context.local_addr().unwrap_or(""),
-            principal = field::Empty,
-        );
-        Self {
-            context,
-            started_at: std::time::Instant::now(),
-            span,
-        }
-    }
-
-    fn record_principal(&mut self, principal: Option<&AuthenticatedPrincipal>) {
-        if let Some(principal) = principal {
-            self.context.set_authenticated_principal(principal.clone());
-            self.span.record("principal", principal.username());
-        }
-    }
-
-    fn context(&self) -> &ProxyContext {
-        &self.context
-    }
-
-    fn span(&self) -> Span {
-        self.span.clone()
-    }
-
-    fn elapsed(&self) -> Duration {
-        self.started_at.elapsed()
-    }
-}
-
-struct TelemetryStreamState<P> {
-    service: ProxyGrpcService<P>,
-    context: ProxyContext,
-    principal: Option<AuthenticatedPrincipal>,
-    client_id: String,
-    _permit: ResourcePermit,
-    outbound: BudgetedQueue<v2::TelemetryCommand>,
-    inbound: tonic::Streaming<v2::TelemetryCommand>,
-    done: bool,
-}
-
-impl<P> Drop for TelemetryStreamState<P> {
-    fn drop(&mut self) {
-        self.service.sessions.unbind_telemetry_link(self.client_id.as_str());
-    }
-}
 
 pub struct ProxyGrpcService<P> {
     config: Arc<ProxyConfig>,
@@ -762,20 +701,6 @@ where
     }
 }
 
-fn receive_message_stream_status(response: &v2::ReceiveMessageResponse) -> Option<&v2::Status> {
-    match response.content.as_ref() {
-        Some(v2::receive_message_response::Content::Status(status)) => Some(status),
-        _ => None,
-    }
-}
-
-fn pull_message_stream_status(response: &v2::PullMessageResponse) -> Option<&v2::Status> {
-    match response.content.as_ref() {
-        Some(v2::pull_message_response::Content::Status(status)) => Some(status),
-        _ => None,
-    }
-}
-
 #[tonic::async_trait]
 impl<P> v2::messaging_service_server::MessagingService for ProxyGrpcService<P>
 where
@@ -1026,7 +951,7 @@ where
 
         let status = responses
             .last()
-            .and_then(receive_message_stream_status)
+            .and_then(stream_status::receive_message)
             .map(ToOwned::to_owned)
             .unwrap_or_else(ProxyStatusMapper::ok);
         self.finish_stream_payload(&observation, &status).await;
@@ -1186,7 +1111,7 @@ where
 
         let status = responses
             .last()
-            .and_then(pull_message_stream_status)
+            .and_then(stream_status::pull_message)
             .map(ToOwned::to_owned)
             .unwrap_or_else(ProxyStatusMapper::ok);
         self.finish_stream_payload(&observation, &status).await;

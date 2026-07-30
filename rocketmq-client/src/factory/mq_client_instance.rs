@@ -12,14 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::RwLock as StdRwLock;
-use std::sync::Weak;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -35,6 +33,7 @@ use rocketmq_error::UnifiedServiceError;
 use rocketmq_model::common::base::service_state::ServiceState;
 use rocketmq_model::common::boundary_type::BoundaryType;
 use rocketmq_model::common::config::TopicConfig;
+#[cfg(test)]
 use rocketmq_model::common::constant::PermName;
 use rocketmq_model::common::filter::expression_type::ExpressionType;
 use rocketmq_model::common::message::message_ext::MessageExt;
@@ -69,7 +68,6 @@ use rocketmq_runtime::schedule::simple_scheduler::ScheduledTaskManager;
 use rocketmq_runtime::tokio_lock::RocketMQTokioMutex;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ResourceBudget;
-use rocketmq_transport::ClientMetadata;
 use rocketmq_transport::ConnectionNetEvent;
 use rocketmq_transport::RPCHook;
 use rocketmq_transport::TokioClientConfig;
@@ -101,14 +99,31 @@ use crate::implementation::mq_client_api_impl::MQClientAPIImpl;
 use crate::producer::default_mq_producer::DefaultMQProducer;
 use crate::producer::default_mq_producer::ProducerConfig;
 use crate::producer::producer_impl::mq_producer_inner::MQProducerInnerImpl;
-use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
 use crate::producer::request_future_holder::RequestFutureHolder;
 use crate::producer::send_result::SendResult;
 use crate::runtime::spawn_client_task_with_context;
-use crate::runtime::spawn_client_tracked_task_with_context;
 use crate::runtime::ClientRuntime;
 use crate::runtime::ClientTrackedTaskHandle;
 use crate::stat::consumer_stats_manager::ConsumerStatsManager;
+
+mod connection_listener;
+mod route_conversion;
+
+pub use connection_listener::run_lifecycle_probe as run_connection_event_listener_lifecycle_probe;
+pub use connection_listener::ConnectionEventListenerLifecycleProbe;
+use route_conversion::cap_default_topic_route_queue_nums;
+#[allow(
+    unused_imports,
+    reason = "preserves the existing public route-conversion entry point"
+)]
+pub use route_conversion::topic_route_data2_topic_publish_info;
+#[allow(
+    unused_imports,
+    reason = "preserves the existing public route-conversion entry point"
+)]
+pub use route_conversion::topic_route_data2_topic_subscribe_info;
+pub use route_conversion::topic_route_data2topic_publish_info;
+pub use route_conversion::topic_route_data2topic_subscribe_info;
 
 const LOCK_TIMEOUT_MILLIS: u64 = 3000;
 const SCHEDULED_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -137,68 +152,6 @@ fn get_topic_config_request_header(topic: CheetahString) -> GetTopicConfigReques
         Some(true),
     );
     request_header
-}
-
-async fn run_connection_net_event_listener(
-    mut rx: tokio::sync::broadcast::Receiver<ConnectionNetEvent>,
-    weak_instance: Weak<MQClientInstance>,
-    shutdown_token: CancellationToken,
-) {
-    loop {
-        tokio::select! {
-            biased;
-            _ = shutdown_token.cancelled() => {
-                break;
-            }
-            event = rx.recv() => {
-                let Ok(value) = event else {
-                    warn!("ConnectionNetEvent recv error");
-                    break;
-                };
-
-                if let Some(instance_) = weak_instance.upgrade() {
-                    match value {
-                        ConnectionNetEvent::CONNECTED(remote_address) => {
-                            info!("ConnectionNetEvent CONNECTED");
-                            let remote_address = remote_address.to_string();
-                            instance_.on_channel_active(&remote_address).await;
-                        }
-                        ConnectionNetEvent::DISCONNECTED => {
-                            instance_.on_channel_close("");
-                        }
-                        ConnectionNetEvent::EXCEPTION => {
-                            instance_.on_channel_exception("");
-                        }
-                        ConnectionNetEvent::IDLE => {
-                            instance_.on_channel_idle("");
-                        }
-                    }
-                }
-            },
-        }
-    }
-}
-
-fn spawn_connection_net_event_listener(
-    service_context: &ChildServiceContext,
-    rx: tokio::sync::broadcast::Receiver<ConnectionNetEvent>,
-    weak_instance: Weak<MQClientInstance>,
-    shutdown_token: CancellationToken,
-) -> Option<ClientTrackedTaskHandle> {
-    match spawn_client_tracked_task_with_context(
-        service_context,
-        "rocketmq-client-connection-events",
-        run_connection_net_event_listener(rx, weak_instance, shutdown_token),
-    ) {
-        Ok(handle) => Some(handle),
-        Err(error) => {
-            error!(
-                "Failed to spawn MQClientInstance connection event listener task: {}",
-                error
-            );
-            None
-        }
-    }
 }
 
 fn schedule_rebalance_wakeup(
@@ -288,14 +241,6 @@ pub struct MQClientInstance {
     connection_event_task_handle: StdMutex<Option<ClientTrackedTaskHandle>>,
     rebalance_delay_tasks: TaskTracker,
     rebalance_delay_shutdown: CancellationToken,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ConnectionEventListenerLifecycleProbe {
-    pub healthy: bool,
-    pub task_count_before_shutdown: usize,
-    pub task_count_after_shutdown: usize,
-    pub shutdown_elapsed_us: u128,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -485,7 +430,7 @@ impl MQClientInstance {
         *instance
             .connection_event_task_handle
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = spawn_connection_net_event_listener(
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = connection_listener::spawn(
             &service_context.child("connection-events"),
             rx,
             weak_instance,
@@ -1313,7 +1258,7 @@ impl MQClientInstance {
             .lock_namesrv
             .try_lock_timeout(Duration::from_millis(LOCK_TIMEOUT_MILLIS))
             .await;
-        if let Some(lock) = lock {
+        if let Some(_lock) = lock {
             let mut updated_table = HashMap::new();
             let mut broker_name_set = HashSet::new();
 
@@ -1744,7 +1689,7 @@ impl MQClientInstance {
         for (broker_id, broker_name, addr) in broker_list {
             // Clone necessary data for the async task
             let heartbeat_data = heartbeat_data.clone();
-            let client_id = self.client_id.clone();
+            let _client_id = self.client_id.clone();
             let mq_client_api = mq_client_api.clone();
             let timeout = self.client_config.mq_client_api_timeout;
             let send_heartbeat_times_total = self.send_heartbeat_times_total.clone();
@@ -2103,7 +2048,7 @@ impl MQClientInstance {
                                 return Err(e);
                             }
                             _ => {
-                                let desc = format!(
+                                let _desc = format!(
                                     "Check client in broker error, maybe because you use {} to filter message, but \
                                      server has not been upgraded to support!This error would not affect the launch \
                                      of consumer, but may has impact on message receiving if you have use the new \
@@ -2479,118 +2424,6 @@ impl MQClientInstance {
     }
 }
 
-#[allow(clippy::unnecessary_unwrap)]
-pub fn topic_route_data2topic_publish_info(topic: &str, route: &mut TopicRouteData) -> TopicPublishInfo {
-    let mut info = TopicPublishInfo {
-        topic_route_data: Some(route.clone()),
-        ..Default::default()
-    };
-    if let Some(order_topic_conf) = route.order_topic_conf.as_ref().filter(|conf| !conf.is_empty()) {
-        for broker in order_topic_conf.split(';') {
-            let item = broker.split(":").collect::<Vec<&str>>();
-            if item.len() == 2 {
-                let queue_num = match item[1].parse::<i32>() {
-                    Ok(queue_num) => queue_num,
-                    Err(error) => {
-                        warn!(
-                            "ignore invalid order topic conf entry for topic={}, broker={}, queue_nums={}, error={}",
-                            topic, item[0], item[1], error
-                        );
-                        continue;
-                    }
-                };
-                for i in 0..queue_num {
-                    let mq = MessageQueue::from_parts(topic, item[0], i);
-                    info.message_queue_list.push(mq);
-                }
-            }
-        }
-        info.order_topic = true;
-    } else if route.order_topic_conf.is_none()
-        && route
-            .topic_queue_mapping_by_broker
-            .as_ref()
-            .is_some_and(|topic_queue_mapping_by_broker| !topic_queue_mapping_by_broker.is_empty())
-    {
-        info.order_topic = false;
-        let mq_end_points = ClientMetadata::topic_route_data2endpoints_for_static_topic(topic, route);
-        if let Some(mq_end_points) = mq_end_points {
-            for (mq, broker_name) in mq_end_points {
-                info.message_queue_list.push(mq);
-            }
-        }
-        info.message_queue_list
-            .sort_by(|a, b| match a.queue_id().cmp(&b.queue_id()) {
-                Ordering::Less => std::cmp::Ordering::Less,
-                Ordering::Equal => std::cmp::Ordering::Equal,
-                Ordering::Greater => std::cmp::Ordering::Greater,
-            });
-    } else {
-        route.queue_datas.sort();
-        for queue_data in route.queue_datas.iter() {
-            if PermName::is_writeable(queue_data.perm) {
-                let mut broker_data = None;
-                for bd in route.broker_datas.iter() {
-                    if bd.broker_name() == queue_data.broker_name.as_str() {
-                        broker_data = Some(bd.clone());
-                        break;
-                    }
-                }
-                let Some(broker_data) = broker_data else {
-                    continue;
-                };
-                if !broker_data.broker_addrs().contains_key(&(mix_all::MASTER_ID)) {
-                    continue;
-                }
-                for i in 0..queue_data.write_queue_nums {
-                    let mq = MessageQueue::from_parts(topic, queue_data.broker_name.as_str(), i as i32);
-                    info.message_queue_list.push(mq);
-                }
-            }
-        }
-    }
-    info
-}
-
-fn cap_default_topic_route_queue_nums(topic_route_data: &mut TopicRouteData, default_topic_queue_nums: u32) {
-    for data in topic_route_data.queue_datas.iter_mut() {
-        let queue_nums = default_topic_queue_nums.min(data.read_queue_nums);
-        data.read_queue_nums = queue_nums;
-        data.write_queue_nums = queue_nums;
-    }
-}
-
-pub fn topic_route_data2_topic_publish_info(topic: &str, route: &mut TopicRouteData) -> TopicPublishInfo {
-    topic_route_data2topic_publish_info(topic, route)
-}
-
-pub fn topic_route_data2topic_subscribe_info(topic: &str, route: &TopicRouteData) -> HashSet<MessageQueue> {
-    if let Some(ref topic_queue_mapping_by_broker) = route.topic_queue_mapping_by_broker {
-        if !topic_queue_mapping_by_broker.is_empty() {
-            let mq_endpoints = ClientMetadata::topic_route_data2endpoints_for_static_topic(topic, route);
-            return mq_endpoints
-                .unwrap_or_default()
-                .keys()
-                .cloned()
-                .collect::<HashSet<MessageQueue>>();
-        }
-    }
-    let mut mq_list = HashSet::new();
-    for qd in &route.queue_datas {
-        if PermName::is_readable(qd.perm) {
-            for i in 0..qd.read_queue_nums {
-                let mq = MessageQueue::from_parts(topic, qd.broker_name.as_str(), i as i32);
-                mq_list.insert(mq);
-            }
-        }
-    }
-    mq_list
-}
-
-pub fn topic_route_data2_topic_subscribe_info(topic: &str, route: &TopicRouteData) -> HashSet<MessageQueue> {
-    topic_route_data2topic_subscribe_info(topic, route)
-}
-
 fn new_probe_client_instance(
     client_runtime: &Arc<ClientRuntime>,
     client_config: ClientConfig,
@@ -2605,32 +2438,6 @@ fn new_probe_client_instance(
         client_runtime.telemetry_handle().clone(),
         client_runtime.pool().request_future_holder(),
     )
-}
-
-#[doc(hidden)]
-pub async fn run_connection_event_listener_lifecycle_probe(
-    client_runtime: Arc<ClientRuntime>,
-) -> ConnectionEventListenerLifecycleProbe {
-    let client_config = ClientConfig {
-        namesrv_addr: None,
-        ..Default::default()
-    };
-    let instance = new_probe_client_instance(&client_runtime, client_config, "connection-event-listener-probe");
-    let task_count_before_shutdown = instance.connection_event_task_count();
-
-    let shutdown_started = Instant::now();
-    instance
-        .shutdown_connection_event_listener(Duration::from_secs(1))
-        .await;
-    let shutdown_elapsed_us = shutdown_started.elapsed().as_micros();
-    let task_count_after_shutdown = instance.connection_event_task_count();
-
-    ConnectionEventListenerLifecycleProbe {
-        healthy: task_count_before_shutdown == 1 && task_count_after_shutdown == 0,
-        task_count_before_shutdown,
-        task_count_after_shutdown,
-        shutdown_elapsed_us,
-    }
 }
 
 fn route_refresh_probe_topics(topic_count: usize) -> Vec<CheetahString> {

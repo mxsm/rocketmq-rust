@@ -248,8 +248,18 @@ def validate_specialist_ledgers(root: Path, registry: dict[str, Any]) -> list[Fi
             value = node.value
         if name in allowlist_names and value is not None:
             allow_count += len(ast.literal_eval(value))
+    lint_registry = json.loads(
+        (root / "scripts/rust-lint-debt-registry.json").read_text(encoding="utf-8")
+    )
+    allow_count += len(lint_registry["entries"])
     if entries["ARC-ALLOW-001"]["scope_count"] != allow_count:
-        findings.append(Finding("scope-drift", "scripts/error_architecture_guard.py", f"allow={allow_count}"))
+        findings.append(
+            Finding(
+                "scope-drift",
+                "scripts/error_architecture_guard.py,scripts/rust-lint-debt-registry.json",
+                f"allow={allow_count}",
+            )
+        )
 
     policy = json.loads((root / "scripts/architecture-dependency-policy.json").read_text(encoding="utf-8"))
     facade_count = sum(

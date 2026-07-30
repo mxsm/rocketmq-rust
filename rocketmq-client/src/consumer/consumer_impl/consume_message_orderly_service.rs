@@ -801,7 +801,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
     async fn submit_consume_request(
         &self,
         this: Arc<Self>,
-        msgs: Vec<Arc<MessageExt>>,
+        _msgs: Vec<Arc<MessageExt>>,
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
         dispatch_to_consume: bool,

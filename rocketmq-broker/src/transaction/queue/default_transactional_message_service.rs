@@ -460,6 +460,10 @@ where
     }
 
     /// Process messages in a specific queue
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "existing transaction scan context is tracked by the lint debt registry"
+    )]
     async fn process_message_queue<Listener: TransactionalMessageCheckListener>(
         &self,
         message_queue: &MessageQueue,

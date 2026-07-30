@@ -127,6 +127,25 @@ fn local_store_production_source() -> String {
     .replace("\r\n", "\n")
 }
 
+fn commit_log_production_source() -> String {
+    [
+        include_str!("../../../src/log_file/commit_log.rs"),
+        include_str!("../../../src/log_file/commit_log/context.rs"),
+        include_str!("../../../src/log_file/commit_log/handles.rs"),
+        include_str!("../../../src/log_file/commit_log/append_sequencer.rs"),
+    ]
+    .into_iter()
+    .map(|source| {
+        let source = source.replace("\r\n", "\n");
+        source
+            .split_once("#[cfg(test)]\nmod tests")
+            .map_or(source.as_str(), |(production, _)| production)
+            .to_string()
+    })
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
 fn new_test_store(temp_dir: &tempfile::TempDir) -> LocalFileMessageStore {
     new_configured_test_store(temp_dir, MessageStoreConfig::default())
 }
@@ -576,7 +595,7 @@ fn clean_commit_log_source_contract_uses_narrow_cleanup_capability() {
     assert!(cleanup.contains("commit_log: CommitLogCleanupHandle"));
     assert!(!cleanup.contains("ArcMut<CommitLog>"));
 
-    let commit_log_source = include_str!("../../../src/log_file/commit_log.rs").replace("\r\n", "\n");
+    let commit_log_source = commit_log_production_source();
     assert!(commit_log_source.contains("pub(crate) struct CommitLogCleanupHandle"));
     assert!(commit_log_source.contains("pub(crate) fn cleanup_handle(&self) -> CommitLogCleanupHandle"));
     assert!(commit_log_source.contains("pub fn delete_expired_files_by_time_before(\n        &mut self,"));
@@ -639,7 +658,7 @@ fn commit_log_child_source_contract_uses_narrow_dispatch_and_owned_flush_manager
     assert!(production.contains("dispatcher: CommitLogDispatchHandle"));
     assert!(production.contains("published: Arc<ArcSwap<Vec<Arc<dyn CommitLogDispatcher>>>>"));
 
-    let commit_log_source = include_str!("../../../src/log_file/commit_log.rs").replace("\r\n", "\n");
+    let commit_log_source = commit_log_production_source();
     assert!(commit_log_source.contains("dispatcher: super::CommitLogDispatchHandle"));
     assert!(commit_log_source.contains("flush_manager: super::DefaultFlushManager"));
     assert!(!commit_log_source.contains("ArcMut<super::CommitLogDispatcherDefault>"));
@@ -658,11 +677,7 @@ fn commit_log_store_context_source_contract_removes_local_root_back_reference() 
     assert!(!local_production.contains("delay_level_table: ArcMut<BTreeMap<i32"));
     assert!(!local_production.contains("set_local_file_message_store"));
 
-    let commit_log_source = include_str!("../../../src/log_file/commit_log.rs").replace("\r\n", "\n");
-    let commit_log_production = commit_log_source
-        .split_once("#[cfg(test)]\nmod tests")
-        .map(|(source, _)| source)
-        .expect("CommitLog production section");
+    let commit_log_production = commit_log_production_source();
     assert!(commit_log_production.contains("pub(crate) struct CommitLogStoreContext"));
     assert!(commit_log_production.contains("ha_service: Arc<ArcSwapOption<GeneralHAService>>"));
     assert!(commit_log_production.contains("store_context: super::CommitLogStoreContext"));
@@ -685,11 +700,7 @@ fn commit_log_long_lived_readers_use_narrow_capability() {
     assert!(local_production.contains("self.commit_log.read_handle()"));
     assert!(!local_production.contains("self_check_commit_log = self.commit_log.clone()"));
 
-    let commit_log_source = include_str!("../../../src/log_file/commit_log.rs").replace("\r\n", "\n");
-    let commit_log_production = commit_log_source
-        .split_once("#[cfg(test)]\nmod tests")
-        .map(|(source, _)| source)
-        .expect("CommitLog production section");
+    let commit_log_production = commit_log_production_source();
     assert!(commit_log_production.contains("pub(crate) struct CommitLogReadHandle"));
     assert!(commit_log_production.contains("mapped_file_queue: MappedFileQueueReadHandle"));
     assert!(commit_log_production.contains("runtime_state: Arc<CommitLogRuntimeState>"));

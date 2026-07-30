@@ -4971,7 +4971,6 @@ dependencies = [
 name = "rocketmq-proxy-core"
 version = "1.0.0"
 dependencies = [
- "async-trait",
  "dashmap",
  "prost",
  "prost-types",

@@ -235,10 +235,9 @@ impl SessionWriterDiagnostics {
         let now = Instant::now();
         let mut state = self.state();
         if let Some(index) = state.queue.iter().position(|entry| entry.id == id) {
-            let entry = state
-                .queue
-                .remove(index)
-                .unwrap_or_else(|| unreachable!("writer diagnostics queue index was just resolved"));
+            let Some(entry) = state.queue.remove(index) else {
+                return now;
+            };
             let queue_age = now.saturating_duration_since(entry.enqueued_at);
             state.last_queue_age = queue_age;
             state.max_queue_age = state.max_queue_age.max(queue_age);
@@ -1229,7 +1228,8 @@ mod session_lifecycle_tests {
 
     #[test]
     fn queued_send_path_does_not_restore_a_lock_guard_across_network_await() {
-        let production = include_str!("connection.rs")
+        let source = include_str!("connection.rs").replace("\r\n", "\n");
+        let production = source
             .split("#[cfg(test)]\nmod session_lifecycle_tests")
             .next()
             .expect("production connection source");

@@ -49,7 +49,7 @@
         "scripts/rust-hygiene-baseline.json",
         "scripts/rust_hygiene_guard.py"
       ],
-      "scope_count": 938
+      "scope_count": 737
     },
     {
       "id": "ARC-TRAIT-001",
@@ -64,37 +64,39 @@
         "scripts/trait-policy-baseline.json",
         "scripts/trait_policy_guard.py"
       ],
-      "scope_count": 660
+      "scope_count": 645
     },
     {
       "id": "ARC-ALLOW-001",
       "class": "allow",
-      "owner": "error-architecture-maintainers",
+      "owner": "architecture-maintainers",
       "status": "active",
-      "reason": "typed-error transition allowlists still contain reviewed source identities",
+      "reason": "typed-error and Rust lint transition allowlists still contain reviewed source identities",
       "adr": "rocketmq-doc/en/architecture-debt-governance-adr.md",
-      "removal_condition": "typed error paths replace all explicit error-architecture allowlist entries",
+      "removal_condition": "typed error paths and narrowed APIs replace every registered error or lint allow identity",
       "target_release": "2.0.0",
       "evidence": [
         "scripts/error_architecture_guard.py",
-        "docs/07-error-hygiene-allowlist.md"
+        "docs/07-error-hygiene-allowlist.md",
+        "scripts/rust-lint-debt-registry.json",
+        "scripts/rust_lint_debt_guard.py"
       ],
-      "scope_count": 81
+      "scope_count": 232
     },
     {
       "id": "ARC-RUNTIME-001",
       "class": "runtime_adapter",
       "owner": "runtime-maintainers",
       "status": "active",
-      "reason": "approved runtime adapter and task-group root sites remain during lifecycle ownership migration",
+      "reason": "the runtime boundary audit enforces zero action-required adapters while documenting the remaining runtime primitives and explicit compatibility sites",
       "adr": "rocketmq-doc/en/architecture-debt-governance-adr.md",
-      "removal_condition": "runtime audit reports zero current-runtime-adapter and task-group-root identities",
+      "removal_condition": "explicit compatibility constructors are removed and the zero action-required runtime baseline remains enforced",
       "target_release": "2.0.0",
       "evidence": [
         "scripts/runtime-audit-baseline.json",
         "scripts/runtime-audit.ps1"
       ],
-      "scope_count": 28
+      "scope_count": 0
     },
     {
       "id": "ARC-FACADE-001",
