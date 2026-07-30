@@ -31,6 +31,8 @@ use super::operations::AutonomyReportWindow;
 use super::operations::CostBudgetAlert;
 use super::operations::OPERATIONS_SCHEMA_VERSION;
 use super::operations::OptimizationCandidate;
+use super::operations::OperationsAnalyticsQuery;
+use super::operations::OperationsAnalyticsReport;
 use super::operations::bounded_outcome_limit;
 use crate::ControlPlaneError;
 use crate::PostgresRepository;
@@ -130,6 +132,24 @@ impl AutonomyOperationsService {
             .build_autonomy_operational_report(auth.tenant_id, &clusters, window)
             .await?;
         Ok(self.decorate(report))
+    }
+
+    pub(crate) async fn analytics(
+        &self,
+        auth: &AuthContext,
+        query: &OperationsAnalyticsQuery,
+    ) -> Result<OperationsAnalyticsReport, ControlPlaneError> {
+        require_report_reader(auth)?;
+        query.validate()?;
+        if let Some(cluster_id) = query.cluster_id {
+            require_cluster(auth, cluster_id)?;
+        }
+        let now = Utc::now();
+        let window = report_window(query.period, query.anchor.unwrap_or(now), now)?;
+        let clusters = authorized_clusters(auth, query.cluster_id)?;
+        self.repository
+            .operations_analytics(auth.tenant_id, &clusters, query, window)
+            .await
     }
 
     /// Materializes the previous completed week and month. Repeated scans are
