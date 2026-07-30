@@ -38,7 +38,9 @@ use super::model::CreatePlanRequest;
 use super::model::CreatePlanResponse;
 use super::model::CriticReviewRequest;
 use super::model::CriticReviewResponse;
+use super::model::ExecutionPreconditionEvidenceView;
 use super::model::ExecutionSubmissionView;
+use super::model::PrepareExecutionPreconditionRequest;
 use super::model::QuarantineListQuery;
 use super::model::QuarantinePage;
 use super::model::SubmitExecutionRequest;
@@ -53,6 +55,10 @@ pub(crate) fn routes() -> Router<AppState> {
         .route(
             "/v1/incidents/{incident_id}/diagnosis-revisions/{revision_id}/confirm-execution",
             post(confirm_diagnosis_for_execution).layer(DefaultBodyLimit::max(32 * 1024)),
+        )
+        .route(
+            "/v1/incidents/{incident_id}/execution-preconditions",
+            post(prepare_execution_precondition).layer(DefaultBodyLimit::max(128 * 1024)),
         )
         .route("/v1/plans", post(create_plan).layer(DefaultBodyLimit::max(256 * 1024)))
         .route("/v1/plans/{id}", get(get_plan))
@@ -110,6 +116,25 @@ async fn create_plan(
     state
         .supervised_execution
         .create_plan(&auth, &request, correlation_id(&headers))
+        .await
+        .map(Json)
+}
+
+async fn prepare_execution_precondition(
+    State(state): State<AppState>,
+    Path(incident_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<PrepareExecutionPreconditionRequest>,
+) -> Result<Json<ExecutionPreconditionEvidenceView>, ControlPlaneError> {
+    let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
+    state
+        .supervised_execution
+        .prepare_execution_precondition(
+            &auth,
+            parse_incident_id(&incident_id)?,
+            &request,
+            correlation_id(&headers),
+        )
         .await
         .map(Json)
 }
