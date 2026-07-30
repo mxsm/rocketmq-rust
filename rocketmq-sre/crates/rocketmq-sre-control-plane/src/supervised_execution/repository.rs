@@ -98,6 +98,34 @@ impl PostgresRepository {
         })
     }
 
+    pub(super) async fn evidence_linked_to_incident(
+        &self,
+        auth: &AuthContext,
+        incident_id: IncidentId,
+        evidence_id: EvidenceId,
+    ) -> Result<bool, ControlPlaneError> {
+        sqlx::query_scalar(
+            "SELECT EXISTS (
+                SELECT 1
+                FROM evidence_links l
+                JOIN evidence_snapshots e ON e.id = l.evidence_id
+                JOIN sre_incidents i ON i.id = l.incident_id
+                WHERE l.incident_id = $1
+                  AND l.evidence_id = $2
+                  AND e.tenant_id = $3
+                  AND i.tenant_id = $3
+                  AND e.cluster_id = i.cluster_id
+                  AND (e.expires_at IS NULL OR e.expires_at > NOW())
+             )",
+        )
+        .bind(incident_id.as_uuid())
+        .bind(evidence_id.as_uuid())
+        .bind(auth.tenant_id.as_uuid())
+        .fetch_one(&self.pool)
+        .await
+        .map_err(ControlPlaneError::from)
+    }
+
     pub(super) async fn next_action_plan_version(
         &self,
         auth: &AuthContext,
