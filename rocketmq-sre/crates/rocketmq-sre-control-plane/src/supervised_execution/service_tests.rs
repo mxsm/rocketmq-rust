@@ -99,6 +99,7 @@ async fn postgres_plan_policy_approval_audit_and_quarantine_are_fail_closed() {
             plan,
             risk,
             policy_decision,
+            ..
         } => (plan, risk, policy_decision),
         CreatePlanResponse::ManualRunbook { .. } => panic!("model-backed diagnosis must produce a plan"),
     };
