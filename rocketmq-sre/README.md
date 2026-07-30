@@ -187,7 +187,7 @@ Control Plane database restore, and a bounded Kind Broker rebuild exercise:
 
 ```powershell
 .\scripts\phase05-enterprise-smoke.ps1 `
-  -Kubeconfig G:\rocketmq-sre-phase2-temp\kind-access\rocketmq-sre-phase00.kubeconfig
+  -Kubeconfig D:\BuildCache\rocketmq-sre-temp\kind\phase00-kubeconfig
 ```
 
 The smoke writes a redacted machine-readable result outside the repository.
