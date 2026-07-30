@@ -39,9 +39,18 @@ OBJECTIVE_IDS = (
 FAULT_SCENARIOS = (
     "rolling_upgrade",
     "node_eviction",
+    "nameserver_minority_partition",
+    "nameserver_majority_unavailable",
     "collector_outage",
     "disk_pressure",
+    "disk_full",
+    "slow_disk_fsync_jitter",
     "controller_leader_failure",
+    "controller_quorum_loss",
+    "network_impairment",
+    "ha_replication_lag",
+    "snapshot_install_interruption",
+    "proxy_slow_broker_overload",
     "secret_rotation",
     "acknowledged_message_recovery",
 )
@@ -188,7 +197,7 @@ def validate_policy(
     )
     guard.require(
         policy.get("required_fault_scenarios") == list(FAULT_SCENARIOS),
-        "SLO policy must bind the exact seven M11-11 fault scenarios",
+        f"SLO policy must bind the exact {len(FAULT_SCENARIOS)} M11-11 fault scenarios",
     )
 
     objectives = policy.get("objectives")
@@ -467,7 +476,7 @@ def validate_fault_snapshot(
     ]
     guard.require(
         scenario_ids == list(FAULT_SCENARIOS),
-        "fault evidence does not contain the exact seven scenarios",
+        f"fault evidence does not contain the exact {len(FAULT_SCENARIOS)} scenarios",
     )
     assertions = snapshot.get("global_assertions")
     guard.require(

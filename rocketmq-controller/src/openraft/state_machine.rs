@@ -796,6 +796,52 @@ mod tests {
     }
 
     #[test]
+    fn deterministic_snapshot_cases_preserve_checksum_and_payload() {
+        const SEED: u64 = 0x524d_5143_4f4e_5452;
+        let mut state = SEED;
+
+        for case in 0..32 {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            let payload_len = (state & 0xff) as usize;
+            let payload = (0..payload_len)
+                .map(|index| state.rotate_left(index as u32) as u8)
+                .collect::<Vec<_>>();
+            let snapshot =
+                SnapshotData::new(payload.clone(), None, StoredMembership::default()).expect("generated snapshot");
+            let first = encode_v1(RaftRecordKey::SnapshotData, &snapshot)
+                .unwrap_or_else(|error| panic!("seed={SEED:#018x} case={case} encode failed: {error}"));
+            let second = encode_v1(RaftRecordKey::SnapshotData, &snapshot)
+                .unwrap_or_else(|error| panic!("seed={SEED:#018x} case={case} re-encode failed: {error}"));
+            assert_eq!(first, second, "seed={SEED:#018x} case={case}");
+
+            let decoded = validate_snapshot_bytes(&first)
+                .unwrap_or_else(|error| panic!("seed={SEED:#018x} case={case} validate failed: {error}"));
+            assert_eq!(
+                decoded.replicas_info_manager_state, payload,
+                "seed={SEED:#018x} case={case}"
+            );
+            assert_eq!(decoded.last_applied, None, "seed={SEED:#018x} case={case}");
+            assert_eq!(
+                decoded.last_membership,
+                Some(StoredMembership::default()),
+                "seed={SEED:#018x} case={case}"
+            );
+            assert_eq!(decoded.checksum, snapshot.checksum, "seed={SEED:#018x} case={case}");
+
+            let mut corrupted = decoded;
+            corrupted.checksum ^= 1;
+            let corrupted_bytes =
+                encode_v1(RaftRecordKey::SnapshotData, &corrupted).expect("corrupted snapshot remains serializable");
+            assert!(
+                validate_snapshot_bytes(&corrupted_bytes).is_err(),
+                "seed={SEED:#018x} case={case} accepted a checksum mismatch"
+            );
+        }
+    }
+
+    #[test]
     fn check_not_active_broker_removes_expired_live_info() {
         let state_machine = new_state_machine();
         state_machine.apply_request(&heartbeat_request(1_000, 3_000));

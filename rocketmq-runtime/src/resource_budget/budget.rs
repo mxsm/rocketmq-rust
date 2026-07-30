@@ -15,6 +15,8 @@
 use std::fmt;
 use std::sync::Arc;
 use std::sync::Mutex;
+
+use smallvec::SmallVec;
 use std::time::Duration;
 
 use super::clock::MonotonicClock;
@@ -27,21 +29,33 @@ use super::limit::FullPolicy;
 use super::limit::RateLimit;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Represents budget snapshot.
 pub struct BudgetSnapshot {
+    /// The path value.
     pub path: Arc<str>,
+    /// The number of current entries.
     pub current_count: usize,
+    /// The current size in bytes.
     pub current_bytes: usize,
+    /// The number of admitted entries.
     pub admitted_count: u64,
+    /// The number of released entries.
     pub released_count: u64,
+    /// The number of rejected entries.
     pub rejected_count: u64,
+    /// The number of throttled entries.
     pub throttled_count: u64,
+    /// The number of dropped entries.
     pub dropped_count: u64,
+    /// The number of coalesced entries.
     pub coalesced_count: u64,
+    /// The number of closed slow consumer entries.
     pub closed_slow_consumer_count: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("resource budget {path} exhausted its {dimension:?} capacity at {exhausted_path} ({policy:?})")]
+/// Represents budget acquire error.
 pub struct BudgetAcquireError {
     path: Arc<str>,
     exhausted_path: Arc<str>,
@@ -51,26 +65,31 @@ pub struct BudgetAcquireError {
 
 impl BudgetAcquireError {
     #[must_use]
+    /// Returns the path.
     pub fn path(&self) -> &str {
         &self.path
     }
 
     #[must_use]
+    /// Returns the exhausted path.
     pub fn exhausted_path(&self) -> &str {
         &self.exhausted_path
     }
 
     #[must_use]
+    /// Returns the dimension.
     pub const fn dimension(&self) -> BudgetDimension {
         self.dimension
     }
 
     #[must_use]
+    /// Returns the policy.
     pub const fn policy(&self) -> FullPolicy {
         self.policy
     }
 }
 
+/// Represents resource budget tree.
 pub struct ResourceBudgetTree {
     root: ResourceBudget,
 }
@@ -85,10 +104,12 @@ impl fmt::Debug for ResourceBudgetTree {
 }
 
 impl ResourceBudgetTree {
+    /// Creates a new `ResourceBudgetTree`.
     pub fn new(name: impl Into<String>, limit: BudgetLimit) -> Result<Self, BudgetConfigError> {
         Self::with_clock(name, limit, Arc::new(SystemMonotonicClock::new()))
     }
 
+    /// Sets clock and returns the updated value.
     pub fn with_clock(
         name: impl Into<String>,
         limit: BudgetLimit,
@@ -106,12 +127,14 @@ impl ResourceBudgetTree {
     }
 
     #[must_use]
+    /// Returns the root.
     pub fn root(&self) -> ResourceBudget {
         self.root.clone()
     }
 }
 
 #[derive(Clone)]
+/// Represents resource budget.
 pub struct ResourceBudget {
     node: Arc<BudgetNode>,
     chain: Arc<[Arc<BudgetNode>]>,
@@ -128,6 +151,7 @@ impl fmt::Debug for ResourceBudget {
 }
 
 impl ResourceBudget {
+    /// Returns the child.
     pub fn child(&self, name: impl Into<String>, limit: BudgetLimit) -> Result<Self, BudgetConfigError> {
         let name = validated_name(name.into())?;
         let path: Arc<str> = Arc::from(format!("{}/{}", self.node.path, name));
@@ -142,8 +166,9 @@ impl ResourceBudget {
         })
     }
 
+    /// Attempts to acquire.
     pub fn try_acquire(&self, bytes: usize, class: BudgetClass) -> Result<ResourcePermit, BudgetAcquireError> {
-        let mut reservations = Vec::with_capacity(self.chain.len());
+        let mut reservations = SmallVec::<[NodeReservation; 4]>::with_capacity(self.chain.len());
         for node in self.chain.iter() {
             match node.try_reserve(bytes, class) {
                 Ok(reservation) => reservations.push(reservation),
@@ -170,25 +195,30 @@ impl ResourceBudget {
         })
     }
 
+    /// Attempts to acquire data.
     pub fn try_acquire_data(&self, bytes: usize) -> Result<ResourcePermit, BudgetAcquireError> {
         self.try_acquire(bytes, BudgetClass::Data)
     }
 
+    /// Attempts to acquire control.
     pub fn try_acquire_control(&self, bytes: usize) -> Result<ResourcePermit, BudgetAcquireError> {
         self.try_acquire(bytes, BudgetClass::Control)
     }
 
     #[must_use]
+    /// Returns the snapshot.
     pub fn snapshot(&self) -> BudgetSnapshot {
         self.node.snapshot()
     }
 
     #[must_use]
+    /// Returns the path.
     pub fn path(&self) -> &str {
         &self.node.path
     }
 
     #[must_use]
+    /// Returns the limit.
     pub fn limit(&self) -> BudgetLimit {
         self.node.limit
     }
@@ -226,8 +256,9 @@ fn validated_name(name: String) -> Result<String, BudgetConfigError> {
     Ok(name.to_owned())
 }
 
+/// Represents resource permit.
 pub struct ResourcePermit {
-    reservations: Vec<NodeReservation>,
+    reservations: SmallVec<[NodeReservation; 4]>,
     bytes: usize,
     class: BudgetClass,
 }
@@ -248,11 +279,13 @@ impl fmt::Debug for ResourcePermit {
 
 impl ResourcePermit {
     #[must_use]
+    /// Returns the bytes.
     pub const fn bytes(&self) -> usize {
         self.bytes
     }
 
     #[must_use]
+    /// Returns the class.
     pub const fn class(&self) -> BudgetClass {
         self.class
     }

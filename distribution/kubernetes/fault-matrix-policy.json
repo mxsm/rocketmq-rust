@@ -10,6 +10,7 @@
   "cluster": {
     "control_plane_nodes": 1,
     "worker_nodes": 3,
+    "broker_replicas": 3,
     "controller_replicas": 3,
     "controller_quorum": 2,
     "kind_node_image": "kindest/node:v1.32.2@sha256:f226345927d7e348497136874b6d207e0b32cc52154ad8323129352923a3142f",
@@ -56,8 +57,14 @@
     {
       "id": "rolling_upgrade",
       "timeout_seconds": 600,
+      "precondition": "all five baseline services are ready and an acknowledged message is queryable",
       "injection": "replace the five baseline image digests with candidate digests one workload at a time",
-      "recovery": "rollback every changed workload to its baseline digest",
+      "observable": "rollout status, pre-stop failures, message offsets, image identity, and PVC identity",
+      "rpo_seconds": 0,
+      "rto_seconds": 600,
+      "abort_condition": "any candidate workload misses its rollout deadline or the acknowledged message becomes unavailable",
+      "cleanup": "restore every workload to its baseline digest",
+      "cleanup_verification": "all baseline digests and the original PVC UID set are restored",
       "required_assertions": [
         "rollout_completed",
         "acknowledged_message_visible",
@@ -79,8 +86,14 @@
     {
       "id": "node_eviction",
       "timeout_seconds": 300,
-      "injection": "cordon and drain one worker with eviction API while respecting PodDisruptionBudgets",
-      "recovery": "uncordon the worker and wait for the stateless workload to recover",
+      "precondition": "two ready Proxy replicas are spread across schedulable workers",
+      "injection": "cordon and drain one worker with the eviction API while respecting PodDisruptionBudgets",
+      "observable": "eviction response, replacement Pod UID and node, PDB state, message visibility, and PVC identity",
+      "rpo_seconds": 0,
+      "rto_seconds": 300,
+      "abort_condition": "a stateful PVC is selected for deletion or both Proxy replicas become unavailable",
+      "cleanup": "uncordon the worker and wait for every workload",
+      "cleanup_verification": "the worker is schedulable and the original PVC UID set is intact",
       "required_assertions": [
         "eviction_api_used",
         "pdb_respected",
@@ -97,10 +110,67 @@
       ]
     },
     {
+      "id": "nameserver_minority_partition",
+      "timeout_seconds": 300,
+      "precondition": "three NameServer replicas are ready and route discovery succeeds",
+      "injection": "isolate one NameServer replica from the client namespace with a deny ingress and egress policy",
+      "observable": "isolated Pod identity, policy state, route discovery, message visibility, and recovery latency",
+      "rpo_seconds": 0,
+      "rto_seconds": 30,
+      "abort_condition": "route discovery or acknowledged-message lookup exceeds the availability budget",
+      "cleanup": "delete the run-scoped isolation policy",
+      "cleanup_verification": "all three NameServer replicas are ready and route discovery succeeds",
+      "required_assertions": [
+        "minority_isolated",
+        "route_discovery_available",
+        "acknowledged_message_visible",
+        "nameserver_replicas_restored"
+      ],
+      "required_evidence": [
+        "partition_policy",
+        "nameserver_status",
+        "route_probe",
+        "message_after",
+        "recovery_timing"
+      ]
+    },
+    {
+      "id": "nameserver_majority_unavailable",
+      "timeout_seconds": 300,
+      "precondition": "three NameServer replicas are ready and the route cache is warm",
+      "injection": "make two of three NameServer replicas unavailable",
+      "observable": "unavailable replica count, cached-route data-plane result, fresh route failure mode, and restoration",
+      "rpo_seconds": 0,
+      "rto_seconds": 120,
+      "abort_condition": "the acknowledged message is lost or restoration exceeds the scenario deadline",
+      "cleanup": "restore the NameServer StatefulSet to three replicas",
+      "cleanup_verification": "three NameServer replicas are ready and a fresh route probe succeeds",
+      "required_assertions": [
+        "majority_unavailable_observed",
+        "cached_route_data_plane_bounded",
+        "failure_mode_typed_or_bounded",
+        "acknowledged_message_visible",
+        "nameserver_replicas_restored"
+      ],
+      "required_evidence": [
+        "scale_down_status",
+        "cached_route_probe",
+        "fresh_route_probe",
+        "message_after",
+        "restore_status"
+      ]
+    },
+    {
       "id": "collector_outage",
       "timeout_seconds": 300,
+      "precondition": "the collector has one ready replica and the data plane is healthy",
       "injection": "scale the OpenTelemetry collector to zero",
-      "recovery": "restore the collector replica count and wait for exporter recovery",
+      "observable": "data-plane round trip, bounded telemetry behavior, collector rollout, and SLO duration",
+      "rpo_seconds": 0,
+      "rto_seconds": 30,
+      "abort_condition": "data-plane traffic fails or telemetry backpressure becomes unbounded",
+      "cleanup": "restore the collector replica count to one",
+      "cleanup_verification": "the collector is ready and the data plane remains available",
       "required_assertions": [
         "data_plane_remained_available",
         "telemetry_queue_bounded",
@@ -118,8 +188,14 @@
     {
       "id": "disk_pressure",
       "timeout_seconds": 300,
-      "injection": "taint one worker with node.kubernetes.io/disk-pressure:NoSchedule and evict a stateless Pod",
-      "recovery": "remove the taint and verify scheduling and durability",
+      "precondition": "a ready stateless Proxy Pod is scheduled on a worker",
+      "injection": "taint that worker with node.kubernetes.io/disk-pressure:NoSchedule and evict the Proxy Pod",
+      "observable": "taint, replacement Pod UID and placement, message visibility, PVC identity, and node state",
+      "rpo_seconds": 0,
+      "rto_seconds": 300,
+      "abort_condition": "a stateful PVC changes identity or no Proxy replica remains ready",
+      "cleanup": "remove the disk-pressure taint",
+      "cleanup_verification": "the node is untainted and every workload is ready",
       "required_assertions": [
         "disk_pressure_taint_observed",
         "stateless_pod_rescheduled",
@@ -136,12 +212,71 @@
       ]
     },
     {
+      "id": "disk_full",
+      "timeout_seconds": 300,
+      "precondition": "the production LocalFileMessageStore accepts a durable write and free-space telemetry is captured",
+      "injection": "drive the production store through its disk-full running-state transition without consuming host capacity",
+      "observable": "filesystem usage, typed write rejection, acknowledged-message durability, state recovery, and post-cleanup usage",
+      "rpo_seconds": 0,
+      "rto_seconds": 120,
+      "abort_condition": "an acknowledged message becomes unreadable or the injected state cannot be cleared",
+      "cleanup": "transition the production store back to disk-ok and shut it down cleanly",
+      "cleanup_verification": "new writes succeed, the acknowledged message remains readable, and the cluster Broker is ready",
+      "required_assertions": [
+        "disk_full_state_injected",
+        "write_failure_bounded",
+        "acknowledged_message_visible",
+        "disk_state_cleared",
+        "broker_recovered"
+      ],
+      "required_evidence": [
+        "disk_before",
+        "fault_injection",
+        "write_probe",
+        "message_after",
+        "disk_after"
+      ]
+    },
+    {
+      "id": "slow_disk_fsync_jitter",
+      "timeout_seconds": 300,
+      "precondition": "the Broker PVC is writable and baseline write latency is recorded",
+      "injection": "run bounded synchronous write contention on the Broker PVC",
+      "observable": "baseline and impaired latency, timeout behavior, message offsets, and contention-process termination",
+      "rpo_seconds": 0,
+      "rto_seconds": 120,
+      "abort_condition": "the acknowledged-message lookup fails or disk utilization reaches the emergency reserve",
+      "cleanup": "terminate the contention process and delete its run-scoped file",
+      "cleanup_verification": "no contention process or file remains and Broker readiness recovers",
+      "required_assertions": [
+        "fsync_jitter_observed",
+        "request_latency_bounded",
+        "acknowledged_message_visible",
+        "contention_stopped",
+        "broker_recovered"
+      ],
+      "required_evidence": [
+        "latency_before",
+        "contention_status",
+        "latency_during",
+        "message_after",
+        "cleanup_status"
+      ]
+    },
+    {
       "id": "controller_leader_failure",
       "timeout_seconds": 300,
+      "precondition": "three Controllers are ready and exactly one leader is reported",
       "injection": "delete the current Controller leader Pod",
-      "recovery": "wait for a different elected leader and three ready Controller replicas",
+      "observable": "leader identity before and after, quorum state, message visibility, and replica restoration",
+      "rpo_seconds": 0,
+      "rto_seconds": 180,
+      "abort_condition": "two leaders are observed, quorum is lost, or election exceeds the deadline",
+      "cleanup": "wait for the deleted ordinal and all Controller replicas",
+      "cleanup_verification": "three Controllers are ready and exactly one different leader is reported",
       "required_assertions": [
         "leader_changed",
+        "single_leader_observed",
         "controller_quorum_preserved",
         "acknowledged_message_visible",
         "controller_replicas_restored"
@@ -155,10 +290,150 @@
       ]
     },
     {
+      "id": "controller_quorum_loss",
+      "timeout_seconds": 300,
+      "precondition": "three Controllers are ready and exactly one leader is reported",
+      "injection": "make two Controller replicas unavailable while retaining one replica",
+      "observable": "quorum-unavailable response, absence of duplicate leadership, data-plane behavior, and restored election",
+      "rpo_seconds": 0,
+      "rto_seconds": 180,
+      "abort_condition": "the isolated replica commits a control-plane mutation or acknowledged data is lost",
+      "cleanup": "restore the Controller StatefulSet to three replicas",
+      "cleanup_verification": "three replicas are ready and exactly one leader is reported",
+      "required_assertions": [
+        "quorum_loss_observed",
+        "control_plane_failed_closed",
+        "duplicate_leadership_absent",
+        "acknowledged_message_visible",
+        "controller_quorum_restored"
+      ],
+      "required_evidence": [
+        "quorum_loss_status",
+        "control_plane_probe",
+        "leadership_probe",
+        "message_after",
+        "restore_status"
+      ]
+    },
+    {
+      "id": "network_impairment",
+      "timeout_seconds": 420,
+      "precondition": "the Broker and both Proxy replicas are ready and baseline round-trip latency is recorded",
+      "injection": "apply bounded latency and packet loss, then reject established Broker traffic to model a half-open connection",
+      "observable": "traffic-control state, latency, loss/retry behavior, half-open timeout, message offsets, and cleanup state",
+      "rpo_seconds": 0,
+      "rto_seconds": 120,
+      "abort_condition": "impairment escapes the selected worker or acknowledged data becomes unreadable",
+      "cleanup": "remove every run-scoped traffic-control and firewall rule",
+      "cleanup_verification": "no qdisc/firewall marker remains and workloads recover",
+      "required_assertions": [
+        "latency_injected",
+        "packet_loss_injected",
+        "half_open_bounded",
+        "acknowledged_message_visible",
+        "network_faults_removed"
+      ],
+      "required_evidence": [
+        "network_before",
+        "tc_state",
+        "half_open_probe",
+        "message_after",
+        "network_after"
+      ]
+    },
+    {
+      "id": "ha_replication_lag",
+      "timeout_seconds": 420,
+      "precondition": "three controller-mode Brokers are ready with one master and at least one synchronized replica",
+      "injection": "delay HA replication traffic to one replica, write an acknowledged probe, and remove the current master",
+      "observable": "replication lag, acknowledged offset, promoted Broker identity, RPO, RTO, and restored membership",
+      "rpo_seconds": 0,
+      "rto_seconds": 180,
+      "abort_condition": "the acknowledged probe is absent after promotion or more than one master is observed",
+      "cleanup": "remove replication delay and restore all Broker replicas",
+      "cleanup_verification": "one master, synchronized replicas, zero acknowledged-message loss, and all Brokers ready",
+      "required_assertions": [
+        "replication_lag_observed",
+        "single_master_preserved",
+        "promotion_completed",
+        "acknowledged_message_visible",
+        "rpo_satisfied",
+        "rto_satisfied"
+      ],
+      "required_evidence": [
+        "replication_before",
+        "lag_injection",
+        "promotion_status",
+        "message_after",
+        "rpo_report",
+        "rto_report"
+      ]
+    },
+    {
+      "id": "snapshot_install_interruption",
+      "timeout_seconds": 420,
+      "precondition": "Controller state has advanced beyond a recorded snapshot boundary",
+      "injection": "restart a lagging follower while it is installing a Raft snapshot",
+      "observable": "snapshot transfer attempt, interrupted follower state, checksum/replay result, leader identity, and catch-up",
+      "rpo_seconds": 0,
+      "rto_seconds": 180,
+      "abort_condition": "the follower applies a corrupt snapshot, leadership duplicates, or committed state regresses",
+      "cleanup": "allow the follower to restart and complete snapshot installation",
+      "cleanup_verification": "the follower catches up, checksum validation passes, and one leader remains",
+      "required_assertions": [
+        "snapshot_install_started",
+        "install_interrupted",
+        "corrupt_snapshot_rejected",
+        "follower_caught_up",
+        "single_leader_observed"
+      ],
+      "required_evidence": [
+        "snapshot_before",
+        "interruption_status",
+        "checksum_validation",
+        "snapshot_after",
+        "leadership_status"
+      ]
+    },
+    {
+      "id": "proxy_slow_broker_overload",
+      "timeout_seconds": 420,
+      "precondition": "both Proxy replicas are ready and admission metrics start below every configured bound",
+      "injection": "hold a long poll against an impaired Broker while issuing unrelated sends until admission overload is reached",
+      "observable": "long-poll duration, unrelated-send progress, FIFO order, bounded inflight/items/bytes, typed overload, and shutdown diagnostics",
+      "rpo_seconds": 0,
+      "rto_seconds": 120,
+      "abort_condition": "an unrelated send stalls beyond its deadline or queue budgets exceed their hard limits",
+      "cleanup": "remove Broker impairment and let every admitted request drain or cancel",
+      "cleanup_verification": "all permits return and leaked and detached task counts are zero",
+      "required_assertions": [
+        "long_poll_did_not_block_send",
+        "ordering_preserved",
+        "admission_limits_enforced",
+        "typed_overload_observed",
+        "leaked_zero",
+        "detached_zero"
+      ],
+      "required_evidence": [
+        "long_poll_probe",
+        "send_progress",
+        "ordering_report",
+        "overload_report",
+        "budget_snapshot",
+        "shutdown_report"
+      ]
+    },
+    {
       "id": "secret_rotation",
       "timeout_seconds": 300,
+      "precondition": "baseline credentials authorize an acknowledged-message query",
       "injection": "atomically replace runtime ACL material and restart the affected workload",
-      "recovery": "restore the baseline secret and verify baseline credentials after rollback",
+      "observable": "old/new credential results, rollback result, and redaction scan",
+      "rpo_seconds": 0,
+      "rto_seconds": 180,
+      "abort_condition": "both old and new credentials are simultaneously accepted after rotation or a secret value is emitted",
+      "cleanup": "restore the baseline secret and restart the Broker",
+      "cleanup_verification": "baseline credentials work and generated evidence contains no secret value",
       "required_assertions": [
         "old_credentials_worked_before_rotation",
         "old_credentials_rejected_after_rotation",
@@ -177,8 +452,14 @@
     {
       "id": "acknowledged_message_recovery",
       "timeout_seconds": 300,
-      "injection": "restart the Broker after recording a successful send acknowledgement",
-      "recovery": "wait for Broker readiness and query the same unique key",
+      "precondition": "a successful send acknowledgement and both durable offsets have been recorded",
+      "injection": "restart the Broker after recording the successful send acknowledgement",
+      "observable": "message identity, queue and commit-log offsets, PVC identity, and Broker recovery",
+      "rpo_seconds": 0,
+      "rto_seconds": 180,
+      "abort_condition": "message identity or either durable offset changes",
+      "cleanup": "wait for the Broker StatefulSet to become ready",
+      "cleanup_verification": "the same unique key and offsets are queryable on the original PVC",
       "required_assertions": [
         "send_acknowledged",
         "message_visible_before_restart",

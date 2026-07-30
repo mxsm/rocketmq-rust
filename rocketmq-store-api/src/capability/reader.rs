@@ -28,8 +28,11 @@ use std::future::Future;
 /// }
 /// ```
 pub trait MessageReader: Send + Sync {
+    /// Value type used for request.
     type Request: Send;
+    /// Value type used for output.
     type Output: Send;
+    /// Value type used for error.
     type Error: StdError + Send + Sync + 'static;
 
     /// Reads a bounded message window.

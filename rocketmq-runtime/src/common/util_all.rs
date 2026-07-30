@@ -38,8 +38,11 @@ use crate::RuntimeResult;
 static MULTI_PATH_SPLITTER: LazyLock<String> =
     LazyLock::new(|| env::var("rocketmq.broker.multiPathSplitter").unwrap_or_else(|_| ",".to_string()));
 
+/// The yyyy mm dd hh mm ss constant.
 pub const YYYY_MM_DD_HH_MM_SS: &str = "%Y-%m-%d %H:%M:%S";
+/// The yyyy mm dd hh mm ss sss constant.
 pub const YYYY_MM_DD_HH_MM_SS_SSS: &str = "%Y-%m-%d#%H:%M:%S:%3f";
+/// The yyyymmddhhmmss constant.
 pub const YYYYMMDDHHMMSS: &str = "%Y%m%d%H%M%S";
 
 const HEX_ARRAY: [char; 16] = [
@@ -54,11 +57,13 @@ fn local_timestamp_millis_or_epoch(t: i64) -> DateTime<Local> {
         .unwrap_or_else(Local::now)
 }
 
+/// Executes compute elapsed time milliseconds.
 pub fn compute_elapsed_time_milliseconds(begin_time: Instant) -> u64 {
     let elapsed = begin_time.elapsed();
     elapsed.as_millis() as u64
 }
 
+/// Returns whether it time to do.
 pub fn is_it_time_to_do(when: &str) -> bool {
     let hours: Vec<&str> = when.split(";").collect();
     if !hours.is_empty() {
@@ -150,10 +155,12 @@ pub fn time_millis_to_human_string(t: i64) -> String {
     )
 }
 
+/// Returns whether path exists.
 pub fn is_path_exists(path: &str) -> bool {
     Path::new(path).exists()
 }
 
+/// Returns disk partition space used percent.
 pub fn get_disk_partition_space_used_percent(path: &str) -> f64 {
     if path.is_empty() {
         error!(
@@ -206,6 +213,7 @@ pub fn get_disk_partition_space_used_percent(path: &str) -> f64 {
     -1.0
 }
 
+/// Creates the bytes to string value.
 pub fn bytes_to_string(src: &[u8]) -> String {
     let mut hex_chars = Vec::with_capacity(src.len() * 2);
     for &byte in src {
@@ -216,18 +224,21 @@ pub fn bytes_to_string(src: &[u8]) -> String {
     hex_chars.into_iter().collect()
 }
 
+/// Executes write int.
 pub fn write_int(buffer: &mut [char], pos: usize, value: i32) {
     for (current_pos, move_bits) in (pos..).zip((0..=28).rev().step_by(4)) {
         buffer[current_pos] = HEX_ARRAY[((value >> move_bits) & 0xF) as usize];
     }
 }
 
+/// Executes write short.
 pub fn write_short(buffer: &mut [char], pos: usize, value: i16) {
     for (current_pos, move_bits) in (pos..).zip((0..=12).rev().step_by(4)) {
         buffer[current_pos] = HEX_ARRAY[((value >> move_bits) & 0xF) as usize];
     }
 }
 
+/// Creates the string to bytes value.
 pub fn string_to_bytes(hex_string: impl Into<String>) -> Option<Vec<u8>> {
     let hex_string = hex_string.into();
     if hex_string.is_empty() {
@@ -289,6 +300,7 @@ pub fn offset_to_file_name(offset: u64) -> String {
     format!("{offset:020}")
 }
 
+/// Executes ensure dir ok.
 pub fn ensure_dir_ok(dir_name: &str) {
     if !dir_name.is_empty() {
         let multi_path_splitter = MULTI_PATH_SPLITTER.as_str();
@@ -312,6 +324,7 @@ fn create_dir_if_not_exist(dir_name: &str) {
     }
 }
 
+/// Executes compute next minutes time millis.
 pub fn compute_next_minutes_time_millis() -> u64 {
     let now = SystemTime::now();
     let millis_since_epoch = now
@@ -322,6 +335,7 @@ pub fn compute_next_minutes_time_millis() -> u64 {
     ((millis_since_epoch / millis_in_minute) + 1) * millis_in_minute
 }
 
+/// Executes compute next morning time millis.
 pub fn compute_next_morning_time_millis() -> u64 {
     let now = Local::now();
     let tomorrow = now.date_naive().succ_opt().unwrap_or_else(|| now.date_naive());
@@ -333,6 +347,7 @@ pub fn compute_next_morning_time_millis() -> u64 {
     next_morning.timestamp_millis().max(0) as u64
 }
 
+/// Executes delete empty directory.
 pub fn delete_empty_directory<P: AsRef<Path>>(path: P) {
     let path = path.as_ref();
     if !path.exists() {
@@ -354,6 +369,7 @@ pub fn delete_empty_directory<P: AsRef<Path>>(path: P) {
     }
 }
 
+/// Returns ip.
 pub fn get_ip() -> RuntimeResult<Vec<u8>> {
     match local_ip_address::local_ip() {
         Ok(value) => match value {
@@ -373,6 +389,7 @@ pub fn get_ip() -> RuntimeResult<Vec<u8>> {
     }
 }
 
+/// Returns ip str.
 pub fn get_ip_str() -> CheetahString {
     match local_ip_address::local_ip() {
         Ok(value) => match value {
@@ -389,10 +406,12 @@ pub fn get_ip_str() -> CheetahString {
     }
 }
 
+/// Parses date.
 pub fn parse_date(date: &str, pattern: &str) -> Option<NaiveDateTime> {
     NaiveDateTime::parse_from_str(date, pattern).ok()
 }
 
+/// Parses date to millis.
 pub fn parse_date_to_millis(date: &str, pattern: &str) -> Option<i64> {
     let parsed = parse_date(date, pattern)?;
     let timestamp = match Local.from_local_datetime(&parsed) {

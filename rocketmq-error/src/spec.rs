@@ -39,22 +39,35 @@ pub const ALL_ERROR_SPECS: &[ErrorSpec] = registry::ERROR_SPECS;
 /// fields without changing the lookup contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ErrorSpec {
+    /// The kind value.
     pub kind: ErrorKind,
+    /// The code value.
     pub code: ErrorCode,
+    /// The scope value.
     pub scope: ErrorScope,
+    /// The category value.
     pub category: ErrorCategory,
+    /// The public message value.
     pub public_message: &'static str,
+    /// The remoting value.
     pub remoting: RemotingSpec,
+    /// The grpc value.
     pub grpc: GrpcSpec,
+    /// The http value.
     pub http: HttpSpec,
+    /// The cli value.
     pub cli: CliSpec,
+    /// The recovery value.
     pub recovery: RecoverySpec,
+    /// The observe value.
     pub observe: ObserveSpec,
+    /// The redact value.
     pub redact: RedactionPolicy,
 }
 
 impl ErrorSpec {
     #[inline]
+    /// Creates a new `ErrorSpec`.
     pub const fn new(kind: ErrorKind, public_message: &'static str) -> Self {
         Self {
             kind,

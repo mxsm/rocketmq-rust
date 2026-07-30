@@ -17,8 +17,11 @@ use std::future::Future;
 
 /// Derived-record append capability with implementation-owned values.
 pub trait DerivedRecordSink: Send {
+    /// Value type used for record.
     type Record: Send;
+    /// Value type used for progress.
     type Progress: Send;
+    /// Value type used for error.
     type Error: StdError + Send + Sync + 'static;
 
     /// Appends derived data independently from primary append acknowledgement.

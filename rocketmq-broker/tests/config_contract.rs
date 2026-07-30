@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::PathBuf;
 
 use cheetah_string::CheetahString;
@@ -40,6 +41,16 @@ fn assert_invalid_section(result: Result<ValidatedBrokerConfig, BrokerConfigErro
         Err(error) => panic!("expected an invalid {expected} configuration, got {error}"),
         Ok(_) => panic!("expected an invalid {expected} configuration"),
     }
+}
+
+fn load_inline_config(source: &str) -> Result<RawBrokerConfig, Box<BrokerConfigError>> {
+    let mut file = tempfile::Builder::new()
+        .suffix(".toml")
+        .tempfile()
+        .expect("temporary configuration file");
+    file.write_all(source.as_bytes())
+        .expect("write temporary configuration");
+    RawBrokerConfig::load(file.path()).map_err(Box::new)
 }
 
 #[test]
@@ -285,5 +296,53 @@ fn rendered_deployment_sources_use_the_canonical_section_layout() {
         assert!(source.contains("    [broker]"));
         assert!(source.contains("    [broker.brokerIdentity]"));
         assert!(source.contains("    [store]"));
+    }
+}
+
+#[test]
+fn deterministic_config_cases_preserve_defaults_and_reject_unknown_fields() {
+    const SEED: u64 = 0x524d_5143_4f4e_4647;
+    let mut state = SEED;
+
+    for case in 0..16 {
+        state = state
+            .wrapping_mul(2_862_933_555_777_941_757)
+            .wrapping_add(3_037_000_493);
+        let listen_port = 12_000 + (state % 20_000) as u32;
+        let max_client_events = 1 + state % 16_384;
+        let source = format!(
+            "[broker]\n\
+             listenPort = {listen_port}\n\
+             maxClientEventCount = {max_client_events}\n\
+             storePathRootDir = \"./target/property-config/broker-{case}\"\n\
+             [broker.brokerIdentity]\n\
+             brokerName = \"property-broker-{case}\"\n\
+             brokerClusterName = \"PropertyCluster\"\n\
+             brokerId = 0\n\
+             [store]\n\
+             haListenPort = {}\n\
+             storePathRootDir = \"./target/property-config/store-{case}\"\n",
+            listen_port + 1
+        );
+        let raw = load_inline_config(&source)
+            .unwrap_or_else(|error| panic!("seed={SEED:#018x} case={case} failed to deserialize: {error}"));
+        let validated = ValidatedBrokerConfig::try_from(raw)
+            .unwrap_or_else(|error| panic!("seed={SEED:#018x} case={case} failed to validate: {error}"));
+        assert_eq!(
+            validated.sections().network().listen_port(),
+            listen_port as u16,
+            "seed={SEED:#018x} case={case}"
+        );
+        assert_eq!(
+            validated.sections().resources().max_client_events(),
+            max_client_events as i32,
+            "seed={SEED:#018x} case={case}"
+        );
+
+        let unknown = source.replace("[broker]\n", &format!("[broker]\nunknownProperty{case} = true\n"));
+        assert!(
+            load_inline_config(&unknown).is_err(),
+            "seed={SEED:#018x} case={case} accepted an unknown field"
+        );
     }
 }

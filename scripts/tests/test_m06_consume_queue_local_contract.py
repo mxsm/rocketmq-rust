@@ -36,7 +36,9 @@ class M06ConsumeQueueLocalContractTests(unittest.TestCase):
         mapped_queue = source(
             "rocketmq-store/src/consume_queue/mapped_file_queue.rs"
         )
-        commit_log = source("rocketmq-store/src/log_file/commit_log.rs")
+        commit_log_handles = source(
+            "rocketmq-store/src/log_file/commit_log/handles.rs"
+        )
 
         self.assertIn(
             "context: RwLock<Option<ConsumeQueueStoreContext>>", local_store
@@ -53,7 +55,7 @@ class M06ConsumeQueueLocalContractTests(unittest.TestCase):
         )
         self.assertIn(
             "pub(crate) fn pickup_store_timestamp(&self, offset: i64, size: i32) -> i64",
-            commit_log,
+            commit_log_handles,
         )
 
     def test_consume_queue_handle_uses_explicit_per_queue_synchronization(self) -> None:

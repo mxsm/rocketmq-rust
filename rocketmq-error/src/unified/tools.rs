@@ -30,103 +30,187 @@ pub enum ToolsError {
     // ============================================================================
     /// Topic not found
     #[error("Topic '{topic}' not found")]
-    TopicNotFound { topic: String },
+    /// The topic not found value.
+    TopicNotFound {
+        /// The topic value.
+        topic: String,
+    },
 
     /// Topic already exists
     #[error("Topic '{topic}' already exists")]
-    TopicAlreadyExists { topic: String },
+    /// The topic already exists value.
+    TopicAlreadyExists {
+        /// The topic value.
+        topic: String,
+    },
 
     /// Invalid topic configuration
     #[error("Invalid topic configuration: {reason}")]
-    TopicInvalid { reason: String },
+    /// The topic invalid value.
+    TopicInvalid {
+        /// The reason value.
+        reason: String,
+    },
 
     // ============================================================================
     // Cluster Management Errors
     // ============================================================================
     /// Cluster not found
     #[error("Cluster '{cluster}' not found")]
-    ClusterNotFound { cluster: String },
+    /// The cluster not found value.
+    ClusterNotFound {
+        /// The cluster value.
+        cluster: String,
+    },
 
     /// Invalid cluster configuration
     #[error("Invalid cluster configuration: {reason}")]
-    ClusterInvalid { reason: String },
+    /// The cluster invalid value.
+    ClusterInvalid {
+        /// The reason value.
+        reason: String,
+    },
 
     // ============================================================================
     // Broker Management Errors
     // ============================================================================
     /// Broker not found
     #[error("Broker '{broker}' not found")]
-    BrokerNotFound { broker: String },
+    /// The broker not found value.
+    BrokerNotFound {
+        /// The broker value.
+        broker: String,
+    },
 
     /// Broker offline
     #[error("Broker '{broker}' is offline")]
-    BrokerOffline { broker: String },
+    /// The broker offline value.
+    BrokerOffline {
+        /// The broker value.
+        broker: String,
+    },
 
     // ============================================================================
     // Consumer Management Errors
     // ============================================================================
     /// Consumer group not found
     #[error("Consumer group '{group}' not found")]
-    ConsumerGroupNotFound { group: String },
+    /// The consumer group not found value.
+    ConsumerGroupNotFound {
+        /// The group value.
+        group: String,
+    },
 
     /// Consumer offline
     #[error("Consumer '{consumer}' is offline")]
-    ConsumerOffline { consumer: String },
+    /// The consumer offline value.
+    ConsumerOffline {
+        /// The consumer value.
+        consumer: String,
+    },
 
     // ============================================================================
     // NameServer Management Errors
     // ============================================================================
     /// NameServer unreachable
     #[error("NameServer '{addr}' is unreachable")]
-    NameServerUnreachable { addr: String },
+    /// The name server unreachable value.
+    NameServerUnreachable {
+        /// The addr value.
+        addr: String,
+    },
 
     /// NameServer configuration invalid
     #[error("Invalid NameServer configuration: {reason}")]
-    NameServerConfigInvalid { reason: String },
+    /// The name server config invalid value.
+    NameServerConfigInvalid {
+        /// The reason value.
+        reason: String,
+    },
 
     // ============================================================================
     // Configuration Errors
     // ============================================================================
     /// Invalid configuration field
     #[error("Invalid configuration for '{field}': {reason}")]
-    InvalidConfiguration { field: String, reason: String },
+    /// The invalid configuration value.
+    InvalidConfiguration {
+        /// The field value.
+        field: String,
+        /// The reason value.
+        reason: String,
+    },
 
     /// Missing required field
     #[error("Missing required field: '{field}'")]
-    MissingRequiredField { field: String },
+    /// The missing required field value.
+    MissingRequiredField {
+        /// The field value.
+        field: String,
+    },
 
     // ============================================================================
     // Validation Errors
     // ============================================================================
     /// Input validation failed
     #[error("Validation failed for '{field}': {reason}")]
-    ValidationError { field: String, reason: String },
+    /// The validation error value.
+    ValidationError {
+        /// The field value.
+        field: String,
+        /// The reason value.
+        reason: String,
+    },
 
     /// Generic validation error
     #[error("Validation error: {message}")]
-    ValidationFailed { message: String },
+    /// The validation failed value.
+    ValidationFailed {
+        /// The message value.
+        message: String,
+    },
 
     // ============================================================================
     // Permission Errors
     // ============================================================================
     /// Permission denied for operation
     #[error("Permission denied for operation: {operation}")]
-    PermissionDenied { operation: String },
+    /// The permission denied value.
+    PermissionDenied {
+        /// The operation value.
+        operation: String,
+    },
 
     /// Invalid permission value
     #[error("Invalid permission value: {value}, allowed values: {}", .allowed.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", "))]
-    InvalidPermission { value: i32, allowed: Vec<i32> },
+    /// The invalid permission value.
+    InvalidPermission {
+        /// The value value.
+        value: i32,
+        /// The allowed value.
+        allowed: Vec<i32>,
+    },
 
     // ============================================================================
     // Operation Errors
     // ============================================================================
     /// Operation timeout
     #[error("Operation '{operation}' timed out after {duration_ms}ms")]
-    OperationTimeout { operation: String, duration_ms: u64 },
+    /// The operation timeout value.
+    OperationTimeout {
+        /// The operation value.
+        operation: String,
+        /// The duration duration in milliseconds.
+        duration_ms: u64,
+    },
 
     /// Generic internal error
     #[error("Internal error: {message}")]
-    Internal { message: String },
+    /// The internal value.
+    Internal {
+        /// The message value.
+        message: String,
+    },
 }
 
 impl ToolsError {

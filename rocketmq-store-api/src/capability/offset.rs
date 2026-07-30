@@ -16,8 +16,11 @@ use std::error::Error as StdError;
 
 /// Logical offset lookup capability.
 pub trait OffsetIndex: Send + Sync {
+    /// Value type used for query.
     type Query: Send + Sync;
+    /// Value type used for output.
     type Output;
+    /// Value type used for error.
     type Error: StdError + Send + Sync + 'static;
 
     /// Queries the current logical offset projection.

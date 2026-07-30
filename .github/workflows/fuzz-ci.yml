@@ -12,6 +12,11 @@ on:
       - 'rocketmq-controller/**'
       - 'rocketmq-protocol/**'
       - 'rocketmq-store-local/**'
+      - 'scripts/architecture_evidence_governance_guard.py'
+      - 'scripts/architecture-risk-test-matrix.json'
+      - 'scripts/property-state-suite-registry.json'
+      - 'scripts/architecture-debt-registry.json'
+      - 'codecov.yml'
       - '.github/workflows/fuzz-ci.yml'
   pull_request:
     branches: [main]
@@ -21,6 +26,11 @@ on:
       - 'rocketmq-controller/**'
       - 'rocketmq-protocol/**'
       - 'rocketmq-store-local/**'
+      - 'scripts/architecture_evidence_governance_guard.py'
+      - 'scripts/architecture-risk-test-matrix.json'
+      - 'scripts/property-state-suite-registry.json'
+      - 'scripts/architecture-debt-registry.json'
+      - 'codecov.yml'
       - '.github/workflows/fuzz-ci.yml'
   workflow_dispatch:
   schedule:
@@ -43,6 +53,9 @@ jobs:
       - name: Set up fixed nightly
         run: rustup toolchain install nightly-2026-07-05 --profile minimal
 
+      - name: Validate fuzz ownership and retention policy
+        run: python scripts/architecture_evidence_governance_guard.py
+
       - name: Build fuzz target
         run: >-
           cargo +nightly-2026-07-05 check
@@ -53,7 +66,7 @@ jobs:
 
   exercise:
     name: Exercise ${{ matrix.target }}
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'pull_request' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -64,7 +77,7 @@ jobs:
           - controller_snapshot
           - store_recovery_record
     env:
-      FUZZ_SECONDS: ${{ github.event.schedule == '17 18 * * 0' && '900' || '60' }}
+      FUZZ_SECONDS: ${{ github.event.schedule == '17 18 * * 0' && '900' || github.event_name == 'pull_request' && '10' || '60' }}
 
     steps:
       - name: Checkout

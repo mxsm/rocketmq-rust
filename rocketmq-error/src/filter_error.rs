@@ -16,45 +16,57 @@
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum FilterError {
     #[error("Bytes is empty!")]
+    /// Represents the empty bytes case.
     EmptyBytes,
 
     #[error("Bit is less than 1.")]
+    /// Represents the invalid bit length case.
     InvalidBitLength,
 
     #[error("BitLength is less than bytes.length * 8")]
+    /// Represents the bit length too small case.
     BitLengthTooSmall,
 
     #[error("BitPos {0} is greater than {1}")]
+    /// Represents the bit position out of bounds case.
     BitPositionOutOfBounds(usize, usize),
 
     #[error("BytePos {0} is greater than {1}")]
+    /// Represents the byte position out of bounds case.
     BytePositionOutOfBounds(usize, usize),
 
     #[error("Not initialized!")]
+    /// Represents the uninitialized case.
     Uninitialized,
 }
 
 impl FilterError {
+    /// Creates the empty bytes value.
     pub fn empty_bytes() -> Self {
         FilterError::EmptyBytes
     }
 
+    /// Creates the invalid bit length value.
     pub fn invalid_bit_length() -> Self {
         FilterError::InvalidBitLength
     }
 
+    /// Creates the bit length too small value.
     pub fn bit_length_too_small() -> Self {
         FilterError::BitLengthTooSmall
     }
 
+    /// Creates the bit position out of bounds value.
     pub fn bit_position_out_of_bounds(pos: usize, max: usize) -> Self {
         FilterError::BitPositionOutOfBounds(pos, max)
     }
 
+    /// Creates the byte position out of bounds value.
     pub fn byte_position_out_of_bounds(pos: usize, max: usize) -> Self {
         FilterError::BytePositionOutOfBounds(pos, max)
     }
 
+    /// Creates the uninitialized value.
     pub fn uninitialized() -> Self {
         FilterError::Uninitialized
     }

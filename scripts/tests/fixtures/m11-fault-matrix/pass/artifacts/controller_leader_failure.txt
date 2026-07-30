@@ -1,1 +1,1 @@
-fixture: Controller leader changed while quorum, replicas, and acknowledged-message visibility were preserved
+M11-11 guard fixture only: controller_leader_failure

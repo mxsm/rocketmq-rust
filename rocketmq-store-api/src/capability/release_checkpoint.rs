@@ -26,6 +26,7 @@ use crate::checkpoint::CheckpointRestoreVerification;
 /// from ordinary administrative storage operations.
 #[allow(async_fn_in_trait)]
 pub trait ReleaseCheckpointStore: Send + Sync {
+    /// Value type used for error.
     type Error: StdError + Send + Sync + 'static;
 
     /// Flushes the Store barrier and creates a checksummed checkpoint artifact.

@@ -44,15 +44,31 @@ async-trait = "0.1"
 bytes = { workspace = true }
 cheetah-string = { workspace = true }
 serde = { workspace = true }
+smallvec = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+anyhow = { workspace = true }
 criterion = { version = "0.8", features = ["html_reports"] }
+serde_json = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
+
+[[example]]
+name = "architecture_proxy_performance_collector"
+required-features = ["bench-support"]
 
 [[bench]]
 name = "cluster_executor"
 harness = false
 required-features = ["bench-support"]
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2.186"
+
+[target.'cfg(windows)'.dev-dependencies]
+windows = { version = "0.62.2", features = [
+  "Win32_System_ProcessStatus",
+  "Win32_System_Threading",
+] }

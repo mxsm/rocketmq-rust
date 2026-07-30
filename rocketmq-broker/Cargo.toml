@@ -111,6 +111,9 @@ rocketmq-controller  = { workspace = true }
 rocketmq-namesrv     = { workspace = true }
 tempfile             = "3.27.0"
 
+[[example]]
+name = "architecture_transaction_performance_collector"
+
 [[bin]]
 name = "rocketmq-broker-rust"
 path = "src/bin/broker_bootstrap_server.rs"
@@ -158,3 +161,12 @@ harness = false
 [[bench]]
 name    = "topic_config_lookup_benchmark"
 harness = false
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2.186"
+
+[target.'cfg(windows)'.dev-dependencies]
+windows = { version = "0.62.2", features = [
+  "Win32_System_ProcessStatus",
+  "Win32_System_Threading",
+] }

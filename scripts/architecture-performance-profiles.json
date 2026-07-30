@@ -460,7 +460,7 @@
           "id": "mixed-tls-churn",
           "parameters": {
             "message_size_bytes": 1024,
-            "connections": 10000,
+            "connections": 50000,
             "duration_seconds": 900,
             "cooldown_seconds": 60,
             "tls_ratio": 0.5,
@@ -524,6 +524,88 @@
         {
           "metric": "control_plane_success_ratio",
           "operator": "min",
+          "value": 1.0,
+          "gate": false
+        }
+      ]
+    },
+    {
+      "id": "proxy-mixed-execution",
+      "description": "Proxy Cluster batched sends on unrelated producer keys while one key is blocked in simulated remote I/O; this focused profile measures head-of-line isolation and does not claim end-to-end Broker TPS.",
+      "collection": {
+        "driver": "target-hardware-sidecar",
+        "status": "requires-target-hardware-run",
+        "reference_commands": [
+          "cargo run --release --quiet -p rocketmq-proxy-cluster --features bench-support --example architecture_proxy_performance_collector -- proxy-mixed-execution same-and-distinct-keys"
+        ],
+        "required_outputs": [
+          "environment_metadata",
+          "correctness_evidence",
+          "raw_samples",
+          "profile_report"
+        ]
+      },
+      "metric_sets": ["core"],
+      "metrics": [],
+      "variants": [
+        {
+          "id": "same-and-distinct-keys",
+          "parameters": {
+            "rounds": 512,
+            "unrelated_commands_per_round": 64,
+            "messages_per_command": 32,
+            "message_size_bytes": 1024,
+            "unrelated_key_count": 16,
+            "blocked_io_duration_ms": 20,
+            "key_distribution": "one-blocked-key-plus-distinct-producer-keys",
+            "io_accounting": "one-admit-one-drain",
+            "external_network": false
+          }
+        }
+      ],
+      "hypotheses": [
+        {
+          "metric": "io_amplification_ratio",
+          "operator": "max",
+          "value": 1.0,
+          "gate": false
+        }
+      ]
+    },
+    {
+      "id": "transaction-queue-io",
+      "description": "Transaction operation-queue resolution followed by per-queue durable file I/O, proving that shared queue lookup does not cover the await.",
+      "collection": {
+        "driver": "target-hardware-sidecar",
+        "status": "requires-target-hardware-run",
+        "reference_commands": [
+          "cargo run --release --quiet -p rocketmq-broker --example architecture_transaction_performance_collector -- transaction-queue-io queues-8"
+        ],
+        "required_outputs": [
+          "environment_metadata",
+          "correctness_evidence",
+          "raw_samples",
+          "profile_report"
+        ]
+      },
+      "metric_sets": ["core"],
+      "metrics": [],
+      "variants": [
+        {
+          "id": "queues-8",
+          "parameters": {
+            "queues": 8,
+            "operations_per_queue": 8192,
+            "payload_bytes": 1024,
+            "sync_every": 32,
+            "filesystem": "target-host-temporary-directory"
+          }
+        }
+      ],
+      "hypotheses": [
+        {
+          "metric": "io_amplification_ratio",
+          "operator": "max",
           "value": 1.0,
           "gate": false
         }

@@ -13,6 +13,35 @@ env:
   CARGO_PROFILE_TEST_DEBUG: "false"
 
 jobs:
+  governance:
+    name: Evidence registry governance
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Validate risk, property, fuzz, and coverage registries
+        run: |
+          mkdir -p target/architecture-evidence/governance
+          python scripts/architecture_evidence_governance_guard.py \
+            | tee target/architecture-evidence/governance/guard-output.txt
+          sha256sum \
+            scripts/architecture-risk-test-matrix.json \
+            scripts/property-state-suite-registry.json \
+            fuzz/corpus-registry.json \
+            codecov.yml \
+            > target/architecture-evidence/governance/registry-sha256.txt
+          git rev-parse HEAD > target/architecture-evidence/governance/commit.txt
+
+      - name: Upload governance evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: architecture-nightly-governance-${{ github.sha }}
+          path: target/architecture-evidence/governance
+          if-no-files-found: error
+          retention-days: 30
+
   loom:
     name: Complete Loom models
     runs-on: ubuntu-latest
@@ -44,6 +73,34 @@ jobs:
         with:
           name: architecture-nightly-loom-${{ github.sha }}
           path: target/architecture-evidence/loom
+          if-no-files-found: error
+          retention-days: 30
+
+  property-state:
+    name: Deterministic property and state suites
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Use repository Rust 1.95 toolchain
+        run: rustup show active-toolchain
+
+      - name: Execute registered suites
+        run: |
+          set -o pipefail
+          mkdir -p target/architecture-evidence/property-state
+          rustc -Vv > target/architecture-evidence/property-state/environment.txt
+          python scripts/run_property_state_suites.py \
+            2>&1 | tee target/architecture-evidence/property-state/test-output.txt
+          git rev-parse HEAD > target/architecture-evidence/property-state/commit.txt
+
+      - name: Upload property and state evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: architecture-nightly-property-state-${{ github.sha }}
+          path: target/architecture-evidence/property-state
           if-no-files-found: error
           retention-days: 30
 

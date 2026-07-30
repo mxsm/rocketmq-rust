@@ -1,0 +1,1 @@
+M11-11 guard fixture only: snapshot_install_interruption

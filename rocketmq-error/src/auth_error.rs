@@ -67,8 +67,11 @@ pub enum AuthError {
          allowedSkewMillis={allowed_skew_millis}"
     )]
     RequestTimestampExpired {
+        /// The struct field value.
         request_timestamp_millis: i64,
+        /// The struct field value.
         now_millis: i64,
+        /// The struct field value.
         allowed_skew_millis: u64,
     },
 
@@ -79,8 +82,10 @@ pub enum AuthError {
     /// Authentication operation failed with a preserved typed source.
     #[error("Authentication operation {operation} failed")]
     Operation {
+        /// The struct field value.
         operation: &'static str,
         #[source]
+        /// The struct field value.
         source: Box<dyn StdError + Send + Sync>,
     },
 }

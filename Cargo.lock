@@ -4599,6 +4599,7 @@ dependencies = [
  "dirs",
  "dns-lookup",
  "futures",
+ "libc",
  "local-ip-address",
  "num_cpus",
  "parking_lot",
@@ -4625,6 +4626,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "trait-variant",
+ "windows",
 ]
 
 [[package]]
@@ -4950,10 +4952,12 @@ dependencies = [
 name = "rocketmq-proxy-cluster"
 version = "1.0.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "bytes",
  "cheetah-string",
  "criterion",
+ "libc",
  "rocketmq-client-rust",
  "rocketmq-error",
  "rocketmq-model",
@@ -4962,9 +4966,12 @@ dependencies = [
  "rocketmq-runtime",
  "rocketmq-security-api",
  "serde",
+ "serde_json",
+ "smallvec",
  "tokio",
  "tokio-util",
  "tracing",
+ "windows",
 ]
 
 [[package]]
@@ -5024,6 +5031,7 @@ dependencies = [
  "parking_lot",
  "serde",
  "serde_json",
+ "smallvec",
  "sysinfo",
  "tempfile",
  "thiserror 2.0.18",

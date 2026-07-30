@@ -32,6 +32,7 @@ impl SecretProviderId {
         Ok(Self(value))
     }
 
+    /// Borrows this value as str.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -55,6 +56,7 @@ impl SecretName {
         Ok(Self(value))
     }
 
+    /// Borrows this value as str.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -70,10 +72,13 @@ impl fmt::Debug for SecretName {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum SecretIdentifierError {
     #[error("secret identifier is empty")]
+    /// Represents the empty case.
     Empty,
     #[error("secret identifier exceeds 128 bytes")]
+    /// Represents the too long case.
     TooLong,
     #[error("secret identifier contains unsupported characters")]
+    /// Represents the unsupported character case.
     UnsupportedCharacter,
 }
 
@@ -113,10 +118,12 @@ impl SecretMaterial {
         &self.0
     }
 
+    /// Returns the len.
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
+    /// Returns whether empty.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -144,6 +151,7 @@ impl Drop for SecretMaterial {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum SecretMaterialError {
     #[error("secret material is empty")]
+    /// Represents the empty case.
     Empty,
 }
 
@@ -152,10 +160,12 @@ pub enum SecretMaterialError {
 pub struct SecretVersion(u64);
 
 impl SecretVersion {
+    /// Creates a new `SecretVersion`.
     pub const fn new(value: u64) -> Self {
         Self(value)
     }
 
+    /// Returns the get.
     pub const fn get(self) -> u64 {
         self.0
     }
@@ -168,18 +178,22 @@ pub struct VersionedSecret {
 }
 
 impl VersionedSecret {
+    /// Creates a new `VersionedSecret`.
     pub fn new(material: SecretMaterial, version: Option<SecretVersion>) -> Self {
         Self { material, version }
     }
 
+    /// Returns the material.
     pub fn material(&self) -> &SecretMaterial {
         &self.material
     }
 
+    /// Converts this value into material.
     pub fn into_material(self) -> SecretMaterial {
         self.material
     }
 
+    /// Returns the version.
     pub const fn version(&self) -> Option<SecretVersion> {
         self.version
     }
@@ -197,22 +211,29 @@ impl fmt::Debug for VersionedSecret {
 /// Mutation support declared by a provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SecretAccess {
+    /// Represents the read only case.
     ReadOnly,
+    /// Represents the read write case.
     ReadWrite,
 }
 
 /// Storage class declared by a provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SecretPersistence {
+    /// Represents the process environment case.
     ProcessEnvironment,
+    /// Represents the encrypted local storage case.
     EncryptedLocalStorage,
+    /// Represents the external service case.
     ExternalService,
 }
 
 /// Concurrency contract declared by a provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SecretVersioning {
+    /// Represents the unversioned case.
     Unversioned,
+    /// Represents the optimistic case.
     Optimistic,
 }
 
@@ -225,6 +246,7 @@ pub struct SecretProviderCapabilities {
 }
 
 impl SecretProviderCapabilities {
+    /// Creates a new `SecretProviderCapabilities`.
     pub const fn new(access: SecretAccess, persistence: SecretPersistence, versioning: SecretVersioning) -> Self {
         Self {
             access,
@@ -233,14 +255,17 @@ impl SecretProviderCapabilities {
         }
     }
 
+    /// Returns the access.
     pub const fn access(self) -> SecretAccess {
         self.access
     }
 
+    /// Returns the persistence.
     pub const fn persistence(self) -> SecretPersistence {
         self.persistence
     }
 
+    /// Returns the versioning.
     pub const fn versioning(self) -> SecretVersioning {
         self.versioning
     }
@@ -250,33 +275,46 @@ impl SecretProviderCapabilities {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum SecretProviderError {
     #[error("secret provider is not registered")]
+    /// Represents the provider not registered case.
     ProviderNotRegistered,
     #[error("secret provider is already registered")]
+    /// Represents the duplicate provider case.
     DuplicateProvider,
     #[error("secret material was not found")]
+    /// Represents the not found case.
     NotFound,
     #[error("secret provider is read-only")]
+    /// Represents the read only case.
     ReadOnly,
     #[error("secret material is invalid")]
+    /// Represents the invalid material case.
     InvalidMaterial,
     #[error("secret provider configuration is invalid")]
+    /// Represents the invalid configuration case.
     InvalidConfiguration,
     #[error("secret storage permissions are not owner-only")]
+    /// Represents the insecure permissions case.
     InsecurePermissions,
     #[error("secret version conflict")]
+    /// Represents the version conflict case.
     VersionConflict,
     #[error("secret envelope is invalid or authentication failed")]
+    /// Represents the invalid envelope case.
     InvalidEnvelope,
     #[error("secret provider is unavailable")]
+    /// Represents the unavailable case.
     Unavailable,
     #[error("secret provider is unsupported on this platform")]
+    /// Represents the unsupported platform case.
     UnsupportedPlatform,
 }
 
 /// Synchronous, runtime-neutral boundary implemented by injected providers.
 pub trait SecretProvider: Send + Sync {
+    /// Returns the id.
     fn id(&self) -> &SecretProviderId;
 
+    /// Returns the capabilities.
     fn capabilities(&self) -> SecretProviderCapabilities;
 
     /// Reads a secret without exposing provider implementation types.

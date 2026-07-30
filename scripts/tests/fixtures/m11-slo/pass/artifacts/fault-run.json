@@ -33,13 +33,40 @@
       "id": "node_eviction"
     },
     {
+      "id": "nameserver_minority_partition"
+    },
+    {
+      "id": "nameserver_majority_unavailable"
+    },
+    {
       "id": "collector_outage"
     },
     {
       "id": "disk_pressure"
     },
     {
+      "id": "disk_full"
+    },
+    {
+      "id": "slow_disk_fsync_jitter"
+    },
+    {
       "id": "controller_leader_failure"
+    },
+    {
+      "id": "controller_quorum_loss"
+    },
+    {
+      "id": "network_impairment"
+    },
+    {
+      "id": "ha_replication_lag"
+    },
+    {
+      "id": "snapshot_install_interruption"
+    },
+    {
+      "id": "proxy_slow_broker_overload"
     },
     {
       "id": "secret_rotation"

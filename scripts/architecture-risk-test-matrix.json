@@ -1,0 +1,263 @@
+{
+  "schema_version": 1,
+  "risk_classes": {
+    "critical": "Wire, persisted state, unsafe memory, consensus, durability, and shutdown correctness",
+    "high": "Execution ordering, transport serialization, transaction, recovery, security, and error mapping",
+    "normal": "Composition, tooling, configuration, documentation, and compatibility-facade governance"
+  },
+  "required_debt_registry": "scripts/architecture-debt-registry.json",
+  "entries": [
+    {
+      "debt_id": "ARC-COMP-001",
+      "risk_class": "high",
+      "owner": "store",
+      "tests": [
+        {
+          "kind": "integration",
+          "sources": ["rocketmq-store-local/tests/storage_layout_golden.rs"],
+          "trigger_paths": ["rocketmq-store*/**", "rocketmq-broker/**"],
+          "command": "cargo test -p rocketmq-store-local --test storage_layout_golden",
+          "duration_seconds": 120,
+          "platform": "any",
+          "features": "default",
+          "artifact": "cargo-test-output-<commit>",
+          "behavior_contract": true
+        }
+      ]
+    },
+    {
+      "debt_id": "ARC-COMP-002",
+      "risk_class": "normal",
+      "owner": "store-tools",
+      "tests": [
+        {
+          "kind": "contract",
+          "sources": ["scripts/tests/test_architecture_dependency_guard.py"],
+          "trigger_paths": ["**/Cargo.toml", "rocketmq-store*/**"],
+          "command": "python -m unittest scripts.tests.test_architecture_dependency_guard -v",
+          "duration_seconds": 60,
+          "platform": "any",
+          "features": "not-applicable",
+          "artifact": "architecture-guard-output-<commit>",
+          "behavior_contract": true
+        }
+      ]
+    },
+    {
+      "debt_id": "ARC-PANIC-001",
+      "risk_class": "high",
+      "owner": "architecture-maintainers",
+      "tests": [
+        {
+          "kind": "contract",
+          "sources": ["scripts/tests/test_rust_hygiene_guard.py"],
+          "trigger_paths": ["**/*.rs"],
+          "command": "python -m unittest scripts.tests.test_rust_hygiene_guard -v",
+          "duration_seconds": 60,
+          "platform": "any",
+          "features": "all",
+          "artifact": "architecture-guard-output-<commit>",
+          "behavior_contract": true
+        }
+      ]
+    },
+    {
+      "debt_id": "ARC-TRAIT-001",
+      "risk_class": "normal",
+      "owner": "architecture-maintainers",
+      "tests": [
+        {
+          "kind": "contract",
+          "sources": ["scripts/tests/test_trait_policy_guard.py"],
+          "trigger_paths": ["**/*.rs"],
+          "command": "python -m unittest scripts.tests.test_trait_policy_guard -v",
+          "duration_seconds": 60,
+          "platform": "any",
+          "features": "all",
+          "artifact": "architecture-guard-output-<commit>",
+          "behavior_contract": true
+        }
+      ]
+    },
+    {
+      "debt_id": "ARC-ALLOW-001",
+      "risk_class": "high",
+      "owner": "architecture-maintainers",
+      "tests": [
+        {
+          "kind": "contract",
+          "sources": ["scripts/tests/test_rust_lint_debt_guard.py"],
+          "trigger_paths": ["**/*.rs", ".clippy.toml"],
+          "command": "python -m unittest scripts.tests.test_rust_lint_debt_guard -v",
+          "duration_seconds": 60,
+          "platform": "any",
+          "features": "all",
+          "artifact": "architecture-guard-output-<commit>",
+          "behavior_contract": true
+        }
+      ]
+    },
+    {
+      "debt_id": "ARC-RUNTIME-001",
+      "risk_class": "critical",
+      "owner": "runtime-maintainers",
+      "tests": [
+        {
+          "kind": "loom",
+          "sources": ["rocketmq-runtime/tests/task_group_shutdown_loom.rs"],
+          "trigger_paths": ["rocketmq-runtime/**", "**/*.rs"],
+          "command": "cargo test -p rocketmq-runtime --test task_group_shutdown_loom",
+          "duration_seconds": 300,
+          "platform": "any",
+          "features": "default",
+          "artifact": "architecture-nightly-loom-<commit>",
+          "behavior_contract": true
+        }
+      ]
+    },
+    {
+      "debt_id": "ARC-FACADE-001",
+      "risk_class": "high",
+      "owner": "store",
+      "tests": [
+        {
+          "kind": "contract",
+          "sources": ["scripts/tests/test_message_store_capability_guard.py"],
+          "trigger_paths": ["rocketmq-store*/**", "rocketmq-broker/**"],
+          "command": "python -m unittest scripts.tests.test_message_store_capability_guard -v",
+          "duration_seconds": 60,
+          "platform": "any",
+          "features": "default",
+          "artifact": "architecture-guard-output-<commit>",
+          "behavior_contract": true
+        }
+      ]
+    },
+    {
+      "debt_id": "ARC-FACADE-002",
+      "risk_class": "high",
+      "owner": "proxy",
+      "tests": [
+        {
+          "kind": "integration",
+          "sources": ["rocketmq-proxy-cluster/src/cluster_behavior_tests.rs"],
+          "trigger_paths": ["rocketmq-proxy*/**"],
+          "command": "cargo test -p rocketmq-proxy-cluster --lib",
+          "duration_seconds": 300,
+          "platform": "any",
+          "features": "default",
+          "artifact": "cargo-test-output-<commit>",
+          "behavior_contract": true
+        }
+      ]
+    },
+    {
+      "debt_id": "ARC-RUNTIME-002",
+      "risk_class": "high",
+      "owner": "runtime-maintainers",
+      "tests": [
+        {
+          "kind": "integration",
+          "sources": ["rocketmq-client/tests/client_runtime_ownership.rs"],
+          "trigger_paths": ["rocketmq-client/**", "rocketmq-runtime/**"],
+          "command": "cargo test -p rocketmq-client-rust --test client_runtime_ownership",
+          "duration_seconds": 180,
+          "platform": "any",
+          "features": "default",
+          "artifact": "cargo-test-output-<commit>",
+          "behavior_contract": true
+        }
+      ]
+    },
+    {
+      "debt_id": "ARC-RUNTIME-003",
+      "risk_class": "high",
+      "owner": "proxy",
+      "tests": [
+        {
+          "kind": "integration",
+          "sources": ["rocketmq-proxy-cluster/src/cluster_behavior_tests.rs"],
+          "trigger_paths": ["rocketmq-proxy-cluster/**", "rocketmq-runtime/**"],
+          "command": "cargo test -p rocketmq-proxy-cluster --lib cluster",
+          "duration_seconds": 300,
+          "platform": "any",
+          "features": "default",
+          "artifact": "cargo-test-output-<commit>",
+          "behavior_contract": true
+        }
+      ]
+    },
+    {
+      "debt_id": "ARC-RUNTIME-004",
+      "risk_class": "high",
+      "owner": "broker",
+      "tests": [
+        {
+          "kind": "integration",
+          "sources": ["rocketmq-broker/src/transaction/queue/default_transactional_message_service.rs"],
+          "trigger_paths": ["rocketmq-broker/src/transaction/**", "rocketmq-store*/**"],
+          "command": "cargo test -p rocketmq-broker transaction_service_ownership_uses_standard_arc_and_explicit_serialization",
+          "duration_seconds": 300,
+          "platform": "any",
+          "features": "default",
+          "artifact": "cargo-test-output-<commit>",
+          "behavior_contract": true
+        }
+      ]
+    },
+    {
+      "debt_id": "ARC-RUNTIME-005",
+      "risk_class": "critical",
+      "owner": "transport",
+      "tests": [
+        {
+          "kind": "integration",
+          "sources": ["rocketmq-transport/tests/session_concurrency.rs"],
+          "trigger_paths": ["rocketmq-transport/**", "rocketmq-broker/**"],
+          "command": "cargo test -p rocketmq-transport --test session_concurrency",
+          "duration_seconds": 300,
+          "platform": "any",
+          "features": "default",
+          "artifact": "cargo-test-output-<commit>",
+          "behavior_contract": true
+        }
+      ]
+    },
+    {
+      "debt_id": "ARC-RUNTIME-006",
+      "risk_class": "high",
+      "owner": "dashboard",
+      "tests": [
+        {
+          "kind": "integration",
+          "sources": ["rocketmq-dashboard/rocketmq-dashboard-web/backend/src/admin/dashboard_admin_client.rs"],
+          "trigger_paths": ["rocketmq-dashboard/**", "rocketmq-tools/rocketmq-admin/**"],
+          "command": "cargo test --manifest-path rocketmq-dashboard/rocketmq-dashboard-web/backend/Cargo.toml",
+          "duration_seconds": 600,
+          "platform": "any",
+          "features": "all",
+          "artifact": "cargo-test-output-<commit>",
+          "behavior_contract": true
+        }
+      ]
+    },
+    {
+      "debt_id": "ARC-RUNTIME-007",
+      "risk_class": "critical",
+      "owner": "runtime-maintainers",
+      "tests": [
+        {
+          "kind": "property",
+          "sources": ["rocketmq-runtime/tests/resource_budget_tree.rs"],
+          "trigger_paths": ["rocketmq-runtime/**", "rocketmq-tools/rocketmq-admin/**"],
+          "command": "cargo test -p rocketmq-runtime --test resource_budget_tree",
+          "duration_seconds": 300,
+          "platform": "any",
+          "features": "default",
+          "artifact": "cargo-test-output-<commit>",
+          "behavior_contract": true
+        }
+      ]
+    }
+  ]
+}

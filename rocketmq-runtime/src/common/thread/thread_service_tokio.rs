@@ -29,6 +29,7 @@ use crate::common::thread::Runnable;
 
 const SERVICE_THREAD_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Represents service thread tokio.
 pub struct ServiceThreadTokio {
     name: String,
     runnable: Arc<Mutex<dyn Runnable>>,
@@ -40,6 +41,7 @@ pub struct ServiceThreadTokio {
 }
 
 impl ServiceThreadTokio {
+    /// Creates a new `ServiceThreadTokio`.
     pub fn new(name: String, runnable: Arc<Mutex<dyn Runnable>>) -> Self {
         ServiceThreadTokio {
             name,
@@ -52,6 +54,7 @@ impl ServiceThreadTokio {
         }
     }
 
+    /// Starts the owned service.
     pub fn start(&mut self) {
         let started = self.started.clone();
         let runnable = self.runnable.clone();
@@ -81,6 +84,7 @@ impl ServiceThreadTokio {
         self.completion = Some(completion_rx);
     }
 
+    /// Executes make stop.
     pub fn make_stop(&mut self) {
         if !self.started.load(Ordering::Acquire) {
             return;
@@ -88,19 +92,23 @@ impl ServiceThreadTokio {
         self.stopped.store(true, Ordering::Release);
     }
 
+    /// Returns whether stopped.
     pub fn is_stopped(&self) -> bool {
         self.stopped.load(Ordering::Relaxed)
     }
 
+    /// Shuts down the owned service.
     pub async fn shutdown(&mut self) {
         self.shutdown_interrupt(false).await;
     }
 
+    /// Shuts down interrupt.
     pub async fn shutdown_interrupt(&mut self, interrupt: bool) {
         self.shutdown_interrupt_with_timeout(interrupt, SERVICE_THREAD_SHUTDOWN_TIMEOUT)
             .await;
     }
 
+    /// Shuts down interrupt with timeout.
     pub async fn shutdown_interrupt_with_timeout(&mut self, interrupt: bool, join_timeout: Duration) {
         if let Ok(value) = self
             .started
@@ -159,10 +167,12 @@ impl ServiceThreadTokio {
         }
     }
 
+    /// Executes wakeup.
     pub fn wakeup(&self) {
         self.notified.notify_waiters();
     }
 
+    /// Executes wait for running.
     pub async fn wait_for_running(&self, interval: u64) {
         let _ = timeout(Duration::from_millis(interval), self.notified.notified()).await;
     }

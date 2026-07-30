@@ -30,6 +30,7 @@ static LOCK: Mutex<()> = Mutex::new(());
 #[cfg(feature = "async_fs")]
 static ASYNC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+/// Reads a file into a UTF-8 string.
 pub fn file_to_string(file_name: impl AsRef<Path>) -> RuntimeResult<String> {
     let path = file_name.as_ref();
     match std::fs::read_to_string(path) {
@@ -41,6 +42,7 @@ pub fn file_to_string(file_name: impl AsRef<Path>) -> RuntimeResult<String> {
         Err(e) => Err(RuntimeError::Io(e)),
     }
 }
+/// Writes a string to a file.
 pub fn string_to_file(str_content: &str, file_name: impl AsRef<Path>) -> RuntimeResult<()> {
     let _lock = LOCK.lock();
 
@@ -61,11 +63,21 @@ pub fn string_to_file(str_content: &str, file_name: impl AsRef<Path>) -> Runtime
         .map_err(metadata_io_error)
 }
 
+/// Creates the metadata io error value.
 pub fn metadata_io_error(error: MetadataIoError) -> RuntimeError {
     RuntimeError::Io(io::Error::other(error))
 }
 
 #[cfg(feature = "async_fs")]
+/// Reads the complete file as a UTF-8 string without blocking the async executor.
+///
+/// Unlike [`file_to_string`], a missing file is reported as an error rather than
+/// being converted to an empty string.
+///
+/// # Errors
+///
+/// Returns [`RuntimeError::Io`] when the path does not exist, cannot be read, or
+/// does not contain valid UTF-8.
 pub async fn file_to_string_async(file_name: impl AsRef<Path>) -> RuntimeResult<String> {
     let path = file_name.as_ref();
     if !tokio::fs::try_exists(path).await? {
@@ -79,6 +91,16 @@ pub async fn file_to_string_async(file_name: impl AsRef<Path>) -> RuntimeResult<
 }
 
 #[cfg(feature = "async_fs")]
+/// Replaces a file with UTF-8 content while preserving the previous bytes in a
+/// sibling `.bak` file.
+///
+/// Concurrent calls through this helper are serialized within the process. The
+/// parent directory is created when necessary.
+///
+/// # Errors
+///
+/// Returns [`RuntimeError::Io`] when existence checks, backup creation,
+/// directory creation, writing, or flushing fail.
 pub async fn string_to_file_async(str_content: &str, file_name: impl AsRef<Path>) -> RuntimeResult<()> {
     let _lock = ASYNC_LOCK.lock().await;
 

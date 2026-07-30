@@ -1435,7 +1435,7 @@ async fn worker_maps_send_results_and_orders_shutdown() {
                             queue_id: None,
                         },
                     ],
-                    timeout: Some(Duration::from_millis(100)),
+                    timeout: None,
                 },
                 Some("client-a".to_owned()),
                 "request-a".to_owned(),
@@ -1552,7 +1552,7 @@ async fn cancellation_during_producer_start_still_shuts_down_producer_before_cli
                     message: ProxyMessage::new("TopicA", b"body".to_vec()),
                     queue_id: None,
                 }],
-                timeout: Some(Duration::from_millis(100)),
+                timeout: None,
             },
             None,
             "request".to_owned(),
@@ -1565,7 +1565,10 @@ async fn cancellation_during_producer_start_still_shuts_down_producer_before_cli
         result.expect_err("cancelled producer startup must not send")
     });
     let error = error.await;
-    assert!(matches!(error, ProxyError::Transport { .. }));
+    assert!(
+        matches!(error, ProxyError::Transport { .. }),
+        "producer startup cancellation must surface as transport shutdown: {error:?}"
+    );
     let events = events.lock().expect("event log lock poisoned");
     assert_eq!(
         events.as_slice(),

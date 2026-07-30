@@ -28,19 +28,34 @@ use super::limit::BudgetDimension;
 use super::limit::FullPolicy;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Identifies the queue push outcome state.
 pub enum QueuePushOutcome {
+    /// Represents the enqueued case.
     Enqueued,
-    Coalesced { replaced: usize },
-    DroppedStale { dropped: usize },
+    /// Represents the coalesced case.
+    Coalesced {
+        /// The replaced value.
+        replaced: usize,
+    },
+    /// Represents the dropped stale case.
+    DroppedStale {
+        /// The dropped value.
+        dropped: usize,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Identifies the queue push error kind state.
 pub enum QueuePushErrorKind {
+    /// Represents the budget exhausted case.
     BudgetExhausted(BudgetAcquireError),
+    /// Represents the closed case.
     Closed,
+    /// Represents the slow consumer closed case.
     SlowConsumerClosed,
 }
 
+/// Represents queue push error.
 pub struct QueuePushError<T> {
     kind: QueuePushErrorKind,
     item: T,
@@ -48,11 +63,13 @@ pub struct QueuePushError<T> {
 
 impl<T> QueuePushError<T> {
     #[must_use]
+    /// Returns the kind.
     pub fn kind(&self) -> &QueuePushErrorKind {
         &self.kind
     }
 
     #[must_use]
+    /// Converts this value into item.
     pub fn into_item(self) -> T {
         self.item
     }
@@ -81,6 +98,7 @@ impl<T> fmt::Display for QueuePushError<T> {
 
 impl<T: fmt::Debug> std::error::Error for QueuePushError<T> {}
 
+/// Represents budgeted item.
 pub struct BudgetedItem<T> {
     item: T,
     enqueued_at: Duration,
@@ -89,41 +107,58 @@ pub struct BudgetedItem<T> {
 
 impl<T> BudgetedItem<T> {
     #[must_use]
+    /// Converts this value into item.
     pub fn into_item(self) -> T {
         self.item
     }
 
     #[must_use]
+    /// Converts this value into parts.
     pub fn into_parts(self) -> (T, ResourcePermit, Duration) {
         (self.item, self.permit, self.enqueued_at)
     }
 
     #[must_use]
+    /// Returns the enqueued at.
     pub const fn enqueued_at(&self) -> Duration {
         self.enqueued_at
     }
 
     #[must_use]
+    /// Returns the retained bytes.
     pub fn retained_bytes(&self) -> usize {
         self.permit.bytes()
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Represents queue snapshot.
 pub struct QueueSnapshot {
+    /// The path value.
     pub path: Arc<str>,
+    /// The depth value.
     pub depth: usize,
+    /// The number of reserved entries.
     pub reserved_count: usize,
+    /// The retained size in bytes.
     pub retained_bytes: usize,
+    /// The oldest age value.
     pub oldest_age: Option<Duration>,
+    /// The number of throttled entries.
     pub throttled_count: u64,
+    /// The number of rejected entries.
     pub rejected_count: u64,
+    /// The number of dropped entries.
     pub dropped_count: u64,
+    /// The number of coalesced entries.
     pub coalesced_count: u64,
+    /// The number of closed slow consumer entries.
     pub closed_slow_consumer_count: u64,
+    /// Whether closed.
     pub closed: bool,
 }
 
+/// Represents budgeted queue.
 pub struct BudgetedQueue<T> {
     inner: Arc<QueueInner<T>>,
 }
@@ -147,6 +182,7 @@ impl<T> fmt::Debug for BudgetedQueue<T> {
 
 impl<T> BudgetedQueue<T> {
     #[must_use]
+    /// Creates a new `BudgetedQueue`.
     pub fn new(budget: ResourceBudget) -> Self {
         Self {
             inner: Arc::new(QueueInner {
@@ -167,6 +203,7 @@ impl<T> BudgetedQueue<T> {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
 
+    /// Attempts to push.
     pub fn try_push(
         &self,
         item: T,
@@ -197,18 +234,22 @@ impl<T> BudgetedQueue<T> {
         }
     }
 
+    /// Attempts to push data.
     pub fn try_push_data(&self, item: T, retained_bytes: usize) -> Result<QueuePushOutcome, QueuePushError<T>> {
         self.try_push(item, retained_bytes, BudgetClass::Data)
     }
 
+    /// Attempts to push control.
     pub fn try_push_control(&self, item: T, retained_bytes: usize) -> Result<QueuePushOutcome, QueuePushError<T>> {
         self.try_push(item, retained_bytes, BudgetClass::Control)
     }
 
+    /// Attempts to pop.
     pub fn try_pop(&self) -> Option<T> {
         self.try_pop_budgeted().map(BudgetedItem::into_item)
     }
 
+    /// Attempts to pop budgeted.
     pub fn try_pop_budgeted(&self) -> Option<BudgetedItem<T>> {
         self.apply_age_policy();
         let mut state = self
@@ -234,10 +275,12 @@ impl<T> BudgetedQueue<T> {
         previous_len - state.items.len()
     }
 
+    /// Returns the recv.
     pub async fn recv(&self) -> Option<T> {
         self.recv_budgeted().await.map(BudgetedItem::into_item)
     }
 
+    /// Returns the recv budgeted.
     pub async fn recv_budgeted(&self) -> Option<BudgetedItem<T>> {
         loop {
             let notified = self.inner.notify.notified();
@@ -251,6 +294,7 @@ impl<T> BudgetedQueue<T> {
         }
     }
 
+    /// Executes close.
     pub fn close(&self) {
         let mut state = self
             .inner
@@ -263,6 +307,7 @@ impl<T> BudgetedQueue<T> {
     }
 
     #[must_use]
+    /// Returns whether closed.
     pub fn is_closed(&self) -> bool {
         self.inner
             .state
@@ -272,6 +317,7 @@ impl<T> BudgetedQueue<T> {
     }
 
     #[must_use]
+    /// Returns the len.
     pub fn len(&self) -> usize {
         self.inner
             .state
@@ -282,11 +328,13 @@ impl<T> BudgetedQueue<T> {
     }
 
     #[must_use]
+    /// Returns whether empty.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     #[must_use]
+    /// Returns the snapshot.
     pub fn snapshot(&self) -> QueueSnapshot {
         let now = self.inner.budget.monotonic_now();
         let state = self

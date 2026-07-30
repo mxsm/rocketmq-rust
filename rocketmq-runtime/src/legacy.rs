@@ -24,12 +24,14 @@ use std::time::Duration;
 /// explicit compatibility adapters.
 #[deprecated(note = "use RuntimeOwner or an injected ChildServiceContext instead")]
 pub enum RocketMQRuntime {
+    /// Represents the multi case.
     Multi(tokio::runtime::Runtime),
 }
 
 #[allow(deprecated)]
 impl RocketMQRuntime {
     #[inline]
+    /// Creates multi.
     pub fn new_multi(threads: usize, name: &str) -> Self {
         Self::Multi(
             tokio::runtime::Builder::new_multi_thread()
@@ -42,6 +44,7 @@ impl RocketMQRuntime {
     }
 
     #[inline]
+    /// Returns handle.
     pub fn get_handle(&self) -> &tokio::runtime::Handle {
         match self {
             Self::Multi(runtime) => runtime.handle(),
@@ -49,6 +52,7 @@ impl RocketMQRuntime {
     }
 
     #[inline]
+    /// Returns runtime.
     pub fn get_runtime(&self) -> &tokio::runtime::Runtime {
         match self {
             Self::Multi(runtime) => runtime,
@@ -56,6 +60,7 @@ impl RocketMQRuntime {
     }
 
     #[inline]
+    /// Shuts down the owned service.
     pub fn shutdown(self) {
         match self {
             Self::Multi(runtime) => runtime.shutdown_background(),
@@ -63,6 +68,7 @@ impl RocketMQRuntime {
     }
 
     #[inline]
+    /// Shuts down timeout.
     pub fn shutdown_timeout(self, timeout: Duration) {
         match self {
             Self::Multi(runtime) => runtime.shutdown_timeout(timeout),
@@ -70,6 +76,7 @@ impl RocketMQRuntime {
     }
 
     #[inline]
+    /// Executes schedule at fixed rate.
     pub fn schedule_at_fixed_rate<F>(&self, task: F, initial_delay: Option<Duration>, period: Duration)
     where
         F: Fn() + Send + 'static,
@@ -94,6 +101,7 @@ impl RocketMQRuntime {
     }
 
     #[inline]
+    /// Executes schedule at fixed rate mut.
     pub fn schedule_at_fixed_rate_mut<F>(&self, mut task: F, initial_delay: Option<Duration>, period: Duration)
     where
         F: FnMut() + Send + 'static,

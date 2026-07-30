@@ -105,7 +105,8 @@ If you only want to use the client SDK from your own application, add the curren
 ```toml
 [dependencies]
 rocketmq-client-rust = "1.0.0"
-rocketmq-common = "1.0.0"
+rocketmq-model = "1.0.0"
+rocketmq-protocol = "1.0.0"
 ```
 
 ### 2. Start the NameServer
@@ -171,20 +172,24 @@ RocketMQ-Rust is organized into deployable services, reusable protocol/runtime c
 
 | Crate | Responsibility |
 |-------|----------------|
-| [rocketmq](./rocketmq) | Public foundation crate and shared runtime entry points. |
 | [rocketmq-namesrv](./rocketmq-namesrv) | NameServer implementation for broker registration, topic routing, and service discovery. |
 | [rocketmq-broker](./rocketmq-broker) | Broker implementation for message storage, dispatch, delivery, and consumer coordination. |
 | [rocketmq-controller](./rocketmq-controller) | Controller service for broker coordination and high availability workflows. |
 | [rocketmq-proxy](./rocketmq-proxy) | Proxy layer for gateway-style client access and protocol integration. |
+| [rocketmq-proxy-core](./rocketmq-proxy-core) | Stable proxy contracts, use cases, and ingress-independent models. |
+| [rocketmq-proxy-cluster](./rocketmq-proxy-cluster) | Cluster-mode proxy adapter with keyed execution and remote Broker access. |
+| [rocketmq-proxy-local](./rocketmq-proxy-local) | Local-mode proxy adapter. |
 
 ### Client, Protocol, and Shared Libraries
 
 | Crate | Responsibility |
 |-------|----------------|
 | [rocketmq-client](./rocketmq-client) | Async producer, consumer, and admin SDK for application integration. |
-| [rocketmq-remoting](./rocketmq-remoting) | RocketMQ remoting protocol, command encoding/decoding, and network integration. |
-| [rocketmq-common](./rocketmq-common) | Shared message models, configuration types, constants, and utility code. |
+| [rocketmq-protocol](./rocketmq-protocol) | RocketMQ wire commands, headers, serialization, and compatibility contracts. |
+| [rocketmq-transport](./rocketmq-transport) | Runtime-owned network sessions and canonical per-session writers. |
+| [rocketmq-model](./rocketmq-model) | Shared message, route, configuration, and domain models. |
 | [rocketmq-auth](./rocketmq-auth) | Authentication, authorization, ACL evaluation, and request context support. |
+| [rocketmq-security-api](./rocketmq-security-api) | Runtime-neutral authentication, authorization, signing, and maintenance contracts. |
 | [rocketmq-filter](./rocketmq-filter) | Message filtering support, including tag and expression-based filtering. |
 
 ### Storage, Runtime, and Observability
@@ -192,11 +197,18 @@ RocketMQ-Rust is organized into deployable services, reusable protocol/runtime c
 | Crate | Responsibility |
 |-------|----------------|
 | [rocketmq-store](./rocketmq-store) | Durable local storage engine for commit logs, consume queues, and message indexes. |
+| [rocketmq-store-api](./rocketmq-store-api) | Backend-neutral append, read, lifecycle, replication, checkpoint, and health capabilities. |
+| [rocketmq-store-local](./rocketmq-store-local) | Local CommitLog, ConsumeQueue, Index, mapped-file, and recovery implementation. |
+| [rocketmq-store-rocksdb](./rocketmq-store-rocksdb) | RocksDB-backed store implementation. |
 | [rocketmq-tieredstore](./rocketmq-tieredstore) | Tiered storage abstractions for extending message data beyond local disks. |
 | [rocketmq-runtime](./rocketmq-runtime) | Async runtime abstractions and runtime-friendly coordination utilities. |
 | [rocketmq-error](./rocketmq-error) | Shared error types and result conventions across workspace crates. |
 | [rocketmq-macros](./rocketmq-macros) | Procedural macros used by RocketMQ-Rust crates and examples. |
 | [rocketmq-observability](./rocketmq-observability) | Metrics and tracing integration for service and client instrumentation. |
+
+The cross-cutting ownership, cancellation, error, limit, compatibility, and
+failure-mode contracts are documented in the
+[core capability contracts](rocketmq-doc/en/core-capability-contracts.md).
 
 ### Tools, Examples, and Dashboards
 
@@ -208,6 +220,7 @@ RocketMQ-Rust is organized into deployable services, reusable protocol/runtime c
 | [rocketmq-admin-core](./rocketmq-tools/rocketmq-admin/rocketmq-admin-core) | Shared admin functionality used by CLI and terminal interfaces. |
 | [rocketmq-admin-tui](./rocketmq-tools/rocketmq-admin/rocketmq-admin-tui) | Terminal UI for interactive administration workflows. |
 | [rocketmq-store-inspect](./rocketmq-tools/rocketmq-store-inspect) | Storage inspection utilities for broker data files. |
+| [rocketmq-mcp](./rocketmq-tools/rocketmq-mcp) | Model Context Protocol server for deny-by-default RocketMQ diagnostics and administration. |
 | [rocketmq-dashboard](./rocketmq-dashboard) | Dashboard workspace for desktop, web, and shared management UI components. |
 | [rocketmq-dashboard-common](./rocketmq-dashboard/rocketmq-dashboard-common) | Shared dashboard models and reusable dashboard infrastructure. |
 | [rocketmq-dashboard-gpui](./rocketmq-dashboard/rocketmq-dashboard-gpui) | GPUI-based desktop dashboard. |
@@ -273,7 +286,11 @@ For detailed guidelines, please read our [Contribution Guide](https://rocketmqru
 <details>
 <summary><b>Is RocketMQ-Rust production-ready?</b></summary>
 
-Yes. The core services and client SDK are designed for production-oriented deployments and are actively maintained.
+The services are designed for production-oriented deployments, but production
+readiness is a property of a specific candidate and environment. Promotion
+requires commit- and digest-bound fault, soak, performance, acknowledgement
+RPO/RTO, and executable rollback evidence described by the
+[production-readiness runbook](rocketmq-doc/en/architecture-production-readiness-runbook.md).
 </details>
 
 <details>
@@ -293,8 +310,12 @@ documented specialized checks such as Miri and rustdoc JSON generation.
 <details>
 <summary><b>How does performance compare to Java RocketMQ?</b></summary>
 
-RocketMQ-Rust leverages Rust's zero-cost abstractions and efficient async runtime to deliver comparable or better performance with lower memory footprint.
-Benchmarks are available in individual component documentation.
+No general comparison is claimed. Component microbenchmarks detect algorithmic
+regressions; they do not establish production TPS. Candidate performance is
+accepted only from the target-hardware profile with identical configuration,
+at least five samples, dispersion checks, and a correctness-valid evidence
+bundle indexed by the
+[architecture evidence document](rocketmq-doc/en/architecture-release-evidence-index.md).
 </details>
 
 <details>

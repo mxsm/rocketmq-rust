@@ -2,7 +2,7 @@
   "schema_version": 1,
   "milestone": "M11-12",
   "execution_unit": "R24",
-  "policy_sha256": "e12df9458d1a6c739abcb60ffbd8cf8e0c473841bdc382308a8441e966447bd9",
+  "policy_sha256": "fb4fa40bf4f15bc3ca63803623be590899671c5f0f53d561681ffcc1d4276d35",
   "candidate_commit": "0123456789abcdef0123456789abcdef01234567",
   "candidate_images": {
     "broker": "registry.example.invalid/rocketmq/broker@sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
@@ -22,7 +22,7 @@
   "fixture": true,
   "fault_evidence": {
     "path": "artifacts/fault-run.json",
-    "sha256": "a666b789c38bff72d8b73907062232c616657e9e1ae72ddce63366cb43d885b1"
+    "sha256": "f3e798264b3c79ebb302039663953618bc83714cf5e4f73a1592f52eba7314bf"
   },
   "objectives": [
     {
@@ -96,14 +96,14 @@
   "release_artifacts": {
     "distribution/config/grafana-architecture-production-readiness.json": "b586879abcf204d2cbf06c049fe21e0bfef10d1dadb67488a6c5ee91eab8ac70",
     "distribution/config/prometheus-architecture-production-readiness-alerts.yaml": "44bfcbb119343fd848fe7c32ffaeab235eee960c2ec3ad2130b31493893f4646",
-    "rocketmq-doc/en/architecture-production-readiness-runbook.md": "c19a9ee5ea258523bf3678f9f5167c8161197a72f75e094fd0bef0556e8a678d",
-    "distribution/kubernetes/fault-matrix-policy.json": "771b3abf35213a4b6fbb3626d7822e11e6a17d9609ae7587d309bcaf2a5cdd37",
+    "rocketmq-doc/en/architecture-production-readiness-runbook.md": "03c7688700f75b4933821dd97c3cdfe1dffeec1cea6df822e45ba390e7354085",
+    "distribution/kubernetes/fault-matrix-policy.json": "d3daba9c126eac22dae4cf3217e76429b6d61485bbfcf0ec69765eabc951fea9",
     "scripts/telemetry-semantic-registry.json": "32f7824018e2f7a5a73176a177198bef08e252eb6c23fdc43dd6e73b5ae294a5"
   },
   "artifacts": [
     {
       "path": "artifacts/fault-run.json",
-      "sha256": "a666b789c38bff72d8b73907062232c616657e9e1ae72ddce63366cb43d885b1"
+      "sha256": "f3e798264b3c79ebb302039663953618bc83714cf5e4f73a1592f52eba7314bf"
     },
     {
       "path": "artifacts/objectives.txt",

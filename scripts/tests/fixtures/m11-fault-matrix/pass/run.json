@@ -1,16 +1,17 @@
 {
   "schema_version": 1,
   "milestone": "M11-11",
-  "policy_sha256": "72dd08e26ca0d5454cfe9ff79465de53dca8155ab7bf967dddc8683663c7f22f",
+  "policy_sha256": "e1e4d6dee233c1318c1e9858cc81471b009fdc183f8bedf63774762998bc1b09",
   "run_id": "fixture-m11-11-positive",
   "started_at": "2026-07-17T01:00:00Z",
-  "finished_at": "2026-07-17T01:07:00Z",
+  "finished_at": "2026-07-17T01:16:00Z",
   "backend": "kind",
   "dynamic_execution": false,
   "fixture": true,
   "cluster_profile": {
     "control_plane_nodes": 1,
     "worker_nodes": 3,
+    "broker_replicas": 3,
     "controller_replicas": 3,
     "storage_class": "fixture-standard",
     "nodes": [
@@ -98,6 +99,41 @@
       }
     },
     {
+      "id": "nameserver_minority_partition",
+      "status": "passed",
+      "assertions": {
+        "minority_isolated": true,
+        "route_discovery_available": true,
+        "acknowledged_message_visible": true,
+        "nameserver_replicas_restored": true
+      },
+      "evidence": {
+        "partition_policy": "artifacts/nameserver_minority_partition.txt",
+        "nameserver_status": "artifacts/nameserver_minority_partition.txt",
+        "route_probe": "artifacts/nameserver_minority_partition.txt",
+        "message_after": "artifacts/nameserver_minority_partition.txt",
+        "recovery_timing": "artifacts/nameserver_minority_partition.txt"
+      }
+    },
+    {
+      "id": "nameserver_majority_unavailable",
+      "status": "passed",
+      "assertions": {
+        "majority_unavailable_observed": true,
+        "cached_route_data_plane_bounded": true,
+        "failure_mode_typed_or_bounded": true,
+        "acknowledged_message_visible": true,
+        "nameserver_replicas_restored": true
+      },
+      "evidence": {
+        "scale_down_status": "artifacts/nameserver_majority_unavailable.txt",
+        "cached_route_probe": "artifacts/nameserver_majority_unavailable.txt",
+        "fresh_route_probe": "artifacts/nameserver_majority_unavailable.txt",
+        "message_after": "artifacts/nameserver_majority_unavailable.txt",
+        "restore_status": "artifacts/nameserver_majority_unavailable.txt"
+      }
+    },
+    {
       "id": "collector_outage",
       "status": "passed",
       "assertions": {
@@ -133,10 +169,47 @@
       }
     },
     {
+      "id": "disk_full",
+      "status": "passed",
+      "assertions": {
+        "disk_full_state_injected": true,
+        "write_failure_bounded": true,
+        "acknowledged_message_visible": true,
+        "disk_state_cleared": true,
+        "broker_recovered": true
+      },
+      "evidence": {
+        "disk_before": "artifacts/disk_full.txt",
+        "fault_injection": "artifacts/disk_full.txt",
+        "write_probe": "artifacts/disk_full.txt",
+        "message_after": "artifacts/disk_full.txt",
+        "disk_after": "artifacts/disk_full.txt"
+      }
+    },
+    {
+      "id": "slow_disk_fsync_jitter",
+      "status": "passed",
+      "assertions": {
+        "fsync_jitter_observed": true,
+        "request_latency_bounded": true,
+        "acknowledged_message_visible": true,
+        "contention_stopped": true,
+        "broker_recovered": true
+      },
+      "evidence": {
+        "latency_before": "artifacts/slow_disk_fsync_jitter.txt",
+        "contention_status": "artifacts/slow_disk_fsync_jitter.txt",
+        "latency_during": "artifacts/slow_disk_fsync_jitter.txt",
+        "message_after": "artifacts/slow_disk_fsync_jitter.txt",
+        "cleanup_status": "artifacts/slow_disk_fsync_jitter.txt"
+      }
+    },
+    {
       "id": "controller_leader_failure",
       "status": "passed",
       "assertions": {
         "leader_changed": true,
+        "single_leader_observed": true,
         "controller_quorum_preserved": true,
         "acknowledged_message_visible": true,
         "controller_replicas_restored": true
@@ -147,6 +220,100 @@
         "quorum_status": "artifacts/controller_leader_failure.txt",
         "message_after": "artifacts/controller_leader_failure.txt",
         "controller_status": "artifacts/controller_leader_failure.txt"
+      }
+    },
+    {
+      "id": "controller_quorum_loss",
+      "status": "passed",
+      "assertions": {
+        "quorum_loss_observed": true,
+        "control_plane_failed_closed": true,
+        "duplicate_leadership_absent": true,
+        "acknowledged_message_visible": true,
+        "controller_quorum_restored": true
+      },
+      "evidence": {
+        "quorum_loss_status": "artifacts/controller_quorum_loss.txt",
+        "control_plane_probe": "artifacts/controller_quorum_loss.txt",
+        "leadership_probe": "artifacts/controller_quorum_loss.txt",
+        "message_after": "artifacts/controller_quorum_loss.txt",
+        "restore_status": "artifacts/controller_quorum_loss.txt"
+      }
+    },
+    {
+      "id": "network_impairment",
+      "status": "passed",
+      "assertions": {
+        "latency_injected": true,
+        "packet_loss_injected": true,
+        "half_open_bounded": true,
+        "acknowledged_message_visible": true,
+        "network_faults_removed": true
+      },
+      "evidence": {
+        "network_before": "artifacts/network_impairment.txt",
+        "tc_state": "artifacts/network_impairment.txt",
+        "half_open_probe": "artifacts/network_impairment.txt",
+        "message_after": "artifacts/network_impairment.txt",
+        "network_after": "artifacts/network_impairment.txt"
+      }
+    },
+    {
+      "id": "ha_replication_lag",
+      "status": "passed",
+      "assertions": {
+        "replication_lag_observed": true,
+        "single_master_preserved": true,
+        "promotion_completed": true,
+        "acknowledged_message_visible": true,
+        "rpo_satisfied": true,
+        "rto_satisfied": true
+      },
+      "evidence": {
+        "replication_before": "artifacts/ha_replication_lag.txt",
+        "lag_injection": "artifacts/ha_replication_lag.txt",
+        "promotion_status": "artifacts/ha_replication_lag.txt",
+        "message_after": "artifacts/ha_replication_lag.txt",
+        "rpo_report": "artifacts/ha_replication_lag.txt",
+        "rto_report": "artifacts/ha_replication_lag.txt"
+      }
+    },
+    {
+      "id": "snapshot_install_interruption",
+      "status": "passed",
+      "assertions": {
+        "snapshot_install_started": true,
+        "install_interrupted": true,
+        "corrupt_snapshot_rejected": true,
+        "follower_caught_up": true,
+        "single_leader_observed": true
+      },
+      "evidence": {
+        "snapshot_before": "artifacts/snapshot_install_interruption.txt",
+        "interruption_status": "artifacts/snapshot_install_interruption.txt",
+        "checksum_validation": "artifacts/snapshot_install_interruption.txt",
+        "snapshot_after": "artifacts/snapshot_install_interruption.txt",
+        "leadership_status": "artifacts/snapshot_install_interruption.txt"
+      }
+    },
+    {
+      "id": "proxy_slow_broker_overload",
+      "status": "passed",
+      "assertions": {
+        "long_poll_did_not_block_send": true,
+        "ordering_preserved": true,
+        "admission_limits_enforced": true,
+        "typed_overload_observed": true,
+        "leaked_zero": true,
+        "detached_zero": true
+      },
+      "evidence": {
+        "long_poll_probe": "artifacts/proxy_slow_broker_overload.txt",
+        "send_progress": "artifacts/proxy_slow_broker_overload.txt",
+        "ordering_report": "artifacts/proxy_slow_broker_overload.txt",
+        "overload_report": "artifacts/proxy_slow_broker_overload.txt",
+        "budget_snapshot": "artifacts/proxy_slow_broker_overload.txt",
+        "shutdown_report": "artifacts/proxy_slow_broker_overload.txt"
       }
     },
     {
@@ -192,31 +359,67 @@
   "artifacts": [
     {
       "path": "artifacts/rolling_upgrade.txt",
-      "sha256": "3a88693bc57dd4c3d5f37e2acb1dc7e35daa0e578ca6c8538ed3fc4534de4373"
+      "sha256": "347e8b9271f4ae424b5d425d595c5a2cdad7dc56636a07e4d7bba35c72e7db8e"
     },
     {
       "path": "artifacts/node_eviction.txt",
-      "sha256": "536532dedeeed56d3f086f49bfb898babf09e36f7d5ac1ee5efc374e59ff7688"
+      "sha256": "13ba90f2d670d57eec8f5974fc04aa12c0aad7e19984644fcec76d013d806362"
+    },
+    {
+      "path": "artifacts/nameserver_minority_partition.txt",
+      "sha256": "6f873f92ed6fd3cdb02f367623d136ab198971af2e8c8edc2f8e2a9c37fcec8a"
+    },
+    {
+      "path": "artifacts/nameserver_majority_unavailable.txt",
+      "sha256": "99eb94bd0963b9b42b53467de58930b5a7032198d1390154fb21d82395f2493d"
     },
     {
       "path": "artifacts/collector_outage.txt",
-      "sha256": "bd82089b896f1cb98c14954d293c5a761b88bfca7ea8341ab8739c1d2c4db1c6"
+      "sha256": "e7da96241a46d576e54eb26760aecb5f2d169cc58a60a2e4c621a7ce6635d946"
     },
     {
       "path": "artifacts/disk_pressure.txt",
-      "sha256": "9e29c84a61a63655bff5c10fd9ff3153336b16caa0ed5c149950c06a349d72c1"
+      "sha256": "6cbc779fcb3709c8d6debf004a4e31a8be7bb1cc255fd733a2f7db94741d147b"
+    },
+    {
+      "path": "artifacts/disk_full.txt",
+      "sha256": "95e11c5055129b272d6c6d96e975a9366d5873631d71d21b6f2ff527182edf09"
+    },
+    {
+      "path": "artifacts/slow_disk_fsync_jitter.txt",
+      "sha256": "1382f620eab8dae0000d57905ff4bbfe8210e311b2fedabaefc0d68e7c6a80d5"
     },
     {
       "path": "artifacts/controller_leader_failure.txt",
-      "sha256": "d7ac38651c788f9e8745b1a183b894aa4f5acd428ea4a2cebdf31c5c18352e5d"
+      "sha256": "81eb8b7b10881ae31c434dde0e84afffc2d30e1df0599c81e6df01e0008aebd2"
+    },
+    {
+      "path": "artifacts/controller_quorum_loss.txt",
+      "sha256": "936027aef18f715790cd443a4f619fef998ed16b443ac59cec50bebb57b6f4ee"
+    },
+    {
+      "path": "artifacts/network_impairment.txt",
+      "sha256": "1011b9fec8c2649d595e4e844378257ce6092b4817b1e82f9e90c8c46f766cb0"
+    },
+    {
+      "path": "artifacts/ha_replication_lag.txt",
+      "sha256": "3d75273b981b204536e8d47682cadaae1a4c783812589a28f1c4a916d0292061"
+    },
+    {
+      "path": "artifacts/snapshot_install_interruption.txt",
+      "sha256": "5e3f246e3c331050ac7188810294d7fae623943d2b35759899de17d27e24005c"
+    },
+    {
+      "path": "artifacts/proxy_slow_broker_overload.txt",
+      "sha256": "df9a0d21b7bf765a7d4a23c9cc0bbbc75cbb528ca5c3c747a8098a5a77f6ec7f"
     },
     {
       "path": "artifacts/secret_rotation.txt",
-      "sha256": "4df393a882f7367f20eb8e91411e9f31df2aecef2b57e4748b2879ea4f1fd9c7"
+      "sha256": "6d9b2bd1ef28c012be82390e86c9b502cd09533095b68bb68c7c4203defd9889"
     },
     {
       "path": "artifacts/acknowledged_message_recovery.txt",
-      "sha256": "b4874c779023eedf707a81589cb97e3cf5d481f2b6aac39ac6bbbc6972a89b12"
+      "sha256": "5315a4390990f08d35b0f519db90bb105c55cf140533d3bbda050118de9a8a22"
     }
   ]
 }

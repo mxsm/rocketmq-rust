@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+/// Service task types and operations.
 pub mod service_task;
 
 pub use service_task::run_service_manager_lifecycle_probe;

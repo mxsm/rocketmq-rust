@@ -26,6 +26,14 @@ dependencies, and collector-outage limits must change together with that contrac
 - `/readyz` is the canonical service-readiness endpoint. It returns success only
   after the service-specific security, storage or control-plane dependencies and
   release identity have completed.
+- Acknowledgement RPO/RTO is evaluated with
+  `distribution/config/ack-failover-evidence-schema.json` and the
+  [acknowledgement and failover contract](acknowledgement-failover-contract-adr.md).
+  An asynchronous acknowledgement never inherits a zero-loss claim from a
+  synchronous profile.
+- The project does not claim built-in regional disaster recovery. The exact
+  boundary is recorded in the
+  [regional disaster recovery ADR](regional-disaster-recovery-adr.md).
 
 ## Release identity
 
@@ -135,6 +143,24 @@ Alert: `RocketMQHaReplicationLagHigh`
    after quorum recovery.
 4. **Escalate:** Page storage and Controller owners if quorum cannot recover or
    replica and leader offsets remain inconsistent.
+
+## Required fault matrix
+
+The M11-11 policy requires all 16 ordered scenarios in one non-fixture run:
+rolling upgrade, node eviction, both NameServer availability boundaries,
+collector outage, disk pressure, disk-full admission, synchronous-write
+contention, Controller leader loss, Controller quorum loss with duplicate-leader
+detection, latency/loss/half-open network impairment, HA lag and promotion,
+interrupted Raft snapshot installation, Proxy long-poll/slow-Broker overload,
+secret rotation, and acknowledged-message recovery.
+
+Each record must satisfy its declared RPO/RTO and retain the injection,
+observable, abort, cleanup, and cleanup-verification evidence. A model test may
+drive an otherwise unsafe fault (for example disk-full admission) only when it
+uses the production state transition and is executed from the current checkout;
+fixture output is never promotion evidence. The run must finish with no `netem`
+qdisc, cordon, disk-pressure taint, synthetic disk-contention process, scaled-down
+quorum, rotated credential, candidate image, or unresolved fault.
 
 ## Collector outage budget
 

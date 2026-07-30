@@ -25,6 +25,10 @@ use crate::shutdown_report::ShutdownReport;
 use crate::task_group::TaskGroup;
 use crate::task_group::TaskGroupLifecycleState;
 
+/// Owns one Tokio runtime and its root service context.
+///
+/// Dropping this value without an explicit shutdown starts Tokio background
+/// shutdown and logs any still-tracked work.
 pub struct RuntimeOwner {
     config: RuntimeConfig,
     runtime: Option<tokio::runtime::Runtime>,
@@ -32,6 +36,12 @@ pub struct RuntimeOwner {
 }
 
 impl RuntimeOwner {
+    /// Creates a new `RuntimeOwner`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the configuration is invalid, the Tokio runtime
+    /// cannot be built, or the root blocking executor cannot be initialized.
     pub fn new(config: RuntimeConfig) -> RuntimeResult<Self> {
         config.validate()?;
 
@@ -70,14 +80,17 @@ impl RuntimeOwner {
         })
     }
 
+    /// Returns the root context used to derive owned component scopes.
     pub fn root_context(&self) -> &RootServiceContext {
         &self.root_context
     }
 
+    /// Returns the validated runtime configuration.
     pub fn config(&self) -> &RuntimeConfig {
         &self.config
     }
 
+    /// Blocks the current thread until `future` completes.
     pub fn block_on<F>(&self, future: F) -> F::Output
     where
         F: Future,
@@ -88,16 +101,26 @@ impl RuntimeOwner {
             .block_on(future)
     }
 
+    /// Cancels and awaits tracked tasks until the configured deadline.
     pub async fn shutdown_tasks(&self) -> ShutdownReport {
         self.shutdown_tasks_until(ShutdownDeadline::after(self.config.shutdown_timeout))
             .await
     }
 
+    /// Blocks while shutting down tracked work and the Tokio runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when invoked from inside a Tokio runtime.
     pub fn shutdown_runtime_blocking(self) -> RuntimeResult<ShutdownReport> {
         let timeout = self.config.shutdown_timeout;
         self.shutdown_runtime_blocking_with_timeout(timeout)
     }
 
+    /// Cancels tracked work and asks Tokio to finish runtime shutdown in the background.
+    ///
+    /// The returned report captures only the immediate task-group shutdown
+    /// state; background Tokio work is not awaited by this method.
     pub fn shutdown_background(mut self) -> ShutdownReport {
         let report = self.shutdown_tasks_now();
         report.log_if_unhealthy();
@@ -107,6 +130,11 @@ impl RuntimeOwner {
         report
     }
 
+    /// Blocks while shutting down tracked work within `timeout`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when invoked from inside a Tokio runtime.
     pub fn shutdown_runtime_blocking_with_timeout(self, timeout: std::time::Duration) -> RuntimeResult<ShutdownReport> {
         self.shutdown_runtime_blocking_until(ShutdownDeadline::after(timeout))
     }

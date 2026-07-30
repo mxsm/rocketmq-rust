@@ -77,6 +77,36 @@ fn child_permit_reserves_every_ancestor_and_releases_on_drop() {
 }
 
 #[test]
+fn deep_child_permit_preserves_ancestors_beyond_inline_storage() {
+    let tree = ResourceBudgetTree::new("process", limit(8, 800, FullPolicy::Reject)).expect("root budget");
+    let mut levels = vec![tree.root()];
+    for index in 0..6 {
+        let child = levels
+            .last()
+            .expect("parent budget")
+            .child(format!("level-{index}"), limit(8, 800, FullPolicy::Reject))
+            .expect("child budget");
+        levels.push(child);
+    }
+
+    let permit = levels
+        .last()
+        .expect("deepest budget")
+        .try_acquire_data(64)
+        .expect("deep permit");
+    assert!(levels.iter().all(|budget| {
+        let snapshot = budget.snapshot();
+        snapshot.current_count == 1 && snapshot.current_bytes == 64
+    }));
+
+    drop(permit);
+    assert!(levels.iter().all(|budget| {
+        let snapshot = budget.snapshot();
+        snapshot.current_count == 0 && snapshot.current_bytes == 0
+    }));
+}
+
+#[test]
 fn parent_budget_bounds_the_sum_of_independent_children() {
     let tree = ResourceBudgetTree::new("process", limit(2, 100, FullPolicy::Reject)).expect("root budget");
     let first = tree

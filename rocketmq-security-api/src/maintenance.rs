@@ -359,26 +359,47 @@ pub enum MaintenancePolicyError {
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum MaintenanceAuthorizationError {
     #[error("maintenance authorization context is missing")]
+    /// Represents the missing authorization context case.
     MissingAuthorizationContext,
     #[error("maintenance authentication is disabled")]
+    /// Represents the authentication disabled case.
     AuthenticationDisabled,
     #[error("maintenance authorization is disabled")]
+    /// Represents the authorization disabled case.
     AuthorizationDisabled,
     #[error("maintenance request class is not privileged maintenance")]
+    /// Represents the invalid request class case.
     InvalidRequestClass,
     #[error("maintenance caller is anonymous")]
+    /// Represents the anonymous case.
     Anonymous,
     #[error("maintenance principal '{0}' is not bound by policy")]
+    /// Represents the principal unbound case.
     PrincipalUnbound(String),
     #[error("maintenance principal '{principal}' is missing role {role:?}")]
-    MissingRole { principal: String, role: MaintenanceRole },
+    /// Represents the missing role case.
+    MissingRole {
+        /// The principal value.
+        principal: String,
+        /// The role value.
+        role: MaintenanceRole,
+    },
     #[error("maintenance capability {0:?} is not granted")]
+    /// Represents the capability denied case.
     CapabilityDenied(MaintenanceCapability),
     #[error("maintenance request deadline has expired")]
+    /// Represents the deadline expired case.
     DeadlineExpired,
     #[error("maintenance request lifetime {requested_millis}ms exceeds policy maximum {maximum_millis}ms")]
-    DeadlineTooFar { requested_millis: u64, maximum_millis: u64 },
+    /// Represents the deadline too far case.
+    DeadlineTooFar {
+        /// The requested duration in milliseconds.
+        requested_millis: u64,
+        /// The maximum duration in milliseconds.
+        maximum_millis: u64,
+    },
     #[error("maintenance request is missing a non-zero fencing token")]
+    /// Represents the missing fencing token case.
     MissingFencingToken,
 }
 

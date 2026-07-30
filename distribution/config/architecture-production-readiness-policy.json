@@ -9,9 +9,18 @@
   "required_fault_scenarios": [
     "rolling_upgrade",
     "node_eviction",
+    "nameserver_minority_partition",
+    "nameserver_majority_unavailable",
     "collector_outage",
     "disk_pressure",
+    "disk_full",
+    "slow_disk_fsync_jitter",
     "controller_leader_failure",
+    "controller_quorum_loss",
+    "network_impairment",
+    "ha_replication_lag",
+    "snapshot_install_interruption",
+    "proxy_slow_broker_overload",
     "secret_rotation",
     "acknowledged_message_recovery"
   ],

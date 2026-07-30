@@ -49,69 +49,104 @@ const STATE_SHUTDOWN_COMPLETED: u8 = 3;
 const STATE_POISONED: u8 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+/// Represents task id.
 pub struct TaskId(u64);
 
 impl TaskId {
+    /// Borrows this value as u64.
     pub fn as_u64(self) -> u64 {
         self.0
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+/// Represents task group id.
 pub struct TaskGroupId(u64);
 
 impl TaskGroupId {
+    /// Borrows this value as u64.
     pub fn as_u64(self) -> u64 {
         self.0
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// Identifies the task kind state.
 pub enum TaskKind {
+    /// Represents the service case.
     Service,
+    /// Represents the worker case.
     Worker,
+    /// Represents the scheduled driver case.
     ScheduledDriver,
+    /// Represents the scheduled run case.
     ScheduledRun,
+    /// Represents the blocking reaper case.
     BlockingReaper,
+    /// Represents the shutdown case.
     Shutdown,
+    /// Represents the other case.
     Other,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// Identifies the task state state.
 pub enum TaskState {
+    /// Represents the queued case.
     Queued,
+    /// Represents the running case.
     Running,
+    /// Represents the completed case.
     Completed,
+    /// Represents the cancelled case.
     Cancelled,
+    /// Represents the aborted case.
     Aborted,
+    /// Represents the panicked case.
     Panicked,
+    /// Represents the leaked case.
     Leaked,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// Identifies the task result state.
 pub enum TaskResult {
+    /// Represents the completed case.
     Completed,
+    /// Represents the cancelled case.
     Cancelled,
+    /// Represents the aborted case.
     Aborted,
+    /// Represents the panicked case.
     Panicked,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// Identifies the detached task policy state.
 pub enum DetachedTaskPolicy {
+    /// Represents the track only case.
     TrackOnly,
+    /// Represents the abort on shutdown case.
     AbortOnShutdown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// Identifies the task group lifecycle state state.
 pub enum TaskGroupLifecycleState {
+    /// Represents the open case.
     Open,
+    /// Represents the closing case.
     Closing,
+    /// Represents the closed case.
     Closed,
+    /// Represents the shutdown completed case.
     ShutdownCompleted,
+    /// Represents the poisoned case.
     Poisoned,
 }
 
 #[derive(Debug, Clone)]
+/// Represents task group.
 pub struct TaskGroup {
     inner: Arc<TaskGroupInner>,
 }
@@ -129,8 +164,11 @@ pub struct TaskGroupChildLease {
 /// Bounded lifecycle counters for dynamically registered child groups.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct TaskGroupChildStats {
+    /// The active value.
     pub active: usize,
+    /// The created value.
     pub created: usize,
+    /// The pruned value.
     pub pruned: usize,
 }
 
@@ -222,10 +260,12 @@ impl std::ops::Deref for TaskGroupChildLease {
 }
 
 impl TaskGroupChildLease {
+    /// Returns the group.
     pub fn group(&self) -> &TaskGroup {
         &self.group
     }
 
+    /// Completes the operation with the supplied result.
     pub fn complete(self) {}
 }
 
@@ -250,18 +290,22 @@ impl TaskGroup {
         }
     }
 
+    /// Returns the id.
     pub fn id(&self) -> TaskGroupId {
         self.inner.id
     }
 
+    /// Returns the parent id.
     pub fn parent_id(&self) -> Option<TaskGroupId> {
         self.inner.parent_id
     }
 
+    /// Returns the name.
     pub fn name(&self) -> &str {
         &self.inner.name
     }
 
+    /// Returns the cancellation token.
     pub fn cancellation_token(&self) -> CancellationToken {
         self.inner.cancellation_token.clone()
     }
@@ -271,18 +315,22 @@ impl TaskGroup {
         *self.inner.shutdown_deadline.lock()
     }
 
+    /// Returns the lifecycle state.
     pub fn lifecycle_state(&self) -> TaskGroupLifecycleState {
         self.inner.lifecycle_state()
     }
 
+    /// Returns the task count.
     pub fn task_count(&self) -> usize {
         self.inner.tasks.len()
     }
 
+    /// Returns the child count.
     pub fn child_count(&self) -> usize {
         self.inner.children.lock().len() + self.live_dynamic_children().len()
     }
 
+    /// Returns the child stats.
     pub fn child_stats(&self) -> TaskGroupChildStats {
         let active = self.live_dynamic_children().len();
         TaskGroupChildStats {
@@ -292,16 +340,19 @@ impl TaskGroup {
         }
     }
 
+    /// Returns the contains task.
     pub fn contains_task(&self, task_id: TaskId) -> bool {
         self.inner.tasks.contains_key(&task_id)
     }
 
+    /// Returns the child.
     pub fn child(&self, name: impl Into<Arc<str>>) -> Self {
         let name = name.into();
         self.try_child(name.clone())
             .unwrap_or_else(|_error| self.closed_child(name))
     }
 
+    /// Attempts to child.
     pub fn try_child(&self, name: impl Into<Arc<str>>) -> RuntimeResult<Self> {
         let name = name.into();
         let _spawn_guard = self.inner.spawn_gate.lock();
@@ -317,6 +368,7 @@ impl TaskGroup {
         Ok(child)
     }
 
+    /// Attempts to child lease.
     pub fn try_child_lease(&self, name: impl Into<Arc<str>>) -> RuntimeResult<TaskGroupChildLease> {
         let name = name.into();
         let _spawn_guard = self.inner.spawn_gate.lock();
@@ -372,6 +424,7 @@ impl TaskGroup {
         live
     }
 
+    /// Spawns the supplied task.
     pub fn spawn<F>(&self, name: impl Into<Arc<str>>, kind: TaskKind, future: F) -> RuntimeResult<TaskId>
     where
         F: Future<Output = ()> + Send + 'static,
@@ -379,6 +432,7 @@ impl TaskGroup {
         self.spawn_inner(name.into(), kind, None, future)
     }
 
+    /// Spawns service.
     pub fn spawn_service<F>(&self, name: impl Into<Arc<str>>, future: F) -> RuntimeResult<TaskId>
     where
         F: Future<Output = ()> + Send + 'static,
@@ -386,6 +440,7 @@ impl TaskGroup {
         self.spawn(name, TaskKind::Service, future)
     }
 
+    /// Spawns with handle.
     pub fn spawn_with_handle<F>(
         &self,
         name: impl Into<Arc<str>>,
@@ -398,6 +453,7 @@ impl TaskGroup {
         self.spawn_inner_with_handle(name.into(), kind, None, true, future)
     }
 
+    /// Spawns service with handle.
     pub fn spawn_service_with_handle<F>(
         &self,
         name: impl Into<Arc<str>>,
@@ -409,14 +465,17 @@ impl TaskGroup {
         self.spawn_with_handle(name, TaskKind::Service, future)
     }
 
+    /// Executes cancel.
     pub fn cancel(&self) {
         self.inner.cancellation_token.cancel();
     }
 
+    /// Returns the abort task.
     pub fn abort_task(&self, task_id: TaskId) -> bool {
         self.abort_task_inner(task_id).is_some()
     }
 
+    /// Returns the abort task and wait.
     pub async fn abort_task_and_wait(&self, task_id: TaskId, timeout: Duration) -> bool {
         let Some(completion) = self.abort_task_inner(task_id) else {
             return false;
@@ -433,6 +492,7 @@ impl TaskGroup {
         tokio::time::timeout(timeout, completion.wait()).await.is_ok()
     }
 
+    /// Returns the wait task.
     pub async fn wait_task(&self, task_id: TaskId, timeout: Duration) -> bool {
         let Some(completion) = self.inner.tasks.get(&task_id).map(|meta| meta.completion.clone()) else {
             return true;
@@ -449,10 +509,12 @@ impl TaskGroup {
         tokio::time::timeout(timeout, completion.wait()).await.is_ok()
     }
 
+    /// Shuts down the owned service.
     pub fn shutdown(&self, timeout: Duration) -> BoxFuture<'_, ShutdownReport> {
         self.shutdown_until(ShutdownDeadline::after(timeout))
     }
 
+    /// Shuts down until.
     pub fn shutdown_until(&self, deadline: ShutdownDeadline) -> BoxFuture<'_, ShutdownReport> {
         let deadline = {
             let mut installed = self.inner.shutdown_deadline.lock();
@@ -474,6 +536,7 @@ impl TaskGroup {
         .boxed()
     }
 
+    /// Shuts down now.
     pub fn shutdown_now(&self) -> ShutdownReport {
         if let Some(report) = self.inner.shutdown_report.get() {
             return report.clone();

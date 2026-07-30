@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![deny(missing_docs)]
+
 //! Storage capability contracts.
 
 mod capability;
@@ -78,21 +80,37 @@ pub enum Durability {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum AppendStatus {
     #[default]
+    /// Represents the put ok case.
     PutOk,
+    /// Represents the flush disk timeout case.
     FlushDiskTimeout,
+    /// Represents the flush replica timeout case.
     FlushReplicaTimeout,
+    /// Represents the replica unavailable case.
     ReplicaUnavailable,
+    /// Represents the service unavailable case.
     ServiceUnavailable,
+    /// Represents the storage unavailable case.
     StorageUnavailable,
+    /// Represents the invalid message case.
     InvalidMessage,
+    /// Represents the properties too large case.
     PropertiesTooLarge,
+    /// Represents the page cache busy case.
     PageCacheBusy,
+    /// Represents the unknown case.
     Unknown,
+    /// Represents the insufficient replicas case.
     InsufficientReplicas,
+    /// Represents the remote append failed case.
     RemoteAppendFailed,
+    /// Represents the queue limit exceeded case.
     QueueLimitExceeded,
+    /// Represents the schedule flow control case.
     ScheduleFlowControl,
+    /// Represents the schedule message illegal case.
     ScheduleMessageIllegal,
+    /// Represents the schedule disabled case.
     ScheduleDisabled,
 }
 
@@ -119,13 +137,21 @@ pub struct AppendReceipt {
 /// Invariant violation rejected while constructing an [`AppendReceipt`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AppendReceiptError {
+    /// Represents the empty range case.
     EmptyRange,
+    /// Represents the reversed range case.
     ReversedRange,
+    /// Represents the rejected status with range case.
     RejectedStatusWithRange,
+    /// Represents the accepted status without range case.
     AcceptedStatusWithoutRange,
+    /// Represents the appended watermark behind range case.
     AppendedWatermarkBehindRange,
+    /// Represents the durable watermark behind range case.
     DurableWatermarkBehindRange,
+    /// Represents the durable watermark ahead of appended case.
     DurableWatermarkAheadOfAppended,
+    /// Represents the memory durability already covered case.
     MemoryDurabilityAlreadyCovered,
 }
 
@@ -344,8 +370,11 @@ impl<L: fmt::Debug> fmt::Debug for LeasedBytes<L> {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ReadCacheState {
     #[default]
+    /// Represents the unknown case.
     Unknown,
+    /// Represents the hot case.
     Hot,
+    /// Represents the cold case.
     Cold,
 }
 
@@ -397,32 +426,54 @@ impl<L> SelectResult<L> {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum GetStatus {
     #[default]
+    /// Represents the found case.
     Found,
+    /// Represents the no matched message case.
     NoMatchedMessage,
+    /// Represents the message was removing case.
     MessageWasRemoving,
+    /// Represents the offset found null case.
     OffsetFoundNull,
+    /// Represents the offset overflow badly case.
     OffsetOverflowBadly,
+    /// Represents the offset overflow one case.
     OffsetOverflowOne,
+    /// Represents the offset too small case.
     OffsetTooSmall,
+    /// Represents the no matched logic queue case.
     NoMatchedLogicQueue,
+    /// Represents the no message in queue case.
     NoMessageInQueue,
+    /// Represents the offset reset case.
     OffsetReset,
 }
 
 /// Canonical neutral projection of a legacy logical get result.
 #[derive(Debug)]
 pub struct GetResult<L> {
+    /// The records value.
     pub records: Vec<SelectResult<L>>,
+    /// The queue offsets value.
     pub queue_offsets: Vec<u64>,
+    /// The status value.
     pub status: Option<GetStatus>,
+    /// The next begin offset value.
     pub next_begin_offset: i64,
+    /// The min offset value.
     pub min_offset: i64,
+    /// The max offset value.
     pub max_offset: i64,
+    /// The buffer total size value.
     pub buffer_total_size: i32,
+    /// The number of message entries.
     pub message_count: i32,
+    /// Whether suggest pulling from replica.
     pub suggest_pulling_from_replica: bool,
+    /// The number of commercial message entries.
     pub commercial_message_count: i32,
+    /// The commercial size per message value.
     pub commercial_size_per_message: i32,
+    /// The cold data sum value.
     pub cold_data_sum: i64,
 }
 
@@ -508,12 +559,19 @@ impl<T> ReadOutcome<T> {
 /// Canonical neutral projection of a legacy key query result.
 #[derive(Debug)]
 pub struct QueryResult<L> {
+    /// The records value.
     pub records: Vec<SelectResult<L>>,
+    /// The index last update timestamp value.
     pub index_last_update_timestamp: i64,
+    /// The index last update physical offset value.
     pub index_last_update_physical_offset: i64,
+    /// The buffer total size value.
     pub buffer_total_size: i32,
+    /// Whether index query safe.
     pub index_query_safe: bool,
+    /// The index safe physical offset value.
     pub index_safe_physical_offset: i64,
+    /// The index confirm physical offset value.
     pub index_confirm_physical_offset: i64,
 }
 
@@ -534,23 +592,36 @@ impl<L> Default for QueryResult<L> {
 /// Compact durable-write pressure projection.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FlushBacklog {
+    /// The queue depth value.
     pub queue_depth: u64,
+    /// The oldest wait duration in milliseconds.
     pub oldest_wait_millis: u64,
 }
 
 /// Canonical backend-neutral health projection.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoreHealthSnapshot {
+    /// Whether writable.
     pub writable: bool,
+    /// The last error value.
     pub last_error: Option<StoreErrorKind>,
+    /// Whether page cache busy.
     pub page_cache_busy: bool,
+    /// Whether transient pool deficient.
     pub transient_pool_deficient: bool,
+    /// The flush backlog value.
     pub flush_backlog: FlushBacklog,
+    /// The dispatch behind size in bytes.
     pub dispatch_behind_bytes: i64,
+    /// Whether shutdown.
     pub shutdown: bool,
+    /// The number of replication pending entries.
     pub replication_pending_count: u64,
+    /// The replication oldest wait duration in milliseconds.
     pub replication_oldest_wait_millis: u64,
+    /// The appended watermark value.
     pub appended_watermark: i64,
+    /// The durable watermark value.
     pub durable_watermark: i64,
 }
 

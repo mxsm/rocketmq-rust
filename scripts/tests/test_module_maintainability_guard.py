@@ -83,6 +83,18 @@ mod tests {
         self.assertTrue(guard.is_test_only_file(Path("crate/src/behavior_tests.rs")))
         self.assertFalse(guard.is_test_only_file(Path("crate/src/runtime.rs")))
 
+    def test_scan_file_does_not_count_comment_only_lines_as_production_loc(
+        self,
+    ) -> None:
+        with self.subTest("documentation and comments"):
+            source = """
+//! Crate documentation.
+/// Item documentation.
+// Implementation note.
+pub struct RuntimeState;
+"""
+            self.assertEqual(1, guard.production_code_lines(source))
+
     def test_new_oversized_module_fails_closed(self) -> None:
         baseline = guard.baseline_payload(baseline_metrics())
         current = baseline_metrics() + [metric("crate-new/src/oversized.rs", 801)]

@@ -15,34 +15,50 @@
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Identifies the full policy state.
 pub enum FullPolicy {
+    /// Represents the reject case.
     Reject,
+    /// Represents the coalesce latest case.
     CoalesceLatest,
+    /// Represents the drop stale case.
     DropStale,
+    /// Represents the close slow consumer case.
     CloseSlowConsumer,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Identifies the budget class state.
 pub enum BudgetClass {
+    /// Represents the data case.
     Data,
+    /// Represents the control case.
     Control,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Identifies the budget dimension state.
 pub enum BudgetDimension {
+    /// Represents the count case.
     Count,
+    /// Represents the bytes case.
     Bytes,
+    /// Represents the rate case.
     Rate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Represents rate limit.
 pub struct RateLimit {
+    /// The permits per second value.
     pub permits_per_second: u64,
+    /// The burst value.
     pub burst: u64,
 }
 
 impl RateLimit {
     #[must_use]
+    /// Creates a new `RateLimit`.
     pub const fn new(permits_per_second: u64, burst: u64) -> Self {
         Self {
             permits_per_second,
@@ -52,14 +68,19 @@ impl RateLimit {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Represents budget capacity.
 pub struct BudgetCapacity {
+    /// The count value.
     pub count: usize,
+    /// The bytes value.
     pub bytes: usize,
+    /// The rate value.
     pub rate: Option<RateLimit>,
 }
 
 impl BudgetCapacity {
     #[must_use]
+    /// Creates a new `BudgetCapacity`.
     pub const fn new(count: usize, bytes: usize) -> Self {
         Self {
             count,
@@ -69,6 +90,7 @@ impl BudgetCapacity {
     }
 
     #[must_use]
+    /// Sets rate and returns the updated value.
     pub const fn with_rate(mut self, rate: RateLimit) -> Self {
         self.rate = Some(rate);
         self
@@ -82,15 +104,21 @@ impl Default for BudgetCapacity {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Represents budget limit.
 pub struct BudgetLimit {
+    /// The capacity value.
     pub capacity: BudgetCapacity,
+    /// The control reserve value.
     pub control_reserve: BudgetCapacity,
+    /// The max age value.
     pub max_age: Option<Duration>,
+    /// The full policy value.
     pub full_policy: FullPolicy,
 }
 
 impl BudgetLimit {
     #[must_use]
+    /// Creates a new `BudgetLimit`.
     pub const fn new(count: usize, bytes: usize, full_policy: FullPolicy) -> Self {
         Self {
             capacity: BudgetCapacity::new(count, bytes),
@@ -101,18 +129,21 @@ impl BudgetLimit {
     }
 
     #[must_use]
+    /// Sets rate and returns the updated value.
     pub const fn with_rate(mut self, rate: RateLimit) -> Self {
         self.capacity.rate = Some(rate);
         self
     }
 
     #[must_use]
+    /// Sets control reserve and returns the updated value.
     pub const fn with_control_reserve(mut self, reserve: BudgetCapacity) -> Self {
         self.control_reserve = reserve;
         self
     }
 
     #[must_use]
+    /// Sets max age and returns the updated value.
     pub const fn with_max_age(mut self, max_age: Duration) -> Self {
         self.max_age = Some(max_age);
         self
@@ -214,23 +245,62 @@ fn validate_rate(path: &str, rate: Option<RateLimit>) -> Result<(), BudgetConfig
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
+/// Identifies the budget config error state.
 pub enum BudgetConfigError {
     #[error("resource budget name must not be blank")]
+    /// Represents the empty name case.
     EmptyName,
     #[error("resource budget name must not contain '/'")]
+    /// Represents the invalid name case.
     InvalidName,
     #[error("resource budget {path} has zero {dimension:?} capacity")]
-    ZeroCapacity { path: String, dimension: BudgetDimension },
+    /// Represents the zero capacity case.
+    ZeroCapacity {
+        /// The path value.
+        path: String,
+        /// The dimension value.
+        dimension: BudgetDimension,
+    },
     #[error("resource budget {path} has a zero rate or burst")]
-    ZeroRate { path: String },
+    /// Represents the zero rate case.
+    ZeroRate {
+        /// The path value.
+        path: String,
+    },
     #[error("resource budget {path} has zero maximum age")]
-    ZeroMaxAge { path: String },
+    /// Represents the zero max age case.
+    ZeroMaxAge {
+        /// The path value.
+        path: String,
+    },
     #[error("resource budget {path} {dimension:?} reserve exceeds its capacity")]
-    ReserveExceedsCapacity { path: String, dimension: BudgetDimension },
+    /// Represents the reserve exceeds capacity case.
+    ReserveExceedsCapacity {
+        /// The path value.
+        path: String,
+        /// The dimension value.
+        dimension: BudgetDimension,
+    },
     #[error("resource budget {path} defines a {dimension:?} reserve without a parent capacity")]
-    ReserveWithoutCapacity { path: String, dimension: BudgetDimension },
+    /// Represents the reserve without capacity case.
+    ReserveWithoutCapacity {
+        /// The path value.
+        path: String,
+        /// The dimension value.
+        dimension: BudgetDimension,
+    },
     #[error("resource budget {path} {dimension:?} capacity exceeds its parent")]
-    ChildExceedsParent { path: String, dimension: BudgetDimension },
+    /// Represents the child exceeds parent case.
+    ChildExceedsParent {
+        /// The path value.
+        path: String,
+        /// The dimension value.
+        dimension: BudgetDimension,
+    },
     #[error("resource budget {path} maximum age exceeds its parent")]
-    ChildMaxAgeExceedsParent { path: String },
+    /// Represents the child max age exceeds parent case.
+    ChildMaxAgeExceedsParent {
+        /// The path value.
+        path: String,
+    },
 }

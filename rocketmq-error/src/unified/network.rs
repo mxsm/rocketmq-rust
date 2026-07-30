@@ -21,55 +21,125 @@ use thiserror::Error;
 pub enum NetworkError {
     /// Connection to remote address failed
     #[error("Connection failed to {addr}: {reason}")]
-    ConnectionFailed { addr: String, reason: String },
+    /// The connection failed value.
+    ConnectionFailed {
+        /// The addr value.
+        addr: String,
+        /// The reason value.
+        reason: String,
+    },
 
     /// Connection timeout
     #[error("Connection timeout to {addr} after {timeout_ms}ms")]
-    ConnectionTimeout { addr: String, timeout_ms: u64 },
+    /// The connection timeout value.
+    ConnectionTimeout {
+        /// The addr value.
+        addr: String,
+        /// The timeout duration in milliseconds.
+        timeout_ms: u64,
+    },
 
     /// Connection was closed unexpectedly
     #[error("Connection closed: {addr}")]
-    ConnectionClosed { addr: String },
+    /// The connection closed value.
+    ConnectionClosed {
+        /// The addr value.
+        addr: String,
+    },
 
     /// Failed to send data
     #[error("Send failed to {addr}: {reason}")]
-    SendFailed { addr: String, reason: String },
+    /// The send failed value.
+    SendFailed {
+        /// The addr value.
+        addr: String,
+        /// The reason value.
+        reason: String,
+    },
 
     /// Failed to receive data
     #[error("Receive failed from {addr}: {reason}")]
-    ReceiveFailed { addr: String, reason: String },
+    /// The receive failed value.
+    ReceiveFailed {
+        /// The addr value.
+        addr: String,
+        /// The reason value.
+        reason: String,
+    },
 
     /// Invalid address format
     #[error("Invalid address format: {addr}")]
-    InvalidAddress { addr: String },
+    /// The invalid address value.
+    InvalidAddress {
+        /// The addr value.
+        addr: String,
+    },
 
     /// DNS resolution failed
     #[error("DNS resolution failed for {host}: {reason}")]
-    DnsResolutionFailed { host: String, reason: String },
+    /// The dns resolution failed value.
+    DnsResolutionFailed {
+        /// The host value.
+        host: String,
+        /// The reason value.
+        reason: String,
+    },
 
     /// Too many requests (backpressure)
     #[error("Too many requests to {addr}, limit: {limit}")]
-    TooManyRequests { addr: String, limit: usize },
+    /// The too many requests value.
+    TooManyRequests {
+        /// The addr value.
+        addr: String,
+        /// The limit value.
+        limit: usize,
+    },
 
     /// Outbound queue cannot admit another request.
     #[error("Outbound queue is full for {addr}")]
-    QueueFull { addr: String },
+    /// The queue full value.
+    QueueFull {
+        /// The addr value.
+        addr: String,
+    },
 
     /// The request expired before its first socket write.
     #[error("Request deadline exceeded before send to {addr}")]
-    DeadlineExceededBeforeSend { addr: String },
+    /// The deadline exceeded before send value.
+    DeadlineExceededBeforeSend {
+        /// The addr value.
+        addr: String,
+    },
 
     /// A socket write did not complete inside the request deadline.
     #[error("Write timeout to {addr} after {timeout_ms}ms")]
-    WriteTimeout { addr: String, timeout_ms: u64 },
+    /// The write timeout value.
+    WriteTimeout {
+        /// The addr value.
+        addr: String,
+        /// The timeout duration in milliseconds.
+        timeout_ms: u64,
+    },
 
     /// A sent request did not receive its response inside the request deadline.
     #[error("Response timeout from {addr} after {timeout_ms}ms")]
-    ResponseTimeout { addr: String, timeout_ms: u64 },
+    /// The response timeout value.
+    ResponseTimeout {
+        /// The addr value.
+        addr: String,
+        /// The timeout duration in milliseconds.
+        timeout_ms: u64,
+    },
 
     /// Request timeout
     #[error("Request timeout to {addr} after {timeout_ms}ms")]
-    RequestTimeout { addr: String, timeout_ms: u64 },
+    /// The request timeout value.
+    RequestTimeout {
+        /// The addr value.
+        addr: String,
+        /// The timeout duration in milliseconds.
+        timeout_ms: u64,
+    },
 }
 
 impl NetworkError {

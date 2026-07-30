@@ -111,10 +111,12 @@ impl<T: Send + 'static> CompletableFuture<T> {
     }
 
     // Rust code to complete a future task by updating the state and waking up the associated waker
+    /// Completes the operation with the supplied result.
     pub fn complete(&mut self, result: T) {
         complete_state(&self.state, result);
     }
 
+    /// Completes the operation with an error.
     pub fn complete_exceptionally(&mut self, error: RuntimeError) {
         complete_exceptionally(&self.state, error);
     }

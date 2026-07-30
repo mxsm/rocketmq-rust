@@ -139,48 +139,102 @@ pub enum RocketMQError {
     // ============================================================================
     /// Broker not found
     #[error("Broker not found: {name}")]
-    BrokerNotFound { name: String },
+    /// The broker not found value.
+    BrokerNotFound {
+        /// The name value.
+        name: String,
+    },
 
     /// Broker registration failed
     #[error("Broker registration failed for '{name}': {reason}")]
-    BrokerRegistrationFailed { name: String, reason: String },
+    /// The broker registration failed value.
+    BrokerRegistrationFailed {
+        /// The name value.
+        name: String,
+        /// The reason value.
+        reason: String,
+    },
 
     /// Broker operation failed with error code
     #[error("Broker operation '{operation}' failed: code={code}, message={message}")]
     BrokerOperationFailed {
+        /// The struct field value.
         operation: &'static str,
+        /// The struct field value.
         code: i32,
+        /// The struct field value.
         message: String,
+        /// The struct field value.
         broker_addr: Option<String>,
     },
 
     /// Topic does not exist
     #[error("Topic '{topic}' does not exist")]
-    TopicNotExist { topic: String },
+    /// The topic not exist value.
+    TopicNotExist {
+        /// The topic value.
+        topic: String,
+    },
 
     /// Queue does not exist
     #[error("Queue does not exist: topic='{topic}', queue_id={queue_id}")]
-    QueueNotExist { topic: String, queue_id: i32 },
+    /// The queue not exist value.
+    QueueNotExist {
+        /// The topic value.
+        topic: String,
+        /// The queue identifier.
+        queue_id: i32,
+    },
 
     /// Subscription group not found
     #[error("Subscription group '{group}' not found")]
-    SubscriptionGroupNotExist { group: String },
+    /// The subscription group not exist value.
+    SubscriptionGroupNotExist {
+        /// The group value.
+        group: String,
+    },
 
     /// Queue ID out of range
     #[error("Queue {queue_id} out of range (0-{max}) for topic '{topic}'")]
-    QueueIdOutOfRange { topic: String, queue_id: i32, max: i32 },
+    /// The queue id out of range value.
+    QueueIdOutOfRange {
+        /// The topic value.
+        topic: String,
+        /// The queue identifier.
+        queue_id: i32,
+        /// The max value.
+        max: i32,
+    },
 
     /// Message body too large
     #[error("Message body length {actual} bytes exceeds limit {limit} bytes")]
-    MessageTooLarge { actual: usize, limit: usize },
+    /// The message too large value.
+    MessageTooLarge {
+        /// The actual value.
+        actual: usize,
+        /// The limit value.
+        limit: usize,
+    },
 
     /// Message validation failed
     #[error("Message validation failed: {reason}")]
-    MessageValidationFailed { reason: String },
+    /// The message validation failed value.
+    MessageValidationFailed {
+        /// The reason value.
+        reason: String,
+    },
 
     /// Retry limit exceeded
     #[error("Retry limit {current}/{max} exceeded for group '{group}'")]
-    RetryLimitExceeded { group: String, current: i32, max: i32 },
+    /// The retry limit exceeded value.
+    RetryLimitExceeded {
+        /// The group value.
+        group: String,
+        /// The current value.
+        current: i32,
+        /// The max value.
+        max: i32,
+    },
 
     /// Transaction message rejected
     #[error("Transaction message rejected by broker policy")]
@@ -188,30 +242,53 @@ pub enum RocketMQError {
 
     /// Broker permission denied
     #[error("Broker permission denied: {operation}")]
-    BrokerPermissionDenied { operation: String },
+    /// The broker permission denied value.
+    BrokerPermissionDenied {
+        /// The operation value.
+        operation: String,
+    },
 
     /// Not master broker
     #[error("Not master broker, master address: {master_address}")]
-    NotMasterBroker { master_address: String },
+    /// The not master broker value.
+    NotMasterBroker {
+        /// The master address value.
+        master_address: String,
+    },
 
     /// Message lookup failed
     #[error("Message lookup failed at offset {offset}")]
-    MessageLookupFailed { offset: i64 },
+    /// The message lookup failed value.
+    MessageLookupFailed {
+        /// The offset value.
+        offset: i64,
+    },
 
     /// Query result was not found
     #[error("Query result was not found: {resource}")]
-    QueryNotFound { resource: String },
+    /// The query not found value.
+    QueryNotFound {
+        /// The resource value.
+        resource: String,
+    },
 
     /// Topic sending forbidden
     #[error("Sending to topic '{topic}' is forbidden")]
-    TopicSendingForbidden { topic: String },
+    /// The topic sending forbidden value.
+    TopicSendingForbidden {
+        /// The topic value.
+        topic: String,
+    },
 
     /// Async task failed
     #[error("Async task '{task}' failed: {context}")]
     BrokerAsyncTaskFailed {
+        /// The struct field value.
         task: &'static str,
+        /// The struct field value.
         context: String,
         #[source]
+        /// The struct field value.
         source: Box<dyn std::error::Error + Send + Sync>,
     },
 
@@ -220,13 +297,21 @@ pub enum RocketMQError {
     // ============================================================================
     /// Request body missing or invalid
     #[error("Request body {operation} failed: {reason}")]
-    RequestBodyInvalid { operation: &'static str, reason: String },
+    /// The request body invalid value.
+    RequestBodyInvalid {
+        /// The operation value.
+        operation: &'static str,
+        /// The reason value.
+        reason: String,
+    },
 
     /// Request body decoding or validation failed with a typed source.
     #[error("Request body {operation} failed")]
     RequestBodySource {
+        /// The struct field value.
         operation: &'static str,
         #[source]
+        /// The struct field value.
         source: Box<dyn std::error::Error + Send + Sync>,
     },
 
@@ -237,45 +322,81 @@ pub enum RocketMQError {
     /// Request header decoding or validation failed with a typed source.
     #[error("Request header {operation} failed")]
     RequestHeaderSource {
+        /// The struct field value.
         operation: &'static str,
         #[source]
+        /// The struct field value.
         source: Box<dyn std::error::Error + Send + Sync>,
     },
 
     /// Authentication or authorization failed with a typed source.
     #[error("Authentication operation {operation} failed")]
     AuthenticationSource {
+        /// The struct field value.
         operation: &'static str,
         #[source]
+        /// The struct field value.
         source: Box<dyn std::error::Error + Send + Sync>,
     },
 
     /// Response encoding/decoding failed
     #[error("Response {operation} failed: {reason}")]
-    ResponseProcessFailed { operation: &'static str, reason: String },
+    /// The response process failed value.
+    ResponseProcessFailed {
+        /// The operation value.
+        operation: &'static str,
+        /// The reason value.
+        reason: String,
+    },
 
     // ============================================================================
     // NameServer/Route Errors
     // ============================================================================
     /// Route information not found
     #[error("Route information not found for topic '{topic}'")]
-    RouteNotFound { topic: String },
+    /// The route not found value.
+    RouteNotFound {
+        /// The topic value.
+        topic: String,
+    },
 
     /// Route data inconsistency detected
     #[error("Route data inconsistency detected for topic '{topic}': {reason}")]
-    RouteInconsistent { topic: String, reason: String },
+    /// The route inconsistent value.
+    RouteInconsistent {
+        /// The topic value.
+        topic: String,
+        /// The reason value.
+        reason: String,
+    },
 
     /// Broker registration conflict
     #[error("Broker registration conflict for '{broker_name}': {reason}")]
-    RouteRegistrationConflict { broker_name: String, reason: String },
+    /// The route registration conflict value.
+    RouteRegistrationConflict {
+        /// The broker name value.
+        broker_name: String,
+        /// The reason value.
+        reason: String,
+    },
 
     /// Route state version conflict
     #[error("Route state version conflict: expected={expected}, actual={actual}")]
-    RouteVersionConflict { expected: u64, actual: u64 },
+    /// The route version conflict value.
+    RouteVersionConflict {
+        /// The expected value.
+        expected: u64,
+        /// The actual value.
+        actual: u64,
+    },
 
     /// Cluster not found
     #[error("Cluster '{cluster}' not found")]
-    ClusterNotFound { cluster: String },
+    /// The cluster not found value.
+    ClusterNotFound {
+        /// The cluster value.
+        cluster: String,
+    },
 
     // ============================================================================
     // Client Errors
@@ -294,7 +415,13 @@ pub enum RocketMQError {
 
     /// Invalid client state
     #[error("Invalid client state: expected {expected}, got {actual}")]
-    ClientInvalidState { expected: &'static str, actual: String },
+    /// The client invalid state value.
+    ClientInvalidState {
+        /// The expected value.
+        expected: &'static str,
+        /// The actual value.
+        actual: String,
+    },
 
     /// Producer not available
     #[error("Producer is not available")]
@@ -330,69 +457,136 @@ pub enum RocketMQError {
     // ============================================================================
     /// Storage read failed
     #[error("Storage read failed for '{path}': {reason}")]
-    StorageReadFailed { path: String, reason: String },
+    /// The storage read failed value.
+    StorageReadFailed {
+        /// The path value.
+        path: String,
+        /// The reason value.
+        reason: String,
+    },
 
     /// Storage write failed
     #[error("Storage write failed for '{path}': {reason}")]
-    StorageWriteFailed { path: String, reason: String },
+    /// The storage write failed value.
+    StorageWriteFailed {
+        /// The path value.
+        path: String,
+        /// The reason value.
+        reason: String,
+    },
 
     /// Data corruption detected
     #[error("Corrupted data detected in '{path}'")]
-    StorageCorrupted { path: String },
+    /// The storage corrupted value.
+    StorageCorrupted {
+        /// The path value.
+        path: String,
+    },
 
     /// Out of storage space
     #[error("Out of storage space: {path}")]
-    StorageOutOfSpace { path: String },
+    /// The storage out of space value.
+    StorageOutOfSpace {
+        /// The path value.
+        path: String,
+    },
 
     /// Storage lock failed
     #[error("Failed to acquire lock for '{path}'")]
-    StorageLockFailed { path: String },
+    /// The storage lock failed value.
+    StorageLockFailed {
+        /// The path value.
+        path: String,
+    },
 
     // ============================================================================
     // Configuration Errors
     // ============================================================================
     /// Configuration parsing failed
     #[error("Configuration parse error for '{key}': {reason}")]
-    ConfigParseFailed { key: &'static str, reason: String },
+    /// The config parse failed value.
+    ConfigParseFailed {
+        /// The key value.
+        key: &'static str,
+        /// The reason value.
+        reason: String,
+    },
 
     /// Required configuration missing
     #[error("Required configuration '{key}' is missing")]
-    ConfigMissing { key: &'static str },
+    /// The config missing value.
+    ConfigMissing {
+        /// The key value.
+        key: &'static str,
+    },
 
     /// Invalid configuration value
     #[error("Invalid configuration for '{key}': value='{value}', reason={reason}")]
     ConfigInvalidValue {
+        /// The struct field value.
         key: &'static str,
+        /// The struct field value.
         value: String,
+        /// The struct field value.
         reason: String,
     },
 
     /// Invalid authentication or authorization configuration.
     #[error("Invalid auth configuration for '{key}': {reason}")]
-    AuthConfigInvalid { key: &'static str, reason: String },
+    /// The auth config invalid value.
+    AuthConfigInvalid {
+        /// The key value.
+        key: &'static str,
+        /// The reason value.
+        reason: String,
+    },
 
     /// Authentication or authorization hot reload failed.
     #[error("Auth hot reload failed for '{path}': {reason}")]
-    AuthHotReloadFailed { path: String, reason: String },
+    /// The auth hot reload failed value.
+    AuthHotReloadFailed {
+        /// The path value.
+        path: String,
+        /// The reason value.
+        reason: String,
+    },
 
     // ============================================================================
     // Controller/Raft Errors
     // ============================================================================
     /// Not the Raft leader
     #[error("Not leader, current leader is: {}", leader_id.map(|id| id.to_string()).unwrap_or_else(|| "unknown".to_string()))]
-    ControllerNotLeader { leader_id: Option<u64> },
+    /// The controller not leader value.
+    ControllerNotLeader {
+        /// The leader identifier.
+        leader_id: Option<u64>,
+    },
 
     /// Raft consensus error
     #[error("Raft consensus error: {reason}")]
-    ControllerRaftError { reason: String },
+    /// The controller raft error value.
+    ControllerRaftError {
+        /// The reason value.
+        reason: String,
+    },
 
     /// Consensus operation timeout
     #[error("Consensus operation '{operation}' timed out after {timeout_ms}ms")]
-    ControllerConsensusTimeout { operation: &'static str, timeout_ms: u64 },
+    /// The controller consensus timeout value.
+    ControllerConsensusTimeout {
+        /// The operation value.
+        operation: &'static str,
+        /// The timeout duration in milliseconds.
+        timeout_ms: u64,
+    },
 
     /// Snapshot operation failed
     #[error("Snapshot operation failed: {reason}")]
-    ControllerSnapshotFailed { reason: String },
+    /// The controller snapshot failed value.
+    ControllerSnapshotFailed {
+        /// The reason value.
+        reason: String,
+    },
 
     // ============================================================================
     // System Errors
@@ -407,19 +601,31 @@ pub enum RocketMQError {
 
     /// Operation timeout
     #[error("Operation '{operation}' timed out after {timeout_ms}ms")]
-    Timeout { operation: &'static str, timeout_ms: u64 },
+    /// The timeout value.
+    Timeout {
+        /// The operation value.
+        operation: &'static str,
+        /// The timeout duration in milliseconds.
+        timeout_ms: u64,
+    },
 
     /// Internal operation failed with a preserved typed source.
     #[error("Internal operation {operation} failed")]
     Internal {
+        /// The struct field value.
         operation: &'static str,
         #[source]
+        /// The struct field value.
         source: Box<dyn std::error::Error + Send + Sync>,
     },
 
     /// A violated program invariant with no lower-level source.
     #[error("Invariant violated: {invariant}")]
-    InvariantViolation { invariant: &'static str },
+    /// The invariant violation value.
+    InvariantViolation {
+        /// The invariant value.
+        invariant: &'static str,
+    },
 
     /// Service lifecycle error
     #[error("Service error: {0}")]
@@ -433,10 +639,15 @@ pub enum RocketMQError {
     InvalidVersionOrdinal(u32),
 
     #[error("Not initialized: {0}")]
+    /// Represents the not initialized case.
     NotInitialized(String),
 
     #[error("Message is missing required property: {property}")]
-    MissingRequiredMessageProperty { property: &'static str },
+    /// Represents the missing required message property case.
+    MissingRequiredMessageProperty {
+        /// The property value.
+        property: &'static str,
+    },
 }
 
 // ============================================================================

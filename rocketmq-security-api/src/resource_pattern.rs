@@ -19,9 +19,13 @@ use serde::Serializer;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 #[repr(u8)]
+/// Identifies the resource pattern state.
 pub enum ResourcePattern {
+    /// Represents the any case.
     Any = 1,
+    /// Represents the literal case.
     Literal = 2,
+    /// Represents the prefixed case.
     Prefixed = 3,
 }
 
@@ -40,11 +44,13 @@ impl ResourcePattern {
     }
 
     #[inline]
+    /// Returns the code.
     pub fn code(self) -> u8 {
         self as u8
     }
 
     #[inline]
+    /// Returns the name.
     pub fn name(self) -> &'static str {
         match self {
             Self::Any => "ANY",

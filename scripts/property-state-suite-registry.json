@@ -1,0 +1,119 @@
+{
+  "schema_version": 1,
+  "generator_decision": {
+    "selected": "custom-deterministic-generator",
+    "reason": "Fixed, readable case tables cover synchronous and asynchronous state machines without adding an MSRV-sensitive dependency.",
+    "rejected": {
+      "proptest": "Shrinking is valuable, but an additional dependency and opaque generated cases are unnecessary for the bounded domains selected here.",
+      "quickcheck": "Compact generators do not provide enough control over async state transitions and persisted binary fixtures."
+    }
+  },
+  "minimum_categories": 5,
+  "suites": [
+    {
+      "id": "protocol-remoting-round-trip",
+      "category": "wire-protocol",
+      "owner": "protocol",
+      "source": "rocketmq-protocol/tests/remoting_wire_golden.rs",
+      "test": "deterministic_remoting_cases_round_trip_without_trailing_bytes",
+      "seed": "0x524d5150524f544f",
+      "command": ["cargo", "test", "-p", "rocketmq-protocol", "--test", "remoting_wire_golden", "deterministic_remoting_cases_round_trip_without_trailing_bytes", "--", "--exact"],
+      "expected_tests": 1,
+      "pr_cases": 32,
+      "nightly_cases": 32,
+      "external_network": false,
+      "fixed_ports": false,
+      "arbitrary_sleep": false
+    },
+    {
+      "id": "store-record-round-trip",
+      "category": "persisted-storage",
+      "owner": "store",
+      "source": "rocketmq-store-local/tests/storage_layout_golden.rs",
+      "test": "deterministic_storage_records_round_trip_and_preserve_offsets",
+      "seed": "0x524d5153544f5245",
+      "command": ["cargo", "test", "-p", "rocketmq-store-local", "--test", "storage_layout_golden", "deterministic_storage_records_round_trip_and_preserve_offsets", "--", "--exact"],
+      "expected_tests": 1,
+      "pr_cases": 64,
+      "nightly_cases": 64,
+      "external_network": false,
+      "fixed_ports": false,
+      "arbitrary_sleep": false
+    },
+    {
+      "id": "controller-snapshot-round-trip",
+      "category": "consensus-state",
+      "owner": "controller",
+      "source": "rocketmq-controller/src/openraft/state_machine.rs",
+      "test": "deterministic_snapshot_cases_preserve_checksum_and_payload",
+      "seed": "0x524d51434f4e5452",
+      "command": ["cargo", "test", "-p", "rocketmq-controller", "--lib", "openraft::state_machine::tests::deterministic_snapshot_cases_preserve_checksum_and_payload", "--", "--exact"],
+      "expected_tests": 1,
+      "pr_cases": 32,
+      "nightly_cases": 32,
+      "external_network": false,
+      "fixed_ports": false,
+      "arbitrary_sleep": false
+    },
+    {
+      "id": "broker-config-boundary",
+      "category": "configuration",
+      "owner": "broker",
+      "source": "rocketmq-broker/tests/config_contract.rs",
+      "test": "deterministic_config_cases_preserve_defaults_and_reject_unknown_fields",
+      "seed": "0x524d51434f4e4647",
+      "command": ["cargo", "test", "-p", "rocketmq-broker", "--test", "config_contract", "deterministic_config_cases_preserve_defaults_and_reject_unknown_fields", "--", "--exact"],
+      "expected_tests": 1,
+      "pr_cases": 16,
+      "nightly_cases": 16,
+      "external_network": false,
+      "fixed_ports": false,
+      "arbitrary_sleep": false
+    },
+    {
+      "id": "filter-parser-evaluator-equivalence",
+      "category": "filter-expression",
+      "owner": "filter",
+      "source": "rocketmq-filter/src/filter/filter_sql_filter.rs",
+      "test": "deterministic_equivalent_expressions_match_for_all_contexts",
+      "seed": "0x524d5146494c5445",
+      "command": ["cargo", "test", "-p", "rocketmq-filter", "--lib", "filter::filter_sql_filter::tests::deterministic_equivalent_expressions_match_for_all_contexts", "--", "--exact"],
+      "expected_tests": 1,
+      "pr_cases": 24,
+      "nightly_cases": 24,
+      "external_network": false,
+      "fixed_ports": false,
+      "arbitrary_sleep": false
+    },
+    {
+      "id": "proxy-keyed-execution",
+      "category": "proxy-execution",
+      "owner": "proxy",
+      "source": "rocketmq-proxy-cluster/src/cluster_behavior_tests.rs",
+      "test": "same_consumer_key_is_fifo_without_serializing_distinct_keys",
+      "seed": "0x524d5150524f5859",
+      "command": ["cargo", "test", "-p", "rocketmq-proxy-cluster", "--lib", "cluster::behavior_tests::same_consumer_key_is_fifo_without_serializing_distinct_keys", "--", "--exact"],
+      "expected_tests": 1,
+      "pr_cases": 16,
+      "nightly_cases": 16,
+      "external_network": false,
+      "fixed_ports": false,
+      "arbitrary_sleep": false
+    },
+    {
+      "id": "runtime-budget-state-machine",
+      "category": "runtime-lifecycle",
+      "owner": "runtime",
+      "source": "rocketmq-runtime/tests/resource_budget_tree.rs",
+      "test": "child_permit_reserves_every_ancestor_and_releases_on_drop",
+      "seed": "0x524d5152554e5449",
+      "command": ["cargo", "test", "-p", "rocketmq-runtime", "--test", "resource_budget_tree", "child_permit_reserves_every_ancestor_and_releases_on_drop", "--", "--exact"],
+      "expected_tests": 1,
+      "pr_cases": 32,
+      "nightly_cases": 32,
+      "external_network": false,
+      "fixed_ports": false,
+      "arbitrary_sleep": false
+    }
+  ]
+}

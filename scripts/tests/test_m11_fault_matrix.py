@@ -88,6 +88,12 @@ class FaultMatrixGuardTests(unittest.TestCase):
         mutation(run)
         self.run_path.write_text(json.dumps(run, indent=2) + "\n", encoding="utf-8")
 
+    def mutate_policy(self, mutation) -> None:  # type: ignore[no-untyped-def]
+        path = self.root / "distribution" / "kubernetes" / "fault-matrix-policy.json"
+        policy = json.loads(path.read_text(encoding="utf-8"))
+        mutation(policy)
+        path.write_text(json.dumps(policy, indent=2) + "\n", encoding="utf-8")
+
     def test_policy_and_positive_fixture_pass(self) -> None:
         self.run_guard("--policy-only", expect_success=True)
         self.run_guard("--evidence", str(FIXTURE), "--allow-fixture", expect_success=True)
@@ -114,12 +120,23 @@ class FaultMatrixGuardTests(unittest.TestCase):
     def test_missing_scenario_is_rejected(self) -> None:
         self.mutate_run(lambda run: run["scenarios"].pop())
         result = self.run_guard("--evidence", str(FIXTURE), "--allow-fixture", expect_success=False)
-        self.assertIn("exact ordered seven scenarios", result.stderr)
+        self.assertIn("exact ordered 16 scenarios", result.stderr)
 
     def test_scenario_assertion_key_drift_is_rejected(self) -> None:
         self.mutate_run(lambda run: run["scenarios"][0]["assertions"].pop("queue_offset_preserved"))
         result = self.run_guard("--evidence", str(FIXTURE), "--allow-fixture", expect_success=False)
         self.assertIn("rolling_upgrade: assertion keys drifted", result.stderr)
+
+    def test_scenario_without_abort_or_cleanup_contract_is_rejected(self) -> None:
+        self.mutate_policy(
+            lambda policy: (
+                policy["scenarios"][0].pop("abort_condition"),
+                policy["scenarios"][0].pop("cleanup_verification"),
+            )
+        )
+        result = self.run_guard("--policy-only", expect_success=False)
+        self.assertIn("abort condition", result.stderr)
+        self.assertIn("cleanup verification", result.stderr)
 
     def test_placeholder_image_digest_is_rejected(self) -> None:
         self.mutate_run(
@@ -148,6 +165,15 @@ class FaultMatrixGuardTests(unittest.TestCase):
         runner.write_text(source.replace("commitlog_offset_preserved", "offset_not_checked"), encoding="utf-8")
         result = self.run_guard("--policy-only", expect_success=False)
         self.assertIn("commitlog_offset_preserved", result.stderr)
+
+    def test_runner_that_drops_network_fault_injection_is_rejected(self) -> None:
+        runner = self.root / "scripts" / "kind-architecture-refactor-e2e.ps1"
+        source = runner.read_text(encoding="utf-8")
+        marker = "Set-NodeNetworkImpairment $networkNode @('delay', '200ms', '50ms', 'loss', '10%')"
+        self.assertIn(marker, source)
+        runner.write_text(source.replace(marker, "network impairment skipped"), encoding="utf-8")
+        result = self.run_guard("--policy-only", expect_success=False)
+        self.assertIn("Set-NodeNetworkImpairment", result.stderr)
 
     def test_dynamic_input_and_registry_regressions_are_rejected(self) -> None:
         workflow = self.root / ".github" / "workflows" / "kubernetes-fault-matrix.yml"

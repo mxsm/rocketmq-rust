@@ -319,6 +319,10 @@ public `RuntimeHandle`, and detached task spawning.
   registration behavior have focused tests.
 - Phase 3 owns long-running soak, failure-matrix, and production evidence work;
   those are intentionally not Phase 2 merge prerequisites.
+- Public capability behavior and failure boundaries are consolidated in the
+  [core capability contracts](core-capability-contracts.md). `rocketmq-store-api`,
+  `rocketmq-runtime`, `rocketmq-error`, and `rocketmq-security-api` enforce
+  `deny(missing_docs)`, so a newly exposed undocumented item fails compilation.
 
 ## Proxy Cluster execution ownership
 
@@ -346,3 +350,11 @@ The `cluster_executor` Criterion target measures same-key FIFO admission and
 high-cardinality exact-key admission/retirement as an algorithm regression
 signal. It is explicitly separate from the target-hardware mixed workload
 profile and does not claim production throughput.
+
+The target-hardware `proxy-mixed-execution` profile instead submits batched
+1 KiB sends on unrelated producer keys after a separate key has entered
+simulated remote I/O. Its throughput and p99 measure completion of those
+unrelated messages before the blocked key releases. The workload exercises the
+production admission, byte budget, ordering-key registry, and queue retirement,
+but still does not claim end-to-end Broker TPS because it has no external
+network or Broker.

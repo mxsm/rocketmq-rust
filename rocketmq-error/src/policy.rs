@@ -17,26 +17,36 @@ use crate::ErrorKind;
 /// Retry or recovery classification for one error kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RetryClass {
+    /// Represents the never case.
     Never,
+    /// Represents the immediate case.
     Immediate,
+    /// Represents the after backoff case.
     AfterBackoff,
+    /// Represents the refresh route case.
     RefreshRoute,
+    /// Represents the switch broker case.
     SwitchBroker,
+    /// Represents the refresh leader case.
     RefreshLeader,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// Represents recovery spec.
 pub struct RecoverySpec {
+    /// The retry value.
     pub retry: RetryClass,
 }
 
 impl RecoverySpec {
     #[inline]
+    /// Creates a new `RecoverySpec`.
     pub const fn new(retry: RetryClass) -> Self {
         Self { retry }
     }
 
     #[inline]
+    /// Returns the mapping for the supplied error kind.
     pub const fn for_kind(kind: ErrorKind) -> Self {
         Self::new(match kind {
             ErrorKind::RouteNotFound
@@ -74,26 +84,36 @@ impl RecoverySpec {
 /// Default severity for logs, metrics, traces, and alert routing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ErrorSeverity {
+    /// Represents the debug case.
     Debug,
+    /// Represents the info case.
     Info,
+    /// Represents the warn case.
     Warn,
+    /// Represents the error case.
     Error,
+    /// Represents the critical case.
     Critical,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// Represents observe spec.
 pub struct ObserveSpec {
+    /// The severity value.
     pub severity: ErrorSeverity,
+    /// The metric label value.
     pub metric_label: &'static str,
 }
 
 impl ObserveSpec {
     #[inline]
+    /// Creates a new `ObserveSpec`.
     pub const fn new(severity: ErrorSeverity, metric_label: &'static str) -> Self {
         Self { severity, metric_label }
     }
 
     #[inline]
+    /// Returns the mapping for the supplied error kind.
     pub const fn for_kind(kind: ErrorKind) -> Self {
         Self::new(observe_severity(kind), kind.code().as_str())
     }

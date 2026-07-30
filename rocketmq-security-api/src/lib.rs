@@ -12,10 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![deny(missing_docs)]
+
 //! Runtime-neutral security contracts.
 
 pub mod maintenance;
+/// Resource pattern types and operations.
 pub mod resource_pattern;
+/// Resource type types and operations.
 pub mod resource_type;
 pub mod secret_provider;
 pub mod secure_deployment;
@@ -99,6 +103,7 @@ pub struct PeerInfo {
 }
 
 impl PeerInfo {
+    /// Creates a new `PeerInfo`.
     pub fn new(address: SocketAddr, tls: bool) -> Self {
         Self {
             address,
@@ -107,19 +112,23 @@ impl PeerInfo {
         }
     }
 
+    /// Sets certificate subject and returns the updated value.
     pub fn with_certificate_subject(mut self, subject: impl Into<CheetahString>) -> Self {
         self.certificate_subject = Some(subject.into());
         self
     }
 
+    /// Returns the address.
     pub fn address(&self) -> SocketAddr {
         self.address
     }
 
+    /// Returns whether tls.
     pub fn is_tls(&self) -> bool {
         self.tls
     }
 
+    /// Returns the certificate subject.
     pub fn certificate_subject(&self) -> Option<&str> {
         self.certificate_subject.as_deref()
     }
@@ -149,6 +158,7 @@ pub struct SecurityRequestView<'a> {
 }
 
 impl<'a> SecurityRequestView<'a> {
+    /// Creates a new `SecurityRequestView`.
     pub fn new(
         code: i32,
         version: i32,
@@ -165,22 +175,27 @@ impl<'a> SecurityRequestView<'a> {
         }
     }
 
+    /// Returns the code.
     pub fn code(&self) -> i32 {
         self.code
     }
 
+    /// Returns the version.
     pub fn version(&self) -> i32 {
         self.version
     }
 
+    /// Returns the fields.
     pub fn fields(&self) -> &'a HashMap<CheetahString, CheetahString> {
         self.fields
     }
 
+    /// Returns the body.
     pub fn body(&self) -> Option<&'a [u8]> {
         self.body
     }
 
+    /// Returns the peer.
     pub fn peer(&self) -> Option<&'a PeerInfo> {
         self.peer
     }
@@ -205,10 +220,12 @@ pub struct Principal {
 }
 
 impl Principal {
+    /// Creates a new `Principal`.
     pub fn new(id: impl Into<CheetahString>) -> Self {
         Self { id: id.into() }
     }
 
+    /// Returns the id.
     pub fn id(&self) -> &str {
         &self.id
     }
@@ -217,10 +234,15 @@ impl Principal {
 /// Protected resource category.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResourceKind {
+    /// Represents the topic case.
     Topic,
+    /// Represents the consumer group case.
     ConsumerGroup,
+    /// Represents the cluster case.
     Cluster,
+    /// Represents the broker case.
     Broker,
+    /// Represents the other case.
     Other,
 }
 
@@ -232,6 +254,7 @@ pub struct Resource {
 }
 
 impl Resource {
+    /// Creates a new `Resource`.
     pub fn new(kind: ResourceKind, name: impl Into<CheetahString>) -> Self {
         Self {
             kind,
@@ -239,14 +262,17 @@ impl Resource {
         }
     }
 
+    /// Creates the topic value.
     pub fn topic(name: impl Into<CheetahString>) -> Self {
         Self::new(ResourceKind::Topic, name)
     }
 
+    /// Returns the kind.
     pub fn kind(&self) -> ResourceKind {
         self.kind
     }
 
+    /// Returns the name.
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -260,27 +286,43 @@ impl Resource {
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Action {
+    /// Represents the unknown case.
     Unknown = 0,
+    /// Represents the all case.
     All = 1,
+    /// Represents the any case.
     Any = 2,
+    /// Represents the pub case.
     Pub = 3,
+    /// Represents the sub case.
     Sub = 4,
+    /// Represents the create case.
     Create = 5,
+    /// Represents the update case.
     Update = 6,
+    /// Represents the delete case.
     Delete = 7,
+    /// Represents the get case.
     Get = 8,
+    /// Represents the list case.
     List = 9,
+    /// Represents the publish case.
     Publish = 10,
+    /// Represents the subscribe case.
     Subscribe = 11,
+    /// Represents the describe case.
     Describe = 12,
+    /// Represents the manage case.
     Manage = 13,
 }
 
 impl Action {
+    /// Returns the code.
     pub const fn code(self) -> u8 {
         self as u8
     }
 
+    /// Returns the name.
     pub const fn name(self) -> &'static str {
         match self {
             Self::Unknown => "Unknown",
@@ -300,6 +342,7 @@ impl Action {
         }
     }
 
+    /// Returns by name.
     pub fn get_by_name(name: &str) -> Option<Self> {
         match name.trim().to_ascii_lowercase().as_str() {
             "unknown" => Some(Self::Unknown),
@@ -354,11 +397,17 @@ impl fmt::Display for Action {
 /// Final authorization decision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
+    /// Represents the allow case.
     Allow,
-    Deny { reason: CheetahString },
+    /// Represents the deny case.
+    Deny {
+        /// The reason value.
+        reason: CheetahString,
+    },
 }
 
 impl Decision {
+    /// Creates the deny value.
     pub fn deny(reason: impl Into<CheetahString>) -> Self {
         Self::Deny { reason: reason.into() }
     }
@@ -373,6 +422,7 @@ pub struct RequestContext<'a> {
 }
 
 impl<'a> RequestContext<'a> {
+    /// Creates a new `RequestContext`.
     pub fn new(
         request: SecurityRequestView<'a>,
         principal: Option<&'a Principal>,
@@ -387,6 +437,7 @@ impl<'a> RequestContext<'a> {
         }
     }
 
+    /// Returns the principal.
     pub fn principal(&self) -> Option<&Principal> {
         self.principal
     }
@@ -402,18 +453,22 @@ pub struct AuthenticatedRequestContext<'a> {
 }
 
 impl<'a> AuthenticatedRequestContext<'a> {
+    /// Returns the request.
     pub fn request(&self) -> SecurityRequestView<'a> {
         self.request
     }
 
+    /// Returns the principal.
     pub fn principal(&self) -> &'a Principal {
         self.principal
     }
 
+    /// Returns the resource.
     pub fn resource(&self) -> &'a Resource {
         self.resource
     }
 
+    /// Returns the action.
     pub fn action(&self) -> Action {
         self.action
     }
@@ -421,6 +476,7 @@ impl<'a> AuthenticatedRequestContext<'a> {
 
 /// Authorization policy that can only evaluate authenticated requests.
 pub trait RequestPolicy: Send + Sync {
+    /// Returns the evaluate authenticated.
     fn evaluate_authenticated(&self, context: AuthenticatedRequestContext<'_>) -> Decision;
 }
 
@@ -441,8 +497,10 @@ pub fn evaluate_request(policy: &dyn RequestPolicy, context: &RequestContext<'_>
 #[derive(Debug, Error)]
 pub enum SigningError {
     #[error("signing credentials are unavailable")]
+    /// Represents the credentials unavailable case.
     CredentialsUnavailable,
     #[error("request signing failed: {0}")]
+    /// Represents the failed case.
     Failed(CheetahString),
 }
 
@@ -452,10 +510,12 @@ pub struct Signature {
 }
 
 impl Signature {
+    /// Creates a new `Signature`.
     pub fn new(fields: Vec<(CheetahString, Secret<CheetahString>)>) -> Self {
         Self { fields }
     }
 
+    /// Returns the fields.
     pub fn fields(&self) -> &[(CheetahString, Secret<CheetahString>)] {
         &self.fields
     }
@@ -471,6 +531,7 @@ impl fmt::Debug for Signature {
 
 /// Contract implemented by transport-specific outbound signers in `rocketmq-auth`.
 pub trait OutboundSigner: Send + Sync {
+    /// Returns the sign.
     fn sign(&self, request: SecurityRequestView<'_>) -> Result<Signature, SigningError>;
 }
 
@@ -478,14 +539,17 @@ pub trait OutboundSigner: Send + Sync {
 pub struct Secret<T>(T);
 
 impl<T> Secret<T> {
+    /// Creates a new `Secret`.
     pub fn new(value: T) -> Self {
         Self(value)
     }
 
+    /// Returns the expose secret.
     pub fn expose_secret(&self) -> &T {
         &self.0
     }
 
+    /// Converts this value into inner.
     pub fn into_inner(self) -> T {
         self.0
     }
@@ -500,8 +564,11 @@ impl<T> fmt::Debug for Secret<T> {
 /// Deployment security profile selected by configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeploymentProfile {
+    /// Represents the development case.
     Development,
+    /// Represents the compatibility case.
     Compatibility,
+    /// Represents the secure case.
     Secure,
 }
 
@@ -529,6 +596,7 @@ pub struct SecurityConfigView<'a> {
 }
 
 impl<'a> SecurityConfigView<'a> {
+    /// Creates a new `SecurityConfigView`.
     pub fn new(profile: &'a str) -> Self {
         Self {
             profile,
@@ -539,21 +607,25 @@ impl<'a> SecurityConfigView<'a> {
         }
     }
 
+    /// Sets trust anchor and returns the updated value.
     pub fn with_trust_anchor(mut self, path: &'a Path) -> Self {
         self.trust_anchor = Some(path);
         self
     }
 
+    /// Sets secret file and returns the updated value.
     pub fn with_secret_file(mut self, path: &'a Path) -> Self {
         self.secret_file = Some(path);
         self
     }
 
+    /// Sets bootstrap expiry and returns the updated value.
     pub fn with_bootstrap_expiry(mut self, expires_at: SystemTime) -> Self {
         self.bootstrap_expires_at = Some(expires_at);
         self
     }
 
+    /// Sets insecure downgrade and returns the updated value.
     pub fn with_insecure_downgrade(mut self, enabled: bool) -> Self {
         self.insecure_downgrade = enabled;
         self
@@ -563,16 +635,27 @@ impl<'a> SecurityConfigView<'a> {
 /// Stable reasons why a profile is not ready.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SecurityReadinessFailure {
+    /// Represents the unknown profile case.
     UnknownProfile,
+    /// Represents the missing trust anchor case.
     MissingTrustAnchor,
+    /// Represents the trust anchor unavailable case.
     TrustAnchorUnavailable,
+    /// Represents the trust anchor not regular file case.
     TrustAnchorNotRegularFile,
+    /// Represents the missing secret file case.
     MissingSecretFile,
+    /// Represents the secret file unavailable case.
     SecretFileUnavailable,
+    /// Represents the secret file not regular file case.
     SecretFileNotRegularFile,
+    /// Represents the insecure secret file permissions case.
     InsecureSecretFilePermissions,
+    /// Represents the missing bootstrap expiry case.
     MissingBootstrapExpiry,
+    /// Represents the expired bootstrap case.
     ExpiredBootstrap,
+    /// Represents the insecure downgrade case.
     InsecureDowngrade,
 }
 
@@ -584,14 +667,17 @@ pub struct SecurityReadinessReport {
 }
 
 impl SecurityReadinessReport {
+    /// Returns whether ready.
     pub fn is_ready(&self) -> bool {
         self.failures.is_empty()
     }
 
+    /// Returns the profile.
     pub fn profile(&self) -> Option<DeploymentProfile> {
         self.profile
     }
 
+    /// Returns the failures.
     pub fn failures(&self) -> &[SecurityReadinessFailure] {
         &self.failures
     }
@@ -677,11 +763,14 @@ fn inspect_readable_file(
 /// Portable projection of secret-file permissions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SecretFilePermissions {
+    /// Whether group access.
     pub group_access: bool,
+    /// Whether other access.
     pub other_access: bool,
 }
 
 impl SecretFilePermissions {
+    /// Returns whether owner only.
     pub fn is_owner_only(self) -> bool {
         !self.group_access && !self.other_access
     }
@@ -691,12 +780,16 @@ impl SecretFilePermissions {
 #[derive(Debug, Error)]
 pub enum SecretFileError {
     #[error("failed to open secret file: {0}")]
+    /// Represents the open case.
     Open(#[source] io::Error),
     #[error("failed to inspect secret file permissions: {0}")]
+    /// Represents the metadata case.
     Metadata(#[source] io::Error),
     #[error("secret file permissions allow group or other access")]
+    /// Represents the insecure permissions case.
     InsecurePermissions,
     #[error("failed to read secret file: {0}")]
+    /// Represents the read case.
     Read(#[source] io::Error),
 }
 

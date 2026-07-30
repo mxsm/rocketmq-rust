@@ -24,25 +24,41 @@ use crate::task_group::TaskKind;
 use crate::task_group::TaskState;
 
 #[derive(Debug, Clone, Serialize)]
+/// Represents shutdown report.
 pub struct ShutdownReport {
+    /// The name value.
     pub name: String,
     #[serde(with = "duration_millis")]
+    /// The elapsed value.
     pub elapsed: Duration,
+    /// The completed value.
     pub completed: usize,
+    /// The cancelled value.
     pub cancelled: usize,
+    /// The aborted value.
     pub aborted: usize,
+    /// The panicked value.
     pub panicked: usize,
+    /// The timed out value.
     pub timed_out: usize,
+    /// The leaked value.
     pub leaked: usize,
+    /// The blocking still running value.
     pub blocking_still_running: usize,
+    /// The detached still running value.
     pub detached_still_running: usize,
+    /// The children value.
     pub children: Vec<ShutdownReport>,
+    /// The remaining tasks value.
     pub remaining_tasks: Vec<TaskSnapshot>,
+    /// The blocking tasks value.
     pub blocking_tasks: Vec<BlockingTaskSnapshot>,
+    /// The annotations value.
     pub annotations: Vec<ShutdownAnnotation>,
 }
 
 impl ShutdownReport {
+    /// Creates a new `ShutdownReport`.
     pub fn new(name: impl Into<String>, elapsed: Duration) -> Self {
         Self {
             name: name.into(),
@@ -62,6 +78,7 @@ impl ShutdownReport {
         }
     }
 
+    /// Returns whether healthy.
     pub fn is_healthy(&self) -> bool {
         self.leaked == 0
             && self.panicked == 0
@@ -71,6 +88,7 @@ impl ShutdownReport {
             && self.children.iter().all(Self::is_healthy)
     }
 
+    /// Returns the assert no task leak.
     pub fn assert_no_task_leak(&self) -> Result<(), String> {
         if self.is_healthy() {
             Ok(())
@@ -79,16 +97,19 @@ impl ShutdownReport {
         }
     }
 
+    /// Executes log if unhealthy.
     pub fn log_if_unhealthy(&self) {
         if !self.is_healthy() {
             tracing::warn!(report = %self.to_json(), "runtime shutdown report is unhealthy");
         }
     }
 
+    /// Converts this value to json.
     pub fn to_json(&self) -> String {
         serde_json::to_string_pretty(self).unwrap_or_else(|error| format!("{{\"serialization_error\":\"{}\"}}", error))
     }
 
+    /// Executes merge blocking.
     pub fn merge_blocking(&mut self, snapshot: crate::blocking::BlockingExecutorSnapshot) {
         self.blocking_still_running += snapshot.blocking_still_running;
         self.blocking_tasks.extend(snapshot.tasks);
@@ -101,25 +122,38 @@ impl ShutdownReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Represents task snapshot.
 pub struct TaskSnapshot {
+    /// The id identifier.
     pub id: TaskId,
+    /// The name value.
     pub name: String,
+    /// The group identifier.
     pub group_id: TaskGroupId,
+    /// The group name value.
     pub group_name: String,
+    /// The kind value.
     pub kind: TaskKind,
+    /// The state value.
     pub state: TaskState,
     #[serde(with = "duration_millis")]
+    /// The elapsed value.
     pub elapsed: Duration,
+    /// Whether detached.
     pub detached: bool,
+    /// The detached policy value.
     pub detached_policy: Option<DetachedTaskPolicy>,
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Represents shutdown annotation.
 pub struct ShutdownAnnotation {
+    /// The message value.
     pub message: String,
 }
 
 impl ShutdownAnnotation {
+    /// Creates a new `ShutdownAnnotation`.
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),

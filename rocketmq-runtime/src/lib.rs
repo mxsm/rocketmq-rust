@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![deny(missing_docs)]
+
 //! Runtime substrate for the RocketMQ Rust unified thread model.
 //!
 //! This crate standardizes how components own or borrow a Tokio runtime, how
@@ -27,32 +29,52 @@
 //! test and migration harness, while [`RocketMQRuntime`] remains only as a
 //! deprecated compatibility boundary.
 
+/// Actor types and operations.
 pub mod actor;
 pub mod blocking;
+/// Common types and operations.
 pub mod common;
+/// Config types and operations.
 pub mod config;
+/// Context types and operations.
 pub mod context;
+/// Diagnostics types and operations.
 pub mod diagnostics;
+/// Error types and operations.
 pub mod error;
+/// Executor service types and operations.
 pub mod executor_service;
 mod handle;
+/// Legacy types and operations.
 pub mod legacy;
 pub mod metadata_io;
+/// Owner types and operations.
 pub mod owner;
 pub mod prelude;
 mod public_api;
+/// Resource budget types and operations.
 pub mod resource_budget;
+/// Schedule types and operations.
 pub mod schedule;
+/// Scheduled types and operations.
 pub mod scheduled;
+/// Service context types and operations.
 pub mod service_context;
 pub mod service_lifecycle;
+/// Shutdown types and operations.
 pub mod shutdown;
+/// Shutdown deadline types and operations.
 pub mod shutdown_deadline;
+/// Shutdown report types and operations.
 pub mod shutdown_report;
+/// Signal types and operations.
 pub mod signal;
+/// Task types and operations.
 pub mod task;
+/// Task group types and operations.
 pub mod task_group;
 mod task_spawner;
+/// Tokio lock types and operations.
 pub mod tokio_lock;
 
 pub use actor::ActorRuntime;

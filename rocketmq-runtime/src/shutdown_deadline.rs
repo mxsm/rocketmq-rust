@@ -22,24 +22,29 @@ pub struct ShutdownDeadline {
 }
 
 impl ShutdownDeadline {
+    /// Creates the after value.
     pub fn after(timeout: Duration) -> Self {
         Self {
             at: Instant::now() + timeout,
         }
     }
 
+    /// Creates the at value.
     pub fn at(at: Instant) -> Self {
         Self { at }
     }
 
+    /// Returns the instant.
     pub fn instant(self) -> Instant {
         self.at
     }
 
+    /// Returns the remaining.
     pub fn remaining(self) -> Duration {
         self.at.saturating_duration_since(Instant::now())
     }
 
+    /// Returns whether expired.
     pub fn is_expired(self) -> bool {
         self.remaining().is_zero()
     }

@@ -23,6 +23,7 @@ use std::time::Instant;
 use crate::config::config_manager::ConfigManager;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_runtime::blocking::BlockingTaskState;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::MetadataDeadline;
@@ -39,6 +40,8 @@ use tracing::warn;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
 const COMMAND_CAPACITY: usize = 256;
+const TOPIC_CONFIG_BLOCKING_PREFIX: &str = "broker.topic-config.";
+const TOPIC_CONFIG_METADATA_RESOURCE: &str = "metadata-io:broker.topic-config";
 
 pub(crate) type TopicRegistrationFuture = Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'static>>;
 pub(crate) type TopicRegistrationAction = Box<dyn FnOnce() -> TopicRegistrationFuture + Send + 'static>;
@@ -181,6 +184,22 @@ impl TopicConfigCoordinator {
 
     fn runtime_capabilities(&self) -> &TopicConfigRuntimeCapabilities {
         &self.runtime_capabilities
+    }
+
+    fn blocking_still_running(&self) -> usize {
+        self.runtime_capabilities
+            .blocking
+            .snapshot()
+            .tasks
+            .iter()
+            .filter(|task| {
+                (task.name.starts_with(TOPIC_CONFIG_BLOCKING_PREFIX) || task.name == TOPIC_CONFIG_METADATA_RESOURCE)
+                    && matches!(
+                        task.state,
+                        BlockingTaskState::Running | BlockingTaskState::TimedOutStillRunning
+                    )
+            })
+            .count()
     }
 
     async fn ensure_started(&self) -> RocketMQResult<()> {
@@ -330,7 +349,7 @@ impl TopicConfigCoordinator {
                 worker_exited: true,
                 registration_quiesced: true,
                 unregister_succeeded: false,
-                blocking_still_running: self.runtime_capabilities.blocking.snapshot().blocking_still_running,
+                blocking_still_running: self.blocking_still_running(),
                 timed_out: false,
                 elapsed: started.elapsed(),
                 detail: None,
@@ -368,7 +387,7 @@ impl TopicConfigCoordinator {
         };
         let timed_out = deadline.is_expired() || (!final_persist_succeeded && detail.is_none());
         let worker_exited = run.task_group.wait_task(run.worker, deadline.remaining()).await;
-        let blocking_still_running = self.runtime_capabilities.blocking.snapshot().blocking_still_running;
+        let blocking_still_running = self.blocking_still_running();
         let report = TopicConfigCoordinatorShutdownReport {
             admission_closed,
             pending_at_end: self.pending_count(),
@@ -486,11 +505,13 @@ fn topic_coordinator_error(error: impl ToString) -> RocketMQError {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc;
     use std::sync::Arc;
     use std::time::Duration;
 
     use crate::config::broker_config::BrokerConfig;
     use rocketmq_model::common::config::TopicConfig;
+    use rocketmq_runtime::BlockingLane;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_runtime::ShutdownDeadline;
     use rocketmq_store::MessageStoreConfig;
@@ -586,6 +607,54 @@ mod tests {
             .shutdown_until(ShutdownDeadline::after(Duration::from_secs(5)))
             .await;
         assert!(report.can_unregister(), "{report:?}");
+        let runtime_report = runtime.shutdown_tasks(Duration::from_secs(1)).await;
+        assert!(runtime_report.is_healthy(), "{}", runtime_report.to_json());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shutdown_ignores_unrelated_metadata_blocking_work() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let (runtime, coordinator) = test_coordinator(&temp_dir);
+        coordinator
+            .manager()
+            .update_topic_config(TopicConfig::with_queues("ScopedShutdownTopic", 1, 1), 0);
+        coordinator.persist_and_wait().await.expect("snapshot should persist");
+
+        let blocking = runtime.blocking(BlockingLane::MetadataIo).clone();
+        let (entered_sender, entered_receiver) = oneshot::channel();
+        let (release_sender, release_receiver) = mpsc::channel();
+        let unrelated = tokio::spawn(async move {
+            blocking
+                .spawn_io("unrelated.metadata.persist", move || {
+                    let _ = entered_sender.send(());
+                    release_receiver
+                        .recv_timeout(Duration::from_secs(5))
+                        .expect("unrelated metadata task should be released");
+                })
+                .await
+        });
+        entered_receiver.await.expect("unrelated metadata task should start");
+        assert_eq!(
+            runtime
+                .blocking(BlockingLane::MetadataIo)
+                .snapshot()
+                .blocking_still_running,
+            1
+        );
+
+        let report = coordinator
+            .shutdown_until(ShutdownDeadline::after(Duration::from_secs(5)))
+            .await;
+        assert!(report.can_unregister(), "{report:?}");
+        assert_eq!(report.blocking_still_running, 0, "{report:?}");
+
+        release_sender
+            .send(())
+            .expect("unrelated metadata task should be releasable");
+        unrelated
+            .await
+            .expect("unrelated metadata future should join")
+            .expect("unrelated metadata task should complete");
         let runtime_report = runtime.shutdown_tasks(Duration::from_secs(1)).await;
         assert!(runtime_report.is_healthy(), "{}", runtime_report.to_json());
     }

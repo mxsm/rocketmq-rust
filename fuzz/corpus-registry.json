@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "toolchain": "nightly-2026-07-05",
+  "cargo_fuzz_version": "0.13.2",
+  "workflow": ".github/workflows/fuzz-ci.yml",
+  "crash_policy": {
+    "crash": "Sanitize the reproducer, minimize it, add it to the owning corpus, and add a named regression test when the invariant can be expressed deterministically.",
+    "timeout": "Classify separately as bounded-resource exhaustion; a timeout is not a semantic crash.",
+    "out_of_memory": "Classify separately as bounded-resource exhaustion; capture input size and peak memory.",
+    "retention_days": 30,
+    "artifact": "architecture-fuzz-<target>-<commit>"
+  },
+  "targets": [
+    {
+      "name": "protocol_decode",
+      "owner": "protocol",
+      "harness": "fuzz/fuzz_targets/protocol_decode.rs",
+      "production_entrypoint": "rocketmq_protocol::RemotingCommand::decode",
+      "invariants": ["no panic", "bounded input", "complete frames never consume bytes beyond the input"],
+      "corpus": "fuzz/corpus/protocol_decode",
+      "dictionary": null,
+      "max_input_bytes": 1048576,
+      "pr_timeout_seconds": 10,
+      "nightly_timeout_seconds": 60,
+      "weekly_timeout_seconds": 900,
+      "retention_days": 30
+    },
+    {
+      "name": "raw_broker_config",
+      "owner": "broker",
+      "harness": "fuzz/fuzz_targets/raw_broker_config.rs",
+      "production_entrypoint": "serde_json::from_slice::<RawBrokerConfig> then ValidatedBrokerConfig::try_from",
+      "invariants": ["no panic", "unknown fields are rejected", "validation never accepts an invalid raw configuration"],
+      "corpus": "fuzz/corpus/raw_broker_config",
+      "dictionary": null,
+      "max_input_bytes": 262144,
+      "pr_timeout_seconds": 10,
+      "nightly_timeout_seconds": 60,
+      "weekly_timeout_seconds": 900,
+      "retention_days": 30
+    },
+    {
+      "name": "controller_snapshot",
+      "owner": "controller",
+      "harness": "fuzz/fuzz_targets/controller_snapshot.rs",
+      "production_entrypoint": "rocketmq_controller::validate_snapshot_payload",
+      "invariants": ["no panic", "checksum mismatch is rejected", "unsupported snapshot versions are rejected"],
+      "corpus": "fuzz/corpus/controller_snapshot",
+      "dictionary": null,
+      "max_input_bytes": 1048576,
+      "pr_timeout_seconds": 10,
+      "nightly_timeout_seconds": 60,
+      "weekly_timeout_seconds": 900,
+      "retention_days": 30
+    },
+    {
+      "name": "store_recovery_record",
+      "owner": "store",
+      "harness": "fuzz/fuzz_targets/store_recovery_record.rs",
+      "production_entrypoint": "CommitLogFrameCursor and persisted record decode implementations",
+      "invariants": ["no panic", "bounded input", "truncated records do not decode as complete records"],
+      "corpus": "fuzz/corpus/store_recovery_record",
+      "dictionary": null,
+      "max_input_bytes": 1048576,
+      "pr_timeout_seconds": 10,
+      "nightly_timeout_seconds": 60,
+      "weekly_timeout_seconds": 900,
+      "retention_days": 30
+    }
+  ]
+}

@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![deny(missing_docs)]
+
 //! # RocketMQ Error Handling System
 //!
 //! This crate provides a unified, semantic, and performant error handling system

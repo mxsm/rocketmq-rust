@@ -52,6 +52,7 @@ pub struct CronTrigger {
 }
 
 impl CronTrigger {
+    /// Creates a new `CronTrigger`.
     pub fn new(expression: impl Into<String>) -> Result<Self, SchedulerError> {
         let expression = expression.into();
         let schedule = Schedule::from_str(&expression)
@@ -112,6 +113,7 @@ pub struct IntervalTrigger {
 }
 
 impl IntervalTrigger {
+    /// Creates a new `IntervalTrigger`.
     pub fn new(interval: Duration) -> Self {
         Self {
             interval,
@@ -122,29 +124,35 @@ impl IntervalTrigger {
         }
     }
 
+    /// Sets start time and returns the updated value.
     pub fn with_start_time(mut self, start_time: SystemTime) -> Self {
         self.start_time = Some(start_time);
         self
     }
 
+    /// Sets end time and returns the updated value.
     pub fn with_end_time(mut self, end_time: SystemTime) -> Self {
         self.end_time = Some(end_time);
         self
     }
 
+    /// Sets repeat count and returns the updated value.
     pub fn with_repeat_count(mut self, count: u32) -> Self {
         self.repeat_count = Some(count);
         self
     }
 
+    /// Creates the every seconds value.
     pub fn every_seconds(seconds: u64) -> Self {
         Self::new(Duration::from_secs(seconds))
     }
 
+    /// Creates the every minutes value.
     pub fn every_minutes(minutes: u64) -> Self {
         Self::new(Duration::from_secs(minutes * 60))
     }
 
+    /// Creates the every hours value.
     pub fn every_hours(hours: u64) -> Self {
         Self::new(Duration::from_secs(hours * 3600))
     }
@@ -200,6 +208,7 @@ pub struct DelayTrigger {
 }
 
 impl DelayTrigger {
+    /// Creates a new `DelayTrigger`.
     pub fn new(delay: Duration) -> Self {
         Self {
             delay,
@@ -208,18 +217,22 @@ impl DelayTrigger {
         }
     }
 
+    /// Creates the after seconds value.
     pub fn after_seconds(seconds: u64) -> Self {
         Self::new(Duration::from_secs(seconds))
     }
 
+    /// Creates the after minutes value.
     pub fn after_minutes(minutes: u64) -> Self {
         Self::new(Duration::from_secs(minutes * 60))
     }
 
+    /// Creates the after hours value.
     pub fn after_hours(hours: u64) -> Self {
         Self::new(Duration::from_secs(hours * 3600))
     }
 
+    /// Creates the at time value.
     pub fn at_time(execution_time: SystemTime) -> Self {
         let now = SystemTime::now();
         let delay = execution_time.duration_since(now).unwrap_or(Duration::ZERO);
@@ -282,6 +295,7 @@ pub struct DelayedIntervalTrigger {
 }
 
 impl DelayedIntervalTrigger {
+    /// Creates a new `DelayedIntervalTrigger`.
     pub fn new(interval: Duration, initial_delay: Duration) -> Self {
         Self {
             interval,
@@ -294,6 +308,7 @@ impl DelayedIntervalTrigger {
         }
     }
 
+    /// Creates the every seconds with delay value.
     pub fn every_seconds_with_delay(interval_seconds: u64, delay_seconds: u64) -> Self {
         Self::new(
             Duration::from_secs(interval_seconds),
@@ -301,6 +316,7 @@ impl DelayedIntervalTrigger {
         )
     }
 
+    /// Creates the every minutes with delay value.
     pub fn every_minutes_with_delay(interval_minutes: u64, delay_minutes: u64) -> Self {
         Self::new(
             Duration::from_secs(interval_minutes * 60),

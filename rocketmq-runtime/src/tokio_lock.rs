@@ -14,6 +14,7 @@
 
 use std::time::Duration;
 
+/// Represents rocket mqtokio rw lock.
 pub struct RocketMQTokioRwLock<T: ?Sized> {
     lock: tokio::sync::RwLock<T>,
 }
@@ -129,6 +130,7 @@ impl<T: ?Sized> RocketMQTokioRwLock<T> {
     }
 }
 
+/// Represents rocket mqtokio mutex.
 pub struct RocketMQTokioMutex<T: ?Sized> {
     lock: tokio::sync::Mutex<T>,
 }

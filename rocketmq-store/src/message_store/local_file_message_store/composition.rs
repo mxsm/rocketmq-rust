@@ -371,6 +371,7 @@ impl LocalFileMessageStore {
         HAReplicaStoreHandle {
             message_store_config: self.message_store_config.clone(),
             shutdown: self.shutdown.clone(),
+            running_flags: self.running_flags.clone(),
             master_flushed_offset: self.master_flushed_offset.clone(),
             alive_replica_num_in_group: self.alive_replica_num_in_group.clone(),
             state_machine_version: self.state_machine_version.clone(),
@@ -400,6 +401,7 @@ impl LocalFileMessageStore {
             message_store_config: Arc::clone(&self.message_store_config),
             lifecycle: self.composition.lifecycle_handle(),
             shutdown: Arc::clone(&self.shutdown),
+            running_flags: Arc::clone(&self.running_flags),
             put_message_hooks: self.put_message_hook_list.clone(),
             topic_config_table: Arc::clone(&self.topic_config_table),
             commit_log: self.commit_log.internal_message_write_handle(),

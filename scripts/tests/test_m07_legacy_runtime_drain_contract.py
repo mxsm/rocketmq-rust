@@ -14,8 +14,10 @@ class LegacyRuntimeDrainContractTest(unittest.TestCase):
 
     def test_runtime_package_owns_lifecycle_and_shutdown(self) -> None:
         exports = source("rocketmq-runtime/src/lib.rs")
+        public_api = source("rocketmq-runtime/src/public_api.rs")
 
-        self.assertIn("pub use owner::RuntimeOwner", exports)
+        self.assertIn("pub use public_api::*", exports)
+        self.assertIn("pub use crate::owner::RuntimeOwner", public_api)
         self.assertIn("pub use service_context::", exports)
         self.assertTrue((ROOT / "rocketmq-runtime/src/shutdown_deadline.rs").is_file())
         self.assertTrue((ROOT / "rocketmq-runtime/src/task_group.rs").is_file())

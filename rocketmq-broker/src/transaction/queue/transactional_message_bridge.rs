@@ -299,13 +299,7 @@ where
     }
 
     pub async fn write_op(&self, queue_id: i32, message: Message) -> bool {
-        let op_queue = {
-            let mut op_queue_map = self.op_queue_map.lock().await;
-            op_queue_map
-                .entry(queue_id)
-                .or_insert_with(|| get_op_queue_by_half(queue_id, self.broker_name.clone()))
-                .clone()
-        };
+        let op_queue = resolve_op_queue(&self.op_queue_map, queue_id, &self.broker_name).await;
         let inner = self.make_op_message_inner(message, &op_queue);
         let result = self.put_message_return_result(inner).await;
         result.put_message_status() == PutMessageStatus::PutOk
@@ -331,6 +325,18 @@ where
         let put_message_result = escape_bridge.put_message(message_inner).await;
         put_message_result.is_ok()
     }
+}
+
+pub(crate) async fn resolve_op_queue(
+    op_queue_map: &Mutex<HashMap<i32, MessageQueue>>,
+    queue_id: i32,
+    broker_name: &CheetahString,
+) -> MessageQueue {
+    let mut op_queue_map = op_queue_map.lock().await;
+    op_queue_map
+        .entry(queue_id)
+        .or_insert_with(|| get_op_queue_by_half(queue_id, broker_name.clone()))
+        .clone()
 }
 
 #[inline]

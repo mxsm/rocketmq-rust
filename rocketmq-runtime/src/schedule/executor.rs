@@ -40,8 +40,11 @@ use crate::schedule::TaskStatus;
 /// Task executor pool configuration
 #[derive(Debug, Clone)]
 pub struct ExecutorConfig {
+    /// The max concurrent tasks value.
     pub max_concurrent_tasks: usize,
+    /// The default timeout value.
     pub default_timeout: Duration,
+    /// Whether enable metrics.
     pub enable_metrics: bool,
 }
 
@@ -58,11 +61,17 @@ impl Default for ExecutorConfig {
 /// Task execution metrics
 #[derive(Debug, Clone, Default)]
 pub struct ExecutionMetrics {
+    /// The total executions value.
     pub total_executions: u64,
+    /// The successful executions value.
     pub successful_executions: u64,
+    /// The failed executions value.
     pub failed_executions: u64,
+    /// The cancelled executions value.
     pub cancelled_executions: u64,
+    /// The average execution time value.
     pub average_execution_time: Duration,
+    /// The max execution time value.
     pub max_execution_time: Duration,
 }
 
@@ -110,10 +119,12 @@ impl TaskExecutor {
     }
 
     #[deprecated(note = "use TaskExecutor::new_with_task_group; the ambient-runtime adapter is removed in 2.0.0")]
+    /// Creates a new `TaskExecutor`.
     pub fn new(config: ExecutorConfig) -> Self {
         Self::new_legacy_compatibility(config)
     }
 
+    /// Creates with task group.
     pub fn new_with_task_group(config: ExecutorConfig, parent_task_group: TaskGroup) -> Self {
         Self::new_with_optional_task_group(config, Some(parent_task_group.child("rocketmq.task-executor")))
     }
@@ -242,6 +253,7 @@ impl TaskExecutor {
         running_tasks.len()
     }
 
+    /// Returns the task group task count.
     pub async fn task_group_task_count(&self) -> usize {
         self.task_group
             .read()
@@ -251,6 +263,7 @@ impl TaskExecutor {
             .unwrap_or_default()
     }
 
+    /// Returns the last task group shutdown report.
     pub async fn last_task_group_shutdown_report(&self) -> Option<ShutdownReport> {
         self.last_task_group_shutdown_report.read().await.clone()
     }
@@ -317,6 +330,7 @@ impl TaskExecutor {
         }
     }
 
+    /// Returns the execute task with delay.
     pub async fn execute_task_with_delay(
         &self,
         task: Arc<Task>,
@@ -478,6 +492,7 @@ pub struct ExecutorPool {
 }
 
 impl ExecutorPool {
+    /// Creates a new `ExecutorPool`.
     pub fn new(pool_size: usize, config: ExecutorConfig) -> Self {
         let executors = (0..pool_size)
             .map(|_| Arc::new(TaskExecutor::new_legacy_compatibility(config.clone())))
@@ -489,6 +504,7 @@ impl ExecutorPool {
         }
     }
 
+    /// Creates with task group.
     pub fn new_with_task_group(pool_size: usize, config: ExecutorConfig, parent_task_group: TaskGroup) -> Self {
         let executors = (0..pool_size)
             .map(|index| {

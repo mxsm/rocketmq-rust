@@ -14,6 +14,7 @@
 
 /// Health snapshot capability with an implementation-owned projection.
 pub trait StoreHealth: Send + Sync {
+    /// Value type used for snapshot.
     type Snapshot;
 
     /// Returns the current health projection.

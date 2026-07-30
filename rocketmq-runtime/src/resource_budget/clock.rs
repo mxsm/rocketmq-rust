@@ -20,16 +20,19 @@ use std::time::Instant;
 /// Production code normally uses [`SystemMonotonicClock`]. Tests can inject a
 /// deterministic clock without sleeping or changing wall-clock time.
 pub trait MonotonicClock: Send + Sync + 'static {
+    /// Returns the now.
     fn now(&self) -> Duration;
 }
 
 #[derive(Debug)]
+/// Represents system monotonic clock.
 pub struct SystemMonotonicClock {
     origin: Instant,
 }
 
 impl SystemMonotonicClock {
     #[must_use]
+    /// Creates a new `SystemMonotonicClock`.
     pub fn new() -> Self {
         Self { origin: Instant::now() }
     }
