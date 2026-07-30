@@ -207,6 +207,29 @@ impl ResourceSafetyStore {
         Ok(())
     }
 
+    /// Loads the unreleased lock history owned by one execution.
+    ///
+    /// Recovery releases these records only after a fresh fenced reconcile
+    /// proves that every forward effect is absent.
+    ///
+    /// # Errors
+    ///
+    /// Returns database failures.
+    pub async fn unreleased_for_execution(&self, execution_id: ExecutionId) -> Result<Vec<ResourceLock>, JournalError> {
+        let rows = sqlx::query(
+            "SELECT id, tenant_id, cluster_id, resource_key, action_id,
+                    holder_execution_id, acquired_at, renewed_at, expires_at,
+                    released_at
+             FROM resource_locks
+             WHERE holder_execution_id = $1 AND released_at IS NULL
+             ORDER BY acquired_at, id",
+        )
+        .bind(execution_id.as_uuid())
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(resource_lock_from_row).collect()
+    }
+
     /// Persists a quarantine that remains after temporary locks are released.
     ///
     /// # Errors
@@ -358,5 +381,20 @@ fn quarantine_from_row(row: &sqlx::postgres::PgRow) -> Result<ResourceQuarantine
             .map(EvidenceId::from_uuid)
             .collect(),
         cleared_at: row.try_get("cleared_at")?,
+    })
+}
+
+fn resource_lock_from_row(row: sqlx::postgres::PgRow) -> Result<ResourceLock, JournalError> {
+    Ok(ResourceLock {
+        id: ResourceLockId::from_uuid(row.try_get("id")?),
+        tenant_id: TenantId::from_uuid(row.try_get("tenant_id")?),
+        cluster_id: ClusterId::from_uuid(row.try_get("cluster_id")?),
+        resource_key: row.try_get("resource_key")?,
+        action_id: row.try_get("action_id")?,
+        holder_execution_id: ExecutionId::from_uuid(row.try_get("holder_execution_id")?),
+        acquired_at: row.try_get("acquired_at")?,
+        renewed_at: row.try_get("renewed_at")?,
+        expires_at: row.try_get("expires_at")?,
+        released_at: row.try_get("released_at")?,
     })
 }
