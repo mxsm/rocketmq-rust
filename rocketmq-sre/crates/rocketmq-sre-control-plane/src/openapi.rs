@@ -72,6 +72,7 @@ mod tests {
         "/v1/change-windows",
         "/v1/conversations",
         "/v1/conversations/{id}",
+        "/v1/event-entries",
         "/v1/events/stream",
         "/v1/evidence",
         "/v1/evidence/{id}",
@@ -520,6 +521,15 @@ mod tests {
             "#/components/schemas/IntegrationEventRequest"
         );
         assert_eq!(
+            paths["/v1/event-entries"]["post"]["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/UnifiedEventEntryRequest"
+        );
+        assert_eq!(
+            paths["/v1/event-entries"]["post"]["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/UnifiedEventEntryResult"
+        );
+        assert_eq!(paths["/v1/event-entries"]["post"]["x-max-body-bytes"], 65_536);
+        assert_eq!(
             paths["/v1/incidents/{id}/topology"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
             "#/components/schemas/IncidentTopologyView"
         );
@@ -534,6 +544,20 @@ mod tests {
         assert_eq!(
             schemas["AlertmanagerWebhookRequest"]["properties"]["alerts"]["maxItems"],
             128
+        );
+        assert_eq!(
+            schemas["UnifiedEventEntryRequest"]["oneOf"]
+                .as_array()
+                .expect("five unified event entry variants")
+                .len(),
+            5
+        );
+        assert_eq!(
+            schemas["EventEntrySourceKind"]["enum"]
+                .as_array()
+                .expect("five source kinds")
+                .len(),
+            5
         );
         assert_eq!(schemas["IncidentTopologyView"]["properties"]["nodes"]["maxItems"], 128);
         assert_eq!(schemas["IncidentTopologyView"]["properties"]["edges"]["maxItems"], 256);
