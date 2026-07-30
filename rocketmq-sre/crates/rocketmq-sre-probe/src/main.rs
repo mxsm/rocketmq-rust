@@ -28,6 +28,7 @@ use rocketmq_client_rust::DefaultMQProducer;
 use rocketmq_client_rust::DefaultMQPushConsumer;
 use rocketmq_client_rust::MQPushConsumer;
 use rocketmq_client_rust::MessageListenerConcurrently;
+use rocketmq_client_rust::TelemetryHandle;
 use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::message::message_ext::MessageExt;
@@ -121,12 +122,14 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         shutdown_timeout: PROBE_SHUTDOWN_TIMEOUT,
         ..RuntimeConfig::default()
     })?;
-    let client_runtime = ClientRuntime::new(
+    let client_runtime = ClientRuntime::try_new(
         runtime_owner.root_context().child("probe.client"),
         ClientRuntimeConfig {
             shutdown_timeout: PROBE_SHUTDOWN_TIMEOUT,
+            ..ClientRuntimeConfig::default()
         },
-    );
+        TelemetryHandle::noop(),
+    )?;
     let operation_result = if matches!(command, Command::Run(_)) {
         runtime_owner.block_on(run_command(
             command,
