@@ -5,11 +5,11 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$DatabaseUrl,
-    [string]$Kubeconfig = 'G:\rocketmq-sre-phase2-temp\kind-access\rocketmq-sre-phase00.kubeconfig',
-    [string]$CargoTargetDir = 'G:\rocketmq-sre-phase2-cargo-target',
-    [string]$ClusterTargetDir = 'G:\rocketmq-sre-phase3-credential-cluster-target',
-    [string]$CargoHome = 'G:\rocketmq-sre-phase1-cargo-home',
-    [string]$TemporaryRoot = 'G:\rocketmq-sre-phase2-temp',
+    [string]$Kubeconfig = 'D:\BuildCache\rocketmq-sre-temp\kind\phase00-kubeconfig',
+    [string]$CargoTargetDir = 'D:\BuildCache\rocketmq-sre-target',
+    [string]$ClusterTargetDir = 'D:\BuildCache\rocketmq-sre-phase3-credential-cluster-target',
+    [string]$CargoHome = 'D:\BuildCache\rocketmq-sre-cargo-home',
+    [string]$TemporaryRoot = 'D:\BuildCache\rocketmq-sre-temp',
     [ValidateRange(1024, 65535)]
     [int]$NameServerPort = 43876,
     [ValidateRange(1026, 65534)]
