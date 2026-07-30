@@ -2654,6 +2654,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/incidents/{incident_id}/diagnosis-revisions/{revision_id}/confirm-execution": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create an immutable execution-eligible revision from the latest complete model-assisted diagnosis */
+        post: operations["confirmDiagnosisForSupervisedExecutionV1"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -5718,6 +5735,7 @@ export interface components {
             plan: components["schemas"]["ActionPlan"];
             risk: components["schemas"]["ActionRisk"];
             policy_decision: components["schemas"]["PolicyDecision"];
+            precondition_hash: string;
         } | {
             /** @constant */
             kind: "manual_runbook";
@@ -5730,6 +5748,7 @@ export interface components {
             latest_critic_review: components["schemas"]["CriticReview"] | null;
             latest_policy_decision: components["schemas"]["PolicyDecision"] | null;
             latest_approval: components["schemas"]["ApprovalRecord"] | null;
+            precondition_hash: string;
         };
         CriticReviewRequest: {
             plan_hash: string;
@@ -7296,6 +7315,36 @@ export interface components {
             warnings: string[];
             /** Format: date-time */
             observed_at: string;
+        };
+        ConfirmDiagnosisExecutionRequest: {
+            /** @constant */
+            human_confirmed: true;
+            reason: string;
+        };
+        DiagnosisExecutionConfirmation: {
+            /** @constant */
+            schema_version: "rocketmq-sre.diagnosis-execution-confirmation.v1";
+            /** Format: uuid */
+            incident_id: string;
+            /** Format: uuid */
+            source_revision_id: string;
+            /** Format: uuid */
+            confirmed_revision_id: string;
+            /** Format: uint32 */
+            revision: number;
+            /** Format: uuid */
+            cluster_id: string;
+            /** Format: uuid */
+            primary_model_invocation_id: string;
+            evidence_ids: string[];
+            /** @constant */
+            execution_eligible: true;
+            confirmed_by: string;
+            reason: string;
+            /** Format: uuid */
+            correlation_id: string;
+            /** Format: date-time */
+            confirmed_at: string;
         };
     };
     responses: {
@@ -17163,6 +17212,87 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OperationsAnalyticsReport"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sanitized stable error envelope */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    confirmDiagnosisForSupervisedExecutionV1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                incident_id: string;
+                revision_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfirmDiagnosisExecutionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiagnosisExecutionConfirmation"];
                 };
             };
             /** @description Sanitized stable error envelope */
