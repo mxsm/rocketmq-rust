@@ -443,7 +443,11 @@ impl RequiredSignalExposure {
     fn has_protected_query_route(&self) -> bool {
         matches!(
             self.remote_queryable.as_str(),
-            Some("protected_connector_api" | "protected_system_resources_only")
+            Some(
+                "protected_connector_api"
+                    | "protected_system_resources_only"
+                    | "protected_component_endpoints_and_prometheus"
+            )
         )
     }
 }
