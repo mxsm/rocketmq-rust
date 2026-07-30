@@ -1,0 +1,547 @@
+name: RocketMQ AI SRE Release
+
+on:
+  push:
+    tags:
+      - "sre-v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: SemVer without the sre-v prefix
+        required: true
+        type: string
+      publish:
+        description: Publish, sign, attest, and promote registry images
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rocketmq-sre-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-and-attest:
+    name: Build ${{ matrix.component }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: control-plane
+            image: rocketmq-sre-control-plane
+            dockerfile: rocketmq-sre/deploy/docker/Dockerfile
+            target: control-plane
+          - component: connector
+            image: rocketmq-sre-connector
+            dockerfile: rocketmq-sre/deploy/docker/Dockerfile
+            target: connector
+          - component: executor
+            image: rocketmq-sre-executor
+            dockerfile: rocketmq-sre/deploy/docker/Dockerfile
+            target: executor
+          - component: execution-agent
+            image: rocketmq-sre-execution-agent
+            dockerfile: rocketmq-sre/deploy/docker/Dockerfile
+            target: execution-agent
+          - component: probe
+            image: rocketmq-sre-probe
+            dockerfile: rocketmq-sre/deploy/docker/Dockerfile
+            target: probe
+          - component: ui
+            image: rocketmq-sre-ui
+            dockerfile: rocketmq-sre/deploy/docker/ui.Dockerfile
+            target: ""
+          - component: mcp
+            image: rocketmq-mcp
+            dockerfile: docker/Dockerfile.base
+            target: mcp
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          syft-version: v1.48.0
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.2
+
+      - name: Resolve immutable release identity
+        id: release
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            version="${GITHUB_REF_NAME#sre-v}"
+            publish=true
+          else
+            version="${INPUT_VERSION}"
+            publish="${INPUT_PUBLISH}"
+          fi
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid SRE release version: ${version}" >&2
+            exit 1
+          fi
+          mapfile -t sre_versions < <(
+            cargo metadata \
+              --manifest-path rocketmq-sre/Cargo.toml \
+              --locked \
+              --format-version 1 \
+              --no-deps |
+              jq -r '.packages[].version' |
+              sort -u
+          )
+          if [[ "${#sre_versions[@]}" -ne 1 || "${sre_versions[0]}" != "${version}" ]]; then
+            echo "Release version ${version} does not match every SRE crate." >&2
+            exit 1
+          fi
+          mcp_version="$(
+            cargo metadata \
+              --manifest-path rocketmq-tools/rocketmq-mcp/Cargo.toml \
+              --locked \
+              --format-version 1 \
+              --no-deps |
+              jq -r '.packages[] | select(.name == "rocketmq-mcp") | .version'
+          )"
+          if [[ -z "${mcp_version}" ]]; then
+            echo "RocketMQ MCP package version was not resolved." >&2
+            exit 1
+          fi
+          owner="$(printf '%s' "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          image="${REGISTRY}/${owner}/${{ matrix.image }}"
+          staging_tag="${image}:sha-${GITHUB_SHA}"
+          {
+            echo "version=${version}"
+            echo "publish=${publish}"
+            echo "image=${image}"
+            echo "staging_tag=${staging_tag}"
+            echo "sre_version=${sre_versions[0]}"
+            echo "mcp_version=${mcp_version}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Authenticate to GHCR
+        if: steps.release.outputs.publish == 'true'
+        shell: bash
+        run: |
+          set +x
+          printf '%s' "${{ secrets.GITHUB_TOKEN }}" |
+            docker login "${REGISTRY}" --username "${GITHUB_ACTOR}" --password-stdin
+
+      - name: Build immutable candidate
+        id: build
+        shell: bash
+        env:
+          PUBLISH: ${{ steps.release.outputs.publish }}
+          STAGING_TAG: ${{ steps.release.outputs.staging_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-evidence
+          arguments=(
+            build
+            --file "${{ matrix.dockerfile }}"
+            --platform linux/amd64
+            --tag "${STAGING_TAG}"
+            --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}"
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}"
+            --label "org.opencontainers.image.version=${{ steps.release.outputs.version }}"
+            --metadata-file release-evidence/build-metadata.json
+          )
+          if [[ -n "${{ matrix.target }}" ]]; then
+            arguments+=(--target "${{ matrix.target }}")
+          fi
+          if [[ "${PUBLISH}" == "true" ]]; then
+            arguments+=(--push)
+          else
+            arguments+=(--load)
+          fi
+          arguments+=(.)
+          docker buildx "${arguments[@]}"
+
+          if [[ "${PUBLISH}" == "true" ]]; then
+            digest="$(jq -r '."containerimage.digest" // empty' release-evidence/build-metadata.json)"
+          else
+            digest="$(docker image inspect --format '{{.Id}}' "${STAGING_TAG}")"
+          fi
+          if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Build did not produce an immutable digest." >&2
+            exit 1
+          fi
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
+
+      - name: Generate CycloneDX SBOM
+        shell: bash
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ${{ steps.release.outputs.image }}
+          PUBLISH: ${{ steps.release.outputs.publish }}
+          STAGING_TAG: ${{ steps.release.outputs.staging_tag }}
+        run: |
+          set -euo pipefail
+          subject="${STAGING_TAG}"
+          if [[ "${PUBLISH}" == "true" ]]; then
+            subject="${IMAGE}@${DIGEST}"
+          fi
+          syft "${subject}" \
+            --output cyclonedx-json=release-evidence/sbom.cdx.json
+          jq -e '
+            .bomFormat == "CycloneDX" and
+            (.components | type == "array")
+          ' release-evidence/sbom.cdx.json >/dev/null
+
+      - name: Create keyless signature and attestations
+        if: steps.release.outputs.publish == 'true'
+        shell: bash
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ${{ steps.release.outputs.image }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          subject="${IMAGE}@${DIGEST}"
+          identity="https://github.com/${GITHUB_WORKFLOW_REF}"
+          jq -n \
+            --arg repository "https://github.com/${GITHUB_REPOSITORY}" \
+            --arg revision "${GITHUB_SHA}" \
+            --arg workflow "${identity}" \
+            --arg version "${VERSION}" \
+            '{
+              buildType: "https://github.com/docker/buildx@v1",
+              builder: {id: $workflow},
+              invocation: {
+                configSource: {
+                  uri: $repository,
+                  digest: {sha1: $revision},
+                  entryPoint: ".github/workflows/rocketmq-sre-release.yml"
+                },
+                parameters: {version: $version},
+                environment: {runner: "github-hosted-linux-amd64"}
+              },
+              metadata: {
+                buildInvocationId: env.GITHUB_RUN_ID,
+                completeness: {parameters: true, environment: true, materials: true},
+                reproducible: false
+              },
+              materials: [{uri: $repository, digest: {sha1: $revision}}]
+            }' > release-evidence/provenance.json
+
+          cosign sign --yes "${subject}"
+          cosign attest --yes \
+            --type cyclonedx \
+            --predicate release-evidence/sbom.cdx.json \
+            "${subject}"
+          cosign attest --yes \
+            --type slsaprovenance \
+            --predicate release-evidence/provenance.json \
+            "${subject}"
+          cosign verify \
+            --certificate-identity "${identity}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "${subject}" >/dev/null
+          cosign verify-attestation \
+            --type cyclonedx \
+            --certificate-identity "${identity}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "${subject}" >/dev/null
+          cosign verify-attestation \
+            --type slsaprovenance \
+            --certificate-identity "${identity}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "${subject}" >/dev/null
+
+      - name: Write redacted component manifest
+        shell: bash
+        env:
+          COMPONENT: ${{ matrix.component }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ${{ steps.release.outputs.image }}
+          MCP_VERSION: ${{ steps.release.outputs.mcp_version }}
+          PUBLISH: ${{ steps.release.outputs.publish }}
+          SRE_VERSION: ${{ steps.release.outputs.sre_version }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          binary_version="${SRE_VERSION}"
+          if [[ "${COMPONENT}" == "mcp" ]]; then
+            binary_version="${MCP_VERSION}"
+          fi
+          jq -n \
+            --arg component "${COMPONENT}" \
+            --arg image "${IMAGE}" \
+            --arg digest "${DIGEST}" \
+            --arg version "${VERSION}" \
+            --arg binary_version "${binary_version}" \
+            --arg commit "${GITHUB_SHA}" \
+            --arg workflow_ref "${GITHUB_WORKFLOW_REF}" \
+            --argjson published "${PUBLISH}" \
+            '{
+              schema_version: "rocketmq-sre.release-component.v1",
+              component: $component,
+              image: $image,
+              digest: $digest,
+              version: $version,
+              binary_version: $binary_version,
+              commit: $commit,
+              workflow_ref: $workflow_ref,
+              platform: "linux/amd64",
+              published: $published,
+              cyclonedx_sbom: "sbom.cdx.json",
+              keyless_signature_verified: $published,
+              keyless_attestations_verified: $published,
+              sensitive_material_recorded: false
+            }' > release-evidence/manifest.json
+
+      - name: Upload component release evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sre-release-${{ matrix.component }}-${{ steps.release.outputs.version }}
+          path: release-evidence/
+          if-no-files-found: error
+          retention-days: 90
+
+  promote:
+    name: Promote immutable release
+    needs: build-and-attest
+    if: github.event_name == 'push' || inputs.publish == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      packages: write
+      actions: read
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.2
+
+      - name: Authenticate to GHCR
+        shell: bash
+        run: |
+          set +x
+          printf '%s' "${{ secrets.GITHUB_TOKEN }}" |
+            docker login "${REGISTRY}" --username "${GITHUB_ACTOR}" --password-stdin
+
+      - name: Download and validate component evidence
+        id: index
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          version="${INPUT_VERSION}"
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            version="${GITHUB_REF_NAME#sre-v}"
+          fi
+          mkdir -p release-inputs
+          gh run download "${GITHUB_RUN_ID}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern "sre-release-*-${version}" \
+            --dir release-inputs
+          mapfile -t manifests < <(find release-inputs -name manifest.json -type f | sort)
+          if [[ "${#manifests[@]}" -ne 7 ]]; then
+            echo "Expected seven component manifests, found ${#manifests[@]}." >&2
+            exit 1
+          fi
+          jq -s \
+            --arg version "${version}" \
+            --arg commit "${GITHUB_SHA}" \
+            'if all(.[];
+              .schema_version == "rocketmq-sre.release-component.v1" and
+              .version == $version and
+              .commit == $commit and
+              .published == true and
+              (.digest | test("^sha256:[0-9a-f]{64}$"))
+            ) then {
+              schema_version: "rocketmq-sre.release-index.v1",
+              version: $version,
+              commit: $commit,
+              components: (sort_by(.component)),
+              keyless_identity: env.GITHUB_WORKFLOW_REF,
+              n_minus_one: {status: "pending"},
+              sensitive_material_recorded: false
+            } else error("component manifest validation failed") end' \
+            "${manifests[@]}" > rocketmq-sre-release-index.json
+          if [[ "$(jq -r '[.components[].component] | unique | length' rocketmq-sre-release-index.json)" -ne 7 ]]; then
+            echo "Component manifest IDs are not unique." >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Promote version tags and verify signatures
+        shell: bash
+        env:
+          VERSION: ${{ steps.index.outputs.version }}
+        run: |
+          set -euo pipefail
+          identity="https://github.com/${GITHUB_WORKFLOW_REF}"
+          jq -c '.components[]' rocketmq-sre-release-index.json |
+            while IFS= read -r component; do
+              image="$(jq -r '.image' <<<"${component}")"
+              digest="$(jq -r '.digest' <<<"${component}")"
+              subject="${image}@${digest}"
+              existing_digest="$(
+                docker buildx imagetools inspect \
+                  "${image}:${VERSION}" \
+                  --format '{{json .Manifest}}' 2>/dev/null |
+                  jq -r '.digest // empty' ||
+                  true
+              )"
+              if [[ -n "${existing_digest}" && "${existing_digest}" != "${digest}" ]]; then
+                echo "Immutable tag ${image}:${VERSION} already points to another digest." >&2
+                exit 1
+              fi
+              if [[ -z "${existing_digest}" ]]; then
+                docker buildx imagetools create \
+                  --tag "${image}:${VERSION}" \
+                  "${subject}"
+              fi
+              if [[ "${VERSION}" != *-* ]]; then
+                docker buildx imagetools create \
+                  --tag "${image}:latest" \
+                  "${subject}"
+              fi
+              cosign verify \
+                --certificate-identity "${identity}" \
+                --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+                "${image}:${VERSION}" >/dev/null
+            done
+
+      - name: Audit retained N-1 release
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.index.outputs.version }}
+        run: |
+          set -euo pipefail
+          current_tag="sre-v${VERSION}"
+          mapfile -t release_tags < <(
+            gh release list \
+              --repo "${GITHUB_REPOSITORY}" \
+              --limit 100 \
+              --json tagName,isDraft \
+              --jq \
+              '.[] | select(.isDraft == false) | .tagName | select(startswith("sre-v"))'
+          )
+          prior_tag=""
+          previous_tag=""
+          while IFS= read -r candidate_tag; do
+            if [[ "${candidate_tag}" == "${current_tag}" ]]; then
+              prior_tag="${previous_tag}"
+              break
+            fi
+            previous_tag="${candidate_tag}"
+          done < <(
+            printf '%s\n' "${release_tags[@]}" "${current_tag}" |
+              sort -Vu
+          )
+          if [[ -z "${prior_tag}" ]]; then
+            jq '.n_minus_one = {
+              status: "not_available_first_release",
+              actual_binary_matrix_required: true
+            }' rocketmq-sre-release-index.json > release-index.tmp
+          else
+            mkdir -p n-minus-one
+            gh release download "${prior_tag}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern rocketmq-sre-release-index.json \
+              --dir n-minus-one
+            jq -e '
+              .schema_version == "rocketmq-sre.release-index.v1" and
+              ([.components[].component] | unique | length) == 7 and
+              all(.components[];
+                .digest | test("^sha256:[0-9a-f]{64}$")
+              )
+            ' n-minus-one/rocketmq-sre-release-index.json >/dev/null
+            jq -c '.components[]' n-minus-one/rocketmq-sre-release-index.json |
+              while IFS= read -r component; do
+                image="$(jq -r '.image' <<<"${component}")"
+                digest="$(jq -r '.digest' <<<"${component}")"
+                docker buildx imagetools inspect "${image}@${digest}" >/dev/null
+              done
+            prior_sha="$(sha256sum n-minus-one/rocketmq-sre-release-index.json | cut -d" " -f1)"
+            jq \
+              --arg tag "${prior_tag}" \
+              --arg sha256 "${prior_sha}" \
+              '.n_minus_one = {
+                status: "retained",
+                tag: $tag,
+                release_index_sha256: $sha256,
+                actual_binary_matrix_required: true
+              }' rocketmq-sre-release-index.json > release-index.tmp
+          fi
+          mv release-index.tmp rocketmq-sre-release-index.json
+
+      - name: Create immutable release evidence bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -czf rocketmq-sre-release-evidence.tar.gz release-inputs
+          sha256sum \
+            rocketmq-sre-release-index.json \
+            rocketmq-sre-release-evidence.tar.gz \
+            > rocketmq-sre-release-evidence.sha256
+
+      - name: Publish GitHub release evidence
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.index.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag="sre-v${VERSION}"
+          if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "${tag}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --clobber \
+              rocketmq-sre-release-index.json \
+              rocketmq-sre-release-evidence.tar.gz \
+              rocketmq-sre-release-evidence.sha256
+          else
+            gh release create "${tag}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --verify-tag \
+              --generate-notes \
+              --title "RocketMQ AI SRE ${VERSION}" \
+              rocketmq-sre-release-index.json \
+              rocketmq-sre-release-evidence.tar.gz \
+              rocketmq-sre-release-evidence.sha256
+          fi
+
+      - name: Upload aggregate release evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rocketmq-sre-release-${{ steps.index.outputs.version }}
+          path: |
+            rocketmq-sre-release-index.json
+            rocketmq-sre-release-evidence.tar.gz
+            rocketmq-sre-release-evidence.sha256
+          if-no-files-found: error
+          retention-days: 90
