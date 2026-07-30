@@ -402,7 +402,7 @@ export interface DiagnosisRevision {
   }>;
   evidence_ids: string[];
   primary_model_invocation_id?: string;
-  execution_eligible: false;
+  execution_eligible: boolean;
   partial: boolean;
   created_at: string;
 }
