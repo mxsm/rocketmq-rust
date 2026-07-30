@@ -109,11 +109,13 @@ Assert-PortAvailable ($BrokerPort + 1)
 
 New-Item -ItemType Directory -Force -Path $CargoTargetDir, $CargoHome, $TemporaryRoot | Out-Null
 $targetDrive = Get-PSDrive -Name ([IO.Path]::GetPathRoot([IO.Path]::GetFullPath($CargoTargetDir)).Substring(0, 1))
-if (($targetDrive.Free / 1GB) -lt 15) {
+$targetFreeGiB = $targetDrive.Free / 1GB
+$targetFreePercent = 100 * $targetDrive.Free / ($targetDrive.Free + $targetDrive.Used)
+if ($targetFreeGiB -lt 30 -or $targetFreePercent -lt 15) {
     Invoke-Native cargo @(
         '+1.95.0', 'clean',
         '--target-dir', $CargoTargetDir
-    ) 'low-space Cargo cleanup'
+    ) 'Broker-reserve Cargo cleanup'
 }
 
 $runRoot = Join-Path $TemporaryRoot "phase03-topic-cas-$([Guid]::NewGuid().ToString('N'))"
@@ -202,6 +204,22 @@ try {
         '--package', 'rocketmq-admin-cli',
         '--bin', 'rocketmq-admin-cli'
     ) 'RocketMQ Topic CAS test-cluster build'
+
+    $targetDrive = Get-PSDrive -Name (
+        [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($CargoTargetDir)).Substring(0, 1)
+    )
+    $targetFreeGiB = $targetDrive.Free / 1GB
+    $targetFreePercent = 100 * $targetDrive.Free / ($targetDrive.Free + $targetDrive.Used)
+    if ($targetFreeGiB -lt 15 -or $targetFreePercent -lt 12) {
+        Invoke-Native cargo @(
+            '+1.95.0', 'clean',
+            '--target-dir', $CargoTargetDir
+        ) 'post-build low-space Cargo cleanup'
+        throw (
+            'The Topic CAS build left insufficient Broker runtime reserve; ' +
+            'the owned Cargo target was cleaned. Rerun the smoke test.'
+        )
+    }
 
     $namesrvBinary = Join-Path $CargoTargetDir 'debug/rocketmq-namesrv-rust.exe'
     $brokerBinary = Join-Path $CargoTargetDir 'debug/rocketmq-broker-rust.exe'
