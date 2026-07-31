@@ -1,5 +1,7 @@
 # RocketMQ Rust AI SRE
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 `rocketmq-sre` is the independent Rust workspace and UI for the AI-assisted,
 read-only operations plane for RocketMQ Rust. Phase 00 provides the secure
 foundation. Phase 01 adds durable operator workflows, eight deterministic
