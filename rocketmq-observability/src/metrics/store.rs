@@ -506,7 +506,7 @@ pub struct StoreMetrics {
 
 #[cfg(feature = "otel-metrics")]
 impl StoreMetrics {
-    pub fn new(meter: &opentelemetry::metrics::Meter) -> Self {
+    pub(crate) fn new(meter: &opentelemetry::metrics::Meter) -> Self {
         Self::new_with_ha_recording(meter, true)
     }
 
@@ -688,7 +688,7 @@ impl StoreMetrics {
         metrics
     }
 
-    pub fn new_with_observables_and_replication_lag<F, H>(
+    pub(crate) fn new_with_observables_and_replication_lag<F, H>(
         meter: &opentelemetry::metrics::Meter,
         source: F,
         replication_lag_source: H,
