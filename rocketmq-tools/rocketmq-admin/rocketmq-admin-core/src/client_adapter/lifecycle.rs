@@ -30,6 +30,8 @@ use rocketmq_error::RocketMQError;
 pub use rocketmq_client_rust::ClientRuntime;
 #[cfg(feature = "client-adapter")]
 pub use rocketmq_client_rust::ClientRuntimeConfig;
+#[cfg(feature = "client-adapter")]
+pub use rocketmq_client_rust::TelemetryHandle;
 
 use crate::core::clock::Clock;
 use crate::core::security::AdminCredentials;
