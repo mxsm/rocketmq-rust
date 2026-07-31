@@ -229,6 +229,8 @@ use rocketmq_transport::RPCHook;
 #[cfg(feature = "admin-full")]
 use rocketmq_transport::RpcRequestHeader;
 #[cfg(feature = "admin-full")]
+use tracing::info;
+#[cfg(feature = "admin-full")]
 use tracing::warn;
 
 #[cfg(feature = "admin-full")]
