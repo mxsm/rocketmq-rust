@@ -4119,6 +4119,33 @@
       }
     },
     {
+      "id": "rocketmq_release_info",
+      "source_symbol": "RELEASE_INFO",
+      "signal_type": "metric",
+      "kind": "gauge",
+      "unit": "1",
+      "owner": "observability",
+      "catalog": "rust",
+      "family": "release-identity",
+      "stability": "stable",
+      "attributes": [
+        "service",
+        "release_commit",
+        "release_nonce"
+      ],
+      "cardinality_budget": 64,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
       "id": "rocketmq_mcp_requests_total",
       "source_symbol": "MCP_REQUESTS_TOTAL",
       "signal_type": "metric",
