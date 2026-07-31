@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::config::ServerConfig;
+use crate::dispatch::AuthorizedCommandDispatcher;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::wait_for_signal;
@@ -40,11 +41,9 @@ use crate::admission::AdmissionLimits;
 use crate::admission::ResourceLimit;
 use crate::base::channel_event_listener::ChannelEventListener;
 use crate::base::connection_net_event::ConnectionNetEvent;
-use crate::base::pending_request_table::PendingRequestTable;
 use crate::base::tokio_event::TokioEvent;
 use crate::net::channel::Channel;
 use crate::net::channel::ChannelInner;
-use crate::remoting::inner::RemotingGeneralHandler;
 use crate::runtime::connection_handler_context::ConnectionHandlerContext;
 use crate::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 use crate::runtime::processor::RequestProcessor;
@@ -143,7 +142,7 @@ struct ConnectionListener<RP> {
     ///
     /// Contains request processor, RPC hooks, and response routing table.
     /// Arc-wrapped to share across all connection handlers efficiently.
-    cmd_handler: Arc<RemotingGeneralHandler<RP>>,
+    dispatcher: Arc<AuthorizedCommandDispatcher<RP>>,
 
     /// TLS mode and acceptor state for newly accepted connections.
     tls_runtime: TlsServerRuntime,
@@ -151,8 +150,6 @@ struct ConnectionListener<RP> {
     /// Tracks remoting event and connection tasks for shutdown diagnostics.
     task_group: TaskGroup,
 
-    admission: Arc<AdmissionController>,
-    transport_security: Option<Arc<TransportSecurity>>,
     transport_principal: Option<Principal>,
     command_interceptor: Arc<dyn SessionCommandInterceptor>,
     telemetry: TransportTelemetry,
@@ -223,23 +220,21 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
         let listener = self.listener.take().ok_or_else(|| {
             RocketMQError::network_connection_failed("remoting-server", "transport listener already started")
         })?;
-        let mut transport = TransportListener::new(
+        let transport = TransportListener::new(
             listener,
             self.task_group.clone(),
             self.tls_runtime.clone(),
-            self.admission.clone(),
+            self.dispatcher.boundary().admission_controller(),
             DEFAULT_TLS_HANDSHAKE_TIMEOUT,
         )
+        .with_authorized_dispatch(self.dispatcher.boundary(), self.transport_principal.clone())
         .with_telemetry(self.telemetry.clone());
-        if let Some(security) = self.transport_security.clone() {
-            transport = transport.with_security(security, self.transport_principal.clone());
-        }
         transport
             .run(Arc::new(InterceptingConnectionHandler {
                 inner: ConnectionHandler {
                     shutdown_complete_tx: self.shutdown_complete_tx.clone(),
                     conn_disconnect_notify: self.conn_disconnect_notify.clone(),
-                    cmd_handler: self.cmd_handler.clone(),
+                    dispatcher: self.dispatcher.clone(),
                     event_tx,
                     sessions: dashmap::DashMap::new(),
                 },
@@ -252,7 +247,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
 struct ConnectionHandler<RP> {
     shutdown_complete_tx: mpsc::Sender<()>,
     conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
-    cmd_handler: Arc<RemotingGeneralHandler<RP>>,
+    dispatcher: Arc<AuthorizedCommandDispatcher<RP>>,
     event_tx: mpsc::Sender<TokioEvent>,
     sessions: dashmap::DashMap<u64, RemotingSession<ConnectionHandlerContext>>,
 }
@@ -295,12 +290,12 @@ impl<RP: RequestProcessor + Sync + Clone + 'static> ConnectionHandler<RP> {
         let channel_inner = match &action {
             RemotingSessionAction::Connect => ChannelInner::new_transport_session(
                 session.connection(),
-                self.cmd_handler.response_table.clone(),
+                self.dispatcher.response_table(),
                 session.task_group().clone(),
             ),
             RemotingSessionAction::Command(_) => ChannelInner::new_transport_session_with_task_group(
                 session.connection(),
-                self.cmd_handler.response_table.clone(),
+                self.dispatcher.response_table(),
                 session.task_group().clone(),
             ),
         };
@@ -333,10 +328,8 @@ impl<RP: RequestProcessor + Sync + Clone + 'static> ConnectionHandler<RP> {
                         return;
                     }
                 }
-                let cmd_handler = self.cmd_handler.clone();
-                cmd_handler
-                    .process_message_received(&remoting_session.context, command)
-                    .await;
+                let dispatcher = self.dispatcher.clone();
+                dispatcher.process_network(&remoting_session.context, command).await;
             }
         }
     }
@@ -353,7 +346,7 @@ impl<RP: RequestProcessor + Sync + Clone + 'static> TransportConnectionHandler f
         &self,
         command: &rocketmq_protocol::protocol::remoting_command::RemotingCommand,
     ) -> crate::request_ordering::RequestOrdering {
-        self.cmd_handler.request_processor.request_ordering(command)
+        self.dispatcher.request_ordering(command)
     }
 
     fn command(
@@ -431,6 +424,7 @@ pub struct RocketMQServer<RP> {
     transport_security: Option<Arc<TransportSecurity>>,
     transport_principal: Option<Principal>,
     admission: Option<Arc<AdmissionController>>,
+    authorized_dispatcher: Option<Arc<AuthorizedCommandDispatcher<RP>>>,
     telemetry: TransportTelemetry,
     #[cfg(all(test, not(doctest)))]
     test_request_hook: Option<TestRequestHook>,
@@ -446,6 +440,7 @@ impl<RP> RocketMQServer<RP> {
             transport_security: None,
             transport_principal: None,
             admission: None,
+            authorized_dispatcher: None,
             telemetry: TransportTelemetry::noop(),
             #[cfg(all(test, not(doctest)))]
             test_request_hook: None,
@@ -498,6 +493,13 @@ impl<RP> RocketMQServer<RP> {
     #[doc(hidden)]
     pub fn with_admission_controller(mut self, admission: Arc<AdmissionController>) -> Self {
         self.admission = Some(admission);
+        self
+    }
+
+    /// Installs one dispatcher shared with another trusted entry adapter.
+    #[doc(hidden)]
+    pub fn with_authorized_dispatcher(mut self, dispatcher: Arc<AuthorizedCommandDispatcher<RP>>) -> Self {
+        self.authorized_dispatcher = Some(dispatcher);
         self
     }
 
@@ -634,6 +636,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> RocketMQServer<RP> {
             Some(notify_conn_disconnect),
             rpc_hooks,
             channel_event_listener,
+            self.authorized_dispatcher.clone(),
             RemotingServerRunCapabilities {
                 tls_runtime,
                 task_group,
@@ -756,6 +759,7 @@ pub async fn run_with_report_with_service_context_and_telemetry<RP: RequestProce
         conn_disconnect_notify,
         rpc_hooks,
         channel_event_listener,
+        None,
         RemotingServerRunCapabilities {
             tls_runtime,
             task_group: remoting_context.task_group().clone(),
@@ -788,6 +792,7 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
     conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
     rpc_hooks: Vec<Arc<dyn RPCHook>>,
     channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
+    authorized_dispatcher: Option<Arc<AuthorizedCommandDispatcher<RP>>>,
     capabilities: RemotingServerRunCapabilities,
 ) -> Option<ShutdownReport> {
     let RemotingServerRunCapabilities {
@@ -802,25 +807,6 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
     } = capabilities;
     let (notify_shutdown, _) = broadcast::channel(1);
     let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::channel(1);
-    // Initialize the connection listener state
-    let handler = RemotingGeneralHandler::new_with_telemetry(
-        request_processor,
-        rpc_hooks,
-        match PendingRequestTable::try_with_limits_and_budget(
-            crate::base::pending_request_table::PendingRequestLimits {
-                max_count: 512,
-                ..Default::default()
-            },
-            &process_budget,
-        ) {
-            Ok(table) => table,
-            Err(error) => {
-                error!(%error, "failed to initialize remoting pending-request budget");
-                return None;
-            }
-        },
-        telemetry.clone(),
-    );
     let mut admission_limits = AdmissionLimits::default();
     admission_limits.connections = ResourceLimit {
         count: DEFAULT_MAX_CONNECTIONS,
@@ -830,15 +816,39 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
         count: DEFAULT_MAX_CONNECTIONS,
         ..admission_limits.handshakes
     };
-    let admission = match admission {
-        Some(admission) => admission,
-        None => match AdmissionController::try_new_with_budget(admission_limits, &process_budget) {
-            Ok(admission) => Arc::new(admission),
-            Err(error) => {
-                error!(%error, "failed to initialize transport admission budgets");
-                return None;
-            }
+    let admission = match authorized_dispatcher.as_ref() {
+        Some(dispatcher) => dispatcher.boundary().admission_controller(),
+        None => match admission {
+            Some(admission) => admission,
+            None => match AdmissionController::try_new_with_budget(admission_limits, &process_budget) {
+                Ok(admission) => Arc::new(admission),
+                Err(error) => {
+                    error!(%error, "failed to initialize transport admission budgets");
+                    return None;
+                }
+            },
         },
+    };
+    let dispatcher = match authorized_dispatcher {
+        Some(dispatcher) => dispatcher,
+        None => {
+            let security = transport_security
+                .unwrap_or_else(|| Arc::new(TransportSecurity::development_insecure_loopback(None, None)));
+            match AuthorizedCommandDispatcher::try_new(
+                request_processor,
+                rpc_hooks,
+                &process_budget,
+                telemetry.clone(),
+                security,
+                admission,
+            ) {
+                Ok(dispatcher) => Arc::new(dispatcher),
+                Err(error) => {
+                    error!(%error, "failed to initialize authorized command dispatcher");
+                    return None;
+                }
+            }
+        }
     };
     let mut listener = ConnectionListener {
         listener: Some(listener),
@@ -846,11 +856,9 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
         shutdown_complete_tx,
         conn_disconnect_notify,
         channel_event_listener,
-        cmd_handler: Arc::new(handler),
+        dispatcher,
         tls_runtime,
         task_group: task_group.clone(),
-        admission,
-        transport_security,
         transport_principal,
         command_interceptor,
         telemetry,
@@ -1731,6 +1739,7 @@ mod tests {
             DefaultRemotingRequestProcessor,
             None,
             Vec::new(),
+            None,
             None,
             RemotingServerRunCapabilities {
                 tls_runtime,

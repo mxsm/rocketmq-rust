@@ -28,7 +28,6 @@ use std::time::Duration;
 use futures_util::StreamExt;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::OperationContext;
@@ -39,19 +38,14 @@ use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskId;
 use rocketmq_runtime::TaskKind;
-use rocketmq_security_api::Action;
-use rocketmq_security_api::Decision;
 use rocketmq_security_api::PeerInfo;
 use rocketmq_security_api::Principal;
-use rocketmq_security_api::Resource;
-use rocketmq_security_api::ResourceKind;
 use tokio_util::sync::CancellationToken;
 
 use crate::admission::AdmissionClass;
 use crate::admission::AdmissionController;
 use crate::admission::AdmissionResource;
 use crate::admission::AdmissionScope;
-use crate::admission::FullPolicy;
 use crate::config::TlsConfig;
 use crate::config::TlsMode;
 use crate::connection::record_transport_write;
@@ -61,10 +55,11 @@ use crate::connection::ConnectionState;
 use crate::connection::SessionLifecycle;
 use crate::connection::SessionWriterDiagnostics;
 use crate::connection::SessionWriterSnapshot;
+use crate::dispatch::AuthorizedDispatchBoundary;
+use crate::dispatch::RequestContext;
+use crate::dispatch::ResponseSink;
 use crate::request_ordering::RequestOrdering;
 use crate::security::TransportSecurity;
-use crate::session_executor::SessionDispatchError;
-use crate::session_executor::SessionExecutor;
 use crate::telemetry::TransportTelemetry;
 use crate::tls::NegotiatedConnection;
 use crate::tls::TlsServerRuntime;
@@ -160,7 +155,7 @@ impl SessionHandle {
         self.task_group.abort_task(self.writer_task_id);
     }
 
-    fn with_response_class(mut self, class: AdmissionClass) -> Self {
+    pub(crate) fn with_response_class(mut self, class: AdmissionClass) -> Self {
         self.response_class = Some(class);
         self
     }
@@ -331,10 +326,9 @@ pub struct TransportListener {
     listener: tokio::net::TcpListener,
     task_group: TaskGroup,
     tls: TlsServerRuntime,
-    admission: Arc<AdmissionController>,
+    dispatch: Arc<AuthorizedDispatchBoundary>,
     handshake_timeout: Duration,
     idle_timeout: Duration,
-    security: Arc<TransportSecurity>,
     principal: Option<Principal>,
     next_session: AtomicU64,
     telemetry: TransportTelemetry,
@@ -348,14 +342,17 @@ impl TransportListener {
         admission: Arc<AdmissionController>,
         handshake_timeout: Duration,
     ) -> Self {
+        let dispatch = Arc::new(AuthorizedDispatchBoundary::new(
+            Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
+            admission,
+        ));
         Self {
             listener,
             task_group,
             tls,
-            admission,
+            dispatch,
             handshake_timeout,
             idle_timeout: Duration::from_secs(120),
-            security: Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
             principal: None,
             next_session: AtomicU64::new(1),
             telemetry: TransportTelemetry::noop(),
@@ -368,7 +365,20 @@ impl TransportListener {
     }
 
     pub fn with_security(mut self, security: Arc<TransportSecurity>, principal: Option<Principal>) -> Self {
-        self.security = security;
+        self.dispatch = Arc::new(AuthorizedDispatchBoundary::new(
+            security,
+            self.dispatch.admission_controller(),
+        ));
+        self.principal = principal;
+        self
+    }
+
+    pub(crate) fn with_authorized_dispatch(
+        mut self,
+        dispatch: Arc<AuthorizedDispatchBoundary>,
+        principal: Option<Principal>,
+    ) -> Self {
+        self.dispatch = dispatch;
         self.principal = principal;
         self
     }
@@ -385,6 +395,7 @@ impl TransportListener {
         H: ConnectionHandler,
     {
         let cancellation = self.task_group.cancellation_token();
+        let admission = self.dispatch.admission_controller();
         loop {
             let accepted = tokio::select! {
                 () = cancellation.cancelled() => return Ok(()),
@@ -397,7 +408,7 @@ impl TransportListener {
             let local_addr = stream.local_addr()?;
             let session_id = self.next_session.fetch_add(1, Ordering::Relaxed);
             let scope = AdmissionScope::new(remote_addr.ip()).with_session(session_id);
-            let Ok(connection_permit) = self.admission.try_acquire(
+            let Ok(connection_permit) = admission.try_acquire(
                 AdmissionResource::Connection,
                 scope,
                 crate::admission::estimated_connection_retained_bytes(),
@@ -408,10 +419,10 @@ impl TransportListener {
             let session_operation = OperationContext::without_deadline(TaskKind::Service);
             let session_group = self.task_group.clone();
             let tls = self.tls.clone();
-            let admission = self.admission.clone();
+            let admission = admission.clone();
+            let dispatch = self.dispatch.clone();
             let handshake_timeout = self.handshake_timeout;
             let idle_timeout = self.idle_timeout;
-            let security = self.security.clone();
             let principal = self.principal.clone();
             let handler = handler.clone();
             let telemetry = self.telemetry.clone();
@@ -446,8 +457,7 @@ impl TransportListener {
                         session_id,
                         scope,
                         session_group,
-                        admission,
-                        security,
+                        dispatch,
                         principal,
                         peer_is_tls,
                         idle_timeout,
@@ -471,8 +481,7 @@ async fn run_framed_session<H>(
     session_id: u64,
     scope: AdmissionScope,
     task_group: TaskGroup,
-    admission: Arc<AdmissionController>,
-    security: Arc<TransportSecurity>,
+    dispatch: Arc<AuthorizedDispatchBoundary>,
     principal: Option<Principal>,
     peer_is_tls: bool,
     idle_timeout: Duration,
@@ -483,10 +492,11 @@ async fn run_framed_session<H>(
     let connection_id = connection.connection_id().clone();
     let telemetry = connection.telemetry();
     let (mut frame_writer, mut stream) = connection.into_session_io();
-    let executor = match SessionExecutor::try_new(&task_group, admission.clone(), scope) {
+    let executor = match dispatch.session(&task_group, scope) {
         Ok(executor) => executor,
         Err(_) => return,
     };
+    let admission = dispatch.admission_controller();
     let (state_tx, state_rx) = tokio::sync::watch::channel(ConnectionState::Healthy);
     let lifecycle = Arc::new(SessionLifecycle::new());
     let (writer, mut writes) = tokio::sync::mpsc::channel::<QueuedWrite>(SESSION_WRITER_QUEUE_CAPACITY);
@@ -603,68 +613,28 @@ async fn run_framed_session<H>(
         let command = decoded.command;
         let class = AdmissionClass::for_request_code(command.code());
         let bytes = decoded.retained_frame_bytes;
-        let peer = PeerInfo::new(remote_addr, peer_is_tls);
-        if let Decision::Deny { reason } = security.authorize(
-            &command,
-            Some(&peer),
-            principal.as_ref(),
-            Resource::new(ResourceKind::Other, command.code().to_string()),
-            Action::Manage,
-        ) {
-            let mut connection = session.clone().with_response_class(class).connection();
-            let _ = connection
-                .send_command(
-                    RemotingCommand::create_response_command_with_code_remark(
-                        ResponseCode::NoPermission,
-                        reason.to_string(),
-                    )
-                    .set_opaque(command.opaque()),
-                )
-                .await;
-            continue;
-        }
+        let context = RequestContext::network(PeerInfo::new(remote_addr, peer_is_tls), principal.clone(), None);
         let ordering = handler.request_ordering(&command);
-        let opaque = command.opaque();
         let request_handler = handler.clone();
         let request_session = session.clone().with_response_class(class);
-        let rejection_session = session.clone().with_response_class(class);
-        match executor.try_execute(
-            bytes,
-            class,
-            ordering,
-            move |request_operation| async move {
-                request_handler
-                    .command(request_session.with_operation_context(request_operation), command)
-                    .await;
-            },
-            move |_request_operation, error| async move {
-                let mut connection = rejection_session.connection();
-                let _ = connection
-                    .send_command(
-                        RemotingCommand::create_response_command_with_code_remark(
-                            ResponseCode::SystemBusy,
-                            error.to_string(),
-                        )
-                        .set_opaque(opaque),
-                    )
-                    .await;
-            },
-        ) {
-            Ok(_) => {}
-            Err(SessionDispatchError::Admission(error)) if error.policy() == FullPolicy::Reject => {
-                let mut connection = session.clone().with_response_class(class).connection();
-                let _ = connection
-                    .send_command(
-                        RemotingCommand::create_response_command_with_code_remark(
-                            ResponseCode::SystemBusy,
-                            error.to_string(),
-                        )
-                        .set_opaque(opaque),
-                    )
-                    .await;
-                continue;
-            }
-            Err(SessionDispatchError::Admission(_)) | Err(SessionDispatchError::Closing(_)) => break,
+        let response = ResponseSink::Network(Arc::new(session.clone().with_response_class(class)));
+        if executor
+            .dispatch(
+                context,
+                command,
+                bytes,
+                ordering,
+                response,
+                move |request_operation, command| async move {
+                    request_handler
+                        .command(request_session.with_operation_context(request_operation), command)
+                        .await;
+                },
+            )
+            .await
+            .is_err()
+        {
+            break;
         }
     }
     let request_deadline = task_group
@@ -700,8 +670,7 @@ pub async fn run_connected_session<H>(
         session_id,
         scope,
         task_group,
-        admission,
-        security,
+        Arc::new(AuthorizedDispatchBoundary::new(security, admission)),
         principal,
         false,
         idle_timeout,
@@ -743,12 +712,11 @@ pub struct TransportServer {
     service_context: ChildServiceContext,
     config: TransportServerConfig,
     processor: Arc<dyn RequestProcessor>,
-    admission: Arc<AdmissionController>,
+    dispatch: Arc<AuthorizedDispatchBoundary>,
     tls: TlsServerRuntime,
     started: AtomicBool,
     next_session: AtomicU64,
     active_sessions: AtomicUsize,
-    security: Arc<TransportSecurity>,
     principal: Option<Principal>,
     telemetry: TransportTelemetry,
 }
@@ -884,12 +852,11 @@ impl TransportServer {
             service_context,
             config,
             processor,
-            admission,
+            dispatch: Arc::new(AuthorizedDispatchBoundary::new(security, admission)),
             tls,
             started: AtomicBool::new(false),
             next_session: AtomicU64::new(1),
             active_sessions: AtomicUsize::new(0),
-            security,
             principal,
             telemetry,
         }))
@@ -925,7 +892,7 @@ impl TransportServer {
                 };
                 let session_id = server.next_session.fetch_add(1, Ordering::Relaxed);
                 let scope = AdmissionScope::new(remote_addr.ip()).with_session(session_id);
-                let Ok(connection_permit) = server.admission.try_acquire(
+                let Ok(connection_permit) = server.dispatch.admission_controller().try_acquire(
                     AdmissionResource::Connection,
                     scope,
                     crate::admission::estimated_connection_retained_bytes(),
@@ -964,12 +931,13 @@ impl TransportServer {
         session_group: TaskGroup,
     ) {
         let scope = AdmissionScope::new(remote_addr.ip()).with_session(session_id);
+        let admission = self.dispatch.admission_controller();
         let handshake_cancellation = session_group.cancellation_token();
         let negotiated = tokio::select! {
             () = handshake_cancellation.cancelled() => return,
             negotiated = negotiate_transport_connection(
                 &self.tls,
-                &self.admission,
+                &admission,
                 scope,
                 stream,
                 remote_addr,
@@ -991,8 +959,7 @@ impl TransportServer {
             session_id,
             scope,
             session_group.clone(),
-            self.admission.clone(),
-            self.security.clone(),
+            self.dispatch.clone(),
             self.principal.clone(),
             peer_is_tls,
             self.config.request_timeout,

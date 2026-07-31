@@ -18,6 +18,8 @@ mod startup;
 
 pub(super) struct BrokerRequestPipeline {
     pub(super) proxy_request_processor: Option<DefaultServerProcessor>,
+    pub(super) authorized_dispatcher:
+        Option<Arc<rocketmq_transport::AuthorizedCommandDispatcher<DefaultServerProcessor>>>,
     pub(super) consumer_ids_change_listener: Arc<dyn ConsumerIdsChangeListener + Send + Sync + 'static>,
     pub(super) processor_wiring_complete: bool,
 }
@@ -28,6 +30,7 @@ impl BrokerRequestPipeline {
     ) -> Self {
         Self {
             proxy_request_processor: None,
+            authorized_dispatcher: None,
             consumer_ids_change_listener,
             processor_wiring_complete: false,
         }
@@ -619,5 +622,11 @@ impl BrokerRuntime {
 
     pub(crate) fn proxy_request_processor(&self) -> Option<DefaultServerProcessor> {
         self.composition.request_pipeline.proxy_request_processor.clone()
+    }
+
+    pub(crate) fn authorized_dispatcher(
+        &self,
+    ) -> Option<Arc<rocketmq_transport::AuthorizedCommandDispatcher<DefaultServerProcessor>>> {
+        self.composition.request_pipeline.authorized_dispatcher.clone()
     }
 }

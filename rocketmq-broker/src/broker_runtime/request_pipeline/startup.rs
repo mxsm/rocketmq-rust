@@ -36,7 +36,43 @@ impl BrokerRuntime {
             });
         }
         let (request_processor, fast_request_processor) = self.init_processor_checked()?;
+        let service_context =
+            self.composition
+                .state
+                .service_context
+                .as_ref()
+                .ok_or_else(|| BrokerStartupError::Initialization {
+                    component: "service_context",
+                    detail: "broker remoting servers require an injected service context".to_owned(),
+                })?;
+        let admission = Arc::new(
+            rocketmq_transport::AdmissionController::try_new_with_budget(
+                rocketmq_transport::AdmissionLimits::default(),
+                &service_context.process_budget(),
+            )
+            .map_err(|error| BrokerStartupError::Initialization {
+                component: "authorized_dispatcher",
+                detail: format!("failed to create shared Broker admission boundary: {error}"),
+            })?,
+        );
+        let authorized_dispatcher = Arc::new(
+            rocketmq_transport::AuthorizedCommandDispatcher::try_new(
+                request_processor.clone(),
+                Vec::new(),
+                &service_context.process_budget(),
+                self.composition.state.transport_telemetry.clone(),
+                Arc::new(rocketmq_transport::TransportSecurity::development_insecure_loopback(
+                    None, None,
+                )),
+                admission,
+            )
+            .map_err(|error| BrokerStartupError::Initialization {
+                component: "authorized_dispatcher",
+                detail: error.to_string(),
+            })?,
+        );
         self.composition.request_pipeline.proxy_request_processor = Some(request_processor.clone());
+        self.composition.request_pipeline.authorized_dispatcher = Some(authorized_dispatcher.clone());
         self.lifecycle
             .startup_journal
             .complete(BrokerComponent::RequestProcessors);
@@ -53,20 +89,12 @@ impl BrokerRuntime {
         self.lifecycle.remoting_server_task_group = Some(remoting_server_task_group.clone());
 
         let broker_config = self.composition.state.broker_config();
-        let service_context =
-            self.composition
-                .state
-                .service_context
-                .as_ref()
-                .ok_or_else(|| BrokerStartupError::Initialization {
-                    component: "service_context",
-                    detail: "broker remoting servers require an injected service context".to_owned(),
-                })?;
         let mut server = RocketMQServer::new_with_telemetry(
             Arc::new(broker_config.broker_server_config.clone()),
             service_context.component("broker.remoting-server.normal"),
             self.composition.state.transport_telemetry.clone(),
-        );
+        )
+        .with_authorized_dispatcher(authorized_dispatcher.clone());
         // Start the normal Broker remoting server.
         let client_housekeeping_service_main = self
             .composition
@@ -103,7 +131,8 @@ impl BrokerRuntime {
             Arc::new(fast_server_config),
             service_context.component("broker.remoting-server.fast"),
             self.composition.state.transport_telemetry.clone(),
-        );
+        )
+        .with_authorized_dispatcher(authorized_dispatcher);
         let shutdown_token = remoting_server_task_group.cancellation_token();
         let (fast_report_tx, fast_report_rx) = oneshot::channel();
         let (fast_startup_tx, fast_startup_rx) = oneshot::channel();

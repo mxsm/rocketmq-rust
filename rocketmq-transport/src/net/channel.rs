@@ -45,6 +45,7 @@ use crate::base::response_future::ResponseFuture;
 use crate::connection::Connection;
 use crate::connection::ConnectionStateHandle;
 use crate::deadline::RequestDeadline;
+use crate::dispatch::ResponseSink;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 pub type ChannelId = CheetahString;
@@ -413,7 +414,7 @@ pub struct ChannelInner {
 
     // === I/O Transport ===
     /// Underlying network connection serialized by one async writer lock.
-    connection: Arc<tokio::sync::Mutex<Connection>>,
+    connection: ChannelIo,
 
     /// Cloneable lifecycle state without connection mutation capability.
     connection_state: ConnectionStateHandle,
@@ -438,6 +439,11 @@ pub struct ChannelInner {
     /// Tracks the outbound send task for shutdown diagnostics.
     send_task_group: TaskGroup,
     send_task_id: Option<TaskId>,
+}
+
+enum ChannelIo {
+    Network(Arc<tokio::sync::Mutex<Connection>>),
+    Local(ResponseSink),
 }
 
 /// Background task that processes the outbound message queue.
@@ -588,6 +594,21 @@ fn complete_send_error(
 }
 
 impl ChannelInner {
+    pub(crate) fn new_local(response: ResponseSink, task_group: TaskGroup) -> Self {
+        let (outbound_queue_tx, outbound_queue_rx) = flume::bounded(0);
+        drop(outbound_queue_rx);
+        Self {
+            outbound_queue_tx: parking_lot::Mutex::new(Some(outbound_queue_tx)),
+            connection: ChannelIo::Local(response),
+            connection_state: ConnectionStateHandle::healthy(),
+            response_table: PendingRequestTable::new(),
+            pending_request_owner: None,
+            legacy_response_table: None,
+            send_task_group: task_group,
+            send_task_id: None,
+        }
+    }
+
     /// Creates a new `ChannelInner` and spawns the background send task.
     ///
     /// # Arguments
@@ -728,7 +749,7 @@ impl ChannelInner {
         };
         Ok(Self {
             outbound_queue_tx: parking_lot::Mutex::new(Some(outbound_queue_tx)),
-            connection,
+            connection: ChannelIo::Network(connection),
             connection_state,
             response_table,
             pending_request_owner,
@@ -819,17 +840,30 @@ impl ChannelInner {
 
     /// Sends a command through the serialized writer capability.
     pub async fn send_command(&self, command: RemotingCommand) -> rocketmq_error::RocketMQResult<()> {
-        self.connection.lock().await.send_command(command).await
+        match &self.connection {
+            ChannelIo::Network(connection) => connection.lock().await.send_command(command).await,
+            ChannelIo::Local(response) => response.send(command).await.map_err(response_sink_error),
+        }
     }
 
     /// Sends a borrowed command through the serialized writer capability.
     pub async fn send_command_ref(&self, command: &mut RemotingCommand) -> rocketmq_error::RocketMQResult<()> {
-        self.connection.lock().await.send_command_ref(command).await
+        match &self.connection {
+            ChannelIo::Network(connection) => connection.lock().await.send_command_ref(command).await,
+            ChannelIo::Local(response) => {
+                let owned = command.clone();
+                let _ = command.take_body();
+                response.send(owned).await.map_err(response_sink_error)
+            }
+        }
     }
 
     /// Sends pre-encoded bytes through the serialized writer capability.
     pub async fn send_bytes(&self, bytes: Bytes) -> rocketmq_error::RocketMQResult<()> {
-        self.connection.lock().await.send_bytes(bytes).await
+        match &self.connection {
+            ChannelIo::Network(connection) => connection.lock().await.send_bytes(bytes).await,
+            ChannelIo::Local(response) => response.send_bytes(bytes).await.map_err(response_sink_error),
+        }
     }
 
     // === High-Level Send Methods ===
@@ -961,6 +995,10 @@ impl ChannelInner {
     ) -> rocketmq_error::RocketMQResult<()> {
         let deadline = RequestDeadline::from_timeout_millis(timeout_millis);
         let request = request.mark_oneway_rpc();
+        if let ChannelIo::Local(response) = &self.connection {
+            deadline.ensure_before_send("embedded-response")?;
+            return response.send(request).await.map_err(response_sink_error);
+        }
 
         let outbound_queue_tx = self.outbound_queue_sender()?;
         deadline.ensure_before_send("channel")?;
@@ -997,6 +1035,9 @@ impl ChannelInner {
         if let Some(deadline) = deadline {
             deadline.ensure_before_send("channel")?;
         }
+        if let ChannelIo::Local(response) = &self.connection {
+            return response.send(request).await.map_err(response_sink_error);
+        }
         let outbound_queue_tx = self.outbound_queue_sender()?;
         outbound_queue_tx
             .try_send((request, None, deadline, None))
@@ -1031,6 +1072,10 @@ impl ChannelInner {
     pub fn is_ok(&self) -> bool {
         self.connection_state.is_healthy()
     }
+}
+
+fn response_sink_error(error: crate::dispatch::ResponseSinkError) -> RocketMQError {
+    RocketMQError::response_process_failed("embedded_response_sink", error.to_string())
 }
 
 #[cfg(test)]
@@ -1204,7 +1249,10 @@ mod tests {
             )
             .expect("create channel"),
         );
-        let locked_connection = channel.connection.clone();
+        let locked_connection = match &channel.connection {
+            ChannelIo::Network(connection) => Arc::clone(connection),
+            ChannelIo::Local(_) => panic!("test requires a network channel"),
+        };
         let writer_lock = locked_connection.lock().await;
         let sending = channel.clone();
         let send = tokio::spawn(async move {
@@ -1252,7 +1300,10 @@ mod tests {
             )
             .expect("create channel"),
         );
-        let locked_connection = channel.connection.clone();
+        let locked_connection = match &channel.connection {
+            ChannelIo::Network(connection) => Arc::clone(connection),
+            ChannelIo::Local(_) => panic!("test requires a network channel"),
+        };
         let writer_lock = locked_connection.lock().await;
 
         channel

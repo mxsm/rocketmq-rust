@@ -31,6 +31,7 @@ simd = ["rocketmq-protocol/simd"]
 tls = ["arc-swap", "rcgen", "rustls-native-certs", "tokio-rustls"]
 observability = ["dep:rocketmq-observability", "rocketmq-observability/otel-metrics"]
 observability-traces = ["dep:rocketmq-observability"]
+test-support = []
 
 [dependencies]
 rocketmq-error = { workspace = true }
@@ -61,6 +62,7 @@ serde_json.workspace = true
 serde_json_any_key.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
+thiserror.workspace = true
 tracing.workspace = true
 trait-variant.workspace = true
 uuid.workspace = true
