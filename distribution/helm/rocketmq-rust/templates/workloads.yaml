@@ -45,6 +45,7 @@ spec:
           args: ["--configFile", "/etc/rocketmq/broker.toml"]
           env:
 {{ include "rocketmq.lifecycleEnv" . | indent 12 }}
+{{ include "rocketmq.telemetryEnv" . | indent 12 }}
 {{ include "rocketmq.runtimeDiagnosticsEnv" . | indent 12 }}
             - name: POD_NAME
               valueFrom:
@@ -164,6 +165,7 @@ spec:
           args: ["--configFile", "/etc/rocketmq/namesrv.toml"]
           env:
 {{ include "rocketmq.lifecycleEnv" . | indent 12 }}
+{{ include "rocketmq.telemetryEnv" . | indent 12 }}
 {{ include "rocketmq.runtimeDiagnosticsEnv" . | indent 12 }}
             - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/namesrv}
             - {name: OTEL_SERVICE_NAME, value: rocketmq-namesrv}
@@ -261,6 +263,7 @@ spec:
           args: ["--config-file", "/etc/rocketmq/controller.toml"]
           env:
 {{ include "rocketmq.lifecycleEnv" . | indent 12 }}
+{{ include "rocketmq.telemetryEnv" . | indent 12 }}
 {{ include "rocketmq.runtimeDiagnosticsEnv" . | indent 12 }}
             - name: POD_NAME
               valueFrom:
@@ -382,6 +385,7 @@ spec:
           args: ["--config", "/etc/rocketmq/proxy.toml"]
           env:
 {{ include "rocketmq.lifecycleEnv" . | indent 12 }}
+{{ include "rocketmq.telemetryEnv" . | indent 12 }}
 {{ include "rocketmq.runtimeDiagnosticsEnv" . | indent 12 }}
             - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/proxy}
             - {name: OTEL_SERVICE_NAME, value: rocketmq-proxy}
