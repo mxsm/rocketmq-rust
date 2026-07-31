@@ -141,6 +141,7 @@ impl LocalFileMessageStore {
             transient_store_pool_enable,
             message_store_config.fast_fail_if_no_buffer_in_store_pool,
             message_store_config.as_ref(),
+            runtime_scope.mapped_file_allocation_budget(),
         );
         #[cfg(feature = "observability")]
         let allocate_mapped_file_service = allocate_mapped_file_service.with_store_metrics(telemetry.store().clone());

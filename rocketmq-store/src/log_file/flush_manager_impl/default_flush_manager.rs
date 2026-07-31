@@ -18,15 +18,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_runtime::BudgetClass;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskId;
 use rocketmq_store_local::flush::group_commit::run_group_commit_worker;
+use rocketmq_store_local::flush::group_commit::GroupCommitQueue;
 use rocketmq_store_local::flush::group_commit::GroupCommitStatus;
 use rocketmq_store_local::flush::group_commit::GroupCommitWorkerConfig;
 use rocketmq_store_local::flush::group_commit::GroupCommitWorkerPorts;
 use rocketmq_store_local::flush::group_commit::SyncFlushStats;
-use rocketmq_store_local::flush::group_commit::GROUP_COMMIT_CHANNEL_CAPACITY;
 use rocketmq_store_local::flush::root::FlushManagerRoot;
 use rocketmq_store_local::flush::worker::run_commit_real_time_worker;
 use rocketmq_store_local::flush::worker::run_flush_real_time_worker;
@@ -149,7 +150,7 @@ impl DefaultFlushManager {
                     runtime_scope: runtime_scope.clone(),
                     store_checkpoint: store_checkpoint.clone(),
                     notified: Arc::new(Notify::new()),
-                    tx_in: None,
+                    request_queue: None,
                     shutdown_token: CancellationToken::new(),
                     worker_group: None,
                     worker_task: None,
@@ -407,7 +408,7 @@ struct GroupCommitService {
     runtime_scope: crate::runtime::StoreRuntimeScope,
     store_checkpoint: Arc<StoreCheckpoint>,
     notified: Arc<Notify>,
-    tx_in: Option<tokio::sync::mpsc::Sender<GroupCommitRequest>>,
+    request_queue: Option<GroupCommitQueue<StoreError>>,
     shutdown_token: CancellationToken,
     worker_group: Option<TaskGroup>,
     worker_task: Option<TaskId>,
@@ -426,19 +427,28 @@ impl GroupCommitService {
             return false;
         }
 
-        let Some(tx_in) = self.tx_in.as_ref() else {
+        let Some(request_queue) = self.request_queue.as_ref() else {
             return false;
         };
         let enqueue_time_millis = request.enqueue_time_millis();
+        let retained_bytes = request.retained_bytes();
+        let deadline = request.admission_deadline();
+        self.sync_flush_stats
+            .record_enqueue(enqueue_time_millis, retained_bytes);
         tokio::select! {
-            result = tx_in.send(request) => {
+            result = request_queue.push_until(request, retained_bytes, BudgetClass::Data, deadline) => {
                 let sent = result.is_ok();
-                if sent {
-                    self.sync_flush_stats.record_enqueue(enqueue_time_millis);
+                if !sent {
+                    self.sync_flush_stats.rollback_enqueue(enqueue_time_millis, retained_bytes);
+                    self.sync_flush_stats.record_rejected();
                 }
                 sent
             },
-            _ = self.shutdown_token.cancelled() => false,
+            _ = self.shutdown_token.cancelled() => {
+                self.sync_flush_stats.rollback_enqueue(enqueue_time_millis, retained_bytes);
+                self.sync_flush_stats.record_abandoned();
+                false
+            },
         }
     }
 
@@ -449,8 +459,8 @@ impl GroupCommitService {
 
         let worker_group = crate::runtime::task_group(&self.runtime_scope, "rocketmq-store.commit-log.group-commit");
         self.shutdown_token = CancellationToken::new();
-        let (tx_in, rx_in) = tokio::sync::mpsc::channel::<GroupCommitRequest>(GROUP_COMMIT_CHANNEL_CAPACITY);
-        self.tx_in = Some(tx_in);
+        let request_queue = GroupCommitQueue::new(self.runtime_scope.group_commit_budget());
+        self.request_queue = Some(request_queue.clone());
         let shutdown_token = self.shutdown_token.clone();
         let store_checkpoint = self.store_checkpoint.clone();
         let notified = Arc::clone(&self.notified);
@@ -471,7 +481,7 @@ impl GroupCommitService {
                 time::sleep,
             );
             run_group_commit_worker(
-                rx_in,
+                request_queue,
                 notified,
                 shutdown_token,
                 sync_flush_stats,
@@ -484,7 +494,9 @@ impl GroupCommitService {
             Ok(task_id) => task_id,
             Err(error) => {
                 warn!("GroupCommitService cannot start because task spawn failed: {error}");
-                self.tx_in.take();
+                if let Some(queue) = self.request_queue.take() {
+                    queue.close();
+                }
                 return;
             }
         };
@@ -497,14 +509,18 @@ impl GroupCommitService {
     }
 
     pub fn shutdown(&mut self) {
+        if let Some(queue) = self.request_queue.take() {
+            queue.close();
+        }
         self.shutdown_token.cancel();
-        self.tx_in.take();
         shutdown_worker_now("GroupCommitService", &mut self.worker_group, &mut self.worker_task);
     }
 
     pub async fn shutdown_gracefully(&mut self) {
+        if let Some(queue) = self.request_queue.take() {
+            queue.close();
+        }
         self.shutdown_token.cancel();
-        self.tx_in.take();
         shutdown_worker_gracefully("GroupCommitService", &mut self.worker_group, &mut self.worker_task).await;
     }
 }
@@ -811,8 +827,8 @@ mod tests {
         let sync_flush_stats = SyncFlushStats::default();
         let (request_64, mut response_64) = GroupCommitRequest::new(64, 5_000);
         let (request_96, mut response_96) = GroupCommitRequest::new(96, 5_000);
-        sync_flush_stats.record_enqueue(request_64.enqueue_time_millis());
-        sync_flush_stats.record_enqueue(request_96.enqueue_time_millis());
+        sync_flush_stats.record_enqueue(request_64.enqueue_time_millis(), request_64.retained_bytes());
+        sync_flush_stats.record_enqueue(request_96.enqueue_time_millis(), request_96.retained_bytes());
         let requests = vec![request_64, request_96];
 
         complete_group_commit_batch(requests, 80, &sync_flush_stats);
@@ -860,7 +876,7 @@ mod tests {
         let sync_flush_stats = SyncFlushStats::default();
         let (request, _response) = GroupCommitRequest::new(64, 5_000);
 
-        sync_flush_stats.record_enqueue(request.enqueue_time_millis());
+        sync_flush_stats.record_enqueue(request.enqueue_time_millis(), request.retained_bytes());
 
         let runtime_info = sync_flush_stats.snapshot();
         assert_eq!(runtime_info.queue_depth, 1);
@@ -998,7 +1014,7 @@ mod tests {
             runtime_scope: crate::runtime::test_scope("group-commit-service-test"),
             store_checkpoint,
             notified: Arc::new(Notify::new()),
-            tx_in: None,
+            request_queue: None,
             shutdown_token: CancellationToken::new(),
             worker_group: None,
             worker_task: None,
@@ -1031,7 +1047,7 @@ mod tests {
             Some(crate::store_error::StoreErrorKind::Storage)
         );
 
-        let (pending_request, pending_response) = GroupCommitRequest::new(2, 0);
+        let (pending_request, pending_response) = GroupCommitRequest::new(2, 5_000);
         assert!(service.put_request(pending_request).await);
         service.shutdown_gracefully().await;
         assert!(service.worker_group.is_none());

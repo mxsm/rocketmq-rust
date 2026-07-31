@@ -17,16 +17,22 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::fmt::Formatter;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Condvar;
 use std::sync::Mutex as StdMutex;
 use std::thread;
 use std::time::Duration;
+use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use parking_lot::RwLock;
 use rocketmq_error::RocketMQError;
+use rocketmq_runtime::BudgetClass;
+use rocketmq_runtime::BudgetSnapshot;
+use rocketmq_runtime::ResourceBudget;
+use rocketmq_runtime::ResourcePermit;
 use tokio::sync::Notify;
 use tracing::error;
 use tracing::info;
@@ -42,6 +48,23 @@ use crate::mapped_file::MappedFile;
 
 /// Timeout for waiting on file allocation (matches Java: 5 seconds)
 const WAIT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Bounded mapped-file allocation queue diagnostics.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MappedFileAllocationQueueSnapshot {
+    /// Requests currently holding mapped-file allocation budget.
+    pub current_count: usize,
+    /// File bytes charged to accepted requests.
+    pub charged_bytes: usize,
+    /// Requests waiting in the priority heap, including harmless stale keys.
+    pub queued_count: usize,
+    /// Age of the oldest request still owned by the table.
+    pub oldest_age: Option<Duration>,
+    /// Requests rejected by count or byte admission.
+    pub rejected_count: u64,
+    /// Accepted requests explicitly abandoned by timeout or shutdown.
+    pub abandoned_count: u64,
+}
 
 struct WorkerCompletion {
     completed: Arc<AtomicBool>,
@@ -73,7 +96,13 @@ pub struct AllocateMappedFileService {
     request_table: Arc<RwLock<HashMap<String, Arc<AllocateRequest>>>>,
 
     /// Priority queue for ordered processing
-    request_queue: Arc<RwLock<BinaryHeap<Arc<AllocateRequest>>>>,
+    request_queue: Arc<RwLock<BinaryHeap<AllocationQueueEntry>>>,
+
+    /// Count and charged-file-byte budget derived from the Store runtime.
+    allocation_budget: ResourceBudget,
+
+    /// Accepted requests removed before normal completion.
+    abandoned_count: Arc<AtomicU64>,
 
     /// Exception flag (set when allocation fails)
     has_exception: Arc<AtomicBool>,
@@ -117,6 +146,8 @@ impl Clone for AllocateMappedFileService {
         Self {
             request_table: self.request_table.clone(),
             request_queue: self.request_queue.clone(),
+            allocation_budget: self.allocation_budget.clone(),
+            abandoned_count: self.abandoned_count.clone(),
             has_exception: self.has_exception.clone(),
             stopped: self.stopped.clone(),
             notify: self.notify.clone(),
@@ -134,12 +165,6 @@ impl Clone for AllocateMappedFileService {
     }
 }
 
-impl Default for AllocateMappedFileService {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl AllocateMappedFileService {
     /// Create a new AllocateMappedFileService with full configuration
     ///
@@ -151,6 +176,7 @@ impl AllocateMappedFileService {
         transient_store_pool: Option<Arc<TransientStorePool>>,
         transient_store_pool_enable: bool,
         fast_fail_if_no_buffer: bool,
+        allocation_budget: ResourceBudget,
     ) -> Self {
         let request_table = Arc::new(RwLock::new(HashMap::new()));
         let request_queue = Arc::new(RwLock::new(BinaryHeap::new()));
@@ -162,6 +188,8 @@ impl AllocateMappedFileService {
         Self {
             request_table,
             request_queue,
+            allocation_budget,
+            abandoned_count: Arc::new(AtomicU64::new(0)),
             has_exception,
             stopped,
             notify,
@@ -194,6 +222,7 @@ impl AllocateMappedFileService {
         transient_store_pool_enable: bool,
         fast_fail_if_no_buffer: bool,
         message_store_config: &C,
+        allocation_budget: ResourceBudget,
     ) -> Self
     where
         C: AllocateMappedFileServiceConfig,
@@ -202,15 +231,10 @@ impl AllocateMappedFileService {
             transient_store_pool,
             transient_store_pool_enable,
             fast_fail_if_no_buffer,
+            allocation_budget,
         );
         service.warm_mapped_file_config = message_store_config.mapped_file_warmup_config();
         service
-    }
-
-    /// Create a new AllocateMappedFileService with default configuration
-    /// (no TransientStorePool)
-    pub fn new() -> Self {
-        Self::new_with_config(None, false, false)
     }
 
     pub fn is_started(&self) -> bool {
@@ -281,7 +305,7 @@ impl AllocateMappedFileService {
     /// Main worker loop - corresponds to Java's run() method
     fn run_worker(
         request_table: Arc<RwLock<HashMap<String, Arc<AllocateRequest>>>>,
-        request_queue: Arc<RwLock<BinaryHeap<Arc<AllocateRequest>>>>,
+        request_queue: Arc<RwLock<BinaryHeap<AllocationQueueEntry>>>,
         has_exception: Arc<AtomicBool>,
         stopped: Arc<AtomicBool>,
         transient_store_pool: Option<Arc<TransientStorePool>>,
@@ -328,7 +352,7 @@ impl AllocateMappedFileService {
     /// Returns false if interrupted or no requests available
     fn mmap_operation(
         request_table: &Arc<RwLock<HashMap<String, Arc<AllocateRequest>>>>,
-        request_queue: &Arc<RwLock<BinaryHeap<Arc<AllocateRequest>>>>,
+        request_queue: &Arc<RwLock<BinaryHeap<AllocationQueueEntry>>>,
         has_exception: &Arc<AtomicBool>,
         transient_store_pool: &Option<Arc<TransientStorePool>>,
         warm_mapped_file_config: MappedFileWarmupConfig,
@@ -340,38 +364,29 @@ impl AllocateMappedFileService {
             queue.pop()
         };
 
-        let req = match req {
-            Some(r) => r,
+        let entry = match req {
+            Some(entry) => entry,
             None => return false, // No requests available
         };
 
         // Check if request still valid in table
         let expected_request = {
             let table = request_table.read();
-            table.get(req.file_path()).cloned()
+            table.get(entry.file_path()).cloned()
         };
 
-        let expected_request = match expected_request {
-            Some(r) => r,
+        let req = match expected_request {
+            Some(request) if request.file_size() == entry.file_size() => request,
             None => {
                 warn!(
                     "this mmap request expired, maybe cause timeout {} {}",
-                    req.file_path(),
-                    req.file_size()
+                    entry.file_path(),
+                    entry.file_size()
                 );
                 return true;
             }
+            Some(_) => return true,
         };
-
-        // Verify it's the same request object
-        if !Arc::ptr_eq(&expected_request, &req) {
-            warn!(
-                "never expected here, maybe cause timeout {} {}",
-                req.file_path(),
-                req.file_size()
-            );
-            return true;
-        }
 
         // Check if already allocated
         if req.mapped_file.read().is_some() {
@@ -389,7 +404,27 @@ impl AllocateMappedFileService {
 
         match result {
             Ok(mapped_file) => {
+                let request_is_owned = request_table
+                    .read()
+                    .get(req.file_path())
+                    .is_some_and(|request| Arc::ptr_eq(request, &req));
+                if !request_is_owned {
+                    mapped_file.destroy(1000);
+                    req.complete();
+                    return true;
+                }
                 *req.mapped_file.write() = Some(mapped_file);
+                let request_is_still_owned = request_table
+                    .read()
+                    .get(req.file_path())
+                    .is_some_and(|request| Arc::ptr_eq(request, &req));
+                if !request_is_still_owned {
+                    if let Some(mapped_file) = req.mapped_file.write().take() {
+                        mapped_file.destroy(1000);
+                    }
+                    req.complete();
+                    return true;
+                }
                 has_exception.store(false, Ordering::Relaxed);
 
                 // Signal completion (like CountDownLatch.countDown())
@@ -406,7 +441,7 @@ impl AllocateMappedFileService {
                 has_exception.store(true, Ordering::Relaxed);
 
                 // Re-queue the request for retry
-                request_queue.write().push(req);
+                request_queue.write().push(entry);
 
                 // Small delay before retry
                 thread::sleep(Duration::from_millis(1));
@@ -476,6 +511,77 @@ impl AllocateMappedFileService {
         condvar.notify_one();
     }
 
+    fn admit_request(&self, file_path: String, file_size: i32) -> AllocationAdmission {
+        if let Some(existing) = self.request_table.read().get(&file_path) {
+            return AllocationAdmission::Existing(existing.clone());
+        }
+        let charged_bytes = usize::try_from(file_size).unwrap_or_default().max(1);
+        let permit = match self.allocation_budget.try_acquire(charged_bytes, BudgetClass::Data) {
+            Ok(permit) => permit,
+            Err(error) => {
+                warn!(
+                    queue = "mapped-file-allocation",
+                    reason = %error,
+                    charged_bytes,
+                    "mapped-file allocation request rejected by Store budget"
+                );
+                return AllocationAdmission::Rejected;
+            }
+        };
+        let mut table = self.request_table.write();
+        if let Some(existing) = table.get(&file_path) {
+            return AllocationAdmission::Existing(existing.clone());
+        }
+        let request = Arc::new(AllocateRequest::new(file_path.clone(), file_size, permit));
+        table.insert(file_path, request.clone());
+        drop(table);
+        self.request_queue
+            .write()
+            .push(AllocationQueueEntry::from_request(&request));
+        self.notify_worker();
+        AllocationAdmission::Inserted(request)
+    }
+
+    fn remove_request_if_owned(&self, request: &Arc<AllocateRequest>, abandoned: bool) {
+        let mut table = self.request_table.write();
+        let removed = if table
+            .get(request.file_path())
+            .is_some_and(|current| Arc::ptr_eq(current, request))
+        {
+            table.remove(request.file_path());
+            if abandoned {
+                self.abandoned_count.fetch_add(1, Ordering::Relaxed);
+            }
+            true
+        } else {
+            false
+        };
+        drop(table);
+
+        if removed && abandoned {
+            if let Some(mapped_file) = request.mapped_file.write().take() {
+                mapped_file.destroy(1000);
+            }
+        }
+    }
+
+    /// Returns count, charged bytes, oldest age, rejection, and abandonment
+    /// diagnostics for the mapped-file allocation boundary.
+    #[must_use]
+    pub fn queue_snapshot(&self) -> MappedFileAllocationQueueSnapshot {
+        let budget: BudgetSnapshot = self.allocation_budget.snapshot();
+        let table = self.request_table.read();
+        let oldest_age = table.values().map(|request| request.enqueued_at.elapsed()).max();
+        MappedFileAllocationQueueSnapshot {
+            current_count: budget.current_count,
+            charged_bytes: budget.current_bytes,
+            queued_count: self.request_queue.read().len(),
+            oldest_age,
+            rejected_count: budget.rejected_count,
+            abandoned_count: self.abandoned_count.load(Ordering::Relaxed),
+        }
+    }
+
     /// Submit pre-allocation request and wait for result
     ///
     /// **This is the primary API - corresponds to Java's `putRequestAndReturnMappedFile()`**
@@ -497,66 +603,45 @@ impl AllocateMappedFileService {
     ) -> Result<Option<Arc<DefaultMappedFile>>, RocketMQError> {
         // Check available buffer capacity if using TransientStorePool
         let mut can_submit_requests = self.allocation_capacity(2);
-
-        // Submit request for next file
-        let next_req = Arc::new(AllocateRequest::new(next_file_path.clone(), file_size));
-        let next_put_ok = {
-            let mut table = self.request_table.write();
-            if table.contains_key(&next_file_path) {
-                false
-            } else {
-                table.insert(next_file_path.clone(), next_req.clone());
-                true
-            }
-        };
-
-        if next_put_ok {
-            if can_submit_requests == 0 {
-                warn!(
-                    "[NOTIFYME]TransientStorePool is not enough, so create mapped file error, RequestQueueSize: {}, \
-                     StorePoolSize: {}",
-                    self.request_queue.read().len(),
-                    self.transient_store_pool
-                        .as_ref()
-                        .map_or(0, |p| p.available_buffer_nums())
-                );
-                self.request_table.write().remove(&next_file_path);
-                return Ok(None);
-            }
-
-            self.request_queue.write().push(next_req.clone());
-            self.notify_worker();
-            can_submit_requests -= 1;
+        let existing_request = self.request_table.read().get(&next_file_path).cloned();
+        if can_submit_requests == 0 && existing_request.is_none() {
+            warn!(
+                "[NOTIFYME]TransientStorePool is not enough, so create mapped file error, RequestQueueSize: {}, \
+                 StorePoolSize: {}",
+                self.request_queue.read().len(),
+                self.transient_store_pool
+                    .as_ref()
+                    .map_or(0, |pool| pool.available_buffer_nums())
+            );
+            return Ok(None);
         }
+
+        // Submit request for next file.
+        let next_req = match existing_request {
+            Some(request) => request,
+            None => match self.admit_request(next_file_path.clone(), file_size) {
+                AllocationAdmission::Inserted(request) => {
+                    can_submit_requests -= 1;
+                    request
+                }
+                AllocationAdmission::Existing(request) => request,
+                AllocationAdmission::Rejected => return Ok(None),
+            },
+        };
 
         // Submit request for next-next file (pre-allocation)
         if !next_next_file_path.is_empty() {
-            let next_next_req = Arc::new(AllocateRequest::new(next_next_file_path.clone(), file_size));
-            let next_next_put_ok = {
-                let mut table = self.request_table.write();
-                if table.contains_key(&next_next_file_path) {
-                    false
-                } else {
-                    table.insert(next_next_file_path.clone(), next_next_req.clone());
-                    true
-                }
-            };
-
-            if next_next_put_ok {
-                if can_submit_requests == 0 {
-                    warn!(
-                        "[NOTIFYME]TransientStorePool is not enough, so skip preallocate mapped file, \
-                         RequestQueueSize: {}, StorePoolSize: {}",
-                        self.request_queue.read().len(),
-                        self.transient_store_pool
-                            .as_ref()
-                            .map_or(0, |p| p.available_buffer_nums())
-                    );
-                    self.request_table.write().remove(&next_next_file_path);
-                } else {
-                    self.request_queue.write().push(next_next_req);
-                    self.notify_worker();
-                }
+            if can_submit_requests == 0 {
+                warn!(
+                    "[NOTIFYME]TransientStorePool is not enough, so skip preallocate mapped file, \
+                     RequestQueueSize: {}, StorePoolSize: {}",
+                    self.request_queue.read().len(),
+                    self.transient_store_pool
+                        .as_ref()
+                        .map_or(0, |pool| pool.available_buffer_nums())
+                );
+            } else if let AllocationAdmission::Rejected = self.admit_request(next_next_file_path, file_size) {
+                warn!("mapped-file preallocation skipped because its Store budget is exhausted");
             }
         }
 
@@ -566,31 +651,22 @@ impl AllocateMappedFileService {
             return Ok(None);
         }
 
-        // Wait for the next file to be allocated
-        let result = {
-            let table = self.request_table.read();
-            table.get(&next_file_path).cloned()
-        };
+        // Wait for allocation to complete (with timeout).
+        let mut wait_guard = AllocationWaitGuard::new(self.clone(), next_req.clone());
+        let wait_result = tokio::time::timeout(WAIT_TIMEOUT, next_req.wait()).await;
 
-        if let Some(req) = result {
-            // Wait for allocation to complete (with timeout)
-            let wait_result = tokio::time::timeout(WAIT_TIMEOUT, req.wait()).await;
-
-            match wait_result {
-                Ok(()) => {
-                    // Remove from table and return result
-                    self.request_table.write().remove(&next_file_path);
-                    let mapped_file = req.mapped_file.read().clone();
-                    Ok(mapped_file)
-                }
-                Err(_) => {
-                    warn!("create mmap timeout {} {}", req.file_path(), req.file_size());
-                    Ok(None)
-                }
+        match wait_result {
+            Ok(()) => {
+                // Remove from table and return result
+                wait_guard.finish(false);
+                let mapped_file = next_req.mapped_file.read().clone();
+                Ok(mapped_file)
             }
-        } else {
-            error!("find preallocate mmap failed, this never happen");
-            Ok(None)
+            Err(_) => {
+                warn!("create mmap timeout {} {}", next_req.file_path(), next_req.file_size());
+                wait_guard.finish(true);
+                Ok(None)
+            }
         }
     }
 
@@ -646,37 +722,14 @@ impl AllocateMappedFileService {
         next_next_file_path: String,
         file_size: i32,
     ) -> Result<Option<Arc<DefaultMappedFile>>, RocketMQError> {
-        let next_req = Arc::new(AllocateRequest::new(next_file_path.clone(), file_size));
-        let next_put_ok = {
-            let mut table = self.request_table.write();
-            if table.contains_key(&next_file_path) {
-                false
-            } else {
-                table.insert(next_file_path.clone(), next_req.clone());
-                true
-            }
+        let next_req = match self.admit_request(next_file_path.clone(), file_size) {
+            AllocationAdmission::Inserted(request) | AllocationAdmission::Existing(request) => request,
+            AllocationAdmission::Rejected => return Ok(None),
         };
 
-        if next_put_ok {
-            self.request_queue.write().push(next_req.clone());
-            self.notify_worker();
-        }
-
         if !next_next_file_path.is_empty() {
-            let next_next_req = Arc::new(AllocateRequest::new(next_next_file_path.clone(), file_size));
-            let next_next_put_ok = {
-                let mut table = self.request_table.write();
-                if table.contains_key(&next_next_file_path) {
-                    false
-                } else {
-                    table.insert(next_next_file_path.clone(), next_next_req.clone());
-                    true
-                }
-            };
-
-            if next_next_put_ok {
-                self.request_queue.write().push(next_next_req);
-                self.notify_worker();
+            if let AllocationAdmission::Rejected = self.admit_request(next_next_file_path, file_size) {
+                warn!("mapped-file blocking preallocation skipped because its Store budget is exhausted");
             }
         }
 
@@ -685,21 +738,12 @@ impl AllocateMappedFileService {
             return Ok(None);
         }
 
-        let result = {
-            let table = self.request_table.read();
-            table.get(&next_file_path).cloned()
-        };
-
-        if let Some(req) = result {
-            if req.wait_blocking(WAIT_TIMEOUT) {
-                self.request_table.write().remove(&next_file_path);
-                Ok(req.mapped_file.read().clone())
-            } else {
-                warn!("create mmap timeout {} {}", req.file_path(), req.file_size());
-                Ok(None)
-            }
+        if next_req.wait_blocking(WAIT_TIMEOUT) {
+            self.remove_request_if_owned(&next_req, false);
+            Ok(next_req.mapped_file.read().clone())
         } else {
-            error!("find preallocate mmap failed, this never happen");
+            warn!("create mmap timeout {} {}", next_req.file_path(), next_req.file_size());
+            self.remove_request_if_owned(&next_req, true);
             Ok(None)
         }
     }
@@ -719,20 +763,8 @@ impl AllocateMappedFileService {
             return;
         }
 
-        let req = Arc::new(AllocateRequest::new(file_path.clone(), file_size as i32));
-        let put_ok = {
-            let mut table = self.request_table.write();
-            if let std::collections::hash_map::Entry::Vacant(entry) = table.entry(file_path) {
-                entry.insert(req.clone());
-                true
-            } else {
-                false
-            }
-        };
-
-        if put_ok {
-            self.request_queue.write().push(req);
-            self.notify_worker();
+        if let AllocationAdmission::Rejected = self.admit_request(file_path, file_size as i32) {
+            warn!("background mapped-file allocation rejected by Store budget");
         }
     }
 
@@ -779,9 +811,14 @@ impl AllocateMappedFileService {
             }
         }
 
-        // Clean up pre-allocated files
-        let table = self.request_table.read();
-        for req in table.values() {
+        // Clean up pre-allocated files and release every request permit.
+        let requests = {
+            let mut table = self.request_table.write();
+            std::mem::take(&mut *table)
+        };
+        self.request_queue.write().clear();
+        self.abandoned_count.fetch_add(requests.len() as u64, Ordering::Relaxed);
+        for req in requests.values() {
             if let Some(ref mapped_file) = *req.mapped_file.read() {
                 info!("delete pre allocated mapped file, {}", req.file_path());
                 mapped_file.destroy(1000);
@@ -802,6 +839,74 @@ impl AllocateMappedFileService {
     }
 }
 
+enum AllocationAdmission {
+    Inserted(Arc<AllocateRequest>),
+    Existing(Arc<AllocateRequest>),
+    Rejected,
+}
+
+struct AllocationWaitGuard {
+    service: AllocateMappedFileService,
+    request: Arc<AllocateRequest>,
+    disarmed: bool,
+}
+
+impl AllocationWaitGuard {
+    fn new(service: AllocateMappedFileService, request: Arc<AllocateRequest>) -> Self {
+        Self {
+            service,
+            request,
+            disarmed: false,
+        }
+    }
+
+    fn finish(&mut self, abandoned: bool) {
+        self.service.remove_request_if_owned(&self.request, abandoned);
+        self.disarmed = true;
+    }
+}
+
+impl Drop for AllocationWaitGuard {
+    fn drop(&mut self) {
+        if !self.disarmed {
+            self.service.remove_request_if_owned(&self.request, true);
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AllocationQueueEntry {
+    key: MappedFileAllocationRequestKey,
+}
+
+impl AllocationQueueEntry {
+    fn from_request(request: &AllocateRequest) -> Self {
+        Self {
+            key: request.key.clone(),
+        }
+    }
+
+    fn file_path(&self) -> &str {
+        self.key.file_path()
+    }
+
+    fn file_size(&self) -> i32 {
+        self.key.file_size()
+    }
+}
+
+impl PartialOrd for AllocationQueueEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for AllocationQueueEntry {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.key.cmp(&other.key)
+    }
+}
+
 /// Request to allocate a new MappedFile
 ///
 /// Corresponds to Java's AllocateRequest inner class:
@@ -810,6 +915,12 @@ impl AllocateMappedFileService {
 struct AllocateRequest {
     /// Runtime-neutral path, size, and ordering identity.
     key: MappedFileAllocationRequestKey,
+
+    /// Count and charged-file-byte ownership for this canonical request.
+    _permit: ResourcePermit,
+
+    /// Monotonic enqueue time used by queue saturation diagnostics.
+    enqueued_at: Instant,
 
     /// Completion notification (equivalent to Java's CountDownLatch)
     completion: Arc<Notify>,
@@ -825,9 +936,11 @@ struct AllocateRequest {
 }
 
 impl AllocateRequest {
-    fn new(file_path: String, file_size: i32) -> Self {
+    fn new(file_path: String, file_size: i32, permit: ResourcePermit) -> Self {
         Self {
             key: MappedFileAllocationRequestKey::new(file_path, file_size),
+            _permit: permit,
+            enqueued_at: Instant::now(),
             completion: Arc::new(Notify::new()),
             blocking_completion: Arc::new((StdMutex::new(()), Condvar::new())),
             completed: Arc::new(AtomicBool::new(false)),
@@ -904,9 +1017,35 @@ impl Ord for AllocateRequest {
 
 #[cfg(test)]
 mod tests {
+    use rocketmq_runtime::BudgetLimit;
+    use rocketmq_runtime::FullPolicy;
+    use rocketmq_runtime::ResourceBudget;
+    use rocketmq_runtime::ResourceBudgetTree;
     use tempfile::tempdir;
 
     use super::*;
+
+    fn test_allocation_budget() -> ResourceBudget {
+        ResourceBudgetTree::new(
+            "allocation-service-test",
+            BudgetLimit::new(16, 64 * 1024, FullPolicy::Reject),
+        )
+        .expect("test allocation budget")
+        .root()
+    }
+
+    fn test_request(file_path: String, file_size: i32) -> Arc<AllocateRequest> {
+        let budget = ResourceBudgetTree::new(
+            "allocation-request-test",
+            BudgetLimit::new(4, 8_192, FullPolicy::Reject),
+        )
+        .expect("test budget")
+        .root();
+        let permit = budget
+            .try_acquire_data(usize::try_from(file_size).expect("positive file size"))
+            .expect("request budget");
+        Arc::new(AllocateRequest::new(file_path, file_size, permit))
+    }
 
     struct TestAllocationServiceConfig;
 
@@ -920,8 +1059,8 @@ mod tests {
     fn allocate_request_delegates_identity_display_and_priority_to_local_key() {
         let lower_path = std::path::Path::new("root").join("00000000000000000100");
         let higher_path = std::path::Path::new("root").join("00000000000000000200");
-        let lower = Arc::new(AllocateRequest::new(lower_path.to_string_lossy().into_owned(), 1024));
-        let higher = Arc::new(AllocateRequest::new(higher_path.to_string_lossy().into_owned(), 2048));
+        let lower = test_request(lower_path.to_string_lossy().into_owned(), 1024);
+        let higher = test_request(higher_path.to_string_lossy().into_owned(), 2048);
         let mut requests = BinaryHeap::from([higher, lower.clone()]);
 
         let first = requests.pop().expect("lower offset request");
@@ -941,7 +1080,7 @@ mod tests {
     async fn allocate_mapped_file_blocking_works_inside_runtime() {
         let temp_dir = tempdir().expect("temp dir");
         let file_path = temp_dir.path().join("00000000000000000000");
-        let service = AllocateMappedFileService::new();
+        let service = AllocateMappedFileService::new_with_config(None, false, false, test_allocation_budget());
         assert!(!service.is_started());
         service.start();
         assert!(service.is_started());
@@ -976,7 +1115,13 @@ mod tests {
     #[test]
     fn warm_mapped_file_config_follows_commitlog_file_size_threshold() {
         let config = TestAllocationServiceConfig;
-        let service = AllocateMappedFileService::new_with_message_store_config(None, false, false, &config);
+        let service = AllocateMappedFileService::new_with_message_store_config(
+            None,
+            false,
+            false,
+            &config,
+            test_allocation_budget(),
+        );
 
         assert!(!service.should_warm_mapped_file(1023));
         assert!(service.should_warm_mapped_file(1024));
@@ -987,16 +1132,20 @@ mod tests {
         let pool = Arc::new(TransientStorePool::new(2, 16));
         pool.return_buffer(vec![0; 16]);
         pool.return_buffer(vec![0; 16]);
-        let service = AllocateMappedFileService::new_with_config(Some(pool), true, true);
+        let service = AllocateMappedFileService::new_with_config(Some(pool), true, true, test_allocation_budget());
 
         assert_eq!(service.allocation_capacity(2), 2);
-        service.request_queue.write().push(Arc::new(AllocateRequest::new(
+        let request = test_request(
             std::path::Path::new("root")
                 .join("00000000000000000100")
                 .to_string_lossy()
                 .into_owned(),
             16,
-        )));
+        );
+        service
+            .request_queue
+            .write()
+            .push(AllocationQueueEntry::from_request(&request));
         assert_eq!(service.allocation_capacity(2), 1);
     }
 }
