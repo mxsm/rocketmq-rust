@@ -67,20 +67,20 @@ impl DefaultMQAdminExtImpl {
         self.client_config.set_use_tls(use_tls);
     }
 
-    pub(super) fn mq_client_api(&self) -> rocketmq_error::RocketMQResult<Arc<MQClientAPIImpl>> {
+    pub(in crate::admin) fn mq_client_api(&self) -> rocketmq_error::RocketMQResult<Arc<MQClientAPIImpl>> {
         self.client_instance
             .as_ref()
             .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?
             .get_mq_client_api_impl()
     }
 
-    pub(super) fn remoting_timeout_millis(&self) -> rocketmq_error::RocketMQResult<u64> {
+    pub(in crate::admin) fn remoting_timeout_millis(&self) -> rocketmq_error::RocketMQResult<u64> {
         u64::try_from(self.timeout_millis.as_millis()).map_err(|_| {
             rocketmq_error::RocketMQError::illegal_argument("admin timeout exceeds the supported u64 millisecond range")
         })
     }
 
-    pub(super) async fn start_admin(&mut self) -> rocketmq_error::RocketMQResult<()> {
+    pub(in crate::admin) async fn start_admin(&mut self) -> rocketmq_error::RocketMQResult<()> {
         match self.service_state {
             ServiceState::CreateJust => {
                 self.service_state = ServiceState::StartFailed;
@@ -136,7 +136,7 @@ impl DefaultMQAdminExtImpl {
         }
     }
 
-    pub(super) async fn shutdown_admin(&mut self) {
+    pub(in crate::admin) async fn shutdown_admin(&mut self) {
         match self.service_state {
             ServiceState::CreateJust | ServiceState::ShutdownAlready | ServiceState::StartFailed => {}
             ServiceState::Running => {
