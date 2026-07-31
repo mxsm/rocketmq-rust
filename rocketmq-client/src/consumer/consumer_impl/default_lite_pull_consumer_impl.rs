@@ -3101,15 +3101,15 @@ mod tests {
 
     #[tokio::test]
     async fn lite_pull_task_wait_aborts_tracked_task_after_timeout() {
-        struct DropFlag(Arc<AtomicBool>);
+        struct DropFlag(Arc<tokio::sync::Notify>);
 
         impl Drop for DropFlag {
             fn drop(&mut self) {
-                self.0.store(true, AtomicOrdering::SeqCst);
+                self.0.notify_one();
             }
         }
 
-        let task_aborted = Arc::new(AtomicBool::new(false));
+        let task_aborted = Arc::new(tokio::sync::Notify::new());
         let task_aborted_inner = task_aborted.clone();
         let (started_tx, started_rx) = tokio::sync::oneshot::channel();
 
@@ -3132,10 +3132,9 @@ mod tests {
             .expect("lite pull timeout test task should report startup");
 
         assert!(!task_handle.wait(Duration::from_millis(20)).await);
-        assert!(
-            task_aborted.load(AtomicOrdering::SeqCst),
-            "timed-out lite pull task should be aborted before wait returns"
-        );
+        tokio::time::timeout(Duration::from_secs(1), task_aborted.notified())
+            .await
+            .expect("timed-out lite pull task should finish aborting");
     }
 
     #[tokio::test]
