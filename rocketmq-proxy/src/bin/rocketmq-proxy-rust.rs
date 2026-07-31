@@ -136,6 +136,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
                 message: format!("failed to initialize proxy telemetry bootstrap: {error}"),
             },
         )?;
+    register_proxy_release_identity(&telemetry_guard, &process_telemetry)?;
     log_telemetry_bootstrap(
         &bootstrap_config,
         &resolved_filter,
@@ -659,7 +660,18 @@ mod tests {
 
     #[test]
     fn proxy_bootstrap_accepts_standard_otlp_environment_values() {
-        let mut config = build_proxy_telemetry_bootstrap_config(&ProxyConfig::default());
+        let process_telemetry =
+            rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig::try_from_values(
+                "rocketmq-proxy",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("local Proxy process telemetry");
+        let mut config = build_proxy_telemetry_bootstrap_config(&ProxyConfig::default(), &process_telemetry);
 
         rocketmq_observability::apply_standard_otlp_environment_values(
             &mut config,
