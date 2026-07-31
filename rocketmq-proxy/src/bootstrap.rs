@@ -370,17 +370,15 @@ where
         backend_context: Option<ChildServiceContext>,
         service_context: ChildServiceContext,
     ) -> Self {
-        #[cfg(feature = "observability")]
-        crate::observability::init_observability_metrics(&config, &session_registry);
-
         let config = Arc::new(config);
         let processor_ref = Arc::clone(&processor);
         let sessions = session_registry.clone();
         let drain = rocketmq_proxy_core::ProxyDrainController::default();
-        let grpc_service = ProxyGrpcService::new(Arc::clone(&config), processor, session_registry)
-            .with_drain_controller(drain.clone())
-            .with_hooks(hooks)
-            .with_metrics(metrics);
+        let grpc_service =
+            ProxyGrpcService::from_execution_guards(Arc::clone(&config), processor, session_registry, grpc_guards)
+                .with_drain_controller(drain.clone())
+                .with_hooks(hooks)
+                .with_metrics(metrics);
         Self {
             config,
             processor: processor_ref,
