@@ -2,270 +2,234 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-`rocketmq-sre` is the independent Rust workspace and UI for the AI-assisted,
-read-only operations plane for RocketMQ Rust. Phase 00 provides the secure
-foundation. Phase 01 adds durable operator workflows, eight deterministic
-diagnostic packs, a bounded multi-provider Model Gateway, Evidence and
-knowledge services, asset/topology inventory, inspections, recommendations,
-Shadow evaluation, and the independent desktop AI SRE workspace.
-Phase 02 is being delivered in bounded increments. P2-01 adds typed alert,
-correlation, topology, forecast, simulation, readiness, notification,
-postmortem, and action-item contracts together with forward-only PostgreSQL
-migrations and a generated Phase 02 OpenAPI/UI contract. P2-04 adds
-authenticated Alertmanager and provider-neutral event ingestion, deterministic
-cross-topology Incident correlation, owner routing, recurrence-safe terminal
-handling, operator notes, transactional notifications and durable SSE-backed
-timeline updates. P2-05 adds deterministic multi-window SLO burn-rate and
-health scoring. P2-06 adds explainable 7-day/30-day capacity and backlog
-forecasting, seasonal anomaly and change-point hints, deterministic What-if
-simulation, Upgrade/DR readiness, persisted forecast outcomes, and a full-width
-desktop prediction workspace. Forecasts and simulations remain advisory-only
-and cannot create execution requests. Phase 03 now includes immutable
-execution contracts, a durable PostgreSQL execution journal, server-validated
-ActionPlan creation, deterministic policy evaluation, non-self human approval,
-service-signed ApprovalGrant issuance, execution submission, resource
-quarantine management, correlation-scoped Audit APIs, and a generated Phase 03
-OpenAPI/TypeScript contract. P3-04 adds a fail-closed heterogeneous Critic
-gate: R2 plans can advance to human approval only after an immutable review
-from a different normalized model family, with exact primary/Critic invocation
-lineage and fallback identity. Target-side execution remains fail closed unless
-the dedicated Executor, Execution Agent, action descriptor, policy, approval,
-lease/fence, and a typed driver are all explicitly enabled.
-Phase 05 adds enterprise Fleet, regional routing, onboarding quotas, asset and
-compliance indexes, bounded Fleet inspections, representative enterprise
-integrations, release escort, DR Center, governed artifact lifecycles, FinOps,
-and the desktop enterprise operations UI. The canonical Phase 05 OpenAPI,
-read-only Rust and TypeScript clients, and `rocketmq-sre` operator CLI share the
-same fixed status/cluster/incident/inspection/plan read boundary. The CLI can
-validate local-only Plan and Runbook drafts, but cannot submit, approve, or
-execute them.
+RocketMQ Rust AI SRE is an evidence-driven operations intelligence and
+controlled automation platform for RocketMQ Rust. It combines deterministic
+diagnostics, large language models, observability data, operational knowledge,
+and explicit safety controls in a dedicated SRE workspace.
 
-## Workspace boundaries
+The project is maintained as a standalone Rust 2024 workspace inside the
+RocketMQ Rust repository. It has its own dependency graph, lockfile, services,
+desktop-oriented web UI, API contracts, SDKs, deployment assets, and validation
+tools. It integrates with `rocketmq-mcp` over MCP Streamable HTTP and does not
+import MCP server DTOs or reuse the ordinary RocketMQ Dashboard session and
+mutation surfaces.
 
-The workspace deliberately does not share MCP server DTOs. The Connector will
-consume MCP through Streamable HTTP and translate validated wire responses into
-canonical Evidence contracts. The Executor and Execution Agent are compiled as
-disabled libraries and cannot mutate a target cluster.
+## What the project provides
 
-The eleven crates are:
+| Area | Capabilities |
+| --- | --- |
+| Cluster access | Tenant-scoped onboarding, capability negotiation, topology and asset inventory, bounded synthetic probes, and read-only RocketMQ evidence collection through MCP |
+| Evidence | Versioned Evidence contracts, canonical JSON and content hashes, freshness and partial-result semantics, PostgreSQL metadata, and private object storage for large payloads |
+| Diagnostics | Deterministic Diagnostic Packs, hypothesis and counter-evidence tracking, inspections, health and SLO analysis, alert correlation, and Incident timelines |
+| AI assistance | Provider-neutral model IR, capability-aware routing, streaming, fallback, budgets, redaction, RAG support, and heterogeneous primary/Critic model lineage |
+| Prediction | Capacity and backlog forecasts, anomaly and change-point hints, What-if simulation, upgrade readiness, and disaster-recovery readiness |
+| Controlled automation | Typed Action Plans, policy evaluation, non-self human approval, immutable grants, supervised execution, verification, rollback, leases, fencing, and recovery |
+| Enterprise operations | Fleet and regional views, release escort, DR Center, compliance and governance indexes, integrations, notification delivery, postmortems, and FinOps views |
+| Interfaces | Full-width desktop AI SRE UI, versioned HTTP APIs, generated OpenAPI contracts, read-only Rust and TypeScript clients, and an operator CLI |
 
-- `rocketmq-sre-contracts`: versioned wire and persistence contracts.
-- `rocketmq-sre-core`: incident coordination and extension registry.
-- `rocketmq-sre-model-gateway`: canonical model IR and provider descriptors.
-- `rocketmq-sre-control-plane`: control-plane service composition root.
-- `rocketmq-sre-connector`: MCP connector composition root.
-- `rocketmq-sre-executor`: supervised execution, verification, rollback, and
-  recovery boundary; it has no target mutation credential.
-- `rocketmq-sre-execution-agent`: isolated typed-driver boundary with durable
-  fencing and opt-in target adapters.
-- `rocketmq-sre-probe`: bounded synthetic probe identity and validation.
-- `rocketmq-sre-eval`: schema and coverage validation utilities.
-- `rocketmq-sre-client`: bounded read-only Rust client for status, cluster,
-  incident, inspection, plan, and OpenAPI queries.
-- `rocketmq-sre-cli`: fixed read-only operator commands plus local-only typed
-  Plan and Runbook draft validation.
+The system follows an evidence-first workflow:
+
+```text
+observe → correlate → diagnose → recommend → govern → execute → verify → learn
+```
+
+Rules and typed contracts remain authoritative for safety decisions. A model
+can explain evidence and propose a plan, but it cannot bypass capability,
+policy, approval, credential, lease, fencing, or verification boundaries.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    Operator["SRE operator"] --> UI["AI SRE UI"]
+    Operator --> CLI["CLI / SDK"]
+    UI --> CP["Control Plane"]
+    CLI --> CP
+
+    CP <--> Connector["Connector"]
+    Connector --> MCP["RocketMQ MCP<br/>read-only"]
+    MCP --> Cluster["RocketMQ Rust cluster"]
+
+    CP --> Evidence["Evidence / Knowledge"]
+    Evidence --> PostgreSQL["PostgreSQL"]
+    Evidence --> ObjectStore["Private object store"]
+    CP --> ModelGateway["Model Gateway"]
+    CP --> Executor["Executor"]
+    Executor --> Agent["Execution Agent"]
+    Agent -. "explicit typed adapters" .-> Cluster
+
+    Telemetry["Metrics / Logs / Traces"] --> CP
+    Telemetry --> Connector
+```
+
+The ordinary RocketMQ operations UI and the AI SRE UI are separate products.
+The Dashboard remains the direct resource-management interface. AI SRE owns
+cross-signal diagnosis, Incident workflows, recommendations, governance,
+supervised execution, Fleet operations, and audit history. The two can
+cooperate through scoped read-only context and deep links without sharing
+sessions or raw mutation APIs.
+
+## Safety model
+
+- MCP and Connector are read-only. They never expose RocketMQ apply, delete,
+  reset, clean, or arbitrary Admin operations.
+- Evidence, logs, diagnostics, errors, and model requests are bounded and
+  sanitized. Credentials, tokens, ACL/TLS material, private keys, message
+  bodies, and full configuration values are excluded.
+- Provider credentials are resolved from secret references. Built-in provider
+  profiles contain protocol defaults, not API keys.
+- Target changes use a separate Executor and Execution Agent path. The
+  Executor has no target credentials or target network access.
+- Mutation adapters are typed, individually enabled, policy constrained, and
+  protected by approval, idempotency, leases, fencing, verification, and
+  rollback semantics.
+- Unsupported schema majors, capability drift, identity mismatch, unsafe
+  provider behavior, and incomplete execution authority fail closed.
+- PostgreSQL is the durable system of record. In-memory repositories are
+  reserved for tests.
+
+For detailed boundary decisions, see
+[Project boundaries](docs/decisions/0001-project-boundaries.md) and
+[Read-only MCP boundary](docs/decisions/0002-read-only-mcp-boundary.md).
+
+## Model providers
+
+The Model Gateway uses a canonical model IR and protocol adapters instead of
+binding product logic to a single vendor SDK.
+
+| Provider or runtime | Protocol family |
+| --- | --- |
+| OpenAI and compatible gateways | OpenAI-compatible |
+| Azure OpenAI | Azure OpenAI-compatible |
+| Anthropic | Anthropic Messages |
+| Google Gemini | Gemini native |
+| AWS Bedrock | Bedrock Converse with SigV4 |
+| DeepSeek | OpenAI-compatible and Anthropic-compatible profiles |
+| Zhipu GLM | GLM/OpenAI-compatible |
+| Kimi / Moonshot | OpenAI-compatible, with an explicit opt-in MFJS profile |
+| vLLM, Ollama, llama.cpp, and SGLang | Local OpenAI-compatible runtimes |
+| Enterprise model gateways | Configurable OpenAI-compatible profile |
+
+Each profile declares its effective chat, tool, structured-output, reasoning,
+streaming, embedding, reranking, data-classification, region, cost, and context
+capabilities. Routing rejects a provider that cannot satisfy the request
+instead of silently degrading the contract.
+
+See [Model compatibility](docs/compatibility.md) and
+[Extension guide](docs/phase05-extension-guide.md).
+
+## Workspace crates
+
+| Crate | Responsibility |
+| --- | --- |
+| `rocketmq-sre-contracts` | Versioned domain, wire, persistence, Evidence, Incident, plan, execution, and extension contracts; independent of networking, async runtimes, databases, and RocketMQ implementations |
+| `rocketmq-sre-core` | Incident coordination, deterministic domain services, and descriptor registry |
+| `rocketmq-sre-model-gateway` | Canonical model IR, provider profiles, protocol adapters, routing, streaming, budgets, fallback, and Critic support |
+| `rocketmq-sre-control-plane` | Product API and service composition root, persistence, onboarding, diagnostics, governance, and operator workflows |
+| `rocketmq-sre-connector` | Authenticated MCP client, capability handshake, schema validation, evidence conversion, and data-source health |
+| `rocketmq-sre-executor` | Supervised execution journal, policy/approval enforcement, dispatch, verification, rollback, and recovery without target credentials |
+| `rocketmq-sre-execution-agent` | Isolated typed target adapters, credential separation, leases, fencing, idempotency, and effect reconciliation |
+| `rocketmq-sre-probe` | Bounded producer/consumer probe for dedicated synthetic topics and groups |
+| `rocketmq-sre-eval` | Schema export, coverage validation, deterministic evaluations, and acceptance utilities |
+| `rocketmq-sre-client` | Fixed read-only Rust client for status, cluster, Incident, inspection, plan, and OpenAPI queries |
+| `rocketmq-sre-cli` | Read-only operator commands and local-only typed Plan and Runbook draft validation |
+
+Additional project areas include:
+
+- `ui/`: React 18, TypeScript, Vite, Tailwind CSS, Radix UI, and shadcn/ui-style
+  components for the desktop workspace.
+- `migrations/`: forward-only PostgreSQL migrations.
+- `openapi/` and `sdk/`: generated API contracts and client SDKs.
+- `config/`: capability, observability, policy, and coverage catalogs.
+- `deploy/`: Docker Compose and Kind development/acceptance environments.
+- `docs/`: architecture decisions, protocol contracts, extension guides, and
+  operational records.
+
+## Quick start
+
+### Prerequisites
+
+- Rust 1.95 or newer
+- Docker Desktop or Docker Engine with Docker Compose
+- Node.js and npm for UI development
+- PowerShell 7 or Windows PowerShell for the provided local scripts
+
+PostgreSQL runs in Docker; no host PostgreSQL installation is required.
+
+From the repository root:
+
+```powershell
+.\rocketmq-sre\scripts\dev.ps1 -Action Up
+```
+
+The principal local endpoints are:
+
+| Service | URL |
+| --- | --- |
+| AI SRE UI | `http://localhost:3004` |
+| Control Plane API | `http://localhost:8090` |
+| MCP Streamable HTTP | `https://localhost:8089` |
+| Prometheus | `http://localhost:9090` |
+| Loki | `http://localhost:3100` |
+| Tempo | `http://localhost:3200` |
+
+Stop the stack while preserving PostgreSQL and Evidence volumes:
+
+```powershell
+.\rocketmq-sre\scripts\dev.ps1 -Action Down
+```
+
+For local identities, TLS fixtures, ports, smoke tests, volume reset behavior,
+and troubleshooting, see the [local environment guide](deploy/dev/README.md).
 
 ## Development
 
+Run Rust commands from `rocketmq-sre/`:
+
 ```powershell
 python scripts/check_source_layout.py
+python scripts/check_execution_dependency_boundary.py
+cargo fmt -p rocketmq-sre-contracts -p rocketmq-sre-core -p rocketmq-sre-model-gateway -p rocketmq-sre-control-plane -p rocketmq-sre-connector -p rocketmq-sre-executor -p rocketmq-sre-execution-agent -p rocketmq-sre-probe -p rocketmq-sre-eval -p rocketmq-sre-client -p rocketmq-sre-cli -- --check
 cargo check --locked --workspace
 cargo test --locked --workspace --all-features
-cargo run --locked -p rocketmq-sre-eval --bin schema-export -- schemas
-cargo run --locked -p rocketmq-sre-eval --bin phase3-schema-export
-node scripts/generate_phase3_openapi.mjs
-node scripts/generate_phase5_openapi.mjs
-npm --prefix ui run generate:api
-npm --prefix ui run check:api
-npm ci --prefix sdk/typescript
-npm test --prefix sdk/typescript
-cargo run --locked -p rocketmq-sre-cli -- --help
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo doc --locked --workspace --no-deps
 ```
 
-The workspace uses Rust 2024's modern source layout: `foo.rs` owns child
-modules stored under `foo/`. Legacy `foo/mod.rs` entry points are rejected by
-the source-layout check.
-
-## Run the Phase 00 stack
-
-PostgreSQL is containerized; no host database installation is required.
-Large Evidence payloads are stored in the private `evidence-objects` named
-volume mounted only by the Control Plane, so a normal stack or Control Plane
-restart preserves both the PostgreSQL reference and its content. The in-memory
-object store is never selected by normal service startup.
+Run UI commands from the repository root:
 
 ```powershell
-.\scripts\dev.ps1 -Action Up
-.\scripts\phase00-smoke.ps1 -Target Compose
-.\scripts\dev.ps1 -Action Down
+npm --prefix rocketmq-sre/ui ci
+npm --prefix rocketmq-sre/ui run lint
+npm --prefix rocketmq-sre/ui run test -- --run
+npm --prefix rocketmq-sre/ui run build
 ```
 
-The Compose smoke waits for the bounded probe to create positive Consumer Lag
-and then verifies that consumption makes it decline. It performs real
-Prometheus, Loki, and Tempo queries; validates the versioned MCP runtime and
-observability resources through the Connector data-source report; restarts
-PostgreSQL and the Control Plane to prove onboarding persistence; and confirms
-that a Collector outage does not block the RocketMQ/MCP data path before
-checking exporter recovery. The final step offboards the fixed development
-cluster. Because `Down` preserves the PostgreSQL volume, remove the Phase 00
-volumes as described in [the local stack guide](deploy/dev/README.md) before
-repeating the full smoke from a clean state.
+The Rust workspace uses the Rust 2024 module layout: `foo.rs` owns child modules
+under `foo/`. Legacy `foo/mod.rs` entry points are rejected.
 
-The Phase 01 reverse Connector channel is HTTPS-only outside loopback. Compose
-and Kind terminate mTLS in a constrained Control Plane proxy, use separate
-server/client trust roots, overwrite connector identity headers from the
-verified certificate, and isolate direct Axum access from the Connector.
-Validate the deployment contract with:
+## User interface
 
-```powershell
-.\scripts\verify-mtls-deployment.ps1 -CheckCertificates
-```
+The UI is designed as a full-screen desktop operations workspace using
+shadcn/ui conventions and accessible Radix UI primitives. The supported design
+targets are 1280×720, 1440×900, and 1920×1080. Dedicated mobile interaction
+design is intentionally outside the current scope.
 
-The ordinary RocketMQ Dashboard and the AI SRE UI are deliberately separate.
-The AI SRE workspace owns incidents, inspections, typed plans, supervised
-execution tracking, Fleet, release, DR, governance, integration, and FinOps
-workflows. It never reuses Dashboard sessions or raw mutation APIs; ordinary
-resource pages cooperate through scoped read-only context and deep links.
-The UI targets a full-screen desktop workspace at 1280×720,
-1440×900, and 1920×1080. Narrow layouts remain non-breaking, but dedicated
-mobile interaction design is intentionally deferred.
+## Documentation
 
-Run the Phase 01 live read-only path against the Compose stack before Phase 00
-offboarding:
-
-```powershell
-.\scripts\phase01-smoke.ps1 -Target Compose -BootstrapProbe
-```
-
-This complements the deterministic eight-pack Shadow suite: the live smoke
-proves the real Connector/MCP/RocketMQ Evidence path and durable product
-workflow, while Shadow supplies normal/fault/missing coverage for every Wave A
-pack.
-
-Run the Phase 02 operator-loop acceptance against the current Kind stack:
-
-```powershell
-.\scripts\phase02-operator-loop-smoke.ps1 -Target Kind
-```
-
-The smoke creates and runs a deterministic inspection, promotes its
-recommendation to an Incident, ingests an independent Alertmanager event,
-performs model-assisted diagnosis, queries forecasts, runs a read-only
-traffic-growth simulation, verifies exactly-once sanitized notification
-delivery, and persists a draft Postmortem with queryable Action Items. Its
-reserved local Email notification fixture is enabled only for the run and is
-disabled again in `finally`; it never contacts an external notification
-service.
-
-See:
-
+- [Local environment](deploy/dev/README.md)
+- [Kind environment](deploy/kind/README.md)
+- [Compatibility](docs/compatibility.md)
 - [Project boundaries](docs/decisions/0001-project-boundaries.md)
 - [Read-only MCP boundary](docs/decisions/0002-read-only-mcp-boundary.md)
-- [Control Plane connector-channel mTLS](docs/control-plane-connector-mtls.md)
-- [Connector transport ADR](docs/connector-control-plane-transport-adr.md)
-- [Compatibility](docs/compatibility.md)
-- [Phase 01 live Kind validation record](docs/phase01-live-validation-record.md)
-- [Phase 02 contracts and persistence](docs/phase02-contracts-and-persistence.md)
-- [Phase 02 diagnostic evidence sources](docs/phase02-evidence-sources.md)
-- [Phase 02 DiagnosticPack catalog](docs/phase02-diagnostic-packs.md)
-- [Phase 02 alert correlation and notification](docs/phase02-alert-correlation.md)
-- [Phase 03 execution contracts](docs/phase03-execution-contracts.md)
-- [Phase 03 PostgreSQL recovery](docs/phase03-postgres-recovery.md)
-- [Phase 03 Plan, Policy, Approval, and Audit](docs/phase03-plan-policy-approval.md)
-- [Phase 03 heterogeneous Critic](docs/phase03-heterogeneous-critic.md)
-- [Phase 05 OpenAPI, SDK, and CLI](docs/phase05-openapi-sdk-cli.md)
-- [Phase 05 enterprise validation record](docs/phase05-enterprise-validation-record.md)
-- [Phase 05 operations guide](docs/phase05-operations-guide.md)
-- [Phase 05 extension guide](docs/phase05-extension-guide.md)
-- [Phase 5 new-engineer handoff checklist](docs/phase05-handoff-checklist.md)
-- [Local stack](deploy/dev/README.md)
+- [Control Plane–Connector mTLS](docs/control-plane-connector-mtls.md)
+- [Connector transport](docs/connector-control-plane-transport-adr.md)
+- [Diagnostic Pack catalog](docs/phase02-diagnostic-packs.md)
+- [Execution contracts](docs/phase03-execution-contracts.md)
+- [Plan, policy, approval, and audit](docs/phase03-plan-policy-approval.md)
+- [Operations guide](docs/phase05-operations-guide.md)
+- [Extension guide](docs/phase05-extension-guide.md)
 
-## Phase 05 enterprise acceptance
+## License
 
-The reproducible Phase 05 acceptance combines a 100-cluster/two-region
-PostgreSQL scale scenario, current/N-1 protocol and capability behavior,
-enterprise integration idempotency, regional Fleet release orchestration, an
-isolated Control Plane database restore, and a bounded Kind Broker rebuild
-exercise:
-
-```powershell
-.\scripts\phase05-enterprise-smoke.ps1 `
-  -Kubeconfig D:\BuildCache\rocketmq-sre-temp\kind\phase00-kubeconfig
-```
-
-The smoke writes a redacted machine-readable result outside the repository.
-The committed validation record states the exact tested boundary: the Kind
-Broker uses a host-local persistent PVC and the exercise proves message-history
-RPO 0 for a Pod replacement. It is not a physical multi-node or multi-region
-disaster-recovery claim. The current/N-1 check exercises persisted runtime
-handshake behavior; an actual N-1 binary run additionally requires a previously
-published SRE/MCP release artifact.
-
-The bounded soak/Chaos runner samples all SRE, RocketMQ, PostgreSQL, and
-observability workloads while replacing the MCP/Connector, Control Plane, and
-Broker Pods and interrupting the OTel Collector:
-
-```powershell
-# Short qualification of the runner and recovery paths.
-.\scripts\phase05-soak-chaos.ps1 `
-  -Mode Run `
-  -DurationSeconds 90 `
-  -SampleIntervalSeconds 5 `
-  -CollectorOutageSeconds 3 `
-  -InjectFaults
-
-# Six-hour release qualification.
-.\scripts\phase05-soak-chaos.ps1 `
-  -Mode Run `
-  -DurationSeconds 21600 `
-  -SampleIntervalSeconds 60 `
-  -CollectorOutageSeconds 30 `
-  -InjectFaults `
-  -FullDurationQualification
-```
-
-The runner refuses an unexpected Kubernetes context, restricts kubeconfig and
-evidence paths to D or F, restores the Collector in `finally`, preserves the
-Broker PVC UID set, and records no configuration or Secret values. A full
-qualification is accepted only when its evidence reports the complete duration,
-all four recovered faults, at least 99% sampled readiness, and an empty
-unresolved-fault set.
-
-## Kind acceptance
-
-The Phase 00 Kind environment reuses the repository-pinned Kubernetes tool
-versions, the canonical Helm `dev-single` profile, and locally loaded images.
-It adds ephemeral in-cluster PostgreSQL, the SRE services, and the minimum
-Prometheus/Loki/Tempo/OTel acceptance overlay. It is deliberately not a
-production Helm distribution.
-
-```powershell
-.\scripts\kind.ps1 -Action Up
-.\scripts\kind.ps1 -Action Status
-.\scripts\kind.ps1 -Action Smoke
-.\scripts\kind.ps1 -Action Down
-```
-
-See [Kind acceptance environment](deploy/kind/README.md) for prerequisites,
-the pinned versions, and smoke coverage.
-
-## Phase 01 offline Shadow evaluation
-
-The Phase 01 evaluator runs eight Wave A diagnostic packs against normal,
-fault, and missing-evidence fixtures. It supports a deterministic mock
-Provider, rules-only operation, and Provider-outage fallback. The Compose
-runner has no network, and the Kind Job additionally has no service-account
-token or RBAC plus deny-all ingress/egress. Both report zero mutation and
-Executor calls.
-
-```powershell
-.\scripts\phase01-shadow.ps1 -Target Offline -Provider Mock
-.\scripts\phase01-shadow.ps1 -Target Offline -Provider RulesOnly
-.\scripts\phase01-shadow.ps1 -Target Offline -Provider Outage
-.\scripts\phase01-shadow.ps1 -Target Compose -Provider Mock
-```
-
-See [Phase 01 Shadow evaluation](docs/phase01-shadow-evaluation.md) and
-[Phase 01 known issues and Phase 02 inputs](docs/phase01-known-issues-and-phase02-inputs.md).
-The real RocketMQ/MCP/Connector/model-provider acceptance evidence is recorded
-in [Phase 01 live Kind validation record](docs/phase01-live-validation-record.md).
+Licensed under the Apache License, Version 2.0.
