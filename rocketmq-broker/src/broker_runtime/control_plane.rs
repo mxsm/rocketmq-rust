@@ -49,11 +49,7 @@ impl BrokerRuntime {
                 let producer_manager = self.composition.state.producer_manager.clone_shared_state();
                 let consumer_manager = self.composition.state.consumer_manager.clone_shared_state();
                 let broker_fast_failure = self.composition.state.broker_fast_failure.clone();
-                crate::metrics::broker_metrics_manager::BrokerMetricsManager::init_global_with_observables_and_configs(
-                    provider,
-                    attributes_supplier,
-                    label_config,
-                    sampling_config,
+                metrics_manager.register_observables(
                     Some(move || broker_fast_failure.pending_count_snapshot()),
                     move || broker_permission,
                     move || i64::try_from(topic_config_manager.topic_config_table().len()).unwrap_or(i64::MAX),
@@ -92,21 +88,22 @@ impl BrokerRuntime {
                     },
                 );
                 let consumer_offset_manager = self.composition.state.consumer_offset_manager_handle();
-                if let Some(metrics) = crate::metrics::broker_metrics_manager::BrokerMetricsManager::try_global() {
-                    metrics.register_consumer_lag_observable_gauge(move || {
-                        consumer_offset_manager
-                            .consumer_lag_snapshot()
-                            .into_iter()
-                            .map(|observation| {
-                                crate::metrics::broker_metrics_manager::ConsumerLagAttributes::new(
-                                    observation.topic,
-                                    observation.consumer_group,
-                                    observation.lag_messages,
-                                )
-                            })
-                            .collect()
-                    });
-                }
+                metrics_manager.register_consumer_lag_observable_gauge(move || {
+                    consumer_offset_manager
+                        .consumer_lag_snapshot()
+                        .into_iter()
+                        .map(|observation| {
+                            crate::metrics::broker_metrics_manager::ConsumerLagAttributes::new(
+                                observation.topic,
+                                observation.consumer_group,
+                                observation.lag_messages,
+                            )
+                        })
+                        .collect()
+                });
+            }
+
+            if let Some(metrics_manager) = self.composition.state.pop_metrics_manager.clone() {
                 let pop_offset_processor = self.composition.state.pop_message_processor.clone();
                 let pop_checkpoint_processor = self.composition.state.pop_message_processor.clone();
                 let ack_message_processor = self.composition.state.ack_message_processor.clone();
@@ -138,42 +135,30 @@ impl BrokerRuntime {
                 );
             }
 
-                let store_meter = rocketmq_observability::meter(provider, "rocketmq-store");
-                let store_observable = self.composition.state.escape_bridge().store_capability();
-                let replication_lag_observable = store_observable.clone();
-                let _ = rocketmq_observability::metrics::store::init_global_with_observables_and_replication_lag(
-                    &store_meter,
-                    move || {
-                        store_observable
-                            .with_store(|message_store| {
-                                let max_phy_offset = message_store.get_max_phy_offset();
-                                let min_phy_offset = message_store.get_min_phy_offset();
-                                let earliest_message_time = message_store.get_earliest_message_time_store();
-                                rocketmq_observability::metrics::store::StoreObservableValues {
-                                    storage_size_bytes: (max_phy_offset - min_phy_offset).max(0),
-                                    flush_behind_bytes: (max_phy_offset - message_store.get_flushed_where()).max(0),
-                                    dispatch_behind_bytes: message_store.dispatch_behind_bytes().max(0),
-                                    message_reserve_time_millis: if earliest_message_time > 0 {
-                                        current_millis() as i64 - earliest_message_time
-                                    } else {
-                                        0
-                                    },
-                                }
-                            })
-                            .unwrap_or_default()
-                    },
-                    move || {
-                        replication_lag_observable
-                            .with_store(|message_store| {
-                                observed_replication_lag_bytes(
-                                    message_store.get_max_phy_offset(),
-                                    message_store.get_confirm_offset(),
-                                )
-                            })
-                            .ok()
-                            .flatten()
-                    },
-                );
+            let store_observable = self.composition.state.escape_bridge().store_capability();
+            self.composition
+                .state
+                .store_telemetry
+                .store()
+                .register_observables(move || {
+                    store_observable
+                        .with_store(|message_store| {
+                            let max_phy_offset = message_store.get_max_phy_offset();
+                            let min_phy_offset = message_store.get_min_phy_offset();
+                            let earliest_message_time = message_store.get_earliest_message_time_store();
+                            rocketmq_observability::metrics::store::StoreObservableValues {
+                                storage_size_bytes: (max_phy_offset - min_phy_offset).max(0),
+                                flush_behind_bytes: (max_phy_offset - message_store.get_flushed_where()).max(0),
+                                dispatch_behind_bytes: message_store.dispatch_behind_bytes().max(0),
+                                message_reserve_time_millis: if earliest_message_time > 0 {
+                                    current_millis() as i64 - earliest_message_time
+                                } else {
+                                    0
+                                },
+                            }
+                        })
+                        .unwrap_or_default()
+                });
 
             let timer_observable = self.composition.state.timer_message_store().cloned();
             self.composition
