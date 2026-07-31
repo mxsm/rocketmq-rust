@@ -1097,6 +1097,13 @@ pub const RUST_METRICS: &[MetricDescriptor] = &[
         source: MetricSource::Observability,
     },
     MetricDescriptor {
+        name: metrics::RELEASE_INFO,
+        kind: MetricKind::Gauge,
+        unit: "1",
+        labels: &[labels::SERVICE, labels::RELEASE_COMMIT, labels::RELEASE_NONCE],
+        source: MetricSource::Observability,
+    },
+    MetricDescriptor {
         name: metrics::MCP_REQUESTS_TOTAL,
         kind: MetricKind::Counter,
         unit: "{request}",
