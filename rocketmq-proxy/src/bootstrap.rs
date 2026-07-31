@@ -497,10 +497,10 @@ where
             let grpc_service = grpc_service.with_auth_runtime(auth_runtime.clone());
             let readiness = lifecycle
                 .map(|lifecycle| LifecycleReadiness::new(lifecycle, if config.remoting.enabled { 2 } else { 1 }));
-            if !config.remoting.enabled {
+            let serve_result = if !config.remoting.enabled {
                 let grpc_ready = readiness;
                 let grpc_context = service_context.child("grpc-ingress");
-                return server::serve_with_report_with_task_group_and_ready(
+                server::serve_with_report_with_task_group_and_ready(
                     config,
                     grpc_service,
                     shared_shutdown.clone(),
@@ -508,51 +508,53 @@ where
                     move || publish_listener_ready(grpc_ready),
                 )
                 .await
-                .and_then(require_healthy_grpc_shutdown);
-            }
-
-            let grpc_shutdown = shared_shutdown.clone();
-            let remoting_shutdown = {
-                let shared_shutdown = shared_shutdown.clone();
-                async move {
-                    let _ = shared_shutdown.await;
-                }
-            };
-            let grpc_parent_task_group = service_context.child("grpc-ingress").task_group().clone();
-            let remoting_service_context = service_context.child("remoting-ingress");
-            let grpc_config = config.clone();
-            let remoting_config = config;
-            let remoting_auth_runtime = auth_runtime.clone();
-            let grpc_ready = readiness.clone();
-            let remoting_ready = readiness;
-            let grpc_future = async move {
-                server::serve_with_report_with_task_group_and_ready(
-                    grpc_config,
-                    grpc_service,
-                    grpc_shutdown,
-                    grpc_parent_task_group,
-                    move || publish_listener_ready(grpc_ready),
-                )
-                .await
                 .and_then(require_healthy_grpc_shutdown)
+            } else {
+                let grpc_shutdown = shared_shutdown.clone();
+                let remoting_shutdown = {
+                    let shared_shutdown = shared_shutdown.clone();
+                    async move {
+                        let _ = shared_shutdown.await;
+                    }
+                };
+                let grpc_parent_task_group = service_context.child("grpc-ingress").task_group().clone();
+                let remoting_service_context = service_context.child("remoting-ingress");
+                let grpc_config = config.clone();
+                let remoting_config = config;
+                let remoting_auth_runtime = auth_runtime.clone();
+                let grpc_ready = readiness.clone();
+                let remoting_ready = readiness;
+                let grpc_future = async move {
+                    server::serve_with_report_with_task_group_and_ready(
+                        grpc_config,
+                        grpc_service,
+                        grpc_shutdown,
+                        grpc_parent_task_group,
+                        move || publish_listener_ready(grpc_ready),
+                    )
+                    .await
+                    .and_then(require_healthy_grpc_shutdown)
+                };
+                let remoting_future = async move {
+                    remoting::serve_with_service_context_and_ready_and_drain(
+                        remoting_service_context,
+                        transport_telemetry,
+                        remoting_config,
+                        processor,
+                        sessions,
+                        remoting_auth_runtime,
+                        remoting_backend,
+                        drain,
+                        remoting_shutdown,
+                        move || publish_listener_ready(remoting_ready),
+                    )
+                    .await
+                    .and_then(require_healthy_remoting_shutdown)
+                };
+                tokio::try_join!(grpc_future, remoting_future).map(|_| ())
             };
-            let remoting_future = async move {
-                remoting::serve_with_service_context_and_ready_and_drain(
-                    remoting_service_context,
-                    transport_telemetry,
-                    remoting_config,
-                    processor,
-                    sessions,
-                    remoting_auth_runtime,
-                    remoting_backend,
-                    drain,
-                    remoting_shutdown,
-                    move || publish_listener_ready(remoting_ready),
-                )
-                .await
-                .and_then(require_healthy_remoting_shutdown)
-            };
-            tokio::try_join!(grpc_future, remoting_future).map(|_| ())
+            auth_runtime = auth_runtime_for_shutdown;
+            serve_result
         }
         .await;
         let deadline = resolve_shutdown_deadline(&shared_shutdown, lifecycle_for_shutdown.as_ref());
