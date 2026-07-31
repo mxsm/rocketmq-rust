@@ -347,8 +347,10 @@ mod tests {
     #[test]
     fn source_has_no_process_global_meter_access() {
         let source = include_str!("runtime.rs");
+        let global_meter = ["global", "::meter"].concat();
+        let static_metrics = ["static RUNTIME", "_METRICS"].concat();
 
-        assert!(!source.contains("global::meter"));
-        assert!(!source.contains("static RUNTIME_METRICS"));
+        assert!(!source.contains(&global_meter));
+        assert!(!source.contains(&static_metrics));
     }
 }
