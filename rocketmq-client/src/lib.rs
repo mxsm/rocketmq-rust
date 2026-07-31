@@ -117,7 +117,6 @@ pub use crate::admin::TopicConfigPatch;
 pub use crate::admin::TopicConfigPatchOutcome;
 #[cfg(feature = "admin-read")]
 pub use crate::admin::TopicConfigVersioned;
-pub use crate::base::client_config::ClientConfig;
 pub use crate::base::query_result::QueryResult;
 pub use crate::base::MQAdmin;
 pub use crate::base::MqClientAdmin;
