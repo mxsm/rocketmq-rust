@@ -51,9 +51,8 @@ impl OffsetRequestHandler {
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let request_header = request
-            .decode_command_custom_header::<GetMaxOffsetRequestHeader>()
-            .unwrap(); //need to optimize
+        let request_header =
+            request.decode_required_header::<GetMaxOffsetRequestHeader>("decode get-max-offset request header")?;
         let mapping_context = broker_runtime_inner
             .topic_queue_mapping_manager()
             .build_topic_queue_mapping_context(&request_header, false);
@@ -84,9 +83,8 @@ impl OffsetRequestHandler {
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let request_header = request
-            .decode_command_custom_header::<GetMinOffsetRequestHeader>()
-            .unwrap(); //need to optimize
+        let request_header =
+            request.decode_required_header::<GetMinOffsetRequestHeader>("decode get-min-offset request header")?;
 
         let mapping_context = broker_runtime_inner
             .topic_queue_mapping_manager()

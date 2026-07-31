@@ -648,9 +648,8 @@ where
         let begin_time_mills = current_millis();
         let mut response = RemotingCommand::create_response_command();
         response.set_opaque_mut(request.opaque());
-        let mut request_header = request
-            .decode_command_custom_header_fast::<PullMessageRequestHeader>()
-            .unwrap();
+        let mut request_header =
+            request.decode_required_header_fast::<PullMessageRequestHeader>("decode pull-message request header")?;
         //info!("receive pull message request: {:?}", request_header);
         let mut response_header = PullMessageResponseHeader::default();
         let policy = self.context.policy();

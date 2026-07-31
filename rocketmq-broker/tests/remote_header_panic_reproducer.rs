@@ -13,17 +13,15 @@
 // limitations under the License.
 
 use std::collections::HashMap;
-use std::panic::catch_unwind;
-use std::panic::AssertUnwindSafe;
 
 use cheetah_string::CheetahString;
+use rocketmq_error::ErrorKind;
 use rocketmq_protocol::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader;
 use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 #[test]
-#[ignore = "red reproducer: remote pull headers must never reach an unwrap panic"]
-fn pull_header_decode_unwrap_does_not_panic_for_untrusted_fields() {
+fn pull_required_header_decode_returns_typed_errors_for_untrusted_fields() {
     let mut malformed = valid_pull_fields();
     malformed.insert(field("queueId"), field("not-a-number"));
     let mut overflow = valid_pull_fields();
@@ -44,28 +42,16 @@ fn pull_header_decode_unwrap_does_not_panic_for_untrusted_fields() {
         ),
     ];
 
-    let panics = cases
-        .into_iter()
-        .filter_map(|(case, command)| {
-            catch_unwind(AssertUnwindSafe(|| {
-                let _ = command
-                    .decode_command_custom_header_fast::<PullMessageRequestHeader>()
-                    .unwrap();
-            }))
-            .is_err()
-            .then_some(case)
-        })
-        .collect::<Vec<_>>();
-
-    assert!(
-        panics.is_empty(),
-        "remote pull header decoding panicked for: {panics:?}"
-    );
+    for (case, command) in cases {
+        let error = command
+            .decode_required_header_fast::<PullMessageRequestHeader>("decode pull request header")
+            .expect_err(case);
+        assert_eq!(error.kind(), ErrorKind::RequestHeaderError, "{case}");
+    }
 }
 
 #[test]
-#[ignore = "red reproducer: remote admin headers must never reach an unwrap panic"]
-fn admin_header_decode_unwrap_does_not_panic_for_untrusted_fields() {
+fn admin_required_header_decode_returns_typed_errors_for_untrusted_fields() {
     let mut malformed = valid_admin_fields();
     malformed.insert(field("queueId"), field("not-a-number"));
     let mut overflow = valid_admin_fields();
@@ -82,23 +68,12 @@ fn admin_header_decode_unwrap_does_not_panic_for_untrusted_fields() {
         ),
     ];
 
-    let panics = cases
-        .into_iter()
-        .filter_map(|(case, command)| {
-            catch_unwind(AssertUnwindSafe(|| {
-                let _ = command
-                    .decode_command_custom_header::<GetMaxOffsetRequestHeader>()
-                    .unwrap();
-            }))
-            .is_err()
-            .then_some(case)
-        })
-        .collect::<Vec<_>>();
-
-    assert!(
-        panics.is_empty(),
-        "remote admin header decoding panicked for: {panics:?}"
-    );
+    for (case, command) in cases {
+        let error = command
+            .decode_required_header::<GetMaxOffsetRequestHeader>("decode get-max-offset request header")
+            .expect_err(case);
+        assert_eq!(error.kind(), ErrorKind::RequestHeaderError, "{case}");
+    }
 }
 
 fn valid_pull_fields() -> HashMap<CheetahString, CheetahString> {

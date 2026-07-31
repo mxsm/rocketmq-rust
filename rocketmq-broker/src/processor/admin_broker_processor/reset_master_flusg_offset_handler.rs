@@ -42,9 +42,9 @@ impl ResetMasterFlushOffsetHandler {
 
         let broker_id = broker_runtime_inner.broker_config().broker_identity.broker_id;
         if broker_id != MASTER_ID {
-            let request_header = request
-                .decode_command_custom_header::<ResetMasterFlushOffsetHeader>()
-                .unwrap();
+            let request_header = request.decode_required_header::<ResetMasterFlushOffsetHeader>(
+                "decode reset-master-flush-offset request header",
+            )?;
 
             if let Some(maset_flush_offset) = request_header.master_flush_offset {
                 if let Some(message_store) = broker_runtime_inner.message_store() {

@@ -860,6 +860,44 @@ impl RemotingCommand {
         }
     }
 
+    /// Decodes a required custom request header and classifies any failure at
+    /// the request-header boundary.
+    ///
+    /// `operation` must be a static, low-cardinality description. It is exposed
+    /// as structured error context, while the source retains the decoder cause.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`rocketmq_error::RocketMQError::RequestHeaderSource`] when the
+    /// extension fields are absent or the header cannot be decoded.
+    pub fn decode_required_header<T>(&self, operation: &'static str) -> rocketmq_error::RocketMQResult<T>
+    where
+        T: FromMap<Target = T, Error = rocketmq_error::RocketMQError>,
+    {
+        self.decode_command_custom_header::<T>()
+            .map_err(|source| required_header_decode_error(operation, source))
+    }
+
+    /// Decodes a required custom request header through the fast codec when the
+    /// header supports it and classifies any failure at the request-header
+    /// boundary.
+    ///
+    /// `operation` must be a static, low-cardinality description. It is exposed
+    /// as structured error context, while the source retains the decoder cause.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`rocketmq_error::RocketMQError::RequestHeaderSource`] when the
+    /// extension fields are absent or the header cannot be decoded.
+    pub fn decode_required_header_fast<T>(&self, operation: &'static str) -> rocketmq_error::RocketMQResult<T>
+    where
+        T: FromMap<Target = T, Error = rocketmq_error::RocketMQError>,
+        T: Default + CommandCustomHeader,
+    {
+        self.decode_command_custom_header_fast::<T>()
+            .map_err(|source| required_header_decode_error(operation, source))
+    }
+
     #[inline]
     pub fn is_response_type(&self) -> bool {
         let bits = 1 << Self::RPC_TYPE;
@@ -1058,6 +1096,14 @@ impl RemotingCommand {
     }
 }
 
+#[inline]
+fn required_header_decode_error(
+    operation: &'static str,
+    source: rocketmq_error::RocketMQError,
+) -> rocketmq_error::RocketMQError {
+    rocketmq_error::RocketMQError::request_header_source(operation, source)
+}
+
 /// Extract header length from the combined serialize_type field
 #[inline]
 pub fn parse_header_length(size: i32) -> usize {
@@ -1099,7 +1145,7 @@ impl AsMut<RemotingCommand> for RemotingCommand {
 mod tests {
     use super::*;
 
-    #[derive(Debug, Default)]
+    #[derive(Debug, Default, PartialEq, Eq)]
     struct TestCustomHeader {
         value: i32,
     }
@@ -1248,6 +1294,63 @@ mod tests {
         );
         let decoded = command.decode_command_custom_header::<TestCustomHeader>().unwrap();
         assert_eq!(decoded.value, 7);
+    }
+
+    #[test]
+    fn required_header_decode_preserves_valid_standard_and_fast_results() {
+        let command = RemotingCommand::create_remoting_command(1).set_ext_fields(HashMap::from([(
+            CheetahString::from_static_str("value"),
+            CheetahString::from_static_str("7"),
+        )]));
+
+        let standard = command
+            .decode_required_header::<TestCustomHeader>("decode test header")
+            .unwrap();
+        let fast = command
+            .decode_required_header_fast::<TestCustomHeader>("decode test header")
+            .unwrap();
+
+        assert_eq!(standard, TestCustomHeader { value: 7 });
+        assert_eq!(fast, standard);
+    }
+
+    #[test]
+    fn required_header_decode_maps_missing_malformed_and_overflow_to_typed_error() {
+        let cases = [
+            ("missing extension fields", RemotingCommand::create_remoting_command(1)),
+            (
+                "missing required field",
+                RemotingCommand::create_remoting_command(1).set_ext_fields(HashMap::new()),
+            ),
+            (
+                "malformed numeric field",
+                RemotingCommand::create_remoting_command(1).set_ext_fields(HashMap::from([(
+                    CheetahString::from_static_str("value"),
+                    CheetahString::from_static_str("not-a-number"),
+                )])),
+            ),
+            (
+                "overflowing numeric field",
+                RemotingCommand::create_remoting_command(1).set_ext_fields(HashMap::from([(
+                    CheetahString::from_static_str("value"),
+                    CheetahString::from_static_str("2147483648"),
+                )])),
+            ),
+        ];
+
+        for (case, command) in cases {
+            let standard = command
+                .decode_required_header::<TestCustomHeader>("decode test header")
+                .expect_err(case);
+            assert_eq!(standard.kind(), rocketmq_error::ErrorKind::RequestHeaderError, "{case}");
+            assert!(std::error::Error::source(&standard).is_some(), "{case}");
+
+            let fast = command
+                .decode_required_header_fast::<TestCustomHeader>("decode test header")
+                .expect_err(case);
+            assert_eq!(fast.kind(), rocketmq_error::ErrorKind::RequestHeaderError, "{case}");
+            assert!(std::error::Error::source(&fast).is_some(), "{case}");
+        }
     }
 
     #[test]

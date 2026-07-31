@@ -117,9 +117,8 @@ impl ConsumerRequestHandler {
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
-        let request_header = request
-            .decode_command_custom_header::<GetConsumeStatsRequestHeader>()
-            .unwrap();
+        let request_header =
+            request.decode_required_header::<GetConsumeStatsRequestHeader>("decode consume-stats request header")?;
         let mut consume_stats = ConsumeStats::new();
         let mut topics = HashSet::new();
         if request_header.get_topic().is_empty() {

@@ -373,8 +373,9 @@ where
         }
 
         let request_code = *request.code_ref();
+        let opaque = request.opaque();
 
-        match self.process_table.get(&request_code).cloned() {
+        let result = match self.process_table.get(&request_code).cloned() {
             Some(processor) => {
                 self.process_with_optional_fast_failure(
                     fast_failure_queue_kind(request_code, false),
@@ -401,7 +402,9 @@ where
                     Ok(Some(response))
                 }
             },
-        }
+        };
+
+        map_request_header_error(result, opaque)
     }
 
     fn reject_request(&self, code: i32) -> RejectRequestResponse {
@@ -649,6 +652,18 @@ fn system_error_response(opaque: i32, remark: impl Into<String>) -> RemotingComm
     internal_error_with_opaque(opaque, remark)
 }
 
+fn map_request_header_error(
+    result: rocketmq_error::RocketMQResult<Option<RemotingCommand>>,
+    opaque: i32,
+) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    match result {
+        Err(error) if error.kind() == rocketmq_error::ErrorKind::RequestHeaderError => {
+            Ok(Some(command_from_error_with_opaque(&error, opaque)))
+        }
+        result => result,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -662,6 +677,27 @@ mod tests {
 
     type TestBrokerRequestProcessor =
         BrokerRequestProcessor<LocalFileMessageStore, DefaultTransactionalMessageService<LocalFileMessageStore>>;
+
+    #[test]
+    fn request_header_error_mapping_is_stable_redacted_and_preserves_opaque() {
+        let source = rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
+            format: "header",
+            message: "secret-extension-value".to_owned(),
+        });
+        let error = rocketmq_error::RocketMQError::request_header_source("decode test request header", source);
+
+        let response = map_request_header_error(Err(error), 47)
+            .expect("request-header error should become a response")
+            .expect("request-header error should return a response command");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::InvalidParameter);
+        assert_eq!(response.opaque(), 47);
+        assert_eq!(
+            response.remark().map(|remark| remark.as_str()),
+            Some("Request header is invalid")
+        );
+        assert!(!response.remark().is_some_and(|remark| remark.contains("secret")));
+    }
 
     #[test]
     fn fast_failure_queue_kind_maps_java_fast_failure_families() {

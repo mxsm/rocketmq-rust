@@ -23,8 +23,10 @@ use crate::rpc::topic_request_header::TopicRequestHeader;
 #[derive(Debug, Clone, Serialize, Deserialize, RequestHeaderCodecV2)]
 #[serde(rename_all = "camelCase")]
 pub struct GetMaxOffsetRequestHeader {
+    #[required]
     pub topic: CheetahString,
 
+    #[required]
     pub queue_id: i32,
 
     pub committed: bool,

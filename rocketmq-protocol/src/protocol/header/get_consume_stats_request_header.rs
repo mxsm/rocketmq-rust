@@ -22,6 +22,7 @@ use crate::rpc::topic_request_header::TopicRequestHeader;
 #[derive(Debug, Serialize, Deserialize, RequestHeaderCodecV2)]
 pub struct GetConsumeStatsRequestHeader {
     #[serde(rename = "consumerGroup")]
+    #[required]
     pub consumer_group: CheetahString,
     #[serde(rename = "topic")]
     pub topic: CheetahString,
