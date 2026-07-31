@@ -75,6 +75,7 @@ pub use handle::CONTROLLER_METER_SCOPE;
 pub use handle::MCP_METER_SCOPE;
 pub use handle::NAMESRV_METER_SCOPE;
 pub use handle::PROXY_METER_SCOPE;
+pub use handle::RUNTIME_METER_SCOPE;
 pub use handle::SRE_CONNECTOR_METER_SCOPE;
 pub use handle::SRE_CONTROL_PLANE_METER_SCOPE;
 pub use handle::STORE_METER_SCOPE;
