@@ -44,6 +44,7 @@ use crate::error::Result;
 use crate::event::controller_result::ControllerResult as EventControllerResult;
 use crate::heartbeat::default_broker_heartbeat_manager::DefaultBrokerHeartbeatManager;
 use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
+use crate::metrics::controller_metrics_manager::ControllerMetricsManager;
 use crate::openraft::GrpcRaftService;
 use crate::openraft::RaftNodeManager;
 use crate::openraft::StateMachineReadView;
@@ -146,6 +147,7 @@ pub struct OpenRaftController {
     scheduling: Arc<AtomicBool>,
     first_received_heartbeat_time: Arc<AtomicU64>,
     service_context: ChildServiceContext,
+    metrics_manager: Arc<ControllerMetricsManager>,
 }
 
 impl OpenRaftController {
@@ -162,6 +164,17 @@ impl OpenRaftController {
         heartbeat_manager: Arc<DefaultBrokerHeartbeatManager>,
         service_context: ChildServiceContext,
     ) -> Self {
+        let metrics_manager =
+            ControllerMetricsManager::new(config.clone(), &rocketmq_observability::TelemetryHandle::noop());
+        Self::new_with_heartbeat_and_metrics(config, heartbeat_manager, service_context, metrics_manager)
+    }
+
+    pub(crate) fn new_with_heartbeat_and_metrics(
+        config: ControllerConfigReader,
+        heartbeat_manager: Arc<DefaultBrokerHeartbeatManager>,
+        service_context: ChildServiceContext,
+        metrics_manager: Arc<ControllerMetricsManager>,
+    ) -> Self {
         Self {
             config,
             lifecycle_lock: AsyncMutex::new(()),
@@ -174,6 +187,7 @@ impl OpenRaftController {
             scheduling: Arc::new(AtomicBool::new(false)),
             first_received_heartbeat_time: Arc::new(AtomicU64::new(0)),
             service_context,
+            metrics_manager,
         }
     }
 
@@ -838,6 +852,10 @@ impl OpenRaftController {
     pub fn scheduling_enabled(&self) -> bool {
         self.scheduling.load(Ordering::Acquire)
     }
+
+    pub(crate) fn record_election_attempt(&self, latency_ms: u64) {
+        self.metrics_manager.record_election_attempt(latency_ms);
+    }
 }
 
 impl Controller for OpenRaftController {
@@ -863,6 +881,7 @@ impl Controller for OpenRaftController {
         let listeners = self.lifecycle_listeners.clone();
         let scheduling = self.scheduling.clone();
         let first_received_heartbeat_time = self.first_received_heartbeat_time.clone();
+        let metrics_manager = self.metrics_manager.clone();
         let scheduled_tasks = self.start_scan_task_group().await?;
         let mut task_config = ScheduledTaskConfig::fixed_delay(
             "controller.openraft.scan-not-active-broker",
@@ -875,6 +894,7 @@ impl Controller for OpenRaftController {
             let listeners = listeners.clone();
             let scheduling = scheduling.clone();
             let first_received_heartbeat_time = first_received_heartbeat_time.clone();
+            let metrics_manager = metrics_manager.clone();
             async move {
                 if !scheduling.load(Ordering::Acquire) {
                     return;
@@ -883,9 +903,8 @@ impl Controller for OpenRaftController {
                 use openraft::async_runtime::WatchReceiver;
                 let metrics = node.raft().metrics().borrow_watched().clone();
                 let config = config.snapshot();
-                rocketmq_observability::metrics::controller::record_quorum_health(
-                    metrics.running_state.is_ok() && metrics.last_quorum_acked.is_some(),
-                );
+                metrics_manager
+                    .record_quorum_health(metrics.running_state.is_ok() && metrics.last_quorum_acked.is_some());
                 if metrics.current_leader != Some(config.node_id) {
                     return;
                 }
@@ -903,7 +922,7 @@ impl Controller for OpenRaftController {
                     .replicas_info_manager()
                     .heartbeat_age_samples_at(now_millis);
                 for age_millis in heartbeat_ages {
-                    rocketmq_observability::metrics::controller::record_heartbeat_age(age_millis);
+                    metrics_manager.record_heartbeat_age(age_millis);
                 }
 
                 let scan_span = rocketmq_observability::trace::controller::heartbeat_scan_span();
@@ -913,9 +932,7 @@ impl Controller for OpenRaftController {
                 {
                     Ok(inactive_brokers) => {
                         let stale_count = inactive_brokers.len();
-                        rocketmq_observability::metrics::controller::record_stale_brokers(
-                            u64::try_from(stale_count).unwrap_or(u64::MAX),
-                        );
+                        metrics_manager.record_stale_brokers(u64::try_from(stale_count).unwrap_or(u64::MAX));
                         scan_span.record("result", "success");
                         scan_span.record("stale_count", i64::try_from(stale_count).unwrap_or(i64::MAX));
                         for broker_identity in inactive_brokers {
