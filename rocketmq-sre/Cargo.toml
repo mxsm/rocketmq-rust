@@ -48,7 +48,7 @@ hmac = "0.12.1"
 jsonwebtoken = { version = "9.3.1", features = ["use_pem"] }
 k8s-openapi = { version = "0.28.0", features = ["v1_36"] }
 kube = { version = "4.2.0", default-features = false, features = ["client", "ring", "rustls-tls"] }
-object_store = { version = "0.12.4", features = ["aws", "fs"] }
+object_store = { version = "0.14.1", features = ["aws", "fs"] }
 prost = "0.14.4"
 reqwest = { version = "0.13.2", default-features = false, features = ["json", "rustls"] }
 rustls = { version = "0.23.42", default-features = false, features = ["ring", "std"] }
