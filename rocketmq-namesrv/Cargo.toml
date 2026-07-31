@@ -71,6 +71,7 @@ clap           = { version = "4.6.1", features = ["derive"] }
 cheetah-string = { workspace = true }
 
 [dev-dependencies]
+rocketmq-transport = { workspace = true, features = ["test-support"] }
 criterion = { version = "0.8", features = ["html_reports", "async_futures"] }
 futures   = "0.3"
 tempfile = "3.27.0"

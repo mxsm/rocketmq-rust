@@ -73,6 +73,7 @@ futures        = { workspace = true }
 cheetah-string = { workspace = true }
 
 [dev-dependencies]
+rocketmq-transport = { workspace = true, features = ["test-support"] }
 criterion = { version = "0.8.2", features = ["async_tokio"] }
 trybuild  = "1.0.116"
 

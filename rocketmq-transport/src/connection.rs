@@ -335,6 +335,11 @@ pub struct ConnectionStateHandle {
 }
 
 impl ConnectionStateHandle {
+    pub(crate) fn healthy() -> Self {
+        let (state_tx, state_rx) = watch::channel(ConnectionState::Healthy);
+        Self { state_tx, state_rx }
+    }
+
     /// Returns the most recently published connection state.
     #[inline]
     pub fn state(&self) -> ConnectionState {

@@ -4834,6 +4834,7 @@ dependencies = [
  "serde_json",
  "serde_json_any_key",
  "tempfile",
+ "thiserror 2.0.19",
  "tokio",
  "tokio-rustls",
  "tokio-util",

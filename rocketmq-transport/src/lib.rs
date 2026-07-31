@@ -27,8 +27,10 @@ mod connection;
 mod connection_context;
 mod deadline;
 mod discovery;
+mod dispatch;
 mod error_helpers;
 mod error_response;
+#[cfg(any(test, feature = "test-support"))]
 mod local;
 mod net;
 pub mod prelude;
@@ -97,6 +99,20 @@ pub use discovery::http_tiny_client::HttpResult;
 pub use discovery::http_tiny_client::HttpTinyClient;
 pub use discovery::name_server_update_callback::NameServerUpdateCallback;
 pub use discovery::top_addressing::TopAddressing;
+pub use dispatch::AuthorizedCommandDispatcher;
+pub use dispatch::AuthorizedDispatchBoundary;
+pub use dispatch::DispatchError;
+pub use dispatch::DispatchOutcome;
+pub use dispatch::LocalResponseReceiver;
+#[doc(hidden)]
+pub use dispatch::LocalResponseSink;
+pub use dispatch::RequestContext;
+pub use dispatch::RequestContextError;
+pub use dispatch::RequestTransport;
+pub use dispatch::ResponseSink;
+pub use dispatch::ResponseSinkError;
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
 pub use local::LocalRequestHarness;
 pub use net::channel::ArcChannel;
 pub use net::channel::Channel;

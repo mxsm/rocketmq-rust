@@ -4366,6 +4366,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_json_any_key",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-util",
  "tracing",

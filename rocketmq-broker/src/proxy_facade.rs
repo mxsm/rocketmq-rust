@@ -30,10 +30,10 @@ use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::TaskGroup;
+use rocketmq_security_api::Principal;
 use rocketmq_store::MessageStoreConfig;
-use rocketmq_transport::LocalRequestHarness;
-use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
-use tokio::time::timeout;
+use rocketmq_transport::RequestContext;
+use rocketmq_transport::RequestDeadline;
 
 use crate::broker_runtime::BrokerRuntime;
 use crate::lifecycle::BrokerReadiness;
@@ -195,42 +195,45 @@ impl ProxyBrokerFacade {
         mut request: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<rocketmq_protocol::protocol::remoting_command::RemotingCommand> {
         request.make_custom_header_to_net();
-        let mut processor = self
+        let dispatcher = self
             .runtime
-            .proxy_request_processor()
+            .authorized_dispatcher()
             .ok_or_else(embedded_broker_request_processor_not_ready)?;
 
         let opaque = request.opaque();
-        let mut harness = LocalRequestHarness::new(self.local_request_tasks.clone()).await?;
-        if let Some(mut response) = processor
-            .process_request(harness.channel(), harness.context(), &mut request)
-            .await?
-        {
-            response.make_custom_header_to_net();
-            return Ok(response.set_opaque(opaque).mark_response_type());
-        }
-
-        let response = timeout(LOCAL_PROXY_RESPONSE_TIMEOUT, harness.receive_response())
+        let deadline = RequestDeadline::after(LOCAL_PROXY_RESPONSE_TIMEOUT);
+        let context =
+            RequestContext::try_embedded(Some(Principal::new("embedded-proxy")), Some(deadline)).map_err(|error| {
+                rocketmq_error::RocketMQError::response_process_failed(
+                    "embedded_broker_request_context",
+                    error.to_string(),
+                )
+            })?;
+        let response = dispatcher
+            .dispatch_embedded(&self.local_request_tasks, context, request)
             .await
-            .map_err(|_| rocketmq_error::RocketMQError::Timeout {
-                operation: "embedded_broker_response",
-                timeout_ms: LOCAL_PROXY_RESPONSE_TIMEOUT.as_millis() as u64,
-            })??;
-
-        response.ok_or_else(|| {
-            rocketmq_error::RocketMQError::response_process_failed(
-                "embedded_broker_response",
-                format!(
-                    "embedded broker produced no response for request code {}",
-                    request.code()
-                ),
-            )
-        })
+            .map_err(embedded_dispatch_error)?
+            .set_opaque(opaque)
+            .mark_response_type();
+        Ok(response)
     }
 }
 
 fn embedded_broker_request_processor_not_ready() -> rocketmq_error::RocketMQError {
     rocketmq_error::RocketMQError::not_initialized("embedded_broker_request_processor")
+}
+
+fn embedded_dispatch_error(error: rocketmq_transport::DispatchError) -> rocketmq_error::RocketMQError {
+    if matches!(
+        &error,
+        rocketmq_transport::DispatchError::Response(rocketmq_transport::ResponseSinkError::DeadlineExceeded)
+    ) {
+        return rocketmq_error::RocketMQError::Timeout {
+            operation: "embedded_broker_response",
+            timeout_ms: LOCAL_PROXY_RESPONSE_TIMEOUT.as_millis() as u64,
+        };
+    }
+    rocketmq_error::RocketMQError::response_process_failed("embedded_broker_dispatch", error.to_string())
 }
 
 fn build_topic_route(broker_config: &BrokerConfig, topic_config: &TopicConfig) -> TopicRouteData {
