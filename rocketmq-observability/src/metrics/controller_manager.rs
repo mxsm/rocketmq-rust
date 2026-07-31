@@ -356,6 +356,36 @@ impl ControllerMetricsManager {
             .record_election_latency(latency_ms, self.base_attributes.as_ref());
     }
 
+    pub fn record_election_attempt(&self, latency_ms: u64) {
+        let Some(attributes) = self.recording_attributes() else {
+            return;
+        };
+        self.controller_metrics.record_election_total(1, &attributes);
+        self.controller_metrics.record_election_latency(latency_ms, &attributes);
+    }
+
+    pub fn record_quorum_health(&self, healthy: bool) {
+        let Some(attributes) = self.recording_attributes() else {
+            return;
+        };
+        self.controller_metrics
+            .record_quorum_health(u64::from(healthy), &attributes);
+    }
+
+    pub fn record_heartbeat_age(&self, age_ms: u64) {
+        let Some(attributes) = self.recording_attributes() else {
+            return;
+        };
+        self.controller_metrics.record_heartbeat_age(age_ms, &attributes);
+    }
+
+    pub fn record_stale_brokers(&self, count: u64) {
+        let Some(attributes) = self.recording_attributes() else {
+            return;
+        };
+        self.controller_metrics.record_stale_brokers(count, &attributes);
+    }
+
     #[cfg(test)]
     fn is_noop(&self) -> bool {
         self.noop
@@ -491,6 +521,10 @@ mod tests {
         manager.record_dledger_op_latency(DLedgerOperation::Append, 20);
         manager.inc_election_total(ElectionResult::NewMasterElected);
         manager.record_election_latency(30);
+        manager.record_election_attempt(30);
+        manager.record_quorum_health(true);
+        manager.record_heartbeat_age(50);
+        manager.record_stale_brokers(0);
     }
 
     #[test]
