@@ -19,6 +19,7 @@ use std::sync::atomic::Ordering;
 use std::sync::mpsc as std_mpsc;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
 use parking_lot::Mutex;
 use rocketmq_error::RocketMQError;
@@ -239,7 +240,7 @@ impl ClientRuntimeTaskHandle {
     }
 
     pub(crate) fn task_count(&self) -> usize {
-        self.task_group.task_count()
+        usize::from(self.task_group.contains_task(self.task_id))
     }
 
     pub(crate) fn is_finished(&self) -> bool {
@@ -281,7 +282,7 @@ pub(crate) fn spawn_client_task_with_context<F>(
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    let task_group = context.task_group().child(task_name);
+    let task_group = context.task_group().clone();
     let (completion_tx, completion_rx) = std_mpsc::channel();
     let task_id = task_group
         .spawn_service(task_name, async move {
@@ -311,12 +312,14 @@ where
 
 pub(crate) struct ClientTrackedTaskHandle {
     task_group: TaskGroup,
+    task_id: TaskId,
+    task_name: &'static str,
     completion_rx: Mutex<Option<std_mpsc::Receiver<()>>>,
 }
 
 impl ClientTrackedTaskHandle {
     pub(crate) fn task_count(&self) -> usize {
-        self.task_group.task_count()
+        usize::from(self.task_group.contains_task(self.task_id))
     }
 
     pub(crate) fn is_finished(&self) -> bool {
@@ -335,10 +338,17 @@ impl ClientTrackedTaskHandle {
     }
 
     pub(crate) async fn shutdown(self, timeout: Duration) -> ShutdownReport {
-        self.task_group.shutdown(timeout).await
+        let started_at = Instant::now();
+        if self.task_group.wait_task(self.task_id, timeout).await {
+            return completed_task_report(self.task_name, started_at.elapsed());
+        }
+
+        let aborted = self.task_group.abort_task_and_wait(self.task_id, timeout).await;
+        timed_out_task_report(self.task_name, started_at.elapsed(), aborted)
     }
 
     pub(crate) fn shutdown_blocking(self, timeout: Duration) -> (ShutdownReport, bool) {
+        let started_at = Instant::now();
         let completed = match self.completion_rx.into_inner() {
             Some(completion_rx) => match completion_rx.recv_timeout(timeout) {
                 Ok(()) | Err(std_mpsc::RecvTimeoutError::Disconnected) => true,
@@ -347,13 +357,37 @@ impl ClientTrackedTaskHandle {
             None => true,
         };
 
-        let report = self.task_group.shutdown_now();
+        let report = if completed {
+            completed_task_report(self.task_name, started_at.elapsed())
+        } else {
+            let aborted = self.task_group.abort_task(self.task_id);
+            timed_out_task_report(self.task_name, started_at.elapsed(), aborted)
+        };
         (report, completed)
     }
 
     pub(crate) fn shutdown_now(self) -> ShutdownReport {
-        self.task_group.shutdown_now()
+        let mut report = ShutdownReport::new(self.task_name, Duration::ZERO);
+        if self.task_group.abort_task(self.task_id) {
+            report.aborted = 1;
+        } else {
+            report.completed = 1;
+        }
+        report
     }
+}
+
+fn completed_task_report(task_name: &'static str, elapsed: Duration) -> ShutdownReport {
+    let mut report = ShutdownReport::new(task_name, elapsed);
+    report.completed = 1;
+    report
+}
+
+fn timed_out_task_report(task_name: &'static str, elapsed: Duration, aborted: bool) -> ShutdownReport {
+    let mut report = ShutdownReport::new(task_name, elapsed);
+    report.timed_out = 1;
+    report.aborted = usize::from(aborted);
+    report
 }
 
 pub(crate) fn spawn_client_tracked_task_with_context<F>(
@@ -364,9 +398,9 @@ pub(crate) fn spawn_client_tracked_task_with_context<F>(
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    let task_group = context.task_group().child(task_name);
+    let task_group = context.task_group().clone();
     let (completion_tx, completion_rx) = std_mpsc::channel();
-    task_group
+    let task_id = task_group
         .spawn_service(task_name, async move {
             let _completion = ClientTrackedTaskCompletion::new(completion_tx);
             task.await;
@@ -375,6 +409,8 @@ where
 
     Ok(ClientTrackedTaskHandle {
         task_group,
+        task_id,
+        task_name,
         completion_rx: Mutex::new(Some(completion_rx)),
     })
 }
@@ -568,5 +604,67 @@ mod tests {
         let _ = handle.task_id();
         let report = service_context.task_group().shutdown(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{report:?}");
+    }
+
+    #[tokio::test]
+    async fn transient_tasks_share_component_owner() {
+        const TASKS: usize = 1_024;
+
+        let service_context = test_service_context("client-transient-owner-test");
+        let baseline_children = service_context.task_group().child_count();
+        let mut handles = Vec::with_capacity(TASKS);
+
+        for _ in 0..TASKS {
+            handles.push(
+                spawn_client_task_with_context(&service_context, "transient-task", async {})
+                    .expect("transient task should spawn"),
+            );
+        }
+
+        for handle in &handles {
+            assert!(handle.wait_finished(Duration::from_secs(1)));
+        }
+
+        assert_eq!(service_context.task_group().task_count(), 0);
+        assert_eq!(
+            service_context.task_group().child_count(),
+            baseline_children,
+            "completed task handles must not retain per-task child groups"
+        );
+        drop(handles);
+
+        let report = service_context.task_group().shutdown(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+    }
+
+    #[tokio::test]
+    async fn tracked_task_shutdown_does_not_close_component_owner() {
+        let service_context = test_service_context("client-tracked-task-isolation-test");
+        let first =
+            spawn_client_tracked_task_with_context(&service_context, "first-tracked-task", std::future::pending())
+                .expect("first task should spawn");
+        let (second_shutdown_tx, second_shutdown_rx) = tokio::sync::oneshot::channel();
+        let second = spawn_client_tracked_task_with_context(&service_context, "second-tracked-task", async move {
+            let _ = second_shutdown_rx.await;
+        })
+        .expect("second task should spawn");
+
+        let report = first.shutdown_now();
+        assert_eq!(report.aborted, 1, "{}", report.to_json());
+        assert_eq!(
+            service_context.task_group().lifecycle_state(),
+            TaskGroupLifecycleState::Open
+        );
+        assert_eq!(second.task_count(), 1);
+
+        second_shutdown_tx
+            .send(())
+            .expect("second task should still be running");
+        let report = second.shutdown(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+        assert_eq!(report.completed, 1);
+
+        let report = service_context.task_group().shutdown(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
     }
 }

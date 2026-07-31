@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use rocketmq_client_rust::ClientConfig;
 use rocketmq_client_rust::ClientRuntime;
@@ -36,6 +37,39 @@ fn client_runtime(owner: &RuntimeOwner, telemetry_handle: TelemetryHandle) -> Ar
         telemetry_handle,
     )
     .expect("test client runtime should be valid")
+}
+
+#[test]
+fn transient_tasks_share_component_owner() {
+    const TASKS: usize = 1_024;
+
+    let owner = runtime_owner("client-runtime-transient-owner");
+    let runtime = client_runtime(&owner, TelemetryHandle::noop());
+    let component = runtime.child("transient-tasks");
+    let task_group = component.task_group().clone();
+    let baseline_children = task_group.child_count();
+
+    owner.block_on(async {
+        let mut task_ids = Vec::with_capacity(TASKS);
+        for _ in 0..TASKS {
+            task_ids.push(
+                task_group
+                    .spawn_service("transient-client-task", async {})
+                    .expect("transient task should spawn"),
+            );
+        }
+        for task_id in task_ids {
+            assert!(task_group.wait_task(task_id, Duration::from_secs(1)).await);
+        }
+
+        assert_eq!(task_group.task_count(), 0);
+        assert_eq!(task_group.child_count(), baseline_children);
+        let report = runtime.shutdown().await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+    });
+    owner
+        .shutdown_runtime_blocking()
+        .expect("runtime should shut down cleanly");
 }
 
 #[test]

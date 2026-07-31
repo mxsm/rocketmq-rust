@@ -28,12 +28,15 @@ use criterion::Criterion;
 #[derive(Debug)]
 struct ClientRuntimeSpawnOutput {
     task_count: usize,
+    retained_child_groups: usize,
     elapsed: Duration,
 }
 
 fn run_explicit_runtime_spawn(task_count: usize) -> ClientRuntimeSpawnOutput {
     let runtime = support::BenchClientRuntime::new("explicit-spawn");
-    let task_group = runtime.child("spawn").task_group().child("tasks");
+    let spawn_context = runtime.child("spawn");
+    let task_group = spawn_context.task_group().clone();
+    let baseline_children = task_group.child_count();
     let (tx, rx) = mpsc::channel();
     let started_at = Instant::now();
 
@@ -52,9 +55,14 @@ fn run_explicit_runtime_spawn(task_count: usize) -> ClientRuntimeSpawnOutput {
             .expect("explicit client runtime task should complete");
     }
     let elapsed = started_at.elapsed();
+    let retained_child_groups = task_group.child_count() - baseline_children;
     runtime.shutdown();
 
-    ClientRuntimeSpawnOutput { task_count, elapsed }
+    ClientRuntimeSpawnOutput {
+        task_count,
+        retained_child_groups,
+        elapsed,
+    }
 }
 
 fn bench_client_runtime_spawn(criterion: &mut Criterion) {
@@ -67,6 +75,7 @@ fn bench_client_runtime_spawn(criterion: &mut Criterion) {
                 bencher.iter(|| {
                     let output = run_explicit_runtime_spawn(black_box(*task_count));
                     assert_eq!(output.task_count, *task_count);
+                    assert_eq!(output.retained_child_groups, 0);
                     black_box(output.elapsed);
                 });
             },
