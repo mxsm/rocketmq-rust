@@ -181,6 +181,7 @@ impl RootServiceContext {
             .snapshot(&self.task_group, self.blocking_lanes.snapshots())
     }
 
+    /// Returns a bounded, sanitized diagnostics view for this service runtime.
     pub fn diagnostics_view_v1(
         &self,
         component: crate::diagnostics::RuntimeComponent,
@@ -290,6 +291,7 @@ impl ChildServiceContext {
             .snapshot(&self.task_group, self.blocking_lanes.snapshots())
     }
 
+    /// Returns a bounded, sanitized diagnostics view for this service subtree.
     pub fn diagnostics_view_v1(
         &self,
         component: crate::diagnostics::RuntimeComponent,
