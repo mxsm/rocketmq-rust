@@ -27,29 +27,6 @@ use rocketmq_runtime::RuntimeDiagnosticsViewV1;
 #[cfg(any(feature = "otel-metrics", test))]
 use rocketmq_runtime::RuntimeTaskKindV1;
 
-#[cfg(feature = "otel-metrics")]
-use std::sync::OnceLock;
-
-#[cfg(feature = "otel-metrics")]
-static RUNTIME_METRICS: OnceLock<RuntimeMetrics> = OnceLock::new();
-
-#[cfg(feature = "otel-metrics")]
-fn global_metrics() -> &'static RuntimeMetrics {
-    RUNTIME_METRICS.get_or_init(|| RuntimeMetrics::new(&opentelemetry::global::meter("rocketmq-runtime")))
-}
-
-/// Records one caller-owned diagnostics snapshot.
-///
-/// This helper does not create a polling task. Services decide when to sample
-/// from an existing lifecycle-owned task or authenticated diagnostics request.
-pub fn record_snapshot(view: &RuntimeDiagnosticsViewV1) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record(view);
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = view;
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeLifecycleState {
     Starting,
@@ -92,26 +69,100 @@ impl RuntimeLifecycleReason {
     }
 }
 
-pub fn record_lifecycle(component: RuntimeComponent, state: RuntimeLifecycleState, reason: RuntimeLifecycleReason) {
-    let result = if state == RuntimeLifecycleState::Failed {
-        "failure"
-    } else {
-        "success"
-    };
+/// Instance-owned runtime diagnostics and lifecycle metric recorder.
+#[derive(Clone)]
+pub struct RuntimeMetricsRecorder {
+    component: RuntimeComponent,
     #[cfg(feature = "otel-metrics")]
-    global_metrics().record_lifecycle(component, state, result, reason);
+    telemetry: crate::TelemetryRecorder,
+    #[cfg(feature = "otel-metrics")]
+    metrics: Option<RuntimeMetrics>,
+}
 
-    tracing::info!(
-        event = crate::semantic::events::RUNTIME_LIFECYCLE,
-        component = component_name(component),
-        state = state.as_str(),
-        result,
-        reason = reason.as_str(),
-        "runtime lifecycle transition"
-    );
+impl RuntimeMetricsRecorder {
+    /// Creates a no-op recorder that still emits the bounded lifecycle log contract.
+    #[must_use]
+    pub fn noop(component: RuntimeComponent) -> Self {
+        Self::from_handle(&crate::TelemetryHandle::noop(), component)
+    }
+
+    /// Creates a recorder bound to the component's fixed injected meter.
+    #[must_use]
+    pub fn from_handle(handle: &crate::TelemetryHandle, component: RuntimeComponent) -> Self {
+        #[cfg(feature = "otel-metrics")]
+        {
+            let telemetry = handle.child(crate::handle::RUNTIME_METER_SCOPE);
+            let metrics = telemetry.meter().map(|meter| RuntimeMetrics::new(&meter));
+            Self {
+                component,
+                telemetry,
+                metrics,
+            }
+        }
+
+        #[cfg(not(feature = "otel-metrics"))]
+        {
+            let _ = handle;
+            Self { component }
+        }
+    }
+
+    /// Records one caller-owned diagnostics snapshot.
+    ///
+    /// This method does not create a polling task. Services decide when to
+    /// sample from lifecycle-owned work or an authenticated diagnostics request.
+    pub fn record_snapshot(&self, view: &RuntimeDiagnosticsViewV1) {
+        if view.component != self.component {
+            return;
+        }
+        #[cfg(feature = "otel-metrics")]
+        if self.telemetry.is_active() {
+            if let Some(metrics) = &self.metrics {
+                metrics.record(view);
+            }
+        }
+    }
+
+    /// Records one bounded lifecycle transition and its structured log event.
+    pub fn record_lifecycle(&self, state: RuntimeLifecycleState, reason: RuntimeLifecycleReason) {
+        let result = if state == RuntimeLifecycleState::Failed {
+            "failure"
+        } else {
+            "success"
+        };
+        #[cfg(feature = "otel-metrics")]
+        if self.telemetry.is_active() {
+            if let Some(metrics) = &self.metrics {
+                metrics.record_lifecycle(self.component, state, result, reason);
+            }
+        }
+
+        tracing::info!(
+            event = crate::semantic::events::RUNTIME_LIFECYCLE,
+            component = component_name(self.component),
+            state = state.as_str(),
+            result,
+            reason = reason.as_str(),
+            "runtime lifecycle transition"
+        );
+    }
+}
+
+/// Compatibility helper for callers that have not yet injected a recorder.
+///
+/// This path never reads global telemetry state. It records no metrics; callers
+/// should retain a [`RuntimeMetricsRecorder`] when metrics are required.
+pub fn record_snapshot(view: &RuntimeDiagnosticsViewV1) {
+    RuntimeMetricsRecorder::noop(view.component).record_snapshot(view);
+}
+
+/// Compatibility helper for lifecycle logging without global metric state.
+pub fn record_lifecycle(component: RuntimeComponent, state: RuntimeLifecycleState, reason: RuntimeLifecycleReason) {
+    RuntimeMetricsRecorder::noop(component).record_lifecycle(state, reason);
 }
 
 #[cfg(feature = "otel-metrics")]
+#[derive(Clone)]
 struct RuntimeMetrics {
     tasks: opentelemetry::metrics::Gauge<u64>,
     task_groups: opentelemetry::metrics::Gauge<u64>,
@@ -286,13 +337,18 @@ mod tests {
 
     #[test]
     fn lifecycle_labels_are_bounded_enums() {
-        record_lifecycle(
-            RuntimeComponent::Mcp,
-            RuntimeLifecycleState::Ready,
-            RuntimeLifecycleReason::Startup,
-        );
+        RuntimeMetricsRecorder::noop(RuntimeComponent::Mcp)
+            .record_lifecycle(RuntimeLifecycleState::Ready, RuntimeLifecycleReason::Startup);
         assert_eq!(component_name(RuntimeComponent::Other), "other");
         assert_eq!(task_kind_name(RuntimeTaskKindV1::ScheduledRun), "scheduled_run");
         assert_eq!(lane_name(RuntimeBlockingLaneV1::MetadataIo), "metadata_io");
+    }
+
+    #[test]
+    fn source_has_no_process_global_meter_access() {
+        let source = include_str!("runtime.rs");
+
+        assert!(!source.contains("global::meter"));
+        assert!(!source.contains("static RUNTIME_METRICS"));
     }
 }
