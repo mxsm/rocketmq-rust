@@ -462,7 +462,7 @@ where
             backend_context,
             service_context,
         } = self;
-        let auth_context = service_context.child("auth");
+        let auth_context = service_context.component("auth");
         let mut auth_runtime_for_shutdown = auth_runtime.clone();
         let lifecycle_for_shutdown = lifecycle.clone();
         let shared_shutdown = shutdown.boxed().shared();
@@ -481,7 +481,7 @@ where
                         message: format!("failed to attach Proxy drain lifecycle: {error}"),
                     })?;
             }
-            let auth_context = service_context.child("auth");
+            let auth_context = service_context.component("auth");
             let effective_auth_runtime = match auth_runtime.clone() {
                 Some(auth_runtime) => Some(auth_runtime),
                 None => {
@@ -499,7 +499,7 @@ where
                 .map(|lifecycle| LifecycleReadiness::new(lifecycle, if config.remoting.enabled { 2 } else { 1 }));
             let serve_result = if !config.remoting.enabled {
                 let grpc_ready = readiness;
-                let grpc_context = service_context.child("grpc-ingress");
+                let grpc_context = service_context.component("grpc-ingress");
                 server::serve_with_report_with_task_group_and_ready(
                     config,
                     grpc_service,
@@ -517,8 +517,8 @@ where
                         let _ = shared_shutdown.await;
                     }
                 };
-                let grpc_parent_task_group = service_context.child("grpc-ingress").task_group().clone();
-                let remoting_service_context = service_context.child("remoting-ingress");
+                let grpc_parent_task_group = service_context.component("grpc-ingress").task_group().clone();
+                let remoting_service_context = service_context.component("remoting-ingress");
                 let grpc_config = config.clone();
                 let remoting_config = config;
                 let remoting_auth_runtime = effective_auth_runtime;
@@ -664,7 +664,7 @@ fn default_service_manager_and_backend(
                 cluster_config.broker_cluster_name = config.auth.cluster_name.clone();
             }
             let signer = build_cluster_acl_signer(config).map(|signer| signer.into_outbound_signer());
-            let cluster_context = service_context.child("cluster-backend");
+            let cluster_context = service_context.component("cluster-backend");
             let client = Arc::new(RocketmqClusterClient::new(
                 cluster_config,
                 signer,
@@ -684,7 +684,7 @@ fn default_service_manager_and_backend(
         )),
         #[cfg(feature = "local-mode")]
         ProxyMode::Local => {
-            let local_context = service_context.child("local-backend");
+            let local_context = service_context.component("local-backend");
             let (manager, client) = local_components_from_config_with_service_context(
                 config.local.clone(),
                 config.local.query_assignment_strategy_name.clone(),
@@ -796,7 +796,7 @@ mod tests {
 
         assert!(result.is_err(), "an invalid gRPC budget must fail startup");
         assert_eq!(
-            service_context.task_group().child_count(),
+            service_context.task_group().component_count(),
             0,
             "default backend workers must not start before gRPC budget validation"
         );
@@ -808,8 +808,8 @@ mod tests {
     async fn early_startup_error_cleans_started_backend_task_group() {
         let runtime_context = RuntimeContext::from_current("proxy-startup-rollback-test");
         let service_context = runtime_context.service_context("proxy-startup-rollback");
-        let backend_context = service_context.child("backend");
-        let auth_context = service_context.child("auth");
+        let backend_context = service_context.component("backend");
+        let auth_context = service_context.component("auth");
         let cancellation = backend_context.task_group().cancellation_token();
         let (started_tx, started_rx) = tokio::sync::oneshot::channel();
         backend_context

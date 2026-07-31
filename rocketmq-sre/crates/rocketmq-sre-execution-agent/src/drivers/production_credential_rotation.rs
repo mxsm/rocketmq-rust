@@ -112,7 +112,7 @@ impl ProductionCredentialRotationClient {
             .filter(|value| *value > 0)
             .ok_or(ExecutionAgentError::Configuration)?;
         let client_runtime = ClientRuntime::try_new(
-            context.child("credential-probe-admin-client"),
+            context.component("credential-probe-admin-client"),
             ClientRuntimeConfig {
                 shutdown_timeout: config.shutdown_timeout,
                 ..ClientRuntimeConfig::default()

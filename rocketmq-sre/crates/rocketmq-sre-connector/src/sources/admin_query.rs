@@ -93,7 +93,7 @@ impl AdminQuerySource {
             return Ok(());
         };
         let runtime = ClientRuntime::try_new(
-            context.child("rocketmq-read-admin-client"),
+            context.component("rocketmq-read-admin-client"),
             ClientRuntimeConfig {
                 shutdown_timeout: config.shutdown_timeout,
                 ..ClientRuntimeConfig::default()

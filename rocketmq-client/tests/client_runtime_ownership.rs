@@ -32,7 +32,7 @@ fn runtime_owner(name: &str) -> RuntimeOwner {
 
 fn client_runtime(owner: &RuntimeOwner, telemetry_handle: TelemetryHandle) -> Arc<ClientRuntime> {
     ClientRuntime::try_new(
-        owner.root_context().child("client"),
+        owner.root_context().component("client"),
         ClientRuntimeConfig::default(),
         telemetry_handle,
     )
@@ -45,9 +45,9 @@ fn transient_tasks_share_component_owner() {
 
     let owner = runtime_owner("client-runtime-transient-owner");
     let runtime = client_runtime(&owner, TelemetryHandle::noop());
-    let component = runtime.child("transient-tasks");
+    let component = runtime.component("transient-tasks");
     let task_group = component.task_group().clone();
-    let baseline_children = task_group.child_count();
+    let baseline_children = task_group.component_count();
 
     owner.block_on(async {
         let mut task_ids = Vec::with_capacity(TASKS);
@@ -63,7 +63,7 @@ fn transient_tasks_share_component_owner() {
         }
 
         assert_eq!(task_group.task_count(), 0);
-        assert_eq!(task_group.child_count(), baseline_children);
+        assert_eq!(task_group.component_count(), baseline_children);
         let report = runtime.shutdown().await;
         assert!(report.is_healthy(), "{}", report.to_json());
     });

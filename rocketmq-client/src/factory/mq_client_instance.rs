@@ -345,7 +345,7 @@ impl MQClientInstance {
         default_producer.set_producer_group(mix_all::CLIENT_INNER_PRODUCER_GROUP);
         default_producer.set_default_mqproducer_impl(
             crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl::new_internal(
-                service_context.child("default-producer"),
+                service_context.component("default-producer"),
                 default_producer.client_config_snapshot().as_ref().clone(),
                 default_producer.producer_config_snapshot().as_ref().clone(),
                 None,
@@ -389,7 +389,7 @@ impl MQClientInstance {
             broker_heartbeat_fingerprint_table,
             broker_support_v2_heartbeat_set,
             route_refresh_state,
-            consumer_stats_manager: ConsumerStatsManager::new(service_context.child("consumer-stats")),
+            consumer_stats_manager: ConsumerStatsManager::new(service_context.component("consumer-stats")),
             connection_event_shutdown: CancellationToken::new(),
             connection_event_task_handle: StdMutex::new(None),
             rebalance_delay_tasks: TaskTracker::new(),
@@ -414,7 +414,7 @@ impl MQClientInstance {
             rpc_hook,
             Arc::new(client_config.clone()),
             Some(tx),
-            service_context.child("remoting"),
+            service_context.component("remoting"),
             instance.telemetry_handle.clone(),
         ));
 
@@ -431,7 +431,7 @@ impl MQClientInstance {
             .connection_event_task_handle
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = connection_listener::spawn(
-            &service_context.child("connection-events"),
+            &service_context.component("connection-events"),
             rx,
             weak_instance,
             connection_event_shutdown,
@@ -2434,7 +2434,7 @@ fn new_probe_client_instance(
         0,
         scope,
         None,
-        client_runtime.child(scope),
+        client_runtime.component(scope),
         client_runtime.telemetry_handle().clone(),
         client_runtime.pool().request_future_holder(),
     )
@@ -2629,7 +2629,7 @@ mod tests {
             0,
             client_id,
             None,
-            runtime.child(client_id),
+            runtime.component(client_id),
             runtime.telemetry_handle().clone(),
             runtime.pool().request_future_holder(),
         )

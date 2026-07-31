@@ -408,8 +408,9 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
 
         let task_group = self
             .service_context
+            .component("rocketmq-transport.client.workers")
             .task_group()
-            .child("rocketmq-transport.client.workers");
+            .clone();
         *task_group_guard = Some(task_group.clone());
         Some(task_group)
     }
@@ -1020,7 +1021,11 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingService for Rocketmq
                     }
                 }
 
-                let task_group = self.service_context.task_group().child("rocketmq-transport.client");
+                let task_group = self
+                    .service_context
+                    .component("rocketmq-transport.client")
+                    .task_group()
+                    .clone();
                 *task_group_guard = Some(task_group.clone());
                 task_group
             };

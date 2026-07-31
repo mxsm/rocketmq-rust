@@ -178,8 +178,6 @@ pub use shutdown_report::TaskSnapshot;
 pub use signal::wait_for_signal;
 pub use signal::wait_for_signal_result;
 pub use task_group::DetachedTaskPolicy;
-pub use task_group::TaskGroupChildLease;
-pub use task_group::TaskGroupChildStats;
 pub use task_group::TaskGroupId;
 pub use task_group::TaskGroupLifecycleState;
 pub use task_group::TaskId;

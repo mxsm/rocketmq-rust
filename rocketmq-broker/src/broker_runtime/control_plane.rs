@@ -611,7 +611,7 @@ impl BrokerRuntime {
                 error!("Initialize auth admin service failed because ChildServiceContext is unavailable");
                 return false;
             };
-            return match AuthAdminService::new(auth_config, service_context.child("broker.auth-admin")).await {
+            return match AuthAdminService::new(auth_config, service_context.component("broker.auth-admin")).await {
                 Ok(service) => {
                     self.composition.state.auth_admin_service = Some(Arc::new(service));
                     true
@@ -624,7 +624,7 @@ impl BrokerRuntime {
         }
 
         let auth_context = match self.composition.state.service_context.as_ref() {
-            Some(service_context) => service_context.child("broker.auth"),
+            Some(service_context) => service_context.component("broker.auth"),
             None => {
                 error!("Initialize auth runtime failed because ChildServiceContext is unavailable");
                 return false;

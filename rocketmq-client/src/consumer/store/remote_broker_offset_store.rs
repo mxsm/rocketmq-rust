@@ -350,7 +350,7 @@ mod tests {
             0,
             "remote-offset-coalescing-test",
             None,
-            runtime.child("instance"),
+            runtime.component("instance"),
             runtime.telemetry_handle().clone(),
             runtime.pool().request_future_holder(),
         );

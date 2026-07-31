@@ -235,8 +235,8 @@ impl DefaultBrokerHeartbeatManager {
         let broker_live_table = self.broker_live_table.clone();
         let listeners = self.lifecycle_listeners.clone();
         let scan_interval_ms = self.scan_interval_ms;
-        let task_group = self.parent_task_group.child("rocketmq-controller.heartbeat");
-        let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
+        let task_group = self.parent_task_group.clone();
+        let scheduled_tasks = ScheduledTaskGroup::new(task_group.clone());
         let mut config = ScheduledTaskConfig::fixed_delay(
             "controller.heartbeat.scan-not-active-broker",
             Duration::from_millis(scan_interval_ms),
@@ -482,7 +482,7 @@ mod tests {
                     .expect("controller heartbeat test runtime should start")
             })
             .root_context()
-            .child(name)
+            .component(name)
             .task_group()
             .clone()
     }

@@ -44,7 +44,7 @@ use tracing::info;
 
 fn main() -> ProxyResult<()> {
     let owner = RuntimeOwner::new(proxy_runtime_config()).map_err(proxy_runtime_error("build proxy runtime"))?;
-    let service_context = owner.root_context().child("proxy");
+    let service_context = owner.root_context().component("proxy");
     let lifecycle = ServiceLifecycle::from_env("rocketmq-proxy").map_err(|error| ProxyError::Transport {
         message: format!("invalid Proxy lifecycle configuration: {error}"),
     })?;

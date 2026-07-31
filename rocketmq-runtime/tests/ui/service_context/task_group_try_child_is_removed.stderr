@@ -1,0 +1,5 @@
+error[E0599]: no method named `try_child` found for reference `&TaskGroup` in the current scope
+  --> tests/ui/service_context/task_group_try_child_is_removed.rs:17:23
+   |
+17 |         let _ = group.try_child("request");
+   |                       ^^^^^^^^^ method not found in `&TaskGroup`

@@ -106,7 +106,7 @@ impl RuntimeContext {
     }
 
     pub fn service_context(&self, scope: impl Into<ScopeId>) -> ChildServiceContext {
-        self.root.child(scope)
+        self.root.component(scope)
     }
 
     pub async fn shutdown_tasks(&self, timeout: Duration) -> ShutdownReport {

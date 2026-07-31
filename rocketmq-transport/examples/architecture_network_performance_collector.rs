@@ -429,7 +429,7 @@ impl TransportHarness {
         server.start().context("start architecture network collector server")?;
         tokio::task::yield_now().await;
         let baseline_tasks = server.live_task_count();
-        let baseline_child_groups = server.owned_child_group_count();
+        let baseline_child_groups = server.owned_component_group_count();
         ensure!(baseline_tasks > 0, "transport accept task did not start");
 
         let client = Arc::new(TransportClient::new(
@@ -925,7 +925,7 @@ fn convergence_snapshot(harness: &TransportHarness) -> Result<ConvergenceSnapsho
     let live_task_delta = live_tasks
         .checked_sub(harness.baseline_tasks)
         .ok_or_else(|| anyhow!("server accept task disappeared during measurement"))?;
-    let child_groups = harness.server.owned_child_group_count();
+    let child_groups = harness.server.owned_component_group_count();
     let retained_child_groups = child_groups
         .checked_sub(harness.baseline_child_groups)
         .ok_or_else(|| anyhow!("server baseline child ownership disappeared during measurement"))?;

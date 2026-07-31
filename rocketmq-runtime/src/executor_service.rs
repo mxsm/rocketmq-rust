@@ -108,7 +108,7 @@ impl TokioExecutorService {
     fn from_config(config: RuntimeConfig) -> RuntimeResult<TokioExecutorService> {
         let inner = RuntimeOwner::new(config)
             .map_err(|error| service_startup_failed("failed to create TokioExecutorService runtime", error))?;
-        let task_group = inner.root_context().task_group().child("tokio-executor");
+        let task_group = inner.root_context().component("tokio-executor").task_group().clone();
         Ok(TokioExecutorService { inner, task_group })
     }
 }
@@ -303,7 +303,7 @@ impl ScheduledExecutorService {
     fn from_config(config: RuntimeConfig) -> RuntimeResult<ScheduledExecutorService> {
         let inner = RuntimeOwner::new(config)
             .map_err(|error| service_startup_failed("failed to create ScheduledExecutorService runtime", error))?;
-        let scheduled_tasks = ScheduledTaskGroup::new(inner.root_context().task_group().child("scheduled"));
+        let scheduled_tasks = inner.root_context().component("scheduled").scheduled_tasks("executor");
         Ok(ScheduledExecutorService { inner, scheduled_tasks })
     }
 }

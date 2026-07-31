@@ -715,15 +715,15 @@ mod tests {
         let topic_config_manager = inner.topic_config_manager_handle();
         let subscription_group_lookup = inner.subscription_group_manager().config_lookup();
         let lite_event_dispatcher = inner.lite_event_dispatcher().clone();
-        let parent_task_group = inner.broker_service_task_group();
-        let queue_lock_manager = parent_task_group
+        let service_context = inner.broker_service_context();
+        let queue_lock_manager = service_context
             .clone()
-            .map(QueueLockManager::new_with_parent_task_group)
+            .map(QueueLockManager::new_with_service_context)
             .unwrap_or_else(QueueLockManager::new);
         let long_polling = PopLiteLongPollingServiceContext::try_with_resource_budget(
             PopLiteLongPollingPolicy::from_config(&inner.broker_config()),
             lite_event_dispatcher.clone(),
-            parent_task_group,
+            service_context,
             inner.resource_budget(),
         )
         .expect("test Broker resource budget");

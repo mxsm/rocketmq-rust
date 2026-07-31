@@ -207,9 +207,9 @@ impl ClusterTaskExecutor {
         service_context: &ChildServiceContext,
         telemetry_handle: TelemetryHandle,
     ) -> ProxyResult<Self> {
-        let worker_context = service_context.child("command-worker");
+        let worker_context = service_context.component("command-worker");
         let client_runtime = ClientRuntime::try_new(
-            worker_context.child("client-runtime"),
+            worker_context.component("client-runtime"),
             ClientRuntimeConfig::default(),
             telemetry_handle,
         )?;
@@ -244,7 +244,7 @@ impl ClusterTaskExecutor {
             producer_factory,
             ..
         } = state;
-        let worker_context = service_context.child("command-worker");
+        let worker_context = service_context.component("command-worker");
         Self::spawn_execution(
             config,
             rpc_hook,

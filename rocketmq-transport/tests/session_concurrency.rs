@@ -100,7 +100,7 @@ async fn request_churn_is_history_independent() {
     let runtime = RuntimeContext::from_current("transport-request-churn");
     let service = runtime.service_context("session-component");
     let owner = service.task_group().clone();
-    let baseline_children = owner.child_count();
+    let baseline_components = owner.component_count();
     let operation = OperationContext::without_deadline(TaskKind::Worker);
 
     for _ in 0..REQUESTS {
@@ -116,7 +116,7 @@ async fn request_churn_is_history_independent() {
 
     assert_eq!(operation.active_task_count(), 0);
     assert_eq!(owner.task_count(), 0);
-    assert_eq!(owner.child_count(), baseline_children);
+    assert_eq!(owner.component_count(), baseline_components);
     let report = runtime.shutdown_tasks(Duration::from_secs(1)).await;
     assert!(report.is_healthy(), "{}", report.to_json());
 }

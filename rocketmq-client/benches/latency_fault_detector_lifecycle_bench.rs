@@ -31,7 +31,7 @@ use rocketmq_client_rust::LatencyFaultDetectorLifecycleProbe;
 fn run_lifecycle_probe() -> LatencyFaultDetectorLifecycleProbe {
     let runtime = support::BenchClientRuntime::new("latency-fault-detector");
     let output = runtime.block_on(run_latency_fault_detector_lifecycle_probe(
-        runtime.child("latency-fault-detector"),
+        runtime.component("latency-fault-detector"),
     ));
     runtime.shutdown();
     output

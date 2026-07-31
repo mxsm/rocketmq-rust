@@ -31,7 +31,7 @@ use rocketmq_client_rust::ConsumerStatsManagerLifecycleProbe;
 fn run_lifecycle_probe() -> ConsumerStatsManagerLifecycleProbe {
     let runtime = support::BenchClientRuntime::new("consumer-stats");
     let output = runtime.block_on(run_consumer_stats_manager_lifecycle_probe(
-        runtime.child("consumer-stats"),
+        runtime.component("consumer-stats"),
     ));
     runtime.shutdown();
     output

@@ -191,10 +191,10 @@ impl<MS: MessageStore> BrokerRuntimeState<MS> {
         let offsets = self.consumer_offset_manager_handle().request_capability();
         let order = self.consumer_order_info_manager_handle();
         let escape_bridge = self.escape_bridge();
-        let parent_task_group = self.broker_service_task_group();
-        let queue_lock_manager = parent_task_group
+        let service_context = self.service_context.clone();
+        let queue_lock_manager = service_context
             .clone()
-            .map(QueueLockManager::new_with_parent_task_group)
+            .map(QueueLockManager::new_with_service_context)
             .expect("BrokerRuntime always has an injected ChildServiceContext");
         let context = Arc::new(PopMessageProcessorContext::new(
             self.pop_policy_state.clone(),
@@ -214,13 +214,13 @@ impl<MS: MessageStore> BrokerRuntimeState<MS> {
             subscriptions.clone(),
             offsets,
             PopStoreCapability::new(&escape_bridge),
-            parent_task_group.clone(),
+            service_context.clone(),
         ));
         let long_polling_context = PopLongPollingServiceContext::new(
             PopLongPollingPolicy::from_config(&self.broker_config()),
             topics,
             subscriptions,
-            parent_task_group,
+            service_context,
         );
         PopMessageProcessor::new(context, buffer_context, long_polling_context, queue_lock_manager)
     }
@@ -238,7 +238,7 @@ impl<MS: MessageStore> BrokerRuntimeState<MS> {
             self.pop_inflight_message_counter().clone(),
             Arc::clone(&self.should_start_time),
             self.pop_metrics_manager.clone(),
-            self.broker_service_task_group(),
+            self.broker_service_context(),
         ))
     }
 
@@ -361,7 +361,7 @@ impl<MS: MessageStore> BrokerRuntimeState<MS> {
             config,
             Arc::clone(&self.topic_queue_mapping_manager),
             self.broker_outer_api.clone(),
-            self.broker_service_task_group(),
+            self.broker_service_context(),
         )
     }
 
@@ -374,17 +374,17 @@ impl<MS: MessageStore> BrokerRuntimeState<MS> {
         name: impl Into<Arc<str>>,
         no_runtime_warning: &'static str,
     ) -> Option<TaskGroup> {
-        crate::broker_runtime::broker_task_group_or_current(
-            self.service_context.as_ref().map(ChildServiceContext::task_group),
-            name,
-            no_runtime_warning,
-        )
+        crate::broker_runtime::broker_task_group_or_current(self.service_context.as_ref(), name, no_runtime_warning)
     }
 
     pub(crate) fn broker_service_task_group(&self) -> Option<TaskGroup> {
         self.service_context
             .as_ref()
             .map(|service_context| service_context.task_group().clone())
+    }
+
+    pub(crate) fn broker_service_context(&self) -> Option<ChildServiceContext> {
+        self.service_context.clone()
     }
 
     pub(crate) fn resource_budget(&self) -> &ResourceBudget {
@@ -1100,18 +1100,18 @@ impl BrokerRuntime {
         let store_host = SocketAddr::new(network.bind_address(), network.listen_port());
         let scheduled_task_manager = BrokerScheduledTasks::new_with_task_group(service_context.task_group().clone());
         let metadata_io = Some(MetadataIoActor::start(
-            &service_context.child("broker.metadata-io"),
+            &service_context.component("broker.metadata-io"),
             MetadataIoConfig::default(),
         ));
         let broker_outer_api = BrokerOuterAPI::new(
             Arc::new(TokioClientConfig::default()),
-            service_context.child("broker.outer-api"),
+            service_context.component("broker.outer-api"),
             transport_telemetry.clone(),
         );
 
         let mut topic_queue_mapping_manager = TopicQueueMappingManager::new_with_service_context(
             broker_config.clone(),
-            service_context.child("broker.topic-queue-mapping"),
+            service_context.component("broker.topic-queue-mapping"),
         );
         if let Some(actor) = metadata_io.as_ref().and_then(|result| result.as_ref().ok()) {
             topic_queue_mapping_manager.set_metadata_io_actor(actor.clone());
@@ -1134,7 +1134,7 @@ impl BrokerRuntime {
         let should_start_time = Arc::new(AtomicU64::new(0));
         let pop_inflight_message_counter = PopInflightMessageCounter::new(should_start_time);
         let broker_fast_failure =
-            BrokerFastFailure::new_with_parent_task_group(broker_config.clone(), service_context.task_group().clone());
+            BrokerFastFailure::new_with_service_context(broker_config.clone(), service_context.clone());
         #[cfg(feature = "rocksdb_store")]
         let rocksdb_config_managers =
             open_broker_rocksdb_config_managers(broker_config.as_ref(), message_store_config.as_ref());
@@ -1244,7 +1244,7 @@ impl BrokerRuntime {
         let mut stats_manager = BrokerStatsManager::new_with_scheduler(
             Arc::clone(&store_runtime_config),
             Some(Arc::new(scheduled_task_manager.clone())),
-            service_context.task_group().child("broker.statistics"),
+            service_context.component("broker.statistics").task_group().clone(),
         );
         #[cfg(feature = "rocksdb_store")]
         {
@@ -1288,7 +1288,7 @@ impl BrokerRuntime {
                 .service_context
                 .clone()
                 .expect("BrokerRuntime always owns an injected service context")
-                .child("broker.topic-config"),
+                .component("broker.topic-config"),
             state
                 .metadata_io
                 .as_ref()
@@ -1298,7 +1298,7 @@ impl BrokerRuntime {
         state.topic_route_info_manager = Some(TopicRouteInfoManager::new(
             state.broker_outer_api.clone(),
             broker_config_snapshot.load_balance_poll_name_server_interval,
-            state.broker_service_task_group(),
+            state.broker_service_context(),
         ));
         let escape_bridge = Arc::new(EscapeBridge::new(
             state.escape_bridge_policy_state.clone(),
@@ -1413,7 +1413,7 @@ impl BrokerRuntime {
             state.producer_manager.connection_housekeeping(),
             state.consumer_manager.connection_housekeeping(),
             stats_manager,
-            state.broker_service_task_group(),
+            state.broker_service_context(),
         )));
         state.slave_synchronize = Some(Arc::new(SlaveSynchronize::new_with_master_addr(
             SlaveSynchronizeContext::new(

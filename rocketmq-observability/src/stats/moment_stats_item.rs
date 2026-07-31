@@ -18,9 +18,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use parking_lot::Mutex;
+use rocketmq_runtime::OperationContext;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::TaskGroup;
+use rocketmq_runtime::TaskKind;
 use tracing::info;
 use tracing::warn;
 
@@ -29,12 +31,17 @@ use rocketmq_runtime::common::util_all::compute_next_minutes_time_millis;
 
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
+struct StatsTaskOwner {
+    task_group: TaskGroup,
+    operation: OperationContext,
+}
+
 #[derive(Clone)]
 pub struct MomentStatsItem {
     value: Arc<AtomicI64>,
     stats_name: String,
     stats_key: String,
-    task_group: Arc<Mutex<Option<TaskGroup>>>,
+    task_owner: Arc<Mutex<Option<StatsTaskOwner>>>,
     parent_task_group: TaskGroup,
 }
 
@@ -44,7 +51,7 @@ impl MomentStatsItem {
             value: Arc::new(AtomicI64::new(0)),
             stats_name,
             stats_key,
-            task_group: Arc::new(Mutex::new(None)),
+            task_owner: Arc::new(Mutex::new(None)),
             parent_task_group,
         }
     }
@@ -54,7 +61,7 @@ impl MomentStatsItem {
     }
 
     pub fn init(self: Arc<Self>) {
-        if self.task_group.lock().is_some() {
+        if self.task_owner.lock().is_some() {
             warn!(
                 "[{}] [{}] MomentStatsItem already initialized",
                 self.stats_name, self.stats_key
@@ -62,19 +69,16 @@ impl MomentStatsItem {
             return;
         }
 
-        let group_name = format!(
-            "rocketmq-observability.moment-stats.{}.{}",
-            self.stats_name, self.stats_key
-        );
-        let task_group = self.parent_task_group.child(group_name);
-        let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
+        let task_group = self.parent_task_group.clone();
+        let operation = OperationContext::without_deadline(TaskKind::ScheduledDriver);
+        let scheduled_tasks = ScheduledTaskGroup::new(task_group.clone());
         let self_clone = self.clone();
         let mut config =
             ScheduledTaskConfig::fixed_rate_no_overlap("common.moment-stats.print", Duration::from_secs(300));
         config.initial_delay =
             Duration::from_millis((compute_next_minutes_time_millis() as i64 - current_millis() as i64).unsigned_abs());
 
-        if let Err(error) = scheduled_tasks.schedule_fixed_rate_no_overlap(config, move || {
+        if let Err(error) = scheduled_tasks.schedule_fixed_rate_no_overlap_operation(&operation, config, move || {
             let self_clone = self_clone.clone();
             async move {
                 self_clone.print_at_minutes();
@@ -87,20 +91,26 @@ impl MomentStatsItem {
             );
             return;
         }
-        *self.task_group.lock() = Some(task_group);
+        *self.task_owner.lock() = Some(StatsTaskOwner { task_group, operation });
     }
 
     pub async fn shutdown(&self) {
-        let task_group = { self.task_group.lock().take() };
-        if let Some(task_group) = task_group {
-            let report = task_group.shutdown(SHUTDOWN_TIMEOUT).await;
-            if !report.is_healthy() {
-                warn!(
-                    report = %report.to_json(),
-                    "[{}] [{}] MomentStatsItem shutdown report is unhealthy",
-                    self.stats_name,
-                    self.stats_key
-                );
+        let task_owner = { self.task_owner.lock().take() };
+        if let Some(task_owner) = task_owner {
+            match task_owner
+                .operation
+                .cancel_and_wait(&task_owner.task_group, SHUTDOWN_TIMEOUT)
+                .await
+            {
+                Ok(true) => {}
+                Ok(false) => warn!(
+                    "[{}] [{}] MomentStatsItem shutdown exceeded its deadline",
+                    self.stats_name, self.stats_key
+                ),
+                Err(error) => warn!(
+                    "[{}] [{}] MomentStatsItem used an invalid task owner: {}",
+                    self.stats_name, self.stats_key, error
+                ),
             }
         }
     }

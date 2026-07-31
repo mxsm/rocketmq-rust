@@ -25,6 +25,7 @@ use rocketmq_model::common::config::TopicConfig;
 use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_store::ArcMessageFilter;
 use rocketmq_store::BrokerStatsManager;
@@ -442,7 +443,7 @@ pub(crate) struct PopBufferMergeContext<MS: MessageStore> {
     pub(crate) subscriptions: SubscriptionGroupConfigLookup,
     pub(crate) offsets: ConsumerOffsetRequestCapability<MS>,
     pub(crate) store: PopStoreCapability<MS>,
-    parent_task_group: Option<TaskGroup>,
+    service_context: Option<ChildServiceContext>,
 }
 
 impl<MS: MessageStore> PopBufferMergeContext<MS> {
@@ -452,7 +453,7 @@ impl<MS: MessageStore> PopBufferMergeContext<MS> {
         subscriptions: SubscriptionGroupConfigLookup,
         offsets: ConsumerOffsetRequestCapability<MS>,
         store: PopStoreCapability<MS>,
-        parent_task_group: Option<TaskGroup>,
+        service_context: Option<ChildServiceContext>,
     ) -> Self {
         Self {
             policy,
@@ -460,13 +461,13 @@ impl<MS: MessageStore> PopBufferMergeContext<MS> {
             subscriptions,
             offsets,
             store,
-            parent_task_group,
+            service_context,
         }
     }
 
     pub(crate) fn task_group(&self) -> Option<TaskGroup> {
         broker_task_group_or_current(
-            self.parent_task_group.as_ref(),
+            self.service_context.as_ref(),
             "rocketmq-broker.pop-buffer-merge",
             "failed to start PopBufferMergeService outside Tokio runtime",
         )
@@ -484,7 +485,7 @@ pub(crate) struct PopReviveContext<MS: MessageStore> {
     pub(crate) inflight: PopInflightMessageCounter,
     pub(crate) should_start_time: Arc<AtomicU64>,
     pub(crate) metrics: Option<Arc<PopMetricsManager>>,
-    parent_task_group: Option<TaskGroup>,
+    service_context: Option<ChildServiceContext>,
 }
 
 #[allow(
@@ -503,7 +504,7 @@ impl<MS: MessageStore> PopReviveContext<MS> {
         inflight: PopInflightMessageCounter,
         should_start_time: Arc<AtomicU64>,
         metrics: Option<Arc<PopMetricsManager>>,
-        parent_task_group: Option<TaskGroup>,
+        service_context: Option<ChildServiceContext>,
     ) -> Self {
         Self {
             policy,
@@ -516,13 +517,13 @@ impl<MS: MessageStore> PopReviveContext<MS> {
             inflight,
             should_start_time,
             metrics,
-            parent_task_group,
+            service_context,
         }
     }
 
     pub(crate) fn task_group(&self, queue_id: i32) -> Option<TaskGroup> {
         broker_task_group_or_current(
-            self.parent_task_group.as_ref(),
+            self.service_context.as_ref(),
             format!("rocketmq-broker.pop-revive.{queue_id}"),
             "failed to start PopReviveService outside Tokio runtime",
         )

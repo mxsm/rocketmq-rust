@@ -249,6 +249,69 @@ impl ScheduledTaskGroup {
         spawn_result
     }
 
+    /// Schedules fixed-rate, non-overlapping work as part of a bounded operation.
+    pub fn schedule_fixed_rate_no_overlap_operation<F, Fut>(
+        &self,
+        operation: &OperationContext,
+        mut config: ScheduledTaskConfig,
+        task: F,
+    ) -> RuntimeResult<TaskId>
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        config.mode = ScheduleMode::FixedRateNoOverlap;
+        let name: Arc<str> = Arc::from(config.name.as_str());
+        let name_for_cleanup = name.clone();
+        let metrics = self.register(name.clone(), config.clone())?;
+        let token = operation.cancellation_token();
+        let driver = operation.with_task_kind(TaskKind::ScheduledDriver);
+        let run_operation = operation.with_task_kind(TaskKind::ScheduledRun);
+        let run_group = self.group.clone();
+        let task = Arc::new(task);
+
+        let spawn_result = self
+            .group
+            .spawn_operation(&driver, format!("scheduled-driver:{name}"), async move {
+                if !sleep_or_cancel(&token, config.initial_delay).await {
+                    return;
+                }
+
+                let mut expected_tick = Instant::now();
+                loop {
+                    if token.is_cancelled() {
+                        return;
+                    }
+
+                    if !metrics.try_begin_no_overlap_run(expected_tick) {
+                        expected_tick = next_expected_tick(expected_tick, config.period);
+                    } else {
+                        let run_name = format!("scheduled-run:{name}");
+                        let run_metrics = metrics.clone();
+                        let run_task = task.clone();
+                        let max_run_time = config.max_run_time;
+                        let spawn_result = run_group.spawn_operation(&run_operation, run_name, async move {
+                            let started_at = Instant::now();
+                            let timed_out = run_with_optional_timeout(run_task(), max_run_time).await;
+                            run_metrics.finish_run(started_at, timed_out);
+                        });
+                        if spawn_result.is_err() {
+                            metrics.rollback_started_run();
+                        }
+                        expected_tick = next_expected_tick(expected_tick, config.period);
+                    }
+
+                    if !sleep_or_cancel(&token, config.period).await {
+                        return;
+                    }
+                }
+            });
+        if spawn_result.is_err() {
+            self.schedules.remove(&name_for_cleanup);
+        }
+        spawn_result
+    }
+
     /// Returns the schedule fixed delay controlled.
     pub fn schedule_fixed_delay_controlled<F, Fut>(
         &self,

@@ -104,7 +104,7 @@ impl ProductionSubscriptionGroupPatchClient {
         context: ChildServiceContext,
     ) -> Result<Self, ExecutionAgentError> {
         let client_runtime = ClientRuntime::try_new(
-            context.child("subscription-group-admin-client"),
+            context.component("subscription-group-admin-client"),
             ClientRuntimeConfig {
                 shutdown_timeout: config.shutdown_timeout,
                 ..ClientRuntimeConfig::default()

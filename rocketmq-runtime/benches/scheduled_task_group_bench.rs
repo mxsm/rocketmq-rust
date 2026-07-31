@@ -52,11 +52,11 @@ fn runtime_config() -> RuntimeConfig {
 
 fn run_scheduled_case(mode: ScheduleMode, period: Duration, run_for: Duration) -> ScheduledBenchOutput {
     let owner = RuntimeOwner::new(runtime_config()).expect("runtime owner should start");
-    let context = owner.root_context().child("bench.scheduler-root");
+    let context = owner.root_context().component("bench.scheduler-root");
     let observed_runs = Arc::new(AtomicUsize::new(0));
 
     owner.block_on(async move {
-        let scheduled = context.child("bench.scheduler").scheduled_tasks("scheduled");
+        let scheduled = context.component("bench.scheduler").scheduled_tasks("scheduled");
         match mode {
             ScheduleMode::FixedDelay => {
                 let runs = observed_runs.clone();

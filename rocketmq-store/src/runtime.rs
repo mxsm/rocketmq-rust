@@ -24,14 +24,14 @@ use rocketmq_runtime::TaskKind;
 
 #[derive(Debug, Clone)]
 pub(crate) struct StoreRuntimeScope {
-    parent_task_group: TaskGroup,
+    service_context: ChildServiceContext,
     blocking_executor: BlockingExecutor,
 }
 
 impl StoreRuntimeScope {
     pub(crate) fn new(service_context: ChildServiceContext) -> Self {
         Self {
-            parent_task_group: service_context.task_group().clone(),
+            service_context: service_context.clone(),
             blocking_executor: service_context.storage_io().clone(),
         }
     }
@@ -64,7 +64,7 @@ impl StoreRuntimeScope {
     }
 
     pub(crate) fn task_group(&self, name: &'static str) -> TaskGroup {
-        self.parent_task_group.child(name)
+        self.service_context.component(name).task_group().clone()
     }
 
     pub(crate) fn blocking_snapshot(&self) -> BlockingExecutorSnapshot {
@@ -93,7 +93,7 @@ where
     F: FnOnce() + Send + 'static,
 {
     let executor = scope.blocking_executor.clone();
-    let task_group = scope.task_group(name);
+    let task_group = scope.service_context.task_group();
     task_group
         .spawn(name, TaskKind::Worker, async move {
             if let Err(error) = executor.spawn_io(name, operation).await {
@@ -133,7 +133,7 @@ pub(crate) fn test_runtime_owner() -> &'static rocketmq_runtime::RuntimeOwner {
 
 #[cfg(test)]
 pub(crate) fn test_service_context(name: &'static str) -> ChildServiceContext {
-    test_runtime_owner().root_context().child(name)
+    test_runtime_owner().root_context().component(name)
 }
 
 #[cfg(test)]

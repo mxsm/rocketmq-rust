@@ -31,7 +31,7 @@ static TEST_RUNTIME_OWNER: LazyLock<RuntimeOwner> = LazyLock::new(|| {
 
 pub fn client_runtime(scope: impl Into<rocketmq_runtime::ScopeId>) -> Arc<ClientRuntime> {
     ClientRuntime::try_new(
-        TEST_RUNTIME_OWNER.root_context().child(scope),
+        TEST_RUNTIME_OWNER.root_context().component(scope),
         ClientRuntimeConfig::default(),
         TelemetryHandle::noop(),
     )

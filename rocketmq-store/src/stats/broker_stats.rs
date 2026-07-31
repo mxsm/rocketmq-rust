@@ -146,7 +146,7 @@ mod tests {
         OWNER
             .get_or_init(|| RuntimeOwner::new(RuntimeConfig::default()).expect("test runtime owner should start"))
             .root_context()
-            .child("broker-stats-test")
+            .component("broker-stats-test")
             .task_group()
             .clone()
     }

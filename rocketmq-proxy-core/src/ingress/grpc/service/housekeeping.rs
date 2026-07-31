@@ -92,7 +92,7 @@ where
     C: Fn() -> CFut + Clone + Send + Sync + 'static,
     CFut: Future<Output = ()> + Send + 'static,
 {
-    let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
+    let scheduled_tasks = ScheduledTaskGroup::new(task_group.clone());
     let schedule_result = scheduled_tasks.schedule_fixed_rate_no_overlap(
         ScheduledTaskConfig::fixed_rate_no_overlap("proxy.grpc.housekeeping", interval),
         run_once,

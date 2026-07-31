@@ -60,7 +60,7 @@ fn run_cli_main_thread() -> RocketMQResult<i32> {
     let owner = RuntimeOwner::new(admin_cli_runtime_config())
         .map_err(|source| RocketMQError::internal("build rocketmq-admin-cli runtime", source))?;
     let client_runtime = ClientRuntime::try_new(
-        owner.root_context().child("rocketmq-admin-client"),
+        owner.root_context().component("rocketmq-admin-client"),
         ClientRuntimeConfig::default(),
         TelemetryHandle::noop(),
     )?;

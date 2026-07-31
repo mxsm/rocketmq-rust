@@ -180,7 +180,7 @@ impl Drop for AdminSessionLease {
 
 impl DashboardAdminClient {
     pub fn new(config: Arc<RwLock<DashboardConfigView>>, client_runtime: Arc<ClientRuntime>) -> Self {
-        let session_tasks = client_runtime.child("dashboard-admin-session");
+        let session_tasks = client_runtime.component("dashboard-admin-session");
         Self {
             config,
             client_runtime,

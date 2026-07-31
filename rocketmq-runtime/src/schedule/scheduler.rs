@@ -180,7 +180,7 @@ impl TaskScheduler {
             Some(parent_task_group) => ExecutorPool::new_with_task_group(
                 config.executor_pool_size,
                 config.executor_config.clone(),
-                parent_task_group.child("rocketmq.task-scheduler.executors"),
+                parent_task_group.component("rocketmq.task-scheduler.executors"),
             ),
             None => ExecutorPool::new(config.executor_pool_size, config.executor_config.clone()),
         });
@@ -209,7 +209,7 @@ impl TaskScheduler {
 
         info!("Starting task scheduler");
         let scheduler_group = if let Some(parent_task_group) = self.parent_task_group.as_ref() {
-            parent_task_group.child("rocketmq.task-scheduler")
+            parent_task_group.component("rocketmq.task-scheduler")
         } else {
             let runtime = match current_scheduler_handle("TaskScheduler::start") {
                 Ok(runtime) => runtime,

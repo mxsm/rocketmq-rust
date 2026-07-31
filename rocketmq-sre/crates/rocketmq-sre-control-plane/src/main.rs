@@ -29,7 +29,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut runtime_config = RuntimeConfig::server_default("rocketmq-sre-control-plane");
     runtime_config.shutdown_timeout = config.shutdown_timeout();
     let runtime_owner = RuntimeOwner::new(runtime_config)?;
-    let service_context = runtime_owner.root_context().child("rocketmq-sre-control-plane.http");
+    let service_context = runtime_owner
+        .root_context()
+        .component("rocketmq-sre-control-plane.http");
 
     let service_result = runtime_owner.block_on(rocketmq_sre_control_plane::run(config, service_context));
     let shutdown_result = runtime_owner.shutdown_runtime_blocking();

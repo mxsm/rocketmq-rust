@@ -68,7 +68,7 @@ pub(crate) fn test_client_runtime() -> std::sync::Arc<rocketmq_admin_core::clien
         .expect("admin CLI test runtime should start")
     });
     rocketmq_admin_core::client_adapter::ClientRuntime::try_new(
-        OWNER.root_context().child("client"),
+        OWNER.root_context().component("client"),
         rocketmq_admin_core::client_adapter::ClientRuntimeConfig::default(),
         rocketmq_admin_core::client_adapter::TelemetryHandle::noop(),
     )

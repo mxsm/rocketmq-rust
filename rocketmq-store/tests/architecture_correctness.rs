@@ -65,7 +65,7 @@ fn test_service_context() -> ChildServiceContext {
                 .expect("architecture correctness test runtime should start")
         })
         .root_context()
-        .child("architecture-correctness-store")
+        .component("architecture-correctness-store")
 }
 
 fn new_store(root: &Path, flush_disk_type: FlushDiskType) -> LocalFileMessageStore {

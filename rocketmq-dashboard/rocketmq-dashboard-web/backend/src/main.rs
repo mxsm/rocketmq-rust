@@ -35,7 +35,7 @@ fn main() -> anyhow::Result<()> {
     bootstrap.observability.subscriber_install_policy = rocketmq_observability::SubscriberInstallPolicy::Required;
     let telemetry_guard = rocketmq_observability::install_global_with_filter(&bootstrap, resolved_filter.clone())?;
     let client_runtime = ClientRuntime::try_new(
-        owner.root_context().child("rocketmq-admin-client"),
+        owner.root_context().component("rocketmq-admin-client"),
         ClientRuntimeConfig::default(),
         telemetry_guard.handle(),
     )?;

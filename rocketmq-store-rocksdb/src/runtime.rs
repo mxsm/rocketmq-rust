@@ -24,14 +24,14 @@ use rocketmq_runtime::TaskKind;
 
 #[derive(Debug, Clone)]
 pub struct RocksDbRuntimeScope {
-    parent_task_group: TaskGroup,
+    service_context: ChildServiceContext,
     blocking_executor: BlockingExecutor,
 }
 
 impl RocksDbRuntimeScope {
     pub fn new(service_context: ChildServiceContext) -> Self {
         Self {
-            parent_task_group: service_context.task_group().clone(),
+            service_context: service_context.clone(),
             blocking_executor: service_context.storage_io().clone(),
         }
     }
@@ -65,7 +65,7 @@ impl RocksDbRuntimeScope {
     }
 
     pub fn task_group(&self, name: &'static str) -> TaskGroup {
-        self.parent_task_group.child(name)
+        self.service_context.component(name).task_group().clone()
     }
 
     pub fn blocking_snapshot(&self) -> BlockingExecutorSnapshot {
@@ -77,7 +77,7 @@ impl RocksDbRuntimeScope {
         F: FnOnce() + Send + 'static,
     {
         let executor = self.blocking_executor.clone();
-        let task_group = self.parent_task_group.child(name);
+        let task_group = self.service_context.task_group();
         task_group
             .spawn(name, TaskKind::Worker, async move {
                 if let Err(error) = executor.spawn_io(name, operation).await {

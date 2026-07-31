@@ -123,7 +123,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         ..RuntimeConfig::default()
     })?;
     let client_runtime = ClientRuntime::try_new(
-        runtime_owner.root_context().child("probe.client"),
+        runtime_owner.root_context().component("probe.client"),
         ClientRuntimeConfig {
             shutdown_timeout: PROBE_SHUTDOWN_TIMEOUT,
             ..ClientRuntimeConfig::default()

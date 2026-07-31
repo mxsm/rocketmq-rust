@@ -217,7 +217,7 @@ impl BrokerStatsManager {
             enable_queue_stat,
             moment_stats_item_set_fall_size: None,
             moment_stats_item_set_fall_time: None,
-            account_stat_manager: StatisticsManager::new(parent_task_group.child("broker-statistics.account")),
+            account_stat_manager: StatisticsManager::new(parent_task_group.clone()),
             producer_state_getter: None,
             consumer_state_getter: None,
             broker_config: Some(broker_config),
@@ -243,7 +243,7 @@ impl BrokerStatsManager {
             enable_queue_stat,
             moment_stats_item_set_fall_size: None,
             moment_stats_item_set_fall_time: None,
-            account_stat_manager: StatisticsManager::new(parent_task_group.child("broker-statistics.account")),
+            account_stat_manager: StatisticsManager::new(parent_task_group.clone()),
             producer_state_getter: None,
             consumer_state_getter: None,
             broker_config: Some(broker_config),
@@ -259,12 +259,12 @@ impl BrokerStatsManager {
     pub fn init(&mut self) {
         self.moment_stats_item_set_fall_size = Some(Arc::new(MomentStatsItemSet::new(
             Stats::GROUP_GET_FALL_SIZE.to_string(),
-            self.parent_task_group.child("broker-statistics.group-get-fall-size"),
+            self.parent_task_group.clone(),
         )));
 
         self.moment_stats_item_set_fall_time = Some(Arc::new(MomentStatsItemSet::new(
             Stats::GROUP_GET_FALL_TIME.to_string(),
-            self.parent_task_group.child("broker-statistics.group-get-fall-time"),
+            self.parent_task_group.clone(),
         )));
 
         let enable_queue_stat = self.enable_queue_stat;
@@ -1131,7 +1131,7 @@ mod tests {
         OWNER
             .get_or_init(|| RuntimeOwner::new(RuntimeConfig::default()).expect("test runtime owner should start"))
             .root_context()
-            .child(name)
+            .component(name)
             .task_group()
             .clone()
     }

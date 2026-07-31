@@ -45,7 +45,6 @@ mod registry;
 mod shutdown;
 
 use registry::ActiveTaskRegistry;
-use registry::ChildRegistrationKind;
 use shutdown::ShutdownCoordinator;
 
 const STATE_OPEN: u8 = 0;
@@ -161,29 +160,6 @@ pub struct TaskGroup {
     inner: Arc<TaskGroupInner>,
 }
 
-/// A dynamically registered child group whose parent retains only a weak reference.
-///
-/// Dropping the lease releases the caller's group handle. The child remains visible to
-/// parent shutdown while tasks or other handles still own it, and is pruned after the
-/// final strong reference is released.
-#[derive(Debug)]
-pub struct TaskGroupChildLease {
-    group: TaskGroup,
-}
-
-/// Bounded lifecycle counters for dynamically registered child groups.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct TaskGroupChildStats {
-    /// The active value.
-    pub active: usize,
-    /// The created value.
-    pub created: usize,
-    /// The pruned value.
-    pub pruned: usize,
-    /// The number of active child registry slots.
-    pub registry_slots: usize,
-}
-
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TaskKindDiagnostics {
     pub(crate) kind: TaskKind,
@@ -274,24 +250,6 @@ impl TaskCompletion {
     }
 }
 
-impl std::ops::Deref for TaskGroupChildLease {
-    type Target = TaskGroup;
-
-    fn deref(&self) -> &Self::Target {
-        &self.group
-    }
-}
-
-impl TaskGroupChildLease {
-    /// Returns the group.
-    pub fn group(&self) -> &TaskGroup {
-        &self.group
-    }
-
-    /// Completes the operation with the supplied result.
-    pub fn complete(self) {}
-}
-
 impl Drop for TaskCompletionGuard {
     fn drop(&mut self) {
         self.completion.mark_done();
@@ -349,20 +307,9 @@ impl TaskGroup {
         self.inner.registry.tasks.len()
     }
 
-    /// Returns the child count.
-    pub fn child_count(&self) -> usize {
-        self.inner.registry.child_count()
-    }
-
-    /// Returns the child stats.
-    pub fn child_stats(&self) -> TaskGroupChildStats {
-        let stats = self.inner.registry.child_stats();
-        TaskGroupChildStats {
-            active: stats.active_operations,
-            created: stats.operations_created,
-            pruned: stats.operations_released,
-            registry_slots: stats.registry_slots,
-        }
+    /// Returns the number of active component groups directly owned by this group.
+    pub fn component_count(&self) -> usize {
+        self.inner.registry.component_count()
     }
 
     pub(crate) fn diagnostics(&self, long_running_threshold: Duration) -> TaskGroupDiagnostics {
@@ -382,7 +329,7 @@ impl TaskGroup {
             aggregate.record_task(task.kind, elapsed, elapsed >= long_running_threshold);
         }
 
-        for child in self.inner.registry.children_snapshot() {
+        for child in self.inner.registry.components_snapshot() {
             child.accumulate_diagnostics(long_running_threshold, aggregate);
         }
     }
@@ -392,15 +339,13 @@ impl TaskGroup {
         self.inner.registry.tasks.contains_key(&task_id)
     }
 
-    /// Returns the child.
-    pub fn child(&self, name: impl Into<Arc<str>>) -> Self {
+    pub(crate) fn component(&self, name: impl Into<Arc<str>>) -> Self {
         let name = name.into();
-        self.try_child(name.clone())
-            .unwrap_or_else(|_error| self.closed_child(name))
+        self.try_component(name.clone())
+            .unwrap_or_else(|_error| self.closed_component(name))
     }
 
-    /// Attempts to child.
-    pub fn try_child(&self, name: impl Into<Arc<str>>) -> RuntimeResult<Self> {
+    fn try_component(&self, name: impl Into<Arc<str>>) -> RuntimeResult<Self> {
         let name = name.into();
         let _spawn_guard = self.inner.spawn_gate.lock();
         if self.inner.lifecycle_state() != TaskGroupLifecycleState::Open {
@@ -410,36 +355,14 @@ impl TaskGroup {
             });
         }
 
-        let child = self.open_child(name);
-        self.inner.registry.register_child(
-            child.id(),
-            Arc::downgrade(&child.inner),
-            ChildRegistrationKind::Component,
-        );
+        let child = self.open_component(name);
+        self.inner
+            .registry
+            .register_component(child.id(), Arc::downgrade(&child.inner));
         Ok(child)
     }
 
-    /// Attempts to child lease.
-    pub fn try_child_lease(&self, name: impl Into<Arc<str>>) -> RuntimeResult<TaskGroupChildLease> {
-        let name = name.into();
-        let _spawn_guard = self.inner.spawn_gate.lock();
-        if self.inner.lifecycle_state() != TaskGroupLifecycleState::Open {
-            return Err(RuntimeError::TaskGroupClosing {
-                group_id: self.inner.id,
-                group_name: self.inner.name.clone(),
-            });
-        }
-
-        let child = self.open_child(name);
-        self.inner.registry.register_child(
-            child.id(),
-            Arc::downgrade(&child.inner),
-            ChildRegistrationKind::Operation,
-        );
-        Ok(TaskGroupChildLease { group: child })
-    }
-
-    fn open_child(&self, name: Arc<str>) -> Self {
+    fn open_component(&self, name: Arc<str>) -> Self {
         let child_id = TaskGroupId(self.inner.next_group_id.fetch_add(1, Ordering::Relaxed));
         Self {
             inner: Arc::new(TaskGroupInner::new(
@@ -454,8 +377,8 @@ impl TaskGroup {
         }
     }
 
-    fn closed_child(&self, name: Arc<str>) -> Self {
-        let child = self.open_child(name);
+    fn closed_component(&self, name: Arc<str>) -> Self {
+        let child = self.open_component(name);
         child.inner.tracker.close();
         child.inner.cancellation_token.cancel();
         child.inner.lifecycle.store(STATE_SHUTDOWN_COMPLETED, Ordering::Release);
@@ -610,7 +533,7 @@ impl TaskGroup {
 
     fn tighten_shutdown_deadline(&self, deadline: ShutdownDeadline) {
         let installed = self.inner.shutdown.tighten(deadline);
-        for child in self.inner.registry.children_snapshot() {
+        for child in self.inner.registry.components_snapshot() {
             child.tighten_shutdown_deadline(installed);
         }
     }
@@ -732,7 +655,7 @@ impl TaskGroup {
             self.inner.tracker.close();
             self.inner.cancellation_token.cancel();
             self.inner.lifecycle.store(STATE_CLOSED, Ordering::Release);
-            self.inner.registry.children_snapshot()
+            self.inner.registry.components_snapshot()
         };
         self.abort_detached_abort_on_shutdown_tasks();
 
@@ -797,7 +720,7 @@ impl TaskGroup {
             self.inner.tracker.close();
             self.inner.cancellation_token.cancel();
             self.inner.lifecycle.store(STATE_CLOSED, Ordering::Release);
-            self.inner.registry.children_snapshot()
+            self.inner.registry.components_snapshot()
         };
 
         let mut child_reports = Vec::with_capacity(children.len());
@@ -964,7 +887,7 @@ impl TaskGroupInner {
 impl Drop for TaskGroupInner {
     fn drop(&mut self) {
         if let Some(parent_registry) = self.parent_registry.as_ref().and_then(std::sync::Weak::upgrade) {
-            parent_registry.unregister_child(self.id);
+            parent_registry.unregister_component(self.id);
         }
     }
 }

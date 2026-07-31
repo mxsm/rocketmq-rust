@@ -80,7 +80,7 @@ impl BrokerRuntime {
             false,
             self.composition.state.store_telemetry.clone(),
         );
-        let opened = match StoreFactory::open(factory_config, service_context.child("broker.store")) {
+        let opened = match StoreFactory::open(factory_config, service_context.component("broker.store")) {
             Ok(opened) => opened,
             Err(error) => {
                 error!(backend = ?message_store_config.store_type, %error, "Initialize message store failed");
@@ -258,7 +258,7 @@ impl BrokerRuntime {
         let broker_name = self.composition.state.broker_config().broker_name().clone();
         let task_group = self.composition.state.service_context.as_ref().map(|service_context| {
             service_context
-                .child(format!("rocketmq-broker.transaction-check.{broker_name}"))
+                .component(format!("rocketmq-broker.transaction-check.{broker_name}"))
                 .task_group()
                 .clone()
         });

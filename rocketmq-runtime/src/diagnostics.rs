@@ -274,9 +274,9 @@ impl RuntimeDiagnostics {
             parent_group_id: root.parent_id(),
             lifecycle_state: root.lifecycle_state(),
             task_count: root.task_count(),
-            child_count: root.child_count(),
+            child_count: root.component_count(),
             active_tasks: root.task_count(),
-            registry_slots: root.child_count(),
+            registry_slots: root.component_count(),
             blocking_lanes,
         }
     }
@@ -425,7 +425,7 @@ mod tests {
     #[tokio::test]
     async fn sanitized_view_does_not_expose_runtime_or_task_names() {
         let context = RuntimeContext::from_current("sensitive-root-name");
-        let child = context.root_group().child("sensitive-child-name");
+        let child = context.service_context("sensitive-child-name");
         child
             .spawn("sensitive-task-name", TaskKind::Worker, std::future::pending())
             .expect("task should spawn");

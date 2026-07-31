@@ -31,6 +31,7 @@ use rocketmq_protocol::protocol::static_topic::logic_queue_mapping_item::LogicQu
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
 use rocketmq_runtime::common::util_all::is_it_time_to_do;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
@@ -76,7 +77,7 @@ struct TopicQueueMappingCleanServiceInner {
     config: TopicQueueMappingCleanConfig,
     topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
     broker_outer_api: BrokerOuterAPI,
-    parent_task_group: Option<TaskGroup>,
+    service_context: Option<ChildServiceContext>,
     running: AtomicBool,
     lifecycle: Mutex<CleanServiceLifecycle>,
 }
@@ -98,14 +99,14 @@ impl TopicQueueMappingCleanService {
         config: TopicQueueMappingCleanConfig,
         topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
         broker_outer_api: BrokerOuterAPI,
-        parent_task_group: Option<TaskGroup>,
+        service_context: Option<ChildServiceContext>,
     ) -> Self {
         Self {
             inner: Arc::new(TopicQueueMappingCleanServiceInner {
                 config,
                 topic_queue_mapping_manager,
                 broker_outer_api,
-                parent_task_group,
+                service_context,
                 running: AtomicBool::new(false),
                 lifecycle: Mutex::new(CleanServiceLifecycle::default()),
             }),
@@ -127,14 +128,14 @@ impl TopicQueueMappingCleanService {
         }
 
         let Some(task_group) = broker_task_group_or_current(
-            self.inner.parent_task_group.as_ref(),
+            self.inner.service_context.as_ref(),
             "rocketmq-broker.topic-queue-mapping-clean",
             "failed to start TopicQueueMappingCleanService outside Tokio runtime",
         ) else {
             self.inner.running.store(false, Ordering::Release);
             return;
         };
-        let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
+        let scheduled_tasks = ScheduledTaskGroup::new(task_group.clone());
         let this = Self {
             inner: Arc::clone(&self.inner),
         };

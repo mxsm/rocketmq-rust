@@ -94,7 +94,7 @@ impl ClientRuntime {
         let resource_budget = build_client_resource_budget(&config)?;
         let client_metrics = ClientMetrics::from_handle(&telemetry_handle);
         let pool = ClientPool::new(
-            service_context.child("pool"),
+            service_context.component("pool"),
             resource_budget.clone(),
             telemetry_handle.clone(),
             client_metrics.clone(),
@@ -136,9 +136,9 @@ impl ClientRuntime {
         self.resource_budget.clone()
     }
 
-    /// Creates a named descendant scope owned by this client runtime.
-    pub fn child(&self, scope: impl Into<rocketmq_runtime::ScopeId>) -> ChildServiceContext {
-        self.service_context.child(scope)
+    /// Creates a named component scope owned by this client runtime.
+    pub fn component(&self, scope: impl Into<rocketmq_runtime::ScopeId>) -> ChildServiceContext {
+        self.service_context.component(scope)
     }
 
     /// Stops all pooled clients and joins every task owned by this runtime.
@@ -216,7 +216,7 @@ static TEST_RUNTIME_OWNER: std::sync::LazyLock<rocketmq_runtime::RuntimeOwner> =
 #[cfg(test)]
 pub(crate) fn test_client_runtime(scope: &'static str) -> Arc<ClientRuntime> {
     ClientRuntime::try_new(
-        TEST_RUNTIME_OWNER.root_context().child(scope),
+        TEST_RUNTIME_OWNER.root_context().component(scope),
         ClientRuntimeConfig::default(),
         TelemetryHandle::noop(),
     )
@@ -225,7 +225,7 @@ pub(crate) fn test_client_runtime(scope: &'static str) -> Arc<ClientRuntime> {
 
 #[cfg(test)]
 pub(crate) fn test_service_context(scope: &'static str) -> ChildServiceContext {
-    TEST_RUNTIME_OWNER.root_context().child(scope)
+    TEST_RUNTIME_OWNER.root_context().component(scope)
 }
 
 pub(crate) struct ClientRuntimeTaskHandle {
@@ -474,8 +474,8 @@ where
     F: FnMut() -> Fut + Send + 'static,
     Fut: Future<Output = ()> + Send + 'static,
 {
-    let task_group = context.task_group().child(task_name);
-    let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
+    let task_group = context.component(task_name).task_group().clone();
+    let scheduled_tasks = ScheduledTaskGroup::new(task_group.clone());
     let mut config = ScheduledTaskConfig::fixed_delay(task_name, period);
     config.initial_delay = initial_delay;
     config.shutdown_timeout = shutdown_timeout;
@@ -501,8 +501,8 @@ where
     F: FnMut() -> Fut + Send + 'static,
     Fut: Future<Output = ScheduledTaskControl> + Send + 'static,
 {
-    let task_group = context.task_group().child(task_name);
-    let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
+    let task_group = context.component(task_name).task_group().clone();
+    let scheduled_tasks = ScheduledTaskGroup::new(task_group.clone());
     let mut config = ScheduledTaskConfig::fixed_delay(task_name, period);
     config.initial_delay = initial_delay;
     config.shutdown_timeout = shutdown_timeout;
@@ -562,7 +562,7 @@ mod tests {
     #[test]
     fn sibling_component_budgets_share_the_client_runtime_parent_limit() {
         let runtime = ClientRuntime::try_new(
-            TEST_RUNTIME_OWNER.root_context().child("client-budget-parent-test"),
+            TEST_RUNTIME_OWNER.root_context().component("client-budget-parent-test"),
             ClientRuntimeConfig {
                 process_memory_limit_bytes: 4_096,
                 managed_memory_numerator: 1,
@@ -611,7 +611,7 @@ mod tests {
         const TASKS: usize = 1_024;
 
         let service_context = test_service_context("client-transient-owner-test");
-        let baseline_children = service_context.task_group().child_count();
+        let baseline_components = service_context.task_group().component_count();
         let mut handles = Vec::with_capacity(TASKS);
 
         for _ in 0..TASKS {
@@ -627,9 +627,9 @@ mod tests {
 
         assert_eq!(service_context.task_group().task_count(), 0);
         assert_eq!(
-            service_context.task_group().child_count(),
-            baseline_children,
-            "completed task handles must not retain per-task child groups"
+            service_context.task_group().component_count(),
+            baseline_components,
+            "completed task handles must not retain per-task component groups"
         );
         drop(handles);
 

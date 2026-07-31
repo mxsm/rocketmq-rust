@@ -62,7 +62,7 @@ const LOGO: &str = r#"
 
 fn main() -> Result<()> {
     let owner = RuntimeOwner::new(namesrv_runtime_config()).context("failed to build namesrv runtime")?;
-    let service_context = owner.root_context().child("rocketmq-namesrv-runtime");
+    let service_context = owner.root_context().component("rocketmq-namesrv-runtime");
     let lifecycle =
         ServiceLifecycle::from_env("rocketmq-namesrv").context("invalid NameServer lifecycle configuration")?;
 

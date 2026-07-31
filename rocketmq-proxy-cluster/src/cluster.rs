@@ -1009,7 +1009,7 @@ mod cluster_test_runtime {
 
     pub(super) fn client_runtime() -> Arc<ClientRuntime> {
         ClientRuntime::try_new(
-            TEST_RUNTIME_OWNER.root_context().child("client"),
+            TEST_RUNTIME_OWNER.root_context().component("client"),
             ClientRuntimeConfig::default(),
             TelemetryHandle::noop(),
         )
@@ -1017,7 +1017,7 @@ mod cluster_test_runtime {
     }
 
     pub(super) fn service_context(scope: &'static str) -> ChildServiceContext {
-        TEST_RUNTIME_OWNER.root_context().child(scope)
+        TEST_RUNTIME_OWNER.root_context().component(scope)
     }
 }
 
@@ -3214,7 +3214,7 @@ mod tests {
         let client = RocketmqClusterClient::new(ClusterConfig::default(), None, &service, TelemetryHandle::noop())
             .expect("managed client builds");
         assert_eq!(service.task_group().task_count(), 0);
-        assert_eq!(service.task_group().child_count(), 1);
+        assert_eq!(service.task_group().component_count(), 1);
 
         drop(client);
         let report = service.task_group().shutdown(Duration::from_secs(1)).await;

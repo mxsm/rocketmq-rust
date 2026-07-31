@@ -30,7 +30,9 @@ use rocketmq_client_rust::OrderlyLockPeriodicLifecycleProbe;
 
 fn run_lifecycle_probe() -> OrderlyLockPeriodicLifecycleProbe {
     let runtime = support::BenchClientRuntime::new("orderly-lock-periodic");
-    let output = runtime.block_on(run_orderly_lock_periodic_lifecycle_probe(runtime.child("orderly-lock")));
+    let output = runtime.block_on(run_orderly_lock_periodic_lifecycle_probe(
+        runtime.component("orderly-lock"),
+    ));
     runtime.shutdown();
     output
 }

@@ -1014,10 +1014,10 @@ impl TransportServer {
             .saturating_add(self.active_sessions.load(Ordering::Acquire))
     }
 
-    /// Returns the number of child ownership groups retained by the server.
+    /// Returns the number of component ownership groups retained by the server.
     #[must_use]
-    pub fn owned_child_group_count(&self) -> usize {
-        self.service_context.task_group().child_count()
+    pub fn owned_component_group_count(&self) -> usize {
+        self.service_context.task_group().component_count()
     }
 
     pub async fn shutdown_until(&self, deadline: ShutdownDeadline) -> ShutdownReport {

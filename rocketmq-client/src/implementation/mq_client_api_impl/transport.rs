@@ -46,7 +46,7 @@ impl MQClientAPIImpl {
             Arc::new(remoting_config),
             client_remoting_processor,
             tx,
-            service_context.child("transport"),
+            service_context.component("transport"),
             transport_telemetry,
         );
         if let Some(hook) = rpc_hook {

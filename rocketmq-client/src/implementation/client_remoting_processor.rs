@@ -574,7 +574,7 @@ mod tests {
 
     fn test_task_group() -> rocketmq_runtime::TaskGroup {
         crate::runtime::test_service_context("client-remoting-processor-test")
-            .child("local-request-harness")
+            .component("local-request-harness")
             .task_group()
             .clone()
     }
@@ -586,7 +586,7 @@ mod tests {
             0,
             client_id,
             None,
-            runtime.child("instance"),
+            runtime.component("instance"),
             runtime.telemetry_handle().clone(),
             runtime.pool().request_future_holder(),
         )

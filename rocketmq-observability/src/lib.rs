@@ -180,10 +180,10 @@ pub mod bench_support {
         let counter = meter.u64_counter("rocketmq_observability_lifecycle_total").build();
         counter.add(1, &[]);
 
-        let handle = crate::exporter::prometheus::spawn_prometheus_http_endpoint_with_task_group(
+        let handle = crate::exporter::prometheus::spawn_prometheus_http_endpoint(
             &config,
             prometheus.registry().clone(),
-            service_context.task_group().clone(),
+            &service_context,
         )
         .expect("prometheus HTTP endpoint should start");
         let task_count_before_scrape = handle.task_count();

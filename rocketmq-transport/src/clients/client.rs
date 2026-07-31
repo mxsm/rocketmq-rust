@@ -758,8 +758,7 @@ mod lifecycle_tests {
     async fn connect_with_service_context_uses_fixed_component_owner() {
         let runtime_context = RuntimeContext::from_current("remoting-client-context-test");
         let service = runtime_context.service_context("remoting-client-service");
-        let baseline_children = service.task_group().child_count();
-        let baseline_stats = service.task_group().child_stats();
+        let baseline_components = service.task_group().component_count();
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
         let addr = listener.local_addr().expect("listener addr");
         let server = tokio::spawn(async move {
@@ -790,7 +789,7 @@ mod lifecycle_tests {
         assert_eq!(task_group.parent_id(), service.task_group().parent_id());
         assert_eq!(task_group.lifecycle_state(), TaskGroupLifecycleState::Open);
         assert_eq!(operation.active_task_count(), 1);
-        assert_eq!(service.task_group().child_stats(), baseline_stats);
+        assert_eq!(service.task_group().component_count(), baseline_components);
 
         let mut retained_client = client.clone();
         let mut retained_request = RemotingCommand::create_remoting_command(105).set_body(vec![7_u8; 4096]);
@@ -820,9 +819,7 @@ mod lifecycle_tests {
         drop(task_group);
         tokio::task::yield_now().await;
 
-        let final_stats = service.task_group().child_stats();
-        assert_eq!(final_stats, baseline_stats);
-        assert_eq!(service.task_group().child_count(), baseline_children);
+        assert_eq!(service.task_group().component_count(), baseline_components);
         server.abort();
     }
 }

@@ -310,7 +310,7 @@ mod tests {
 
         let runtime = RuntimeContext::from_current("operation-churn-test");
         let owner = runtime.service_context("operations");
-        let baseline_children = owner.task_group().child_count();
+        let baseline_components = owner.task_group().component_count();
         let operation = OperationContext::without_deadline(TaskKind::Worker);
 
         for _ in 0..TASKS {
@@ -328,7 +328,7 @@ mod tests {
         .await
         .expect("operation tasks should complete");
 
-        assert_eq!(owner.task_group().child_count(), baseline_children);
+        assert_eq!(owner.task_group().component_count(), baseline_components);
         let report = runtime.shutdown_tasks(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
     }

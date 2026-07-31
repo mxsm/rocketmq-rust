@@ -56,6 +56,7 @@ use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_store::AckMessage;
 use rocketmq_store::ArcMessageFilter;
@@ -1537,27 +1538,30 @@ pub struct QueueLockManager {
     shutdown: Arc<Notify>,
     running: Arc<AtomicBool>,
     task_group: Arc<Mutex<Option<TaskGroup>>>,
-    parent_task_group: TaskGroup,
+    service_context: ChildServiceContext,
 }
 
 impl QueueLockManager {
     #[cfg(test)]
     pub fn new() -> Self {
-        Self::new_with_parent_task_group(crate::test_task_group("pop-queue-lock"))
+        Self::new_with_service_context(crate::test_service_context("pop-queue-lock"))
     }
 
-    pub(crate) fn new_with_parent_task_group(parent_task_group: TaskGroup) -> Self {
+    pub(crate) fn new_with_service_context(service_context: ChildServiceContext) -> Self {
         QueueLockManager {
             expired_local_cache: Arc::new(RwLock::new(HashMap::with_capacity(4096))),
             shutdown: Arc::new(Notify::new()),
             running: Arc::new(AtomicBool::new(false)),
             task_group: Arc::new(Mutex::new(None)),
-            parent_task_group,
+            service_context,
         }
     }
 
     fn task_group(&self) -> TaskGroup {
-        self.parent_task_group.child("rocketmq-broker.pop.queue-lock")
+        self.service_context
+            .component("rocketmq-broker.pop.queue-lock")
+            .task_group()
+            .clone()
     }
 
     #[inline]
@@ -1863,7 +1867,7 @@ mod tests {
     async fn queue_lock_manager_parent_task_group_parents_cleanup_task() {
         let context = RuntimeContext::from_current("broker-queue-lock-context-test");
         let broker_service = context.service_context("broker-service");
-        let manager = QueueLockManager::new_with_parent_task_group(broker_service.task_group().clone());
+        let manager = QueueLockManager::new_with_service_context(broker_service.clone());
 
         manager.start();
 

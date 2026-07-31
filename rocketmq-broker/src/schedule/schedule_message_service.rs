@@ -2164,7 +2164,7 @@ mod tests {
             .schedule_message_service_for_test()
             .expect("schedule message service should be configured")
             .clone();
-        let fixed_children = parent_group.child_stats().active;
+        let fixed_children = parent_group.component_count();
 
         ScheduleMessageService::start_persist_task_for_probe(service.clone(), Duration::from_secs(60))
             .await
@@ -2172,12 +2172,12 @@ mod tests {
         let first_generation = service.active_generation.load(Ordering::Acquire);
         assert_ne!(first_generation, 0);
         assert_eq!(service.task_count(), 1);
-        assert_eq!(parent_group.child_stats().active, fixed_children);
+        assert_eq!(parent_group.component_count(), fixed_children);
 
         service.stop().await.expect("first schedule generation should stop");
         assert_eq!(service.active_generation.load(Ordering::Acquire), 0);
         assert_eq!(service.task_count(), 0);
-        assert_eq!(parent_group.child_stats().active, fixed_children);
+        assert_eq!(parent_group.component_count(), fixed_children);
 
         ScheduleMessageService::start_persist_task_for_probe(service.clone(), Duration::from_secs(60))
             .await
@@ -2190,7 +2190,7 @@ mod tests {
             .await
             .expect("final schedule shutdown should succeed");
         assert_eq!(service.task_count(), 0);
-        assert_eq!(parent_group.child_stats().active, fixed_children);
+        assert_eq!(parent_group.component_count(), fixed_children);
         assert!(
             ScheduleMessageService::start_persist_task_for_probe(service, Duration::from_secs(60))
                 .await

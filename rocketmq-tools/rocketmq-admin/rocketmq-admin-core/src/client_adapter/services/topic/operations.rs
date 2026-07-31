@@ -814,7 +814,7 @@ mod tests {
         })
         .unwrap();
         let client_runtime = ClientRuntime::try_new(
-            runtime_owner.root_context().child("topic-service-client"),
+            runtime_owner.root_context().component("topic-service-client"),
             ClientRuntimeConfig::default(),
             TelemetryHandle::noop(),
         )

@@ -660,7 +660,7 @@ impl PullMessageService {
             .collect::<Result<Vec<BudgetedQueue<PullRequest>>, RocketMQError>>()?;
         let (mut shutdown, tx_shutdown) = Shutdown::new(1);
         let pop_instance = instance.clone();
-        let service_context = instance.service_context().child("pull-message-service");
+        let service_context = instance.service_context().component("pull-message-service");
         *self
             .service_context
             .write()
@@ -1178,7 +1178,7 @@ pub async fn run_pull_message_service_lifecycle_probe(
         0,
         "pull-message-service-probe",
         None,
-        client_runtime.child("pull-message-service-probe"),
+        client_runtime.component("pull-message-service-probe"),
         client_runtime.telemetry_handle().clone(),
         client_runtime.pool().request_future_holder(),
     );
@@ -1341,7 +1341,7 @@ mod tests {
             0,
             "pull-message-mismatch-test",
             None,
-            runtime.child("instance"),
+            runtime.component("instance"),
             runtime.telemetry_handle().clone(),
             runtime.pool().request_future_holder(),
         );

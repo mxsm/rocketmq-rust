@@ -186,13 +186,11 @@ impl TelemetryProviderGuard {
         let Some(registry) = self.prometheus_registry.take() else {
             return Ok(());
         };
-        self.prometheus_http = Some(
-            crate::exporter::prometheus::spawn_prometheus_http_endpoint_with_task_group(
-                config,
-                registry,
-                service_context.task_group().clone(),
-            )?,
-        );
+        self.prometheus_http = Some(crate::exporter::prometheus::spawn_prometheus_http_endpoint(
+            config,
+            registry,
+            service_context,
+        )?);
         Ok(())
     }
 

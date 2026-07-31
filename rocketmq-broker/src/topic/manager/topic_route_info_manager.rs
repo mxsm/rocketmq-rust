@@ -28,6 +28,7 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_runtime::tokio_lock::RocketMQTokioMutex;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::TaskGroup;
 use tracing::info;
 use tracing::warn;
@@ -50,7 +51,7 @@ pub(crate) struct TopicRouteInfoManager {
     pub(crate) topic_subscribe_info_table: Arc<DashMap<CheetahString /* topic */, HashSet<MessageQueue>>>,
     broker_outer_api: BrokerOuterAPI,
     load_balance_poll_name_server_interval: u64,
-    parent_task_group: Option<TaskGroup>,
+    service_context: Option<ChildServiceContext>,
     running: Arc<AtomicBool>,
     task_group: Arc<Mutex<Option<TaskGroup>>>,
 }
@@ -65,7 +66,7 @@ impl Clone for TopicRouteInfoManager {
             topic_subscribe_info_table: self.topic_subscribe_info_table.clone(),
             broker_outer_api: self.broker_outer_api.clone(),
             load_balance_poll_name_server_interval: self.load_balance_poll_name_server_interval,
-            parent_task_group: self.parent_task_group.clone(),
+            service_context: self.service_context.clone(),
             running: self.running.clone(),
             task_group: self.task_group.clone(),
         }
@@ -76,7 +77,7 @@ impl TopicRouteInfoManager {
     pub fn new(
         broker_outer_api: BrokerOuterAPI,
         load_balance_poll_name_server_interval: u64,
-        parent_task_group: Option<TaskGroup>,
+        service_context: Option<ChildServiceContext>,
     ) -> Self {
         TopicRouteInfoManager {
             lock: Arc::new(RocketMQTokioMutex::new(())),
@@ -86,7 +87,7 @@ impl TopicRouteInfoManager {
             topic_subscribe_info_table: Arc::new(DashMap::new()),
             broker_outer_api,
             load_balance_poll_name_server_interval,
-            parent_task_group,
+            service_context,
             running: Arc::new(AtomicBool::new(false)),
             task_group: Arc::new(Mutex::new(None)),
         }
@@ -102,7 +103,7 @@ impl TopicRouteInfoManager {
         }
 
         let Some(group) = broker_task_group_or_current(
-            self.parent_task_group.as_ref(),
+            self.service_context.as_ref(),
             "rocketmq-broker.topic-route-info",
             "failed to start TopicRouteInfoManager outside Tokio runtime",
         ) else {

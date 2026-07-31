@@ -35,7 +35,7 @@ fn run_lifecycle_probe() -> StoreTimerSchedulerLifecycleProbe {
         ..RuntimeConfig::default()
     })
     .expect("store timer scheduler benchmark runtime should start");
-    let context = owner.root_context().child("store-timer-scheduler-bench");
+    let context = owner.root_context().component("store-timer-scheduler-bench");
     let output = owner.block_on(run_store_timer_scheduler_lifecycle_probe(context));
     owner
         .shutdown_runtime_blocking()

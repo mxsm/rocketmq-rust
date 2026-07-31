@@ -839,13 +839,13 @@ pub(crate) struct BrokerRuntimeState<MS: MessageStore> {
 }
 
 pub(crate) fn broker_task_group_or_current(
-    parent_task_group: Option<&TaskGroup>,
+    service_context: Option<&ChildServiceContext>,
     name: impl Into<Arc<str>>,
     no_runtime_warning: &'static str,
 ) -> Option<TaskGroup> {
     let name = name.into();
-    parent_task_group
-        .map(|parent_task_group| parent_task_group.child(name))
+    service_context
+        .map(|service_context| service_context.component(name).task_group().clone())
         .or_else(|| {
             warn!("{no_runtime_warning}");
             None

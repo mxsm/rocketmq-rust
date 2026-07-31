@@ -304,7 +304,7 @@ impl AuthRuntimeBuilder {
         let metadata_io = match self.metadata_io {
             Some(metadata_io) => metadata_io,
             None => MetadataIoActor::start(
-                &self.service_context.child("auth.metadata-io"),
+                &self.service_context.component("auth.metadata-io"),
                 MetadataIoConfig::default(),
             )
             .map_err(|error| RocketMQError::auth_config_invalid("authRuntime", error.to_string()))?,
@@ -752,9 +752,9 @@ fn start_acl_file_watcher(
 
     let watch_config = config.clone();
     let interval = Duration::from_millis(config.acl_file_watch_interval_millis.max(1));
-    let watcher_context = service_context.child("auth.acl-file-watcher");
+    let watcher_context = service_context.component("auth.acl-file-watcher");
     let task_group = watcher_context.task_group().clone();
-    let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
+    let scheduled_tasks = ScheduledTaskGroup::new(task_group.clone());
     let blocking = service_context.metadata_io().clone();
     if let Err(error) = scheduled_tasks.schedule_fixed_rate_no_overlap(
         ScheduledTaskConfig::fixed_rate_no_overlap("auth.acl-file-watcher.reload", interval),

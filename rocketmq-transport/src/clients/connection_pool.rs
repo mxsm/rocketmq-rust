@@ -826,7 +826,7 @@ mod tests {
     async fn cleanup_task_with_service_context_uses_fixed_component_owner() {
         let context = rocketmq_runtime::RuntimeContext::from_current("connection-pool-context-test");
         let service = context.service_context("connection-pool-service");
-        let baseline_children = service.task_group().child_stats();
+        let baseline_components = service.task_group().component_count();
         let pool = ConnectionPool::<()>::new(100, Duration::from_millis(10));
 
         let cleanup_task = pool
@@ -835,7 +835,7 @@ mod tests {
         assert!(cleanup_task.is_active());
         let owner = cleanup_task.owner.as_ref().expect("active cleanup owner");
         assert_eq!(owner.task_group.id(), service.task_group().id());
-        assert_eq!(service.task_group().child_stats(), baseline_children);
+        assert_eq!(service.task_group().component_count(), baseline_components);
 
         let cleanup_report = cleanup_task.shutdown(Duration::from_secs(1)).await;
         assert!(cleanup_report.is_healthy(), "{}", cleanup_report.to_json());
@@ -843,6 +843,6 @@ mod tests {
         assert!(report.is_healthy(), "{}", report.to_json());
         assert!(report.children.is_empty(), "{}", report.to_json());
         assert_eq!(cleanup_task.task_count(), 0);
-        assert_eq!(service.task_group().child_stats(), baseline_children);
+        assert_eq!(service.task_group().component_count(), baseline_components);
     }
 }

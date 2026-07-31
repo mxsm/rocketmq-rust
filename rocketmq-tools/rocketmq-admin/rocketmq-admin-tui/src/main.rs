@@ -33,7 +33,7 @@ use rocketmq_runtime::RuntimeOwner;
 fn main() -> anyhow::Result<()> {
     let owner = RuntimeOwner::new(admin_tui_runtime_config()).context("failed to build rocketmq-admin-tui runtime")?;
     let client_runtime = ClientRuntime::try_new(
-        owner.root_context().child("rocketmq-admin-client"),
+        owner.root_context().component("rocketmq-admin-client"),
         ClientRuntimeConfig::default(),
         TelemetryHandle::noop(),
     )

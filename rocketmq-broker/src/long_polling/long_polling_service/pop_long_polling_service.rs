@@ -32,6 +32,7 @@ use rocketmq_model::common::pop_ack_constants::PopAckConstants;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
 use rocketmq_store::ArcMessageFilter;
@@ -76,7 +77,7 @@ pub(crate) struct PopLongPollingServiceContext {
     policy: PopLongPollingPolicy,
     topic_config_manager: Arc<TopicConfigManager>,
     subscription_group_lookup: SubscriptionGroupConfigLookup,
-    parent_task_group: Option<TaskGroup>,
+    service_context: Option<ChildServiceContext>,
 }
 
 impl PopLongPollingServiceContext {
@@ -84,13 +85,13 @@ impl PopLongPollingServiceContext {
         policy: PopLongPollingPolicy,
         topic_config_manager: Arc<TopicConfigManager>,
         subscription_group_lookup: SubscriptionGroupConfigLookup,
-        parent_task_group: Option<TaskGroup>,
+        service_context: Option<ChildServiceContext>,
     ) -> Self {
         Self {
             policy,
             topic_config_manager,
             subscription_group_lookup,
-            parent_task_group,
+            service_context,
         }
     }
 }
@@ -146,7 +147,7 @@ impl<RP: PopLongPollingRequestProcessor + Sync + 'static> PopLongPollingService<
         }
 
         let Some(task_group) = broker_task_group_or_current(
-            this.context.parent_task_group.as_ref(),
+            this.context.service_context.as_ref(),
             "rocketmq-broker.long-polling.pop",
             "failed to start PopLongPollingService outside Tokio runtime",
         ) else {

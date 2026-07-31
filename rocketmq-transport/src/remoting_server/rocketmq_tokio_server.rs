@@ -886,7 +886,7 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
 }
 
 fn new_remoting_server_context(context: &ChildServiceContext) -> ChildServiceContext {
-    context.child("rocketmq.remoting.server")
+    context.component("rocketmq.remoting.server")
 }
 
 #[cfg(test)]
@@ -1215,7 +1215,7 @@ mod tests {
         let client = RocketmqDefaultClient::new(
             Arc::new(TokioClientConfig::default()),
             DefaultRemotingRequestProcessor,
-            service.child("client"),
+            service.component("client"),
         );
         let remote_addr = cheetah_string::CheetahString::from_string(addr.to_string());
         let request = rocketmq_protocol::protocol::remoting_command::RemotingCommand::create_remoting_command(105);
@@ -1377,10 +1377,7 @@ mod tests {
             .expect("request executor group lock")
             .clone()
             .expect("request executor group");
-        let stats = request_executor_group.child_stats();
-        assert_eq!(stats.active, 0);
-        assert_eq!(stats.created, 0);
-        assert_eq!(stats.pruned, 0);
+        assert_eq!(request_executor_group.component_count(), 0);
 
         let _ = shutdown_tx.send(());
         let report = server_task.await.unwrap().unwrap();
@@ -1500,10 +1497,7 @@ mod tests {
             .expect("request executor group lock")
             .clone()
             .expect("request executor group");
-        let retained_stats = retained_request_executor_group.child_stats();
-        assert_eq!(retained_stats.active, 0);
-        assert_eq!(retained_stats.created, 0);
-        assert_eq!(retained_stats.pruned, 0);
+        assert_eq!(retained_request_executor_group.component_count(), 0);
 
         let _data_one = admission
             .try_acquire(
@@ -1533,10 +1527,7 @@ mod tests {
             ),
         )
         .await;
-        let released_stats = retained_request_executor_group.child_stats();
-        assert_eq!(released_stats.active, 0);
-        assert_eq!(released_stats.created, 0);
-        assert_eq!(released_stats.pruned, 0);
+        assert_eq!(retained_request_executor_group.component_count(), 0);
         assert!(
             tokio::time::timeout(Duration::from_millis(100), client.receive_command())
                 .await
@@ -1585,7 +1576,7 @@ mod tests {
         let client = RocketmqDefaultClient::new(
             Arc::new(TokioClientConfig::default()),
             DefaultRemotingRequestProcessor,
-            service.child("client"),
+            service.component("client"),
         )
         .with_transport_security(Arc::new(
             crate::security::TransportSecurity::development_insecure_loopback(
@@ -1727,7 +1718,7 @@ mod tests {
             None,
             RemotingServerRunCapabilities {
                 tls_runtime,
-                task_group: service.task_group().child("remoting-server"),
+                task_group: service.component("remoting-server").task_group().clone(),
                 transport_security: None,
                 transport_principal: None,
                 admission: None,

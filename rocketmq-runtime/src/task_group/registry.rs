@@ -13,8 +13,6 @@
 // limitations under the License.
 
 use std::collections::HashMap;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
 use std::sync::Weak;
 
 use dashmap::DashMap;
@@ -26,32 +24,15 @@ use super::TaskGroupInner;
 use super::TaskId;
 use super::TaskMeta;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ChildRegistrationKind {
-    Component,
-    Operation,
-}
-
 #[derive(Debug)]
 struct ChildRegistration {
     inner: Weak<TaskGroupInner>,
-    kind: ChildRegistrationKind,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(super) struct ActiveChildStats {
-    pub(super) active_operations: usize,
-    pub(super) operations_created: usize,
-    pub(super) operations_released: usize,
-    pub(super) registry_slots: usize,
 }
 
 #[derive(Debug)]
 pub(super) struct ActiveTaskRegistry {
     pub(super) tasks: DashMap<TaskId, TaskMeta>,
     children: Mutex<HashMap<TaskGroupId, ChildRegistration>>,
-    operations_created: AtomicUsize,
-    operations_released: AtomicUsize,
 }
 
 impl ActiveTaskRegistry {
@@ -59,63 +40,32 @@ impl ActiveTaskRegistry {
         Self {
             tasks: DashMap::new(),
             children: Mutex::new(HashMap::new()),
-            operations_created: AtomicUsize::new(0),
-            operations_released: AtomicUsize::new(0),
         }
     }
 
-    pub(super) fn register_child(&self, id: TaskGroupId, child: Weak<TaskGroupInner>, kind: ChildRegistrationKind) {
-        let previous = self
-            .children
-            .lock()
-            .insert(id, ChildRegistration { inner: child, kind });
+    pub(super) fn register_component(&self, id: TaskGroupId, child: Weak<TaskGroupInner>) {
+        let previous = self.children.lock().insert(id, ChildRegistration { inner: child });
         debug_assert!(previous.is_none(), "task-group ids must be unique");
-        if kind == ChildRegistrationKind::Operation {
-            self.operations_created.fetch_add(1, Ordering::Relaxed);
-        }
     }
 
-    pub(super) fn unregister_child(&self, id: TaskGroupId) {
-        let removed = self.children.lock().remove(&id);
-        if removed.is_some_and(|entry| entry.kind == ChildRegistrationKind::Operation) {
-            self.operations_released.fetch_add(1, Ordering::Relaxed);
-        }
+    pub(super) fn unregister_component(&self, id: TaskGroupId) {
+        self.children.lock().remove(&id);
     }
 
-    pub(super) fn child_count(&self) -> usize {
+    pub(super) fn component_count(&self) -> usize {
         self.children.lock().len()
     }
 
-    pub(super) fn child_stats(&self) -> ActiveChildStats {
-        let children = self.children.lock();
-        ActiveChildStats {
-            active_operations: children
-                .values()
-                .filter(|entry| entry.kind == ChildRegistrationKind::Operation)
-                .count(),
-            operations_created: self.operations_created.load(Ordering::Relaxed),
-            operations_released: self.operations_released.load(Ordering::Relaxed),
-            registry_slots: children.len(),
-        }
-    }
-
-    pub(super) fn children_snapshot(&self) -> Vec<TaskGroup> {
+    pub(super) fn components_snapshot(&self) -> Vec<TaskGroup> {
         let mut children = self.children.lock();
-        let mut stale_operations = 0usize;
         let mut snapshot = Vec::with_capacity(children.len());
         children.retain(|_, entry| {
             let Some(inner) = entry.inner.upgrade() else {
-                stale_operations += usize::from(entry.kind == ChildRegistrationKind::Operation);
                 return false;
             };
             snapshot.push(TaskGroup { inner });
             true
         });
-        drop(children);
-
-        if stale_operations > 0 {
-            self.operations_released.fetch_add(stale_operations, Ordering::Relaxed);
-        }
         snapshot
     }
 }

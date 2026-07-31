@@ -615,7 +615,7 @@ mod tests {
             0,
             "pull-wrapper-test",
             None,
-            runtime.child("instance"),
+            runtime.component("instance"),
             runtime.telemetry_handle().clone(),
             runtime.pool().request_future_holder(),
         );

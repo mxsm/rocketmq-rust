@@ -31,7 +31,7 @@ use rocketmq_client_rust::ConcurrentCleanExpireLifecycleProbe;
 fn run_lifecycle_probe() -> ConcurrentCleanExpireLifecycleProbe {
     let runtime = support::BenchClientRuntime::new("concurrent-clean-expire");
     let output = runtime.block_on(run_concurrent_clean_expire_lifecycle_probe(
-        runtime.child("concurrent-clean-expire"),
+        runtime.component("concurrent-clean-expire"),
     ));
     runtime.shutdown();
     output

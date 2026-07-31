@@ -240,10 +240,11 @@ impl ProxyAuthRuntime {
         }
 
         let auth_config = config.to_auth_config();
-        let auth_runtime = AuthRuntimeBuilder::new(auth_config.clone(), service_context.child("proxy.auth.runtime"))
-            .build()
-            .await
-            .map_err(ProxyError::from)?;
+        let auth_runtime =
+            AuthRuntimeBuilder::new(auth_config.clone(), service_context.component("proxy.auth.runtime"))
+                .build()
+                .await
+                .map_err(ProxyError::from)?;
         let provider_registry = auth_runtime.provider_registry().clone();
 
         let mut authentication_provider = DefaultAuthenticationProvider::new();

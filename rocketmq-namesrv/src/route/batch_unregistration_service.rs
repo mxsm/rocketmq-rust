@@ -56,14 +56,9 @@ impl BatchUnregistrationService {
             return;
         }
 
-        let Some(task_group) = self
+        let task_group = self
             .name_server_runtime_inner
-            .task_group()
-            .map(|task_group| task_group.child("namesrv.batch-unregistration"))
-        else {
-            warn!("BatchUnregistrationService cannot start because NameServer task group is unavailable");
-            return;
-        };
+            .component_task_group("namesrv.batch-unregistration");
 
         let name_server_runtime_inner = self.name_server_runtime_inner.clone();
         let Some(mut rx) = self.rx.lock().take() else {

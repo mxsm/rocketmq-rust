@@ -982,7 +982,7 @@ pub async fn run_pop_orderly_lock_refresh_lifecycle_probe(
     let listener: ArcMessageListenerOrderly =
         Arc::new(|_msgs: &[&MessageExt], _context: &mut ConsumeOrderlyContext| Ok(ConsumeOrderlyStatus::Success));
     let service = Arc::new(ConsumeMessagePopOrderlyService::new(
-        client_runtime.child("pop-orderly-probe"),
+        client_runtime.component("pop-orderly-probe"),
         client_runtime.telemetry_handle().clone(),
         client_runtime.client_metrics().clone(),
         Arc::new(ClientConfig::default()),

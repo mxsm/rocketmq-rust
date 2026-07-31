@@ -76,7 +76,7 @@ impl CompactionService {
         let compaction_store = self.compaction_store.clone();
         let schedule_interval = self.schedule_interval;
         let worker_group = crate::runtime::task_group(&self.runtime_scope, "rocketmq-store.kv.compaction");
-        let scheduled_tasks = ScheduledTaskGroup::new(worker_group.child("scheduled"));
+        let scheduled_tasks = ScheduledTaskGroup::new(worker_group.clone());
         let mut config = ScheduledTaskConfig::fixed_rate_no_overlap("store.kv.compaction", schedule_interval);
         config.initial_delay = schedule_interval;
 

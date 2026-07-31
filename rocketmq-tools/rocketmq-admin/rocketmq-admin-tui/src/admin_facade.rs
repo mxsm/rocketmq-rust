@@ -93,7 +93,7 @@ pub(crate) fn test_client_runtime() -> Arc<ClientRuntime> {
     });
 
     ClientRuntime::try_new(
-        OWNER.root_context().child("client"),
+        OWNER.root_context().component("client"),
         ClientRuntimeConfig::default(),
         TelemetryHandle::noop(),
     )

@@ -406,39 +406,35 @@ impl<P> ProxyGrpcService<P> {
         }
     }
 
-    pub async fn run_housekeeping_until<F>(&self, shutdown: F, parent_task_group: TaskGroup)
+    pub async fn run_housekeeping_until<F>(&self, shutdown: F, task_group: TaskGroup)
     where
         F: std::future::Future<Output = ()> + Send,
         P: MessagingProcessor + 'static,
     {
-        let _ = self
-            .run_housekeeping_until_with_report(shutdown, parent_task_group)
-            .await;
+        let _ = self.run_housekeeping_until_with_report(shutdown, task_group).await;
     }
 
     pub async fn run_housekeeping_until_with_report<F>(
         &self,
         shutdown: F,
-        parent_task_group: TaskGroup,
+        task_group: TaskGroup,
     ) -> ProxyHousekeepingRunReport
     where
         F: std::future::Future<Output = ()> + Send,
         P: MessagingProcessor + 'static,
     {
-        self.run_housekeeping_until_with_task_group(shutdown, parent_task_group)
-            .await
+        self.run_housekeeping_until_with_task_group(shutdown, task_group).await
     }
 
     pub async fn run_housekeeping_until_with_task_group<F>(
         &self,
         shutdown: F,
-        parent_task_group: TaskGroup,
+        task_group: TaskGroup,
     ) -> ProxyHousekeepingRunReport
     where
         F: std::future::Future<Output = ()> + Send,
         P: MessagingProcessor + 'static,
     {
-        let task_group = parent_task_group.child("rocketmq-proxy.grpc.housekeeping");
         let service = self.clone();
         housekeeping::run_housekeeping_until(self.housekeeping_interval(), shutdown, task_group, move || {
             let service = service.clone();

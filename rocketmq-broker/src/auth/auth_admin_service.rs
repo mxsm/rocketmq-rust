@@ -51,7 +51,7 @@ pub struct AuthAdminService {
 impl AuthAdminService {
     pub async fn new(auth_config: AuthConfig, service_context: ChildServiceContext) -> Result<Self, RocketMQError> {
         let metadata_io = MetadataIoActor::start(
-            &service_context.child("auth-admin.metadata-io"),
+            &service_context.component("auth-admin.metadata-io"),
             MetadataIoConfig::default(),
         )
         .map_err(crate::runtime_to_rocketmq_error)?;

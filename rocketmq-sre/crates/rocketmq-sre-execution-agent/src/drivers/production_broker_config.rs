@@ -288,7 +288,7 @@ impl ProductionBrokerConfigPatchClient {
         context: ChildServiceContext,
     ) -> Result<Self, ExecutionAgentError> {
         let client_runtime = ClientRuntime::try_new(
-            context.child("broker-admin-client"),
+            context.component("broker-admin-client"),
             ClientRuntimeConfig {
                 shutdown_timeout: config.shutdown_timeout,
                 ..ClientRuntimeConfig::default()

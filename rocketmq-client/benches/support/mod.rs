@@ -39,7 +39,7 @@ impl BenchClientRuntime {
         })
         .expect("benchmark runtime owner should start");
         let client_runtime = ClientRuntime::try_new(
-            owner.root_context().child("client"),
+            owner.root_context().component("client"),
             ClientRuntimeConfig::default(),
             TelemetryHandle::noop(),
         )
@@ -51,8 +51,8 @@ impl BenchClientRuntime {
         Arc::clone(&self.client_runtime)
     }
 
-    pub fn child(&self, scope: impl Into<rocketmq_runtime::ScopeId>) -> ChildServiceContext {
-        self.client_runtime.child(scope)
+    pub fn component(&self, scope: impl Into<rocketmq_runtime::ScopeId>) -> ChildServiceContext {
+        self.client_runtime.component(scope)
     }
 
     pub fn block_on<F>(&self, future: F) -> F::Output

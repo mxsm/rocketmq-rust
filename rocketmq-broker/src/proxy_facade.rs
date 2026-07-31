@@ -132,8 +132,8 @@ impl ProxyBrokerFacade {
         service_context: ChildServiceContext,
         telemetry_handle: TelemetryHandle,
     ) -> Self {
-        let runtime_context = service_context.child("embedded-broker");
-        let local_request_tasks = service_context.child("local-request").task_group().clone();
+        let runtime_context = service_context.component("embedded-broker");
+        let local_request_tasks = service_context.component("local-request").task_group().clone();
         Self {
             runtime: BrokerRuntime::new_with_validated_config_and_telemetry(
                 Arc::new(validated_config),

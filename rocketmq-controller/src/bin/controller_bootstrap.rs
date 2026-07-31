@@ -80,7 +80,7 @@ const LOGO: &str = r#"
 pub fn main() -> Result<()> {
     let owner = RuntimeOwner::new(controller_runtime_config())
         .map_err(|source| ControllerError::runtime_source("build controller runtime", source))?;
-    let service_context = owner.root_context().child("rocketmq-controller-runtime");
+    let service_context = owner.root_context().component("rocketmq-controller-runtime");
     let lifecycle = ServiceLifecycle::from_env("rocketmq-controller").map_err(|error| {
         ControllerError::ConfigError(format!("invalid Controller lifecycle configuration: {error}"))
     })?;

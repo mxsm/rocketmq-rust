@@ -342,7 +342,7 @@ pub struct ControllerManager {
 
     broker_housekeeping_service: Mutex<Option<Arc<BrokerHousekeepingService>>>,
     broker_role_notifier: BrokerRoleNotifier,
-    parent_task_group: TaskGroup,
+    service_context: ChildServiceContext,
 }
 
 impl ControllerManager {
@@ -404,14 +404,12 @@ impl ControllerManager {
             ));
         }
         let config = ControllerConfigHandle::new(config);
-        let parent_task_group = service_context.task_group().clone();
-
         info!("Creating controller manager with config: {:?}", config.snapshot());
 
         // Initialize heartbeat manager
         let heartbeat_manager = Arc::new(DefaultBrokerHeartbeatManager::new(
             config.reader(),
-            parent_task_group.clone(),
+            service_context.component("controller.heartbeat").task_group().clone(),
         ));
 
         #[cfg(feature = "metrics")]
@@ -434,7 +432,7 @@ impl ControllerManager {
         let raft_arc = Arc::new(RaftController::new_open_raft_with_heartbeat_and_metrics(
             config.reader(),
             heartbeat_manager.clone(),
-            service_context.child("controller.openraft"),
+            service_context.component("controller.openraft"),
             metrics_manager.clone(),
         ));
 
@@ -451,7 +449,7 @@ impl ControllerManager {
         let transport_telemetry = TransportTelemetry::noop();
         let remoting_server = Some(RocketMQServer::new_with_telemetry(
             Arc::new(server_config),
-            service_context.child("controller.remoting-server"),
+            service_context.component("controller.remoting-server"),
             transport_telemetry.clone(),
         ));
         info!("Remoting server created on port {}", listen_port);
@@ -461,7 +459,7 @@ impl ControllerManager {
         let remoting_client = Arc::new(RocketmqDefaultClient::new_with_telemetry(
             Arc::new(client_config),
             DefaultRemotingRequestProcessor,
-            service_context.child("controller.remoting-client"),
+            service_context.component("controller.remoting-client"),
             transport_telemetry,
         ));
         let notify_retry_base_delay = Duration::from_millis(config.snapshot().heartbeat_interval_ms.max(100));
@@ -487,7 +485,7 @@ impl ControllerManager {
             lifecycle_lock: AsyncMutex::new(()),
             broker_housekeeping_service: Mutex::new(None),
             broker_role_notifier,
-            parent_task_group,
+            service_context,
         })
     }
 
@@ -497,7 +495,11 @@ impl ControllerManager {
             return Ok(task_group.clone());
         }
 
-        let task_group = self.parent_task_group.child("rocketmq-controller.manager");
+        let task_group = self
+            .service_context
+            .component("rocketmq-controller.manager")
+            .task_group()
+            .clone();
         *guard = Some(task_group.clone());
         Ok(task_group)
     }
@@ -1057,7 +1059,7 @@ impl ControllerManager {
         let weak_manager = Arc::downgrade(self);
         let interval = Duration::from_millis(self.config.snapshot().heartbeat_interval_ms.max(100));
         let task_group = self.ensure_manager_task_group()?;
-        let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("leadership-watch"));
+        let scheduled_tasks = ScheduledTaskGroup::new(task_group.clone());
         let was_leader = Arc::new(AtomicBool::new(false));
         let task_config = ScheduledTaskConfig::fixed_delay("controller.leadership-watch", interval);
 
@@ -1287,7 +1289,7 @@ mod tests {
         let inner = Arc::new(ChannelInner::new(
             connection,
             response_table,
-            test_service_context().child("test-channel").task_group().clone(),
+            test_service_context().component("test-channel").task_group().clone(),
         ));
         Channel::new(inner, local_addr, local_addr)
     }

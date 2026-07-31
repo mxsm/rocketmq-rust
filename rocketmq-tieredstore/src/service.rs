@@ -22,6 +22,7 @@ use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
+use rocketmq_runtime::TaskKind;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::TieredStoreConfig;
@@ -38,7 +39,7 @@ pub struct TieredServiceSet<P>
 where
     P: TieredStoreProvider,
 {
-    cleanup_group: tokio::sync::Mutex<Option<rocketmq_runtime::TaskGroup>>,
+    cleanup_owner: tokio::sync::Mutex<Option<runtime::TaskOperationOwner>>,
     cleanup_schedule: tokio::sync::Mutex<Option<ScheduledTaskGroup>>,
     cleanup_shutdown: tokio::sync::Mutex<Option<CancellationToken>>,
     cleanup_error: CleanupErrorSlot,
@@ -52,7 +53,7 @@ where
 {
     pub fn new(parent_task_group: TaskGroup) -> Self {
         Self {
-            cleanup_group: tokio::sync::Mutex::new(None),
+            cleanup_owner: tokio::sync::Mutex::new(None),
             cleanup_schedule: tokio::sync::Mutex::new(None),
             cleanup_shutdown: tokio::sync::Mutex::new(None),
             cleanup_error: Arc::new(tokio::sync::Mutex::new(None)),
@@ -70,16 +71,16 @@ where
         if !config.delete_file_enable {
             return Ok(());
         }
-        if self.cleanup_group.lock().await.is_some() {
+        if self.cleanup_owner.lock().await.is_some() {
             return Ok(());
         }
         let service = CleanupService::new(config, flat_file_store, shutdown);
         let cleanup_shutdown = service.shutdown_token();
-        let task_group = runtime::task_group_with_parent("rocketmq-tieredstore.cleanup", &self.parent_task_group);
-        let scheduled_tasks = service.schedule(&task_group, self.cleanup_error.clone())?;
+        let owner = runtime::TaskOperationOwner::new(self.parent_task_group.clone(), TaskKind::Service);
+        let scheduled_tasks = service.schedule(&owner, self.cleanup_error.clone())?;
         *self.cleanup_shutdown.lock().await = Some(cleanup_shutdown);
         *self.cleanup_schedule.lock().await = Some(scheduled_tasks);
-        *self.cleanup_group.lock().await = Some(task_group);
+        *self.cleanup_owner.lock().await = Some(owner);
         Ok(())
     }
 
@@ -94,8 +95,10 @@ where
         }
         self.cleanup_schedule.lock().await.take();
         let mut shutdown_report = None;
-        if let Some(task_group) = self.cleanup_group.lock().await.take() {
-            let report = task_group.shutdown(std::time::Duration::from_secs(5)).await;
+        if let Some(owner) = self.cleanup_owner.lock().await.take() {
+            let report = owner
+                .shutdown_report("rocketmq-tieredstore.cleanup", std::time::Duration::from_secs(5))
+                .await;
             runtime::shutdown_report_result("tieredstore cleanup", report.clone())?;
             shutdown_report = Some(report);
         }
@@ -106,11 +109,11 @@ where
 
     pub async fn task_count(&self) -> usize {
         let root_task_count = self
-            .cleanup_group
+            .cleanup_owner
             .lock()
             .await
             .as_ref()
-            .map(rocketmq_runtime::TaskGroup::task_count)
+            .map(runtime::TaskOperationOwner::task_count)
             .unwrap_or_default();
         let scheduled_task_count = self
             .cleanup_schedule

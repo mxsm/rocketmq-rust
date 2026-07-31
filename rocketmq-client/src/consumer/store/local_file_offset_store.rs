@@ -804,7 +804,7 @@ pub async fn run_local_file_offset_store_lifecycle_probe(
         0,
         format!("local-offset-store-probe-{}", std::process::id()),
         None,
-        client_runtime.child("local-offset-store-probe"),
+        client_runtime.component("local-offset-store-probe"),
         client_runtime.telemetry_handle().clone(),
         client_runtime.pool().request_future_holder(),
     );
@@ -813,7 +813,7 @@ pub async fn run_local_file_offset_store_lifecycle_probe(
     let persist_commands =
         LocalFileOffsetStore::build_persist_command_queue().expect("local offset probe persist command queue");
     let persist_handle = LocalFileOffsetStore::spawn_background_persist_task_with_interval(
-        &client_runtime.child("local-offset-persist-probe"),
+        &client_runtime.component("local-offset-persist-probe"),
         offset_table.clone(),
         dirty_flag.clone(),
         store_path.clone(),
@@ -925,7 +925,7 @@ mod tests {
             0,
             client_id,
             None,
-            runtime.child("client-instance"),
+            runtime.component("client-instance"),
             runtime.telemetry_handle().clone(),
             runtime.pool().request_future_holder(),
         )
@@ -936,7 +936,7 @@ mod tests {
         let runtime = test_runtime();
         let client_instance = test_client_instance("local-offset-store-construction-test");
         let store = LocalFileOffsetStore::new(
-            runtime.child("construction"),
+            runtime.component("construction"),
             client_instance,
             CheetahString::from_static_str("local_offset_store_no_runtime_group"),
         );
@@ -961,7 +961,7 @@ mod tests {
         let dirty_flag = Arc::new(AtomicBool::new(false));
         let persist_commands = LocalFileOffsetStore::build_persist_command_queue().expect("persist command queue");
         let persist_handle = LocalFileOffsetStore::spawn_background_persist_task(
-            &runtime.child("read-fallback-persist"),
+            &runtime.component("read-fallback-persist"),
             offset_table.clone(),
             dirty_flag.clone(),
             store_path.clone(),
@@ -1013,7 +1013,7 @@ mod tests {
         let dirty_flag = Arc::new(AtomicBool::new(false));
         let persist_commands = LocalFileOffsetStore::build_persist_command_queue().expect("persist command queue");
         let persist_handle = LocalFileOffsetStore::spawn_background_persist_task(
-            &runtime.child("shutdown-persist"),
+            &runtime.component("shutdown-persist"),
             offset_table.clone(),
             dirty_flag.clone(),
             store_path.clone(),

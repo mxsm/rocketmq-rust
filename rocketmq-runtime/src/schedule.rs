@@ -232,7 +232,9 @@ pub mod simple_scheduler {
 
         /// Creates with task group.
         pub fn new_with_task_group(parent_task_group: TaskGroup) -> Self {
-            Self::new_with_optional_task_group(Some(parent_task_group.child(LEGACY_SCHEDULED_TASK_MANAGER_BOUNDARY)))
+            Self::new_with_optional_task_group(Some(
+                parent_task_group.component(LEGACY_SCHEDULED_TASK_MANAGER_BOUNDARY),
+            ))
         }
 
         fn new_with_optional_task_group(task_group: Option<TaskGroup>) -> Self {

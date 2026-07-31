@@ -66,7 +66,7 @@ fn test_service_context() -> ChildServiceContext {
                 .expect("commitlog recovery test runtime should start")
         })
         .root_context()
-        .child("commitlog-recovery-store")
+        .component("commitlog-recovery-store")
 }
 
 fn new_test_store(temp_dir: &TempDir, mut message_store_config: MessageStoreConfig) -> LocalFileMessageStore {

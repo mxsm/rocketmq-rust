@@ -1073,7 +1073,7 @@ mod tests {
             .expect("MCP query test runtime should start")
         });
         let client_runtime = rocketmq_admin_core::read_client_adapter::ClientRuntime::try_new(
-            OWNER.root_context().child("client"),
+            OWNER.root_context().component("client"),
             rocketmq_admin_core::read_client_adapter::ClientRuntimeConfig::default(),
             rocketmq_observability::TelemetryHandle::noop(),
         )

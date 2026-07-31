@@ -136,7 +136,7 @@ pub async fn run(
             ProductionBrokerConfigPatchClient::start(
                 driver_config,
                 pool.clone(),
-                service_context.child("broker-config-driver"),
+                service_context.component("broker-config-driver"),
             )
             .await?,
         ))
@@ -149,7 +149,7 @@ pub async fn run(
             ProductionTopicConfigPatchClient::start(
                 driver_config,
                 pool.clone(),
-                service_context.child("topic-config-driver"),
+                service_context.component("topic-config-driver"),
             )
             .await?,
         ))
@@ -162,7 +162,7 @@ pub async fn run(
             ProductionSubscriptionGroupPatchClient::start(
                 driver_config,
                 pool.clone(),
-                service_context.child("subscription-group-config-driver"),
+                service_context.component("subscription-group-config-driver"),
             )
             .await?,
         ))
@@ -188,7 +188,7 @@ pub async fn run(
             ProductionCredentialRotationClient::start(
                 driver_config,
                 pool.clone(),
-                service_context.child("credential-rotation-driver"),
+                service_context.component("credential-rotation-driver"),
             )
             .await?,
         )),
@@ -209,7 +209,7 @@ pub async fn run(
                 restart_config,
                 config.request_timeout,
                 config.dev_insecure_http,
-                service_context.child("proxy-restart-driver"),
+                service_context.component("proxy-restart-driver"),
             )
             .await?,
         )),

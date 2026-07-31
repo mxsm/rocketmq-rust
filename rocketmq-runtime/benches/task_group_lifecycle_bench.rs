@@ -23,9 +23,11 @@ use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::BenchmarkId;
 use criterion::Criterion;
+use rocketmq_runtime::OperationContext;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ShutdownReport;
+use rocketmq_runtime::TaskKind;
 
 fn runtime_config() -> RuntimeConfig {
     RuntimeConfig {
@@ -39,10 +41,10 @@ fn runtime_config() -> RuntimeConfig {
 
 fn run_spawn_shutdown(task_count: usize) -> ShutdownReport {
     let owner = RuntimeOwner::new(runtime_config()).expect("runtime owner should start");
-    let context = owner.root_context().child("bench.task-group-root");
+    let context = owner.root_context().component("bench.task-group-root");
 
     let report = owner.block_on(async move {
-        let service = context.child(format!("bench.task-group.{task_count}"));
+        let service = context.component(format!("bench.task-group.{task_count}"));
         for task_index in 0..task_count {
             service
                 .spawn_service(format!("short-task-{task_index}"), async {})
@@ -60,24 +62,27 @@ fn run_spawn_shutdown(task_count: usize) -> ShutdownReport {
     report
 }
 
-fn run_child_churn(operation_count: usize) -> ShutdownReport {
+fn run_operation_churn(operation_count: usize) -> ShutdownReport {
     let owner = RuntimeOwner::new(runtime_config()).expect("runtime owner should start");
-    let context = owner.root_context().child("bench.child-registry-root");
+    let context = owner.root_context().component("bench.operation-registry-root");
 
     let report = owner.block_on(async move {
-        let service = context.child(format!("bench.child-registry.{operation_count}"));
+        let service = context.component(format!("bench.operation-registry.{operation_count}"));
+        let operation = OperationContext::without_deadline(TaskKind::Worker);
         for operation_index in 0..operation_count {
-            drop(service.child(format!("component-{operation_index}")));
-            drop(
-                service
-                    .task_group()
-                    .try_child_lease(format!("operation-{operation_index}"))
-                    .expect("child lease should be accepted while the group is open"),
-            );
+            service
+                .task_group()
+                .spawn_operation(&operation, format!("operation-{operation_index}"), async {})
+                .expect("operation task should be accepted while the component is open");
         }
 
-        assert_eq!(service.task_group().child_count(), 0);
-        assert_eq!(service.task_group().child_stats().registry_slots, 0);
+        operation.close_admission();
+        assert!(operation
+            .wait(service.task_group(), Duration::from_secs(5))
+            .await
+            .expect("operation must use its original owner"));
+        assert_eq!(operation.active_task_count(), 0);
+        assert_eq!(service.task_group().component_count(), 0);
         context.task_group().shutdown(Duration::from_secs(5)).await
     });
 
@@ -133,20 +138,20 @@ fn bench_task_group_lifecycle(criterion: &mut Criterion) {
     }
     group.finish();
 
-    let mut child_churn = criterion.benchmark_group("task_group_active_child_registry");
+    let mut operation_churn = criterion.benchmark_group("task_group_operation_registry");
     for operation_count in [1_024usize, 10_000] {
-        child_churn.bench_with_input(
-            BenchmarkId::new("register_drop_shutdown", operation_count),
+        operation_churn.bench_with_input(
+            BenchmarkId::new("register_wait_shutdown", operation_count),
             &operation_count,
             |bencher, operation_count| {
                 bencher.iter(|| {
-                    let report = run_child_churn(black_box(*operation_count));
+                    let report = run_operation_churn(black_box(*operation_count));
                     black_box(report.is_healthy());
                 });
             },
         );
     }
-    child_churn.finish();
+    operation_churn.finish();
 }
 
 criterion_group! {

@@ -168,7 +168,7 @@ impl ReleaseCheckpointStore for StoreReleaseCheckpointService {
                 let service = rocketmq_store_rocksdb::release_checkpoint::RocksDbReleaseCheckpointService::new(
                     rocksdb_message_store.rocksdb_store(),
                     rocketmq_store_rocksdb::runtime::RocksDbRuntimeScope::new(
-                        self.service_context.child("store.release-checkpoint.rocksdb"),
+                        self.service_context.component("store.release-checkpoint.rocksdb"),
                     ),
                     self.checkpoint_root.clone(),
                     storage_identity,
@@ -217,7 +217,7 @@ impl ReleaseCheckpointStore for StoreReleaseCheckpointService {
                 let service = rocketmq_store_rocksdb::release_checkpoint::RocksDbReleaseCheckpointService::new(
                     rocksdb_message_store.rocksdb_store(),
                     rocketmq_store_rocksdb::runtime::RocksDbRuntimeScope::new(
-                        self.service_context.child("store.release-checkpoint.rocksdb"),
+                        self.service_context.component("store.release-checkpoint.rocksdb"),
                     ),
                     self.checkpoint_root.clone(),
                     storage_identity,

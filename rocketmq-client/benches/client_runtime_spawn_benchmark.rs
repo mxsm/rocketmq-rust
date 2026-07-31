@@ -34,9 +34,9 @@ struct ClientRuntimeSpawnOutput {
 
 fn run_explicit_runtime_spawn(task_count: usize) -> ClientRuntimeSpawnOutput {
     let runtime = support::BenchClientRuntime::new("explicit-spawn");
-    let spawn_context = runtime.child("spawn");
+    let spawn_context = runtime.component("spawn");
     let task_group = spawn_context.task_group().clone();
-    let baseline_children = task_group.child_count();
+    let baseline_children = task_group.component_count();
     let (tx, rx) = mpsc::channel();
     let started_at = Instant::now();
 
@@ -55,7 +55,7 @@ fn run_explicit_runtime_spawn(task_count: usize) -> ClientRuntimeSpawnOutput {
             .expect("explicit client runtime task should complete");
     }
     let elapsed = started_at.elapsed();
-    let retained_child_groups = task_group.child_count() - baseline_children;
+    let retained_child_groups = task_group.component_count() - baseline_children;
     runtime.shutdown();
 
     ClientRuntimeSpawnOutput {

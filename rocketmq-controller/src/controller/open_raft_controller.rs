@@ -197,7 +197,11 @@ impl OpenRaftController {
             return Ok(task_group.clone());
         }
 
-        let task_group = self.service_context.task_group().child("rocketmq-controller.openraft");
+        let task_group = self
+            .service_context
+            .component("rocketmq-controller.openraft")
+            .task_group()
+            .clone();
         *guard = Some(task_group.clone());
         Ok(task_group)
     }
@@ -219,9 +223,11 @@ impl OpenRaftController {
         }
 
         let task_group = self
-            .ensure_task_group()?
-            .child("controller.openraft.scan-not-active-broker");
-        let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
+            .service_context
+            .component("controller.openraft.scan-not-active-broker")
+            .task_group()
+            .clone();
+        let scheduled_tasks = ScheduledTaskGroup::new(task_group.clone());
         {
             let mut guard = self.scan_task_group.lock();
             *guard = Some(task_group.clone());

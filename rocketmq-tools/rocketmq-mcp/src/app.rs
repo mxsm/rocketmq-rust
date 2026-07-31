@@ -108,7 +108,7 @@ impl McpApp {
         let guard = Guard::new(config.security.clone(), config.audit.clone(), &config.clusters)
             .map_err(|error| crate::error::McpError::InvalidConfig(error.to_string()))?;
         let client_runtime = ClientRuntime::try_new(
-            service_context.child("rocketmq-mcp-client"),
+            service_context.component("rocketmq-mcp-client"),
             ClientRuntimeConfig::default(),
             telemetry_handle,
         )
@@ -211,7 +211,7 @@ impl McpApp {
         &self,
         lifecycle: &rocketmq_runtime::ServiceLifecycle,
     ) -> Result<(), crate::error::McpError> {
-        let service_context = self.service_context.child("rocketmq-mcp-lifecycle");
+        let service_context = self.service_context.component("rocketmq-mcp-lifecycle");
         lifecycle.start(&service_context).await.map_err(|error| {
             crate::error::McpError::InvalidConfig(format!("failed to start MCP lifecycle boundary: {error}"))
         })
@@ -222,7 +222,7 @@ impl McpApp {
         &self,
         name: &'static str,
     ) -> Result<rocketmq_runtime::ChildServiceContext, crate::error::McpError> {
-        Ok(self.service_context.child(name))
+        Ok(self.service_context.component(name))
     }
 
     pub(crate) fn trace_cache_metrics(&self) {
@@ -335,7 +335,7 @@ impl McpApp {
     }
 
     fn start_background_services(&self) -> Result<(), crate::error::McpError> {
-        let audit_service = self.service_context.child("rocketmq-mcp-audit");
+        let audit_service = self.service_context.component("rocketmq-mcp-audit");
         self.guard
             .audit_log()
             .start(&self.config.audit, &audit_service)

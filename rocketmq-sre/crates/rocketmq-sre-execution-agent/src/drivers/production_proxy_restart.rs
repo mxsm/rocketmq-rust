@@ -129,7 +129,7 @@ impl ProductionProxyRestartClient {
         let kube = Client::try_from(kube_config).map_err(|_| ExecutionAgentError::Configuration)?;
 
         let client_runtime = ClientRuntime::try_new(
-            context.child("proxy-restart-admin-client"),
+            context.component("proxy-restart-admin-client"),
             ClientRuntimeConfig {
                 shutdown_timeout: admin_config.shutdown_timeout,
                 ..ClientRuntimeConfig::default()

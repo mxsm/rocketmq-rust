@@ -35,7 +35,7 @@ fn run_lifecycle_probe() -> StoreStatsServiceLifecycleProbe {
         ..RuntimeConfig::default()
     })
     .expect("store stats service benchmark runtime should start");
-    let context = owner.root_context().child("store-stats-service-bench");
+    let context = owner.root_context().component("store-stats-service-bench");
     let output = owner.block_on(run_store_stats_service_lifecycle_probe(context));
     owner
         .shutdown_runtime_blocking()

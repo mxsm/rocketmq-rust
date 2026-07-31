@@ -27,6 +27,7 @@ use parking_lot::Mutex;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
@@ -362,7 +363,7 @@ struct FastFailureLifecycle {
 
 struct BrokerFastFailureInner {
     broker_config: Arc<BrokerConfig>,
-    parent_task_group: TaskGroup,
+    service_context: ChildServiceContext,
     queues: FastFailureQueues,
     next_task_id: AtomicU64,
     running: AtomicBool,
@@ -380,14 +381,17 @@ pub(crate) struct BrokerFastFailure {
 impl BrokerFastFailure {
     #[cfg(test)]
     pub(crate) fn new(broker_config: Arc<BrokerConfig>) -> Self {
-        Self::new_with_parent_task_group(broker_config, crate::test_task_group("broker-fast-failure"))
+        Self::new_with_service_context(broker_config, crate::test_service_context("broker-fast-failure"))
     }
 
-    pub(crate) fn new_with_parent_task_group(broker_config: Arc<BrokerConfig>, parent_task_group: TaskGroup) -> Self {
+    pub(crate) fn new_with_service_context(
+        broker_config: Arc<BrokerConfig>,
+        service_context: ChildServiceContext,
+    ) -> Self {
         Self {
             inner: Arc::new(BrokerFastFailureInner {
                 broker_config,
-                parent_task_group,
+                service_context,
                 queues: FastFailureQueues::new(),
                 next_task_id: AtomicU64::new(0),
                 running: AtomicBool::new(false),
@@ -400,7 +404,11 @@ impl BrokerFastFailure {
     }
 
     fn task_group(&self) -> TaskGroup {
-        self.inner.parent_task_group.child("rocketmq-broker.fast-failure")
+        self.inner
+            .service_context
+            .component("rocketmq-broker.fast-failure")
+            .task_group()
+            .clone()
     }
 
     pub(crate) fn set_page_cache_busy_checker<F>(&self, checker: F)
@@ -437,7 +445,7 @@ impl BrokerFastFailure {
         }
 
         let task_group = self.task_group();
-        let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
+        let scheduled_tasks = ScheduledTaskGroup::new(task_group.clone());
         let this = self.clone();
         let mut config = ScheduledTaskConfig::fixed_delay("broker.fast-failure.scan", scan_interval);
         config.initial_delay = initial_delay;
@@ -798,10 +806,8 @@ mod tests {
     async fn parent_task_group_parents_scanner_task_group() {
         let context = RuntimeContext::from_current("broker-fast-failure-context-test");
         let broker_service = context.service_context("broker-service");
-        let fast_failure = BrokerFastFailure::new_with_parent_task_group(
-            config_with_fast_failure_waits(1_000),
-            broker_service.task_group().clone(),
-        );
+        let fast_failure =
+            BrokerFastFailure::new_with_service_context(config_with_fast_failure_waits(1_000), broker_service.clone());
 
         fast_failure.start();
 

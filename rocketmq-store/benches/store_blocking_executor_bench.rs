@@ -36,7 +36,7 @@ fn run_store_blocking_probe(task_count: usize, work_duration: Duration) -> Store
         ..RuntimeConfig::default()
     })
     .expect("store blocking benchmark runtime should start");
-    let context = owner.root_context().child("store-blocking-bench");
+    let context = owner.root_context().component("store-blocking-bench");
     let output = owner.block_on(run_store_blocking_io_probe(context, task_count, work_duration));
     owner
         .shutdown_runtime_blocking()

@@ -16,7 +16,6 @@ use rocketmq_runtime::RuntimeError;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskControl;
-use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroupLifecycleState;
@@ -238,10 +237,10 @@ async fn diagnostics_snapshot_reports_runtime_state() {
 }
 
 #[tokio::test]
-async fn service_context_child_preserves_parent_runtime_and_blocking_executor() {
+async fn service_context_component_preserves_parent_runtime_and_blocking_executor() {
     let context = RuntimeContext::from_current("service-context-parent-test");
     let parent = context.service_context("parent-service");
-    let child = parent.child("child-service");
+    let child = parent.component("child-service");
 
     assert_eq!(child.name(), "child-service");
     assert_eq!(child.task_group().parent_id(), Some(parent.task_group().id()));
@@ -259,7 +258,7 @@ async fn service_context_child_preserves_parent_runtime_and_blocking_executor() 
 async fn task_capability_spawns_only_parent_owned_work() {
     let context = RuntimeContext::from_current("task-capability-test");
     let service = context.service_context("task-capability-service");
-    let spawner = service.task_spawner().child("worker");
+    let spawner = service.task_spawner();
     let owner_cancellation = spawner.cancellation_token();
     let (completed_tx, completed_rx) = oneshot::channel();
 
@@ -292,8 +291,8 @@ fn task_capability_source_does_not_expose_raw_runtime_or_detached_spawn() {
 async fn parent_context_shutdown_cancels_and_joins_descendant_tasks() {
     let context = RuntimeContext::from_current("service-context-cancellation-test");
     let parent = context.service_context("parent");
-    let child = parent.child("child");
-    let descendant = child.child("descendant");
+    let child = parent.component("child");
+    let descendant = child.component("descendant");
     let dropped = Arc::new(AtomicUsize::new(0));
     let started = Arc::new(Notify::new());
     let started_task = Arc::clone(&started);
@@ -327,7 +326,7 @@ async fn parent_context_shutdown_cancels_and_joins_descendant_tasks() {
 #[tokio::test]
 async fn task_group_shutdown_waits_for_completed_tasks() {
     let context = RuntimeContext::from_current("task-group-complete-test");
-    let group = context.root_group().child("service");
+    let group = context.service_context("service").task_group().clone();
     let notify = Arc::new(Notify::new());
     let notify_task = notify.clone();
 
@@ -348,7 +347,7 @@ async fn task_group_shutdown_waits_for_completed_tasks() {
 #[tokio::test]
 async fn task_group_shutdown_reports_panics() {
     let context = RuntimeContext::from_current("task-group-panic-test");
-    let group = context.root_group().child("service");
+    let group = context.service_context("service").task_group().clone();
 
     group
         .spawn("panic-task", TaskKind::Worker, async move {
@@ -366,7 +365,7 @@ async fn task_group_shutdown_reports_panics() {
 #[tokio::test]
 async fn task_group_enters_poisoned_state_after_task_panic_and_rejects_new_work() {
     let context = RuntimeContext::from_current("task-group-poisoned-test");
-    let group = context.root_group().child("service");
+    let group = context.service_context("service").task_group().clone();
 
     group
         .spawn("panic-task", TaskKind::Worker, async move {
@@ -391,13 +390,6 @@ async fn task_group_enters_poisoned_state_after_task_panic_and_rejects_new_work(
             .expect_err("poisoned task group should reject new tasks"),
         RuntimeError::TaskGroupClosing { .. }
     ));
-    assert!(matches!(
-        group
-            .try_child("late-child-after-panic")
-            .expect_err("poisoned task group should reject new children"),
-        RuntimeError::TaskGroupClosing { .. }
-    ));
-
     let report = group.shutdown(Duration::from_secs(1)).await;
     assert_eq!(report.panicked, 1, "{}", report.to_json());
     assert_eq!(group.lifecycle_state(), TaskGroupLifecycleState::ShutdownCompleted);
@@ -406,7 +398,7 @@ async fn task_group_enters_poisoned_state_after_task_panic_and_rejects_new_work(
 #[tokio::test]
 async fn task_group_spawn_service_with_handle_remains_tracked() {
     let context = RuntimeContext::from_current("task-group-handle-test");
-    let group = context.root_group().child("service");
+    let group = context.service_context("service").task_group().clone();
 
     let (_task_id, handle) = group.spawn_service_with_handle("handled-task", async move {}).unwrap();
 
@@ -420,7 +412,7 @@ async fn task_group_spawn_service_with_handle_remains_tracked() {
 #[tokio::test]
 async fn task_group_wait_task_observes_completion_without_shutdown() {
     let context = RuntimeContext::from_current("task-group-wait-task-test");
-    let group = context.root_group().child("service");
+    let group = context.service_context("service").task_group().clone();
     let release = Arc::new(Notify::new());
     let release_task = release.clone();
 
@@ -443,7 +435,7 @@ async fn task_group_wait_task_observes_completion_without_shutdown() {
 #[tokio::test]
 async fn task_group_abort_task_removes_metadata_and_reports_abort() {
     let context = RuntimeContext::from_current("task-group-abort-task-test");
-    let group = context.root_group().child("service");
+    let group = context.service_context("service").task_group().clone();
     let started = Arc::new(Notify::new());
     let started_task = started.clone();
     let dropped = Arc::new(AtomicUsize::new(0));
@@ -478,7 +470,7 @@ async fn task_group_abort_task_removes_metadata_and_reports_abort() {
 #[tokio::test]
 async fn task_group_shutdown_aborts_after_timeout_without_leak() {
     let context = RuntimeContext::from_current("task-group-abort-test");
-    let group = context.root_group().child("service");
+    let group = context.service_context("service").task_group().clone();
 
     group
         .spawn_service("pending-task", async move {
@@ -495,7 +487,7 @@ async fn task_group_shutdown_aborts_after_timeout_without_leak() {
 #[tokio::test]
 async fn task_group_shutdown_now_aborts_without_async_wait() {
     let context = RuntimeContext::from_current("task-group-shutdown-now-test");
-    let group = context.root_group().child("service");
+    let group = context.service_context("service").task_group().clone();
 
     group
         .spawn_service("pending-task", async move {
@@ -517,11 +509,12 @@ async fn task_group_shutdown_now_aborts_without_async_wait() {
 }
 
 #[tokio::test]
-async fn task_group_shutdown_starts_children_concurrently() {
+async fn task_group_shutdown_starts_components_concurrently() {
     let context = RuntimeContext::from_current("task-group-child-shutdown-test");
-    let group = context.root_group().child("service");
-    let first_child = group.child("first-child");
-    let second_child = group.child("second-child");
+    let service = context.service_context("service");
+    let group = service.task_group().clone();
+    let first_child = service.component("first-child").task_group().clone();
+    let second_child = service.component("second-child").task_group().clone();
     let second_child_observer = second_child.clone();
 
     first_child
@@ -553,8 +546,8 @@ async fn task_group_shutdown_starts_children_concurrently() {
 #[tokio::test]
 async fn shared_shutdown_deadline_bounds_sequential_group_shutdown() {
     let context = RuntimeContext::from_current("shared-shutdown-deadline");
-    let first = context.root_group().child("first-hung-group");
-    let second = context.root_group().child("second-hung-group");
+    let first = context.service_context("first-hung-group").task_group().clone();
+    let second = context.service_context("second-hung-group").task_group().clone();
     first
         .spawn_service("first-hung-task", std::future::pending())
         .expect("first task should spawn");
@@ -583,7 +576,7 @@ async fn shared_shutdown_deadline_bounds_sequential_group_shutdown() {
 #[tokio::test]
 async fn task_group_exposes_the_earliest_installed_shutdown_deadline() {
     let context = RuntimeContext::from_current("installed-shutdown-deadline");
-    let group = context.root_group().child("service");
+    let group = context.service_context("service").task_group().clone();
     let later = ShutdownDeadline::after(Duration::from_secs(5));
     let earlier = ShutdownDeadline::after(Duration::from_secs(1));
 
@@ -599,9 +592,10 @@ async fn task_group_exposes_the_earliest_installed_shutdown_deadline() {
 }
 
 #[tokio::test]
-async fn task_group_rejects_child_creation_after_shutdown() {
+async fn service_context_rejects_component_work_after_shutdown() {
     let context = RuntimeContext::from_current("task-group-late-child-test");
-    let group = context.root_group().child("service");
+    let service = context.service_context("service");
+    let group = service.task_group().clone();
 
     let report = group.shutdown(Duration::from_secs(1)).await;
     assert!(report.is_healthy(), "{}", report.to_json());
@@ -610,25 +604,21 @@ async fn task_group_rejects_child_creation_after_shutdown() {
         rocketmq_runtime::TaskGroupLifecycleState::ShutdownCompleted
     );
 
-    let error = group
-        .try_child("late-child")
-        .expect_err("try_child should reject child creation after shutdown");
-    assert!(matches!(error, RuntimeError::TaskGroupClosing { .. }));
-
-    let late_child = group.child("late-child-compat");
+    let late_child = service.component("late-component");
     assert_eq!(
-        late_child.lifecycle_state(),
+        late_child.task_group().lifecycle_state(),
         rocketmq_runtime::TaskGroupLifecycleState::ShutdownCompleted
     );
     assert!(late_child.spawn_service("late-task", async {}).is_err());
 }
 
 #[tokio::test]
-async fn task_group_children_with_same_name_keep_distinct_identity() {
+async fn component_groups_with_same_name_keep_distinct_identity() {
     let context = RuntimeContext::from_current("task-group-duplicate-child-name-test");
-    let group = context.root_group().child("service");
-    let first_child = group.child("duplicate-worker");
-    let second_child = group.child("duplicate-worker");
+    let service = context.service_context("service");
+    let group = service.task_group().clone();
+    let first_child = service.component("duplicate-worker").task_group().clone();
+    let second_child = service.component("duplicate-worker").task_group().clone();
 
     assert_ne!(first_child.id(), second_child.id());
     assert_eq!(first_child.parent_id(), Some(group.id()));
@@ -658,7 +648,7 @@ async fn task_group_concurrent_spawn_shutdown_leaves_no_metadata() {
     const TASKS: usize = 10_000;
 
     let context = RuntimeContext::from_current("task-group-concurrent-spawn-shutdown-test");
-    let group = context.root_group().child("service");
+    let group = context.service_context("service").task_group().clone();
     let start = Arc::new(Barrier::new(PRODUCERS + 1));
     let first_spawned = Arc::new(Notify::new());
     let accepted = Arc::new(AtomicUsize::new(0));
@@ -733,7 +723,7 @@ async fn task_group_concurrent_spawn_shutdown_leaves_no_metadata() {
 async fn scheduled_no_overlap_skips_while_previous_run_is_active() {
     let context = RuntimeContext::from_current("scheduled-test");
     let service = context.service_context("service");
-    let scheduled = ScheduledTaskGroup::new(service.task_group().child("scheduled"));
+    let scheduled = service.scheduled_tasks("scheduled");
     let config = ScheduledTaskConfig::fixed_rate_no_overlap("slow-task", Duration::from_millis(10));
 
     scheduled
@@ -763,7 +753,7 @@ async fn scheduled_no_overlap_skips_while_previous_run_is_active() {
 async fn scheduled_fixed_rate_allows_overlap_and_reports_overlap_metrics() {
     let context = RuntimeContext::from_current("scheduled-overlap-test");
     let service = context.service_context("service");
-    let scheduled = ScheduledTaskGroup::new(service.task_group().child("scheduled"));
+    let scheduled = service.scheduled_tasks("scheduled");
     let config = ScheduledTaskConfig::fixed_rate("overlap-task", Duration::from_millis(10));
 
     scheduled
@@ -793,7 +783,7 @@ async fn scheduled_fixed_rate_allows_overlap_and_reports_overlap_metrics() {
 async fn scheduled_fixed_delay_controlled_stops_when_task_requests_stop() {
     let context = RuntimeContext::from_current("scheduled-controlled-stop-test");
     let service = context.service_context("service");
-    let scheduled = ScheduledTaskGroup::new(service.task_group().child("scheduled"));
+    let scheduled = service.scheduled_tasks("scheduled");
     let runs = Arc::new(AtomicUsize::new(0));
     let runs_in_task = runs.clone();
 
@@ -838,7 +828,7 @@ async fn scheduled_fixed_delay_controlled_stops_when_task_requests_stop() {
 #[tokio::test]
 async fn scheduled_spawn_failure_rolls_back_registered_metrics() {
     let context = RuntimeContext::from_current("scheduled-rollback-test");
-    let scheduled = ScheduledTaskGroup::new(context.root_group().child("scheduled"));
+    let scheduled = context.service_context("scheduled").scheduled_tasks("driver");
     let report = scheduled.shutdown(Duration::from_secs(1)).await;
     assert!(report.is_healthy(), "{}", report.to_json());
 
@@ -863,7 +853,7 @@ async fn blocking_executor_limits_concurrency() {
         task_timeout: Duration::from_secs(1),
         ..BlockingPoolPolicy::default()
     };
-    let executor = BlockingExecutor::new(policy, context.root_group().child("blocking")).unwrap();
+    let executor = BlockingExecutor::new(policy, context.service_context("blocking").task_group().clone()).unwrap();
     let active = Arc::new(AtomicUsize::new(0));
     let max_active = Arc::new(AtomicUsize::new(0));
 
@@ -892,7 +882,7 @@ fn blocking_lanes_share_one_global_budget_and_preserve_waiting_lane_reservations
         ..RuntimeConfig::default()
     };
     let owner = RuntimeOwner::new(config).expect("runtime owner should start");
-    let context = owner.root_context().child("global-blocking-budget-test");
+    let context = owner.root_context().component("global-blocking-budget-test");
 
     owner.block_on(async {
         let mut storage_tasks = Vec::new();
@@ -1024,7 +1014,7 @@ async fn blocking_executor_rejects_work_when_bounded_queue_is_full() {
             task_timeout: Duration::from_secs(2),
             ..BlockingPoolPolicy::default()
         },
-        context.root_group().child("blocking"),
+        context.service_context("blocking").task_group().clone(),
     )
     .expect("bounded blocking executor should start");
     let (started_tx, started_rx) = oneshot::channel();
@@ -1079,8 +1069,11 @@ async fn blocking_executor_rejects_work_when_bounded_queue_is_full() {
 #[tokio::test]
 async fn blocking_executor_rejects_expired_deadline_before_running_operation() {
     let context = RuntimeContext::from_current("blocking-expired-deadline-test");
-    let executor = BlockingExecutor::new(BlockingPoolPolicy::default(), context.root_group().child("blocking"))
-        .expect("blocking executor should start");
+    let executor = BlockingExecutor::new(
+        BlockingPoolPolicy::default(),
+        context.service_context("blocking").task_group().clone(),
+    )
+    .expect("blocking executor should start");
     let calls = Arc::new(AtomicUsize::new(0));
     let operation_calls = Arc::clone(&calls);
 
@@ -1105,7 +1098,7 @@ async fn blocking_executor_absolute_deadline_bounds_running_task_and_reaps_it() 
             task_timeout: Duration::from_secs(30),
             ..BlockingPoolPolicy::default()
         },
-        context.root_group().child("blocking"),
+        context.service_context("blocking").task_group().clone(),
     )
     .expect("blocking executor should start");
     let (started_tx, started_rx) = oneshot::channel();
@@ -1158,7 +1151,7 @@ async fn cancelling_queued_blocking_work_removes_its_task_entry() {
             task_timeout: Duration::from_secs(30),
             ..BlockingPoolPolicy::default()
         },
-        context.root_group().child("blocking"),
+        context.service_context("blocking").task_group().clone(),
     )
     .expect("blocking executor should start");
     let (started_tx, started_rx) = oneshot::channel();
@@ -1209,7 +1202,7 @@ async fn cancelling_running_blocking_work_hands_its_join_to_the_reaper() {
             task_timeout: Duration::from_secs(30),
             ..BlockingPoolPolicy::default()
         },
-        context.root_group().child("blocking"),
+        context.service_context("blocking").task_group().clone(),
     )
     .expect("blocking executor should start");
     let (started_tx, started_rx) = oneshot::channel();
@@ -1277,7 +1270,7 @@ async fn blocking_executor_reports_timeout_until_reaper_cleans_late_exit() {
         task_timeout: Duration::from_millis(20),
         ..BlockingPoolPolicy::default()
     };
-    let executor = BlockingExecutor::new(policy, context.root_group().child("blocking")).unwrap();
+    let executor = BlockingExecutor::new(policy, context.service_context("blocking").task_group().clone()).unwrap();
     let (started_tx, started_rx) = oneshot::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
 
@@ -1345,7 +1338,7 @@ fn runtime_owner_uses_configured_blocking_policy_in_shutdown_report() {
         ..BlockingPoolPolicy::default()
     };
     let owner = RuntimeOwner::new(config).expect("runtime owner should start");
-    let context = owner.root_context().child("configured-blocking-test");
+    let context = owner.root_context().component("configured-blocking-test");
     let (started_tx, started_rx) = oneshot::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
 
@@ -1398,7 +1391,7 @@ fn runtime_owner_drop_shutdowns_root_group_when_not_explicitly_closed() {
         ..RuntimeConfig::default()
     };
     let owner = RuntimeOwner::new(config).expect("runtime owner should start");
-    let context = owner.root_context().child("owner-drop-test");
+    let context = owner.root_context().component("owner-drop-test");
 
     owner.block_on(async {
         context
@@ -1428,7 +1421,7 @@ fn runtime_owner_shutdown_background_closes_root_group_without_drop_fallback() {
         ..RuntimeConfig::default()
     };
     let owner = RuntimeOwner::new(config).expect("runtime owner should start");
-    let context = owner.root_context().child("owner-background-test");
+    let context = owner.root_context().component("owner-background-test");
 
     owner.block_on(async {
         context

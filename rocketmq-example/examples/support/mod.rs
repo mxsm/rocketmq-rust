@@ -33,7 +33,7 @@ where
         rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())
             .map_err(|source| RocketMQError::internal("initialize example telemetry", source))?;
     let client_runtime = ClientRuntime::try_new(
-        owner.root_context().child("client"),
+        owner.root_context().component("client"),
         ClientRuntimeConfig::default(),
         telemetry_guard.handle(),
     )?;

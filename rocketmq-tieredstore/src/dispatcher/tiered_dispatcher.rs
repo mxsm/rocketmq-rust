@@ -31,6 +31,7 @@ use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
+use rocketmq_runtime::TaskKind;
 
 use crate::config::TieredStoreConfig;
 use crate::dispatcher::progress::FailureRecordOutcome;
@@ -86,7 +87,7 @@ where
     pending_byte_capacity: u32,
     permits: Arc<Semaphore>,
     shutdown: CancellationToken,
-    task_group: tokio::sync::Mutex<Option<rocketmq_runtime::TaskGroup>>,
+    task_owner: tokio::sync::Mutex<Option<runtime::TaskOperationOwner>>,
     parent_task_group: TaskGroup,
     task_error: DispatcherTaskErrorSlot,
     metrics: Arc<TieredStoreMetrics>,
@@ -139,7 +140,7 @@ where
             pending_byte_capacity,
             permits,
             shutdown,
-            task_group: tokio::sync::Mutex::new(None),
+            task_owner: tokio::sync::Mutex::new(None),
             parent_task_group,
             task_error: Arc::new(tokio::sync::Mutex::new(None)),
             metrics,
@@ -179,18 +180,20 @@ where
     }
 
     pub async fn task_count(&self) -> usize {
-        self.task_group
+        self.task_owner
             .lock()
             .await
             .as_ref()
-            .map(rocketmq_runtime::TaskGroup::task_count)
+            .map(runtime::TaskOperationOwner::task_count)
             .unwrap_or(0)
     }
 
     pub async fn shutdown_with_report(&self) -> Result<ShutdownReport, RocketMQError> {
         self.shutdown.cancel();
-        let report = if let Some(task_group) = self.task_group.lock().await.take() {
-            let report = task_group.shutdown(std::time::Duration::from_secs(5)).await;
+        let report = if let Some(owner) = self.task_owner.lock().await.take() {
+            let report = owner
+                .shutdown_report("rocketmq-tieredstore.dispatcher", std::time::Duration::from_secs(5))
+                .await;
             runtime::shutdown_report_result("tieredstore dispatcher", report.clone())?;
             report
         } else {
@@ -622,7 +625,7 @@ where
         let Some(receiver) = receiver_guard.take() else {
             return Ok(());
         };
-        let task_group = runtime::task_group_with_parent("rocketmq-tieredstore.dispatcher", &self.parent_task_group);
+        let owner = runtime::TaskOperationOwner::new(self.parent_task_group.clone(), TaskKind::Service);
         let task_error = self.task_error.clone();
         let flat_file_store = self.flat_file_store.clone();
         let permits = self.permits.clone();
@@ -632,8 +635,9 @@ where
         let retry_payload_resolver = self.retry_payload_resolver.clone();
         let retry_tick = Arc::new(Notify::new());
         let retry_tick_scheduler = retry_tick.clone();
-        ScheduledTaskGroup::new(task_group.child("scheduled"))
-            .schedule_fixed_rate_no_overlap(
+        ScheduledTaskGroup::new(owner.task_group().clone())
+            .schedule_fixed_rate_no_overlap_operation(
+                owner.operation(),
                 ScheduledTaskConfig::fixed_rate_no_overlap(
                     "tieredstore.dispatcher.retry-ledger",
                     self.progress.retry_poll_interval(),
@@ -644,8 +648,9 @@ where
                 },
             )
             .map_err(|error| dispatcher_startup_failed("schedule retry ledger", error))?;
-        task_group
-            .spawn_service("tiered-dispatcher", async move {
+        owner
+            .task_group()
+            .spawn_operation(owner.operation(), "tiered-dispatcher", async move {
                 if let Err(error) = Self::run(
                     flat_file_store,
                     receiver,
@@ -663,7 +668,7 @@ where
                 }
             })
             .map_err(|error| dispatcher_startup_failed("spawn dispatcher worker", error))?;
-        *self.task_group.lock().await = Some(task_group);
+        *self.task_owner.lock().await = Some(owner);
         Ok(())
     }
 

@@ -368,7 +368,7 @@ impl DefaultLitePullConsumerImpl {
         let rebalance_config = consumer_config.to_consumer_config();
 
         let this = Self {
-            service_context: client_runtime.child(format!("lite-consumer-{}", consumer_config.consumer_group)),
+            service_context: client_runtime.component(format!("lite-consumer-{}", consumer_config.consumer_group)),
             client_pool: client_runtime.pool().clone(),
             client_pool_token: Mutex::new(None),
             client_config: ArcSwap::from_pointee(client_config),
@@ -943,7 +943,7 @@ impl DefaultLitePullConsumerImpl {
                     Some(offset_store) => offset_store,
                     None => Arc::new(match consumer_config.message_model {
                         MessageModel::Broadcasting => OffsetStore::new_with_local(LocalFileOffsetStore::try_new(
-                            self.service_context.child("offset-store"),
+                            self.service_context.component("offset-store"),
                             client_instance.clone(),
                             consumer_config.consumer_group.clone(),
                         )?),
@@ -3027,7 +3027,7 @@ mod tests {
             0,
             client_id,
             None,
-            runtime.child(client_id),
+            runtime.component(client_id),
             runtime.telemetry_handle().clone(),
             runtime.pool().request_future_holder(),
         )

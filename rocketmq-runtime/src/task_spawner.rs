@@ -37,14 +37,6 @@ impl TaskSpawner {
         Self { task_group }
     }
 
-    /// Derives a child capability whose tasks remain owned by the same root.
-    ///
-    /// Child groups inherit cancellation. They do not create a runtime or an
-    /// independently shut down ownership root.
-    pub fn child(&self, name: impl Into<Arc<str>>) -> Self {
-        Self::new(self.task_group.child(name))
-    }
-
     /// Returns the identity of the owned task group.
     pub fn group_id(&self) -> TaskGroupId {
         self.task_group.id()

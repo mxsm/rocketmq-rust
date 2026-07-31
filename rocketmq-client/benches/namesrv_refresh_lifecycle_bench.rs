@@ -32,7 +32,9 @@ use rocketmq_client_rust::RouteRefreshShardProbe;
 
 fn run_lifecycle_probe() -> NamesrvRefreshLifecycleProbe {
     let runtime = support::BenchClientRuntime::new("namesrv-refresh");
-    let output = runtime.block_on(run_namesrv_refresh_lifecycle_probe(runtime.child("namesrv-refresh")));
+    let output = runtime.block_on(run_namesrv_refresh_lifecycle_probe(
+        runtime.component("namesrv-refresh"),
+    ));
     runtime.shutdown();
     output
 }

@@ -67,7 +67,7 @@ pub fn run() {
         }
     };
     let client_runtime = match ClientRuntime::try_new(
-        client_runtime_owner.root_context().child("rocketmq-admin-client"),
+        client_runtime_owner.root_context().component("rocketmq-admin-client"),
         ClientRuntimeConfig::default(),
         TelemetryHandle::noop(),
     ) {
