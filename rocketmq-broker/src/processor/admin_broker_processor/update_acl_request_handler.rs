@@ -37,7 +37,7 @@ impl UpdateAclRequestHandler {
     }
 
     pub async fn update_acl(
-        &mut self,
+        &self,
         _channel: Channel,
         _ctx: rocketmq_transport::ConnectionHandlerContext,
         _request_code: RequestCode,

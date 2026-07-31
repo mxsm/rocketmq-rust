@@ -35,7 +35,7 @@ impl BrokerStatsHandler {
     }
 
     pub async fn view_broker_stats_data(
-        &mut self,
+        &self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,

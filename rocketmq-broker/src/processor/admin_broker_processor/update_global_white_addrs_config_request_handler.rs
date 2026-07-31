@@ -34,7 +34,7 @@ impl UpdateGlobalWhiteAddrsConfigRequestHandler {
     }
 
     pub async fn update_global_white_addrs_config(
-        &mut self,
+        &self,
         _channel: Channel,
         _ctx: rocketmq_transport::ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -170,7 +170,7 @@ mod tests {
         })
         .expect("create provider registry");
         let auth_admin_service = Arc::new(AuthAdminService::with_provider_registry(provider_registry.clone()));
-        let mut handler = UpdateGlobalWhiteAddrsConfigRequestHandler::new(auth_admin_service);
+        let handler = UpdateGlobalWhiteAddrsConfigRequestHandler::new(auth_admin_service);
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
 

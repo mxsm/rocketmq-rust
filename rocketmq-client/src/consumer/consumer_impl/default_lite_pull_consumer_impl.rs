@@ -93,9 +93,13 @@ use crate::runtime::ClientRuntime;
 use crate::runtime::ClientTrackedTaskHandle;
 use rocketmq_runtime::ChildServiceContext;
 
+mod assignment_registry;
 mod config;
 mod model;
 
+use assignment_registry::AssignmentEntry;
+use assignment_registry::AssignmentRegistry;
+pub use assignment_registry::AssignmentRegistrySnapshot;
 pub(crate) use config::default_lite_pull_consume_timestamp;
 pub(crate) use config::validate_lite_pull_consume_from_where;
 pub use config::LitePullConsumerConfig;
@@ -105,6 +109,7 @@ pub use model::SubscriptionType;
 const QUERY_UNIQ_KEY_LOOKBACK_MILLIS: u64 = 3 * 24 * 60 * 60 * 1000;
 const OFFSET_STORE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const REBALANCE_LISTENER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
+const ASSIGNMENT_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_CONSUME_REQUEST_CAPACITY: usize = 10_000;
 const MAX_CONSUME_REQUEST_CAPACITY: usize = 65_536;
 const CONSUME_REQUEST_MAX_AGE: Duration = Duration::from_secs(300);
@@ -117,17 +122,15 @@ enum LitePullTaskHandle {
 }
 
 impl LitePullTaskHandle {
-    fn abort(self) {
+    async fn abort_and_wait(self, timeout: Duration) -> bool {
         match self {
             Self::Tracked { handle, cancelled } => {
                 cancelled.store(true, Ordering::Release);
-                let report = handle.shutdown_now();
-                if !report.is_healthy() {
-                    warn!(
-                        report = %report.to_json(),
-                        "lite pull task immediate shutdown report is unhealthy"
-                    );
+                let stopped = handle.abort_and_wait(timeout).await;
+                if !stopped {
+                    warn!("lite pull task did not stop after abort");
                 }
+                stopped
             }
         }
     }
@@ -189,6 +192,44 @@ async fn sleep_or_cancel(shutdown_signal: &Arc<AtomicBool>, cancelled: &Arc<Atom
         }
 
         tokio::time::sleep((deadline - now).min(Duration::from_millis(50))).await;
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LitePullAssignmentRegistryProbe {
+    pub iterations: usize,
+    pub peak_entries: usize,
+    pub final_entries: usize,
+    pub final_owned_tasks: usize,
+    pub same_queue_serialized: bool,
+    pub different_queues_independent: bool,
+    pub stale_entry_rejected: bool,
+}
+
+async fn sleep_or_assignment_cancel(
+    shutdown_signal: &Arc<AtomicBool>,
+    cancelled: &Arc<AtomicBool>,
+    assignment_cancellation: &CancellationToken,
+    delay: Duration,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + delay;
+    loop {
+        if shutdown_signal.load(Ordering::Acquire)
+            || cancelled.load(Ordering::Acquire)
+            || assignment_cancellation.is_cancelled()
+        {
+            return false;
+        }
+
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            return true;
+        }
+
+        tokio::select! {
+            _ = assignment_cancellation.cancelled() => return false,
+            _ = tokio::time::sleep((deadline - now).min(Duration::from_millis(50))) => {}
+        }
     }
 }
 
@@ -295,10 +336,7 @@ pub struct DefaultLitePullConsumerImpl {
 
     // Queue management
     assigned_message_queue: Arc<AssignedMessageQueue>,
-    message_queue_locks: Arc<RwLock<HashMap<MessageQueue, Arc<Mutex<()>>>>>,
-
-    // Pull task scheduling
-    task_handles: Arc<RwLock<HashMap<MessageQueue, LitePullTaskHandle>>>,
+    assignment_registry: Arc<AssignmentRegistry>,
 
     // Message flow
     consume_requests: BudgetedQueue<LitePullConsumeRequest>,
@@ -383,8 +421,7 @@ impl DefaultLitePullConsumerImpl {
             offset_store: StdRwLock::new(None),
             rpc_hook: StdRwLock::new(None),
             assigned_message_queue: Arc::new(AssignedMessageQueue::new()),
-            message_queue_locks: Arc::new(RwLock::new(HashMap::new())),
-            task_handles: Arc::new(RwLock::new(HashMap::new())),
+            assignment_registry: Arc::new(AssignmentRegistry::new()),
             consume_requests,
             poll_lock: Arc::new(Mutex::new(())),
             topic_to_sub_expression: Arc::new(RwLock::new(HashMap::new())),
@@ -738,27 +775,14 @@ impl DefaultLitePullConsumerImpl {
     }
 
     async fn update_pull_task_for_topic(&self, topic: &str, assigned: &HashSet<MessageQueue>) -> RocketMQResult<()> {
-        let to_start = {
-            let mut task_handles = self.task_handles.write().await;
-            let to_remove: Vec<MessageQueue> = task_handles
-                .keys()
-                .filter(|mq| mq.topic() == topic && !assigned.contains(*mq))
-                .cloned()
-                .collect();
-            for mq in to_remove {
-                if let Some(handle) = task_handles.remove(&mq) {
-                    handle.abort();
-                }
+        self.assignment_registry.reconcile_topic(topic, assigned).await;
+        for mq in assigned {
+            let Some(entry) = self.assignment_registry.ensure(mq.clone()).await else {
+                return Err(crate::mq_client_err!("LitePull assignment registry is closed"));
+            };
+            if !entry.has_task().await {
+                self.start_pull_task(mq.clone()).await?;
             }
-            assigned
-                .iter()
-                .filter(|mq| !task_handles.contains_key(*mq))
-                .cloned()
-                .collect::<Vec<_>>()
-        };
-
-        for mq in to_start {
-            self.start_pull_task(mq).await?;
         }
         Ok(())
     }
@@ -780,22 +804,10 @@ impl DefaultLitePullConsumerImpl {
     /// Updates assigned message queues for ASSIGN mode.
     async fn update_assigned_message_queue_for_assign(&self, assigned: &[MessageQueue]) {
         let assigned_set: HashSet<MessageQueue> = assigned.iter().cloned().collect();
-
-        let to_remove: Vec<MessageQueue> = {
-            let task_handles = self.task_handles.read().await;
-            task_handles
-                .keys()
-                .filter(|mq| !assigned_set.contains(mq))
-                .cloned()
-                .collect()
-        };
-
-        if !to_remove.is_empty() {
-            let mut task_handles = self.task_handles.write().await;
-            for mq in &to_remove {
-                if let Some(handle) = task_handles.remove(mq) {
-                    handle.abort();
-                }
+        self.assignment_registry.reconcile_all(&assigned_set).await;
+        for mq in &assigned_set {
+            if self.assignment_registry.ensure(mq.clone()).await.is_none() {
+                warn!("Skip registering LitePull assignment after shutdown: {}", mq);
             }
         }
 
@@ -806,17 +818,13 @@ impl DefaultLitePullConsumerImpl {
 
     /// Starts pull tasks for assigned queues in ASSIGN mode.
     async fn update_pull_task_for_assign(&self, assigned: &[MessageQueue]) -> RocketMQResult<()> {
-        let to_start: Vec<MessageQueue> = {
-            let task_handles = self.task_handles.read().await;
-            assigned
-                .iter()
-                .filter(|mq| !task_handles.contains_key(mq))
-                .cloned()
-                .collect()
-        };
-
-        for mq in to_start {
-            self.start_pull_task(mq).await?;
+        for mq in assigned {
+            let Some(entry) = self.assignment_registry.ensure(mq.clone()).await else {
+                return Err(crate::mq_client_err!("LitePull assignment registry is closed"));
+            };
+            if !entry.has_task().await {
+                self.start_pull_task(mq.clone()).await?;
+            }
         }
         Ok(())
     }
@@ -1231,10 +1239,13 @@ impl DefaultLitePullConsumerImpl {
                     }
                 }
 
-                // Wait for all pull tasks to complete (5s timeout)
-                let handles: Vec<_> = self.task_handles.write().await.drain().collect();
-                for (mq, handle) in handles {
-                    if !handle.wait(Duration::from_secs(5)).await {
+                // Close assignment admission, then cancel and await every owned pull task.
+                let reports = self
+                    .assignment_registry
+                    .close_and_shutdown(Duration::from_secs(5))
+                    .await;
+                for (mq, healthy) in reports {
+                    if !healthy {
                         warn!("Pull task for {:?} did not finish in time", mq);
                     }
                 }
@@ -1451,11 +1462,13 @@ impl DefaultLitePullConsumerImpl {
 
     /// Spawns an async pull task for a message queue.
     async fn start_pull_task(&self, mq: MessageQueue) -> RocketMQResult<()> {
-        {
-            let task_handles = self.task_handles.read().await;
-            if task_handles.contains_key(&mq) {
-                return Ok(());
-            }
+        let entry = self
+            .assignment_registry
+            .get(&mq)
+            .await
+            .ok_or_else(|| crate::mq_client_err!(format!("Message queue is not actively assigned: {mq}")))?;
+        if entry.has_task().await {
+            return Ok(());
         }
 
         let weak_default_impl = self
@@ -1466,6 +1479,10 @@ impl DefaultLitePullConsumerImpl {
         let shutdown_signal = self.shutdown_signal.clone();
         let task_cancelled = Arc::new(AtomicBool::new(false));
         let task_cancelled_for_task = task_cancelled.clone();
+        let assignment_cancellation = entry.cancellation();
+        let task_generation = entry.next_task_generation();
+        let assignment_entry = Arc::downgrade(&entry);
+        let (start_task_tx, start_task_rx) = tokio::sync::oneshot::channel();
         let assigned_mq = self.assigned_message_queue.clone();
         let mq_clone = mq.clone();
 
@@ -1474,8 +1491,14 @@ impl DefaultLitePullConsumerImpl {
             "rocketmq-client-lite-pull-task",
             task_cancelled,
             async move {
+                if start_task_rx.await.is_err() {
+                    return;
+                }
                 loop {
-                    if shutdown_signal.load(Ordering::Acquire) || task_cancelled_for_task.load(Ordering::Acquire) {
+                    if shutdown_signal.load(Ordering::Acquire)
+                        || task_cancelled_for_task.load(Ordering::Acquire)
+                        || assignment_cancellation.is_cancelled()
+                    {
                         break;
                     }
 
@@ -1489,9 +1512,10 @@ impl DefaultLitePullConsumerImpl {
                     };
 
                     if assigned_mq.is_paused(&mq_clone).await {
-                        if !sleep_or_cancel(
+                        if !sleep_or_assignment_cancel(
                             &shutdown_signal,
                             &task_cancelled_for_task,
+                            &assignment_cancellation,
                             Duration::from_millis(
                                 default_impl
                                     .consumer_config
@@ -1509,9 +1533,10 @@ impl DefaultLitePullConsumerImpl {
                     match default_impl.pull_inner(&mq_clone, &pq).await {
                         Ok(delay) => {
                             if delay > 0
-                                && !sleep_or_cancel(
+                                && !sleep_or_assignment_cancel(
                                     &shutdown_signal,
                                     &task_cancelled_for_task,
+                                    &assignment_cancellation,
                                     Duration::from_millis(delay),
                                 )
                                 .await
@@ -1521,9 +1546,10 @@ impl DefaultLitePullConsumerImpl {
                         }
                         Err(e) => {
                             tracing::error!("Pull error for {:?}: {}", mq_clone, e);
-                            if !sleep_or_cancel(
+                            if !sleep_or_assignment_cancel(
                                 &shutdown_signal,
                                 &task_cancelled_for_task,
+                                &assignment_cancellation,
                                 Duration::from_millis(
                                     default_impl
                                         .consumer_config
@@ -1538,17 +1564,28 @@ impl DefaultLitePullConsumerImpl {
                         }
                     }
                 }
+                if let Some(entry) = assignment_entry.upgrade() {
+                    entry.clear_task_if_generation(task_generation).await;
+                }
             },
         )
         .map_err(|error| crate::mq_client_err!(format!("failed to spawn pull task for {mq}: {error}")))?;
 
-        let mut task_handles = self.task_handles.write().await;
-        match task_handles.entry(mq) {
-            std::collections::hash_map::Entry::Vacant(e) => {
-                e.insert(handle);
+        match self
+            .assignment_registry
+            .install_task(&mq, &entry, task_generation, handle)
+            .await
+        {
+            Ok(()) => {
+                if start_task_tx.send(()).is_err() {
+                    if let Some(handle) = entry.take_task_if_generation(task_generation).await {
+                        handle.abort_and_wait(ASSIGNMENT_TASK_SHUTDOWN_TIMEOUT).await;
+                    }
+                }
             }
-            std::collections::hash_map::Entry::Occupied(_) => {
-                handle.abort();
+            Err(handle) => {
+                drop(start_task_tx);
+                handle.abort_and_wait(ASSIGNMENT_TASK_SHUTDOWN_TIMEOUT).await;
             }
         }
         Ok(())
@@ -1620,8 +1657,11 @@ impl DefaultLitePullConsumerImpl {
                     .into_iter()
                     .map(Arc::new)
                     .collect::<Vec<_>>();
-                let lock = self.message_queue_lock(mq).await;
+                let (entry, lock) = self.assignment_operation(mq).await?;
                 let _guard = lock.lock().await;
+                if entry.is_retired() {
+                    return Ok(0);
+                }
                 let result_is_current = self
                     .update_pull_offset_if_no_pending_seek(
                         mq,
@@ -1653,8 +1693,11 @@ impl DefaultLitePullConsumerImpl {
                 Ok(0)
             }
             PullStatus::NoNewMsg | PullStatus::NoMatchedMsg => {
-                let lock = self.message_queue_lock(mq).await;
+                let (entry, lock) = self.assignment_operation(mq).await?;
                 let _guard = lock.lock().await;
+                if entry.is_retired() {
+                    return Ok(0);
+                }
                 self.update_pull_offset_if_no_pending_seek(
                     mq,
                     pull_result.pull_result.next_begin_offset as i64,
@@ -1679,12 +1722,15 @@ impl DefaultLitePullConsumerImpl {
         }
     }
 
-    async fn message_queue_lock(&self, message_queue: &MessageQueue) -> Arc<Mutex<()>> {
-        let mut locks = self.message_queue_locks.write().await;
-        locks
-            .entry(message_queue.clone())
-            .or_insert_with(|| Arc::new(Mutex::new(())))
-            .clone()
+    async fn assignment_operation(
+        &self,
+        message_queue: &MessageQueue,
+    ) -> RocketMQResult<(Arc<AssignmentEntry>, Arc<Mutex<()>>)> {
+        let entry =
+            self.assignment_registry.get(message_queue).await.ok_or_else(|| {
+                crate::mq_client_err!(format!("Message queue is not actively assigned: {message_queue}"))
+            })?;
+        Ok((entry.clone(), entry.operation_lock()))
     }
 
     async fn update_pull_offset_if_no_pending_seek(
@@ -1709,8 +1755,13 @@ impl DefaultLitePullConsumerImpl {
         process_queue: &Arc<crate::consumer::consumer_impl::process_queue::ProcessQueue>,
         next_pull_offset: i64,
     ) -> u64 {
-        let lock = self.message_queue_lock(mq).await;
+        let Ok((entry, lock)) = self.assignment_operation(mq).await else {
+            return self.consumer_config.load().pull_time_delay_millis_when_exception;
+        };
         let _guard = lock.lock().await;
+        if entry.is_retired() {
+            return self.consumer_config.load().pull_time_delay_millis_when_exception;
+        }
         self.update_pull_offset_if_no_pending_seek(mq, next_pull_offset, process_queue)
             .await;
         self.consumer_config.load().pull_time_delay_millis_when_exception
@@ -2087,6 +2138,12 @@ impl DefaultLitePullConsumerImpl {
         self.assigned_message_queue.message_queues().await
     }
 
+    /// Returns low-cardinality lifecycle diagnostics for LitePull assignments.
+    #[must_use]
+    pub async fn assignment_registry_snapshot(&self) -> AssignmentRegistrySnapshot {
+        self.assignment_registry.snapshot().await
+    }
+
     /// Registers a consume message hook for monitoring message consumption.
     pub fn register_consume_message_hook(&self, hook: Arc<dyn ConsumeMessageHook + Send + Sync>) {
         self.consume_message_hook_list
@@ -2179,8 +2236,13 @@ impl DefaultLitePullConsumerImpl {
             }
         }
 
-        let lock = self.message_queue_lock(message_queue).await;
+        let (entry, lock) = self.assignment_operation(message_queue).await?;
         let _guard = lock.lock().await;
+        if entry.is_retired() {
+            return Err(crate::mq_client_err!(format!(
+                "Message queue assignment was removed: {message_queue}"
+            )));
+        }
 
         // Check again under the queue lock in case rebalance changed assignment after offset lookup.
         self.ensure_message_queue_assigned(message_queue).await?;
@@ -2198,18 +2260,18 @@ impl DefaultLitePullConsumerImpl {
         let _poll_guard = self.poll_lock.lock().await;
         self.clear_message_queue_in_cache(message_queue).await;
 
-        // Stop old pull task
-        let mut task_handles = self.task_handles.write().await;
-        if let Some(handle) = task_handles.remove(message_queue) {
-            handle.abort();
+        // Stop and join the task owned by this assignment entry before restarting it.
+        if let Some(handle) = entry.take_task().await {
+            if !handle.abort_and_wait(Duration::from_secs(5)).await {
+                warn!("Pull task for {:?} did not finish before seek restart", message_queue);
+            }
         }
 
         // Set seek offset
         self.assigned_message_queue.set_seek_offset(message_queue, offset).await;
 
         // Start new pull task
-        if !task_handles.contains_key(message_queue) {
-            drop(task_handles); // Release write lock before starting pull task
+        if self.assignment_registry.is_current(message_queue, &entry).await {
             self.start_pull_task(message_queue.clone()).await?;
         }
 
@@ -2270,23 +2332,8 @@ impl DefaultLitePullConsumerImpl {
         // Remove from rebalance_impl subscription
         self.rebalance_impl.get_subscription_inner().remove(&topic);
 
-        // Stop and remove pull tasks for this topic
-        let to_remove = {
-            let task_handles = self.task_handles.read().await;
-            task_handles
-                .keys()
-                .filter(|mq| mq.topic() == topic.as_str())
-                .cloned()
-                .collect::<Vec<_>>()
-        };
-        if !to_remove.is_empty() {
-            let mut task_handles = self.task_handles.write().await;
-            for mq in to_remove {
-                if let Some(handle) = task_handles.remove(&mq) {
-                    handle.abort();
-                }
-            }
-        }
+        // Detach, cancel, and join every queue-scoped resource for this topic.
+        self.assignment_registry.remove_topic(topic.as_str()).await;
 
         // Remove from assigned_message_queue
         self.assigned_message_queue
@@ -3004,6 +3051,57 @@ pub async fn run_lite_pull_task_lifecycle_probe(service_context: ChildServiceCon
     }
 }
 
+#[doc(hidden)]
+pub async fn run_lite_pull_assignment_registry_probe(iterations: usize) -> LitePullAssignmentRegistryProbe {
+    let registry = AssignmentRegistry::new();
+    let mut peak_entries = 0;
+
+    for queue_id in 0..iterations {
+        let queue_id = i32::try_from(queue_id % i32::MAX as usize).unwrap_or_default();
+        let queue = MessageQueue::from_parts("assignment-churn", "broker-a", queue_id);
+        registry
+            .ensure(queue.clone())
+            .await
+            .expect("probe registry remains open");
+        peak_entries = peak_entries.max(registry.snapshot().await.entries);
+        assert!(registry.remove_and_wait(&queue).await);
+    }
+
+    let first_queue = MessageQueue::from_parts("assignment-lock", "broker-a", 0);
+    let second_queue = MessageQueue::from_parts("assignment-lock", "broker-a", 1);
+    let first_entry = registry
+        .ensure(first_queue.clone())
+        .await
+        .expect("probe registry remains open");
+    let second_entry = registry
+        .ensure(second_queue.clone())
+        .await
+        .expect("probe registry remains open");
+    let first_lock = first_entry.operation_lock();
+    let first_guard = first_lock.lock().await;
+    let same_queue_serialized = first_lock.try_lock().is_err();
+    let second_lock = second_entry.operation_lock();
+    let different_queues_independent = second_lock.try_lock().is_ok();
+    drop(first_guard);
+
+    let stale_entry = Arc::clone(&first_entry);
+    assert!(registry.remove_and_wait(&first_queue).await);
+    let stale_entry_rejected = !registry.is_current(&first_queue, &stale_entry).await;
+    assert!(registry.remove_and_wait(&second_queue).await);
+    registry.close_and_shutdown(Duration::from_secs(1)).await;
+    let final_snapshot = registry.snapshot().await;
+
+    LitePullAssignmentRegistryProbe {
+        iterations,
+        peak_entries,
+        final_entries: final_snapshot.entries,
+        final_owned_tasks: final_snapshot.owned_tasks,
+        same_queue_serialized,
+        different_queues_independent,
+        stale_entry_rejected,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::AtomicBool;
@@ -3075,8 +3173,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn spawn_lite_pull_task_uses_injected_runtime_context() {
+    #[tokio::test]
+    async fn spawn_lite_pull_task_uses_injected_runtime_context() {
         let (tx, rx) = std::sync::mpsc::channel();
         let cancelled = Arc::new(AtomicBool::new(false));
 
@@ -3096,7 +3194,38 @@ mod tests {
             .recv_timeout(Duration::from_secs(1))
             .expect("injected lite pull task should complete");
         assert_eq!(thread_name, "rocketmq-client-unit-test");
-        handle.abort();
+        assert!(handle.abort_and_wait(ASSIGNMENT_TASK_SHUTDOWN_TIMEOUT).await);
+    }
+
+    #[tokio::test]
+    async fn naturally_completed_pull_task_clears_its_owned_handle() {
+        let impl_ = Arc::new(DefaultLitePullConsumerImpl::new(
+            crate::runtime::test_client_runtime("lite-pull-natural-task-completion-test"),
+            Arc::new(ClientConfig::default()),
+            Arc::new(LitePullConsumerConfig {
+                consumer_group: CheetahString::from_static_str("natural-task-completion-group"),
+                ..Default::default()
+            }),
+        ));
+        impl_.bind_self();
+        let mq = MessageQueue::from_parts("natural-task-completion-topic", "broker-a", 0);
+        impl_
+            .assignment_registry
+            .ensure(mq.clone())
+            .await
+            .expect("assignment registry is open");
+
+        impl_.start_pull_task(mq.clone()).await.expect("pull task should start");
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while impl_.assignment_registry_snapshot().await.owned_tasks != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("naturally completed task should clear its owned handle");
+
+        assert!(impl_.assignment_registry.remove_and_wait(&mq).await);
     }
 
     #[tokio::test]
@@ -3546,16 +3675,10 @@ mod tests {
             .await
             .expect("operate_after_running should start preassigned pull task");
 
-        assert!(impl_.task_handles.read().await.contains_key(&mq));
+        assert_eq!(impl_.assignment_registry_snapshot().await.owned_tasks, 1);
 
         impl_.shutdown_signal.store(true, Ordering::Release);
-        let handle = {
-            let mut task_handles = impl_.task_handles.write().await;
-            task_handles.remove(&mq)
-        };
-        if let Some(handle) = handle {
-            handle.abort();
-        }
+        impl_.assignment_registry.remove_and_wait(&mq).await;
     }
 
     #[tokio::test]
@@ -3593,7 +3716,20 @@ mod tests {
             },
         )
         .expect("lite pull assign abort test task should spawn");
-        impl_.task_handles.write().await.insert(removed_mq.clone(), handle);
+        let entry = impl_
+            .assignment_registry
+            .ensure(removed_mq.clone())
+            .await
+            .expect("assignment registry is open");
+        let task_generation = entry.next_task_generation();
+        assert!(
+            impl_
+                .assignment_registry
+                .install_task(&removed_mq, &entry, task_generation, handle)
+                .await
+                .is_ok(),
+            "test task should be installed"
+        );
         tokio::time::timeout(Duration::from_secs(1), started_rx)
             .await
             .expect("lite pull assign abort test task should start")
@@ -3603,7 +3739,7 @@ mod tests {
             .update_assigned_message_queue_for_assign(std::slice::from_ref(&retained_mq))
             .await;
 
-        assert!(!impl_.task_handles.read().await.contains_key(&removed_mq));
+        assert!(impl_.assignment_registry.get(&removed_mq).await.is_none());
         for _ in 0..20 {
             if task_aborted.load(AtomicOrdering::SeqCst) {
                 break;
@@ -4325,6 +4461,11 @@ mod tests {
         );
         let mq = MessageQueue::from_parts("topic-offset-illegal", "broker-a", 0);
         impl_.assigned_message_queue.put(mq.clone()).await;
+        impl_
+            .assignment_registry
+            .ensure(mq.clone())
+            .await
+            .expect("assignment registry is open");
         let process_queue = impl_
             .assigned_message_queue
             .get_process_queue(&mq)
@@ -4368,19 +4509,15 @@ mod tests {
         assert!(!assigned.contains(&mq0));
         assert!(assigned.contains(&mq1));
 
-        let task_handles = impl_.task_handles.read().await;
-        assert!(!task_handles.contains_key(&mq0));
-        assert!(task_handles.contains_key(&mq1));
-        drop(task_handles);
+        assert!(impl_.assignment_registry.get(&mq0).await.is_none());
+        assert!(impl_.assignment_registry.get(&mq1).await.is_some());
+        assert_eq!(impl_.assignment_registry_snapshot().await.owned_tasks, 1);
 
         impl_.shutdown_signal.store(true, Ordering::Release);
-        let handles = {
-            let mut task_handles = impl_.task_handles.write().await;
-            task_handles.drain().map(|(_, handle)| handle).collect::<Vec<_>>()
-        };
-        for handle in handles {
-            handle.abort();
-        }
+        impl_
+            .assignment_registry
+            .close_and_shutdown(Duration::from_secs(1))
+            .await;
     }
 
     struct CountingMessageQueueListener {
@@ -4450,13 +4587,10 @@ mod tests {
         );
 
         impl_.shutdown_signal.store(true, Ordering::Release);
-        let handles = {
-            let mut task_handles = impl_.task_handles.write().await;
-            task_handles.drain().map(|(_, handle)| handle).collect::<Vec<_>>()
-        };
-        for handle in handles {
-            handle.abort();
-        }
+        impl_
+            .assignment_registry
+            .close_and_shutdown(Duration::from_secs(1))
+            .await;
     }
 
     #[tokio::test]

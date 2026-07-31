@@ -37,7 +37,7 @@ impl CreateAclRequestHandler {
     }
 
     pub async fn create_acl(
-        &mut self,
+        &self,
         _channel: Channel,
         _ctx: rocketmq_transport::ConnectionHandlerContext,
         _request_code: RequestCode,

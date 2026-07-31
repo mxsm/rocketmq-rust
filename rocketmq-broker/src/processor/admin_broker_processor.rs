@@ -124,6 +124,17 @@ where
         ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        self.process_request_shared(channel, ctx, request).await
+    }
+}
+
+impl<MS: MessageStore> AdminBrokerProcessor<MS> {
+    pub(crate) async fn process_request_shared(
+        &self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         self.process_request_inner(channel, ctx, request_code, request).await
     }
@@ -203,7 +214,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
 
 impl<MS: MessageStore> AdminBrokerProcessor<MS> {
     async fn process_request_inner(
-        &mut self,
+        &self,
         channel: Channel,
         ctx: ConnectionHandlerContext,
         request_code: RequestCode,
@@ -232,7 +243,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .await
             }
             RequestCode::DeleteTopicInBroker => {
-                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner_mut();
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.topic_request_handler
                     .delete_topic(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
@@ -325,7 +336,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .await
             }
             RequestCode::UpdateAndCreateSubscriptionGroup => {
-                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner_mut();
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.subscription_group_handler
                     .update_and_create_subscription_group(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
@@ -337,7 +348,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .await
             }
             RequestCode::UpdateAndCreateSubscriptionGroupList => {
-                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner_mut();
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.subscription_group_handler
                     .update_and_create_subscription_group_list(
                         broker_runtime_inner,
@@ -355,7 +366,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .await
             }
             RequestCode::DeleteSubscriptionGroup => {
-                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner_mut();
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.subscription_group_handler
                     .delete_subscription_group(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
@@ -403,7 +414,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .await
             }
             RequestCode::InvokeBrokerToResetOffset => {
-                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner_mut();
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.consumer_request_handler
                     .invoke_broker_to_reset_offset(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
@@ -513,7 +524,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .await
             }
             RequestCode::UpdateAndGetGroupForbidden => {
-                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner_mut();
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.subscription_group_handler
                     .update_and_get_group_forbidden(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
@@ -542,7 +553,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .await
             }
             RequestCode::ResumeCheckHalfMessage => {
-                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner_mut();
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.message_related_handler
                     .resume_check_half_message(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
@@ -571,7 +582,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .await
             }
             RequestCode::NotifyMinBrokerIdChange => {
-                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner_mut();
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.notify_min_broker_handler
                     .notify_min_broker_id_change(broker_runtime_inner, channel, ctx, request_code, request)
                     .await

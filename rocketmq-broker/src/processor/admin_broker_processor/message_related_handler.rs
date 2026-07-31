@@ -107,7 +107,7 @@ impl MessageRelatedHandler {
 
     pub async fn resume_check_half_message<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &mut BrokerAdminRuntime<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -602,7 +602,7 @@ mod tests {
     #[tokio::test]
     async fn resume_check_half_message_requeues_half_message() {
         let runtime = new_test_runtime("resume-half").await;
-        let mut admin = runtime.admin_runtime_for_test();
+        let admin = runtime.admin_runtime_for_test();
         let mut half_message = MessageExtBrokerInner::default();
         half_message.set_topic(CheetahString::from_static_str(
             TransactionalMessageUtil::build_half_topic(),
@@ -638,13 +638,7 @@ mod tests {
         request.make_custom_header_to_net();
 
         let response = handler
-            .resume_check_half_message(
-                &mut admin,
-                channel,
-                ctx,
-                RequestCode::ResumeCheckHalfMessage,
-                &mut request,
-            )
+            .resume_check_half_message(&admin, channel, ctx, RequestCode::ResumeCheckHalfMessage, &mut request)
             .await
             .expect("resume check half message should succeed")
             .expect("resume check half message should return response");

@@ -160,7 +160,7 @@ impl Broker2Client {
     /// Response command with result
     pub async fn reset_offset<MS: MessageStore>(
         &self,
-        broker_inner: &mut BrokerAdminRuntime<MS>,
+        broker_inner: &BrokerAdminRuntime<MS>,
         topic: &CheetahString,
         group: &CheetahString,
         timestamp: i64,
@@ -183,7 +183,7 @@ impl Broker2Client {
     /// Response command with result
     pub async fn reset_offset_for_c<MS: MessageStore>(
         &self,
-        broker_inner: &mut BrokerAdminRuntime<MS>,
+        broker_inner: &BrokerAdminRuntime<MS>,
         topic: &CheetahString,
         group: &CheetahString,
         timestamp: i64,
@@ -196,7 +196,7 @@ impl Broker2Client {
     /// Internal reset offset implementation.
     async fn reset_offset_inner<MS: MessageStore>(
         &self,
-        broker_inner: &mut BrokerAdminRuntime<MS>,
+        broker_inner: &BrokerAdminRuntime<MS>,
         topic: &CheetahString,
         group: &CheetahString,
         timestamp: i64,

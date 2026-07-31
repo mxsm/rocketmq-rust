@@ -47,7 +47,7 @@ impl SubscriptionGroupHandler {
 
     pub async fn update_and_create_subscription_group<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &mut BrokerAdminRuntime<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -64,7 +64,7 @@ impl SubscriptionGroupHandler {
         let mut config = SubscriptionGroupConfig::decode(request.get_body().unwrap());
         if let Ok(config) = config.as_mut() {
             broker_runtime_inner
-                .subscription_group_manager_mut()
+                .subscription_group_manager()
                 .update_subscription_group_config(config)
         }
         response.set_code_ref(ResponseCode::Success);
@@ -297,7 +297,7 @@ impl SubscriptionGroupHandler {
 
     pub async fn update_and_create_subscription_group_list<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &mut BrokerAdminRuntime<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -327,14 +327,14 @@ impl SubscriptionGroupHandler {
         }
 
         broker_runtime_inner
-            .subscription_group_manager_mut()
+            .subscription_group_manager()
             .update_subscription_group_config_list(subscription_group_list.group_config_list);
         Ok(Some(response.set_code(ResponseCode::Success)))
     }
 
     pub async fn delete_subscription_group<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &mut BrokerAdminRuntime<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -354,7 +354,7 @@ impl SubscriptionGroupHandler {
                 .is_some();
 
         broker_runtime_inner
-            .subscription_group_manager_mut()
+            .subscription_group_manager()
             .delete_subscription_group_config(request_header.group_name.as_str());
 
         if should_clean_offset {
@@ -373,7 +373,7 @@ impl SubscriptionGroupHandler {
 
     pub async fn update_and_get_group_forbidden<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &mut BrokerAdminRuntime<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -390,13 +390,13 @@ impl SubscriptionGroupHandler {
 
         if let Some(readable) = request_header.readable {
             if readable {
-                broker_runtime_inner.subscription_group_manager_mut().clear_forbidden(
+                broker_runtime_inner.subscription_group_manager().clear_forbidden(
                     &request_header.group,
                     &request_header.topic,
                     PermName::INDEX_PERM_READ as i32,
                 );
             } else {
-                broker_runtime_inner.subscription_group_manager_mut().set_forbidden(
+                broker_runtime_inner.subscription_group_manager().set_forbidden(
                     &request_header.group,
                     &request_header.topic,
                     PermName::INDEX_PERM_READ as i32,
@@ -507,7 +507,7 @@ mod tests {
     #[tokio::test]
     async fn update_and_create_subscription_group_list_persists_multiple_groups() {
         let runtime = new_test_runtime("update-list").await;
-        let mut admin = runtime.admin_runtime_for_test();
+        let admin = runtime.admin_runtime_for_test();
         let handler = SubscriptionGroupHandler::new();
 
         let body = SubscriptionGroupList {
@@ -524,7 +524,7 @@ mod tests {
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let response = handler
             .update_and_create_subscription_group_list(
-                &mut admin,
+                &admin,
                 channel,
                 ctx,
                 RequestCode::UpdateAndCreateSubscriptionGroupList,
@@ -550,7 +550,7 @@ mod tests {
     #[tokio::test]
     async fn delete_subscription_group_cleans_offsets_for_lite_group_even_without_flag() {
         let runtime = new_test_runtime("delete-group").await;
-        let mut admin = runtime.admin_runtime_for_test();
+        let admin = runtime.admin_runtime_for_test();
         let mut config = SubscriptionGroupConfig::new(CheetahString::from_static_str("group-a"));
         config.set_lite_bind_topic(Some(CheetahString::from_static_str("parent-topic")));
         admin
@@ -585,13 +585,7 @@ mod tests {
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let response = handler
-            .delete_subscription_group(
-                &mut admin,
-                channel,
-                ctx,
-                RequestCode::DeleteSubscriptionGroup,
-                &mut request,
-            )
+            .delete_subscription_group(&admin, channel, ctx, RequestCode::DeleteSubscriptionGroup, &mut request)
             .await
             .expect("delete group request should succeed")
             .expect("delete group request should return response");
@@ -618,7 +612,7 @@ mod tests {
     #[tokio::test]
     async fn update_and_get_group_forbidden_updates_readable_flag() {
         let runtime = new_test_runtime("group-forbidden").await;
-        let mut admin = runtime.admin_runtime_for_test();
+        let admin = runtime.admin_runtime_for_test();
         let handler = SubscriptionGroupHandler::new();
         let mut request = RemotingCommand::create_request_command(
             RequestCode::UpdateAndGetGroupForbidden,
@@ -635,7 +629,7 @@ mod tests {
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut response = handler
             .update_and_get_group_forbidden(
-                &mut admin,
+                &admin,
                 channel,
                 ctx,
                 RequestCode::UpdateAndGetGroupForbidden,
@@ -668,7 +662,7 @@ mod tests {
     #[tokio::test]
     async fn subscription_group_cas_commits_once_rejects_stale_and_reports_version() {
         let runtime = new_test_runtime("subscription-group-cas").await;
-        let mut admin = runtime.admin_runtime_for_test();
+        let admin = runtime.admin_runtime_for_test();
         let handler = SubscriptionGroupHandler::new();
         let group = CheetahString::from_static_str("sre-cas-group");
         let mut initial = SubscriptionGroupConfig::new(group.clone());
@@ -676,7 +670,7 @@ mod tests {
         initial.set_consume_broadcast_enable(false);
         initial.set_group_sys_flag(17);
         admin
-            .subscription_group_manager_mut()
+            .subscription_group_manager()
             .update_subscription_group_config(&mut initial);
         let (_, initial_version) = admin
             .subscription_group_manager()
