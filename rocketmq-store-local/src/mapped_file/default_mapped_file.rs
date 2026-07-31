@@ -1574,12 +1574,23 @@ mod tests {
             self.mmap.flush_range(offset, len)
         }
 
-        fn region(&self, offset: usize, len: usize) -> Self::Region {
-            TestMappedRegion {
+        fn region(&self, offset: usize, len: usize) -> Result<Self::Region, crate::mapped_file::MmapRangeError> {
+            let end = offset
+                .checked_add(len)
+                .ok_or(crate::mapped_file::MmapRangeError::Overflow { offset, len })?;
+            let mapping_len = self.mmap.len();
+            if end > mapping_len {
+                return Err(crate::mapped_file::MmapRangeError::OutOfBounds {
+                    offset,
+                    len,
+                    mapping_len,
+                });
+            }
+            Ok(TestMappedRegion {
                 mmap: self.mmap.clone(),
                 offset,
                 len,
-            }
+            })
         }
     }
 

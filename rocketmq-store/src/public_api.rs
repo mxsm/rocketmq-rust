@@ -135,6 +135,7 @@ pub use crate::log_file::mapped_file::MappedFileBuilder;
 pub use crate::log_file::mapped_file::MappedFileError;
 pub use crate::log_file::mapped_file::MappedFileMetrics;
 pub use crate::log_file::mapped_file::MappedFileResult;
+pub use crate::log_file::mapped_file::MmapRangeError;
 pub use crate::log_file::mapped_file::MmapRegionSlice;
 pub use crate::log_file::mapped_file::StoreMappedMemory;
 pub use crate::log_file::MAX_PULL_MSG_SIZE;

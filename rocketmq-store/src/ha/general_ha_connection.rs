@@ -22,178 +22,113 @@ use crate::ha::ha_connection::HAConnectionId;
 use crate::ha::ha_connection_state::HAConnectionState;
 use crate::ha::HAConnectionError;
 
-#[derive(Default)]
-pub struct GeneralHAConnection {
-    default_ha_connection: Option<DefaultHAConnection>,
-    auto_switch_ha_connection: Option<AutoSwitchHAConnection>,
+pub enum GeneralHAConnection {
+    Default(DefaultHAConnection),
+    AutoSwitch(AutoSwitchHAConnection),
 }
 
 impl GeneralHAConnection {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn new_with_default_ha_connection(default_ha_connection: DefaultHAConnection) -> Self {
-        GeneralHAConnection {
-            default_ha_connection: Some(default_ha_connection),
-            auto_switch_ha_connection: None,
-        }
-    }
-
-    pub fn new_with_auto_switch_ha_connection(auto_switch_ha_connection: AutoSwitchHAConnection) -> Self {
-        GeneralHAConnection {
-            default_ha_connection: None,
-            auto_switch_ha_connection: Some(auto_switch_ha_connection),
-        }
-    }
-
-    pub fn set_default_ha_connection(&mut self, connection: DefaultHAConnection) {
-        self.default_ha_connection = Some(connection);
-    }
-
-    pub fn set_auto_switch_ha_connection(&mut self, connection: AutoSwitchHAConnection) {
-        self.auto_switch_ha_connection = Some(connection);
-    }
-
     pub fn is_auto_switch(&self) -> bool {
-        self.auto_switch_ha_connection.is_some()
+        matches!(self, Self::AutoSwitch(_))
     }
 
     pub fn set_slave_broker_id(&self, slave_broker_id: Option<i64>) {
-        if let Some(connection) = &self.auto_switch_ha_connection {
-            connection.set_slave_broker_id(slave_broker_id);
+        match self {
+            Self::Default(_) => {}
+            Self::AutoSwitch(connection) => connection.set_slave_broker_id(slave_broker_id),
         }
     }
 
     pub fn slave_broker_id(&self) -> Option<i64> {
-        self.auto_switch_ha_connection
-            .as_ref()
-            .and_then(|connection| connection.slave_broker_id())
+        match self {
+            Self::Default(_) => None,
+            Self::AutoSwitch(connection) => connection.slave_broker_id(),
+        }
     }
 
-    pub(crate) fn runtime_handle(&self) -> Option<HAConnectionRuntimeHandle> {
-        match (&self.default_ha_connection, &self.auto_switch_ha_connection) {
-            (Some(connection), _) => Some(connection.runtime_handle()),
-            (_, Some(connection)) => Some(connection.runtime_handle()),
-            (None, None) => None,
+    pub(crate) fn runtime_handle(&self) -> HAConnectionRuntimeHandle {
+        match self {
+            Self::Default(connection) => connection.runtime_handle(),
+            Self::AutoSwitch(connection) => connection.runtime_handle(),
         }
     }
 }
 
 impl HAConnection for GeneralHAConnection {
     async fn start(&mut self) -> Result<(), HAConnectionError> {
-        match (&mut self.default_ha_connection, &mut self.auto_switch_ha_connection) {
-            (Some(connection), _) => connection.start().await,
-            (_, Some(connection)) => connection.start().await,
-            (None, None) => Err(HAConnectionError::Connection("No HA connection set".to_string())),
+        match self {
+            Self::Default(connection) => connection.start().await,
+            Self::AutoSwitch(connection) => connection.start().await,
         }
     }
 
     async fn shutdown(&mut self) {
-        match (&mut self.default_ha_connection, &mut self.auto_switch_ha_connection) {
-            (Some(connection), _) => connection.shutdown().await,
-            (_, Some(connection)) => connection.shutdown().await,
-            (None, None) => {
-                tracing::warn!("No HA connection to shutdown");
-            }
+        match self {
+            Self::Default(connection) => connection.shutdown().await,
+            Self::AutoSwitch(connection) => connection.shutdown().await,
         }
     }
 
     fn close(&self) {
-        match (&self.default_ha_connection, &self.auto_switch_ha_connection) {
-            (Some(connection), _) => connection.close(),
-            (_, Some(connection)) => connection.close(),
-            (None, None) => {
-                tracing::warn!("No HA connection to close");
-            }
+        match self {
+            Self::Default(connection) => connection.close(),
+            Self::AutoSwitch(connection) => connection.close(),
         }
     }
 
     fn get_socket(&self) -> &TcpStream {
-        match (&self.default_ha_connection, &self.auto_switch_ha_connection) {
-            (Some(connection), _) => connection.get_socket(),
-            (_, Some(connection)) => connection.get_socket(),
-            (None, None) => {
-                tracing::warn!("No HA connection to get socket from");
-                panic!("No HA connection available");
-            }
+        match self {
+            Self::Default(connection) => connection.get_socket(),
+            Self::AutoSwitch(connection) => connection.get_socket(),
         }
     }
 
     async fn get_current_state(&self) -> HAConnectionState {
-        match (&self.default_ha_connection, &self.auto_switch_ha_connection) {
-            (Some(connection), _) => connection.get_current_state().await,
-            (_, Some(connection)) => connection.get_current_state().await,
-            (None, None) => {
-                tracing::warn!("No HA connection to get current state from");
-                panic!("No HA connection available");
-            }
+        match self {
+            Self::Default(connection) => connection.get_current_state().await,
+            Self::AutoSwitch(connection) => connection.get_current_state().await,
         }
     }
 
     fn get_client_address(&self) -> &str {
-        match (&self.default_ha_connection, &self.auto_switch_ha_connection) {
-            (Some(connection), _) => connection.get_client_address(),
-            (_, Some(connection)) => connection.get_client_address(),
-            (None, None) => {
-                tracing::warn!("No HA connection to get client address from");
-                panic!("No HA connection available");
-            }
+        match self {
+            Self::Default(connection) => connection.get_client_address(),
+            Self::AutoSwitch(connection) => connection.get_client_address(),
         }
     }
 
     fn get_transferred_byte_in_second(&self) -> i64 {
-        match (&self.default_ha_connection, &self.auto_switch_ha_connection) {
-            (Some(connection), _) => connection.get_transferred_byte_in_second(),
-            (_, Some(connection)) => connection.get_transferred_byte_in_second(),
-            (None, None) => {
-                tracing::warn!("No HA connection to get transferred bytes from");
-                panic!("No HA connection available");
-            }
+        match self {
+            Self::Default(connection) => connection.get_transferred_byte_in_second(),
+            Self::AutoSwitch(connection) => connection.get_transferred_byte_in_second(),
         }
     }
 
     fn get_transfer_from_where(&self) -> i64 {
-        match (&self.default_ha_connection, &self.auto_switch_ha_connection) {
-            (Some(connection), _) => connection.get_transfer_from_where(),
-            (_, Some(connection)) => connection.get_transfer_from_where(),
-            (None, None) => {
-                tracing::warn!("No HA connection to get transfer offset from");
-                panic!("No HA connection available");
-            }
+        match self {
+            Self::Default(connection) => connection.get_transfer_from_where(),
+            Self::AutoSwitch(connection) => connection.get_transfer_from_where(),
         }
     }
 
     fn get_slave_ack_offset(&self) -> i64 {
-        match (&self.default_ha_connection, &self.auto_switch_ha_connection) {
-            (Some(connection), _) => connection.get_slave_ack_offset(),
-            (_, Some(connection)) => connection.get_slave_ack_offset(),
-            (None, None) => {
-                tracing::warn!("No HA connection to get slave ack offset from");
-                panic!("No HA connection available");
-            }
+        match self {
+            Self::Default(connection) => connection.get_slave_ack_offset(),
+            Self::AutoSwitch(connection) => connection.get_slave_ack_offset(),
         }
     }
 
     fn get_ha_connection_id(&self) -> &HAConnectionId {
-        match (&self.default_ha_connection, &self.auto_switch_ha_connection) {
-            (Some(connection), _) => connection.get_ha_connection_id(),
-            (_, Some(connection)) => connection.get_ha_connection_id(),
-            (None, None) => {
-                tracing::warn!("No HA connection to get ID from");
-                panic!("No HA connection available");
-            }
+        match self {
+            Self::Default(connection) => connection.get_ha_connection_id(),
+            Self::AutoSwitch(connection) => connection.get_ha_connection_id(),
         }
     }
 
     fn remote_address(&self) -> String {
-        match (&self.default_ha_connection, &self.auto_switch_ha_connection) {
-            (Some(connection), _) => connection.remote_address(),
-            (_, Some(connection)) => connection.remote_address(),
-            (None, None) => {
-                tracing::warn!("No HA connection to get remote address from");
-                panic!("No HA connection available");
-            }
+        match self {
+            Self::Default(connection) => connection.remote_address(),
+            Self::AutoSwitch(connection) => connection.remote_address(),
         }
     }
 }
