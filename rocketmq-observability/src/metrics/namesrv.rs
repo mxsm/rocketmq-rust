@@ -28,6 +28,7 @@ pub enum NameServerRouteErrorKind {
     Internal,
 }
 
+#[cfg(feature = "otel-metrics")]
 impl NameServerRouteErrorKind {
     const fn as_str(self) -> &'static str {
         match self {
