@@ -42,11 +42,6 @@ pub use crate::semantic::metrics::STORE_TRANSFER_PARTIAL_WRITE_TOTAL;
 
 #[cfg(feature = "otel-metrics")]
 use std::sync::Arc;
-#[cfg(feature = "otel-metrics")]
-use std::sync::OnceLock;
-
-#[cfg(feature = "otel-metrics")]
-static STORE_METRICS: OnceLock<StoreMetrics> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct StoreObservableValues {
@@ -54,40 +49,6 @@ pub struct StoreObservableValues {
     pub flush_behind_bytes: i64,
     pub dispatch_behind_bytes: i64,
     pub message_reserve_time_millis: i64,
-}
-
-#[cfg(feature = "otel-metrics")]
-pub fn init_global(meter: &opentelemetry::metrics::Meter) -> bool {
-    STORE_METRICS.set(StoreMetrics::new(meter)).is_ok()
-}
-
-#[cfg(feature = "otel-metrics")]
-pub fn init_global_with_observables<F>(meter: &opentelemetry::metrics::Meter, source: F) -> bool
-where
-    F: Fn() -> StoreObservableValues + Send + Sync + 'static,
-{
-    STORE_METRICS
-        .set(StoreMetrics::new_with_observables(meter, source))
-        .is_ok()
-}
-
-#[cfg(feature = "otel-metrics")]
-pub fn init_global_with_observables_and_replication_lag<F, H>(
-    meter: &opentelemetry::metrics::Meter,
-    source: F,
-    replication_lag_source: H,
-) -> bool
-where
-    F: Fn() -> StoreObservableValues + Send + Sync + 'static,
-    H: Fn() -> Option<u64> + Send + Sync + 'static,
-{
-    STORE_METRICS
-        .set(StoreMetrics::new_with_observables_and_replication_lag(
-            meter,
-            source,
-            replication_lag_source,
-        ))
-        .is_ok()
 }
 
 /// Cloneable Store recorder bound to one explicit telemetry runtime.
