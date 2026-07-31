@@ -19,6 +19,7 @@
 
 pub mod config;
 pub mod context;
+pub mod contracts;
 pub mod drain;
 pub mod error;
 #[deprecated(
@@ -54,6 +55,7 @@ pub use context::ProxyContext;
 pub use context::ProxyContextWithPrincipal;
 pub use context::ResolvedAddressScheme;
 pub use context::ResolvedEndpoint;
+pub use contracts::*;
 pub use drain::ProxyDrainAdmission;
 pub use drain::ProxyDrainController;
 pub use drain::ProxyDrainError;
