@@ -861,17 +861,15 @@ mod tests {
 
         service_thread.start().await.unwrap();
         service_thread.shutdown().await.unwrap();
+        let child_report = service_thread
+            .last_task_group_shutdown_report()
+            .await
+            .expect("service manager shutdown report should exist");
+        assert_eq!(child_report.name, "rocketmq.service-manager");
 
         let report = service_context.task_group().shutdown(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
-        assert!(
-            report
-                .children
-                .iter()
-                .any(|child| child.name == "rocketmq.service-manager"),
-            "{}",
-            report.to_json()
-        );
+        assert!(report.children.is_empty(), "{}", report.to_json());
     }
 
     #[tokio::test]

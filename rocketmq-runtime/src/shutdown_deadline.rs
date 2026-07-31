@@ -48,4 +48,12 @@ impl ShutdownDeadline {
     pub fn is_expired(self) -> bool {
         self.remaining().is_zero()
     }
+
+    pub(crate) fn earliest(self, other: Self) -> Self {
+        if self.at <= other.at {
+            self
+        } else {
+            other
+        }
+    }
 }

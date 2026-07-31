@@ -773,6 +773,7 @@ mod tests {
                 active: 0,
                 created: 1,
                 pruned: 1,
+                registry_slots: 0,
             }
         );
 

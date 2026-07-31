@@ -60,6 +60,32 @@ fn run_spawn_shutdown(task_count: usize) -> ShutdownReport {
     report
 }
 
+fn run_child_churn(operation_count: usize) -> ShutdownReport {
+    let owner = RuntimeOwner::new(runtime_config()).expect("runtime owner should start");
+    let context = owner.root_context().child("bench.child-registry-root");
+
+    let report = owner.block_on(async move {
+        let service = context.child(format!("bench.child-registry.{operation_count}"));
+        for operation_index in 0..operation_count {
+            drop(service.child(format!("component-{operation_index}")));
+            drop(
+                service
+                    .task_group()
+                    .try_child_lease(format!("operation-{operation_index}"))
+                    .expect("child lease should be accepted while the group is open"),
+            );
+        }
+
+        assert_eq!(service.task_group().child_count(), 0);
+        assert_eq!(service.task_group().child_stats().registry_slots, 0);
+        context.task_group().shutdown(Duration::from_secs(5)).await
+    });
+
+    assert!(report.is_healthy(), "{}", report.to_json());
+    assert!(report.remaining_tasks.is_empty(), "{}", report.to_json());
+    report
+}
+
 fn write_shutdown_report_artifact() {
     let task_count = 10_000;
     let report = run_spawn_shutdown(task_count);
@@ -106,6 +132,21 @@ fn bench_task_group_lifecycle(criterion: &mut Criterion) {
         );
     }
     group.finish();
+
+    let mut child_churn = criterion.benchmark_group("task_group_active_child_registry");
+    for operation_count in [1_024usize, 10_000] {
+        child_churn.bench_with_input(
+            BenchmarkId::new("register_drop_shutdown", operation_count),
+            &operation_count,
+            |bencher, operation_count| {
+                bencher.iter(|| {
+                    let report = run_child_churn(black_box(*operation_count));
+                    black_box(report.is_healthy());
+                });
+            },
+        );
+    }
+    child_churn.finish();
 }
 
 criterion_group! {

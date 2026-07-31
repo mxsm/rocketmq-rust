@@ -891,16 +891,13 @@ mod tests {
 
         manager.cancel_task(task_id);
         manager.shutdown_all(Duration::from_secs(1)).await;
+        let child_report = manager
+            .last_task_group_shutdown_report()
+            .expect("scheduled task manager shutdown report should exist");
+        assert_eq!(child_report.name, "rocketmq.simple-scheduled-task-manager");
         let report = service.task_group().shutdown(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
-        assert!(
-            report
-                .children
-                .iter()
-                .any(|child| child.name == "rocketmq.simple-scheduled-task-manager"),
-            "{}",
-            report.to_json()
-        );
+        assert!(report.children.is_empty(), "{}", report.to_json());
     }
 
     #[tokio::test]
