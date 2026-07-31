@@ -24,7 +24,6 @@ use serde::Serialize;
 
 use crate::blocking::BlockingExecutorSnapshot;
 use crate::blocking::BlockingKind;
-use crate::handle::RuntimeHandle;
 use crate::task_group::TaskGroup;
 use crate::task_group::TaskGroupId;
 use crate::task_group::TaskGroupLifecycleState;
