@@ -98,8 +98,8 @@ pub use logging::FileLogLayer;
 pub use logging::LoggingGuard;
 pub use logging::TelemetryRuntimeGuard;
 pub use logging::TelemetryShutdownReport;
-#[cfg(feature = "otel-traces")]
-pub use propagation::add_current_span_event;
+pub use metrics::labels::MetricLabelPolicy;
+pub use metrics::labels::METRIC_LABEL_SENTINEL;
 #[cfg(feature = "otel-traces")]
 pub use propagation::add_current_span_event_with_status;
 #[cfg(feature = "otel-traces")]
