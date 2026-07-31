@@ -65,59 +65,92 @@ pub struct RuntimeDiagnosticsSnapshot {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeComponent {
+    /// A RocketMQ broker process.
     Broker,
+    /// A RocketMQ NameServer process.
     NameServer,
+    /// A RocketMQ controller process.
     Controller,
+    /// A RocketMQ proxy process.
     Proxy,
+    /// A RocketMQ MCP server process.
     Mcp,
+    /// An AI SRE control-plane process.
     SreControlPlane,
+    /// An AI SRE connector process.
     SreConnector,
+    /// A component without a dedicated bounded identifier.
     Other,
 }
 
+/// Describes the lifecycle state of the root task group.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeLifecycleStateV1 {
+    /// The task group accepts new tasks and child groups.
     Open,
+    /// Shutdown has started and new work is rejected.
     Closing,
+    /// The task group is closed and its owned work is draining.
     Closed,
+    /// Shutdown completed and all bounded cleanup attempts have finished.
     ShutdownCompleted,
+    /// The lifecycle state could not be mapped to a supported value.
     Poisoned,
 }
 
+/// Identifies a bounded category of runtime-owned task.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeTaskKindV1 {
+    /// A long-lived service task.
     Service,
+    /// A background worker task.
     Worker,
+    /// A task that drives a scheduled workload.
     ScheduledDriver,
+    /// One execution of a scheduled workload.
     ScheduledRun,
+    /// A task that reaps completed blocking work.
     BlockingReaper,
+    /// A task that coordinates shutdown.
     Shutdown,
+    /// A task kind without a dedicated bounded identifier.
     Other,
 }
 
+/// Identifies a bounded blocking-executor lane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeBlockingLaneV1 {
+    /// Blocking storage input and output.
     StorageIo,
+    /// Blocking metadata input and output.
     MetadataIo,
+    /// CPU-intensive cryptographic work.
     CpuCrypto,
 }
 
+/// Identifies a bounded category of blocking work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeBlockingKindV1 {
+    /// Short blocking input or output.
     ShortIo,
+    /// CPU-bound work.
     CpuBound,
+    /// Blocking work expected to run for an extended duration.
     LongRunning,
 }
 
 /// Bounds applied while creating [`RuntimeDiagnosticsViewV1`].
 #[derive(Debug, Clone, Copy)]
 pub struct RuntimeDiagnosticsViewOptions {
+    /// Elapsed time after which an active task is classified as long-running.
     pub long_running_threshold: Duration,
+    /// Maximum number of task-kind summaries included in the view.
     pub max_task_kind_summaries: usize,
+    /// Maximum number of blocking-lane summaries included in the view.
     pub max_blocking_lane_summaries: usize,
 }
 
@@ -139,47 +172,75 @@ impl Default for RuntimeDiagnosticsViewOptions {
 /// configuration objects.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeDiagnosticsViewV1 {
+    /// Schema identifier for this serialized diagnostics view.
     pub schema_version: String,
+    /// UTC timestamp at which the snapshot was observed.
     pub observed_at: DateTime<Utc>,
+    /// Bounded component category that owns the runtime.
     pub component: RuntimeComponent,
+    /// Current lifecycle state of the root task group.
     pub lifecycle_state: RuntimeLifecycleStateV1,
+    /// Number of task groups represented by the snapshot.
     pub task_group_count: usize,
+    /// Number of active tasks represented by the snapshot.
     pub task_count: usize,
+    /// Bounded aggregate summaries grouped by task kind.
     pub task_kinds: Vec<RuntimeTaskKindSummaryV1>,
+    /// Bounded aggregate summaries for blocking-executor lanes.
     pub blocking_lanes: Vec<RuntimeBlockingLaneSummaryV1>,
+    /// Whether one or more summaries were omitted by configured bounds.
     pub truncated: bool,
 }
 
 impl RuntimeDiagnosticsViewV1 {
+    /// Stable schema identifier emitted by [`RuntimeDiagnostics::view_v1`].
     pub const SCHEMA_VERSION: &'static str = "rocketmq.runtime-diagnostics.v1";
 }
 
+/// Aggregated task counts and elapsed-time information for one task kind.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeTaskKindSummaryV1 {
+    /// Bounded task category.
     pub kind: RuntimeTaskKindV1,
+    /// Number of active tasks in the category.
     pub active: usize,
+    /// Number of active tasks exceeding the long-running threshold.
     pub long_running: usize,
+    /// Maximum elapsed time among active tasks, in milliseconds.
     pub max_elapsed_millis: u64,
 }
 
+/// Aggregated state for one blocking-executor lane.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeBlockingLaneSummaryV1 {
+    /// Bounded blocking-executor lane.
     pub lane: RuntimeBlockingLaneV1,
+    /// Configured concurrency limit when the executor exposes it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_concurrency: Option<usize>,
+    /// Configured queue-depth limit when the executor exposes it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_queue_depth: Option<usize>,
+    /// Number of queued blocking tasks.
     pub queued: usize,
+    /// Number of running blocking tasks.
     pub running: usize,
+    /// Number of timed-out tasks whose blocking work is still running.
     pub timed_out_still_running: usize,
+    /// Number of blocking tasks that remain active during observation.
     pub blocking_still_running: usize,
+    /// Bounded aggregate summaries grouped by blocking-work kind.
     pub task_kinds: Vec<RuntimeBlockingKindSummaryV1>,
 }
 
+/// Aggregated task counts and elapsed-time information for one blocking-work kind.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeBlockingKindSummaryV1 {
+    /// Bounded blocking-work category.
     pub kind: RuntimeBlockingKindV1,
+    /// Number of active blocking tasks in the category.
     pub active: usize,
+    /// Maximum elapsed time among active tasks, in milliseconds.
     pub max_elapsed_millis: u64,
 }
 
@@ -214,6 +275,7 @@ impl RuntimeDiagnostics {
         }
     }
 
+    /// Creates a bounded diagnostics view using the default sanitization limits.
     pub fn view_v1(
         &self,
         component: RuntimeComponent,
@@ -228,6 +290,7 @@ impl RuntimeDiagnostics {
         )
     }
 
+    /// Creates a bounded diagnostics view using explicit sanitization limits.
     pub fn view_v1_with_options(
         &self,
         component: RuntimeComponent,
