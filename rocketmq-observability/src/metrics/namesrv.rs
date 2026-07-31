@@ -21,45 +21,6 @@ pub use crate::semantic::metrics::NAMESRV_ROUTE_REQUEST_TOTAL;
 
 use std::time::Duration;
 
-#[cfg(feature = "otel-metrics")]
-use std::sync::OnceLock;
-
-#[cfg(feature = "otel-metrics")]
-static NAMESRV_METRICS: OnceLock<NameServerMetrics> = OnceLock::new();
-
-#[cfg(feature = "otel-metrics")]
-static NAMESRV_GLOBAL_METRICS: OnceLock<NameServerMetrics> = OnceLock::new();
-
-#[cfg(feature = "otel-metrics")]
-pub fn init_global(meter: &opentelemetry::metrics::Meter) -> bool {
-    NAMESRV_METRICS.set(NameServerMetrics::new(meter)).is_ok()
-}
-
-#[cfg(feature = "otel-metrics")]
-fn global_metrics() -> &'static NameServerMetrics {
-    if let Some(metrics) = NAMESRV_METRICS.get() {
-        return metrics;
-    }
-
-    NAMESRV_GLOBAL_METRICS.get_or_init(|| NameServerMetrics::new(&opentelemetry::global::meter("rocketmq-namesrv")))
-}
-
-pub fn record_route_request_total(count: u64) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record_route_request_total(count, &[]);
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = count;
-}
-
-pub fn record_route_request_latency(latency_ms: u64) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record_route_request_latency(latency_ms, &[]);
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = latency_ms;
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NameServerRouteErrorKind {
     NotFound,
@@ -68,7 +29,6 @@ pub enum NameServerRouteErrorKind {
 }
 
 impl NameServerRouteErrorKind {
-    #[cfg(feature = "otel-metrics")]
     const fn as_str(self) -> &'static str {
         match self {
             Self::NotFound => "not_found",
@@ -78,59 +38,8 @@ impl NameServerRouteErrorKind {
     }
 }
 
-pub fn record_route_error(kind: NameServerRouteErrorKind) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record_route_errors_total(
-        1,
-        &[opentelemetry::KeyValue::new(
-            crate::semantic::labels::RESULT,
-            kind.as_str(),
-        )],
-    );
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = kind;
-}
-
-pub fn record_route_freshness(freshness_ms: u64) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record_route_freshness(freshness_ms, &[]);
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = freshness_ms;
-}
-
-pub fn record_broker_registrations(count: u64) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record_broker_registrations(count, &[]);
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = count;
-}
-
-pub fn record_active_brokers(count: u64) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record_active_brokers(count, &[]);
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = count;
-}
-
-pub fn record_route_request(elapsed: Duration) {
-    record_route_request_total(1);
-    record_route_request_latency(duration_millis_u64(elapsed));
-}
-
-pub fn record_broker_registration(active_brokers: usize) {
-    record_broker_registrations(1);
-    record_active_brokers(active_brokers as u64);
-}
-
-pub fn record_active_broker_count(active_brokers: usize) {
-    record_active_brokers(active_brokers as u64);
-}
-
 #[inline]
+#[cfg(feature = "otel-metrics")]
 fn duration_millis_u64(duration: Duration) -> u64 {
     duration.as_millis().clamp(0, u128::from(u64::MAX)) as u64
 }
@@ -162,10 +71,26 @@ impl NameServerMetrics {
     pub fn record_active_brokers(&self, _count: u64) {}
 
     #[inline]
-    pub fn record_route_errors_total(&self, _count: u64, _attributes: &[()]) {}
+    pub fn record_route_request(&self, _elapsed: Duration) {}
 
     #[inline]
-    pub fn record_route_freshness(&self, _freshness_ms: u64, _attributes: &[()]) {}
+    pub fn record_broker_registration(&self, _active_brokers: usize) {}
+
+    #[inline]
+    pub fn record_active_broker_count(&self, _active_brokers: usize) {}
+
+    #[inline]
+    pub fn record_route_error(&self, _kind: NameServerRouteErrorKind) {}
+
+    #[inline]
+    pub fn record_route_freshness(&self, _freshness_ms: u64) {}
+}
+
+#[cfg(feature = "otel-metrics")]
+#[derive(Clone, Default)]
+pub struct NameServerMetrics {
+    telemetry: Option<crate::TelemetryHandle>,
+    instruments: Option<NameServerMetricInstruments>,
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -255,6 +180,28 @@ impl NameServerMetrics {
 
     pub fn record_active_broker_count(&self, active_brokers: usize) {
         self.record_active_brokers(active_brokers as u64, &[]);
+    }
+
+    pub fn record_route_error(&self, kind: NameServerRouteErrorKind) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.record_route_errors_total(
+                    1,
+                    &[opentelemetry::KeyValue::new(
+                        crate::semantic::labels::RESULT,
+                        kind.as_str(),
+                    )],
+                );
+            }
+        }
+    }
+
+    pub fn record_route_freshness(&self, freshness_ms: u64) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.record_route_freshness(freshness_ms, &[]);
+            }
+        }
     }
 }
 
@@ -354,33 +301,17 @@ mod tests {
         metrics.record_route_request_latency(3, &attrs);
         metrics.record_broker_registrations(1, &attrs);
         metrics.record_active_brokers(2, &attrs);
-        metrics.record_route_errors_total(1, &attrs);
-        metrics.record_route_freshness(25, &attrs);
+        metrics.record_route_error(NameServerRouteErrorKind::NotFound);
+        metrics.record_route_freshness(25);
     }
 
     #[test]
-    fn namesrv_global_recorders_lazy_initialize() {
-        record_route_request_total(1);
-        record_route_request_latency(3);
-        record_broker_registrations(1);
-        record_active_brokers(2);
-
-        assert!(NAMESRV_METRICS.get().is_some() || NAMESRV_GLOBAL_METRICS.get().is_some());
-    }
-}
-
-#[cfg(test)]
-mod helper_tests {
-    use std::time::Duration;
-
-    use super::*;
-
-    #[test]
-    fn namesrv_high_level_recorders_are_safe_without_explicit_meter() {
-        record_route_request(Duration::from_millis(1));
-        record_broker_registration(2);
-        record_active_broker_count(2);
-        record_route_error(NameServerRouteErrorKind::NotFound);
-        record_route_freshness(25);
+    fn namesrv_noop_recorder_is_safe_without_explicit_meter() {
+        let metrics = NameServerMetrics::from_handle(&crate::TelemetryHandle::noop());
+        metrics.record_route_request(Duration::from_millis(1));
+        metrics.record_broker_registration(2);
+        metrics.record_active_broker_count(2);
+        metrics.record_route_error(NameServerRouteErrorKind::NotFound);
+        metrics.record_route_freshness(25);
     }
 }
