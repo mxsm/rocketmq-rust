@@ -30,6 +30,7 @@ mod builder;
 mod memory;
 
 pub use builder::MappedFileBuilder;
+pub use memory::MmapRangeError;
 pub use memory::MmapRegionSlice;
 pub use memory::StoreMappedMemory;
 pub use rocketmq_store_local::mapped_file::io_uring_backend_status;

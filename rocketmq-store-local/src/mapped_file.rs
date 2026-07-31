@@ -65,6 +65,7 @@ pub use mapped_buffer::MappedBuffer;
 pub use mapped_file_error::MappedFileError;
 pub use mapped_file_error::MappedFileResult;
 pub use memory::MappedMemory;
+pub use memory::MmapRangeError;
 pub use memory::MmapRegionSlice;
 pub use memory::NativeMappedMemory;
 pub use metrics::MappedFileMetrics;

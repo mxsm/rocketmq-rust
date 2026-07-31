@@ -712,7 +712,7 @@ impl HAService for DefaultHAService {
             connections
                 .values()
                 .find(|connection| connection.remote_address() == remote_addr)
-                .and_then(GeneralHAConnection::runtime_handle)
+                .map(GeneralHAConnection::runtime_handle)
         };
         match connection_runtime {
             Some(connection) => Some(connection.current_state().await),
@@ -806,9 +806,9 @@ impl AcceptSocketService {
         let default_connection =
             DefaultHAConnection::new(runtime_scope, connection_context, stream, message_store_config, addr).await?;
         let general_connection = if is_auto_switch {
-            GeneralHAConnection::new_with_auto_switch_ha_connection(AutoSwitchHAConnection::new(default_connection))
+            GeneralHAConnection::AutoSwitch(AutoSwitchHAConnection::new(default_connection))
         } else {
-            GeneralHAConnection::new_with_default_ha_connection(default_connection)
+            GeneralHAConnection::Default(default_connection)
         };
         Ok(general_connection)
     }
@@ -1091,10 +1091,48 @@ mod tests {
         .await
         .expect("build auto-switch connection");
 
+        assert!(matches!(&connection, GeneralHAConnection::AutoSwitch(_)));
         assert!(connection.is_auto_switch());
         assert_eq!(connection.slave_broker_id(), None);
+        let runtime_handle = connection.runtime_handle();
+        assert_eq!(runtime_handle.remote_address(), remote_addr.to_string());
+        assert_eq!(runtime_handle.slave_broker_id(), None);
         connection.set_slave_broker_id(Some(9));
         assert_eq!(connection.slave_broker_id(), Some(9));
+        assert_eq!(runtime_handle.slave_broker_id(), Some(9));
+
+        connection.shutdown().await;
+
+        let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn build_connection_uses_default_variant_when_auto_switch_is_disabled() {
+        let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-default-ha-build-{}", current_millis()));
+        let store = new_test_message_store(&temp_root, false);
+        let service = new_default_ha_service(&store);
+        let (server_stream, remote_addr, _client) = new_server_stream().await;
+
+        let mut connection = AcceptSocketService::build_connection(
+            service.runtime_scope.clone(),
+            service.connection_context(),
+            service.replica_store().message_store_config(),
+            server_stream,
+            remote_addr,
+            false,
+        )
+        .await
+        .expect("build default connection");
+
+        assert!(matches!(&connection, GeneralHAConnection::Default(_)));
+        assert!(!connection.is_auto_switch());
+        assert_eq!(connection.slave_broker_id(), None);
+        let runtime_handle = connection.runtime_handle();
+        assert_eq!(runtime_handle.remote_address(), remote_addr.to_string());
+        assert_eq!(runtime_handle.slave_broker_id(), None);
+        connection.set_slave_broker_id(Some(9));
+        assert_eq!(connection.slave_broker_id(), None);
+        assert_eq!(runtime_handle.slave_broker_id(), None);
 
         connection.shutdown().await;
 
