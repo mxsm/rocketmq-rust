@@ -1213,6 +1213,10 @@ impl NameServerRuntimeHandle {
         self.runtime().task_group()
     }
 
+    pub(crate) fn namesrv_metrics(&self) -> NameServerMetrics {
+        self.runtime().namesrv_metrics()
+    }
+
     pub(crate) fn cluster_test_route_lookup(&self) -> Option<Arc<dyn ClusterTestRouteLookup>> {
         self.runtime().cluster_test_route_lookup()
     }
