@@ -47,6 +47,7 @@ use crate::controller::Controller;
 use crate::error::Result;
 use crate::heartbeat::default_broker_heartbeat_manager::DefaultBrokerHeartbeatManager;
 use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
+use crate::metrics::controller_metrics_manager::ControllerMetricsManager;
 use crate::typ::Node;
 use crate::typ::NodeId;
 
@@ -77,6 +78,22 @@ impl RaftController {
                 config,
                 heartbeat_manager,
                 service_context,
+            )),
+        }
+    }
+
+    pub(crate) fn new_open_raft_with_heartbeat_and_metrics(
+        config: ControllerConfigReader,
+        heartbeat_manager: Arc<DefaultBrokerHeartbeatManager>,
+        service_context: ChildServiceContext,
+        metrics_manager: Arc<ControllerMetricsManager>,
+    ) -> Self {
+        Self {
+            inner: Arc::new(OpenRaftController::new_with_heartbeat_and_metrics(
+                config,
+                heartbeat_manager,
+                service_context,
+                metrics_manager,
             )),
         }
     }
@@ -221,10 +238,8 @@ impl Controller for RaftController {
         let result = self.inner.elect_master(request).instrument(span.clone()).await;
         let outcome = election_outcome(&result);
 
-        rocketmq_observability::metrics::controller::record_election_total(1);
-        rocketmq_observability::metrics::controller::record_election_latency(
-            u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
-        );
+        self.inner
+            .record_election_attempt(u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX));
         span.record("result", outcome);
         info!(
             event = rocketmq_observability::semantic::events::CONTROLLER_ELECTION,
