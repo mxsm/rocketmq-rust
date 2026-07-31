@@ -3420,7 +3420,7 @@ async fn phase5_subscription_group_admin_lifecycle_returns_decodable_bodies() {
             .subscription_group_manager()
             .subscription_group_table()
             .contains_key(&group),
-        "DeleteSubscriptionGroup should remove the stored group before auto-create lookup"
+        "DeleteSubscriptionGroup should remove the stored group"
     );
 
     let missing_header = GetSubscriptionGroupConfigRequestHeader {
@@ -3431,15 +3431,14 @@ async fn phase5_subscription_group_admin_lifecycle_returns_decodable_bodies() {
         RemotingCommand::create_request_command(RequestCode::GetSubscriptionGroupConfig, missing_header);
     missing_request.make_custom_header_to_net();
     let missing_response = process_broker_request(&mut processor, &mut missing_request).await;
-    assert_eq!(ResponseCode::from(missing_response.code()), ResponseCode::Success);
-    let auto_created_group = SubscriptionGroupConfig::decode(
-        missing_response
-            .body()
-            .expect("GetSubscriptionGroupConfig should auto-create and return a body")
-            .as_ref(),
-    )
-    .expect("auto-created subscription group response body should decode");
-    assert_eq!(auto_created_group.group_name(), &group);
+    assert_eq!(
+        ResponseCode::from(missing_response.code()),
+        ResponseCode::SubscriptionGroupNotExist
+    );
+    assert!(
+        missing_response.body().is_none(),
+        "GetSubscriptionGroupConfig must not recreate a missing group"
+    );
 
     let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
 }
