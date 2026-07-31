@@ -784,6 +784,7 @@ mod tests {
 
     use rocketmq_client_rust::ClientRuntime;
     use rocketmq_client_rust::ClientRuntimeConfig;
+    use rocketmq_client_rust::TelemetryHandle;
     use rocketmq_runtime::RuntimeConfig;
     use rocketmq_runtime::RuntimeOwner;
 
@@ -812,10 +813,12 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
-        let client_runtime = ClientRuntime::new(
+        let client_runtime = ClientRuntime::try_new(
             runtime_owner.root_context().child("topic-service-client"),
             ClientRuntimeConfig::default(),
-        );
+            TelemetryHandle::noop(),
+        )
+        .unwrap();
         let credentials = AdminCredentials::try_new("access-key", "secret-key", None).unwrap();
 
         let builder =
