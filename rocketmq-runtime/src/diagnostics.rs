@@ -423,7 +423,7 @@ mod tests {
         child
             .spawn("sensitive-task-name", TaskKind::Worker, std::future::pending())
             .expect("task should spawn");
-        let diagnostics = RuntimeDiagnostics::new(context.runtime().clone());
+        let diagnostics = RuntimeDiagnostics::new();
 
         let view = diagnostics.view_v1(RuntimeComponent::Mcp, context.root_group(), Vec::new());
         let json = serde_json::to_string(&view).expect("view should serialize");
@@ -445,7 +445,7 @@ mod tests {
             .root_group()
             .spawn("worker", TaskKind::Worker, std::future::pending())
             .expect("task should spawn");
-        let diagnostics = RuntimeDiagnostics::new(context.runtime().clone());
+        let diagnostics = RuntimeDiagnostics::new();
         let view = diagnostics.view_v1_with_options(
             RuntimeComponent::Other,
             context.root_group(),
@@ -465,18 +465,27 @@ mod tests {
     #[tokio::test]
     async fn sanitized_view_exposes_only_bounded_blocking_capacity_and_counts() {
         let context = RuntimeContext::from_current("runtime-blocking-capacity");
-        let diagnostics = RuntimeDiagnostics::new(context.runtime().clone());
+        let diagnostics = RuntimeDiagnostics::new();
         let view = diagnostics.view_v1(
             RuntimeComponent::Broker,
             context.root_group(),
             vec![BlockingExecutorSnapshot {
                 name: "sensitive-lane-name".to_owned(),
+                lane: crate::BlockingLane::StorageIo,
                 max_concurrency: 8,
                 max_queue_depth: 32,
+                global_capacity: 8,
+                global_running: 2,
+                global_available: 6,
+                lane_reserved: 8,
+                lane_running: 2,
+                lane_borrowed: 0,
                 queued: 3,
                 running: 2,
                 timed_out_still_running: 1,
                 blocking_still_running: 0,
+                rejected: 0,
+                oldest_queue_wait: Duration::ZERO,
                 tasks: Vec::new(),
             }],
         );
