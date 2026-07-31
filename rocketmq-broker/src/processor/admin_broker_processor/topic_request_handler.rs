@@ -135,9 +135,8 @@ impl TopicRequestHandler {
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let broker_runtime_inner = broker_config_request_handler.broker_runtime_inner();
         let response = RemotingCommand::create_response_command();
-        let request_header = request
-            .decode_command_custom_header::<CreateTopicRequestHeader>()
-            .unwrap();
+        let request_header =
+            request.decode_required_header::<CreateTopicRequestHeader>("decode create-topic request header")?;
         info!(
             "Broker receive request to update or create topic={}, caller address={}",
             request_header.topic,
@@ -570,9 +569,8 @@ impl TopicRequestHandler {
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_response_command();
-        let request_header = request
-            .decode_command_custom_header::<DeleteTopicRequestHeader>()
-            .unwrap();
+        let request_header =
+            request.decode_required_header::<DeleteTopicRequestHeader>("decode delete-topic request header")?;
         let topic = &request_header.topic;
         info!(
             "AdminBrokerProcessor#deleteTopic: broker receive request to delete topic={}, caller={}",
@@ -712,9 +710,8 @@ impl TopicRequestHandler {
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
-        let request_header = request
-            .decode_command_custom_header::<GetTopicStatsRequestHeader>()
-            .unwrap();
+        let request_header =
+            request.decode_required_header::<GetTopicStatsRequestHeader>("decode get-topic-stats request header")?;
         let topic = request_header.topic.as_ref();
         let topic_config = broker_runtime_inner.topic_config_manager().select_topic_config(topic);
         if topic_config.is_none() {
@@ -854,9 +851,9 @@ impl TopicRequestHandler {
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
-        let request_header = request
-            .decode_command_custom_header::<QueryTopicsByConsumerRequestHeader>()
-            .unwrap();
+        let request_header = request.decode_required_header::<QueryTopicsByConsumerRequestHeader>(
+            "decode query-topics-by-consumer request header",
+        )?;
         let topics = broker_runtime_inner
             .consumer_offset_manager()
             .which_topic_by_consumer(request_header.get_group());

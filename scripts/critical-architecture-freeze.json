@@ -2,7 +2,7 @@
   "schema_version": 1,
   "rules": {
     "remote_header_decode_unwrap": {
-      "maximum": 10,
+      "maximum": 0,
       "matchers": [
         {
           "path": "rocketmq-broker/src",

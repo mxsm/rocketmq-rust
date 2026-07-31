@@ -68,20 +68,22 @@ impl NotifyMinBrokerChangeIdHandler {
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let change_header = request
-            .decode_command_custom_header::<NotifyMinBrokerIdChangeRequestHeader>()
-            .unwrap();
+        let change_header = request.decode_required_header::<NotifyMinBrokerIdChangeRequestHeader>(
+            "decode minimum-broker-id change request header",
+        )?;
 
         let broker_config = broker_runtime_inner.broker_config();
 
-        let latest_broker_id = change_header.min_broker_id.expect("min broker id not must be present");
+        let latest_broker_id = change_header
+            .min_broker_id
+            .ok_or_else(|| rocketmq_error::RocketMQError::request_header_error("minBrokerId is required"))?;
 
         warn!(
             "min broker id changed, prev {}, new {}",
             broker_config.broker_identity.broker_id, latest_broker_id
         );
 
-        self.update_min_broker(broker_runtime_inner, change_header).await;
+        self.update_min_broker(broker_runtime_inner, change_header).await?;
 
         let response = RemotingCommand::create_response_command();
         Ok(Some(response.set_code(ResponseCode::Success)))
@@ -91,7 +93,7 @@ impl NotifyMinBrokerChangeIdHandler {
         &mut self,
         broker_runtime_inner: &mut BrokerAdminRuntime<MS>,
         change_header: NotifyMinBrokerIdChangeRequestHeader,
-    ) {
+    ) -> rocketmq_error::RocketMQResult<()> {
         let broker_config = broker_runtime_inner.broker_config();
 
         if broker_config.enable_slave_acting_master && broker_config.broker_identity.broker_id != MASTER_ID {
@@ -99,7 +101,11 @@ impl NotifyMinBrokerChangeIdHandler {
                 if let Some(min_broker_id) = change_header.min_broker_id {
                     if min_broker_id != broker_runtime_inner.get_min_broker_id_in_group() {
                         // on min broker change
-                        let min_broker_addr = change_header.min_broker_addr.as_deref().unwrap();
+                        let min_broker_addr = change_header.min_broker_addr.as_deref().ok_or_else(|| {
+                            rocketmq_error::RocketMQError::request_header_error(
+                                "minBrokerAddr is required when the minimum broker changes",
+                            )
+                        })?;
 
                         self.on_min_broker_change(
                             broker_runtime_inner,
@@ -115,6 +121,7 @@ impl NotifyMinBrokerChangeIdHandler {
                 error!("Update min broker failed");
             }
         }
+        Ok(())
     }
 
     async fn on_min_broker_change<MS: MessageStore>(
