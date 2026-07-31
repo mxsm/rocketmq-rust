@@ -153,7 +153,9 @@ impl ClientRequestProcessor {
             .route_info_manager()
             .route_freshness_millis(&topic_route_data)
         {
-            rocketmq_observability::metrics::namesrv::record_route_freshness(freshness_ms);
+            self.name_server_runtime_inner
+                .namesrv_metrics()
+                .record_route_freshness(freshness_ms);
         }
         if self.need_check_namesrv_ready.load(Ordering::Relaxed) {
             self.need_check_namesrv_ready.store(false, Ordering::Relaxed);
