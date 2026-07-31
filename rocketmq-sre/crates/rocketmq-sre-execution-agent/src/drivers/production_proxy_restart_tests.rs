@@ -184,12 +184,15 @@ async fn real_proxy_drain_reaches_exact_zero_and_restores_ingress() {
     let secret_key = std::env::var("ROCKETMQ_SRE_TEST_PROXY_SECRET_KEY").expect("test secret key must be explicit");
     let credentials = AdminCredentials::try_new(access_key, secret_key, None).expect("test credentials");
     let runtime = RuntimeContext::from_current("phase3-proxy-drain-smoke");
-    let client_runtime = ClientRuntime::new(
+    let client_runtime = ClientRuntime::try_new(
         runtime.service_context("proxy-drain-client"),
         ClientRuntimeConfig {
             shutdown_timeout: Duration::from_secs(10),
+            ..ClientRuntimeConfig::default()
         },
-    );
+        TelemetryHandle::noop(),
+    )
+    .expect("create authenticated Proxy drain client runtime");
     let mut read = ReadAdminBuilder::new(Arc::clone(&client_runtime))
         .namesrv_addr(namesrv_addr.clone())
         .admin_group("rocketmq-sre-proxy-drain-smoke-read")
