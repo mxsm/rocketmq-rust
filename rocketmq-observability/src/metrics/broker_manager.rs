@@ -352,7 +352,9 @@ pub struct BrokerMetricsManager {
     sampled_metric_gate: SamplingGate,
 
     #[cfg(feature = "otel-metrics")]
-    label_guard: Arc<RwLock<LabelGuard>>,
+    label_policy: MetricLabelPolicy,
+
+    telemetry: Option<TelemetryRecorder>,
 }
 
 impl BrokerMetricsManager {
@@ -526,11 +528,8 @@ impl BrokerMetricsManager {
             attributes_supplier,
             sampled_metric_gate: SamplingGate::new(sampling_config.sample_ratio),
             #[cfg(feature = "otel-metrics")]
-            label_guard: Arc::new(RwLock::new(LabelGuard::new(
-                label_config.cardinality_limit,
-                label_config.topic_label_enabled,
-                label_config.consumer_group_label_enabled,
-            ))),
+            label_policy,
+            telemetry,
         }
     }
 
@@ -777,7 +776,7 @@ impl BrokerMetricsManager {
         F: Fn() -> Vec<ConsumerLagAttributes> + Send + Sync + 'static,
     {
         let attributes_supplier = self.attributes_supplier.clone();
-        let label_guard = Arc::clone(&self.label_guard);
+        let label_policy = self.label_policy.clone();
         let broker_metrics = self.broker_metrics.clone();
         let _consumer_lag = self
             .meter
@@ -787,9 +786,9 @@ impl BrokerMetricsManager {
             .with_callback(move |observer| {
                 for observation in consumer_lag_snapshot_fn() {
                     let topic_label =
-                        guarded_bounded_label(&label_guard, BrokerMetricsConstant::LABEL_TOPIC, &observation.topic);
+                        guarded_bounded_label(&label_policy, BrokerMetricsConstant::LABEL_TOPIC, &observation.topic);
                     let consumer_group_label = guarded_bounded_label(
-                        &label_guard,
+                        &label_policy,
                         BrokerMetricsConstant::LABEL_CONSUMER_GROUP,
                         &observation.consumer_group,
                     );
