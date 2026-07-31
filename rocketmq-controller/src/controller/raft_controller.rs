@@ -22,6 +22,9 @@ use std::time::Instant;
 use cheetah_string::CheetahString;
 use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::body::release_checkpoint::ControllerReleaseSnapshotManifest;
+use rocketmq_protocol::protocol::body::release_checkpoint::ControllerReleaseSnapshotRequest;
+use rocketmq_protocol::protocol::body::release_checkpoint::ReleaseCheckpointRestoreVerification;
 use rocketmq_protocol::protocol::body::sync_state_set_body::SyncStateSet;
 use rocketmq_protocol::protocol::header::controller::alter_sync_state_set_request_header::AlterSyncStateSetRequestHeader;
 use rocketmq_protocol::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
@@ -33,6 +36,7 @@ use rocketmq_protocol::protocol::header::controller::register_broker_to_controll
 use rocketmq_protocol::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::ChildServiceContext;
+use rocketmq_security_api::MaintenanceAuthorizationGrant;
 use tracing::info;
 use tracing::Instrument;
 
