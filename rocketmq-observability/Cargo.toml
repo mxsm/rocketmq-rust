@@ -109,6 +109,7 @@ opentelemetry-semantic-conventions = { workspace = true, optional = true }
 tracing-opentelemetry = { workspace = true, optional = true }
 prometheus = { workspace = true, optional = true }
 tokio.workspace = true
+tokio-util.workspace = true
 tonic = { version = "0.14.1", default-features = false, optional = true }
 
 [dev-dependencies]

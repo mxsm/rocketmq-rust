@@ -215,6 +215,11 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .update_and_create_topic(&self.broker_config_request_handler, channel, ctx, request_code, request)
                     .await
             }
+            RequestCode::UpdateTopicConfigCas => {
+                self.topic_request_handler
+                    .update_topic_config_cas(&self.broker_config_request_handler, channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::UpdateAndCreateTopicList => {
                 self.topic_request_handler
                     .update_and_create_topic_list(
@@ -248,7 +253,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .get_timer_metrics(channel, ctx, request_code, request)
                     .await
             }
-            RequestCode::UpdateBrokerConfig => {
+            RequestCode::UpdateBrokerConfig | RequestCode::UpdateBrokerConfigCas => {
                 self.broker_config_request_handler
                     .update_broker_config(channel, ctx, request_code, request)
                     .await
@@ -323,6 +328,12 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                 let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner_mut();
                 self.subscription_group_handler
                     .update_and_create_subscription_group(broker_runtime_inner, channel, ctx, request_code, request)
+                    .await
+            }
+            RequestCode::UpdateSubscriptionGroupConfigCas => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
+                self.subscription_group_handler
+                    .update_subscription_group_config_cas(broker_runtime_inner, channel, ctx, request_code, request)
                     .await
             }
             RequestCode::UpdateAndCreateSubscriptionGroupList => {

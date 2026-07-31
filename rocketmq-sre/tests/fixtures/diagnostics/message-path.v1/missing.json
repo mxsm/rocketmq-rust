@@ -1,0 +1,14 @@
+{
+  "pack": "message-path.v1",
+  "scenario": "missing",
+  "expected_status": "inconclusive",
+  "expected_reason_codes": [],
+  "evidence": [
+    {
+      "evidence_id": "00000000-0000-4000-8006-000000000103",
+      "source": "tempo",
+      "resource": "message-trace/trace-hash-a",
+      "content": { "trace_id_hash": "sha256:trace-a", "span_count": 5 }
+    }
+  ]
+}

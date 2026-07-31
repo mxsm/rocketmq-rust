@@ -1,0 +1,131 @@
+{
+  "$defs": {
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "EvidenceId": {
+      "description": "Stable identifier for an evidence snapshot.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "SimulationId": {
+      "description": "Stable identifier for a read-only what-if simulation.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "SimulationKind": {
+      "description": "Supported deterministic Phase 2 what-if families.",
+      "enum": [
+        "broker_offline",
+        "proxy_offline",
+        "traffic_increase",
+        "broker_scale_out",
+        "proxy_scale_out",
+        "topic_queue_expand",
+        "version_upgrade",
+        "configuration_diff"
+      ],
+      "type": "string"
+    },
+    "SimulationStatus": {
+      "description": "Lifecycle of a read-only simulation.",
+      "enum": [
+        "completed",
+        "insufficient_data",
+        "unsupported"
+      ],
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Read-only what-if result. It never carries an executable action.",
+  "properties": {
+    "algorithm_version": {
+      "type": "string"
+    },
+    "assumptions": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "blast_radius": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "bottlenecks": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "cluster_id": {
+      "$ref": "#/$defs/ClusterId"
+    },
+    "created_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "created_by": {
+      "type": "string"
+    },
+    "evidence_ids": {
+      "items": {
+        "$ref": "#/$defs/EvidenceId"
+      },
+      "type": "array"
+    },
+    "execution_eligible": {
+      "type": "boolean"
+    },
+    "id": {
+      "$ref": "#/$defs/SimulationId"
+    },
+    "input": true,
+    "kind": {
+      "$ref": "#/$defs/SimulationKind"
+    },
+    "missing_assumptions": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "projected_utilization": true,
+    "status": {
+      "$ref": "#/$defs/SimulationStatus"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    }
+  },
+  "required": [
+    "id",
+    "tenant_id",
+    "cluster_id",
+    "kind",
+    "status",
+    "input",
+    "assumptions",
+    "projected_utilization",
+    "bottlenecks",
+    "blast_radius",
+    "missing_assumptions",
+    "evidence_ids",
+    "algorithm_version",
+    "created_by",
+    "execution_eligible",
+    "created_at"
+  ],
+  "title": "WhatIfSimulation",
+  "type": "object"
+}

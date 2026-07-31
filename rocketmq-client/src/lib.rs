@@ -93,9 +93,30 @@ mod trace;
 mod types;
 mod utils;
 
+#[cfg(feature = "admin-read")]
+pub use crate::admin::BrokerConfigAllowlisted;
+#[cfg(feature = "admin-mutation")]
+pub use crate::admin::BrokerConfigPatchOutcome;
 pub use crate::admin::DefaultMQAdminExt;
 pub use crate::admin::DefaultMQAdminExtImpl;
+#[cfg(feature = "admin-full")]
 pub use crate::admin::MQAdminExt;
+#[cfg(feature = "admin-mutation")]
+pub use crate::admin::MQAdminMutationExt;
+#[cfg(feature = "admin-read")]
+pub use crate::admin::MQAdminReadExt;
+#[cfg(feature = "admin-mutation")]
+pub use crate::admin::SubscriptionGroupConfigPatch;
+#[cfg(feature = "admin-mutation")]
+pub use crate::admin::SubscriptionGroupConfigPatchOutcome;
+#[cfg(feature = "admin-read")]
+pub use crate::admin::SubscriptionGroupConfigVersioned;
+#[cfg(feature = "admin-mutation")]
+pub use crate::admin::TopicConfigPatch;
+#[cfg(feature = "admin-mutation")]
+pub use crate::admin::TopicConfigPatchOutcome;
+#[cfg(feature = "admin-read")]
+pub use crate::admin::TopicConfigVersioned;
 pub use crate::base::query_result::QueryResult;
 pub use crate::base::MQAdmin;
 pub use crate::base::MqClientAdmin;

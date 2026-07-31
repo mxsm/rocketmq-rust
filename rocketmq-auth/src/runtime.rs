@@ -902,6 +902,9 @@ fn acl_from_plain_account(account: &PlainAccessConfig) -> RocketMQResult<Option<
     if let Some(group_perms) = account.group_perms() {
         push_named_entries(&mut custom_entries, ResourceType::Group, group_perms);
     }
+    if let Some(permission) = account.cluster_perm() {
+        push_cluster_entry(&mut default_entries, permission.as_str())?;
+    }
 
     if !custom_entries.is_empty() {
         policies.push(Policy::of_entries(PolicyType::Custom, custom_entries));
@@ -919,6 +922,34 @@ fn acl_from_plain_account(account: &PlainAccessConfig) -> RocketMQResult<Option<
         SubjectType::User,
         policies,
     )))
+}
+
+fn push_cluster_entry(entries: &mut Vec<PolicyEntry>, permission: &str) -> RocketMQResult<()> {
+    let permission = permission.trim();
+    let (actions, decision) = match permission {
+        "GET" => (
+            vec![rocketmq_security_api::Action::Get],
+            crate::authorization::enums::decision::Decision::Allow,
+        ),
+        "DENY" => (
+            vec![rocketmq_security_api::Action::All],
+            crate::authorization::enums::decision::Decision::Deny,
+        ),
+        _ => {
+            return Err(RocketMQError::ConfigInvalidValue {
+                key: "aclConfig",
+                value: "clusterPerm=<redacted>".to_string(),
+                reason: "clusterPerm must be GET or DENY".to_string(),
+            });
+        }
+    };
+    entries.push(PolicyEntry::of(
+        Resource::of(ResourceType::Cluster, None, ResourcePattern::Any),
+        actions,
+        None,
+        decision,
+    ));
+    Ok(())
 }
 
 fn push_default_entry(entries: &mut Vec<PolicyEntry>, resource_type: ResourceType, permission: &str) {
@@ -1141,6 +1172,32 @@ mod tests {
         RemotingCommand::create_remoting_command(RequestCode::SendMessage.to_i32()).set_ext_fields(ext_fields)
     }
 
+    fn signed_command(
+        request_code: RequestCode,
+        access_key: &str,
+        secret_key: &str,
+        fields: &[(&str, &str)],
+    ) -> RemotingCommand {
+        let mut ext_fields = HashMap::new();
+        ext_fields.insert(
+            CheetahString::from_static_str("AccessKey"),
+            CheetahString::from(access_key),
+        );
+        let mut signed_values = std::collections::BTreeMap::new();
+        signed_values.insert("AccessKey", access_key);
+        for (name, value) in fields {
+            ext_fields.insert(CheetahString::from(*name), CheetahString::from(*value));
+            signed_values.insert(*name, *value);
+        }
+        let content = signed_values.values().copied().collect::<String>();
+        let signature = acl_signer::cal_signature(content.as_bytes(), secret_key).unwrap();
+        ext_fields.insert(
+            CheetahString::from_static_str("Signature"),
+            CheetahString::from(signature),
+        );
+        RemotingCommand::create_remoting_command(request_code.to_i32()).set_ext_fields(ext_fields)
+    }
+
     #[test]
     fn provider_registry_rejects_unsupported_metadata_provider() {
         let config = AuthConfig {
@@ -1174,6 +1231,87 @@ mod tests {
         let registry = ProviderRegistry::local(&config).expect("file snapshot aliases should use local providers");
 
         assert_eq!(registry.acl_generation(), 0);
+    }
+
+    #[test]
+    fn migrated_sre_reader_can_get_but_cannot_mutate_cluster_resources() {
+        let mut account = PlainAccessConfig::new();
+        account.set_access_key(CheetahString::from_static_str("sre-reader"));
+        account.set_cluster_perm(CheetahString::from_static_str("GET"));
+        account.set_default_topic_perm(CheetahString::from_static_str("GET"));
+        account.set_default_group_perm(CheetahString::from_static_str("GET"));
+
+        let acl = acl_from_plain_account(&account).unwrap().unwrap();
+        let entries = acl.get_policy(PolicyType::Default).unwrap().entries();
+
+        for resource_type in [ResourceType::Cluster, ResourceType::Topic, ResourceType::Group] {
+            let entry = entries
+                .iter()
+                .find(|entry| entry.resource().resource_type() == resource_type)
+                .unwrap();
+            assert_eq!(entry.decision(), Decision::Allow);
+            assert!(entry.is_match_action(&[Action::Get]));
+            assert!(!entry.is_match_action(&[Action::Update]));
+            assert!(!entry.is_match_action(&[Action::Delete]));
+        }
+    }
+
+    #[test]
+    fn migrated_cluster_permission_rejects_non_read_permissions() {
+        let mut account = PlainAccessConfig::new();
+        account.set_access_key(CheetahString::from_static_str("sre-reader"));
+        account.set_cluster_perm(CheetahString::from_static_str("UPDATE"));
+
+        let error = acl_from_plain_account(&account).unwrap_err();
+
+        assert!(matches!(error, RocketMQError::ConfigInvalidValue { .. }));
+        assert!(error.to_string().contains("clusterPerm must be GET or DENY"));
+    }
+
+    #[tokio::test]
+    async fn migrated_sre_reader_accepts_broker_get_and_rejects_topic_mutation_rpc() {
+        let temp = TempDir::new().unwrap();
+        let acl_file = temp.path().join("plain_acl.yml");
+        fs::write(
+            &acl_file,
+            r#"
+accounts:
+  - accessKey: sre-reader
+    secretKey: reader-secret
+    admin: false
+    defaultTopicPerm: GET
+    defaultGroupPerm: GET
+    clusterPerm: GET
+"#,
+        )
+        .unwrap();
+        let runtime = AuthRuntimeBuilder::new(AuthConfig {
+            cluster_name: CheetahString::from_static_str("SreDev"),
+            acl_file: CheetahString::from(acl_file.to_string_lossy().as_ref()),
+            authentication_enabled: true,
+            authorization_enabled: true,
+            ..AuthConfig::default()
+        })
+        .build()
+        .await
+        .unwrap();
+
+        let broker_get = signed_command(RequestCode::GetBrokerRuntimeInfo, "sre-reader", "reader-secret", &[]);
+        runtime.check_remoting(&(), &broker_get).await.unwrap();
+
+        let topic_mutation = signed_command(
+            RequestCode::UpdateAndCreateTopic,
+            "sre-reader",
+            "reader-secret",
+            &[("topic", "Orders")],
+        );
+        let error = runtime.check_remoting(&(), &topic_mutation).await.unwrap_err();
+        assert!(
+            matches!(error, RocketMQError::BrokerPermissionDenied { .. }),
+            "unexpected mutation denial error: {error:?}"
+        );
+
+        runtime.shutdown().await.unwrap();
     }
 
     #[tokio::test]

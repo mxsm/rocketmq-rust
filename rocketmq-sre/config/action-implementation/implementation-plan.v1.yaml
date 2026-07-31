@@ -1,0 +1,46 @@
+schema_version: rocketmq-sre.action-implementation-plan.v1
+waves:
+  - wave: 2
+    policy: human_approval_required
+    actions:
+      - { id: subscription_group.patch_allowlisted.v1, priority: p0, driver_family: admin_core, handler_status: implemented, activation_status: test_cluster_verified, evidence: phase03-subscription-group-cas-smoke.ps1, representative: true }
+      - { id: proxy.rollout_image_canary.v1, priority: p0, driver_family: kubernetes, handler_status: implemented, activation_status: test_cluster_verified, evidence: phase03-proxy-image-canary-smoke.ps1, representative: true }
+      - { id: security.credential_rotate_overlap.v1, priority: p0, driver_family: config, handler_status: implemented, activation_status: test_cluster_verified, evidence: phase03-credential-supervised-e2e.ps1, representative: true }
+      - { id: telemetry.collector.restart_one.v1, priority: p1, driver_family: kubernetes, handler_status: implemented, representative: false }
+      - { id: broker.restart_one.v1, priority: p1, driver_family: kubernetes, handler_status: planned, representative: false }
+      - { id: topic.queue.expand_only.v1, priority: p1, driver_family: admin_core, handler_status: planned, representative: false }
+      - { id: consumer.request_mode.patch_allowlisted.v1, priority: p1, driver_family: admin_core, handler_status: planned, representative: false }
+      - { id: store.readahead.patch_allowlisted.v1, priority: p1, driver_family: admin_core, handler_status: planned, representative: false }
+      - { id: tiered.cold_data_flow.patch_allowlisted.v1, priority: p1, driver_family: admin_core, handler_status: planned, representative: false }
+      - { id: static_topic.patch_non_remap.v1, priority: p2, driver_family: admin_core, handler_status: planned, representative: false }
+      - { id: consumer.offset.reset_bounded.v1, priority: p2, driver_family: admin_core, handler_status: planned, representative: false }
+      - { id: namesrv.config.patch_allowlisted.v1, priority: p2, driver_family: admin_core, handler_status: planned, representative: false }
+      - { id: controller.config.patch_allowlisted.v1, priority: p2, driver_family: admin_core, handler_status: planned, representative: false }
+  - wave: 3
+    policy: planning_only
+    actions:
+      - { id: consumer.offset.clone_or_reset_broad.v1, priority: plan_only, driver_family: none, handler_status: forbidden, representative: false }
+      - { id: message.direct_consume.v1, priority: plan_only, driver_family: none, handler_status: forbidden, representative: false }
+      - { id: message.dlq.resend.v1, priority: plan_only, driver_family: none, handler_status: forbidden, representative: false }
+      - { id: timer.switch.v1, priority: plan_only, driver_family: none, handler_status: forbidden, representative: false }
+      - { id: controller.elect.v1, priority: plan_only, driver_family: none, handler_status: forbidden, representative: false }
+      - { id: static_topic.remap.v1, priority: plan_only, driver_family: none, handler_status: forbidden, representative: false }
+      - { id: broker.container.add_remove.v1, priority: plan_only, driver_family: none, handler_status: forbidden, representative: false }
+permanent_r3:
+  execution_mapping: forbidden
+  capability_ids:
+    - topic.delete
+    - consumer.delete_subscription_group
+    - auth.user.delete
+    - auth.acl.delete
+    - broker.clean_expired_cq
+    - broker.delete_expired_commit_log
+    - broker.clean_unused_topic
+    - broker.reset_master_flush_offset
+    - controller.metadata.clean
+  categories:
+    - topic_group_user_acl_delete
+    - commitlog_consumequeue_index_clean_or_truncate
+    - reset_master_flush_offset
+    - quorum_degradation
+    - auth_or_tls_degradation

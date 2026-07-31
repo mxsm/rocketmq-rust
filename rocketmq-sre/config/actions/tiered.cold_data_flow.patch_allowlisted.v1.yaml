@@ -1,0 +1,51 @@
+id: tiered.cold_data_flow.patch_allowlisted.v1
+version: 1.0.0
+owner: messaging-storage
+supported_versions:
+  - family: rocketmq-sre.action-plan
+    major: 1
+    minor: 0
+required_capabilities:
+  - admin.tiered-flow-control-cas
+config_schema:
+  type: object
+  additionalProperties: false
+parameter_schema:
+  type: object
+  additionalProperties: false
+  required: [broker, consumer_group, expected_version, patch]
+  properties:
+    broker: { type: string, maxLength: 128 }
+    consumer_group: { type: string, maxLength: 255 }
+    expected_version: { type: integer, minimum: 0 }
+    patch:
+      type: object
+      minProperties: 1
+      maxProperties: 3
+      additionalProperties: false
+      properties:
+        read_ahead_message_count_threshold: { type: integer, minimum: 1, maximum: 100000 }
+        read_ahead_batch_size: { type: integer, minimum: 1, maximum: 10000 }
+        max_pending_read_ahead_requests: { type: integer, minimum: 1, maximum: 1024 }
+status: active
+deprecation: null
+risk: r2
+execution_supported: false
+preconditions:
+  - valid_heterogeneous_critic
+  - cold_data_flow_version_matches
+  - owner_approved_thresholds
+  - no_retention_or_data_location_change
+max_impact: allowlisted_fields
+verification:
+  resource_conditions: [cold_data_flow_version_incremented, patch_visible]
+  technical_slis: [tiered_read_error_ratio, tiered_read_latency, broker_memory_pressure]
+  stable_window_seconds: 300
+  max_wait_seconds: 1200
+timeout_seconds: 1200
+compensation:
+  mode: automatic
+  required_before_fields: [before_config, latest_version]
+  timeout_seconds: 600
+forbidden_fields: [delete_data, retention, remote_path, credentials, storage_provider, raw_request_code]
+plan_only: false

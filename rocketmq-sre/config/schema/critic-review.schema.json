@@ -1,0 +1,264 @@
+{
+  "$defs": {
+    "ActionPlanId": {
+      "description": "Stable identifier for an immutable action plan.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "CriticAssessment": {
+      "additionalProperties": false,
+      "description": "Fixed, bounded model output accepted from the heterogeneous Critic.\n\nIt cannot replace descriptors, policy decisions, plan fields, or execution\nparameters. Those remain locally validated Control Plane inputs.",
+      "properties": {
+        "cited_evidence_ids": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          },
+          "type": "array"
+        },
+        "conclusion": {
+          "$ref": "#/$defs/CriticConclusion"
+        },
+        "counter_evidence_ids": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          },
+          "type": "array"
+        },
+        "findings": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/CriticFinding"
+          },
+          "type": "array"
+        },
+        "impact_scope_valid": {
+          "type": "boolean"
+        },
+        "missing_preconditions": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "parameter_ranges_valid": {
+          "type": "boolean"
+        },
+        "rationale": {
+          "type": "string"
+        },
+        "rollback_available": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "conclusion",
+        "parameter_ranges_valid",
+        "impact_scope_valid",
+        "rollback_available",
+        "rationale"
+      ],
+      "type": "object"
+    },
+    "CriticConclusion": {
+      "description": "Bounded deterministic Critic conclusion.",
+      "enum": [
+        "accept",
+        "needs_revision",
+        "reject"
+      ],
+      "type": "string"
+    },
+    "CriticFinding": {
+      "additionalProperties": false,
+      "description": "One structured finding returned by the Critic.",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/CriticFindingCode"
+        },
+        "evidence_ids": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          },
+          "type": "array"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
+    "CriticFindingCode": {
+      "description": "Closed set of checks that a model Critic may report.",
+      "enum": [
+        "evidence_reference_invalid",
+        "counter_evidence_missing",
+        "parameter_out_of_range",
+        "missing_precondition",
+        "impact_scope_exceeded",
+        "rollback_unavailable"
+      ],
+      "type": "string"
+    },
+    "CriticReviewId": {
+      "description": "Stable identifier for an immutable critic review.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "CriticReviewStatus": {
+      "description": "Critic review availability and validation state.",
+      "enum": [
+        "pending",
+        "valid",
+        "invalid",
+        "unavailable",
+        "conflict"
+      ],
+      "type": "string"
+    },
+    "DiagnosisRevisionId": {
+      "description": "Stable identifier for an immutable diagnosis revision.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "EvidenceId": {
+      "description": "Stable identifier for an evidence snapshot.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ModelInvocationId": {
+      "description": "Stable identifier for a model invocation.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Immutable heterogeneous model review bound to actual invocation identity.",
+  "properties": {
+    "assessment": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CriticAssessment"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "conclusion": {
+      "$ref": "#/$defs/CriticConclusion"
+    },
+    "created_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "critic_invocation_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ModelInvocationId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "critic_model_family": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "critic_model_revision": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "critic_profile": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "critic_provider": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "diagnosis_revision_id": {
+      "$ref": "#/$defs/DiagnosisRevisionId"
+    },
+    "endpoint_instance": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "fallback_chain": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "findings": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/CriticFinding"
+      },
+      "type": "array"
+    },
+    "id": {
+      "$ref": "#/$defs/CriticReviewId"
+    },
+    "payload_hash": {
+      "type": "string"
+    },
+    "plan_hash": {
+      "type": "string"
+    },
+    "plan_id": {
+      "$ref": "#/$defs/ActionPlanId"
+    },
+    "primary_invocation_id": {
+      "$ref": "#/$defs/ModelInvocationId"
+    },
+    "primary_model_family": {
+      "type": "string"
+    },
+    "prompt_version": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/CriticReviewStatus"
+    }
+  },
+  "required": [
+    "id",
+    "plan_id",
+    "plan_hash",
+    "diagnosis_revision_id",
+    "primary_invocation_id",
+    "primary_model_family",
+    "prompt_version",
+    "schema_version",
+    "payload_hash",
+    "status",
+    "conclusion",
+    "created_at"
+  ],
+  "title": "CriticReview",
+  "type": "object"
+}

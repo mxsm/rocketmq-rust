@@ -206,3 +206,65 @@ pub trait MessageAdmin: Send {
 
     fn query_trace_data<'a>(&'a mut self, request: &'a TraceQueryRequest) -> AdminFuture<'a, TraceData>;
 }
+
+/// Message operations that cannot modify broker or consumer state.
+pub trait MessageQueryAdmin: Send {
+    fn query_messages_by_key<'a>(
+        &'a mut self,
+        request: &'a QueryMessagesByKeyRequest,
+    ) -> AdminFuture<'a, QueryMessagesResult>;
+    fn find_message<'a>(&'a mut self, request: &'a MessageLookupRequest) -> AdminFuture<'a, MessageRecord>;
+    fn message_detail<'a>(&'a mut self, request: &'a MessageLookupRequest) -> AdminFuture<'a, MessageDetailRecord>;
+    fn message_queue_plan<'a>(&'a mut self, request: &'a MessageQueuePlanRequest) -> AdminFuture<'a, MessageQueuePlan>;
+    fn pull_messages<'a>(&'a mut self, request: &'a PullMessagesRequest) -> AdminFuture<'a, PullMessagesResult>;
+    fn find_dlq_message<'a>(&'a mut self, request: &'a DlqMessageLookupRequest) -> AdminFuture<'a, MessageRecord>;
+    fn query_trace_data<'a>(&'a mut self, request: &'a TraceQueryRequest) -> AdminFuture<'a, TraceData>;
+}
+
+/// Message operations that trigger delivery or consumption side effects.
+pub trait MessageMutationAdmin: Send {
+    fn consume_message_directly<'a>(
+        &'a mut self,
+        request: &'a DirectConsumeRequest,
+    ) -> AdminFuture<'a, DirectConsumeResult>;
+    fn resend_dlq_message<'a>(&'a mut self, request: &'a DlqMessageLookupRequest) -> AdminFuture<'a, DlqResendResult>;
+}
+
+impl<T: MessageAdmin + ?Sized> MessageQueryAdmin for T {
+    fn query_messages_by_key<'a>(
+        &'a mut self,
+        request: &'a QueryMessagesByKeyRequest,
+    ) -> AdminFuture<'a, QueryMessagesResult> {
+        MessageAdmin::query_messages_by_key(self, request)
+    }
+    fn find_message<'a>(&'a mut self, request: &'a MessageLookupRequest) -> AdminFuture<'a, MessageRecord> {
+        MessageAdmin::find_message(self, request)
+    }
+    fn message_detail<'a>(&'a mut self, request: &'a MessageLookupRequest) -> AdminFuture<'a, MessageDetailRecord> {
+        MessageAdmin::message_detail(self, request)
+    }
+    fn message_queue_plan<'a>(&'a mut self, request: &'a MessageQueuePlanRequest) -> AdminFuture<'a, MessageQueuePlan> {
+        MessageAdmin::message_queue_plan(self, request)
+    }
+    fn pull_messages<'a>(&'a mut self, request: &'a PullMessagesRequest) -> AdminFuture<'a, PullMessagesResult> {
+        MessageAdmin::pull_messages(self, request)
+    }
+    fn find_dlq_message<'a>(&'a mut self, request: &'a DlqMessageLookupRequest) -> AdminFuture<'a, MessageRecord> {
+        MessageAdmin::find_dlq_message(self, request)
+    }
+    fn query_trace_data<'a>(&'a mut self, request: &'a TraceQueryRequest) -> AdminFuture<'a, TraceData> {
+        MessageAdmin::query_trace_data(self, request)
+    }
+}
+
+impl<T: MessageAdmin + ?Sized> MessageMutationAdmin for T {
+    fn consume_message_directly<'a>(
+        &'a mut self,
+        request: &'a DirectConsumeRequest,
+    ) -> AdminFuture<'a, DirectConsumeResult> {
+        MessageAdmin::consume_message_directly(self, request)
+    }
+    fn resend_dlq_message<'a>(&'a mut self, request: &'a DlqMessageLookupRequest) -> AdminFuture<'a, DlqResendResult> {
+        MessageAdmin::resend_dlq_message(self, request)
+    }
+}

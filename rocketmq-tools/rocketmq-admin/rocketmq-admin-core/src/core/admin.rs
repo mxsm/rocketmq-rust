@@ -117,7 +117,12 @@ impl AdminBuilder {
         self.namesrv_addr.as_deref()
     }
 
-    #[cfg(any(feature = "client-adapter", test))]
+    #[cfg(any(
+        feature = "read-client-adapter",
+        feature = "mutation-client-adapter",
+        feature = "client-adapter",
+        test
+    ))]
     pub(crate) fn configured_admin_group(&self) -> Option<&str> {
         self.admin_group.as_deref()
     }
@@ -130,17 +135,32 @@ impl AdminBuilder {
         self.timeout_millis
     }
 
-    #[cfg(any(feature = "client-adapter", test))]
+    #[cfg(any(
+        feature = "read-client-adapter",
+        feature = "mutation-client-adapter",
+        feature = "client-adapter",
+        test
+    ))]
     pub(crate) fn configured_unit_name(&self) -> Option<&str> {
         self.unit_name.as_deref()
     }
 
-    #[cfg(any(feature = "client-adapter", test))]
+    #[cfg(any(
+        feature = "read-client-adapter",
+        feature = "mutation-client-adapter",
+        feature = "client-adapter",
+        test
+    ))]
     pub(crate) fn configured_vip_channel_enabled(&self) -> bool {
         self.vip_channel_enabled
     }
 
-    #[cfg(any(feature = "client-adapter", test))]
+    #[cfg(any(
+        feature = "read-client-adapter",
+        feature = "mutation-client-adapter",
+        feature = "client-adapter",
+        test
+    ))]
     pub(crate) fn configured_use_tls(&self) -> bool {
         self.use_tls
     }

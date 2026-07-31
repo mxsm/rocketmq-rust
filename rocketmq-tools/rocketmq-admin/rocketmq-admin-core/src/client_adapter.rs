@@ -14,20 +14,38 @@
 
 //! RocketMQ client-backed implementations of the admin-owned contracts.
 
+#[cfg(feature = "client-adapter")]
 mod broker;
+#[cfg(feature = "client-adapter")]
 mod consumer;
+#[cfg(feature = "client-adapter")]
 mod dashboard;
-mod lifecycle;
+pub(crate) mod lifecycle;
+#[cfg(feature = "client-adapter")]
 mod lite;
+#[cfg(feature = "client-adapter")]
 mod message;
+#[cfg(feature = "mutation-client-adapter")]
+#[path = "client_adapter/topic/producer.rs"]
+pub(crate) mod producer;
+#[cfg(feature = "client-adapter")]
 mod security;
+#[cfg(feature = "client-adapter")]
 pub mod services;
+#[cfg(feature = "client-adapter")]
 mod static_topic;
+#[cfg(feature = "client-adapter")]
 mod topic;
 
+#[cfg(feature = "client-adapter")]
 pub use lifecycle::AdminBuilder;
+#[cfg(feature = "client-adapter")]
 pub use lifecycle::AdminGuard;
+#[cfg(feature = "client-adapter")]
 pub use lifecycle::AdminSession;
-pub use rocketmq_client_rust::ClientRuntime;
-pub use rocketmq_client_rust::ClientRuntimeConfig;
-pub use rocketmq_client_rust::TelemetryHandle;
+#[cfg(feature = "client-adapter")]
+pub use lifecycle::ClientRuntime;
+#[cfg(feature = "client-adapter")]
+pub use lifecycle::ClientRuntimeConfig;
+#[cfg(feature = "client-adapter")]
+pub use lifecycle::TelemetryHandle;

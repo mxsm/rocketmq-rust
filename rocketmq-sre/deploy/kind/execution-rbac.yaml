@@ -1,0 +1,89 @@
+# Copyright 2026 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0.
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sre-execution-agent-typed-workloads
+  namespace: rocketmq-system
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "deployments/scale", "statefulsets", "replicasets"]
+    verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["resourcequotas"]
+    verbs: ["get", "list"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sre-execution-agent-typed-workloads
+  namespace: rocketmq-system
+subjects:
+  - kind: ServiceAccount
+    name: sre-execution-agent
+    namespace: rocketmq-sre
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: sre-execution-agent-typed-workloads
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sre-execution-agent-credential-selector
+  namespace: rocketmq-sre
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["broker-admin-credential-selector"]
+    verbs: ["get", "update"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      - broker-admin-credential-v1
+      - broker-admin-credential-v2
+      - broker-admin-credential-invalid
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sre-execution-agent-credential-selector
+  namespace: rocketmq-sre
+subjects:
+  - kind: ServiceAccount
+    name: sre-execution-agent
+    namespace: rocketmq-sre
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: sre-execution-agent-credential-selector
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sre-execution-agent-node-capacity
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: sre-execution-agent-node-capacity
+subjects:
+  - kind: ServiceAccount
+    name: sre-execution-agent
+    namespace: rocketmq-sre
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: sre-execution-agent-node-capacity

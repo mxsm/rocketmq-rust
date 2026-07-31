@@ -47,6 +47,7 @@ use super::types::UpdateTopicPermRequest;
 use super::types::UpdateTopicPermResult;
 use super::types::UpdateTopicRequest;
 use super::types::UpdateTopicResult;
+use crate::client_adapter::services::admin::AdminBuilder;
 use crate::client_adapter::services::resolver::BrokerAddressResolver;
 use crate::client_adapter::services::RocketMQResult;
 use crate::client_adapter::services::ToolsError;
@@ -199,6 +200,32 @@ impl TopicService {
     /// Create or update a topic through a complete core request lifecycle.
     pub async fn create_or_update_topic_by_request(request: UpdateTopicRequest) -> RocketMQResult<UpdateTopicResult> {
         let mut admin = request.admin_builder().build_and_start().await?;
+        let config = request.config().clone();
+        let target = request.target().clone();
+        let result = Self::create_or_update_topic(&mut admin, config.clone(), target.clone())
+            .await
+            .map(|_| UpdateTopicResult {
+                order_warning: config.order,
+                config,
+                target,
+            });
+        admin.shutdown().await;
+        result
+    }
+
+    /// Create or update a topic using the caller-owned client runtime and optional credentials.
+    ///
+    /// This is the application-facing lifecycle variant. It preserves the legacy request API while
+    /// allowing CLI and service hosts to keep runtime ownership explicit and attach the configured
+    /// admin authentication hook.
+    pub async fn create_or_update_topic_by_request_with_credentials(
+        request: UpdateTopicRequest,
+        credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
+    ) -> RocketMQResult<UpdateTopicResult> {
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime)
+            .build_and_start()
+            .await?;
         let config = request.config().clone();
         let target = request.target().clone();
         let result = Self::create_or_update_topic(&mut admin, config.clone(), target.clone())
@@ -739,8 +766,32 @@ impl TopicService {
     }
 }
 
+fn admin_builder_with_credentials(
+    builder: AdminBuilder,
+    credentials: Option<crate::core::security::AdminCredentials>,
+    client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
+) -> AdminBuilder {
+    let builder = builder.client_runtime(client_runtime);
+    match credentials {
+        Some(hook) => builder.credentials(hook),
+        None => builder,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use rocketmq_client_rust::ClientRuntime;
+    use rocketmq_client_rust::ClientRuntimeConfig;
+    use rocketmq_client_rust::TelemetryHandle;
+    use rocketmq_runtime::RuntimeConfig;
+    use rocketmq_runtime::RuntimeOwner;
+
+    use super::admin_builder_with_credentials;
+    use crate::client_adapter::services::admin::AdminBuilder;
+    use crate::core::security::AdminCredentials;
+
     #[test]
     fn test_topic_config_creation() {
         // Test topic config structure
@@ -753,5 +804,28 @@ mod tests {
             topic_sys_flag: None,
             order: false,
         };
+    }
+
+    #[test]
+    fn topic_admin_builder_injects_runtime_and_credentials() {
+        let runtime_owner = RuntimeOwner::new(RuntimeConfig {
+            thread_name: "topic-service-unit-test".to_string(),
+            ..Default::default()
+        })
+        .unwrap();
+        let client_runtime = ClientRuntime::try_new(
+            runtime_owner.root_context().child("topic-service-client"),
+            ClientRuntimeConfig::default(),
+            TelemetryHandle::noop(),
+        )
+        .unwrap();
+        let credentials = AdminCredentials::try_new("access-key", "secret-key", None).unwrap();
+
+        let builder =
+            admin_builder_with_credentials(AdminBuilder::new(), Some(credentials), Arc::clone(&client_runtime));
+        let debug = format!("{builder:?}");
+
+        assert!(debug.contains("client_runtime: true"));
+        assert!(debug.contains("rpc_hook: true"));
     }
 }

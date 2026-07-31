@@ -1,0 +1,62 @@
+{
+  "$defs": {
+    "EffectState": {
+      "description": "Durable Agent effect state.",
+      "enum": [
+        "prepared",
+        "dispatched",
+        "confirmed",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "ExecutionId": {
+      "description": "Stable identifier for a supervised execution.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ExecutionStepId": {
+      "description": "Stable identifier for an execution step.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Narrow Agent result without raw target responses.",
+  "properties": {
+    "completed_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "execution_id": {
+      "$ref": "#/$defs/ExecutionId"
+    },
+    "operation_id": {
+      "type": "string"
+    },
+    "outcome_code": {
+      "type": "string"
+    },
+    "sanitized_summary": {
+      "type": "string"
+    },
+    "state": {
+      "$ref": "#/$defs/EffectState"
+    },
+    "step_id": {
+      "$ref": "#/$defs/ExecutionStepId"
+    }
+  },
+  "required": [
+    "execution_id",
+    "step_id",
+    "state",
+    "operation_id",
+    "outcome_code",
+    "sanitized_summary",
+    "completed_at"
+  ],
+  "title": "AgentStepResult",
+  "type": "object"
+}

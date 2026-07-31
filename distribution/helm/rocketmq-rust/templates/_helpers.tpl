@@ -179,6 +179,16 @@ rocketmq.apache.org/release-secret-version: {{ .Values.releaseIdentity.secretVer
 rocketmq.apache.org/storage-generation: {{ .Values.releaseIdentity.storageGeneration | quote }}
 {{- end -}}
 
+{{/* Protected diagnostics are separate from the anonymous health listener and disabled by default. */}}
+{{- define "rocketmq.runtimeDiagnosticsEnv" -}}
+{{- if .Values.global.runtimeDiagnostics.enabled }}
+- {name: ROCKETMQ_RUNTIME_DIAGNOSTICS_BIND_ADDR, value: {{ .Values.global.runtimeDiagnostics.bindAddress | quote }}}
+- {name: ROCKETMQ_RUNTIME_DIAGNOSTICS_TOKEN_FILE, value: {{ .Values.global.runtimeDiagnostics.tokenFile | quote }}}
+- {name: ROCKETMQ_RUNTIME_DIAGNOSTICS_SAMPLE_INTERVAL_SECONDS, value: {{ .Values.global.runtimeDiagnostics.sampleIntervalSeconds | quote }}}
+- {name: ROCKETMQ_RUNTIME_DIAGNOSTICS_ALLOW_INSECURE_HTTP, value: {{ .Values.global.runtimeDiagnostics.allowInsecureHttp | quote }}}
+{{- end }}
+{{- end -}}
+
 {{- define "rocketmq.lifecycleProbes" -}}
 lifecycle:
   preStop:

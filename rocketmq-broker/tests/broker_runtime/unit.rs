@@ -380,6 +380,33 @@ fn build_broker_observability_config_maps_logging_bootstrap_defaults() {
 }
 
 #[test]
+fn broker_bootstrap_accepts_standard_otlp_environment_values() {
+    let mut config = build_broker_telemetry_bootstrap_config(&BrokerConfig::default());
+
+    let status = rocketmq_observability::apply_standard_otlp_environment_values(
+        &mut config,
+        Some(std::ffi::OsStr::new("http://collector:4317")),
+        Some(std::ffi::OsStr::new("grpc")),
+    )
+    .expect("valid standard OTLP environment should apply");
+
+    assert_eq!(status, rocketmq_observability::StandardOtlpEnvironmentStatus::Applied);
+    assert_eq!(config.observability.service_name, "rocketmq-broker");
+    assert_eq!(
+        config.observability.metrics.exporter,
+        rocketmq_observability::MetricsExporter::OtlpGrpc
+    );
+    assert_eq!(
+        config.observability.traces.exporter,
+        rocketmq_observability::TraceExporter::OtlpGrpc
+    );
+    assert_eq!(
+        config.observability.logs.exporter,
+        rocketmq_observability::LogsExporter::OtlpGrpc
+    );
+}
+
+#[test]
 fn build_auth_config_maps_signature_algorithm() {
     let broker_config = BrokerConfig {
         signature_algorithm: CheetahString::from_static_str("HmacSHA256"),
@@ -2376,7 +2403,16 @@ async fn bootstrap_broker_against_controller(
 }
 
 async fn shutdown_controller_cluster(controllers: &[Arc<TestControllerManager>]) {
-    let results = futures::future::join_all(controllers.iter().map(|controller| controller.shutdown())).await;
+    // The full llvm-cov workspace job runs hundreds of instrumented Broker tests
+    // concurrently. Keep the production 30-second Controller default unchanged,
+    // but give this synthetic three-node cluster enough time to drain under that
+    // test-only scheduler pressure.
+    let results = futures::future::join_all(
+        controllers
+            .iter()
+            .map(|controller| controller.shutdown_until(ShutdownDeadline::after(Duration::from_secs(60)))),
+    )
+    .await;
     for result in results {
         result.expect("shutdown controller manager");
     }
@@ -3384,7 +3420,7 @@ async fn phase5_subscription_group_admin_lifecycle_returns_decodable_bodies() {
             .subscription_group_manager()
             .subscription_group_table()
             .contains_key(&group),
-        "DeleteSubscriptionGroup should remove the stored group before auto-create lookup"
+        "DeleteSubscriptionGroup should remove the stored group"
     );
 
     let missing_header = GetSubscriptionGroupConfigRequestHeader {
@@ -3395,15 +3431,14 @@ async fn phase5_subscription_group_admin_lifecycle_returns_decodable_bodies() {
         RemotingCommand::create_request_command(RequestCode::GetSubscriptionGroupConfig, missing_header);
     missing_request.make_custom_header_to_net();
     let missing_response = process_broker_request(&mut processor, &mut missing_request).await;
-    assert_eq!(ResponseCode::from(missing_response.code()), ResponseCode::Success);
-    let auto_created_group = SubscriptionGroupConfig::decode(
-        missing_response
-            .body()
-            .expect("GetSubscriptionGroupConfig should auto-create and return a body")
-            .as_ref(),
-    )
-    .expect("auto-created subscription group response body should decode");
-    assert_eq!(auto_created_group.group_name(), &group);
+    assert_eq!(
+        ResponseCode::from(missing_response.code()),
+        ResponseCode::SubscriptionGroupNotExist
+    );
+    assert!(
+        missing_response.body().is_none(),
+        "GetSubscriptionGroupConfig must not recreate a missing group"
+    );
 
     let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
 }

@@ -1,0 +1,41 @@
+id: observability.logger_level_ttl.v1
+version: 1.0.0
+owner: messaging-observability
+supported_versions:
+  - family: rocketmq-sre.action-plan
+    major: 1
+    minor: 0
+required_capabilities:
+  - runtime.typed-logger-control
+config_schema:
+  type: object
+  additionalProperties: false
+parameter_schema:
+  type: object
+  additionalProperties: false
+  required: [component, logger, level, ttl_seconds]
+  properties:
+    component: { type: string, enum: [broker] }
+    logger: { type: string, maxLength: 128 }
+    level: { type: string, enum: [INFO, DEBUG] }
+    ttl_seconds: { type: integer, minimum: 60, maximum: 900 }
+status: active
+deprecation: null
+risk: r1
+execution_supported: true
+preconditions:
+  - logger_prefix_allowlisted
+  - payload_logger_forbidden
+max_impact: single_resource
+verification:
+  resource_conditions: [logger_level_applied, ttl_restore_scheduled]
+  technical_slis: [runtime_error_ratio]
+  stable_window_seconds: 30
+  max_wait_seconds: 120
+timeout_seconds: 120
+compensation:
+  mode: automatic
+  required_before_fields: [previous_level]
+  timeout_seconds: 60
+forbidden_fields: [message_body, security_logger, auth_logger, store_payload_logger]
+plan_only: false

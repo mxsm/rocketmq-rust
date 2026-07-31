@@ -147,8 +147,8 @@ impl UpdateTopicSubCommand {
 impl CommandExecute for UpdateTopicSubCommand {
     async fn execute(
         &self,
-        _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
-        _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> RocketMQResult<()> {
         let validation_result = TopicValidator::validate_topic(&self.topic);
         if !validation_result.valid() {
@@ -158,7 +158,12 @@ impl CommandExecute for UpdateTopicSubCommand {
             )));
         }
 
-        let result = TopicService::create_or_update_topic_by_request(self.request()?).await?;
+        let result = TopicService::create_or_update_topic_by_request_with_credentials(
+            self.request()?,
+            credentials,
+            client_runtime,
+        )
+        .await?;
         Self::print_result(result);
         Ok(())
     }

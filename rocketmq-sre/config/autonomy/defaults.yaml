@@ -1,0 +1,42 @@
+schema_version: rocketmq-sre.autonomy-defaults.v1
+default_mode: disabled
+minimums:
+  min_shadow_samples: 20
+  min_supervised_successes: 5
+  observation_window_days: 7
+  max_unresolved_unknown: 0
+  max_recent_rollbacks: 0
+safety:
+  minimum_evidence_freshness_seconds: 60
+  max_executions_per_hour: 2
+  cooldown_seconds: 900
+  max_concurrent_executions: 1
+  stable_window_seconds: 300
+  dynamic_decision_ttl_seconds: 30
+  autonomy_grant_ttl_seconds: 120
+  fail_closed_on_unknown: true
+  verification_ignores_kill_switch: true
+  compensation_ignores_kill_switch: true
+qualification:
+  shadow_key:
+    - tenant_id
+    - cluster_id
+    - action_id
+    - action_version
+    - policy_definition_version
+    - descriptor_digest
+    - diagnostic_pack_id
+    - diagnostic_pack_version
+    - primary_actual_model_identity_hash
+  autonomous_key:
+    - shadow_key
+    - critic_actual_model_identity_hash
+  require_human_outcome_for_shadow: true
+  require_critic_for_supervised_success: true
+  count_latest_reconciled_terminal_only: true
+recovery:
+  paused_targets:
+    - shadow
+    - supervised
+  direct_paused_to_autonomous: forbidden
+  model_can_change_mode: false

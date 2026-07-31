@@ -1,0 +1,71 @@
+{
+  "$defs": {
+    "ExecutionAction": {
+      "description": "Closed set of Phase 3 actions that may enter supervised planning.\n\nExecution remains gated by the exact descriptor's `plan_only` and\n`execution_supported` flags. Permanently destructive R3 and unknown actions\nare intentionally not representable.",
+      "enum": [
+        "observability.logger_level_ttl.v1",
+        "proxy.scale_out_one.v1",
+        "proxy.restart_one.v1",
+        "broker.config.patch_allowlisted.v1",
+        "topic.config.patch_allowlisted.v1",
+        "subscription_group.patch_allowlisted.v1",
+        "consumer.request_mode.patch_allowlisted.v1",
+        "consumer.offset.reset_bounded.v1",
+        "topic.queue.expand_only.v1",
+        "namesrv.config.patch_allowlisted.v1",
+        "controller.config.patch_allowlisted.v1",
+        "proxy.rollout_image_canary.v1",
+        "broker.restart_one.v1",
+        "static_topic.patch_non_remap.v1",
+        "tiered.cold_data_flow.patch_allowlisted.v1",
+        "store.readahead.patch_allowlisted.v1",
+        "security.credential_rotate_overlap.v1",
+        "telemetry.collector.restart_one.v1",
+        "consumer.offset.clone_or_reset_broad.v1",
+        "message.direct_consume.v1",
+        "message.dlq.resend.v1",
+        "timer.switch.v1",
+        "controller.elect.v1",
+        "static_topic.remap.v1",
+        "broker.container.add_remove.v1"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Bounded service capabilities used by readiness and deployment smoke tests.",
+  "properties": {
+    "arbitrary_json_patch_supported": {
+      "type": "boolean"
+    },
+    "durable_fencing": {
+      "type": "boolean"
+    },
+    "raw_admin_request_supported": {
+      "type": "boolean"
+    },
+    "registered_actions": {
+      "items": {
+        "$ref": "#/$defs/ExecutionAction"
+      },
+      "type": "array"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "shell_supported": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "schema_version",
+    "registered_actions",
+    "raw_admin_request_supported",
+    "arbitrary_json_patch_supported",
+    "shell_supported",
+    "durable_fencing"
+  ],
+  "title": "ExecutionAgentCapabilities",
+  "type": "object"
+}

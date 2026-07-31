@@ -1,0 +1,134 @@
+# Copyright 2026 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0.
+
+schema_version: rocketmq-sre.slo-config.v1
+algorithm_version: rocketmq-sre.health-score.v1
+recording_metric: rocketmq_sre_sli_burn_rate
+freshness_seconds: 180
+worker_interval_seconds: 60
+query_timeout_seconds: 15
+dimensions:
+  traffic: 15
+  consumer: 15
+  broker: 12
+  store: 15
+  ha_controller: 13
+  routing_proxy: 10
+  security: 10
+  platform: 10
+score_caps:
+  partial: 80
+  missing: 60
+windows:
+  - id: fast
+    short_window_seconds: 300
+    long_window_seconds: 3600
+    threshold: 14.4
+    severity: critical
+  - id: medium
+    short_window_seconds: 1800
+    long_window_seconds: 21600
+    threshold: 6.0
+    severity: critical
+  - id: slow
+    short_window_seconds: 21600
+    long_window_seconds: 259200
+    threshold: 1.0
+    severity: warning
+operational_context:
+  maintenance_environments:
+    - maintenance
+  fault_drill_environments:
+    - fault-drill
+    - chaos
+slis:
+  - id: delivery_ratio
+    display_name: Delivery ratio
+    dimension: traffic
+    objective: 0.999
+    weight: 60
+  - id: send_p99
+    display_name: Send P99 latency
+    dimension: traffic
+    objective: 0.99
+    weight: 40
+  - id: consumer_backlog
+    display_name: Consumer backlog
+    dimension: consumer
+    objective: 0.99
+    weight: 30
+  - id: retry_backlog
+    display_name: Retry backlog
+    dimension: consumer
+    objective: 0.99
+    weight: 15
+  - id: dlq_backlog
+    display_name: DLQ growth
+    dimension: consumer
+    objective: 0.999
+    weight: 15
+  - id: pop_backlog
+    display_name: POP revive backlog
+    dimension: consumer
+    objective: 0.99
+    weight: 20
+  - id: timer_backlog
+    display_name: Timer backlog
+    dimension: consumer
+    objective: 0.99
+    weight: 20
+  - id: broker_runtime
+    display_name: Broker runtime availability
+    dimension: broker
+    objective: 0.999
+    weight: 100
+  - id: flush_dispatch
+    display_name: Flush and dispatch pressure
+    dimension: store
+    objective: 0.99
+    weight: 55
+  - id: disk_capacity
+    display_name: Store disk capacity
+    dimension: store
+    objective: 0.99
+    weight: 45
+  - id: broker_ha
+    display_name: Broker HA replication
+    dimension: ha_controller
+    objective: 0.999
+    weight: 50
+  - id: controller_quorum
+    display_name: Controller quorum
+    dimension: ha_controller
+    objective: 0.999
+    weight: 50
+  - id: route_freshness
+    display_name: NameServer route freshness
+    dimension: routing_proxy
+    objective: 0.999
+    weight: 50
+  - id: proxy_connection
+    display_name: Proxy and connection health
+    dimension: routing_proxy
+    objective: 0.99
+    weight: 50
+  - id: certificate_expiry
+    display_name: Certificate validity
+    dimension: security
+    objective: 0.999
+    weight: 50
+  - id: auth_success
+    display_name: Authentication success
+    dimension: security
+    objective: 0.999
+    weight: 50
+  - id: runtime_saturation
+    display_name: Runtime saturation
+    dimension: platform
+    objective: 0.99
+    weight: 50
+  - id: telemetry_freshness
+    display_name: Telemetry freshness
+    dimension: platform
+    objective: 0.99
+    weight: 50

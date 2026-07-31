@@ -417,6 +417,9 @@ impl DefaultAuthorizationContextBuilder {
             | RequestCode::RegisterTopicInNamesrv
             | RequestCode::DeleteTopicInNamesrv
             | RequestCode::UpdateBrokerConfig
+            | RequestCode::UpdateBrokerConfigCas
+            | RequestCode::BeginProxyDrain
+            | RequestCode::CancelProxyDrain
             | RequestCode::PutKvConfig
             | RequestCode::DeleteKvConfig
             | RequestCode::UpdateNamesrvConfig
@@ -449,6 +452,7 @@ impl DefaultAuthorizationContextBuilder {
             | RequestCode::GetKvlistByNamespace
             | RequestCode::QueryDataVersion
             | RequestCode::GetBrokerRuntimeInfo
+            | RequestCode::GetProxyDrainState
             | RequestCode::ViewBrokerStatsData
             | RequestCode::ExportRocksdbConfigToJson
             | RequestCode::ControllerGetReplicaInfo
@@ -904,5 +908,31 @@ mod tests {
             cluster_contexts[0].rpc_code(),
             Some(RequestCode::AuthCreateUser.to_i32().to_string().as_str())
         );
+    }
+
+    #[test]
+    fn supervised_config_and_proxy_drain_codes_require_cluster_permissions() {
+        let builder = DefaultAuthorizationContextBuilder::new(AuthConfig {
+            cluster_name: CheetahString::from_static_str("DefaultCluster"),
+            ..AuthConfig::default()
+        });
+
+        for code in [
+            RequestCode::UpdateBrokerConfigCas,
+            RequestCode::BeginProxyDrain,
+            RequestCode::CancelProxyDrain,
+        ] {
+            let command = command_with_fields(code, &[("AccessKey", "rocketmq")]);
+            let contexts = builder.build_from_remoting(&(), &command).unwrap();
+            assert_eq!(contexts.len(), 1);
+            assert_eq!(contexts[0].resource_key(), Some("Cluster:DefaultCluster".to_string()));
+            assert_eq!(contexts[0].actions(), &[Action::Update]);
+        }
+
+        let query = command_with_fields(RequestCode::GetProxyDrainState, &[("AccessKey", "rocketmq")]);
+        let contexts = builder.build_from_remoting(&(), &query).unwrap();
+        assert_eq!(contexts.len(), 1);
+        assert_eq!(contexts[0].resource_key(), Some("Cluster:DefaultCluster".to_string()));
+        assert_eq!(contexts[0].actions(), &[Action::Get]);
     }
 }

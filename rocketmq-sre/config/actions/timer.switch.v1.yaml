@@ -1,0 +1,42 @@
+id: timer.switch.v1
+version: 1.0.0
+owner: messaging-platform
+supported_versions:
+  - family: rocketmq-sre.action-plan
+    major: 1
+    minor: 0
+required_capabilities:
+  - planning.timer-impact
+config_schema:
+  type: object
+  additionalProperties: false
+parameter_schema:
+  type: object
+  additionalProperties: false
+  required: [broker, expected_state, target_state, pending_timer_count]
+  properties:
+    broker: { type: string, maxLength: 128 }
+    expected_state: { type: string, enum: [enabled, disabled] }
+    target_state: { type: string, enum: [enabled, disabled] }
+    pending_timer_count: { type: integer, minimum: 0 }
+status: active
+deprecation: null
+risk: r2
+execution_supported: false
+preconditions:
+  - timer_backlog_impact_reviewed
+  - target_state_differs
+  - manual_runbook_owner_assigned
+max_impact: single_resource
+verification:
+  resource_conditions: [manual_timer_state_recorded]
+  technical_slis: [timer_backlog, timer_delivery_latency]
+  stable_window_seconds: 300
+  max_wait_seconds: 1800
+timeout_seconds: 1800
+compensation:
+  mode: manual_takeover
+  required_before_fields: [expected_state, pending_timer_count]
+  timeout_seconds: 600
+forbidden_fields: [delete_timer_data, truncate, auto_execute, raw_request_code]
+plan_only: true

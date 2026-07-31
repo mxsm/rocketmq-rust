@@ -14,10 +14,30 @@
 
 pub use crate::semantic::metrics::NAMESRV_ACTIVE_BROKERS;
 pub use crate::semantic::metrics::NAMESRV_BROKER_REGISTRATIONS;
+pub use crate::semantic::metrics::NAMESRV_ROUTE_ERRORS_TOTAL;
+pub use crate::semantic::metrics::NAMESRV_ROUTE_FRESHNESS;
 pub use crate::semantic::metrics::NAMESRV_ROUTE_REQUEST_LATENCY;
 pub use crate::semantic::metrics::NAMESRV_ROUTE_REQUEST_TOTAL;
 
 use std::time::Duration;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NameServerRouteErrorKind {
+    NotFound,
+    Rejected,
+    Internal,
+}
+
+#[cfg(feature = "otel-metrics")]
+impl NameServerRouteErrorKind {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::NotFound => "not_found",
+            Self::Rejected => "rejected",
+            Self::Internal => "internal",
+        }
+    }
+}
 
 #[inline]
 #[cfg(feature = "otel-metrics")]
@@ -59,6 +79,12 @@ impl NameServerMetrics {
 
     #[inline]
     pub fn record_active_broker_count(&self, _active_brokers: usize) {}
+
+    #[inline]
+    pub fn record_route_error(&self, _kind: NameServerRouteErrorKind) {}
+
+    #[inline]
+    pub fn record_route_freshness(&self, _freshness_ms: u64) {}
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -75,6 +101,8 @@ struct NameServerMetricInstruments {
     route_request_latency: opentelemetry::metrics::Histogram<u64>,
     broker_registrations: opentelemetry::metrics::Counter<u64>,
     active_brokers: opentelemetry::metrics::Gauge<u64>,
+    route_errors_total: opentelemetry::metrics::Counter<u64>,
+    route_freshness: opentelemetry::metrics::Histogram<u64>,
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -154,6 +182,28 @@ impl NameServerMetrics {
     pub fn record_active_broker_count(&self, active_brokers: usize) {
         self.record_active_brokers(active_brokers as u64, &[]);
     }
+
+    pub fn record_route_error(&self, kind: NameServerRouteErrorKind) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.record_route_errors_total(
+                    1,
+                    &[opentelemetry::KeyValue::new(
+                        crate::semantic::labels::RESULT,
+                        kind.as_str(),
+                    )],
+                );
+            }
+        }
+    }
+
+    pub fn record_route_freshness(&self, freshness_ms: u64) {
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.record_route_freshness(freshness_ms, &[]);
+            }
+        }
+    }
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -182,13 +232,35 @@ impl NameServerMetricInstruments {
             .with_description("Number of active brokers known by NameServer")
             .with_unit("{broker}")
             .build();
+        let route_errors_total = meter
+            .u64_counter(NAMESRV_ROUTE_ERRORS_TOTAL)
+            .with_description("NameServer route lookup errors grouped by bounded result")
+            .with_unit("{error}")
+            .build();
+        let route_freshness = meter
+            .u64_histogram(NAMESRV_ROUTE_FRESHNESS)
+            .with_description("Age of the oldest live broker entry used by a route lookup")
+            .with_unit("ms")
+            .build();
 
         Self {
             route_request_total,
             route_request_latency,
             broker_registrations,
             active_brokers,
+            route_errors_total,
+            route_freshness,
         }
+    }
+
+    #[inline]
+    pub fn record_route_errors_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
+        self.route_errors_total.add(count, attributes);
+    }
+
+    #[inline]
+    pub fn record_route_freshness(&self, freshness_ms: u64, attributes: &[opentelemetry::KeyValue]) {
+        self.route_freshness.record(freshness_ms, attributes);
     }
 }
 
@@ -210,6 +282,8 @@ mod tests {
         metrics.record_route_request_latency(3, &attrs);
         metrics.record_broker_registrations(1, &attrs);
         metrics.record_active_brokers(2, &attrs);
+        metrics.record_route_error(NameServerRouteErrorKind::NotFound);
+        metrics.record_route_freshness(25);
     }
 
     #[test]
@@ -218,5 +292,7 @@ mod tests {
         metrics.record_route_request(Duration::from_millis(1));
         metrics.record_broker_registration(2);
         metrics.record_active_broker_count(2);
+        metrics.record_route_error(NameServerRouteErrorKind::NotFound);
+        metrics.record_route_freshness(25);
     }
 }

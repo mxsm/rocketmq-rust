@@ -1,0 +1,45 @@
+{
+  "$defs": {
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "LeaseEpoch": {
+      "description": "Monotonically increasing cluster fencing epoch.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Minimal positive introspection result.",
+  "properties": {
+    "cluster_id": {
+      "$ref": "#/$defs/ClusterId"
+    },
+    "epoch": {
+      "$ref": "#/$defs/LeaseEpoch"
+    },
+    "expires_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "valid": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "schema_version",
+    "valid",
+    "cluster_id",
+    "epoch",
+    "expires_at"
+  ],
+  "title": "GrantVerification",
+  "type": "object"
+}

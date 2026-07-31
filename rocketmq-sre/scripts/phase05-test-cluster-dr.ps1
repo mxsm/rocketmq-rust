@@ -1,0 +1,438 @@
+# Copyright 2026 The RocketMQ Rust Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+[CmdletBinding()]
+param(
+    [string]$Kubeconfig = 'D:\BuildCache\rocketmq-sre-temp\kind\phase00-kubeconfig',
+    [string]$ExpectedContext = 'kubernetes-admin@rocketmq-sre-phase00',
+    [int]$PostgresPort = 15432,
+    [string]$CargoTargetDir = 'D:\BuildCache\rocketmq-sre-target',
+    [string]$CargoHome = 'D:\BuildCache\rocketmq-sre-cargo-home',
+    [string]$TemporaryRoot = 'D:\BuildCache\rocketmq-sre-temp',
+    [string]$EvidenceOutput = 'D:\BuildCache\rocketmq-sre-temp\phase05-test-cluster-dr.json'
+)
+
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+$scriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
+$sreRoot = [IO.Path]::GetFullPath((Join-Path $scriptDirectory '..'))
+$manifestPath = Join-Path $sreRoot 'Cargo.toml'
+$probeManifest = Join-Path $sreRoot 'deploy\kind\phase03-proxy-restart-probe-job.yaml'
+$probeJob = 'rocketmq-sre-phase03-proxy-restart-probe'
+$probeMessageCount = 10
+$rocketmqNamespace = 'rocketmq-system'
+$sreNamespace = 'rocketmq-sre'
+$brokerPod = 'rocketmq-broker-0'
+$brokerPvc = 'data-rocketmq-broker-0'
+$runtimeDirectory = Join-Path $TemporaryRoot "phase05-dr-$([Guid]::NewGuid().ToString('N').Substring(0, 12))"
+$portForwardOutput = Join-Path $runtimeDirectory 'postgres-port-forward.stdout.log'
+$portForwardError = Join-Path $runtimeDirectory 'postgres-port-forward.stderr.log'
+$portForward = $null
+
+function Invoke-Native {
+    param(
+        [Parameter(Mandatory = $true)][string]$Command,
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$Description
+    )
+
+    & $Command @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Description failed with exit code $LASTEXITCODE."
+    }
+}
+
+function Assert-DataPath([string]$Path, [string]$Description) {
+    $fullPath = [IO.Path]::GetFullPath($Path)
+    $root = [IO.Path]::GetPathRoot($fullPath)
+    if (
+        -not $root.Equals('D:\', [StringComparison]::OrdinalIgnoreCase) -and
+        -not $root.Equals('F:\', [StringComparison]::OrdinalIgnoreCase)
+    ) {
+        throw "$Description must use the D or F drive."
+    }
+}
+
+function Invoke-BoundedProbe([string]$Phase, [int]$MaxAttempts = 1) {
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        & kubectl -n $rocketmqNamespace delete job $probeJob --ignore-not-found=true --wait=true | Out-Host
+        if ($LASTEXITCODE -ne 0) {
+            throw "Unable to clear the prior bounded probe before '$Phase'."
+        }
+        Invoke-Native kubectl @(
+            'apply', '-f', $probeManifest
+        ) "$Phase bounded probe creation" | Out-Host
+        & kubectl -n $rocketmqNamespace wait `
+            --for=condition=complete `
+            --timeout=190s `
+            "job/$probeJob" | Out-Host
+        $waitExitCode = $LASTEXITCODE
+        $probeOutput = & kubectl -n $rocketmqNamespace logs "job/$probeJob" -c bounded-probe 2>$null
+        $logExitCode = $LASTEXITCODE
+        $evidenceLine = $probeOutput |
+            Where-Object { $_ -match '"sent_messages":10' } |
+            Select-Object -Last 1
+        if (
+            $waitExitCode -eq 0 -and
+            $logExitCode -eq 0 -and
+            -not [string]::IsNullOrWhiteSpace($evidenceLine) -and
+            $evidenceLine -match '"received_messages":10' -and
+            $evidenceLine -match '"acknowledged_messages":10' -and
+            $evidenceLine -match '"status":"succeeded"'
+        ) {
+            return ($evidenceLine | ConvertFrom-Json)
+        }
+        $probeOutput | Out-Host
+        if ($attempt -lt $MaxAttempts) {
+            Write-Warning "The '$Phase' bounded probe attempt $attempt did not converge; retrying once."
+            Start-Sleep -Seconds 10
+        }
+    }
+    throw "The '$Phase' RocketMQ bounded probe did not complete 10/10/10 after $MaxAttempts attempt(s)."
+}
+
+function Invoke-HistoryProbe(
+    [ValidateSet('send', 'consume')][string]$Command,
+    [string]$RunId
+) {
+    $manifest = Get-Content -Raw -LiteralPath $probeManifest
+    $rendered = $manifest.Replace(
+        'args: ["run", "send-consume-ack"]',
+        "args: [`"$Command`"]"
+    ).Replace(
+        'value: "00000000-0000-0000-0000-000000000000"',
+        "value: `"$RunId`""
+    )
+    if ($rendered -eq $manifest) {
+        throw "Unable to render the '$Command' history probe fixture."
+    }
+    $renderedPath = Join-Path $runtimeDirectory "history-$Command-probe.yaml"
+    [IO.File]::WriteAllText(
+        $renderedPath,
+        $rendered,
+        [Text.UTF8Encoding]::new($false)
+    )
+
+    & kubectl -n $rocketmqNamespace delete job $probeJob --ignore-not-found=true --wait=true | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to clear the prior bounded probe before history '$Command'."
+    }
+    Invoke-Native kubectl @(
+        'apply', '-f', $renderedPath
+    ) "history $Command probe creation" | Out-Host
+    & kubectl -n $rocketmqNamespace wait `
+        --for=condition=complete `
+        --timeout=190s `
+        "job/$probeJob" | Out-Host
+    $waitExitCode = $LASTEXITCODE
+    $probeOutput = @(& kubectl -n $rocketmqNamespace logs "job/$probeJob" -c bounded-probe 2>$null)
+    $logExitCode = $LASTEXITCODE
+    $operationPattern = if ($Command -eq 'send') {
+        '^sent=(?<count>\d+)\s'
+    }
+    else {
+        '^consumed=(?<count>\d+)\s'
+    }
+    $operationLine = $probeOutput |
+        Where-Object { $_ -match $operationPattern } |
+        Select-Object -Last 1
+    $resultLine = $probeOutput |
+        Where-Object { $_ -match "^probe_result command=$Command cleanup_partial=false$" } |
+        Select-Object -Last 1
+    $observed = 0
+    if (-not [string]::IsNullOrWhiteSpace($operationLine) -and $operationLine -match $operationPattern) {
+        $observed = [int]$Matches.count
+    }
+    if (
+        $waitExitCode -ne 0 -or
+        $logExitCode -ne 0 -or
+        [string]::IsNullOrWhiteSpace($resultLine) -or
+        $observed -ne $probeMessageCount
+    ) {
+        $probeOutput | Out-Host
+        throw "The history '$Command' probe did not complete exactly $probeMessageCount messages."
+    }
+    return $observed
+}
+
+function Get-BrokerPersistence {
+    $pvcJson = @(& kubectl -n $rocketmqNamespace get pvc $brokerPvc -o json 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $pvcJson.Count -eq 0) {
+        throw "The Broker PVC '$brokerPvc' is required before DR fault injection."
+    }
+    $pvc = ($pvcJson -join "`n") | ConvertFrom-Json
+    if ($pvc.status.phase -ne 'Bound' -or [string]::IsNullOrWhiteSpace($pvc.spec.volumeName)) {
+        throw "The Broker PVC '$brokerPvc' is not Bound."
+    }
+    $pvJson = @(& kubectl get pv $pvc.spec.volumeName -o json 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $pvJson.Count -eq 0) {
+        throw "The Broker PV '$($pvc.spec.volumeName)' is unavailable."
+    }
+    $pv = ($pvJson -join "`n") | ConvertFrom-Json
+    return [pscustomobject]@{
+        PvcUid = [string]$pvc.metadata.uid
+        PvName = [string]$pvc.spec.volumeName
+        PvUid = [string]$pv.metadata.uid
+        StorageClass = [string]$pvc.spec.storageClassName
+        Capacity = [string]$pvc.status.capacity.storage
+        ReclaimPolicy = [string]$pv.spec.persistentVolumeReclaimPolicy
+    }
+}
+
+function Wait-BrokerReplacement([string]$PreviousUid) {
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds(180)
+    while ([DateTimeOffset]::UtcNow -lt $deadline) {
+        $podJson = & kubectl -n $rocketmqNamespace get pod $brokerPod -o json 2>$null
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace(($podJson -join ''))) {
+            $pod = ($podJson -join "`n") | ConvertFrom-Json
+            $ready = $pod.status.conditions |
+                Where-Object { $_.type -eq 'Ready' } |
+                Select-Object -First 1
+            if ($pod.metadata.uid -ne $PreviousUid -and $ready.status -eq 'True') {
+                return $pod.metadata.uid
+            }
+        }
+        Start-Sleep -Seconds 2
+    }
+    throw 'The replacement RocketMQ Broker pod did not become Ready within 180 seconds.'
+}
+
+function Wait-LocalPort([int]$Port) {
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
+    while ([DateTimeOffset]::UtcNow -lt $deadline) {
+        if ($null -ne $portForward -and $portForward.HasExited) {
+            $errorText = if (Test-Path -LiteralPath $portForwardError) {
+                (Get-Content -Raw -LiteralPath $portForwardError).Trim()
+            }
+            else {
+                'no stderr was captured'
+            }
+            throw "PostgreSQL port-forward exited early: $errorText"
+        }
+        $client = [Net.Sockets.TcpClient]::new()
+        try {
+            $client.Connect('127.0.0.1', $Port)
+            return
+        }
+        catch {
+            Start-Sleep -Milliseconds 500
+        }
+        finally {
+            $client.Dispose()
+        }
+    }
+    throw 'Kind PostgreSQL port-forward did not become reachable within 30 seconds.'
+}
+
+foreach ($path in @(
+    @{ Value = $Kubeconfig; Description = 'Kubernetes test kubeconfig' },
+    @{ Value = $CargoTargetDir; Description = 'Cargo target directory' },
+    @{ Value = $CargoHome; Description = 'Cargo home' },
+    @{ Value = $TemporaryRoot; Description = 'temporary directory' },
+    @{ Value = $EvidenceOutput; Description = 'DR evidence output' }
+)) {
+    Assert-DataPath $path.Value $path.Description
+}
+if ($PostgresPort -lt 1024 -or $PostgresPort -gt 65535) {
+    throw 'The local PostgreSQL port must be between 1024 and 65535.'
+}
+
+$savedEnvironment = @{}
+foreach ($name in @(
+    'CARGO_HOME',
+    'CARGO_TARGET_DIR',
+    'TEMP',
+    'TMP',
+    'KUBECONFIG',
+    'ROCKETMQ_SRE_TEST_DATABASE_URL'
+)) {
+    $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+}
+
+$brokerDisrupted = $false
+try {
+    New-Item -ItemType Directory -Force -Path $runtimeDirectory | Out-Null
+    $env:KUBECONFIG = [IO.Path]::GetFullPath($Kubeconfig)
+    $actualContext = (& kubectl config current-context).Trim()
+    if ($LASTEXITCODE -ne 0 -or $actualContext -ne $ExpectedContext) {
+        throw "Refusing DR fault injection for unexpected Kubernetes context '$actualContext'."
+    }
+    Invoke-Native kubectl @(
+        '-n', $rocketmqNamespace,
+        'rollout', 'status',
+        'statefulset/rocketmq-broker',
+        '--timeout=120s'
+    ) 'pre-exercise Broker readiness'
+    Invoke-Native kubectl @(
+        '-n', $sreNamespace,
+        'rollout', 'status',
+        'deployment/sre-control-plane',
+        '--timeout=120s'
+    ) 'pre-exercise Control Plane readiness'
+
+    $persistenceBefore = Get-BrokerPersistence
+    $preProbe = Invoke-BoundedProbe 'pre-recovery'
+    $historyRunId = [Guid]::NewGuid().ToString()
+    $historySent = Invoke-HistoryProbe 'send' $historyRunId
+    $previousUid = (& kubectl -n $rocketmqNamespace get pod $brokerPod -o jsonpath='{.metadata.uid}').Trim()
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($previousUid)) {
+        throw 'Unable to resolve the exact test Broker pod UID.'
+    }
+    $restartStartedAt = [DateTimeOffset]::UtcNow
+    Invoke-Native kubectl @(
+        '-n', $rocketmqNamespace,
+        'delete', 'pod', $brokerPod,
+        '--wait=false'
+    ) 'supervised test-cluster Broker loss'
+    $brokerDisrupted = $true
+    $replacementUid = Wait-BrokerReplacement $previousUid
+    Invoke-Native kubectl @(
+        '-n', $rocketmqNamespace,
+        'rollout', 'status',
+        'statefulset/rocketmq-broker',
+        '--timeout=180s'
+    ) 'test-cluster Broker deterministic rebuild'
+    $restartDurationSeconds = [int][Math]::Ceiling(
+        ([DateTimeOffset]::UtcNow - $restartStartedAt).TotalSeconds
+    )
+    $brokerDisrupted = $false
+    $persistenceAfter = Get-BrokerPersistence
+    if (
+        $persistenceAfter.PvcUid -ne $persistenceBefore.PvcUid -or
+        $persistenceAfter.PvUid -ne $persistenceBefore.PvUid -or
+        $persistenceAfter.PvName -ne $persistenceBefore.PvName
+    ) {
+        throw 'The Broker replacement did not retain the original PVC and PV.'
+    }
+    $historyRecovered = Invoke-HistoryProbe 'consume' $historyRunId
+    $historyRecoverySeconds = [int][Math]::Ceiling(
+        ([DateTimeOffset]::UtcNow - $restartStartedAt).TotalSeconds
+    )
+    $historyLost = $historySent - $historyRecovered
+    if ($historyLost -ne 0) {
+        throw "Broker message-history RPO failed: sent=$historySent recovered=$historyRecovered."
+    }
+    $postProbe = Invoke-BoundedProbe 'post-recovery' 2
+
+    $portForward = Start-Process `
+        -FilePath 'kubectl' `
+        -ArgumentList @(
+            '-n', $sreNamespace,
+            'port-forward',
+            'statefulset/postgres',
+            "${PostgresPort}:5432",
+            '--address', '127.0.0.1'
+        ) `
+        -PassThru `
+        -WindowStyle Hidden `
+        -RedirectStandardOutput $portForwardOutput `
+        -RedirectStandardError $portForwardError
+    Wait-LocalPort $PostgresPort
+
+    $targetDriveName = [IO.Path]::GetPathRoot(
+        [IO.Path]::GetFullPath($CargoTargetDir)
+    ).TrimEnd('\').TrimEnd(':')
+    $targetFreeGiB = (Get-PSDrive -Name $targetDriveName).Free / 1GB
+    Write-Host "${targetDriveName}_FREE_GIB=$([Math]::Round($targetFreeGiB, 2))"
+    if ($targetFreeGiB -lt 15) {
+        Invoke-Native cargo @(
+            'clean',
+            '--manifest-path', $manifestPath,
+            '--target-dir', $CargoTargetDir
+        ) 'low-space Cargo cleanup'
+    }
+    $env:CARGO_HOME = [IO.Path]::GetFullPath($CargoHome)
+    $env:CARGO_TARGET_DIR = [IO.Path]::GetFullPath($CargoTargetDir)
+    $env:TEMP = [IO.Path]::GetFullPath($TemporaryRoot)
+    $env:TMP = $env:TEMP
+    $env:ROCKETMQ_SRE_TEST_DATABASE_URL =
+        "postgres://rocketmq_sre:rocketmq_sre@127.0.0.1:$PostgresPort/rocketmq_sre"
+    Invoke-Native cargo @(
+        'test',
+        '--manifest-path', $manifestPath,
+        '--locked',
+        '-p', 'rocketmq-sre-control-plane',
+        'dr::repository_tests::postgres_dr_center_enforces_test_boundary_and_tracks_findings',
+        '--',
+        '--ignored',
+        '--exact'
+    ) 'DR Center supervised test-cluster record'
+
+    $controlPlaneReady = (& kubectl -n $sreNamespace get deployment sre-control-plane `
+        -o jsonpath='{.status.readyReplicas}').Trim()
+    if ($LASTEXITCODE -ne 0 -or [int]$controlPlaneReady -lt 1) {
+        throw 'The AI SRE Control Plane did not remain Ready after the test-cluster recovery.'
+    }
+    $evidence = [ordered]@{
+        schema_version = 'rocketmq-sre.phase05-test-cluster-dr.v1'
+        status = 'passed'
+        observed_at = [DateTimeOffset]::UtcNow.ToString('O')
+        kubernetes_context = $actualContext
+        namespace = $rocketmqNamespace
+        broker_statefulset = 'rocketmq-broker'
+        previous_pod_uid = $previousUid
+        replacement_pod_uid = $replacementUid
+        broker_rebuild_seconds = $restartDurationSeconds
+        persistent_storage = [ordered]@{
+            pvc_name = $brokerPvc
+            pvc_uid = $persistenceAfter.PvcUid
+            pv_name = $persistenceAfter.PvName
+            pv_uid = $persistenceAfter.PvUid
+            storage_class = $persistenceAfter.StorageClass
+            capacity = $persistenceAfter.Capacity
+            reclaim_policy = $persistenceAfter.ReclaimPolicy
+            retained_across_pod_replacement = $true
+        }
+        message_history = [ordered]@{
+            run_id = $historyRunId
+            expected_messages = $historySent
+            recovered_messages = $historyRecovered
+            lost_messages = $historyLost
+            rpo_messages = $historyLost
+            rto_seconds = $historyRecoverySeconds
+        }
+        pre_recovery_probe = [ordered]@{
+            sent = [int]$preProbe.content.value.sent_messages
+            received = [int]$preProbe.content.value.received_messages
+            acknowledged = [int]$preProbe.content.value.acknowledged_messages
+        }
+        post_recovery_probe = [ordered]@{
+            sent = [int]$postProbe.content.value.sent_messages
+            received = [int]$postProbe.content.value.received_messages
+            acknowledged = [int]$postProbe.content.value.acknowledged_messages
+        }
+        control_plane_ready_replicas = [int]$controlPlaneReady
+        dr_center_record_verified = $true
+        synthetic_topic_rebuilt = $false
+        synthetic_topic_persisted = $true
+        message_history_restore_claimed = $true
+        secrets_recorded = $false
+    }
+    $evidenceDirectory = Split-Path -Parent ([IO.Path]::GetFullPath($EvidenceOutput))
+    New-Item -ItemType Directory -Force -Path $evidenceDirectory | Out-Null
+    $evidence | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $EvidenceOutput -Encoding utf8
+    Write-Host "PHASE05_TEST_CLUSTER_DR_OK evidence=$EvidenceOutput"
+}
+finally {
+    if ($null -ne $portForward -and -not $portForward.HasExited) {
+        Stop-Process -Id $portForward.Id -Force
+        $portForward.WaitForExit()
+    }
+    if ($brokerDisrupted) {
+        & kubectl -n $rocketmqNamespace rollout status statefulset/rocketmq-broker --timeout=180s | Out-Host
+    }
+    foreach ($entry in $savedEnvironment.GetEnumerator()) {
+        [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process')
+    }
+}

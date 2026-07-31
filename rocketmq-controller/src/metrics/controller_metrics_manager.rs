@@ -108,6 +108,22 @@ impl ControllerMetricsManager {
     pub fn record_election_latency(&self, latency_ms: u64) {
         self.inner.record_election_latency(latency_ms);
     }
+
+    pub fn record_election_attempt(&self, latency_ms: u64) {
+        self.inner.record_election_attempt(latency_ms);
+    }
+
+    pub fn record_quorum_health(&self, healthy: bool) {
+        self.inner.record_quorum_health(healthy);
+    }
+
+    pub fn record_heartbeat_age(&self, age_ms: u64) {
+        self.inner.record_heartbeat_age(age_ms);
+    }
+
+    pub fn record_stale_brokers(&self, count: u64) {
+        self.inner.record_stale_brokers(count);
+    }
 }
 
 #[cfg(not(feature = "metrics"))]
@@ -140,6 +156,14 @@ impl ControllerMetricsManager {
     pub fn inc_election_total(&self, _result: super::ElectionResult) {}
 
     pub fn record_election_latency(&self, _latency_ms: u64) {}
+
+    pub fn record_election_attempt(&self, _latency_ms: u64) {}
+
+    pub fn record_quorum_health(&self, _healthy: bool) {}
+
+    pub fn record_heartbeat_age(&self, _age_ms: u64) {}
+
+    pub fn record_stale_brokers(&self, _count: u64) {}
 }
 
 #[cfg(test)]

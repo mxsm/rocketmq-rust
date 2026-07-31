@@ -1,0 +1,308 @@
+{
+  "$defs": {
+    "ActionRisk": {
+      "description": "Risk taxonomy reserved for future action planning and approval.",
+      "enum": [
+        "read",
+        "plan",
+        "r1",
+        "r2",
+        "r3"
+      ],
+      "type": "string"
+    },
+    "CompensationEdge": {
+      "additionalProperties": false,
+      "description": "Directed compensation relationship inside one runbook.",
+      "properties": {
+        "compensation_step": {
+          "$ref": "#/$defs/RunbookStepId"
+        },
+        "from_step": {
+          "$ref": "#/$defs/RunbookStepId"
+        },
+        "trigger": {
+          "$ref": "#/$defs/CompensationTrigger"
+        }
+      },
+      "required": [
+        "from_step",
+        "compensation_step",
+        "trigger"
+      ],
+      "type": "object"
+    },
+    "CompensationTrigger": {
+      "description": "Trigger for a compensation edge.",
+      "enum": [
+        "verification_failed",
+        "step_failed",
+        "cancel_after_intent"
+      ],
+      "type": "string"
+    },
+    "ExecutionAction": {
+      "description": "Closed set of Phase 3 actions that may enter supervised planning.\n\nExecution remains gated by the exact descriptor's `plan_only` and\n`execution_supported` flags. Permanently destructive R3 and unknown actions\nare intentionally not representable.",
+      "enum": [
+        "observability.logger_level_ttl.v1",
+        "proxy.scale_out_one.v1",
+        "proxy.restart_one.v1",
+        "broker.config.patch_allowlisted.v1",
+        "topic.config.patch_allowlisted.v1",
+        "subscription_group.patch_allowlisted.v1",
+        "consumer.request_mode.patch_allowlisted.v1",
+        "consumer.offset.reset_bounded.v1",
+        "topic.queue.expand_only.v1",
+        "namesrv.config.patch_allowlisted.v1",
+        "controller.config.patch_allowlisted.v1",
+        "proxy.rollout_image_canary.v1",
+        "broker.restart_one.v1",
+        "static_topic.patch_non_remap.v1",
+        "tiered.cold_data_flow.patch_allowlisted.v1",
+        "store.readahead.patch_allowlisted.v1",
+        "security.credential_rotate_overlap.v1",
+        "telemetry.collector.restart_one.v1",
+        "consumer.offset.clone_or_reset_broad.v1",
+        "message.direct_consume.v1",
+        "message.dlq.resend.v1",
+        "timer.switch.v1",
+        "controller.elect.v1",
+        "static_topic.remap.v1",
+        "broker.container.add_remove.v1"
+      ],
+      "type": "string"
+    },
+    "ManualGate": {
+      "additionalProperties": false,
+      "description": "Explicit human gate inside a composite runbook.",
+      "properties": {
+        "gate_id": {
+          "type": "string"
+        },
+        "instructions": {
+          "type": "string"
+        },
+        "required_role": {
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "gate_id",
+        "title",
+        "instructions",
+        "required_role",
+        "timeout_seconds"
+      ],
+      "type": "object"
+    },
+    "RunbookCondition": {
+      "additionalProperties": false,
+      "description": "Evidence or schedule fact required before a step may start.",
+      "properties": {
+        "expected": true,
+        "fact": {
+          "type": "string"
+        },
+        "operator": {
+          "$ref": "#/$defs/RunbookConditionOperator"
+        }
+      },
+      "required": [
+        "fact",
+        "operator"
+      ],
+      "type": "object"
+    },
+    "RunbookConditionOperator": {
+      "description": "Deterministic condition operator available to a runbook step.",
+      "enum": [
+        "equals",
+        "not_equals",
+        "greater_than",
+        "less_than",
+        "exists"
+      ],
+      "type": "string"
+    },
+    "RunbookId": {
+      "description": "Stable identifier for a versioned change runbook.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "RunbookStep": {
+      "additionalProperties": false,
+      "description": "One dependency-aware runbook step.",
+      "properties": {
+        "body": {
+          "$ref": "#/$defs/RunbookStepBody"
+        },
+        "condition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunbookCondition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "depends_on": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RunbookStepId"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "id": {
+          "$ref": "#/$defs/RunbookStepId"
+        },
+        "name": {
+          "type": "string"
+        },
+        "parallel_group": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sequence": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "sequence",
+        "name",
+        "body"
+      ],
+      "type": "object"
+    },
+    "RunbookStepBody": {
+      "description": "Closed body of one runbook step.",
+      "oneOf": [
+        {
+          "properties": {
+            "action": {
+              "$ref": "#/$defs/ExecutionAction"
+            },
+            "descriptor_version": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "action",
+              "type": "string"
+            },
+            "parameters": true,
+            "resource": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "action",
+            "descriptor_version",
+            "resource",
+            "parameters"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "gate": {
+              "$ref": "#/$defs/ManualGate"
+            },
+            "kind": {
+              "const": "manual_gate",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "gate"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RunbookStepId": {
+      "description": "Stable identifier for a typed runbook step.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Versioned composite change definition.",
+  "properties": {
+    "compensation_edges": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/CompensationEdge"
+      },
+      "type": "array"
+    },
+    "created_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "id": {
+      "$ref": "#/$defs/RunbookId"
+    },
+    "max_parallelism": {
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "name": {
+      "type": "string"
+    },
+    "owner": {
+      "type": "string"
+    },
+    "risk": {
+      "$ref": "#/$defs/ActionRisk"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "steps": {
+      "items": {
+        "$ref": "#/$defs/RunbookStep"
+      },
+      "type": "array"
+    },
+    "version": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "id",
+    "name",
+    "version",
+    "owner",
+    "description",
+    "risk",
+    "max_parallelism",
+    "steps",
+    "created_at"
+  ],
+  "title": "RunbookDefinition",
+  "type": "object"
+}

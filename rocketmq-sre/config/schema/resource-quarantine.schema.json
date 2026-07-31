@@ -1,0 +1,116 @@
+{
+  "$defs": {
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "EvidenceId": {
+      "description": "Stable identifier for an evidence snapshot.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ExecutionId": {
+      "description": "Stable identifier for a supervised execution.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ResourceQuarantineId": {
+      "description": "Stable identifier for a persistent resource quarantine.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Persistent fail-closed resource block independent of a temporary lock.",
+  "properties": {
+    "action_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "clear_evidence_ids": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/EvidenceId"
+      },
+      "type": "array"
+    },
+    "clear_reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cleared_at": {
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cleared_by": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cluster_id": {
+      "$ref": "#/$defs/ClusterId"
+    },
+    "created_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "created_by": {
+      "type": "string"
+    },
+    "evidence_ids": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/EvidenceId"
+      },
+      "type": "array"
+    },
+    "id": {
+      "$ref": "#/$defs/ResourceQuarantineId"
+    },
+    "reason_code": {
+      "type": "string"
+    },
+    "resource_key": {
+      "type": "string"
+    },
+    "source_execution_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExecutionId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    }
+  },
+  "required": [
+    "id",
+    "tenant_id",
+    "cluster_id",
+    "resource_key",
+    "reason_code",
+    "created_by",
+    "created_at"
+  ],
+  "title": "ResourceQuarantine",
+  "type": "object"
+}

@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: rocketmq-sre-connector
+  namespace: rocketmq-system
+spec:
+  selector:
+    app.kubernetes.io/instance: rocketmq
+    rocketmq.apache.org/service: mcp
+  ports:
+    - name: connector-http
+      port: 8091
+      targetPort: connector-http

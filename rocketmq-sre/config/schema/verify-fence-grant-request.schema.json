@@ -1,0 +1,163 @@
+{
+  "$defs": {
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ExecutionAction": {
+      "description": "Closed set of Phase 3 actions that may enter supervised planning.\n\nExecution remains gated by the exact descriptor's `plan_only` and\n`execution_supported` flags. Permanently destructive R3 and unknown actions\nare intentionally not representable.",
+      "enum": [
+        "observability.logger_level_ttl.v1",
+        "proxy.scale_out_one.v1",
+        "proxy.restart_one.v1",
+        "broker.config.patch_allowlisted.v1",
+        "topic.config.patch_allowlisted.v1",
+        "subscription_group.patch_allowlisted.v1",
+        "consumer.request_mode.patch_allowlisted.v1",
+        "consumer.offset.reset_bounded.v1",
+        "topic.queue.expand_only.v1",
+        "namesrv.config.patch_allowlisted.v1",
+        "controller.config.patch_allowlisted.v1",
+        "proxy.rollout_image_canary.v1",
+        "broker.restart_one.v1",
+        "static_topic.patch_non_remap.v1",
+        "tiered.cold_data_flow.patch_allowlisted.v1",
+        "store.readahead.patch_allowlisted.v1",
+        "security.credential_rotate_overlap.v1",
+        "telemetry.collector.restart_one.v1",
+        "consumer.offset.clone_or_reset_broad.v1",
+        "message.direct_consume.v1",
+        "message.dlq.resend.v1",
+        "timer.switch.v1",
+        "controller.elect.v1",
+        "static_topic.remap.v1",
+        "broker.container.add_remove.v1"
+      ],
+      "type": "string"
+    },
+    "ExecutionId": {
+      "description": "Stable identifier for a supervised execution.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ExecutionStepId": {
+      "description": "Stable identifier for an execution step.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "LeaseEpoch": {
+      "description": "Monotonically increasing cluster fencing epoch.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "LeaseFenceGrant": {
+      "additionalProperties": false,
+      "description": "Short-lived grant authorizing one active epoch to dispatch.",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/ExecutionAction"
+        },
+        "audience": {
+          "type": "string"
+        },
+        "cluster_id": {
+          "$ref": "#/$defs/ClusterId"
+        },
+        "compensation": {
+          "default": false,
+          "type": "boolean"
+        },
+        "epoch": {
+          "$ref": "#/$defs/LeaseEpoch"
+        },
+        "execution_id": {
+          "$ref": "#/$defs/ExecutionId"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "issued_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "lease_id": {
+          "$ref": "#/$defs/LeaseId"
+        },
+        "nonce": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "plan_step_id": {
+          "$ref": "#/$defs/PlanStepId"
+        },
+        "resource": {
+          "type": "string"
+        },
+        "signature": {
+          "type": "string"
+        },
+        "step_id": {
+          "$ref": "#/$defs/ExecutionStepId"
+        }
+      },
+      "required": [
+        "lease_id",
+        "owner",
+        "cluster_id",
+        "epoch",
+        "execution_id",
+        "step_id",
+        "plan_step_id",
+        "action",
+        "resource",
+        "audience",
+        "issued_at",
+        "expires_at",
+        "nonce",
+        "signature"
+      ],
+      "type": "object"
+    },
+    "LeaseId": {
+      "description": "Stable identifier for an executor lease generation.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "PlanStepId": {
+      "description": "Stable identifier for an immutable action plan step.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Agent-side introspection request for one short-lived dispatch grant.",
+  "properties": {
+    "grant": {
+      "$ref": "#/$defs/LeaseFenceGrant"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    }
+  },
+  "required": [
+    "schema_version",
+    "tenant_id",
+    "grant"
+  ],
+  "title": "VerifyFenceGrantRequest",
+  "type": "object"
+}

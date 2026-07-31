@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use rocketmq_model::common::constant::PermName;
+use rocketmq_model::common::mix_all::is_sys_consumer_group;
 use rocketmq_model::common::topic::TopicValidator;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
@@ -20,6 +21,8 @@ use rocketmq_protocol::protocol::body::subscription_group_list::SubscriptionGrou
 use rocketmq_protocol::protocol::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
 use rocketmq_protocol::protocol::header::get_subscription_group_config_request_header::GetSubscriptionGroupConfigRequestHeader;
 use rocketmq_protocol::protocol::header::update_group_forbidden_request_header::UpdateGroupForbiddenRequestHeader;
+use rocketmq_protocol::protocol::header::update_subscription_group_config_cas_request_header::UpdateSubscriptionGroupConfigCasRequestHeader;
+use rocketmq_protocol::protocol::header::update_subscription_group_config_cas_response_header::UpdateSubscriptionGroupConfigCasResponseHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::subscription::group_forbidden::GroupForbidden;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
@@ -32,6 +35,7 @@ use rocketmq_transport::ConnectionHandlerContext;
 use tracing::info;
 
 use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
+use crate::subscription::manager::subscription_group_manager::SubscriptionGroupConfigCasError;
 use crate::subscription::manager::subscription_group_manager::CHARACTER_MAX_LENGTH;
 
 pub(super) struct SubscriptionGroupHandler;
@@ -84,6 +88,166 @@ impl SubscriptionGroupHandler {
         Ok(Some(response))
     }
 
+    pub async fn update_subscription_group_config_cas<MS: MessageStore>(
+        &self,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
+        channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        _request_code: RequestCode,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let response = RemotingCommand::create_response_command().set_opaque(request.opaque());
+        let request_header =
+            match request.decode_command_custom_header::<UpdateSubscriptionGroupConfigCasRequestHeader>() {
+                Ok(header) => header,
+                Err(_) => {
+                    return Ok(Some(response.set_code(ResponseCode::InvalidParameter).set_remark(
+                        "group, expectedVersion, and a valid allowlisted patch are required",
+                    )));
+                }
+            };
+        info!(
+            "Broker receive version-checked Subscription Group patch for group={}, caller address={}",
+            request_header.group,
+            channel.remote_address()
+        );
+
+        if let Some(remark) = validate_group_name(request_header.group.as_str()) {
+            return Ok(Some(
+                response.set_code(ResponseCode::InvalidParameter).set_remark(remark),
+            ));
+        }
+        if is_sys_consumer_group(request_header.group.as_str()) {
+            return Ok(Some(response.set_code(ResponseCode::InvalidParameter).set_remark(
+                "system Subscription Group configuration is not eligible for supervised patching",
+            )));
+        }
+        if request_header.retry_max_times.is_none()
+            && request_header.retry_queue_nums.is_none()
+            && request_header.consume_timeout_minutes.is_none()
+        {
+            return Ok(Some(response.set_code(ResponseCode::InvalidParameter).set_remark(
+                "Subscription Group configuration patch must contain at least one allowlisted field",
+            )));
+        }
+
+        let retry_max_times = match request_header.retry_max_times {
+            Some(value) if (1..=16).contains(&value) => Some(value as u32),
+            Some(_) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::InvalidParameter)
+                        .set_remark("retryMaxTimes must be between 1 and 16"),
+                ));
+            }
+            None => None,
+        };
+        let retry_queue_nums = match request_header.retry_queue_nums {
+            Some(value) if (1..=8).contains(&value) => Some(value as u32),
+            Some(_) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::InvalidParameter)
+                        .set_remark("retryQueueNums must be between 1 and 8"),
+                ));
+            }
+            None => None,
+        };
+        let consume_timeout_minutes = match request_header.consume_timeout_minutes {
+            Some(value) if (1..=1_440).contains(&value) => Some(value as u32),
+            Some(_) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::InvalidParameter)
+                        .set_remark("consumeTimeoutMinutes must be between 1 and 1440"),
+                ));
+            }
+            None => None,
+        };
+
+        let update = match broker_runtime_inner
+            .subscription_group_manager()
+            .update_subscription_group_config_if_version(
+                &request_header.group,
+                request_header.expected_version,
+                retry_max_times,
+                retry_queue_nums,
+                consume_timeout_minutes,
+            ) {
+            Ok(update) => update,
+            Err(SubscriptionGroupConfigCasError::GroupNotFound) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::SubscriptionGroupNotExist)
+                        .set_remark("Subscription Group configuration does not exist on this Broker"),
+                ));
+            }
+            Err(SubscriptionGroupConfigCasError::VersionConflict {
+                expected_version,
+                actual_version,
+            }) => {
+                return Ok(Some(
+                    response
+                        .set_command_custom_header(UpdateSubscriptionGroupConfigCasResponseHeader {
+                            subscription_group_version: actual_version,
+                        })
+                        .set_code(ResponseCode::InvalidParameter)
+                        .set_remark(format!(
+                            "Subscription Group configuration version conflict: expected={expected_version}, \
+                             actual={actual_version}"
+                        )),
+                ));
+            }
+            Err(SubscriptionGroupConfigCasError::NoChange) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::InvalidParameter)
+                        .set_remark("Subscription Group configuration patch has no effect"),
+                ));
+            }
+            Err(SubscriptionGroupConfigCasError::ValueOutOfRange) => {
+                return Ok(Some(response.set_code(ResponseCode::InvalidParameter).set_remark(
+                    "Subscription Group configuration patch contains an out-of-range value",
+                )));
+            }
+            Err(SubscriptionGroupConfigCasError::VersionUnavailable) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::SystemError)
+                        .set_remark("Subscription Group configuration version is unavailable"),
+                ));
+            }
+            Err(SubscriptionGroupConfigCasError::VersionExhausted) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::SystemError)
+                        .set_remark("Subscription Group configuration version is exhausted"),
+                ));
+            }
+        };
+        let subscription_group_version = match u64::try_from(update.data_version.counter()) {
+            Ok(version) => version,
+            Err(_) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::SystemError)
+                        .set_remark("Subscription Group configuration version is unavailable"),
+                ));
+            }
+        };
+
+        Ok(Some(
+            response
+                .set_command_custom_header(UpdateSubscriptionGroupConfigCasResponseHeader {
+                    subscription_group_version,
+                })
+                .set_code(ResponseCode::Success)
+                .set_remark(format!(
+                    "Subscription Group configuration patch committed, version={subscription_group_version}"
+                )),
+        ))
+    }
+
     pub async fn get_subscription_group_config<MS: MessageStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
@@ -97,18 +261,37 @@ impl SubscriptionGroupHandler {
         let group = &request_header.group;
         let group_config = broker_runtime_inner
             .subscription_group_manager()
-            .find_subscription_group_config(group);
+            .select_subscription_group_config_with_version(group);
 
         match group_config {
-            Some(config) => {
+            Ok((config, subscription_group_version)) => {
                 response.set_body_mut_ref(config.encode()?);
+                response.set_command_custom_header_ref(UpdateSubscriptionGroupConfigCasResponseHeader {
+                    subscription_group_version,
+                });
                 Ok(Some(response.set_code(ResponseCode::Success)))
             }
-            None => Ok(Some(
+            Err(SubscriptionGroupConfigCasError::GroupNotFound) => Ok(Some(
                 response
                     .set_code(ResponseCode::SubscriptionGroupNotExist)
                     .set_remark(format!("No group in this broker. group: {}", group)),
             )),
+            Err(
+                SubscriptionGroupConfigCasError::VersionUnavailable | SubscriptionGroupConfigCasError::VersionExhausted,
+            ) => Ok(Some(
+                response
+                    .set_code(ResponseCode::SystemError)
+                    .set_remark("Subscription Group configuration version is unavailable"),
+            )),
+            Err(
+                SubscriptionGroupConfigCasError::VersionConflict { .. }
+                | SubscriptionGroupConfigCasError::ValueOutOfRange
+                | SubscriptionGroupConfigCasError::NoChange,
+            ) => {
+                Ok(Some(response.set_code(ResponseCode::SystemError).set_remark(
+                    "Subscription Group configuration snapshot is unavailable",
+                )))
+            }
         }
     }
 
@@ -478,6 +661,132 @@ mod tests {
             &CheetahString::from_static_str("topic-a"),
             PermName::INDEX_PERM_READ as i32,
         ));
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn subscription_group_cas_commits_once_rejects_stale_and_reports_version() {
+        let runtime = new_test_runtime("subscription-group-cas").await;
+        let mut admin = runtime.admin_runtime_for_test();
+        let handler = SubscriptionGroupHandler::new();
+        let group = CheetahString::from_static_str("sre-cas-group");
+        let mut initial = SubscriptionGroupConfig::new(group.clone());
+        initial.set_consume_enable(false);
+        initial.set_consume_broadcast_enable(false);
+        initial.set_group_sys_flag(17);
+        admin
+            .subscription_group_manager_mut()
+            .update_subscription_group_config(&mut initial);
+        let (_, initial_version) = admin
+            .subscription_group_manager()
+            .select_subscription_group_config_with_version(&group)
+            .expect("versioned Subscription Group should exist");
+
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::UpdateSubscriptionGroupConfigCas,
+            UpdateSubscriptionGroupConfigCasRequestHeader {
+                group: group.clone(),
+                expected_version: initial_version,
+                retry_max_times: Some(8),
+                retry_queue_nums: Some(4),
+                consume_timeout_minutes: Some(30),
+            },
+        );
+        request.make_custom_header_to_net();
+        let channel = create_test_channel().await;
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let response = handler
+            .update_subscription_group_config_cas(
+                &admin,
+                channel,
+                ctx,
+                RequestCode::UpdateSubscriptionGroupConfigCas,
+                &mut request,
+            )
+            .await
+            .expect("Subscription Group CAS should run")
+            .expect("Subscription Group CAS should return a response");
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        let response_header = response
+            .read_custom_header_ref::<UpdateSubscriptionGroupConfigCasResponseHeader>()
+            .expect("success response should carry the committed version");
+        assert_eq!(response_header.subscription_group_version, initial_version + 1);
+        let current = admin
+            .subscription_group_manager()
+            .find_subscription_group_config(&group)
+            .expect("Subscription Group should remain available");
+        assert_eq!(current.retry_max_times(), 8);
+        assert_eq!(current.retry_queue_nums(), 4);
+        assert_eq!(current.consume_timeout_minute(), 30);
+        assert!(!current.consume_enable());
+        assert!(!current.consume_broadcast_enable());
+        assert_eq!(current.group_sys_flag(), 17);
+
+        let mut stale_request = RemotingCommand::create_request_command(
+            RequestCode::UpdateSubscriptionGroupConfigCas,
+            UpdateSubscriptionGroupConfigCasRequestHeader {
+                group: group.clone(),
+                expected_version: initial_version,
+                retry_max_times: Some(7),
+                retry_queue_nums: None,
+                consume_timeout_minutes: None,
+            },
+        );
+        stale_request.make_custom_header_to_net();
+        let channel = create_test_channel().await;
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let stale_response = handler
+            .update_subscription_group_config_cas(
+                &admin,
+                channel,
+                ctx,
+                RequestCode::UpdateSubscriptionGroupConfigCas,
+                &mut stale_request,
+            )
+            .await
+            .expect("stale Subscription Group CAS should return normally")
+            .expect("stale Subscription Group CAS should return a response");
+        assert_eq!(
+            ResponseCode::from(stale_response.code()),
+            ResponseCode::InvalidParameter
+        );
+        assert_eq!(
+            stale_response
+                .read_custom_header_ref::<UpdateSubscriptionGroupConfigCasResponseHeader>()
+                .expect("conflict should carry current version")
+                .subscription_group_version,
+            initial_version + 1
+        );
+
+        let mut get_request = RemotingCommand::create_request_command(
+            RequestCode::GetSubscriptionGroupConfig,
+            GetSubscriptionGroupConfigRequestHeader {
+                group: group.clone(),
+                rpc_request_header: None,
+            },
+        );
+        get_request.make_custom_header_to_net();
+        let channel = create_test_channel().await;
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let get_response = handler
+            .get_subscription_group_config(
+                &admin,
+                channel,
+                ctx,
+                RequestCode::GetSubscriptionGroupConfig,
+                &mut get_request,
+            )
+            .await
+            .expect("get Subscription Group config should run")
+            .expect("get Subscription Group config should return a response");
+        assert_eq!(
+            get_response
+                .read_custom_header_ref::<UpdateSubscriptionGroupConfigCasResponseHeader>()
+                .expect("Subscription Group query should carry the current version")
+                .subscription_group_version,
+            initial_version + 1
+        );
 
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }

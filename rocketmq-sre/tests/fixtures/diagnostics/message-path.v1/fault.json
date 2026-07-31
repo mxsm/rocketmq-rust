@@ -1,0 +1,26 @@
+{
+  "pack": "message-path.v1",
+  "scenario": "fault",
+  "expected_status": "fault",
+  "expected_reason_codes": [
+    "MESSAGE_DELIVERY_STAGE_MISSING",
+    "MESSAGE_ACK_STAGE_MISSING",
+    "MESSAGE_TRANSACTION_STATUS_UNKNOWN"
+  ],
+  "evidence": [
+    {
+      "evidence_id": "00000000-0000-4000-8006-000000000102",
+      "source": "admin-query",
+      "resource": "message-metadata/id-hash-a",
+      "content": {
+        "message_id_hash": "sha256:id-a",
+        "key_hash": "sha256:key-a",
+        "trace_id_hash": "sha256:trace-a",
+        "queue_id": 2,
+        "queue_offset": 1024,
+        "stages": { "send": true, "route": true, "store": true, "deliver": false, "ack": false },
+        "transaction_status": "unknown"
+      }
+    }
+  ]
+}

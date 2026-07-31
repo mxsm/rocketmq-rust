@@ -1,0 +1,46 @@
+schema: rocketmq-sre.diagnostic-pack.v1
+id: producer-connectivity
+version: 1.0.0
+qualified_id: producer-connectivity.v1
+owner: rocketmq-sre
+components: [producer, nameserver, broker]
+output_schema: rocketmq-sre.diagnostic-result.v1
+required_evidence:
+  - key: producer
+    source: admin-query
+    resource_prefix: producer-connectivity/
+    fields:
+      - connected
+      - route_age_seconds
+      - send_error_rate_percent
+      - retry_rate_percent
+      - timeout_rate_percent
+      - queue_selection_failures
+      - backpressure
+      - client_version_supported
+optional_evidence:
+  - { key: topic-route, source: rocketmq-mcp, resource_prefix: topic-route/ }
+rules:
+  - { reason_code: PRODUCER_CONNECTION_LOST, when: "!connected", severity: critical }
+  - reason_code: PRODUCER_ROUTE_STALE
+    when: "route_age_seconds >= 300 || route_available == false"
+    severity: critical
+  - reason_code: PRODUCER_SEND_FAILURES
+    when: "send_error_rate_percent >= 5 || retry_rate_percent >= 10 || timeout_rate_percent >= 2"
+    severity: critical
+  - reason_code: PRODUCER_QUEUE_SELECTION_FAILED
+    when: "queue_selection_failures > 0"
+    severity: critical
+  - { reason_code: PRODUCER_BACKPRESSURE, when: "backpressure", severity: warning }
+  - reason_code: PRODUCER_CLIENT_VERSION_UNSUPPORTED
+    when: "!client_version_supported"
+    severity: warning
+  - { reason_code: PRODUCER_CONNECTIVITY_HEALTHY, when: "all fault rules are false", severity: info }
+  - { reason_code: PRODUCER_CONNECTIVITY_EVIDENCE_INCOMPLETE, when: "required fields are absent", severity: warning }
+missing_behavior: inconclusive
+confidence:
+  implementation: deterministic_engine
+  missing_required_cap: 49
+  unsupported_required_cap: 24
+follow_up:
+  - mcp:topic-route/{topic}

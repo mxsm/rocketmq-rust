@@ -14,12 +14,23 @@
 
 //! Broker capability contracts.
 
+use std::collections::BTreeMap;
+
+#[cfg(any(feature = "read-client-adapter", test))]
+use cheetah_string::CheetahString;
+#[cfg(any(feature = "read-client-adapter", test))]
+use rocketmq_protocol::protocol::body::kv_table::KVTable;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::core::error::required;
 use crate::core::AdminFuture;
 use crate::core::AdminResult;
+
+/// Stable schema version emitted by the read-only broker diagnostics query.
+pub const BROKER_DIAGNOSTICS_SCHEMA_VERSION: &str = "rocketmq.admin-broker-diagnostics.v1";
+/// Stable schema version emitted by the bounded Broker log-filter query.
+pub const BROKER_LOG_FILTER_STATE_SCHEMA_VERSION: &str = "rocketmq.admin-broker-log-filter-state.v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListBrokersRequest {
@@ -74,6 +85,308 @@ pub struct ProbeBrokerRuntimeResult {
     pub failures: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueryBrokerDiagnosticsRequest {
+    pub cluster: String,
+}
+
+impl QueryBrokerDiagnosticsRequest {
+    pub fn try_new(cluster: impl Into<String>) -> AdminResult<Self> {
+        Ok(Self {
+            cluster: required("cluster", cluster)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrokerDiagnosticsCoverage {
+    Available,
+    Partial,
+    Unsupported,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrokerReadinessDiagnostics {
+    pub ready: bool,
+    pub active: bool,
+    pub shutdown: bool,
+    pub registration_accepting: bool,
+    pub registration_configured: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrokerConfigSummary {
+    pub generation: u64,
+    pub broker_role: String,
+    pub store_type: String,
+    pub timer_wheel_enabled: bool,
+    pub transient_store_pool_enabled: bool,
+    pub tiered_store_configured: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncFlushDiagnostics {
+    pub queue_depth: u64,
+    pub timeout_total: u64,
+    pub oldest_wait_millis: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoreHealthDiagnostics {
+    pub writeable: bool,
+    pub last_flush_error: bool,
+    pub os_page_cache_busy: bool,
+    pub transient_store_pool_deficient: bool,
+    pub dispatch_behind_bytes: i64,
+    pub shutdown: bool,
+    pub ha_pending_request_count: u64,
+    pub ha_pending_oldest_wait_millis: u64,
+    pub sync_flush: SyncFlushDiagnostics,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecoveryDiagnostics {
+    pub available: bool,
+    pub total_duration_millis: Option<u64>,
+    pub phase_count: Option<u64>,
+    pub failed_phase_count: Option<u64>,
+    pub fallback_phase_count: Option<u64>,
+    pub fallback_reason_present: Option<bool>,
+    pub scanned_bytes: Option<u64>,
+    pub recovered_messages: Option<u64>,
+    pub invalid_messages: Option<u64>,
+    pub truncated_files: Option<u64>,
+    pub index_files_removed: Option<u64>,
+    pub index_files_rebuilt: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackgroundIndexRebuildDiagnostics {
+    pub state: String,
+    pub effective_enabled: bool,
+    pub gray_mode: bool,
+    pub current_safe_offset: i64,
+    pub target_offset: i64,
+    pub backlog_bytes: i64,
+    pub rebuilt_bytes: u64,
+    pub rebuilt_messages: u64,
+    pub failure_count: u64,
+    pub bytes_per_second: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RocksDbMaintenanceDiagnostics {
+    pub supported: bool,
+    pub maintenance_running: Option<bool>,
+    pub message_maintenance_running: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TieredDispatchDiagnostics {
+    pub configured: bool,
+    pub dispatch_ready: Option<bool>,
+    pub minimum_pinned_wal_segment: Option<u64>,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthSecurityDiagnostics {
+    pub supported: bool,
+    pub authentication_enabled: Option<bool>,
+    pub authorization_enabled: Option<bool>,
+    pub acl_file_watch_enabled: Option<bool>,
+    pub acl_generation: Option<u64>,
+    pub acl_reload_attempts: Option<u64>,
+    pub acl_reload_successes: Option<u64>,
+    pub acl_reload_failures: Option<u64>,
+    pub acl_reload_skipped: Option<u64>,
+    pub credential_rotation_supported: bool,
+}
+
+impl std::fmt::Debug for AuthSecurityDiagnostics {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AuthSecurityDiagnostics")
+            .field("supported", &self.supported)
+            .field("authentication_enabled", &self.authentication_enabled)
+            .field("authorization_enabled", &self.authorization_enabled)
+            .field("acl_file_watch_enabled", &self.acl_file_watch_enabled)
+            .field("acl_generation", &self.acl_generation)
+            .field("acl_reload_attempts", &self.acl_reload_attempts)
+            .field("acl_reload_successes", &self.acl_reload_successes)
+            .field("acl_reload_failures", &self.acl_reload_failures)
+            .field("acl_reload_skipped", &self.acl_reload_skipped)
+            .field("credential_rotation_supported", &"[REDACTED]")
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrokerDiagnostics {
+    pub broker_name: String,
+    pub broker_id: u64,
+    pub observed_at_millis: Option<u64>,
+    pub coverage: BrokerDiagnosticsCoverage,
+    pub readiness: Option<BrokerReadinessDiagnostics>,
+    pub config: Option<BrokerConfigSummary>,
+    pub store_health: Option<StoreHealthDiagnostics>,
+    pub recovery: Option<RecoveryDiagnostics>,
+    pub background_index_rebuild: Option<BackgroundIndexRebuildDiagnostics>,
+    pub rocksdb: RocksDbMaintenanceDiagnostics,
+    pub tiered: TieredDispatchDiagnostics,
+    pub auth: AuthSecurityDiagnostics,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueryBrokerDiagnosticsResult {
+    pub schema_version: String,
+    pub observed_at_millis: u64,
+    pub brokers: Vec<BrokerDiagnostics>,
+    pub unavailable_brokers: usize,
+    pub partial: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueryBrokerAllowlistedConfigRequest {
+    pub broker_addr: String,
+}
+
+impl QueryBrokerAllowlistedConfigRequest {
+    pub fn try_new(broker_addr: impl Into<String>) -> AdminResult<Self> {
+        Ok(Self {
+            broker_addr: required("broker_addr", broker_addr)?,
+        })
+    }
+}
+
+/// Fixed, non-sensitive Broker properties supported by supervised SRE changes.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrokerAllowlistedConfig {
+    pub generation: u64,
+    pub send_message_thread_pool_nums: Option<u32>,
+    pub pull_message_thread_pool_nums: Option<u32>,
+    pub flush_delay_offset_interval_ms: Option<u64>,
+    pub max_client_event_count: Option<i32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum BrokerLogLevel {
+    Info,
+    Debug,
+}
+
+impl BrokerLogLevel {
+    #[must_use]
+    pub const fn as_uppercase(self) -> &'static str {
+        match self {
+            Self::Info => "INFO",
+            Self::Debug => "DEBUG",
+        }
+    }
+
+    #[must_use]
+    pub const fn as_filter_value(self) -> &'static str {
+        match self {
+            Self::Info => "info",
+            Self::Debug => "debug",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueryBrokerLogFilterStateRequest {
+    pub broker_addr: String,
+    pub logger: String,
+}
+
+impl QueryBrokerLogFilterStateRequest {
+    /// Creates a query for one allowlisted Broker logger target.
+    ///
+    /// # Errors
+    ///
+    /// Rejects blank addresses and logger targets outside
+    /// `rocketmq_broker::`.
+    pub fn try_new(broker_addr: impl Into<String>, logger: impl Into<String>) -> AdminResult<Self> {
+        Ok(Self {
+            broker_addr: required("broker_addr", broker_addr)?,
+            logger: broker_logger(logger)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrokerLogFilterState {
+    pub schema_version: String,
+    pub supported: bool,
+    pub logger: String,
+    pub level: Option<BrokerLogLevel>,
+    pub active_operation_id: Option<String>,
+    pub last_completed_operation_id: Option<String>,
+    pub expires_at_millis: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetBrokerLogFilterTtlRequest {
+    pub broker_addr: String,
+    pub logger: String,
+    pub level: BrokerLogLevel,
+    pub ttl_seconds: u32,
+    pub operation_id: String,
+}
+
+impl SetBrokerLogFilterTtlRequest {
+    /// Creates an exact, short-lived Broker log-filter request.
+    ///
+    /// # Errors
+    ///
+    /// Rejects targets outside `rocketmq_broker::`, blank operation IDs, and
+    /// TTLs outside 60 through 900 seconds.
+    pub fn try_new(
+        broker_addr: impl Into<String>,
+        logger: impl Into<String>,
+        level: BrokerLogLevel,
+        ttl_seconds: u32,
+        operation_id: impl Into<String>,
+    ) -> AdminResult<Self> {
+        if !(60..=900).contains(&ttl_seconds) {
+            return Err(crate::core::AdminError::invalid_argument(
+                "ttl_seconds",
+                "must be between 60 and 900",
+            ));
+        }
+        Ok(Self {
+            broker_addr: required("broker_addr", broker_addr)?,
+            logger: broker_logger(logger)?,
+            level,
+            ttl_seconds,
+            operation_id: bounded_operation_id(operation_id)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RestoreBrokerLogFilterRequest {
+    pub broker_addr: String,
+    pub operation_id: String,
+}
+
+impl RestoreBrokerLogFilterRequest {
+    /// Creates a restoration request bound to one SRE operation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects blank addresses and invalid operation IDs.
+    pub fn try_new(broker_addr: impl Into<String>, operation_id: impl Into<String>) -> AdminResult<Self> {
+        Ok(Self {
+            broker_addr: required("broker_addr", broker_addr)?,
+            operation_id: bounded_operation_id(operation_id)?,
+        })
+    }
+}
+
 pub trait BrokerAdmin: Send {
     fn list_brokers<'a>(&'a mut self, request: &'a ListBrokersRequest) -> AdminFuture<'a, ListBrokersResult>;
 
@@ -81,4 +394,551 @@ pub trait BrokerAdmin: Send {
         &'a mut self,
         request: &'a ProbeBrokerRuntimeRequest,
     ) -> AdminFuture<'a, ProbeBrokerRuntimeResult>;
+
+    fn query_broker_diagnostics<'a>(
+        &'a mut self,
+        request: &'a QueryBrokerDiagnosticsRequest,
+    ) -> AdminFuture<'a, QueryBrokerDiagnosticsResult>;
+
+    fn query_allowlisted_config<'a>(
+        &'a mut self,
+        request: &'a QueryBrokerAllowlistedConfigRequest,
+    ) -> AdminFuture<'a, BrokerAllowlistedConfig>;
+
+    fn query_log_filter_state<'a>(
+        &'a mut self,
+        _request: &'a QueryBrokerLogFilterStateRequest,
+    ) -> AdminFuture<'a, BrokerLogFilterState> {
+        Box::pin(async {
+            Err(crate::core::AdminError::backend(
+                "query_log_filter_state",
+                "typed Broker log-filter query is not implemented by this adapter",
+            ))
+        })
+    }
+}
+
+/// Read-only broker administration capability.
+pub trait BrokerQueryAdmin: Send {
+    fn list_brokers<'a>(&'a mut self, request: &'a ListBrokersRequest) -> AdminFuture<'a, ListBrokersResult>;
+
+    fn probe_broker_runtime<'a>(
+        &'a mut self,
+        request: &'a ProbeBrokerRuntimeRequest,
+    ) -> AdminFuture<'a, ProbeBrokerRuntimeResult>;
+
+    fn query_broker_diagnostics<'a>(
+        &'a mut self,
+        request: &'a QueryBrokerDiagnosticsRequest,
+    ) -> AdminFuture<'a, QueryBrokerDiagnosticsResult>;
+
+    fn query_allowlisted_config<'a>(
+        &'a mut self,
+        request: &'a QueryBrokerAllowlistedConfigRequest,
+    ) -> AdminFuture<'a, BrokerAllowlistedConfig>;
+
+    fn query_log_filter_state<'a>(
+        &'a mut self,
+        _request: &'a QueryBrokerLogFilterStateRequest,
+    ) -> AdminFuture<'a, BrokerLogFilterState> {
+        Box::pin(async {
+            Err(crate::core::AdminError::backend(
+                "query_log_filter_state",
+                "typed Broker log-filter query is not implemented by this adapter",
+            ))
+        })
+    }
+}
+
+impl<T: BrokerAdmin + ?Sized> BrokerQueryAdmin for T {
+    fn list_brokers<'a>(&'a mut self, request: &'a ListBrokersRequest) -> AdminFuture<'a, ListBrokersResult> {
+        BrokerAdmin::list_brokers(self, request)
+    }
+
+    fn probe_broker_runtime<'a>(
+        &'a mut self,
+        request: &'a ProbeBrokerRuntimeRequest,
+    ) -> AdminFuture<'a, ProbeBrokerRuntimeResult> {
+        BrokerAdmin::probe_broker_runtime(self, request)
+    }
+
+    fn query_broker_diagnostics<'a>(
+        &'a mut self,
+        request: &'a QueryBrokerDiagnosticsRequest,
+    ) -> AdminFuture<'a, QueryBrokerDiagnosticsResult> {
+        BrokerAdmin::query_broker_diagnostics(self, request)
+    }
+
+    fn query_allowlisted_config<'a>(
+        &'a mut self,
+        request: &'a QueryBrokerAllowlistedConfigRequest,
+    ) -> AdminFuture<'a, BrokerAllowlistedConfig> {
+        BrokerAdmin::query_allowlisted_config(self, request)
+    }
+
+    fn query_log_filter_state<'a>(
+        &'a mut self,
+        request: &'a QueryBrokerLogFilterStateRequest,
+    ) -> AdminFuture<'a, BrokerLogFilterState> {
+        BrokerAdmin::query_log_filter_state(self, request)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueryBrokerConfigGenerationRequest {
+    pub broker_addr: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueryBrokerConfigGenerationResult {
+    pub generation: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PatchBrokerConfigRequest {
+    pub broker_addr: String,
+    pub expected_generation: u64,
+    pub properties: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PatchBrokerConfigOutcome {
+    Applied {
+        previous_generation: u64,
+        generation: u64,
+    },
+    GenerationConflict {
+        expected_generation: u64,
+        actual_generation: u64,
+    },
+}
+
+/// Narrow broker mutation operations used by supervised execution.
+pub trait BrokerMutationAdmin: Send {
+    fn query_config_generation<'a>(
+        &'a mut self,
+        request: &'a QueryBrokerConfigGenerationRequest,
+    ) -> AdminFuture<'a, QueryBrokerConfigGenerationResult>;
+
+    fn patch_config_if_generation<'a>(
+        &'a mut self,
+        request: &'a PatchBrokerConfigRequest,
+    ) -> AdminFuture<'a, PatchBrokerConfigOutcome>;
+
+    fn set_log_filter_ttl<'a>(&'a mut self, _request: &'a SetBrokerLogFilterTtlRequest) -> AdminFuture<'a, ()> {
+        Box::pin(async {
+            Err(crate::core::AdminError::backend(
+                "set_log_filter_ttl",
+                "typed Broker log-filter mutation is not implemented by this adapter",
+            ))
+        })
+    }
+
+    fn restore_log_filter<'a>(&'a mut self, _request: &'a RestoreBrokerLogFilterRequest) -> AdminFuture<'a, ()> {
+        Box::pin(async {
+            Err(crate::core::AdminError::backend(
+                "restore_log_filter",
+                "typed Broker log-filter mutation is not implemented by this adapter",
+            ))
+        })
+    }
+}
+
+#[cfg(any(feature = "read-client-adapter", test))]
+pub(crate) fn project_broker_log_filter_state(logger: String, runtime: &KVTable) -> BrokerLogFilterState {
+    let supported = runtime_bool(runtime, "sreLogFilterControlSupported").unwrap_or(false);
+    BrokerLogFilterState {
+        schema_version: BROKER_LOG_FILTER_STATE_SCHEMA_VERSION.to_owned(),
+        supported,
+        level: supported
+            .then(|| runtime_value(runtime, "sreLogFilterEffective"))
+            .flatten()
+            .and_then(|filter| effective_log_level(filter, &logger)),
+        active_operation_id: bounded_runtime_identifier(runtime, "sreLogFilterActiveOperationId"),
+        last_completed_operation_id: bounded_runtime_identifier(runtime, "sreLogFilterLastCompletedOperationId"),
+        expires_at_millis: runtime_u64(runtime, "sreLogFilterExpiresAtMillis"),
+        logger,
+    }
+}
+
+fn broker_logger(logger: impl Into<String>) -> AdminResult<String> {
+    let logger = required("logger", logger)?;
+    if logger.len() > 128 || !logger.starts_with("rocketmq_broker::") {
+        Err(crate::core::AdminError::invalid_argument(
+            "logger",
+            "must be an allowlisted rocketmq_broker:: target of at most 128 bytes",
+        ))
+    } else {
+        Ok(logger)
+    }
+}
+
+fn bounded_operation_id(operation_id: impl Into<String>) -> AdminResult<String> {
+    let operation_id = required("operation_id", operation_id)?;
+    if operation_id.len() > 128 || operation_id.chars().any(char::is_control) {
+        Err(crate::core::AdminError::invalid_argument(
+            "operation_id",
+            "must be at most 128 bytes and contain no control characters",
+        ))
+    } else {
+        Ok(operation_id)
+    }
+}
+
+#[cfg(any(feature = "read-client-adapter", test))]
+fn bounded_runtime_identifier(runtime: &KVTable, key: &str) -> Option<String> {
+    runtime_value(runtime, key)
+        .filter(|value| !value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control))
+        .map(ToOwned::to_owned)
+}
+
+#[cfg(any(feature = "read-client-adapter", test))]
+fn effective_log_level(filter: &str, logger: &str) -> Option<BrokerLogLevel> {
+    let mut selected = None;
+    let mut selected_target_len = 0usize;
+    for directive in filter.split(',').map(str::trim).filter(|value| !value.is_empty()) {
+        let (target, level) = match directive.split_once('=') {
+            Some((target, level)) => (Some(target.trim()), level.trim()),
+            None => (None, directive),
+        };
+        let target_len = target.map_or(0, str::len);
+        if target.is_some_and(|target| !logger.starts_with(target)) || target_len < selected_target_len {
+            continue;
+        }
+        let level = match level.to_ascii_lowercase().as_str() {
+            "info" => BrokerLogLevel::Info,
+            "debug" => BrokerLogLevel::Debug,
+            _ => continue,
+        };
+        selected = Some(level);
+        selected_target_len = target_len;
+    }
+    selected
+}
+
+#[cfg(any(feature = "read-client-adapter", test))]
+pub(crate) fn project_broker_diagnostics(broker_name: String, broker_id: u64, runtime: &KVTable) -> BrokerDiagnostics {
+    let schema = runtime_value(runtime, "sreDiagnosticsSchemaVersion");
+    if schema != Some("rocketmq.broker-diagnostics.v1") {
+        return unsupported_diagnostics(broker_name, broker_id);
+    }
+
+    let readiness = parse_readiness(runtime);
+    let config = parse_config(runtime);
+    let store_health = parse_store_health(runtime);
+    let background_index_rebuild = parse_background_index(runtime);
+    let missing_required =
+        readiness.is_none() || config.is_none() || store_health.is_none() || background_index_rebuild.is_none();
+    BrokerDiagnostics {
+        broker_name,
+        broker_id,
+        observed_at_millis: runtime_u64(runtime, "sreDiagnosticsObservedAtMillis"),
+        coverage: if missing_required {
+            BrokerDiagnosticsCoverage::Partial
+        } else {
+            BrokerDiagnosticsCoverage::Available
+        },
+        readiness,
+        config,
+        store_health,
+        recovery: parse_recovery(runtime),
+        background_index_rebuild,
+        rocksdb: RocksDbMaintenanceDiagnostics {
+            supported: runtime_bool(runtime, "rocksdbMaintenanceSupported").unwrap_or(false),
+            maintenance_running: runtime_bool(runtime, "rocksdbMaintenanceRunning"),
+            message_maintenance_running: runtime_bool(runtime, "messageRocksdbMaintenanceRunning"),
+        },
+        tiered: TieredDispatchDiagnostics {
+            configured: runtime_bool(runtime, "tieredStoreConfigured").unwrap_or(false),
+            dispatch_ready: runtime_bool(runtime, "tieredDispatchReady"),
+            minimum_pinned_wal_segment: runtime_u64(runtime, "tieredMinimumPinnedWalSegment"),
+        },
+        auth: AuthSecurityDiagnostics {
+            supported: runtime_bool(runtime, "authDiagnosticsSupported").unwrap_or(false),
+            authentication_enabled: runtime_bool(runtime, "authAuthenticationEnabled"),
+            authorization_enabled: runtime_bool(runtime, "authAuthorizationEnabled"),
+            acl_file_watch_enabled: runtime_bool(runtime, "authAclFileWatchEnabled"),
+            acl_generation: runtime_u64(runtime, "authAclGeneration"),
+            acl_reload_attempts: runtime_u64(runtime, "authAclReloadAttempts"),
+            acl_reload_successes: runtime_u64(runtime, "authAclReloadSuccesses"),
+            acl_reload_failures: runtime_u64(runtime, "authAclReloadFailures"),
+            acl_reload_skipped: runtime_u64(runtime, "authAclReloadSkipped"),
+            credential_rotation_supported: runtime_bool(runtime, "authCredentialRotationSupported").unwrap_or(false),
+        },
+        warnings: missing_required
+            .then_some("broker_diagnostics_fields_missing".to_owned())
+            .into_iter()
+            .collect(),
+    }
+}
+
+#[cfg(any(feature = "read-client-adapter", test))]
+fn unsupported_diagnostics(broker_name: String, broker_id: u64) -> BrokerDiagnostics {
+    BrokerDiagnostics {
+        broker_name,
+        broker_id,
+        observed_at_millis: None,
+        coverage: BrokerDiagnosticsCoverage::Unsupported,
+        readiness: None,
+        config: None,
+        store_health: None,
+        recovery: None,
+        background_index_rebuild: None,
+        rocksdb: RocksDbMaintenanceDiagnostics {
+            supported: false,
+            maintenance_running: None,
+            message_maintenance_running: None,
+        },
+        tiered: TieredDispatchDiagnostics {
+            configured: false,
+            dispatch_ready: None,
+            minimum_pinned_wal_segment: None,
+        },
+        auth: AuthSecurityDiagnostics {
+            supported: false,
+            authentication_enabled: None,
+            authorization_enabled: None,
+            acl_file_watch_enabled: None,
+            acl_generation: None,
+            acl_reload_attempts: None,
+            acl_reload_successes: None,
+            acl_reload_failures: None,
+            acl_reload_skipped: None,
+            credential_rotation_supported: false,
+        },
+        warnings: vec!["broker_diagnostics_contract_unsupported".to_owned()],
+    }
+}
+
+#[cfg(any(feature = "read-client-adapter", test))]
+fn parse_readiness(runtime: &KVTable) -> Option<BrokerReadinessDiagnostics> {
+    Some(BrokerReadinessDiagnostics {
+        ready: runtime_bool(runtime, "brokerReady")?,
+        active: runtime_bool(runtime, "brokerActive")?,
+        shutdown: runtime_bool(runtime, "brokerShutdown")?,
+        registration_accepting: runtime_bool(runtime, "brokerRegistrationAccepting")?,
+        registration_configured: runtime_bool(runtime, "brokerRegistrationConfigured")?,
+    })
+}
+
+#[cfg(any(feature = "read-client-adapter", test))]
+fn parse_config(runtime: &KVTable) -> Option<BrokerConfigSummary> {
+    Some(BrokerConfigSummary {
+        generation: runtime_u64(runtime, "brokerConfigGeneration")?,
+        broker_role: runtime_value(runtime, "brokerRole")?.to_owned(),
+        store_type: runtime_value(runtime, "storeType")?.to_owned(),
+        timer_wheel_enabled: runtime_bool(runtime, "timerWheelEnabled")?,
+        transient_store_pool_enabled: runtime_bool(runtime, "transientStorePoolEnabled")?,
+        tiered_store_configured: runtime_bool(runtime, "tieredStoreConfigured")?,
+    })
+}
+
+#[cfg(any(feature = "read-client-adapter", test))]
+fn parse_store_health(runtime: &KVTable) -> Option<StoreHealthDiagnostics> {
+    Some(StoreHealthDiagnostics {
+        writeable: runtime_bool(runtime, "storeWriteable")?,
+        last_flush_error: runtime_bool(runtime, "storeLastFlushError")?,
+        os_page_cache_busy: runtime_bool(runtime, "storeOsPageCacheBusy")?,
+        transient_store_pool_deficient: runtime_bool(runtime, "storeTransientPoolDeficient")?,
+        dispatch_behind_bytes: runtime_i64(runtime, "storeDispatchBehindBytes")?,
+        shutdown: runtime_bool(runtime, "storeShutdown")?,
+        ha_pending_request_count: runtime_u64(runtime, "storeHaPendingRequestCount")?,
+        ha_pending_oldest_wait_millis: runtime_u64(runtime, "storeHaPendingOldestWaitMillis")?,
+        sync_flush: SyncFlushDiagnostics {
+            queue_depth: runtime_u64(runtime, "storeSyncFlushQueueDepth")?,
+            timeout_total: runtime_u64(runtime, "storeSyncFlushTimeoutTotal")?,
+            oldest_wait_millis: runtime_u64(runtime, "storeSyncFlushOldestWaitMillis")?,
+        },
+    })
+}
+
+#[cfg(any(feature = "read-client-adapter", test))]
+fn parse_recovery(runtime: &KVTable) -> Option<RecoveryDiagnostics> {
+    let available = runtime_bool(runtime, "recoveryReportAvailable")?;
+    Some(RecoveryDiagnostics {
+        available,
+        total_duration_millis: runtime_u64(runtime, "recoveryTotalDurationMillis"),
+        phase_count: runtime_u64(runtime, "recoveryPhaseCount"),
+        failed_phase_count: runtime_u64(runtime, "recoveryFailedPhaseCount"),
+        fallback_phase_count: runtime_u64(runtime, "recoveryFallbackPhaseCount"),
+        fallback_reason_present: runtime_bool(runtime, "recoveryFallbackReasonPresent"),
+        scanned_bytes: runtime_u64(runtime, "recoveryScannedBytes"),
+        recovered_messages: runtime_u64(runtime, "recoveryRecoveredMessages"),
+        invalid_messages: runtime_u64(runtime, "recoveryInvalidMessages"),
+        truncated_files: runtime_u64(runtime, "recoveryTruncatedFiles"),
+        index_files_removed: runtime_u64(runtime, "recoveryIndexFilesRemoved"),
+        index_files_rebuilt: runtime_u64(runtime, "recoveryIndexFilesRebuilt"),
+    })
+}
+
+#[cfg(any(feature = "read-client-adapter", test))]
+fn parse_background_index(runtime: &KVTable) -> Option<BackgroundIndexRebuildDiagnostics> {
+    Some(BackgroundIndexRebuildDiagnostics {
+        state: runtime_value(runtime, "backgroundIndexRebuildState")?.to_owned(),
+        effective_enabled: runtime_bool(runtime, "backgroundIndexRebuildEffectiveEnable")?,
+        gray_mode: runtime_bool(runtime, "backgroundIndexRebuildGrayMode")?,
+        current_safe_offset: runtime_i64(runtime, "backgroundIndexRebuildCurrentSafeOffset")?,
+        target_offset: runtime_i64(runtime, "backgroundIndexRebuildTargetOffset")?,
+        backlog_bytes: runtime_i64(runtime, "backgroundIndexRebuildBacklogBytes")?,
+        rebuilt_bytes: runtime_u64(runtime, "backgroundIndexRebuildRebuiltBytes")?,
+        rebuilt_messages: runtime_u64(runtime, "backgroundIndexRebuildRebuiltMessages")?,
+        failure_count: runtime_u64(runtime, "backgroundIndexRebuildFailureCount")?,
+        bytes_per_second: runtime_u64(runtime, "backgroundIndexRebuildBytesPerSecond")?,
+    })
+}
+
+#[cfg(any(feature = "read-client-adapter", test))]
+fn runtime_value<'a>(runtime: &'a KVTable, key: &str) -> Option<&'a str> {
+    runtime.table.get(&CheetahString::from(key)).map(CheetahString::as_str)
+}
+
+#[cfg(any(feature = "read-client-adapter", test))]
+fn runtime_bool(runtime: &KVTable, key: &str) -> Option<bool> {
+    match runtime_value(runtime, key)? {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
+
+#[cfg(any(feature = "read-client-adapter", test))]
+fn runtime_u64(runtime: &KVTable, key: &str) -> Option<u64> {
+    runtime_value(runtime, key)?.parse().ok()
+}
+
+#[cfg(any(feature = "read-client-adapter", test))]
+fn runtime_i64(runtime: &KVTable, key: &str) -> Option<i64> {
+    runtime_value(runtime, key)?.parse().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    #[test]
+    fn diagnostics_projection_uses_real_generation_and_never_serializes_unknown_kv_fields() {
+        let table = HashMap::from([
+            ("sreDiagnosticsSchemaVersion", "rocketmq.broker-diagnostics.v1"),
+            ("sreDiagnosticsObservedAtMillis", "1000"),
+            ("brokerConfigGeneration", "9"),
+            ("brokerReady", "true"),
+            ("brokerActive", "true"),
+            ("brokerShutdown", "false"),
+            ("brokerRegistrationAccepting", "true"),
+            ("brokerRegistrationConfigured", "true"),
+            ("brokerRole", "ASYNC_MASTER"),
+            ("storeType", "local"),
+            ("timerWheelEnabled", "false"),
+            ("transientStorePoolEnabled", "false"),
+            ("tieredStoreConfigured", "false"),
+            ("storeWriteable", "true"),
+            ("storeLastFlushError", "false"),
+            ("storeOsPageCacheBusy", "false"),
+            ("storeTransientPoolDeficient", "false"),
+            ("storeDispatchBehindBytes", "0"),
+            ("storeShutdown", "false"),
+            ("storeHaPendingRequestCount", "0"),
+            ("storeHaPendingOldestWaitMillis", "0"),
+            ("storeSyncFlushQueueDepth", "0"),
+            ("storeSyncFlushTimeoutTotal", "0"),
+            ("storeSyncFlushOldestWaitMillis", "0"),
+            ("recoveryReportAvailable", "false"),
+            ("backgroundIndexRebuildState", "idle"),
+            ("backgroundIndexRebuildEffectiveEnable", "false"),
+            ("backgroundIndexRebuildGrayMode", "false"),
+            ("backgroundIndexRebuildCurrentSafeOffset", "0"),
+            ("backgroundIndexRebuildTargetOffset", "0"),
+            ("backgroundIndexRebuildBacklogBytes", "0"),
+            ("backgroundIndexRebuildRebuiltBytes", "0"),
+            ("backgroundIndexRebuildRebuiltMessages", "0"),
+            ("backgroundIndexRebuildFailureCount", "0"),
+            ("backgroundIndexRebuildBytesPerSecond", "0"),
+            ("authDiagnosticsSupported", "true"),
+            ("authAuthenticationEnabled", "true"),
+            ("authAuthorizationEnabled", "true"),
+            ("authAclFileWatchEnabled", "true"),
+            ("authAclGeneration", "7"),
+            ("authAclReloadAttempts", "3"),
+            ("authAclReloadSuccesses", "2"),
+            ("authAclReloadFailures", "1"),
+            ("authAclReloadSkipped", "0"),
+            ("authCredentialRotationSupported", "false"),
+            ("secretAccessKey", "must-not-escape"),
+        ])
+        .into_iter()
+        .map(|(key, value)| (CheetahString::from(key), CheetahString::from(value)))
+        .collect();
+        let diagnostics = project_broker_diagnostics("broker-a".to_owned(), 0, &KVTable { table });
+
+        assert_eq!(diagnostics.config.as_ref().map(|config| config.generation), Some(9));
+        assert_eq!(diagnostics.coverage, BrokerDiagnosticsCoverage::Available);
+        let encoded = serde_json::to_string(&diagnostics).expect("diagnostics should serialize");
+        assert!(!encoded.contains("secretAccessKey"));
+        assert!(!encoded.contains("must-not-escape"));
+    }
+
+    #[test]
+    fn older_broker_is_explicitly_unsupported_instead_of_guessing_generation() {
+        let diagnostics = project_broker_diagnostics("broker-a".to_owned(), 0, &KVTable { table: HashMap::new() });
+        assert_eq!(diagnostics.coverage, BrokerDiagnosticsCoverage::Unsupported);
+        assert!(diagnostics.config.is_none());
+    }
+
+    #[test]
+    fn log_filter_contract_rejects_unbounded_targets_and_ttls() {
+        assert!(SetBrokerLogFilterTtlRequest::try_new(
+            "broker:10911",
+            "rocketmq_broker::processor",
+            BrokerLogLevel::Debug,
+            60,
+            "operation-1",
+        )
+        .is_ok());
+        assert!(SetBrokerLogFilterTtlRequest::try_new(
+            "broker:10911",
+            "rocketmq_store::commit_log",
+            BrokerLogLevel::Debug,
+            60,
+            "operation-1",
+        )
+        .is_err());
+        assert!(SetBrokerLogFilterTtlRequest::try_new(
+            "broker:10911",
+            "rocketmq_broker::processor",
+            BrokerLogLevel::Info,
+            59,
+            "operation-1",
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn log_filter_projection_selects_the_most_specific_target_without_exposing_raw_filter() {
+        let table = HashMap::from([
+            ("sreLogFilterControlSupported", "true"),
+            (
+                "sreLogFilterEffective",
+                "info,rocketmq_broker=info,rocketmq_broker::processor=debug",
+            ),
+            ("sreLogFilterActiveOperationId", "operation-1"),
+            ("sreLogFilterExpiresAtMillis", "123456"),
+            ("secretToken", "must-not-escape"),
+        ])
+        .into_iter()
+        .map(|(key, value)| (CheetahString::from(key), CheetahString::from(value)))
+        .collect();
+        let state = project_broker_log_filter_state("rocketmq_broker::processor::send".to_owned(), &KVTable { table });
+
+        assert!(state.supported);
+        assert_eq!(state.level, Some(BrokerLogLevel::Debug));
+        assert_eq!(state.active_operation_id.as_deref(), Some("operation-1"));
+        assert_eq!(state.expires_at_millis, Some(123456));
+        let encoded = serde_json::to_string(&state).expect("state should serialize");
+        assert!(!encoded.contains("sreLogFilterEffective"));
+        assert!(!encoded.contains("secretToken"));
+        assert!(!encoded.contains("must-not-escape"));
+    }
 }

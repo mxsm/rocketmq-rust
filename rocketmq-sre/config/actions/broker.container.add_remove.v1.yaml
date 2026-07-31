@@ -1,0 +1,42 @@
+id: broker.container.add_remove.v1
+version: 1.0.0
+owner: messaging-platform
+supported_versions:
+  - family: rocketmq-sre.action-plan
+    major: 1
+    minor: 0
+required_capabilities:
+  - planning.broker-container-impact
+config_schema:
+  type: object
+  additionalProperties: false
+parameter_schema:
+  type: object
+  additionalProperties: false
+  required: [broker_container, operation, broker_name, impact_preview_id]
+  properties:
+    broker_container: { type: string, maxLength: 128 }
+    operation: { type: string, enum: [add_broker, remove_broker] }
+    broker_name: { type: string, maxLength: 128 }
+    impact_preview_id: { type: string, maxLength: 128 }
+status: active
+deprecation: null
+risk: r2
+execution_supported: false
+preconditions:
+  - placement_and_capacity_impact_reviewed
+  - ha_and_sync_state_set_impact_reviewed
+  - manual_runbook_owner_assigned
+max_impact: single_instance
+verification:
+  resource_conditions: [manual_membership_and_registration_recorded]
+  technical_slis: [send_success_ratio, consume_success_ratio, store_dispatch_latency]
+  stable_window_seconds: 600
+  max_wait_seconds: 3600
+timeout_seconds: 3600
+compensation:
+  mode: manual_takeover
+  required_before_fields: [broker_container_members, broker_registration]
+  timeout_seconds: 1800
+forbidden_fields: [force_remove, clean_data, delete_store, break_quorum, auto_execute, raw_request_code]
+plan_only: true

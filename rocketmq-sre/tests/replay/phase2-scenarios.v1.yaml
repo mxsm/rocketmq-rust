@@ -1,0 +1,400 @@
+schema_version: rocketmq.sre.replay-fixtures.v1
+fixtures:
+  - id: rolling-upgrade
+    scenario: rolling-upgrade
+    description: A rolling deployment is followed by an SLO regression.
+    timeline:
+      - at: 2025-01-01T00:00:00Z
+        kind: deployment_change
+        resource: deployment/broker
+        summary: Broker image digest changed during a bounded rollout.
+    pack_runs:
+      - pack: change-regression.v1
+        evidence:
+          - evidence_id: 00000000-0000-4000-8300-000000000001
+            source: kubernetes
+            resource: change-regression/broker
+            content:
+              slo_regressed: true
+              error_or_latency_regressed: false
+              impact_scope_expanded: false
+
+  - id: node-eviction
+    scenario: node-eviction
+    description: A Broker replica becomes unhealthy after its node is evicted.
+    timeline:
+      - at: 2025-01-01T00:01:00Z
+        kind: kubernetes_event
+        resource: node/worker-a
+        summary: Node eviction removed one Broker replica.
+    pack_runs:
+      - pack: broker-ha.v1
+        evidence:
+          - evidence_id: 00000000-0000-4000-8300-000000000002
+            source: admin-query
+            resource: broker-ha/broker-a
+            content:
+              replica_lag_high: false
+              sync_state_set_sufficient: true
+              replicas_healthy: false
+
+  - id: collector-outage
+    scenario: collector-outage
+    description: The telemetry collector is unavailable while the exporter remains enabled.
+    timeline:
+      - at: 2025-01-01T00:02:00Z
+        kind: health_probe
+        resource: otel-collector/default
+        summary: Collector readiness changed to unavailable.
+    pack_runs:
+      - pack: telemetry-pipeline.v1
+        evidence:
+          - evidence_id: 00000000-0000-4000-8300-000000000003
+            source: runtime
+            resource: observability/broker-a
+            content:
+              build_feature_enabled: true
+              exporter_enabled: true
+              last_export_success_age_seconds: 600
+              queue_depth: 50
+              dropped_items: 0
+              collector_reachable: false
+              backend_reachable: true
+
+  - id: disk-pressure-fault
+    scenario: disk-pressure
+    description: Durable Store disk pressure crosses the configured threshold.
+    timeline:
+      - at: 2025-01-01T00:03:00Z
+        kind: metric_threshold
+        resource: store/broker-a
+        summary: Store disk pressure became active.
+    pack_runs:
+      - pack: store-pressure.v1
+        evidence:
+          - evidence_id: 00000000-0000-4000-8300-000000000004
+            source: admin-query
+            resource: store-pressure/broker-a
+            content:
+              disk_pressure: true
+              flush_or_dispatch_stalled: false
+              tiered_wal_pressure: false
+
+  - id: disk-pressure-normal
+    scenario: disk-pressure
+    description: Normal Store pressure control fixture.
+    timeline:
+      - at: 2025-01-01T00:03:00Z
+        kind: metric_sample
+        resource: store/broker-a
+        summary: Store pressure signals remain within policy.
+    pack_runs:
+      - pack: store-pressure.v1
+        evidence:
+          - evidence_id: 00000000-0000-4000-8300-000000000005
+            source: admin-query
+            resource: store-pressure/broker-a
+            content:
+              disk_pressure: false
+              flush_or_dispatch_stalled: false
+              tiered_wal_pressure: false
+
+  - id: disk-pressure-missing
+    scenario: disk-pressure
+    description: Missing Store pressure Evidence control fixture.
+    timeline:
+      - at: 2025-01-01T00:03:00Z
+        kind: source_unavailable
+        resource: store/broker-a
+        summary: Store diagnostics could not be collected.
+    pack_runs:
+      - pack: store-pressure.v1
+        evidence: []
+
+  - id: controller-leader-failure
+    scenario: controller-leader-failure
+    description: Controller leader discovery returns an explicit unknown state.
+    timeline:
+      - at: 2025-01-01T00:04:00Z
+        kind: controller_event
+        resource: controller/quorum-a
+        summary: Leader heartbeat expired.
+    pack_runs:
+      - pack: controller-ha.v1
+        evidence:
+          - evidence_id: 00000000-0000-4000-8300-000000000006
+            source: prometheus
+            resource: controller-ha/quorum-a
+            content:
+              leader_known: false
+              quorum_healthy: true
+              broker_heartbeat_stale: false
+
+  - id: secret-rotation
+    scenario: secret-rotation
+    description: Certificate validity fails during credential rotation.
+    timeline:
+      - at: 2025-01-01T00:05:00Z
+        kind: certificate_change
+        resource: secret/proxy-tls
+        summary: Certificate metadata generation advanced without exposing material.
+    pack_runs:
+      - pack: auth-failure.v1
+        evidence:
+          - evidence_id: 00000000-0000-4000-8300-000000000007
+            source: admin-query
+            resource: auth-failure/proxy
+            content:
+              deny_category: none
+              certificate_valid: false
+              replay_or_clock_skew: false
+
+  - id: acknowledged-message-recovery
+    scenario: acknowledged-message-recovery
+    description: Recovery verification does not reach its terminal verified state.
+    timeline:
+      - at: 2025-01-01T00:06:00Z
+        kind: recovery_event
+        resource: store/broker-a
+        summary: Acknowledged-message recovery verification remained incomplete.
+    pack_runs:
+      - pack: store-integrity.v1
+        evidence:
+          - evidence_id: 00000000-0000-4000-8300-000000000008
+            source: admin-query
+            resource: store-integrity/broker-a
+            content:
+              offset_inconsistent: false
+              recovery_incomplete: true
+              index_rebuild_failed: false
+
+  - id: producer-timeout-retry-storm
+    scenario: producer-timeout-retry-storm
+    description: Broker/remoting latency causes bounded producer retries.
+    timeline:
+      - at: 2025-01-01T00:07:00Z
+        kind: alert
+        resource: producer/orders
+        summary: Producer timeout and retry rate increased.
+    pack_runs:
+      - pack: send-latency.v1
+        evidence:
+          - evidence_id: 00000000-0000-4000-8300-000000000009
+            source: prometheus
+            resource: send-latency/orders
+            content:
+              client_or_proxy_slow: false
+              remoting_or_broker_slow: true
+              store_slow: false
+
+  - id: consumer-rebalance-queue-skew
+    scenario: consumer-rebalance-queue-skew
+    description: Queue placement becomes uneven after a consumer rebalance.
+    timeline:
+      - at: 2025-01-01T00:08:00Z
+        kind: consumer_event
+        resource: consumer/orders
+        summary: Rebalance completed with an uneven queue distribution.
+    pack_runs:
+      - pack: queue-hotspot.v1
+        evidence:
+          - evidence_id: 00000000-0000-4000-8300-000000000010
+            source: prometheus
+            resource: queue-hotspot/orders
+            content:
+              tps_skew_high: false
+              storage_skew_high: true
+              expansion_required: false
+
+  - id: transaction-checkback-stall
+    scenario: transaction-checkback-stall
+    description: Transaction checkback progress stalls while the producer remains reachable.
+    timeline:
+      - at: 2025-01-01T00:09:00Z
+        kind: transaction_event
+        resource: transaction/orders
+        summary: Checkback age crossed the bounded threshold.
+    pack_runs:
+      - pack: transaction-message.v1
+        evidence:
+          - evidence_id: 00000000-0000-4000-8300-000000000011
+            source: prometheus
+            resource: transaction-message/orders
+            content:
+              half_backlog_growing: false
+              checkback_stalled: true
+              producer_reachable: true
+
+  - id: pop-revive-anomaly
+    scenario: pop-revive-anomaly
+    description: POP revive checkpoint lag exceeds its configured envelope.
+    timeline:
+      - at: 2025-01-01T00:10:00Z
+        kind: pop_event
+        resource: consumer/pop-orders
+        summary: Revive progress became stale.
+    pack_runs:
+      - pack: pop-revive.v1
+        evidence:
+          - evidence_id: 00000000-0000-4000-8300-000000000012
+            source: prometheus
+            resource: pop-revive/pop-orders
+            content:
+              inflight_pressure: false
+              revive_lag_high: true
+              receipt_handle_failed: false
+
+  - id: timer-backlog
+    scenario: timer-backlog
+    description: Delayed-message dequeue progress falls behind schedule.
+    timeline:
+      - at: 2025-01-01T00:11:00Z
+        kind: timer_event
+        resource: timer/broker-a
+        summary: Timer dequeue lag crossed the critical window.
+    pack_runs:
+      - pack: timer-backlog.v1
+        evidence:
+          - evidence_id: 00000000-0000-4000-8300-000000000013
+            source: prometheus
+            resource: timer-backlog/broker-a
+            content:
+              dequeue_lag_high: true
+              snapshot_stale: false
+              clock_or_store_pressure: false
+
+  - id: retry-dlq-storm
+    scenario: retry-dlq-storm
+    description: Retry and DLQ backlog grows while downstream remains available.
+    timeline:
+      - at: 2025-01-01T00:12:00Z
+        kind: consumer_event
+        resource: consumer/orders
+        summary: Retry and DLQ rate began sustained growth.
+    pack_runs:
+      - pack: retry-dlq.v1
+        evidence:
+          - evidence_id: 00000000-0000-4000-8300-000000000014
+            source: prometheus
+            resource: retry-dlq/orders
+            content:
+              retry_or_dlq_growing: true
+              poison_metadata_pattern: false
+              downstream_available: true
+
+  - id: rocksdb-tiered-degradation
+    scenario: rocksdb-tiered-degradation
+    description: RocksDB maintenance is stuck and the tiered provider is unavailable.
+    timeline:
+      - at: 2025-01-01T00:13:00Z
+        kind: storage_event
+        resource: store/broker-a
+        summary: Local and tiered storage health degraded together.
+    pack_runs:
+      - pack: rocksdb-health.v1
+        evidence:
+          - evidence_id: 00000000-0000-4000-8300-000000000015
+            source: admin-query
+            resource: rocksdb-health/broker-a
+            content:
+              maintenance_stuck: true
+              read_amplification: 2.0
+              cache_hit_ratio: 0.95
+      - pack: tiered-store.v1
+        evidence:
+          - evidence_id: 00000000-0000-4000-8300-000000000016
+            source: admin-query
+            resource: tiered-store/broker-a
+            content:
+              provider_available: false
+              dispatch_stalled: false
+              metadata_reconcile_state: healthy
+
+  - id: namesrv-route-divergence
+    scenario: namesrv-route-divergence
+    description: NameServers disagree on the effective Topic route.
+    timeline:
+      - at: 2025-01-01T00:14:00Z
+        kind: route_event
+        resource: topic/orders
+        summary: Cross-NameServer route digests diverged.
+    pack_runs:
+      - pack: namesrv-route.v1
+        evidence:
+          - evidence_id: 00000000-0000-4000-8300-000000000017
+            source: rocketmq-mcp
+            resource: namesrv-route/orders
+            content:
+              route_divergent: true
+              registration_stale: false
+              broker_unreachable: false
+
+  - id: controller-quorum-partition
+    scenario: controller-quorum-partition
+    description: A network partition leaves Controller quorum insufficient.
+    timeline:
+      - at: 2025-01-01T00:15:00Z
+        kind: network_event
+        resource: controller/quorum-a
+        summary: Quorum health changed to insufficient.
+    pack_runs:
+      - pack: controller-ha.v1
+        evidence:
+          - evidence_id: 00000000-0000-4000-8300-000000000018
+            source: prometheus
+            resource: controller-ha/quorum-a
+            content:
+              leader_known: true
+              quorum_healthy: false
+              broker_heartbeat_stale: false
+
+  - id: upgrade-config-regression
+    scenario: upgrade-config-regression
+    description: The requested target protocol is incompatible before execution.
+    timeline:
+      - at: 2025-01-01T00:16:00Z
+        kind: readiness_check
+        resource: deployment/broker
+        summary: Upgrade compatibility evaluation rejected the target.
+    pack_runs:
+      - pack: upgrade-readiness.v1
+        evidence:
+          - evidence_id: 00000000-0000-4000-8300-000000000019
+            source: kubernetes
+            resource: upgrade-readiness/broker
+            content:
+              protocol_compatible: false
+              quorum_and_pdb_safe: true
+              canary_and_rollback_ready: true
+
+  - id: runtime-telemetry-saturation
+    scenario: runtime-telemetry-saturation
+    description: BlockingExecutor pressure coincides with a telemetry export stall.
+    timeline:
+      - at: 2025-01-01T00:17:00Z
+        kind: runtime_event
+        resource: runtime/broker-a
+        summary: Blocking queue pressure crossed the bounded threshold.
+    pack_runs:
+      - pack: runtime-saturation.v1
+        evidence:
+          - evidence_id: 00000000-0000-4000-8300-000000000020
+            source: runtime
+            resource: runtime-saturation/broker-a
+            content:
+              taskgroup_saturated: false
+              blocking_executor_pressure: true
+              schedule_or_shutdown_stalled: false
+      - pack: telemetry-pipeline.v1
+        evidence:
+          - evidence_id: 00000000-0000-4000-8300-000000000021
+            source: runtime
+            resource: observability/broker-a
+            content:
+              build_feature_enabled: true
+              exporter_enabled: true
+              last_export_success_age_seconds: 600
+              queue_depth: 1500
+              dropped_items: 0
+              collector_reachable: true
+              backend_reachable: true

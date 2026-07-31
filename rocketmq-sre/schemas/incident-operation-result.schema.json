@@ -1,0 +1,255 @@
+{
+  "$defs": {
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "CorrelationId": {
+      "description": "Identifier propagated across one logical SRE operation.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "IncidentId": {
+      "description": "Stable identifier for an SRE incident.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "IncidentOperationsState": {
+      "description": "Read model for incident ownership and operator state.",
+      "properties": {
+        "acknowledged_by": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cluster_id": {
+          "$ref": "#/$defs/ClusterId"
+        },
+        "incident_id": {
+          "$ref": "#/$defs/IncidentId"
+        },
+        "merged_into_incident_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IncidentId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "owner": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "sla": {
+          "$ref": "#/$defs/IncidentSlaState"
+        },
+        "split_incident_ids": {
+          "items": {
+            "$ref": "#/$defs/IncidentId"
+          },
+          "type": "array"
+        },
+        "suppressed_until": {
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "suppression_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/TenantId"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "incident_id",
+        "tenant_id",
+        "cluster_id",
+        "owner",
+        "split_incident_ids",
+        "sla",
+        "updated_at"
+      ],
+      "type": "object"
+    },
+    "IncidentSlaState": {
+      "description": "Current SLA clocks associated with one incident.",
+      "properties": {
+        "acknowledged_at": {
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "acknowledgement_breached": {
+          "type": "boolean"
+        },
+        "acknowledgement_due_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "resolution_breached": {
+          "type": "boolean"
+        },
+        "resolution_due_at": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "acknowledgement_due_at",
+        "resolution_due_at",
+        "acknowledgement_breached",
+        "resolution_breached"
+      ],
+      "type": "object"
+    },
+    "InvestigationId": {
+      "description": "Stable identifier for a multi-step investigation.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TimelineEvent": {
+      "description": "Immutable timeline entry shared by investigations and incidents.",
+      "properties": {
+        "actor": {
+          "$ref": "#/$defs/WorkflowActor"
+        },
+        "cluster_id": {
+          "$ref": "#/$defs/ClusterId"
+        },
+        "correlation_id": {
+          "$ref": "#/$defs/CorrelationId"
+        },
+        "details": true,
+        "event_type": {
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/TimelineEventId"
+        },
+        "incident_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IncidentId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "investigation_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InvestigationId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "occurred_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/TenantId"
+        }
+      },
+      "required": [
+        "id",
+        "tenant_id",
+        "cluster_id",
+        "event_type",
+        "summary",
+        "details",
+        "correlation_id",
+        "actor",
+        "occurred_at"
+      ],
+      "type": "object"
+    },
+    "TimelineEventId": {
+      "description": "Stable identifier for a workflow timeline event.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "WorkflowActor": {
+      "description": "Identity that caused a workflow event.",
+      "properties": {
+        "display_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subject": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "subject"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Result returned after an incident operator action.",
+  "properties": {
+    "cluster_mutation_performed": {
+      "type": "boolean"
+    },
+    "related_incident_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/IncidentId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "state": {
+      "$ref": "#/$defs/IncidentOperationsState"
+    },
+    "timeline_event": {
+      "$ref": "#/$defs/TimelineEvent"
+    }
+  },
+  "required": [
+    "schema_version",
+    "state",
+    "timeline_event",
+    "cluster_mutation_performed"
+  ],
+  "title": "IncidentOperationResult",
+  "type": "object"
+}

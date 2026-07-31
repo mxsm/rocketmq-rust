@@ -1,0 +1,16 @@
+{
+  "consumer_group": "orders-consumer",
+  "connections": [
+    {
+      "broker_name": "broker-a",
+      "client_id": "orders-client@10.0.0.8",
+      "client_addr": "10.0.0.8:41200",
+      "language": "RUST",
+      "version": 50302,
+      "last_update_timestamp": null
+    }
+  ],
+  "queried_broker_count": 1,
+  "failed_brokers": [],
+  "truncated": false
+}

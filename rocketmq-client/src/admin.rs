@@ -14,8 +14,34 @@
 
 pub mod default_mq_admin_ext;
 pub mod default_mq_admin_ext_impl;
+#[cfg(feature = "admin-full")]
 pub mod mq_admin_ext_async;
+#[cfg(feature = "admin-mutation")]
+mod mq_admin_mutation_ext;
+#[cfg(feature = "admin-read")]
+mod mq_admin_read_ext;
 
 pub use default_mq_admin_ext::DefaultMQAdminExt;
 pub use default_mq_admin_ext_impl::DefaultMQAdminExtImpl;
+#[cfg(feature = "admin-full")]
 pub use mq_admin_ext_async::MQAdminExt;
+#[cfg(feature = "admin-mutation")]
+pub use mq_admin_mutation_ext::BrokerConfigPatchOutcome;
+#[cfg(feature = "admin-mutation")]
+pub use mq_admin_mutation_ext::MQAdminMutationExt;
+#[cfg(feature = "admin-mutation")]
+pub use mq_admin_mutation_ext::SubscriptionGroupConfigPatch;
+#[cfg(feature = "admin-mutation")]
+pub use mq_admin_mutation_ext::SubscriptionGroupConfigPatchOutcome;
+#[cfg(feature = "admin-mutation")]
+pub use mq_admin_mutation_ext::TopicConfigPatch;
+#[cfg(feature = "admin-mutation")]
+pub use mq_admin_mutation_ext::TopicConfigPatchOutcome;
+#[cfg(feature = "admin-read")]
+pub use mq_admin_read_ext::BrokerConfigAllowlisted;
+#[cfg(feature = "admin-read")]
+pub use mq_admin_read_ext::MQAdminReadExt;
+#[cfg(feature = "admin-read")]
+pub use mq_admin_read_ext::SubscriptionGroupConfigVersioned;
+#[cfg(feature = "admin-read")]
+pub use mq_admin_read_ext::TopicConfigVersioned;

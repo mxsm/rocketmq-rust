@@ -1,0 +1,50 @@
+id: static_topic.patch_non_remap.v1
+version: 1.0.0
+owner: messaging-platform
+supported_versions:
+  - family: rocketmq-sre.action-plan
+    major: 1
+    minor: 0
+required_capabilities:
+  - admin.static-topic-metadata-cas
+config_schema:
+  type: object
+  additionalProperties: false
+parameter_schema:
+  type: object
+  additionalProperties: false
+  required: [topic, expected_epoch, expected_mapping_hash, patch]
+  properties:
+    topic: { type: string, maxLength: 255 }
+    expected_epoch: { type: integer, minimum: 0 }
+    expected_mapping_hash: { type: string, maxLength: 80 }
+    patch:
+      type: object
+      minProperties: 1
+      maxProperties: 2
+      additionalProperties: false
+      properties:
+        read_queue_nums: { type: integer, minimum: 1, maximum: 128 }
+        write_queue_nums: { type: integer, minimum: 1, maximum: 128 }
+status: active
+deprecation: null
+risk: r2
+execution_supported: false
+preconditions:
+  - valid_heterogeneous_critic
+  - mapping_hash_and_epoch_match
+  - logical_queue_mapping_unchanged
+  - target_counts_do_not_shrink
+max_impact: single_resource
+verification:
+  resource_conditions: [metadata_patch_visible, mapping_hash_unchanged, mapping_epoch_unchanged]
+  technical_slis: [route_error_ratio, send_success_ratio, consume_success_ratio]
+  stable_window_seconds: 300
+  max_wait_seconds: 1200
+timeout_seconds: 1200
+compensation:
+  mode: manual_takeover
+  required_before_fields: [before_metadata, expected_mapping_hash, expected_epoch]
+  timeout_seconds: 600
+forbidden_fields: [mapping, remap, epoch, broker_assignment, delete_topic, raw_request_code]
+plan_only: false

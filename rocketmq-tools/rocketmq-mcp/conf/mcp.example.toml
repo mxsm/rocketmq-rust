@@ -17,20 +17,22 @@ validate_origin = true
 allowed_origins = ["https://127.0.0.1", "https://localhost"]
 
 [server.http.tls]
-cert_path = "./conf/tls/server-cert.pem"
-key_path = "./conf/tls/server-key.pem"
+cert_path = "tls/server-cert.pem"
+key_path = "tls/server-key.pem"
 
 [server.http.auth]
 # `development-token` is only for loopback development. Production deployments
 # must use `oauth-jwt` and validate issuer, audience, signature, and scope.
 mode = "development-token"
 development_token_env = "ROCKETMQ_MCP_HTTP_TOKEN"
+development_tenant = "local-development"
 issuer = ""
 audience = ""
 required_scopes = ["rocketmq:read"]
 jwt_algorithm = "rs256"
 jwt_key_env = ""
 jwks_url = "https://issuer.example.test/.well-known/jwks.json"
+# jwks_ca_path = "tls/ca-cert.pem"
 jwks_refresh_seconds = 300
 jwks_max_stale_seconds = 900
 protected_resource_metadata_path = "/.well-known/oauth-protected-resource"
@@ -39,6 +41,13 @@ protected_resource_metadata_path = "/.well-known/oauth-protected-resource"
 name = "local-dev"
 namesrv_addr = "127.0.0.1:9876"
 default = true
+# rocketmq_cluster_name = "DefaultCluster"
+# [clusters.credentials]
+# file = "/var/run/secrets/rocketmq/mcp-rmq-credentials.yml"
+# Or use environment references instead of a file:
+# access_key_env = "ROCKETMQ_MCP_RMQ_ACCESS_KEY"
+# secret_key_env = "ROCKETMQ_MCP_RMQ_SECRET_KEY"
+# security_token_env = "ROCKETMQ_MCP_RMQ_SECURITY_TOKEN"
 
 [security]
 profile = "diagnose"
@@ -51,7 +60,7 @@ max_concurrent_requests_per_cluster = 8
 [audit]
 enabled = true
 sink = "file"
-path = "./logs/rocketmq-mcp-audit.log"
+path = "../logs/rocketmq-mcp-audit.log"
 queue_capacity = 1024
 max_record_bytes = 16384
 queue_max_bytes = 1048576

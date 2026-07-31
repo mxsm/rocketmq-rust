@@ -1,6 +1,5 @@
 ---
-source: rocketmq-tools/rocketmq-mcp/src/protocol/server.rs
-assertion_line: 283
+source: src/protocol/server.rs
 expression: surface
 ---
 {
@@ -89,6 +88,13 @@ expression: surface
   ],
   "resources": [
     {
+      "description": "Versioned read-only MCP capability and schema digest manifest.",
+      "mimeType": "application/json",
+      "name": "local-dev_capabilities",
+      "title": "RocketMQ MCP capabilities",
+      "uri": "rocketmq://clusters/local-dev/capabilities"
+    },
+    {
       "description": "Read-only overview for one configured RocketMQ cluster.",
       "mimeType": "application/json",
       "name": "local-dev_overview",
@@ -115,6 +121,20 @@ expression: surface
       "name": "local-dev_consumer_groups",
       "title": "RocketMQ consumer groups",
       "uri": "rocketmq://clusters/local-dev/consumer-groups"
+    },
+    {
+      "description": "Authenticated, bounded, and sanitized MCP runtime diagnostics.",
+      "mimeType": "application/json",
+      "name": "system_runtime_v1",
+      "title": "RocketMQ MCP runtime diagnostics",
+      "uri": "rocketmq://system/runtime/v1"
+    },
+    {
+      "description": "Authenticated and sanitized MCP observability status.",
+      "mimeType": "application/json",
+      "name": "system_observability_v1",
+      "title": "RocketMQ MCP observability status",
+      "uri": "rocketmq://system/observability/v1"
     }
   ],
   "tools": [

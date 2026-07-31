@@ -1,0 +1,114 @@
+# Copyright 2026 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0.
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: rocketmq-sre-phase03-proxy-restart-probe
+  namespace: rocketmq-system
+  labels:
+    app.kubernetes.io/name: rocketmq-sre-phase03-proxy-restart-probe
+    app.kubernetes.io/part-of: rocketmq-sre
+    rocketmq.apache.org/sre-probe: "true"
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 600
+  activeDeadlineSeconds: 180
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rocketmq-sre-phase03-proxy-restart-probe
+        app.kubernetes.io/part-of: rocketmq-sre
+        rocketmq.apache.org/sre-probe: "true"
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: create-dedicated-probe-topic
+          image: rocketmq-rust/fault-driver:local
+          imagePullPolicy: Never
+          args:
+            - topic
+            - updateTopic
+            - --yes
+            - -n
+            - rocketmq-namesrv:9876
+            - -c
+            - RocketmqRust
+            - -t
+            - SRE_PROBE_00000000000040008000000000000001_00000000000000000000000000000000
+            - -r
+            - "4"
+            - -w
+            - "4"
+            - -p
+            - "6"
+          env:
+            - name: ROCKETMQ_ACL_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-sre-kind-secrets
+                  key: bootstrap-access-key
+            - name: ROCKETMQ_ACL_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-sre-kind-secrets
+                  key: bootstrap-secret-key
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 200m, memory: 128Mi}
+      containers:
+        - name: bounded-probe
+          image: rocketmq-rust/sre-probe:phase00-local
+          imagePullPolicy: Never
+          args: ["run", "send-consume-ack"]
+          env:
+            - {name: ROCKETMQ_NAMESRV_ADDR, value: "rocketmq-namesrv:9876"}
+            - {name: ROCKETMQ_SRE_PROBE_CLUSTER_ID, value: "00000000-0000-4000-8000-000000000001"}
+            - {name: ROCKETMQ_SRE_PROBE_RUN_ID, value: "00000000-0000-0000-0000-000000000000"}
+            - {name: ROCKETMQ_SRE_PROBE_TOPIC, value: "SRE_PROBE_00000000000040008000000000000001_00000000000000000000000000000000"}
+            - {name: ROCKETMQ_SRE_PROBE_PRODUCER_GROUP, value: "SRE_PROBE_G_P_00000000000040008000000000000001_00000000000000000000000000000000"}
+            - {name: ROCKETMQ_SRE_PROBE_CONSUMER_GROUP, value: "SRE_PROBE_G_C_00000000000040008000000000000001_00000000000000000000000000000000"}
+            - {name: ROCKETMQ_SRE_PROBE_MAX_MESSAGES, value: "10"}
+            - {name: ROCKETMQ_SRE_PROBE_MAX_MESSAGES_PER_SECOND, value: "5"}
+            - {name: ROCKETMQ_SRE_PROBE_PAYLOAD_BYTES, value: "64"}
+            - {name: ROCKETMQ_SRE_PROBE_DURATION_SECONDS, value: "60"}
+            - name: ROCKETMQ_SRE_PROBE_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-sre-kind-secrets
+                  key: probe-access-key
+            - {name: ROCKETMQ_SRE_PROBE_SECRET_KEY_FILE, value: "/var/run/secrets/rocketmq/probe-secret-key"}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: 20m, memory: 64Mi}
+            limits: {cpu: 300m, memory: 256Mi}
+          volumeMounts:
+            - name: probe-secret
+              mountPath: /var/run/secrets/rocketmq
+              readOnly: true
+      volumes:
+        - name: probe-secret
+          secret:
+            secretName: rocketmq-sre-kind-secrets
+            defaultMode: 0444
+            items:
+              - key: probe-secret-key
+                path: probe-secret-key

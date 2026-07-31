@@ -1,0 +1,176 @@
+{
+  "$defs": {
+    "ActionPlanId": {
+      "description": "Stable identifier for an immutable action plan.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "IncidentId": {
+      "description": "Stable identifier for an SRE incident.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "IntegrationDeliveryId": {
+      "description": "Stable identifier for one idempotent integration delivery.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "IntegrationDeliveryStatus": {
+      "description": "Durable state of an idempotent integration delivery.",
+      "enum": [
+        "pending",
+        "delivering",
+        "delivered",
+        "retry_scheduled",
+        "failed"
+      ],
+      "type": "string"
+    },
+    "IntegrationEventKind": {
+      "description": "Events an external adapter may receive.",
+      "enum": [
+        "plan_submitted",
+        "approval_changed",
+        "release_started",
+        "release_paused",
+        "release_rolling_back",
+        "release_completed",
+        "manual_takeover_required"
+      ],
+      "type": "string"
+    },
+    "IntegrationTargetId": {
+      "description": "Stable identifier for one tenant-scoped external integration target.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ReleaseId": {
+      "description": "Stable identifier for one supervised release workflow.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One bounded outbox record. The idempotency key is unique per target.",
+  "properties": {
+    "attempt_count": {
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "cluster_id": {
+      "$ref": "#/$defs/ClusterId"
+    },
+    "created_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "deep_link": {
+      "type": "string"
+    },
+    "delivered_at": {
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "descriptor_id": {
+      "type": "string"
+    },
+    "descriptor_version": {
+      "type": "string"
+    },
+    "event_kind": {
+      "$ref": "#/$defs/IntegrationEventKind"
+    },
+    "id": {
+      "$ref": "#/$defs/IntegrationDeliveryId"
+    },
+    "idempotency_key": {
+      "type": "string"
+    },
+    "incident_id": {
+      "$ref": "#/$defs/IncidentId"
+    },
+    "last_error_code": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "next_attempt_at": {
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "plan_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ActionPlanId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "release_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReleaseId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "sanitized_summary": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/IntegrationDeliveryStatus"
+    },
+    "target_id": {
+      "$ref": "#/$defs/IntegrationTargetId"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    }
+  },
+  "required": [
+    "schema_version",
+    "id",
+    "target_id",
+    "descriptor_id",
+    "descriptor_version",
+    "tenant_id",
+    "cluster_id",
+    "incident_id",
+    "event_kind",
+    "idempotency_key",
+    "sanitized_summary",
+    "deep_link",
+    "status",
+    "attempt_count",
+    "created_at"
+  ],
+  "title": "IntegrationDelivery",
+  "type": "object"
+}

@@ -259,6 +259,7 @@ pub struct ProxyRuntime<P = DefaultMessagingProcessor> {
     processor: Arc<P>,
     sessions: ClientSessionRegistry,
     grpc_service: ProxyGrpcService<P>,
+    drain: rocketmq_proxy_core::ProxyDrainController,
     local_mode_supported: bool,
     auth_runtime: Option<ProxyAuthRuntime>,
     auth_metadata_service: Option<Arc<dyn MetadataService>>,
@@ -372,8 +373,10 @@ where
         let config = Arc::new(config);
         let processor_ref = Arc::clone(&processor);
         let sessions = session_registry.clone();
+        let drain = rocketmq_proxy_core::ProxyDrainController::default();
         let grpc_service =
             ProxyGrpcService::from_execution_guards(Arc::clone(&config), processor, session_registry, grpc_guards)
+                .with_drain_controller(drain.clone())
                 .with_hooks(hooks)
                 .with_metrics(metrics);
         Self {
@@ -381,6 +384,7 @@ where
             processor: processor_ref,
             sessions,
             grpc_service,
+            drain,
             local_mode_supported,
             auth_runtime,
             auth_metadata_service,
@@ -449,6 +453,7 @@ where
             processor,
             sessions,
             grpc_service,
+            drain,
             local_mode_supported,
             auth_runtime,
             auth_metadata_service,
@@ -458,7 +463,7 @@ where
             service_context,
         } = self;
         let auth_context = service_context.child("auth");
-        let mut auth_runtime = auth_runtime;
+        let mut auth_runtime_for_shutdown = auth_runtime.clone();
         let lifecycle_for_shutdown = lifecycle.clone();
         let shared_shutdown = shutdown.boxed().shared();
         let listener_result = async {
@@ -469,21 +474,33 @@ where
                 ));
             }
             verify_cluster_route_and_security(config.mode, auth_metadata_service.as_ref()).await?;
-            if auth_runtime.is_none() {
-                auth_runtime = ProxyAuthRuntime::from_proxy_config_with_metadata_service(
-                    &config.auth,
-                    auth_metadata_service.clone(),
-                    &auth_context,
-                )
-                .await?;
+            if let Some(lifecycle) = lifecycle.as_ref() {
+                drain
+                    .attach_lifecycle(lifecycle.clone())
+                    .map_err(|error| ProxyError::Transport {
+                        message: format!("failed to attach Proxy drain lifecycle: {error}"),
+                    })?;
             }
-            let grpc_service = grpc_service.with_auth_runtime(auth_runtime.clone());
+            let auth_context = service_context.child("auth");
+            let effective_auth_runtime = match auth_runtime.clone() {
+                Some(auth_runtime) => Some(auth_runtime),
+                None => {
+                    ProxyAuthRuntime::from_proxy_config_with_metadata_service(
+                        &config.auth,
+                        auth_metadata_service,
+                        &auth_context,
+                    )
+                    .await?
+                }
+            };
+            auth_runtime_for_shutdown = effective_auth_runtime.clone();
+            let grpc_service = grpc_service.with_auth_runtime(effective_auth_runtime.clone());
             let readiness = lifecycle
                 .map(|lifecycle| LifecycleReadiness::new(lifecycle, if config.remoting.enabled { 2 } else { 1 }));
-            if !config.remoting.enabled {
+            let serve_result = if !config.remoting.enabled {
                 let grpc_ready = readiness;
                 let grpc_context = service_context.child("grpc-ingress");
-                return server::serve_with_report_with_task_group_and_ready(
+                server::serve_with_report_with_task_group_and_ready(
                     config,
                     grpc_service,
                     shared_shutdown.clone(),
@@ -491,57 +508,59 @@ where
                     move || publish_listener_ready(grpc_ready),
                 )
                 .await
-                .and_then(require_healthy_grpc_shutdown);
-            }
-
-            let grpc_shutdown = shared_shutdown.clone();
-            let remoting_shutdown = {
-                let shared_shutdown = shared_shutdown.clone();
-                async move {
-                    let _ = shared_shutdown.await;
-                }
-            };
-            let grpc_parent_task_group = service_context.child("grpc-ingress").task_group().clone();
-            let remoting_service_context = service_context.child("remoting-ingress");
-            let grpc_config = config.clone();
-            let remoting_config = config;
-            let remoting_auth_runtime = auth_runtime.clone();
-            let grpc_ready = readiness.clone();
-            let remoting_ready = readiness;
-            let grpc_future = async move {
-                server::serve_with_report_with_task_group_and_ready(
-                    grpc_config,
-                    grpc_service,
-                    grpc_shutdown,
-                    grpc_parent_task_group,
-                    move || publish_listener_ready(grpc_ready),
-                )
-                .await
                 .and_then(require_healthy_grpc_shutdown)
+            } else {
+                let grpc_shutdown = shared_shutdown.clone();
+                let remoting_shutdown = {
+                    let shared_shutdown = shared_shutdown.clone();
+                    async move {
+                        let _ = shared_shutdown.await;
+                    }
+                };
+                let grpc_parent_task_group = service_context.child("grpc-ingress").task_group().clone();
+                let remoting_service_context = service_context.child("remoting-ingress");
+                let grpc_config = config.clone();
+                let remoting_config = config;
+                let remoting_auth_runtime = effective_auth_runtime;
+                let grpc_ready = readiness.clone();
+                let remoting_ready = readiness;
+                let grpc_future = async move {
+                    server::serve_with_report_with_task_group_and_ready(
+                        grpc_config,
+                        grpc_service,
+                        grpc_shutdown,
+                        grpc_parent_task_group,
+                        move || publish_listener_ready(grpc_ready),
+                    )
+                    .await
+                    .and_then(require_healthy_grpc_shutdown)
+                };
+                let remoting_future = async move {
+                    remoting::serve_with_service_context_and_ready_and_drain(
+                        remoting_service_context,
+                        transport_telemetry,
+                        remoting_config,
+                        processor,
+                        sessions,
+                        remoting_auth_runtime,
+                        remoting_backend,
+                        drain,
+                        remoting_shutdown,
+                        move || publish_listener_ready(remoting_ready),
+                    )
+                    .await
+                    .and_then(require_healthy_remoting_shutdown)
+                };
+                tokio::try_join!(grpc_future, remoting_future).map(|_| ())
             };
-            let remoting_future = async move {
-                remoting::serve_with_service_context_and_ready(
-                    remoting_service_context,
-                    transport_telemetry,
-                    remoting_config,
-                    processor,
-                    sessions,
-                    remoting_auth_runtime,
-                    remoting_backend,
-                    remoting_shutdown,
-                    move || publish_listener_ready(remoting_ready),
-                )
-                .await
-                .and_then(require_healthy_remoting_shutdown)
-            };
-            tokio::try_join!(grpc_future, remoting_future).map(|_| ())
+            serve_result
         }
         .await;
         let deadline = resolve_shutdown_deadline(&shared_shutdown, lifecycle_for_shutdown.as_ref());
         finalize_proxy_run(
             listener_result,
             backend_context.as_ref(),
-            auth_runtime.as_ref(),
+            auth_runtime_for_shutdown.as_ref(),
             &auth_context,
             &service_context,
             deadline,

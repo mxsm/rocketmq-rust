@@ -283,7 +283,7 @@ impl MessageAdmin for AdminSession {
 
     fn resend_dlq_message<'a>(&'a mut self, request: &'a DlqMessageLookupRequest) -> AdminFuture<'a, DlqResendResult> {
         Box::pin(async move {
-            let dlq_message = self.find_dlq_message(request).await?;
+            let dlq_message = MessageAdmin::find_dlq_message(self, request).await?;
             let topic = property(&dlq_message, PROPERTY_RETRY_TOPIC).ok_or_else(|| {
                 AdminError::invalid_argument(
                     "message",

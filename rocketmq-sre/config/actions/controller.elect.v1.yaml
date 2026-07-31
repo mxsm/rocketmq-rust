@@ -1,0 +1,43 @@
+id: controller.elect.v1
+version: 1.0.0
+owner: messaging-platform
+supported_versions:
+  - family: rocketmq-sre.action-plan
+    major: 1
+    minor: 0
+required_capabilities:
+  - planning.controller-election-impact
+config_schema:
+  type: object
+  additionalProperties: false
+parameter_schema:
+  type: object
+  additionalProperties: false
+  required: [controller_group, expected_leader, candidate, expected_term]
+  properties:
+    controller_group: { type: string, maxLength: 128 }
+    expected_leader: { type: string, maxLength: 255 }
+    candidate: { type: string, maxLength: 255 }
+    expected_term: { type: integer, minimum: 1 }
+status: active
+deprecation: null
+risk: r2
+execution_supported: false
+preconditions:
+  - quorum_healthy
+  - candidate_caught_up
+  - expected_term_and_leader_match
+  - manual_runbook_owner_assigned
+max_impact: single_resource
+verification:
+  resource_conditions: [manual_leader_and_term_recorded, quorum_restored]
+  technical_slis: [controller_quorum_health, controller_election_duration]
+  stable_window_seconds: 600
+  max_wait_seconds: 1800
+timeout_seconds: 1800
+compensation:
+  mode: manual_takeover
+  required_before_fields: [expected_leader, expected_term, quorum_members]
+  timeout_seconds: 900
+forbidden_fields: [remove_peer, add_peer, break_quorum, clean_data, auto_execute, raw_request_code]
+plan_only: true

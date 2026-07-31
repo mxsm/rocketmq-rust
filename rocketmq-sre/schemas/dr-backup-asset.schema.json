@@ -1,0 +1,108 @@
+{
+  "$defs": {
+    "DrBackupAssetId": {
+      "description": "Stable identifier for one disaster-recovery backup asset.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "DrBackupAssetKind": {
+      "description": "Backup or rebuild surface tracked by DR Center.",
+      "enum": [
+        "postgre_sql",
+        "object_storage",
+        "oidc_configuration",
+        "secret_references",
+        "policy_bundle",
+        "observability_backend",
+        "control_plane_runtime",
+        "connector_runtime",
+        "executor_runtime",
+        "execution_agent_runtime",
+        "outbox_ledger",
+        "effect_ledger",
+        "quarantine_ledger",
+        "audit_ledger",
+        "rocket_mq_route",
+        "rocket_mq_controller",
+        "rocket_mq_broker_ha",
+        "rocket_mq_store",
+        "rocket_mq_rocks_db",
+        "rocket_mq_tiered_store",
+        "kubernetes_storage"
+      ],
+      "type": "string"
+    },
+    "DrPlanId": {
+      "description": "Stable identifier for a versioned disaster-recovery plan.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "EvidenceId": {
+      "description": "Stable identifier for an evidence snapshot.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Inventory record for a backup, restore, or deterministic rebuild surface.",
+  "properties": {
+    "access_owner": {
+      "type": "string"
+    },
+    "backup_locator_digest": {
+      "type": "string"
+    },
+    "encrypted": {
+      "type": "boolean"
+    },
+    "evidence_ids": {
+      "items": {
+        "$ref": "#/$defs/EvidenceId"
+      },
+      "type": "array"
+    },
+    "id": {
+      "$ref": "#/$defs/DrBackupAssetId"
+    },
+    "kind": {
+      "$ref": "#/$defs/DrBackupAssetKind"
+    },
+    "last_backup_at": {
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "owner": {
+      "type": "string"
+    },
+    "plan_id": {
+      "$ref": "#/$defs/DrPlanId"
+    },
+    "restore_verified_at": {
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "updated_at": {
+      "format": "date-time",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "plan_id",
+    "kind",
+    "owner",
+    "access_owner",
+    "backup_locator_digest",
+    "encrypted",
+    "evidence_ids",
+    "updated_at"
+  ],
+  "title": "DrBackupAsset",
+  "type": "object"
+}

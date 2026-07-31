@@ -1,0 +1,29 @@
+{
+  "pack": "producer-connectivity.v1",
+  "scenario": "normal",
+  "expected_status": "healthy",
+  "expected_reason_codes": ["PRODUCER_CONNECTIVITY_HEALTHY"],
+  "evidence": [
+    {
+      "evidence_id": "00000000-0000-4000-8004-000000000101",
+      "source": "admin-query",
+      "resource": "producer-connectivity/producer-a",
+      "content": {
+        "connected": true,
+        "route_age_seconds": 10,
+        "send_error_rate_percent": 0.1,
+        "retry_rate_percent": 0.2,
+        "timeout_rate_percent": 0,
+        "queue_selection_failures": 0,
+        "backpressure": false,
+        "client_version_supported": true
+      }
+    },
+    {
+      "evidence_id": "00000000-0000-4000-8004-000000000111",
+      "source": "rocketmq-mcp",
+      "resource": "topic-route/topic-a",
+      "content": { "route_available": true, "queue_count": 8 }
+    }
+  ]
+}

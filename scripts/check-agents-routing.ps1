@@ -112,6 +112,8 @@ $rootAgentsText = Read-RepositoryText -RelativePath "AGENTS.md"
 $requiredRoutePaths = @(
     "fuzz/",
     "rocketmq-example/",
+    "rocketmq-tools/rocketmq-mcp/",
+    "rocketmq-sre/",
     "rocketmq-dashboard/rocketmq-dashboard-gpui/",
     "rocketmq-dashboard/rocketmq-dashboard-tauri/",
     "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/",
@@ -126,10 +128,11 @@ foreach ($routePath in $requiredRoutePaths) {
 }
 
 $requiredMcpCommands = @(
-    "cargo check -p rocketmq-mcp",
-    "cargo test -p rocketmq-mcp",
-    "cargo clippy --all-targets -p rocketmq-mcp --features streamable-http -- -D warnings",
-    "cargo doc -p rocketmq-mcp --no-deps"
+    "cargo check --locked",
+    "python scripts/check_read_only_boundary.py",
+    "cargo test --locked",
+    "cargo clippy --locked --all-targets --features streamable-http -- -D warnings",
+    "cargo doc --locked --no-deps"
 )
 
 $requiredRootTerms = @(
@@ -177,6 +180,8 @@ foreach ($sharedPath in $requiredSharedPaths) {
 $expectedProjectAgents = @(
     "fuzz/AGENTS.md",
     "rocketmq-example/AGENTS.md",
+    "rocketmq-tools/rocketmq-mcp/AGENTS.md",
+    "rocketmq-sre/AGENTS.md",
     "rocketmq-dashboard/rocketmq-dashboard-gpui/AGENTS.md",
     "rocketmq-dashboard/rocketmq-dashboard-tauri/AGENTS.md",
     "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/AGENTS.md",
@@ -223,6 +228,8 @@ $workflowRoutes = [ordered]@{
     ".github/workflows/rocketmq-rust-ci.yaml" = "Root workspace validation"
     ".github/workflows/fuzz-ci.yml" = "fuzz/"
     ".github/workflows/rocketmq-example-ci.yaml" = "rocketmq-example/"
+    ".github/workflows/rocketmq-mcp-ci.yaml" = "rocketmq-tools/rocketmq-mcp/"
+    ".github/workflows/rocketmq-sre-ci.yml" = "rocketmq-sre/"
     ".github/workflows/dashboard-web-ci.yml" = "rocketmq-dashboard/rocketmq-dashboard-web/"
     ".github/workflows/dashboard-tauri-ci.yml" = "rocketmq-dashboard/rocketmq-dashboard-tauri/"
     ".github/workflows/website-check.yml" = "rocketmq-website/"
@@ -238,11 +245,63 @@ foreach ($entry in $workflowRoutes.GetEnumerator()) {
     Assert-TextContains -Text $rootAgentsText -Needle $entry.Value -Context "Root AGENTS.md workflow routing for $($entry.Key)"
 }
 
-$rootWorkflowPath = Join-Path $script:RepoRoot ".github/workflows/rocketmq-rust-ci.yaml"
-if (Test-Path -LiteralPath $rootWorkflowPath) {
-    $rootWorkflowText = Get-Content -LiteralPath $rootWorkflowPath -Raw -Encoding UTF8
+$mcpWorkflowPath = Join-Path $script:RepoRoot ".github/workflows/rocketmq-mcp-ci.yaml"
+if (Test-Path -LiteralPath $mcpWorkflowPath) {
+    $mcpWorkflowText = Get-Content -LiteralPath $mcpWorkflowPath -Raw -Encoding UTF8
     foreach ($command in $requiredMcpCommands) {
-        Assert-TextContains -Text $rootWorkflowText -Needle $command -Context "Root workspace CI rocketmq-mcp validation"
+        Assert-TextContains -Text $mcpWorkflowText -Needle $command -Context "Standalone rocketmq-mcp CI validation"
+    }
+    foreach ($triggerPath in @(
+        "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/**",
+        "rocketmq-auth/**",
+        "rocketmq-client/**",
+        "rocketmq-error/**",
+        "rocketmq-macros/**",
+        "rocketmq-model/**",
+        "rocketmq-observability/**",
+        "rocketmq-protocol/**",
+        "rocketmq-runtime/**",
+        "rocketmq-security-api/**",
+        "rocketmq-transport/**",
+        "Cargo.toml",
+        "Cargo.lock",
+        "rust-toolchain.toml"
+    )) {
+        Assert-TextContains -Text $mcpWorkflowText -Needle $triggerPath -Context "Standalone rocketmq-mcp CI consumer trigger"
+    }
+}
+
+$sreWorkflowPath = Join-Path $script:RepoRoot ".github/workflows/rocketmq-sre-ci.yml"
+if (Test-Path -LiteralPath $sreWorkflowPath) {
+    $sreWorkflowText = Get-Content -LiteralPath $sreWorkflowPath -Raw -Encoding UTF8
+    foreach ($triggerPath in @(
+        "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/**",
+        "rocketmq-tools/rocketmq-mcp/**",
+        "rocketmq-auth/**",
+        "rocketmq-client/**",
+        "rocketmq-error/**",
+        "rocketmq-macros/**",
+        "rocketmq-model/**",
+        "rocketmq-observability/**",
+        "rocketmq-protocol/**",
+        "rocketmq-runtime/**",
+        "rocketmq-security-api/**",
+        "rocketmq-transport/**"
+    )) {
+        Assert-TextContains -Text $sreWorkflowText -Needle $triggerPath -Context "Standalone rocketmq-sre CI consumer trigger"
+    }
+}
+
+$standaloneTriggerGuardPath = Join-Path $script:RepoRoot "scripts/standalone_workspace_trigger_guard.py"
+if (Test-Path -LiteralPath $standaloneTriggerGuardPath) {
+    if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
+        Add-Failure "Python is required for standalone workspace consumer-trigger validation"
+    }
+    else {
+        & python $standaloneTriggerGuardPath --repo-root $script:RepoRoot
+        if ($LASTEXITCODE -ne 0) {
+            Add-Failure "Standalone workspace metadata consumer-trigger validation failed"
+        }
     }
 }
 

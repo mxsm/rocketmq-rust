@@ -17,12 +17,20 @@ use rocketmq_client_rust::MQAdminExt;
 use rocketmq_protocol::protocol::body::kv_table::KVTable;
 
 use crate::client_adapter::lifecycle::AdminSession;
+use crate::core::broker::project_broker_diagnostics;
+use crate::core::broker::project_broker_log_filter_state;
 use crate::core::broker::BrokerAdmin;
+use crate::core::broker::BrokerAllowlistedConfig;
+use crate::core::broker::BrokerLogFilterState;
 use crate::core::broker::BrokerSummary;
 use crate::core::broker::ListBrokersRequest;
 use crate::core::broker::ListBrokersResult;
 use crate::core::broker::ProbeBrokerRuntimeRequest;
 use crate::core::broker::ProbeBrokerRuntimeResult;
+use crate::core::broker::QueryBrokerAllowlistedConfigRequest;
+use crate::core::broker::QueryBrokerDiagnosticsRequest;
+use crate::core::broker::QueryBrokerDiagnosticsResult;
+use crate::core::broker::QueryBrokerLogFilterStateRequest;
 use crate::core::AdminError;
 use crate::core::AdminFuture;
 
@@ -100,6 +108,97 @@ impl BrokerAdmin for AdminSession {
                 }
             }
             Ok(result)
+        })
+    }
+
+    fn query_broker_diagnostics<'a>(
+        &'a mut self,
+        request: &'a QueryBrokerDiagnosticsRequest,
+    ) -> AdminFuture<'a, QueryBrokerDiagnosticsResult> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            let cluster_info = self
+                .inner
+                .examine_broker_cluster_info()
+                .await
+                .map_err(|error| AdminError::backend("examine_broker_cluster_info", error.to_string()))?;
+            let broker_names = cluster_info
+                .cluster_addr_table
+                .as_ref()
+                .and_then(|table| table.get(request.cluster.as_str()))
+                .cloned()
+                .unwrap_or_default();
+            let broker_table = cluster_info.broker_addr_table.unwrap_or_default();
+            let observed_at_millis = self.clock.now_millis();
+            let mut brokers = Vec::new();
+            let mut unavailable_brokers = 0usize;
+            for broker_name in broker_names {
+                let Some(broker_data) = broker_table.get(&broker_name) else {
+                    continue;
+                };
+                for (broker_id, broker_addr) in broker_data.broker_addrs() {
+                    match self.inner.fetch_broker_runtime_stats(broker_addr.clone()).await {
+                        Ok(runtime) => brokers.push(project_broker_diagnostics(
+                            broker_name.to_string(),
+                            *broker_id,
+                            &runtime,
+                        )),
+                        Err(_) => unavailable_brokers = unavailable_brokers.saturating_add(1),
+                    }
+                }
+            }
+            brokers.sort_by(|left, right| {
+                left.broker_name
+                    .cmp(&right.broker_name)
+                    .then(left.broker_id.cmp(&right.broker_id))
+            });
+            Ok(QueryBrokerDiagnosticsResult {
+                schema_version: crate::core::broker::BROKER_DIAGNOSTICS_SCHEMA_VERSION.to_owned(),
+                observed_at_millis,
+                partial: unavailable_brokers > 0
+                    || brokers
+                        .iter()
+                        .any(|broker| broker.coverage != crate::core::broker::BrokerDiagnosticsCoverage::Available),
+                brokers,
+                unavailable_brokers,
+            })
+        })
+    }
+
+    fn query_allowlisted_config<'a>(
+        &'a mut self,
+        request: &'a QueryBrokerAllowlistedConfigRequest,
+    ) -> AdminFuture<'a, BrokerAllowlistedConfig> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            let config = rocketmq_client_rust::MQAdminReadExt::get_broker_config_allowlisted(
+                &self.inner,
+                CheetahString::from(request.broker_addr.as_str()),
+            )
+            .await
+            .map_err(|error| AdminError::backend("get_broker_config_allowlisted", error.to_string()))?;
+            Ok(BrokerAllowlistedConfig {
+                generation: config.generation,
+                send_message_thread_pool_nums: config.send_message_thread_pool_nums,
+                pull_message_thread_pool_nums: config.pull_message_thread_pool_nums,
+                flush_delay_offset_interval_ms: config.flush_delay_offset_interval_ms,
+                max_client_event_count: config.max_client_event_count,
+            })
+        })
+    }
+
+    fn query_log_filter_state<'a>(
+        &'a mut self,
+        request: &'a QueryBrokerLogFilterStateRequest,
+    ) -> AdminFuture<'a, BrokerLogFilterState> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            let runtime = self
+                .inner
+                .fetch_broker_runtime_stats(CheetahString::from(request.broker_addr.as_str()))
+                .await
+                .map_err(|error| AdminError::backend("fetch_broker_runtime_stats", error.to_string()))?;
+            Ok(project_broker_log_filter_state(request.logger.clone(), &runtime))
         })
     }
 }

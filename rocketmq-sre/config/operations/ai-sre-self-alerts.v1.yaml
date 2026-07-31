@@ -1,0 +1,185 @@
+# Copyright 2026 The RocketMQ Rust Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: rocketmq-sre-self-operations
+  labels:
+    app.kubernetes.io/part-of: rocketmq-sre
+spec:
+  groups:
+    - name: rocketmq-sre-self-availability
+      rules:
+        - alert: RocketMQSREControlPlaneUnavailable
+          expr: probe_success{job="sre-control-plane-ready"} == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: AI SRE Control Plane is unavailable
+            runbook: ai-sre-control-plane-unavailable
+            safety_response: deny_new_workflows
+
+        - alert: RocketMQSREConnectorEvidenceStale
+          expr: connector_oldest_heartbeat_age_seconds > 120
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: AI SRE evidence freshness is outside its objective
+            runbook: ai-sre-connector-evidence-stale
+            safety_response: rules_only_or_read_only_degraded
+
+        - alert: RocketMQSREExecutorUnavailable
+          expr: probe_success{job="sre-executor-ready"} == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: AI SRE Executor is unavailable
+            runbook: ai-sre-executor-unavailable
+            safety_response: freeze_new_mutation
+
+        - alert: RocketMQSREExecutionAgentUnavailable
+          expr: probe_success{job="sre-execution-agent-ready"} == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: AI SRE Execution Agent is unavailable
+            runbook: ai-sre-agent-or-fence-failure
+            safety_response: freeze_new_mutation
+
+        - alert: RocketMQSREPostgreSQLUnavailable
+          expr: database_status_healthy == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: AI SRE PostgreSQL is unavailable
+            runbook: ai-sre-postgresql-unavailable
+            safety_response: deny_new_workflows_and_mutation
+
+    - name: rocketmq-sre-self-backlog-and-freshness
+      rules:
+        - alert: RocketMQSREWorkflowQueueBacklog
+          expr: workflow_queue_depth > 100
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: AI SRE workflow queue is growing
+            runbook: ai-sre-control-plane-unavailable
+            safety_response: shed_new_background_work
+
+        - alert: RocketMQSREEvidenceDelayed
+          expr: evidence_oldest_pending_age_seconds > 120
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: AI SRE evidence collection is stale
+            runbook: ai-sre-connector-evidence-stale
+            safety_response: reject_stale_evidence_and_degrade
+
+        - alert: RocketMQSRENotificationBacklog
+          expr: notification_oldest_pending_age_seconds > 300
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: AI SRE notification outbox is delayed
+            runbook: ai-sre-outbox-backlog
+            safety_response: preserve_pending_and_alert
+
+        - alert: RocketMQSREProbeCleanupRequired
+          expr: probe_stale_job_count > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: AI SRE has stale bounded probe resources
+            runbook: ai-sre-probe-failure-or-cleanup
+            safety_response: disable_new_probe_runs
+
+    - name: rocketmq-sre-self-model
+      rules:
+        - record: model_error_ratio
+          expr: sum(rate(rocketmq_sre_model_errors_total[10m])) / clamp_min(sum(rate(rocketmq_sre_model_requests_total[10m])), 1)
+
+        - record: model_cost_microusd
+          expr: sum(increase(rocketmq_sre_model_cost_microusd_total[1h]))
+
+        - alert: RocketMQSREModelErrorRatioHigh
+          expr: model_error_ratio > 0.2
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: AI SRE model error ratio is high
+            runbook: ai-sre-provider-degraded
+            safety_response: fallback_then_rules_only
+
+        - alert: RocketMQSREModelCostBudgetExceeded
+          expr: model_cost_microusd > model_hourly_budget_microusd
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: AI SRE model cost exceeded the configured budget
+            runbook: ai-sre-provider-degraded
+            safety_response: quarantine_expensive_profile_and_fallback
+
+    - name: rocketmq-sre-self-execution-safety
+      rules:
+        - alert: RocketMQSRELeaseOrFenceFailure
+          expr: increase(lease_activation_failure_count[5m]) + increase(fence_rejection_count[5m]) > 0
+          for: 0m
+          labels:
+            severity: critical
+          annotations:
+            summary: AI SRE lease or fencing rejected a mutation
+            runbook: ai-sre-agent-or-fence-failure
+            safety_response: freeze_new_mutation
+
+        - alert: RocketMQSREUnknownEffect
+          expr: unknown_effect_count > 0
+          for: 0m
+          labels:
+            severity: critical
+          annotations:
+            summary: AI SRE has an unresolved mutation effect
+            runbook: ai-sre-agent-or-fence-failure
+            safety_response: freeze_and_require_manual_reconciliation
+
+        - alert: RocketMQSREActiveQuarantine
+          expr: active_quarantine_count > 0
+          for: 0m
+          labels:
+            severity: critical
+          annotations:
+            summary: AI SRE has a quarantined target resource
+            runbook: ai-sre-agent-or-fence-failure
+            safety_response: retain_quarantine_until_manual_clear
+
+        - alert: RocketMQSREAuditPersistenceFailure
+          expr: increase(audit_persistence_failure_count[5m]) > 0
+          for: 0m
+          labels:
+            severity: critical
+          annotations:
+            summary: AI SRE cannot persist the execution audit trail
+            runbook: ai-sre-postgresql-unavailable
+            safety_response: freeze_new_mutation

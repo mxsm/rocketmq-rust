@@ -86,6 +86,14 @@ impl ProxyRequestOutcome {
             Self::Transport { .. } => ProxyRpcOutcome::TransportFailed,
         }
     }
+
+    pub(crate) fn metric_result(&self) -> &'static str {
+        match self {
+            Self::Payload(status) if status.is_ok() => "success",
+            Self::Payload(_) => "payload_failure",
+            Self::Transport { .. } => "transport_failure",
+        }
+    }
 }
 
 #[async_trait]
@@ -189,6 +197,10 @@ impl ProxyMetrics {
     pub fn record_forward_latency(&self, elapsed: std::time::Duration) {
         self.otel
             .record_forward_latency(elapsed.as_millis().clamp(0, u128::from(u64::MAX)) as u64);
+    }
+
+    pub fn record_forward_completed(&self, elapsed: std::time::Duration) {
+        self.record_forward_latency(elapsed);
     }
 
     pub fn snapshot(

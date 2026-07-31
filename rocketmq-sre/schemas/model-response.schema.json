@@ -1,0 +1,340 @@
+{
+  "$defs": {
+    "FinishReason": {
+      "description": "Why a provider stopped generation.",
+      "enum": [
+        "stop",
+        "length",
+        "tool_calls",
+        "content_filter",
+        "safety",
+        "cancelled",
+        "error",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "ModelContentPart": {
+      "description": "One typed content part in a canonical message.",
+      "oneOf": [
+        {
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "const": "text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "json",
+              "type": "string"
+            },
+            "value": true
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "media_type": {
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/ModelImageSource"
+            },
+            "type": {
+              "const": "image",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "media_type",
+            "source"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "call": {
+              "$ref": "#/$defs/ModelToolCall"
+            },
+            "type": {
+              "const": "tool_call",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "call"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "content": true,
+            "is_error": {
+              "type": "boolean"
+            },
+            "tool_call_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "tool_result",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "tool_call_id",
+            "content",
+            "is_error"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "const": "reasoning",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ModelImageSource": {
+      "description": "A provider-neutral image reference.\n\nData URLs are intentionally represented as references. The gateway's\nevidence preparation layer remains responsible for bounding and redacting\nimage data before it reaches this contract.",
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "const": "url",
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "url"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "reference": {
+              "type": "string"
+            },
+            "type": {
+              "const": "data_reference",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "reference"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ModelToolCall": {
+      "description": "Provider-neutral tool call selected by a model.",
+      "properties": {
+        "arguments": true,
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "arguments"
+      ],
+      "type": "object"
+    },
+    "ModelUsage": {
+      "description": "Provider-neutral token usage.",
+      "properties": {
+        "cached_input_tokens": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "input_tokens": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "output_tokens": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "reasoning_tokens": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "total_tokens": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "SchemaVersion": {
+      "description": "Version negotiation information for a serialized contract family.",
+      "properties": {
+        "family": {
+          "type": "string"
+        },
+        "major": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "minor": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "required_features": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "family",
+        "major",
+        "minor"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Canonical response after provider-specific translation.",
+  "properties": {
+    "content": {
+      "default": "",
+      "type": "string"
+    },
+    "finish_reason": {
+      "$ref": "#/$defs/FinishReason"
+    },
+    "input_tokens": {
+      "description": "Compatibility fields retained for Phase 00 consumers.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "model": {
+      "type": "string"
+    },
+    "output_tokens": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "parts": {
+      "items": {
+        "$ref": "#/$defs/ModelContentPart"
+      },
+      "type": "array"
+    },
+    "provider": {
+      "type": "string"
+    },
+    "provider_request_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reasoning_content": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "schema": {
+      "$ref": "#/$defs/SchemaVersion"
+    },
+    "tool_calls": {
+      "items": {
+        "$ref": "#/$defs/ModelToolCall"
+      },
+      "type": "array"
+    },
+    "usage": {
+      "$ref": "#/$defs/ModelUsage",
+      "default": {
+        "cached_input_tokens": null,
+        "input_tokens": null,
+        "output_tokens": null,
+        "reasoning_tokens": null,
+        "total_tokens": null
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "provider",
+    "model",
+    "finish_reason"
+  ],
+  "title": "CanonicalModelResponse",
+  "type": "object"
+}

@@ -37,6 +37,7 @@ use rocketmq_observability::MetricsExporterType;
 use rocketmq_protocol::protocol::remoting_command_facade::initialize_remoting_version;
 use rocketmq_runtime::common::parse_config_file;
 use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::RuntimeComponent;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ServiceLifecycle;
@@ -141,27 +142,12 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         .context("failed to resolve namesrv log filter")?;
     let mut bootstrap_config = build_namesrv_telemetry_bootstrap_config(&namesrv_config, &process_telemetry);
     bootstrap_config.logging.reload = logging_overrides.logging.reload;
-    let telemetry_guard = rocketmq_observability::install_global_with_filter_and_service_context(
-        &bootstrap_config,
-        resolved_filter.clone(),
-        &service_context,
-    )
-    .await
-    .context("failed to initialize namesrv telemetry bootstrap")?;
-    if let Err(registration_error) = register_namesrv_release_identity(&telemetry_guard, &process_telemetry) {
-        let cleanup_error = telemetry_guard
-            .shutdown_with_service_context(&service_context, lifecycle.config().shutdown_timeout)
-            .await
-            .into_result()
-            .err()
-            .map(|error| error.to_string());
-        return Err(match cleanup_error {
-            Some(cleanup_error) => registration_error.context(format!(
-                "namesrv telemetry cleanup after release identity failure also failed: {cleanup_error}"
-            )),
-            None => registration_error,
-        });
-    }
+    rocketmq_observability::apply_standard_otlp_environment(&mut bootstrap_config)
+        .context("failed to apply standard OTLP environment to namesrv telemetry")?;
+    let telemetry_guard =
+        rocketmq_observability::install_global_with_filter(&bootstrap_config, resolved_filter.clone())
+            .context("failed to initialize namesrv telemetry bootstrap")?;
+    register_namesrv_release_identity(&telemetry_guard, &process_telemetry)?;
     log_telemetry_bootstrap(
         &bootstrap_config,
         &resolved_filter,
@@ -180,6 +166,22 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
             tracing::warn!(error = %shutdown_error, "namesrv telemetry cleanup after lifecycle startup failure was unhealthy");
         }
         return Err(error).context("failed to start NameServer lifecycle boundary");
+    }
+    if let Err(error) = rocketmq_observability::start_runtime_diagnostics_endpoint_from_env(
+        &service_context,
+        RuntimeComponent::NameServer,
+    )
+    .await
+    {
+        lifecycle.mark_failed();
+        let request = lifecycle.request_shutdown(ShutdownReason::Internal);
+        if let Err(shutdown_error) = telemetry_guard
+            .shutdown_with_timeout(request.deadline.remaining())
+            .into_result()
+        {
+            tracing::warn!(error = %shutdown_error, "namesrv telemetry cleanup after diagnostics startup failure was unhealthy");
+        }
+        return Err(error).context("failed to start protected NameServer runtime diagnostics");
     }
 
     println!("{}", LOGO);
@@ -860,34 +862,40 @@ mod tests {
     }
 
     #[test]
-    fn namesrv_release_identity_config_enables_prometheus_before_install() {
-        let namesrv_config = NamesrvConfig {
-            rocketmq_home: "target/namesrv-release-identity".to_string(),
-            ..NamesrvConfig::default()
-        };
+    fn namesrv_bootstrap_accepts_standard_otlp_environment_values() {
         let process_telemetry =
             rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig::try_from_values(
                 "rocketmq-namesrv",
-                Some("0123456789abcdef0123456789abcdef01234567"),
-                Some("namesrv-01"),
-                Some("true"),
-                Some("prometheus"),
-                Some("127.0.0.1:9557"),
-                Some("/internal/metrics"),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
             )
-            .expect("NameServer Prometheus process telemetry");
+            .expect("local NameServer process telemetry");
+        let mut config = build_namesrv_telemetry_bootstrap_config(&NamesrvConfig::default(), &process_telemetry);
 
-        let config = build_namesrv_telemetry_bootstrap_config(&namesrv_config, &process_telemetry);
+        rocketmq_observability::apply_standard_otlp_environment_values(
+            &mut config,
+            Some(std::ffi::OsStr::new("http://collector:4317")),
+            Some(std::ffi::OsStr::new("grpc")),
+        )
+        .expect("valid standard OTLP environment should apply");
 
         assert!(config.observability.enabled);
-        assert!(config.observability.metrics.enabled);
+        assert_eq!(config.observability.service_name, "rocketmq-namesrv");
         assert_eq!(
             config.observability.metrics.exporter,
-            rocketmq_observability::MetricsExporter::Prometheus
+            rocketmq_observability::MetricsExporter::OtlpGrpc
         );
-        assert_eq!(config.observability.prometheus.host, "127.0.0.1");
-        assert_eq!(config.observability.prometheus.port, 9557);
-        assert_eq!(config.observability.prometheus.path, "/internal/metrics");
-        assert_eq!(process_telemetry.release_identity().service(), "rocketmq-namesrv");
+        assert_eq!(
+            config.observability.traces.exporter,
+            rocketmq_observability::TraceExporter::OtlpGrpc
+        );
+        assert_eq!(
+            config.observability.logs.exporter,
+            rocketmq_observability::LogsExporter::OtlpGrpc
+        );
     }
 }

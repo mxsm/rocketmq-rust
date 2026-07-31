@@ -54,6 +54,11 @@ data:
     brokerClusterName = "RocketmqRust"
     brokerId = 0
 
+{{- if $.Values.services.broker.logFilterReloadEnabled }}
+    [logging.reload]
+    enabled = true
+
+{{- end }}
     [store]
     haListenAddress = "0.0.0.0"
     haListenPort = 10912
@@ -175,11 +180,13 @@ data:
     namesrvAddr = "{{ include "rocketmq.namesrvAddresses" . }}"
 
     [auth]
+    clusterName = "RocketmqRust"
     authenticationEnabled = true
     authorizationEnabled = true
     authConfigPath = "/var/lib/rocketmq/proxy/auth"
     aclFile = "/var/run/secrets/rocketmq/proxy-acl.yml"
     aclFileWatchEnabled = true
+    signatureAlgorithm = "HmacSHA256"
 ---
 apiVersion: v1
 kind: ConfigMap

@@ -16,7 +16,10 @@
 |---|---|---|
 | `rocketmq-dashboard/rocketmq-dashboard-common/` | Root workspace member and shared dashboard crate | This file |
 | `rocketmq-example/` | Standalone Cargo project | `rocketmq-example/AGENTS.md` |
-| `fuzz/` | Standalone Cargo fuzz project | `fuzz/AGENTS.md` |
+| `rocketmq-tools/rocketmq-mcp/` | Standalone Rust MCP server | Its local `AGENTS.md` |
+| `rocketmq-sre/` | Standalone AI SRE Rust workspace and UI | Its local `AGENTS.md` |
+| `rocketmq-sre/ui/` | Standalone React/TypeScript/Vite AI SRE frontend | Its local `AGENTS.md` |
+| `rocketmq-sre/sdk/typescript/` | Standalone read-only AI SRE TypeScript SDK | Its local `AGENTS.md` |
 | `rocketmq-dashboard/rocketmq-dashboard-gpui/` | Standalone Cargo project | Its local `AGENTS.md` |
 | `rocketmq-dashboard/rocketmq-dashboard-tauri/` | Standalone Node/Vite/Tauri frontend | Its local `AGENTS.md` |
 | `rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/` | Standalone Rust backend | Its local `AGENTS.md` |
@@ -135,7 +138,9 @@ cargo clippy --all-targets --all-features -- -D warnings
 |---|---|---|---|
 | Root workspace Rust crates and `rocketmq-dashboard/rocketmq-dashboard-common/` | Repository root | Root workspace Rust profile plus applicable focused tests for behavior changes | Apply every matching specialized gate below |
 | `rocketmq-example/` | `rocketmq-example/` | Follow `rocketmq-example/AGENTS.md` | Revalidate when any repository path dependency in its `Cargo.toml` changes, especially client, model, protocol, transport, runtime, error, observability, or admin-core |
-| `fuzz/` | `fuzz/` | Follow `fuzz/AGENTS.md`; CI builds all four targets with the fixed nightly | Revalidate when broker, controller, protocol, or store-local path dependencies change |
+| `rocketmq-sre/` | Its standalone workspace root | Follow `rocketmq-sre/AGENTS.md` | Include every SRE Cargo member and the execution dependency boundary |
+| `rocketmq-sre/ui/` | Its project root | Follow its local `AGENTS.md`; run `npm ci`, lint, tests, API check, and production build | Include OpenAPI, routes, shared UI, and package metadata changes |
+| `rocketmq-sre/sdk/typescript/` | Its project root | Follow its local `AGENTS.md`; run `npm ci` and `npm test` | Preserve the fixed read-only SDK and local-only draft boundary |
 | `rocketmq-dashboard/rocketmq-dashboard-gpui/` | Its project root | Follow its `AGENTS.md` | Revalidate for `rocketmq-dashboard-common/` or shared dashboard behavior changes |
 | `rocketmq-dashboard/rocketmq-dashboard-tauri/` frontend | Its project root | Follow its `AGENTS.md`; CI uses `npm ci` and `npm run build` | Include shared frontend config, shell behavior, and package metadata changes |
 | `rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/` | Its Cargo root | Follow its `AGENTS.md` | Revalidate when a root path dependency used by the backend changes |
@@ -197,13 +202,15 @@ cargo test -p rocketmq-broker --features rocksdb_store pop_consumer
 
 ### RocketMQ MCP
 
-If changes touch `rocketmq-tools/rocketmq-mcp/`, its feature definitions, or a shared public API it consumes, run the CI-equivalent checks:
+If changes touch `rocketmq-tools/rocketmq-mcp/`, its feature definitions, or a shared public API it consumes, run from the MCP project root:
 
 ```bash
-cargo check -p rocketmq-mcp
-cargo test -p rocketmq-mcp
-cargo clippy --all-targets -p rocketmq-mcp --features streamable-http -- -D warnings
-cargo doc -p rocketmq-mcp --no-deps
+cargo check --locked
+python scripts/check_read_only_boundary.py
+cargo test --locked
+cargo test --locked --all-features
+cargo clippy --locked --all-targets --features streamable-http -- -D warnings
+cargo doc --locked --no-deps
 ```
 
 Preserve the MCP deny-by-default boundary: default tools remain read-only/diagnostic; `dangerous-tools` requires

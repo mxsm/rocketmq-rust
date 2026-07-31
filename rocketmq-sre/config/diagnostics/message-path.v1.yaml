@@ -1,0 +1,38 @@
+schema: rocketmq-sre.diagnostic-pack.v1
+id: message-path
+version: 1.0.0
+qualified_id: message-path.v1
+owner: rocketmq-sre
+components: [producer, nameserver, broker, store, consumer]
+output_schema: rocketmq-sre.diagnostic-result.v1
+content_policy:
+  allowed: [message_id_hash, key_hash, trace_id_hash, queue_id, queue_offset, stages, transaction_status]
+  forbidden: [body, message_body, payload, body_base64, message_body_base64]
+  opaque_reference_behavior: reject
+required_evidence:
+  - key: message-metadata
+    source: admin-query
+    resource_prefix: message-metadata/
+    fields: [stages.send, stages.route, stages.store, stages.deliver, stages.ack]
+optional_evidence:
+  - { key: trace, source: tempo, resource_prefix: message-trace/ }
+  - { key: topic-route, source: rocketmq-mcp, resource_prefix: topic-route/ }
+rules:
+  - { reason_code: MESSAGE_SEND_STAGE_MISSING, when: "!stages.send", severity: critical }
+  - { reason_code: MESSAGE_ROUTE_STAGE_MISSING, when: "!stages.route", severity: critical }
+  - { reason_code: MESSAGE_STORE_STAGE_MISSING, when: "!stages.store", severity: critical }
+  - { reason_code: MESSAGE_DELIVERY_STAGE_MISSING, when: "!stages.deliver", severity: critical }
+  - { reason_code: MESSAGE_ACK_STAGE_MISSING, when: "!stages.ack", severity: critical }
+  - reason_code: MESSAGE_TRANSACTION_STATUS_UNKNOWN
+    when: "transaction_status == unknown"
+    severity: warning
+  - { reason_code: MESSAGE_PATH_COMPLETE, when: "all five stages are true", severity: info }
+  - { reason_code: MESSAGE_PATH_EVIDENCE_INCOMPLETE, when: "required fields are absent", severity: warning }
+missing_behavior: inconclusive
+confidence:
+  implementation: deterministic_engine
+  missing_required_cap: 49
+  unsupported_required_cap: 24
+follow_up:
+  - tempo:message-trace/{trace_id_hash}
+  - mcp:topic-route/{topic}

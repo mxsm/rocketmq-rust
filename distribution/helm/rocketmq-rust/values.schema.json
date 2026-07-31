@@ -29,6 +29,7 @@
         "imagePullSecrets",
         "otelEndpoint",
         "secretRefs",
+        "runtimeDiagnostics",
         "podSecurity"
       ],
       "properties": {
@@ -81,6 +82,44 @@
               }
             }
           ]
+        },
+        "runtimeDiagnostics": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "bindAddress",
+            "port",
+            "tokenFile",
+            "sampleIntervalSeconds",
+            "allowInsecureHttp"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "bindAddress": {
+              "type": "string",
+              "pattern": "^([^\\s:]+|\\[[0-9A-Fa-f:]+\\]):[0-9]{1,5}$"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "tokenFile": {
+              "type": "string",
+              "pattern": "^/[^\\s]+$"
+            },
+            "sampleIntervalSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 300
+            },
+            "allowInsecureHttp": {
+              "type": "boolean"
+            }
+          }
         },
         "podSecurity": {
           "type": "object",
@@ -500,6 +539,7 @@
         "replicas",
         "replicaGroupName",
         "autoCreateTopicEnable",
+        "logFilterReloadEnabled",
         "image",
         "persistence",
         "pdb",
@@ -516,6 +556,9 @@
           "minLength": 1
         },
         "autoCreateTopicEnable": {
+          "type": "boolean"
+        },
+        "logFilterReloadEnabled": {
           "type": "boolean"
         },
         "image": {
@@ -620,6 +663,7 @@
       "required": [
         "replicas",
         "image",
+        "innerCredentials",
         "pdb",
         "resources"
       ],
@@ -631,6 +675,45 @@
         },
         "image": {
           "$ref": "#/definitions/image"
+        },
+        "innerCredentials": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "secretName",
+            "secretKey"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "secretName": {
+              "type": "string"
+            },
+            "secretKey": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "enabled": {
+                    "const": true
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "secretName": {
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          ]
         },
         "pdb": {
           "$ref": "#/definitions/pdb"

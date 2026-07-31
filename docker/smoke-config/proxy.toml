@@ -4,11 +4,11 @@
 mode = "cluster"
 
 [grpc]
-listenAddr = "0.0.0.0:8081"
+listenAddr = "127.0.0.1:8081"
 
 [remoting]
 enabled = false
-listenAddr = "0.0.0.0:8080"
+listenAddr = "127.0.0.1:8080"
 
 [cluster]
 namesrvAddr = "rocketmq-namesrv:9876"

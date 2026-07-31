@@ -1,0 +1,31 @@
+schema_version: rocketmq.sre.knowledge-manifest.v1
+owner: rocketmq-rust-sre
+review_status: in_review
+human_validated: false
+ai_generated: true
+rocketmq_version_range: ">=1.0.0"
+items:
+  - id: cluster-topology.v1
+    component: cluster
+    file: cluster-topology.v1.md
+  - id: consumer-lag.v2
+    component: consumer
+    file: consumer-lag.v2.md
+  - id: consumer-runtime.v1
+    component: consumer
+    file: consumer-runtime.v1.md
+  - id: producer-connectivity.v1
+    component: producer
+    file: producer-connectivity.v1.md
+  - id: broker-health.v1
+    component: broker
+    file: broker-health.v1.md
+  - id: message-path.v1
+    component: message
+    file: message-path.v1.md
+  - id: telemetry-pipeline.v1
+    component: observability
+    file: telemetry-pipeline.v1.md
+  - id: deployment-drift.v1
+    component: deployment
+    file: deployment-drift.v1.md

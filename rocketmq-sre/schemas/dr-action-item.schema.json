@@ -1,0 +1,123 @@
+{
+  "$defs": {
+    "ActionItemStatus": {
+      "description": "Action-item lifecycle.",
+      "enum": [
+        "open",
+        "assigned",
+        "in_progress",
+        "blocked",
+        "completed",
+        "reopened",
+        "cancelled"
+      ],
+      "type": "string"
+    },
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "DrActionItemId": {
+      "description": "Stable identifier for an action item created from a disaster-recovery finding.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "DrFindingId": {
+      "description": "Stable identifier for a disaster-recovery finding.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "EvidenceId": {
+      "description": "Stable identifier for an evidence snapshot.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Follow-up item created transactionally from every DR finding.",
+  "properties": {
+    "cluster_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ClusterId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "completed_at": {
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "created_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "due_at": {
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "evidence_ids": {
+      "items": {
+        "$ref": "#/$defs/EvidenceId"
+      },
+      "type": "array"
+    },
+    "finding_id": {
+      "$ref": "#/$defs/DrFindingId"
+    },
+    "id": {
+      "$ref": "#/$defs/DrActionItemId"
+    },
+    "owner": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "status": {
+      "$ref": "#/$defs/ActionItemStatus"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    },
+    "title": {
+      "type": "string"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "verification": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "id",
+    "finding_id",
+    "tenant_id",
+    "title",
+    "status",
+    "evidence_ids",
+    "created_at",
+    "updated_at"
+  ],
+  "title": "DrActionItem",
+  "type": "object"
+}

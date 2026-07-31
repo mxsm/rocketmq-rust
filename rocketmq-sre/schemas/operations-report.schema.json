@@ -1,0 +1,185 @@
+{
+  "$defs": {
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "IncidentId": {
+      "description": "Stable identifier for an SRE incident.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "OperationsFinding": {
+      "description": "One bounded, sanitized item in a handoff or operations report.",
+      "properties": {
+        "category": {
+          "type": "string"
+        },
+        "cluster_id": {
+          "$ref": "#/$defs/ClusterId"
+        },
+        "deep_link": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "incident_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IncidentId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "resource": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "severity": {
+          "type": "string"
+        },
+        "suggested_owner": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "category",
+        "severity",
+        "title",
+        "cluster_id",
+        "detail",
+        "suggested_owner",
+        "observed_at",
+        "deep_link"
+      ],
+      "type": "object"
+    },
+    "OperationsReportWindow": {
+      "description": "Supported operations-report time windows.",
+      "enum": [
+        "daily",
+        "weekly"
+      ],
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Daily or weekly operational report.",
+  "properties": {
+    "cluster_mutation_count": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "diagnostic_pack_findings": {
+      "items": {
+        "$ref": "#/$defs/OperationsFinding"
+      },
+      "type": "array"
+    },
+    "forecast_errors": {
+      "items": {
+        "$ref": "#/$defs/OperationsFinding"
+      },
+      "type": "array"
+    },
+    "forecast_mean_absolute_error": {
+      "format": "double",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "generated_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "partial": {
+      "type": "boolean"
+    },
+    "repeat_incidents": {
+      "items": {
+        "$ref": "#/$defs/OperationsFinding"
+      },
+      "type": "array"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "slo_burns": {
+      "items": {
+        "$ref": "#/$defs/OperationsFinding"
+      },
+      "type": "array"
+    },
+    "source_gaps": {
+      "items": {
+        "$ref": "#/$defs/OperationsFinding"
+      },
+      "type": "array"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    },
+    "warnings": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "window": {
+      "$ref": "#/$defs/OperationsReportWindow"
+    },
+    "window_end": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "window_start": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "worst_clusters": {
+      "items": {
+        "$ref": "#/$defs/OperationsFinding"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "tenant_id",
+    "window",
+    "window_start",
+    "window_end",
+    "generated_at",
+    "worst_clusters",
+    "slo_burns",
+    "diagnostic_pack_findings",
+    "repeat_incidents",
+    "forecast_errors",
+    "source_gaps",
+    "partial",
+    "warnings",
+    "cluster_mutation_count"
+  ],
+  "title": "OperationsReport",
+  "type": "object"
+}

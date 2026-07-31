@@ -1,0 +1,45 @@
+id: consumer.request_mode.patch_allowlisted.v1
+version: 1.0.0
+owner: messaging-platform
+supported_versions:
+  - family: rocketmq-sre.action-plan
+    major: 1
+    minor: 0
+required_capabilities:
+  - admin.consumer-request-mode-cas
+config_schema:
+  type: object
+  additionalProperties: false
+parameter_schema:
+  type: object
+  additionalProperties: false
+  required: [topic, group, expected_version, minimum_client_version, request_mode, pop_share_queue_nums]
+  properties:
+    topic: { type: string, maxLength: 255 }
+    group: { type: string, maxLength: 255 }
+    expected_version: { type: integer, minimum: 0 }
+    minimum_client_version: { type: string, maxLength: 32 }
+    request_mode: { type: string, enum: [PULL, POP] }
+    pop_share_queue_nums: { type: integer, minimum: 0, maximum: 32 }
+status: active
+deprecation: null
+risk: r2
+execution_supported: false
+preconditions:
+  - valid_heterogeneous_critic
+  - topic_group_scope_exact
+  - every_active_client_version_compatible
+  - consume_mode_transition_supported
+max_impact: single_resource
+verification:
+  resource_conditions: [request_mode_version_incremented, all_clients_rebalanced]
+  technical_slis: [consume_success_ratio, consumer_lag]
+  stable_window_seconds: 300
+  max_wait_seconds: 1200
+timeout_seconds: 1200
+compensation:
+  mode: automatic
+  required_before_fields: [previous_request_mode, previous_share_queue_nums, latest_version]
+  timeout_seconds: 600
+forbidden_fields: [broadcast_mode, subscription_change, group_permissions, raw_request_code]
+plan_only: false

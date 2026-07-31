@@ -216,6 +216,11 @@ async fn rocksdb_message_store_start_and_shutdown_manage_rocksdb_maintenance_ser
     store.start().await.expect("start store");
     assert!(store.is_rocksdb_maintenance_running());
     assert!(store.is_message_rocksdb_maintenance_running());
+    let runtime_info = store.get_runtime_info();
+    assert_eq!(runtime_info["storeType"], "rocksdb");
+    assert_eq!(runtime_info["rocksdbMaintenanceSupported"], "true");
+    assert_eq!(runtime_info["rocksdbMaintenanceRunning"], "true");
+    assert_eq!(runtime_info["messageRocksdbMaintenanceRunning"], "true");
 
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
     while store.rocksdb_store().metrics().flush_count == 0
@@ -231,6 +236,9 @@ async fn rocksdb_message_store_start_and_shutdown_manage_rocksdb_maintenance_ser
     store.shutdown().await;
     assert!(!store.is_rocksdb_maintenance_running());
     assert!(!store.is_message_rocksdb_maintenance_running());
+    let runtime_info = store.get_runtime_info();
+    assert_eq!(runtime_info["rocksdbMaintenanceRunning"], "false");
+    assert_eq!(runtime_info["messageRocksdbMaintenanceRunning"], "false");
     assert!(
         store
             .consume_queue_store()

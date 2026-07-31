@@ -1,0 +1,127 @@
+{
+  "$defs": {
+    "ActionItemId": {
+      "description": "Stable identifier for a postmortem action item.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ActionItemStatus": {
+      "description": "Action-item lifecycle.",
+      "enum": [
+        "open",
+        "assigned",
+        "in_progress",
+        "blocked",
+        "completed",
+        "reopened",
+        "cancelled"
+      ],
+      "type": "string"
+    },
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "EvidenceId": {
+      "description": "Stable identifier for an evidence snapshot.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "IncidentId": {
+      "description": "Stable identifier for an SRE incident.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "PostmortemId": {
+      "description": "Stable identifier for a postmortem.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Independently tracked postmortem follow-up.",
+  "properties": {
+    "cluster_id": {
+      "$ref": "#/$defs/ClusterId"
+    },
+    "completed_at": {
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "created_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "due_at": {
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "evidence_ids": {
+      "items": {
+        "$ref": "#/$defs/EvidenceId"
+      },
+      "type": "array"
+    },
+    "execution_journal": true,
+    "id": {
+      "$ref": "#/$defs/ActionItemId"
+    },
+    "incident_id": {
+      "$ref": "#/$defs/IncidentId"
+    },
+    "owner": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "postmortem_id": {
+      "$ref": "#/$defs/PostmortemId"
+    },
+    "status": {
+      "$ref": "#/$defs/ActionItemStatus"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    },
+    "title": {
+      "type": "string"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "verification": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "id",
+    "tenant_id",
+    "cluster_id",
+    "postmortem_id",
+    "incident_id",
+    "title",
+    "status",
+    "evidence_ids",
+    "created_at",
+    "updated_at"
+  ],
+  "title": "ActionItem",
+  "type": "object"
+}

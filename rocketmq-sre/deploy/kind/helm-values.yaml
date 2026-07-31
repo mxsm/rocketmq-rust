@@ -1,0 +1,53 @@
+# Phase 00 Kind-only additions to the canonical values-dev-single.yaml profile.
+# This is an acceptance fixture, not a production values file.
+global:
+  otelEndpoint: http://otel-collector.observability.svc.cluster.local:4317
+  secretRefs:
+    existingSecret: rocketmq-runtime-secrets
+  runtimeDiagnostics:
+    enabled: true
+    allowInsecureHttp: true
+
+namespace:
+  # The runner creates the namespace first so it can provision the development
+  # secret before Helm starts the secure-bootstrap workloads.
+  create: false
+
+networkPolicy:
+  enabled: false
+
+services:
+  broker:
+    autoCreateTopicEnable: true
+    logFilterReloadEnabled: true
+    persistence:
+      enabled: true
+      storageClassName: standard
+      size: 10Gi
+    resources:
+      requests: {cpu: 100m, memory: 256Mi}
+      limits: {cpu: 1000m, memory: 2Gi}
+  namesrv:
+    resources:
+      requests: {cpu: 50m, memory: 128Mi}
+      limits: {cpu: 500m, memory: 512Mi}
+  controller:
+    resources:
+      requests: {cpu: 100m, memory: 128Mi}
+      limits: {cpu: 500m, memory: 512Mi}
+  proxy:
+    innerCredentials:
+      enabled: true
+      secretName: rocketmq-runtime-secrets
+      secretKey: proxy-inner-credentials.yml
+    pdb:
+      enabled: true
+      minAvailable: 1
+    resources:
+      requests: {cpu: 100m, memory: 128Mi}
+      limits: {cpu: 500m, memory: 512Mi}
+  mcp:
+    publicBaseUrl: https://localhost:8089
+    resources:
+      requests: {cpu: 100m, memory: 128Mi}
+      limits: {cpu: 500m, memory: 512Mi}

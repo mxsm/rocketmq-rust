@@ -46,6 +46,7 @@ spec:
           env:
 {{ include "rocketmq.lifecycleEnv" . | indent 12 }}
 {{ include "rocketmq.telemetryEnv" . | indent 12 }}
+{{ if .Values.global.runtimeDiagnostics.enabled }}{{ include "rocketmq.runtimeDiagnosticsEnv" . | indent 12 }}{{ end }}
             - name: POD_NAME
               valueFrom:
                 fieldRef:
@@ -58,6 +59,9 @@ spec:
             - {name: health, containerPort: 8088, protocol: TCP}
 {{- if .Values.metrics.enabled }}
             - {name: metrics, containerPort: {{ .Values.metrics.port }}, protocol: TCP}
+{{- end }}
+{{- if .Values.global.runtimeDiagnostics.enabled }}
+            - {name: runtime-diag, containerPort: {{ .Values.global.runtimeDiagnostics.port }}, protocol: TCP}
 {{- end }}
             - {name: remoting, containerPort: 10911, protocol: TCP}
             - {name: ha, containerPort: 10912, protocol: TCP}
@@ -165,6 +169,7 @@ spec:
           env:
 {{ include "rocketmq.lifecycleEnv" . | indent 12 }}
 {{ include "rocketmq.telemetryEnv" . | indent 12 }}
+{{ if .Values.global.runtimeDiagnostics.enabled }}{{ include "rocketmq.runtimeDiagnosticsEnv" . | indent 12 }}{{ end }}
             - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/namesrv}
             - {name: OTEL_SERVICE_NAME, value: rocketmq-namesrv}
             - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: {{ .Values.global.otelEndpoint | quote }}}
@@ -173,6 +178,9 @@ spec:
             - {name: health, containerPort: 8088, protocol: TCP}
 {{- if .Values.metrics.enabled }}
             - {name: metrics, containerPort: {{ .Values.metrics.port }}, protocol: TCP}
+{{- end }}
+{{- if .Values.global.runtimeDiagnostics.enabled }}
+            - {name: runtime-diag, containerPort: {{ .Values.global.runtimeDiagnostics.port }}, protocol: TCP}
 {{- end }}
             - {name: remoting, containerPort: 9876, protocol: TCP}
 {{ include "rocketmq.lifecycleProbes" . | indent 10 }}
@@ -262,6 +270,7 @@ spec:
           env:
 {{ include "rocketmq.lifecycleEnv" . | indent 12 }}
 {{ include "rocketmq.telemetryEnv" . | indent 12 }}
+{{ if .Values.global.runtimeDiagnostics.enabled }}{{ include "rocketmq.runtimeDiagnosticsEnv" . | indent 12 }}{{ end }}
             - name: POD_NAME
               valueFrom:
                 fieldRef:
@@ -277,6 +286,9 @@ spec:
 {{- if .Values.metrics.enabled }}
             - {name: metrics, containerPort: {{ .Values.metrics.port }}, protocol: TCP}
 {{- end }}
+{{- if .Values.global.runtimeDiagnostics.enabled }}
+            - {name: runtime-diag, containerPort: {{ .Values.global.runtimeDiagnostics.port }}, protocol: TCP}
+{{- end }}
             - {name: remoting, containerPort: 60109, protocol: TCP}
             - {name: raft, containerPort: 60110, protocol: TCP}
 {{ include "rocketmq.lifecycleProbes" . | indent 10 }}
@@ -287,7 +299,11 @@ spec:
           volumeMounts:
             - name: config
               mountPath: /etc/rocketmq/controller.toml
+{{- if eq (int .Values.services.controller.replicas) 1 }}
+              subPath: controller-0.toml
+{{- else }}
               subPathExpr: $(POD_NAME).toml
+{{- end }}
               readOnly: true
 {{- if .Values.maintenance.enabled }}
             - name: maintenance-policy
@@ -379,6 +395,7 @@ spec:
           env:
 {{ include "rocketmq.lifecycleEnv" . | indent 12 }}
 {{ include "rocketmq.telemetryEnv" . | indent 12 }}
+{{ if .Values.global.runtimeDiagnostics.enabled }}{{ include "rocketmq.runtimeDiagnosticsEnv" . | indent 12 }}{{ end }}
             - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/proxy}
             - {name: OTEL_SERVICE_NAME, value: rocketmq-proxy}
             - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: {{ .Values.global.otelEndpoint | quote }}}
@@ -387,6 +404,9 @@ spec:
             - {name: health, containerPort: 8088, protocol: TCP}
 {{- if .Values.metrics.enabled }}
             - {name: metrics, containerPort: {{ .Values.metrics.port }}, protocol: TCP}
+{{- end }}
+{{- if .Values.global.runtimeDiagnostics.enabled }}
+            - {name: runtime-diag, containerPort: {{ .Values.global.runtimeDiagnostics.port }}, protocol: TCP}
 {{- end }}
             - {name: remoting, containerPort: 8080, protocol: TCP}
             - {name: grpc, containerPort: 8081, protocol: TCP}
@@ -398,6 +418,9 @@ spec:
           volumeMounts:
             - {name: config, mountPath: /etc/rocketmq/proxy.toml, subPath: proxy.toml, readOnly: true}
             - {name: data, mountPath: /var/lib/rocketmq/proxy}
+{{- if .Values.services.proxy.innerCredentials.enabled }}
+            - {name: proxy-inner-credentials, mountPath: /var/lib/rocketmq/proxy/conf, readOnly: true}
+{{- end }}
             - {name: runtime-secrets, mountPath: /var/run/secrets/rocketmq, readOnly: true}
             - {name: tmp, mountPath: /tmp/rocketmq}
       volumes:
@@ -407,6 +430,16 @@ spec:
         - name: data
           emptyDir:
             sizeLimit: 2Gi
+{{- if .Values.services.proxy.innerCredentials.enabled }}
+        - name: proxy-inner-credentials
+          secret:
+            secretName: {{ required "services.proxy.innerCredentials.secretName is required when inner credentials are enabled" .Values.services.proxy.innerCredentials.secretName | quote }}
+            optional: false
+            defaultMode: 0440
+            items:
+              - key: {{ required "services.proxy.innerCredentials.secretKey is required when inner credentials are enabled" .Values.services.proxy.innerCredentials.secretKey | quote }}
+                path: tools.yml
+{{- end }}
         - name: runtime-secrets
 {{- include "rocketmq.secretVolume" . | nindent 10 }}
         - name: tmp

@@ -1,0 +1,117 @@
+schema_version: rocketmq.sre.required-signals.v1
+component: proxy
+exposure:
+  implementation: implemented_local
+  observable: true
+  remote_queryable: protected_connector_api
+signals:
+  - requirement_id: proxy.availability
+    purpose: Determine whether the proxy process is serving.
+    owner: proxy
+    source_symbol: PROXY_UP
+    registry_reference: rocketmq_proxy_up
+    signal_type: metric
+    status: queryable
+    query: max(rocketmq_proxy_up)
+    query_resource: metrics/rocketmq_proxy_up_ratio
+    freshness_seconds: 30
+    expected_attributes: [cluster, node_id, proxy_mode]
+    sensitivity: operational
+    missing_behavior: missing
+    evidence_field: proxy.availability
+  - requirement_id: proxy.active_connections
+    purpose: Detect connection pressure before RPC latency and failures rise.
+    owner: proxy
+    source_symbol: PROXY_ACTIVE_CONNECTIONS
+    registry_reference: rocketmq_proxy_active_connections
+    signal_type: metric
+    status: queryable
+    query: max(rocketmq_proxy_active_connections)
+    query_resource: metrics/rocketmq_proxy_active_connections
+    freshness_seconds: 30
+    expected_attributes: []
+    sensitivity: operational
+    missing_behavior: missing
+    evidence_field: proxy.active_connections
+  - requirement_id: proxy.grpc_errors
+    purpose: Separate bounded payload and transport failure classes.
+    owner: proxy
+    source_symbol: PROXY_GRPC_ERRORS_TOTAL
+    registry_reference: rocketmq_proxy_grpc_errors_total
+    signal_type: metric
+    status: queryable
+    query: sum by (result) (rate(rocketmq_proxy_grpc_errors_total[5m]))
+    query_resource: metrics/rocketmq_proxy_grpc_errors_total
+    freshness_seconds: 60
+    expected_attributes: [result]
+    sensitivity: operational
+    missing_behavior: missing
+    evidence_field: proxy.grpc_errors
+  - requirement_id: proxy.grpc_latency
+    purpose: Detect ingress latency degradation.
+    owner: proxy
+    source_symbol: PROXY_GRPC_REQUEST_LATENCY
+    registry_reference: rocketmq_proxy_grpc_request_latency
+    signal_type: metric
+    status: queryable
+    query: histogram_quantile(0.99, sum by (le) (rate(rocketmq_proxy_grpc_request_latency_milliseconds_bucket[5m])))
+    query_resource: metrics/rocketmq_proxy_grpc_request_latency_milliseconds_bucket
+    freshness_seconds: 60
+    expected_attributes: []
+    sensitivity: operational
+    missing_behavior: missing
+    evidence_field: proxy.grpc_latency_p99_ms
+  - requirement_id: proxy.forward_latency
+    purpose: Detect degradation between Proxy ingress and the downstream RocketMQ operation.
+    owner: proxy
+    source_symbol: PROXY_FORWARD_LATENCY
+    registry_reference: rocketmq_proxy_forward_latency
+    signal_type: metric
+    status: queryable
+    query: histogram_quantile(0.99, sum by (le) (rate(rocketmq_proxy_forward_latency_milliseconds_bucket[5m])))
+    query_resource: metrics/rocketmq_proxy_forward_latency_milliseconds_bucket
+    freshness_seconds: 60
+    expected_attributes: []
+    sensitivity: operational
+    missing_behavior: missing
+    evidence_field: proxy.forward_latency_p99_ms
+  - requirement_id: proxy.rpc_span
+    purpose: Correlate bounded RPC names and outcomes.
+    owner: proxy
+    source_symbol: PROXY_RPC
+    registry_reference: rocketmq_proxy.rpc
+    signal_type: span
+    status: queryable
+    query: span.name = "rocketmq_proxy.rpc"
+    freshness_seconds: 300
+    expected_attributes: [rpc, result]
+    sensitivity: operational
+    missing_behavior: not_production_verified
+    evidence_field: proxy.rpc_trace
+    notes: Client ID, principal, and network addresses are intentionally excluded.
+  - requirement_id: proxy.forward_span
+    purpose: Correlate bounded downstream forwarding outcomes without client or address data.
+    owner: proxy
+    source_symbol: PROXY_FORWARD
+    registry_reference: RocketMQ PROXY FORWARD
+    signal_type: span
+    status: queryable
+    query: span.name = "RocketMQ PROXY FORWARD"
+    freshness_seconds: 300
+    expected_attributes: [rpc, result]
+    sensitivity: operational
+    missing_behavior: not_production_verified
+    evidence_field: proxy.forward_trace
+  - requirement_id: proxy.auth_span
+    purpose: Correlate bounded authentication outcomes without principals or credentials.
+    owner: proxy
+    source_symbol: PROXY_AUTH
+    registry_reference: RocketMQ PROXY AUTH
+    signal_type: span
+    status: queryable
+    query: span.name = "RocketMQ PROXY AUTH"
+    freshness_seconds: 300
+    expected_attributes: [rpc, result]
+    sensitivity: operational
+    missing_behavior: not_production_verified
+    evidence_field: proxy.auth_trace

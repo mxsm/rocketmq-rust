@@ -23,6 +23,7 @@ use std::pin::Pin;
 
 pub mod admin;
 pub mod broker;
+pub mod client_connection;
 pub mod clock;
 pub mod consumer;
 pub mod dashboard;
@@ -30,6 +31,7 @@ pub mod error;
 pub mod error_view;
 pub mod lite;
 pub mod message;
+pub mod proxy;
 pub mod queue;
 pub mod release_checkpoint;
 pub mod security;

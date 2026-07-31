@@ -1,0 +1,65 @@
+# Copyright 2023 The RocketMQ Rust Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+[package]
+name = "rocketmq-sre-eval"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Schema and coverage evaluation utilities for RocketMQ Rust AI SRE"
+
+[dependencies]
+axum.workspace = true
+base64.workspace = true
+chrono.workspace = true
+jsonwebtoken.workspace = true
+rocketmq-sre-contracts.workspace = true
+rocketmq-sre-core.workspace = true
+rocketmq-sre-model-gateway.workspace = true
+rocketmq-runtime.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "schema-export"
+path = "src/bin/schema_export.rs"
+
+[[bin]]
+name = "phase3-schema-export"
+path = "src/bin/phase3_schema_export.rs"
+
+[[bin]]
+name = "phase00-dev-issuer"
+path = "src/bin/phase00_dev_issuer.rs"
+
+[[bin]]
+name = "phase01-shadow-eval"
+path = "src/bin/phase01_shadow_eval.rs"
+
+[[bin]]
+name = "phase01-model-mock"
+path = "src/bin/phase01_model_mock.rs"

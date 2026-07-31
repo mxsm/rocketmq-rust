@@ -23,6 +23,7 @@ impl BrokerMetricsConstant {
     // Gauge Metrics - System Status
     pub const GAUGE_PROCESSOR_WATERMARK: &'static str = "rocketmq_processor_watermark";
     pub const GAUGE_BROKER_PERMISSION: &'static str = "rocketmq_broker_permission";
+    pub const GAUGE_BROKER_UP: &'static str = "rocketmq_broker_up";
     pub const GAUGE_TOPIC_NUM: &'static str = "rocketmq_topic_number";
     pub const GAUGE_CONSUMER_GROUP_NUM: &'static str = "rocketmq_consumer_group_number";
 
@@ -92,6 +93,7 @@ pub mod metrics {
 
         pub const PROCESSOR_WATERMARK: &str = BMC::GAUGE_PROCESSOR_WATERMARK;
         pub const BROKER_PERMISSION: &str = BMC::GAUGE_BROKER_PERMISSION;
+        pub const BROKER_UP: &str = BMC::GAUGE_BROKER_UP;
         pub const TOPIC_NUM: &str = BMC::GAUGE_TOPIC_NUM;
         pub const CONSUMER_GROUP_NUM: &str = BMC::GAUGE_CONSUMER_GROUP_NUM;
         pub const PRODUCER_CONNECTIONS: &str = BMC::GAUGE_PRODUCER_CONNECTIONS;

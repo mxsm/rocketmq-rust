@@ -1,0 +1,172 @@
+{
+  "$defs": {
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "EvidenceId": {
+      "description": "Stable identifier for an evidence snapshot.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "IncidentId": {
+      "description": "Stable identifier for an SRE incident.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ReleaseId": {
+      "description": "Stable identifier for one supervised release workflow.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ReleaseObservation": {
+      "additionalProperties": false,
+      "description": "Bounded observation used for pause, rollback, and release reporting.",
+      "properties": {
+        "evidence_ids": {
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          },
+          "type": "array"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "phase": {
+          "$ref": "#/$defs/ReleaseObservationPhase"
+        },
+        "regression_detected": {
+          "type": "boolean"
+        },
+        "sanitized_summary": {
+          "type": "string"
+        },
+        "slo_healthy": {
+          "type": "boolean"
+        },
+        "synthetic_probe_healthy": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "phase",
+        "slo_healthy",
+        "synthetic_probe_healthy",
+        "regression_detected",
+        "evidence_ids",
+        "sanitized_summary",
+        "observed_at"
+      ],
+      "type": "object"
+    },
+    "ReleaseObservationPhase": {
+      "description": "Phase associated with one SLO/probe observation.",
+      "enum": [
+        "before",
+        "during",
+        "after"
+      ],
+      "type": "string"
+    },
+    "ReleaseReportId": {
+      "description": "Stable identifier for one immutable release report.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ReleaseStatus": {
+      "description": "Durable release escort lifecycle.",
+      "enum": [
+        "planned",
+        "readiness_checking",
+        "ready",
+        "canary_running",
+        "paused",
+        "verifying",
+        "rolling_back",
+        "rolled_back",
+        "completed",
+        "manual_takeover",
+        "failed"
+      ],
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Immutable before/during/after result of one release workflow.",
+  "properties": {
+    "after": {
+      "items": {
+        "$ref": "#/$defs/ReleaseObservation"
+      },
+      "type": "array"
+    },
+    "before": {
+      "items": {
+        "$ref": "#/$defs/ReleaseObservation"
+      },
+      "type": "array"
+    },
+    "change_id": {
+      "type": "string"
+    },
+    "cluster_id": {
+      "$ref": "#/$defs/ClusterId"
+    },
+    "during": {
+      "items": {
+        "$ref": "#/$defs/ReleaseObservation"
+      },
+      "type": "array"
+    },
+    "final_status": {
+      "$ref": "#/$defs/ReleaseStatus"
+    },
+    "generated_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "id": {
+      "$ref": "#/$defs/ReleaseReportId"
+    },
+    "incident_id": {
+      "$ref": "#/$defs/IncidentId"
+    },
+    "release_id": {
+      "$ref": "#/$defs/ReleaseId"
+    },
+    "release_ref": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    }
+  },
+  "required": [
+    "schema_version",
+    "id",
+    "release_id",
+    "tenant_id",
+    "cluster_id",
+    "incident_id",
+    "change_id",
+    "release_ref",
+    "final_status",
+    "before",
+    "during",
+    "after",
+    "generated_at"
+  ],
+  "title": "ReleaseReport",
+  "type": "object"
+}

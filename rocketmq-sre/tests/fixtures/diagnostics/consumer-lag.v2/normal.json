@@ -1,0 +1,32 @@
+{
+  "pack": "consumer-lag.v2",
+  "scenario": "normal",
+  "expected_status": "healthy",
+  "expected_reason_codes": ["CONSUMER_LAG_HEALTHY"],
+  "evidence": [
+    {
+      "evidence_id": "00000000-0000-4000-8002-000000000101",
+      "source": "rocketmq-mcp",
+      "resource": "consumer-lag/group-a",
+      "content": {
+        "total_lag": 20,
+        "lag_slope_per_min": -2,
+        "queue_skew_ratio": 1.2,
+        "consume_rate_per_sec": 120,
+        "produce_rate_per_sec": 100
+      }
+    },
+    {
+      "evidence_id": "00000000-0000-4000-8002-000000000111",
+      "source": "admin-query",
+      "resource": "consumer-runtime/group-a",
+      "content": { "connected_clients": 2, "paused": false, "allocated_queues": 12 }
+    },
+    {
+      "evidence_id": "00000000-0000-4000-8002-000000000112",
+      "source": "rocketmq-mcp",
+      "resource": "broker-runtime/broker-a",
+      "content": { "broker_ready": true, "store_healthy": true }
+    }
+  ]
+}

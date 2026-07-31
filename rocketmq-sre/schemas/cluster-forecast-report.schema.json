@@ -1,0 +1,760 @@
+{
+  "$defs": {
+    "AnomalyAssessment": {
+      "description": "Result of robust z-score and empirical-quantile anomaly evaluation.",
+      "properties": {
+        "anomaly": {
+          "type": "boolean"
+        },
+        "baseline_median": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "cluster_id": {
+          "$ref": "#/$defs/ClusterId"
+        },
+        "empirical_quantile": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "evidence_ids": {
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          },
+          "type": "array"
+        },
+        "metric": {
+          "type": "string"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "observed_value": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "resource": {
+          "$ref": "#/$defs/ResourceRef"
+        },
+        "robust_z_score": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "seasonality": {
+          "$ref": "#/$defs/Seasonality"
+        },
+        "status": {
+          "$ref": "#/$defs/ForecastStatus"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/TenantId"
+        }
+      },
+      "required": [
+        "tenant_id",
+        "cluster_id",
+        "resource",
+        "metric",
+        "seasonality",
+        "status",
+        "anomaly",
+        "evidence_ids",
+        "observed_at"
+      ],
+      "type": "object"
+    },
+    "AnomalyBaseline": {
+      "description": "Seasonal baseline used for deterministic anomaly detection.",
+      "properties": {
+        "algorithm_version": {
+          "type": "string"
+        },
+        "cluster_id": {
+          "$ref": "#/$defs/ClusterId"
+        },
+        "coverage_ratio": {
+          "format": "double",
+          "type": "number"
+        },
+        "id": {
+          "$ref": "#/$defs/BaselineId"
+        },
+        "median": {
+          "format": "double",
+          "type": "number"
+        },
+        "median_absolute_deviation": {
+          "format": "double",
+          "type": "number"
+        },
+        "metric": {
+          "type": "string"
+        },
+        "period_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "resource": {
+          "$ref": "#/$defs/ResourceRef"
+        },
+        "sample_count": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "seasonality": {
+          "$ref": "#/$defs/Seasonality"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/TenantId"
+        },
+        "valid_from": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "valid_until": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "tenant_id",
+        "cluster_id",
+        "resource",
+        "metric",
+        "seasonality",
+        "period_seconds",
+        "median",
+        "median_absolute_deviation",
+        "sample_count",
+        "coverage_ratio",
+        "algorithm_version",
+        "valid_from",
+        "valid_until"
+      ],
+      "type": "object"
+    },
+    "BacklogEta": {
+      "description": "Estimated drain time for a lag, retry, DLQ, POP, or timer backlog.",
+      "properties": {
+        "algorithm_version": {
+          "type": "string"
+        },
+        "arrival_rate_per_second": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "backlog_kind": {
+          "type": "string"
+        },
+        "backtest": {
+          "$ref": "#/$defs/ForecastBacktest"
+        },
+        "cluster_id": {
+          "$ref": "#/$defs/ClusterId"
+        },
+        "coverage_ratio": {
+          "format": "double",
+          "type": "number"
+        },
+        "current_value": {
+          "format": "double",
+          "type": "number"
+        },
+        "drain_rate_per_second": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "estimated_clear_at": {
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evidence_ids": {
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          },
+          "type": "array"
+        },
+        "execution_eligible": {
+          "type": "boolean"
+        },
+        "id": {
+          "$ref": "#/$defs/ForecastId"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "quality": {
+          "$ref": "#/$defs/ForecastQuality"
+        },
+        "resource": {
+          "$ref": "#/$defs/ResourceRef"
+        },
+        "sample_end": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "sample_start": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "slope_per_hour": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/ForecastStatus"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/TenantId"
+        },
+        "trend": {
+          "$ref": "#/$defs/ForecastTrend"
+        },
+        "window": {
+          "$ref": "#/$defs/ForecastWindow"
+        }
+      },
+      "required": [
+        "id",
+        "tenant_id",
+        "cluster_id",
+        "resource",
+        "backlog_kind",
+        "window",
+        "trend",
+        "status",
+        "quality",
+        "current_value",
+        "sample_start",
+        "sample_end",
+        "coverage_ratio",
+        "algorithm_version",
+        "backtest",
+        "evidence_ids",
+        "execution_eligible",
+        "observed_at"
+      ],
+      "type": "object"
+    },
+    "BaselineId": {
+      "description": "Stable identifier for an anomaly baseline.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "CapacityForecast": {
+      "description": "Capacity trend for one resource and metric.",
+      "properties": {
+        "advisories": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "algorithm_version": {
+          "type": "string"
+        },
+        "backtest": {
+          "$ref": "#/$defs/ForecastBacktest"
+        },
+        "cluster_id": {
+          "$ref": "#/$defs/ClusterId"
+        },
+        "coverage_ratio": {
+          "format": "double",
+          "type": "number"
+        },
+        "evidence_ids": {
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          },
+          "type": "array"
+        },
+        "execution_eligible": {
+          "type": "boolean"
+        },
+        "exhaustion_at": {
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/ForecastId"
+        },
+        "metric": {
+          "type": "string"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "points": {
+          "items": {
+            "$ref": "#/$defs/ForecastPoint"
+          },
+          "type": "array"
+        },
+        "quality": {
+          "$ref": "#/$defs/ForecastQuality"
+        },
+        "resource": {
+          "$ref": "#/$defs/ResourceRef"
+        },
+        "sample_end": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "sample_start": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "slope_per_hour": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/ForecastStatus"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/TenantId"
+        },
+        "threshold": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "trend": {
+          "$ref": "#/$defs/ForecastTrend"
+        },
+        "volatility": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "window": {
+          "$ref": "#/$defs/ForecastWindow"
+        }
+      },
+      "required": [
+        "id",
+        "tenant_id",
+        "cluster_id",
+        "resource",
+        "metric",
+        "window",
+        "trend",
+        "status",
+        "quality",
+        "algorithm_version",
+        "sample_start",
+        "sample_end",
+        "coverage_ratio",
+        "points",
+        "backtest",
+        "evidence_ids",
+        "execution_eligible",
+        "observed_at"
+      ],
+      "type": "object"
+    },
+    "ChangePoint": {
+      "description": "Non-causal change point emitted as an investigation hint.",
+      "properties": {
+        "after_value": {
+          "format": "double",
+          "type": "number"
+        },
+        "algorithm_version": {
+          "type": "string"
+        },
+        "before_value": {
+          "format": "double",
+          "type": "number"
+        },
+        "cluster_id": {
+          "$ref": "#/$defs/ClusterId"
+        },
+        "detected_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "evidence_ids": {
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          },
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/ChangePointId"
+        },
+        "metric": {
+          "type": "string"
+        },
+        "resource": {
+          "$ref": "#/$defs/ResourceRef"
+        },
+        "score": {
+          "format": "double",
+          "type": "number"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/TenantId"
+        }
+      },
+      "required": [
+        "id",
+        "tenant_id",
+        "cluster_id",
+        "resource",
+        "metric",
+        "detected_at",
+        "before_value",
+        "after_value",
+        "score",
+        "algorithm_version",
+        "evidence_ids"
+      ],
+      "type": "object"
+    },
+    "ChangePointId": {
+      "description": "Stable identifier for a detected change point.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "EvidenceId": {
+      "description": "Stable identifier for an evidence snapshot.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ForecastAccuracy": {
+      "description": "Accuracy calculated from persisted outcomes of earlier projections.",
+      "properties": {
+        "bias": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "evaluated_points": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "interval_coverage_ratio": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "mean_absolute_error": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "metric": {
+          "type": "string"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "window": {
+          "$ref": "#/$defs/ForecastWindow"
+        }
+      },
+      "required": [
+        "metric",
+        "window",
+        "evaluated_points",
+        "observed_at"
+      ],
+      "type": "object"
+    },
+    "ForecastBacktest": {
+      "description": "Deterministic holdout result used to monitor forecast accuracy.",
+      "properties": {
+        "bias": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "evaluated_points": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "interval_coverage_ratio": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "mean_absolute_error": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "evaluated_points"
+      ],
+      "type": "object"
+    },
+    "ForecastId": {
+      "description": "Stable identifier for a capacity or backlog forecast.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ForecastPoint": {
+      "description": "One observed or projected point in a forecast series.",
+      "properties": {
+        "at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "projected": {
+          "type": "boolean"
+        },
+        "value": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "at",
+        "value",
+        "projected"
+      ],
+      "type": "object"
+    },
+    "ForecastQuality": {
+      "description": "Explainable quality assessment for a forecast.",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
+    },
+    "ForecastStatus": {
+      "description": "Forecast availability and degradation state.",
+      "enum": [
+        "ready",
+        "insufficient_data",
+        "stale",
+        "unstable_trend",
+        "unsupported"
+      ],
+      "type": "string"
+    },
+    "ForecastTrend": {
+      "description": "Explainable direction of the fitted trend.",
+      "enum": [
+        "increasing",
+        "decreasing",
+        "stable",
+        "unstable",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "ForecastWindow": {
+      "description": "Historical window used to build a forecast.",
+      "enum": [
+        "seven_days",
+        "thirty_days"
+      ],
+      "type": "string"
+    },
+    "ResourceKind": {
+      "description": "Resource classes accepted by the Phase 2 correlation engine.",
+      "enum": [
+        "cluster",
+        "name_server",
+        "controller",
+        "broker",
+        "proxy",
+        "store",
+        "topic",
+        "queue",
+        "consumer_group",
+        "producer_group",
+        "pod",
+        "node",
+        "persistent_volume_claim",
+        "certificate",
+        "runtime",
+        "telemetry"
+      ],
+      "type": "string"
+    },
+    "ResourceRef": {
+      "description": "Tenant-scoped resource identity used for correlation and topology lookup.",
+      "properties": {
+        "display_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ResourceKind"
+        }
+      },
+      "required": [
+        "kind",
+        "key"
+      ],
+      "type": "object"
+    },
+    "Seasonality": {
+      "description": "Seasonal period represented by a deterministic baseline.",
+      "enum": [
+        "hourly",
+        "daily",
+        "weekly"
+      ],
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Bounded read-only projection returned by the cluster forecast API.",
+  "properties": {
+    "accuracy": {
+      "items": {
+        "$ref": "#/$defs/ForecastAccuracy"
+      },
+      "type": "array"
+    },
+    "anomalies": {
+      "items": {
+        "$ref": "#/$defs/AnomalyAssessment"
+      },
+      "type": "array"
+    },
+    "backlog_etas": {
+      "items": {
+        "$ref": "#/$defs/BacklogEta"
+      },
+      "type": "array"
+    },
+    "baselines": {
+      "items": {
+        "$ref": "#/$defs/AnomalyBaseline"
+      },
+      "type": "array"
+    },
+    "change_points": {
+      "items": {
+        "$ref": "#/$defs/ChangePoint"
+      },
+      "type": "array"
+    },
+    "cluster_id": {
+      "$ref": "#/$defs/ClusterId"
+    },
+    "execution_eligible": {
+      "type": "boolean"
+    },
+    "forecasts": {
+      "items": {
+        "$ref": "#/$defs/CapacityForecast"
+      },
+      "type": "array"
+    },
+    "observed_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "partial": {
+      "type": "boolean"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    },
+    "warnings": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "tenant_id",
+    "cluster_id",
+    "forecasts",
+    "backlog_etas",
+    "baselines",
+    "anomalies",
+    "change_points",
+    "accuracy",
+    "partial",
+    "execution_eligible",
+    "observed_at"
+  ],
+  "title": "ClusterForecastReport",
+  "type": "object"
+}

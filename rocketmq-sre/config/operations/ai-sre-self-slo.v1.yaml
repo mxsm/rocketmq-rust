@@ -1,0 +1,142 @@
+# Copyright 2026 The RocketMQ Rust Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+schema_version: rocketmq.sre.self-slo.v1
+owner: messaging-ai-sre
+window_days: 30
+evaluation_interval_seconds: 60
+data_plane_dependency: none
+
+services:
+  - id: control-plane
+    objective: 99.9
+    sli:
+      source: http_probe
+      expression: probe_success{job="sre-control-plane-ready"}
+    latency_sli:
+      source: http_probe
+      expression: probe_http_duration_seconds{job="sre-control-plane-ready"}
+      percentile: 0.99
+      threshold_seconds: 1
+    runbook: ai-sre-control-plane-unavailable
+    failure_mode: deny_new_workflows
+
+  - id: connector
+    objective: 99.5
+    sli:
+      source: control_plane_health
+      expression: rocketmq_sre_connector_queryable_ratio
+    freshness_sli:
+      source: postgres_query
+      expression: connector_oldest_heartbeat_age_seconds
+      threshold_seconds: 120
+    runbook: ai-sre-connector-evidence-stale
+    failure_mode: rules_only_or_read_only_degraded
+
+  - id: executor
+    objective: 99.9
+    sli:
+      source: http_probe
+      expression: probe_success{job="sre-executor-ready"}
+    safety_sli:
+      source: postgres_query
+      expression: executor_unknown_effect_count
+      threshold: 0
+    runbook: ai-sre-executor-unavailable
+    failure_mode: deny_new_mutation
+
+  - id: execution-agent
+    objective: 99.9
+    sli:
+      source: http_probe
+      expression: probe_success{job="sre-execution-agent-ready"}
+    safety_sli:
+      source: agent_capabilities
+      expression: unknown_effects_total
+      threshold: 0
+    runbook: ai-sre-agent-or-fence-failure
+    failure_mode: deny_new_mutation
+
+  - id: probe
+    objective: 99.0
+    sli:
+      source: kubernetes_job
+      expression: rocketmq_sre_probe_success_ratio
+    cleanup_sli:
+      source: kubernetes_job
+      expression: rocketmq_sre_probe_stale_job_count
+      threshold: 0
+    runbook: ai-sre-probe-failure-or-cleanup
+    failure_mode: mark_production_verification_unavailable
+
+  - id: provider-adapter
+    objective: 99.0
+    sli:
+      source: service_metrics
+      expression: 1 - (sum(rate(rocketmq_sre_model_errors_total[5m])) / clamp_min(sum(rate(rocketmq_sre_model_requests_total[5m])), 1))
+    cost_sli:
+      source: service_metrics
+      expression: sum(increase(rocketmq_sre_model_cost_microusd_total[1h]))
+      budget_source: model_profile_budget
+    runbook: ai-sre-provider-degraded
+    failure_mode: fallback_then_rules_only
+
+  - id: postgresql
+    objective: 99.95
+    sli:
+      source: control_plane_health
+      expression: database_status_healthy
+    latency_sli:
+      source: control_plane_health
+      expression: database_latency_ms
+      percentile: 0.99
+      threshold_milliseconds: 250
+    runbook: ai-sre-postgresql-unavailable
+    failure_mode: deny_new_workflows_and_mutation
+
+  - id: outbox
+    objective: 99.9
+    sli:
+      source: postgres_query
+      expression: outbox_delivery_success_ratio
+    backlog_sli:
+      source: postgres_query
+      expression: outbox_oldest_pending_age_seconds
+      threshold_seconds: 300
+    runbook: ai-sre-outbox-backlog
+    failure_mode: preserve_pending_and_alert
+
+required_operational_signals:
+  - workflow_queue_depth
+  - evidence_oldest_pending_age_seconds
+  - model_error_ratio
+  - model_cost_microusd
+  - notification_oldest_pending_age_seconds
+  - lease_activation_failure_count
+  - fence_rejection_count
+  - unknown_effect_count
+  - active_quarantine_count
+  - probe_stale_job_count
+
+monthly_report:
+  source_table: autonomy_operational_reports
+  period_kind: month
+  required_sections:
+    - service_objective_attainment
+    - error_budget_consumption
+    - mutation_denials_and_freezes
+    - degraded_minutes_and_recovery
+    - model_cost_and_fallback
+    - unknown_effects_and_quarantines
+    - probe_success_and_cleanup

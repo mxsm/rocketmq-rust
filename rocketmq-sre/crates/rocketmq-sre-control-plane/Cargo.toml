@@ -1,0 +1,61 @@
+# Copyright 2023 The RocketMQ Rust Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+[package]
+name = "rocketmq-sre-control-plane"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "RocketMQ Rust AI SRE control-plane composition root"
+
+[dependencies]
+axum.workspace = true
+base64.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+hmac.workspace = true
+jsonwebtoken.workspace = true
+object_store.workspace = true
+reqwest.workspace = true
+rocketmq-sre-contracts.workspace = true
+rocketmq-sre-core.workspace = true
+rocketmq-sre-model-gateway.workspace = true
+rocketmq-observability.workspace = true
+rocketmq-runtime.workspace = true
+semver.workspace = true
+serde.workspace = true
+serde_jcs.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+tower.workspace = true
+
+[lints]
+workspace = true

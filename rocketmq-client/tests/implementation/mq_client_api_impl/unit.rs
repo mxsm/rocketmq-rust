@@ -34,6 +34,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering as AtomicOrdering;
 
+#[cfg(feature = "admin-mutation")]
 use rocketmq_model::common::lite::LiteSubscriptionAction;
 use rocketmq_protocol::protocol::command_custom_header::CommandCustomHeader;
 use rocketmq_protocol::protocol::command_custom_header::FromMap;
@@ -386,6 +387,7 @@ fn create_topic_request_header_rejects_values_outside_java_int_range() {
     assert!(error.to_string().contains("readQueueNums value"));
 }
 
+#[cfg(feature = "admin-mutation")]
 #[test]
 fn create_topic_list_request_matches_java_request_code_and_body() {
     let request = create_topic_list_request(vec![TopicConfig::new("TopicA"), TopicConfig::new("TopicB")])
@@ -400,6 +402,7 @@ fn create_topic_list_request_matches_java_request_code_and_body() {
     assert_eq!(decoded.topic_config_list[1].topic_name.as_deref(), Some("TopicB"));
 }
 
+#[cfg(feature = "admin-mutation")]
 #[test]
 fn create_subscription_group_list_request_matches_java_request_code_and_body() {
     let request = create_subscription_group_list_request(vec![
@@ -732,6 +735,7 @@ async fn api_background_task_shutdown_token_cancels_pending_task() {
     assert!(dropped.load(AtomicOrdering::Acquire));
 }
 
+#[cfg(feature = "admin-mutation")]
 #[test]
 fn lite_subscription_ctl_request_matches_java_single_dto_body() {
     let lite_subscription_dto = LiteSubscriptionDTO::new()
@@ -785,6 +789,7 @@ fn notification_request_matches_java_header_fields() {
     assert_eq!(ext_fields.get("exp").map(|value| value.as_str()), Some("tag-a"));
 }
 
+#[cfg(feature = "admin-mutation")]
 #[test]
 fn create_and_update_plain_access_config_request_matches_java_legacy_acl_body() {
     let config = PlainAccessConfig {
@@ -810,6 +815,7 @@ fn create_and_update_plain_access_config_request_matches_java_legacy_acl_body() 
     );
 }
 
+#[cfg(feature = "admin-mutation")]
 #[test]
 fn delete_plain_access_config_request_matches_java_legacy_acl_body() {
     let request = delete_plain_access_config_request(&CheetahString::from_static_str("AK"));

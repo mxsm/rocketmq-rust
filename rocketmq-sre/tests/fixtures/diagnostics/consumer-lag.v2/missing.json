@@ -1,0 +1,14 @@
+{
+  "pack": "consumer-lag.v2",
+  "scenario": "missing",
+  "expected_status": "inconclusive",
+  "expected_reason_codes": [],
+  "evidence": [
+    {
+      "evidence_id": "00000000-0000-4000-8002-000000000103",
+      "source": "admin-query",
+      "resource": "consumer-runtime/group-a",
+      "content": { "connected_clients": 2, "paused": false, "allocated_queues": 12 }
+    }
+  ]
+}

@@ -13,8 +13,12 @@ brokerName = "container-smoke-broker"
 brokerClusterName = "ContainerSmoke"
 brokerId = 0
 
+[broker.brokerServerConfig]
+bindAddress = "127.0.0.1"
+
 [store]
 storePathRootDir = "/var/lib/rocketmq/broker"
+haListenAddress = "127.0.0.1"
 haListenPort = 10912
 mappedFileSizeCommitLog = 1048576
 mappedFileSizeConsumeQueue = 6000

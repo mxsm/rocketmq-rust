@@ -6,6 +6,13 @@ global:
   secretRefs:
     existingSecret: rocketmq-runtime-secrets
     secretProviderClassName: ""
+  runtimeDiagnostics:
+    enabled: false
+    bindAddress: "0.0.0.0:8087"
+    port: 8087
+    tokenFile: "/var/run/secrets/rocketmq/runtime-diagnostics-token"
+    sampleIntervalSeconds: 10
+    allowInsecureHttp: false
   podSecurity:
     runAsUser: 10001
     runAsGroup: 10001
@@ -25,7 +32,7 @@ maintenance:
   policyKey: maintenance-policy.json
   mountPath: /etc/rocketmq/auth/maintenance-policy.json
   version: 1
-  sha256: 328683f40a3aadcca0592c889196294eab10037271b0671de7d1c77287fa51c8
+  sha256: 951aca122bb23b78e29235aaf05b2dffe9422bf97636ce6ac04fddab969ba0ee
 
 metrics:
   enabled: true
@@ -59,6 +66,7 @@ services:
     replicas: 3
     replicaGroupName: rocketmq-broker
     autoCreateTopicEnable: false
+    logFilterReloadEnabled: false
     image:
       repository: rocketmq-rust/broker
       tag: local
@@ -121,6 +129,10 @@ services:
       tag: local
       digest: ""
       pullPolicy: Never
+    innerCredentials:
+      enabled: false
+      secretName: ""
+      secretKey: proxy-inner-credentials.yml
     pdb:
       enabled: true
       minAvailable: 1

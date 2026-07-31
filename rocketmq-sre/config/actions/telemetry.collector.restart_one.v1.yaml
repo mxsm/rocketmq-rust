@@ -1,0 +1,45 @@
+id: telemetry.collector.restart_one.v1
+version: 1.0.0
+owner: messaging-observability
+supported_versions:
+  - family: rocketmq-sre.action-plan
+    major: 1
+    minor: 0
+required_capabilities:
+  - kubernetes.typed-restart
+  - telemetry.pipeline-health
+config_schema:
+  type: object
+  additionalProperties: false
+parameter_schema:
+  type: object
+  additionalProperties: false
+  required: [namespace, pod, expected_uid, pipeline]
+  properties:
+    namespace: { type: string, maxLength: 128 }
+    pod: { type: string, maxLength: 128 }
+    expected_uid: { type: string, maxLength: 128 }
+    pipeline: { type: string, enum: [metrics, logs, traces, combined] }
+status: active
+deprecation: null
+risk: r1
+execution_supported: true
+preconditions:
+  - human_approval_present
+  - expected_pod_uid_matches
+  - remaining_telemetry_path_healthy
+  - no_business_traffic_impact
+  - max_parallelism_one
+max_impact: single_instance
+verification:
+  resource_conditions: [replacement_uid_observed, collector_ready, exporter_connected]
+  technical_slis: [telemetry_export_success_ratio, telemetry_queue_utilization]
+  stable_window_seconds: 180
+  max_wait_seconds: 900
+timeout_seconds: 900
+compensation:
+  mode: manual_takeover
+  required_before_fields: [expected_uid, pipeline_health]
+  timeout_seconds: 300
+forbidden_fields: [multiple_pods, force_delete, pipeline_config, exporter_credentials, arbitrary_patch]
+plan_only: false

@@ -30,6 +30,7 @@ use rocketmq_model::common::mq_version::CURRENT_VERSION;
 use rocketmq_model::utils::env_utils::EnvUtils;
 use rocketmq_protocol::protocol::remoting_command_facade::initialize_remoting_version;
 use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::RuntimeComponent;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ServiceLifecycle;
@@ -138,28 +139,12 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     let environment_filter = rocketmq_observability::read_rust_log().context("failed to read RUST_LOG")?;
     let resolved_filter = resolve_startup_log_filter(&args, logging_overrides, environment_filter.as_deref())
         .context("failed to resolve broker log filter")?;
-    let telemetry_guard = rocketmq_observability::install_global_with_filter_and_service_context(
-        &bootstrap_config,
-        resolved_filter.clone(),
-        &service_context,
-    )
-    .await
-    .context("failed to initialize broker telemetry bootstrap")?;
-    let telemetry_handle = telemetry_guard.handle();
-    if let Err(error) = register_broker_release_identity(&process_telemetry, &telemetry_handle) {
-        let request = lifecycle.request_shutdown(ShutdownReason::Internal);
-        if let Err(shutdown_error) = telemetry_guard
-            .shutdown_with_service_context(&service_context, request.deadline.remaining())
-            .await
-            .into_result()
-        {
-            tracing::warn!(
-                error = %shutdown_error,
-                "broker telemetry cleanup after release identity failure was unhealthy"
-            );
-        }
-        return Err(error);
-    }
+    rocketmq_observability::apply_standard_otlp_environment(&mut bootstrap_config)
+        .context("failed to apply standard OTLP environment to broker telemetry")?;
+    let telemetry_guard =
+        rocketmq_observability::install_global_with_filter(&bootstrap_config, resolved_filter.clone())
+            .context("failed to initialize broker telemetry bootstrap")?;
+    register_broker_release_identity(&process_telemetry, &telemetry_guard.handle())?;
     log_telemetry_bootstrap(
         &bootstrap_config,
         &resolved_filter,
@@ -183,6 +168,20 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
             tracing::warn!(error = %shutdown_error, "broker telemetry cleanup after lifecycle startup failure was unhealthy");
         }
         return Err(error).context("failed to start broker lifecycle boundary");
+    }
+    if let Err(error) =
+        rocketmq_observability::start_runtime_diagnostics_endpoint_from_env(&service_context, RuntimeComponent::Broker)
+            .await
+    {
+        lifecycle.mark_failed();
+        let request = lifecycle.request_shutdown(ShutdownReason::Internal);
+        if let Err(shutdown_error) = telemetry_guard
+            .shutdown_with_timeout(request.deadline.remaining())
+            .into_result()
+        {
+            tracing::warn!(error = %shutdown_error, "broker telemetry cleanup after diagnostics startup failure was unhealthy");
+        }
+        return Err(error).context("failed to start protected broker runtime diagnostics");
     }
 
     // Start broker

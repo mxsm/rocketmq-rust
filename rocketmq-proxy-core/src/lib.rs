@@ -20,6 +20,7 @@
 pub mod config;
 pub mod context;
 pub mod contracts;
+pub mod drain;
 pub mod error;
 #[deprecated(
     since = "1.1.0",
@@ -55,6 +56,12 @@ pub use context::ProxyContextWithPrincipal;
 pub use context::ResolvedAddressScheme;
 pub use context::ResolvedEndpoint;
 pub use contracts::*;
+pub use drain::ProxyDrainAdmission;
+pub use drain::ProxyDrainController;
+pub use drain::ProxyDrainError;
+pub use drain::ProxyDrainPending;
+pub use drain::ProxyDrainPhase;
+pub use drain::ProxyDrainSnapshot;
 pub use error::ProxyError;
 pub use error::ProxyResult;
 pub use identity::ResourceIdentity;

@@ -34,17 +34,25 @@ description = "Reusable RocketMQ admin capability layer"
 rust-version.workspace = true
 
 [features]
-default        = []
-client-adapter = [
+default                 = []
+read-client-adapter     = [
   "dep:rocketmq-client-rust",
+  "rocketmq-client-rust/admin-read",
   "dep:rocketmq-observability",
   "dep:rocketmq-runtime",
   "dep:rocketmq-transport",
 ]
-client-observability = [
-  "client-adapter",
-  "rocketmq-client-rust/observability",
-  "rocketmq-client-rust/observability-metrics",
+mutation-client-adapter = [
+  "dep:rocketmq-client-rust",
+  "rocketmq-client-rust/admin-mutation",
+  "dep:rocketmq-observability",
+  "dep:rocketmq-runtime",
+  "dep:rocketmq-transport",
+]
+client-adapter = [
+  "read-client-adapter",
+  "mutation-client-adapter",
+  "rocketmq-client-rust/admin-full",
 ]
 rocksdb-export = ["dep:rocksdb"]
 
@@ -54,7 +62,7 @@ rocketmq-error        = { workspace = true }
 rocketmq-protocol     = { workspace = true }
 rocketmq-security-api = { workspace = true }
 
-rocketmq-client-rust = { workspace = true, optional = true }
+rocketmq-client-rust = { workspace = true, optional = true, default-features = false }
 rocketmq-observability = { workspace = true, optional = true }
 rocketmq-runtime     = { workspace = true, optional = true }
 rocketmq-transport   = { workspace = true, optional = true }

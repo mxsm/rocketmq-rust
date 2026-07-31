@@ -1,0 +1,30 @@
+{
+  "pack": "consumer-runtime.v1",
+  "scenario": "normal",
+  "expected_status": "healthy",
+  "expected_reason_codes": ["CONSUMER_RUNTIME_HEALTHY"],
+  "evidence": [
+    {
+      "evidence_id": "00000000-0000-4000-8003-000000000101",
+      "source": "admin-query",
+      "resource": "consumer-runtime/group-a",
+      "content": {
+        "connected": true,
+        "running_info_available": true,
+        "rebalance_in_progress": false,
+        "unassigned_queues": 0,
+        "process_rt_ms": 25,
+        "paused": false,
+        "commit_failures": 0,
+        "seek_operations": 0,
+        "client_version_supported": true
+      }
+    },
+    {
+      "evidence_id": "00000000-0000-4000-8003-000000000111",
+      "source": "prometheus",
+      "resource": "consumer-runtime/group-a",
+      "content": { "process_rt_p95_ms": 30, "rebalance_age_seconds": 0 }
+    }
+  ]
+}

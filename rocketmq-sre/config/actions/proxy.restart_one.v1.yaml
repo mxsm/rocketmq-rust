@@ -1,0 +1,42 @@
+id: proxy.restart_one.v1
+version: 1.0.0
+owner: messaging-platform
+supported_versions:
+  - family: rocketmq-sre.action-plan
+    major: 1
+    minor: 0
+required_capabilities:
+  - proxy.authenticated-drain-state
+  - kubernetes.typed-restart
+config_schema:
+  type: object
+  additionalProperties: false
+parameter_schema:
+  type: object
+  additionalProperties: false
+  required: [namespace, pod, expected_uid]
+  properties:
+    namespace: { type: string, maxLength: 128 }
+    pod: { type: string, maxLength: 128 }
+    expected_uid: { type: string, maxLength: 128 }
+status: active
+deprecation: null
+risk: r1
+execution_supported: true
+preconditions:
+  - drain_state_supported
+  - zero_pending_sessions_receipts_transactions_commands_and_rpcs
+  - max_parallelism_one
+max_impact: single_instance
+verification:
+  resource_conditions: [replacement_ready, accepting_and_routed]
+  technical_slis: [proxy_error_ratio, synthetic_message_path]
+  stable_window_seconds: 180
+  max_wait_seconds: 1200
+timeout_seconds: 1200
+compensation:
+  mode: manual_takeover
+  required_before_fields: [admission_state, readiness_state, routing_state]
+  timeout_seconds: 300
+forbidden_fields: [force_delete, arbitrary_patch, max_parallelism]
+plan_only: false

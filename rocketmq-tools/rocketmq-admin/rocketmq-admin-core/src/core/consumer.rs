@@ -293,6 +293,100 @@ pub struct SetConsumerRequestModeResult {
     pub broker_addrs: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuerySubscriptionGroupConfigCasRequest {
+    pub broker_addr: String,
+    pub group: String,
+}
+
+impl QuerySubscriptionGroupConfigCasRequest {
+    pub fn try_new(broker_addr: impl Into<String>, group: impl Into<String>) -> AdminResult<Self> {
+        Ok(Self {
+            broker_addr: required("broker_addr", broker_addr)?,
+            group: required("group", group)?,
+        })
+    }
+}
+
+/// Closed Subscription Group state returned for supervised version-CAS
+/// prechecks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubscriptionGroupConfigCasState {
+    pub version: u64,
+    pub retry_max_times: u32,
+    pub retry_queue_nums: u32,
+    pub consume_timeout_minutes: u32,
+    pub consume_enable: bool,
+    pub consume_from_min_enable: bool,
+    pub consume_broadcast_enable: bool,
+    pub consume_message_orderly: bool,
+    pub broker_id: u64,
+    pub which_broker_when_consume_slowly: u64,
+    pub notify_consumer_ids_changed_enable: bool,
+    pub group_sys_flag: i32,
+}
+
+/// Closed Subscription Group fields supported by supervised execution.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubscriptionGroupConfigCasPatch {
+    pub retry_max_times: Option<u32>,
+    pub retry_queue_nums: Option<u32>,
+    pub consume_timeout_minutes: Option<u32>,
+}
+
+impl SubscriptionGroupConfigCasPatch {
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.retry_max_times.is_none() && self.retry_queue_nums.is_none() && self.consume_timeout_minutes.is_none()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PatchSubscriptionGroupConfigRequest {
+    pub broker_addr: String,
+    pub group: String,
+    pub expected_version: u64,
+    pub patch: SubscriptionGroupConfigCasPatch,
+}
+
+impl PatchSubscriptionGroupConfigRequest {
+    pub fn try_new(
+        broker_addr: impl Into<String>,
+        group: impl Into<String>,
+        expected_version: u64,
+        patch: SubscriptionGroupConfigCasPatch,
+    ) -> AdminResult<Self> {
+        if patch.is_empty() {
+            return Err(crate::core::AdminError::invalid_argument("patch", "must not be empty"));
+        }
+        for (field, value, maximum) in [
+            ("retry_max_times", patch.retry_max_times, 16),
+            ("retry_queue_nums", patch.retry_queue_nums, 8),
+            ("consume_timeout_minutes", patch.consume_timeout_minutes, 1_440),
+        ] {
+            if value.is_some_and(|value| !(1..=maximum).contains(&value)) {
+                return Err(crate::core::AdminError::invalid_argument(
+                    field,
+                    format!("must be between 1 and {maximum}"),
+                ));
+            }
+        }
+        Ok(Self {
+            broker_addr: required("broker_addr", broker_addr)?,
+            group: required("group", group)?,
+            expected_version,
+            patch,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PatchSubscriptionGroupConfigOutcome {
+    Applied { previous_version: u64, version: u64 },
+    VersionConflict { expected_version: u64, actual_version: u64 },
+}
+
 pub trait ConsumerAdmin: Send {
     fn list_consumer_groups<'a>(
         &'a mut self,
@@ -338,4 +432,172 @@ pub trait ConsumerAdmin: Send {
         &'a mut self,
         request: &'a SetConsumerRequestModeRequest,
     ) -> AdminFuture<'a, SetConsumerRequestModeResult>;
+}
+
+/// Consumer queries available to read-only integrations.
+pub trait ConsumerQueryAdmin: Send {
+    fn query_config_cas_state<'a>(
+        &'a mut self,
+        _request: &'a QuerySubscriptionGroupConfigCasRequest,
+    ) -> AdminFuture<'a, SubscriptionGroupConfigCasState> {
+        Box::pin(async {
+            Err(crate::core::AdminError::backend(
+                "query_subscription_group_config_cas_state",
+                "Subscription Group config CAS state is not implemented by this adapter",
+            ))
+        })
+    }
+
+    fn list_consumer_groups<'a>(
+        &'a mut self,
+        request: &'a ListConsumerGroupsRequest,
+    ) -> AdminFuture<'a, ListConsumerGroupsResult>;
+    fn query_consumer_lag<'a>(
+        &'a mut self,
+        request: &'a QueryConsumerLagRequest,
+    ) -> AdminFuture<'a, QueryConsumerLagResult>;
+    fn query_dashboard_consumer_groups<'a>(
+        &'a mut self,
+        request: &'a DashboardConsumerGroupListRequest,
+    ) -> AdminFuture<'a, DashboardConsumerGroupListResult>;
+    fn query_dashboard_consumer_connection<'a>(
+        &'a mut self,
+        request: &'a DashboardConsumerConnectionRequest,
+    ) -> AdminFuture<'a, DashboardConsumerConnection>;
+    fn query_dashboard_consumer_progress<'a>(
+        &'a mut self,
+        request: &'a DashboardConsumerProgressRequest,
+    ) -> AdminFuture<'a, DashboardConsumerProgress>;
+    fn query_dashboard_consumer_config<'a>(
+        &'a mut self,
+        request: &'a DashboardConsumerConfigRequest,
+    ) -> AdminFuture<'a, DashboardConsumerConfig>;
+}
+
+/// Consumer mutations require the explicit mutation adapter feature.
+pub trait ConsumerMutationAdmin: Send {
+    fn patch_config_if_version<'a>(
+        &'a mut self,
+        _request: &'a PatchSubscriptionGroupConfigRequest,
+    ) -> AdminFuture<'a, PatchSubscriptionGroupConfigOutcome> {
+        Box::pin(async {
+            Err(crate::core::AdminError::backend(
+                "patch_subscription_group_config_if_version",
+                "Subscription Group config CAS is not implemented by this adapter",
+            ))
+        })
+    }
+
+    fn upsert_dashboard_consumer_group<'a>(
+        &'a mut self,
+        request: &'a DashboardConsumerUpsertRequest,
+    ) -> AdminFuture<'a, DashboardConsumerMutationResult>;
+    fn delete_dashboard_consumer_group<'a>(
+        &'a mut self,
+        request: &'a DashboardConsumerDeleteRequest,
+    ) -> AdminFuture<'a, DashboardConsumerMutationResult>;
+    fn set_consumer_request_mode<'a>(
+        &'a mut self,
+        request: &'a SetConsumerRequestModeRequest,
+    ) -> AdminFuture<'a, SetConsumerRequestModeResult>;
+}
+
+impl<T: ConsumerAdmin + ?Sized> ConsumerQueryAdmin for T {
+    fn list_consumer_groups<'a>(
+        &'a mut self,
+        request: &'a ListConsumerGroupsRequest,
+    ) -> AdminFuture<'a, ListConsumerGroupsResult> {
+        ConsumerAdmin::list_consumer_groups(self, request)
+    }
+    fn query_consumer_lag<'a>(
+        &'a mut self,
+        request: &'a QueryConsumerLagRequest,
+    ) -> AdminFuture<'a, QueryConsumerLagResult> {
+        ConsumerAdmin::query_consumer_lag(self, request)
+    }
+    fn query_dashboard_consumer_groups<'a>(
+        &'a mut self,
+        request: &'a DashboardConsumerGroupListRequest,
+    ) -> AdminFuture<'a, DashboardConsumerGroupListResult> {
+        ConsumerAdmin::query_dashboard_consumer_groups(self, request)
+    }
+    fn query_dashboard_consumer_connection<'a>(
+        &'a mut self,
+        request: &'a DashboardConsumerConnectionRequest,
+    ) -> AdminFuture<'a, DashboardConsumerConnection> {
+        ConsumerAdmin::query_dashboard_consumer_connection(self, request)
+    }
+    fn query_dashboard_consumer_progress<'a>(
+        &'a mut self,
+        request: &'a DashboardConsumerProgressRequest,
+    ) -> AdminFuture<'a, DashboardConsumerProgress> {
+        ConsumerAdmin::query_dashboard_consumer_progress(self, request)
+    }
+    fn query_dashboard_consumer_config<'a>(
+        &'a mut self,
+        request: &'a DashboardConsumerConfigRequest,
+    ) -> AdminFuture<'a, DashboardConsumerConfig> {
+        ConsumerAdmin::query_dashboard_consumer_config(self, request)
+    }
+}
+
+impl<T: ConsumerAdmin + ?Sized> ConsumerMutationAdmin for T {
+    fn upsert_dashboard_consumer_group<'a>(
+        &'a mut self,
+        request: &'a DashboardConsumerUpsertRequest,
+    ) -> AdminFuture<'a, DashboardConsumerMutationResult> {
+        ConsumerAdmin::upsert_dashboard_consumer_group(self, request)
+    }
+    fn delete_dashboard_consumer_group<'a>(
+        &'a mut self,
+        request: &'a DashboardConsumerDeleteRequest,
+    ) -> AdminFuture<'a, DashboardConsumerMutationResult> {
+        ConsumerAdmin::delete_dashboard_consumer_group(self, request)
+    }
+    fn set_consumer_request_mode<'a>(
+        &'a mut self,
+        request: &'a SetConsumerRequestModeRequest,
+    ) -> AdminFuture<'a, SetConsumerRequestModeResult> {
+        ConsumerAdmin::set_consumer_request_mode(self, request)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PatchSubscriptionGroupConfigRequest;
+    use super::SubscriptionGroupConfigCasPatch;
+
+    #[test]
+    fn subscription_group_cas_request_accepts_only_a_non_empty_bounded_patch() {
+        let valid = PatchSubscriptionGroupConfigRequest::try_new(
+            "127.0.0.1:10911",
+            "orders-consumer",
+            7,
+            SubscriptionGroupConfigCasPatch {
+                retry_max_times: Some(8),
+                retry_queue_nums: Some(4),
+                consume_timeout_minutes: Some(30),
+            },
+        )
+        .expect("bounded patch");
+        assert_eq!(valid.expected_version, 7);
+
+        assert!(PatchSubscriptionGroupConfigRequest::try_new(
+            "127.0.0.1:10911",
+            "orders-consumer",
+            7,
+            SubscriptionGroupConfigCasPatch::default(),
+        )
+        .is_err());
+        assert!(PatchSubscriptionGroupConfigRequest::try_new(
+            "127.0.0.1:10911",
+            "orders-consumer",
+            7,
+            SubscriptionGroupConfigCasPatch {
+                retry_max_times: Some(17),
+                ..SubscriptionGroupConfigCasPatch::default()
+            },
+        )
+        .is_err());
+    }
 }

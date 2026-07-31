@@ -1,0 +1,45 @@
+{
+  "$defs": {
+    "CriticFindingCode": {
+      "description": "Closed set of checks that a model Critic may report.",
+      "enum": [
+        "evidence_reference_invalid",
+        "counter_evidence_missing",
+        "parameter_out_of_range",
+        "missing_precondition",
+        "impact_scope_exceeded",
+        "rollback_unavailable"
+      ],
+      "type": "string"
+    },
+    "EvidenceId": {
+      "description": "Stable identifier for an evidence snapshot.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One structured finding returned by the Critic.",
+  "properties": {
+    "code": {
+      "$ref": "#/$defs/CriticFindingCode"
+    },
+    "evidence_ids": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/EvidenceId"
+      },
+      "type": "array"
+    },
+    "message": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "code",
+    "message"
+  ],
+  "title": "CriticFinding",
+  "type": "object"
+}

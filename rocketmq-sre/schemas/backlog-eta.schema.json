@@ -1,0 +1,258 @@
+{
+  "$defs": {
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "EvidenceId": {
+      "description": "Stable identifier for an evidence snapshot.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ForecastBacktest": {
+      "description": "Deterministic holdout result used to monitor forecast accuracy.",
+      "properties": {
+        "bias": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "evaluated_points": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "interval_coverage_ratio": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "mean_absolute_error": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "evaluated_points"
+      ],
+      "type": "object"
+    },
+    "ForecastId": {
+      "description": "Stable identifier for a capacity or backlog forecast.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ForecastQuality": {
+      "description": "Explainable quality assessment for a forecast.",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
+    },
+    "ForecastStatus": {
+      "description": "Forecast availability and degradation state.",
+      "enum": [
+        "ready",
+        "insufficient_data",
+        "stale",
+        "unstable_trend",
+        "unsupported"
+      ],
+      "type": "string"
+    },
+    "ForecastTrend": {
+      "description": "Explainable direction of the fitted trend.",
+      "enum": [
+        "increasing",
+        "decreasing",
+        "stable",
+        "unstable",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "ForecastWindow": {
+      "description": "Historical window used to build a forecast.",
+      "enum": [
+        "seven_days",
+        "thirty_days"
+      ],
+      "type": "string"
+    },
+    "ResourceKind": {
+      "description": "Resource classes accepted by the Phase 2 correlation engine.",
+      "enum": [
+        "cluster",
+        "name_server",
+        "controller",
+        "broker",
+        "proxy",
+        "store",
+        "topic",
+        "queue",
+        "consumer_group",
+        "producer_group",
+        "pod",
+        "node",
+        "persistent_volume_claim",
+        "certificate",
+        "runtime",
+        "telemetry"
+      ],
+      "type": "string"
+    },
+    "ResourceRef": {
+      "description": "Tenant-scoped resource identity used for correlation and topology lookup.",
+      "properties": {
+        "display_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ResourceKind"
+        }
+      },
+      "required": [
+        "kind",
+        "key"
+      ],
+      "type": "object"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Estimated drain time for a lag, retry, DLQ, POP, or timer backlog.",
+  "properties": {
+    "algorithm_version": {
+      "type": "string"
+    },
+    "arrival_rate_per_second": {
+      "format": "double",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "backlog_kind": {
+      "type": "string"
+    },
+    "backtest": {
+      "$ref": "#/$defs/ForecastBacktest"
+    },
+    "cluster_id": {
+      "$ref": "#/$defs/ClusterId"
+    },
+    "coverage_ratio": {
+      "format": "double",
+      "type": "number"
+    },
+    "current_value": {
+      "format": "double",
+      "type": "number"
+    },
+    "drain_rate_per_second": {
+      "format": "double",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "estimated_clear_at": {
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "evidence_ids": {
+      "items": {
+        "$ref": "#/$defs/EvidenceId"
+      },
+      "type": "array"
+    },
+    "execution_eligible": {
+      "type": "boolean"
+    },
+    "id": {
+      "$ref": "#/$defs/ForecastId"
+    },
+    "observed_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "quality": {
+      "$ref": "#/$defs/ForecastQuality"
+    },
+    "resource": {
+      "$ref": "#/$defs/ResourceRef"
+    },
+    "sample_end": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "sample_start": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "slope_per_hour": {
+      "format": "double",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "status": {
+      "$ref": "#/$defs/ForecastStatus"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    },
+    "trend": {
+      "$ref": "#/$defs/ForecastTrend"
+    },
+    "window": {
+      "$ref": "#/$defs/ForecastWindow"
+    }
+  },
+  "required": [
+    "id",
+    "tenant_id",
+    "cluster_id",
+    "resource",
+    "backlog_kind",
+    "window",
+    "trend",
+    "status",
+    "quality",
+    "current_value",
+    "sample_start",
+    "sample_end",
+    "coverage_ratio",
+    "algorithm_version",
+    "backtest",
+    "evidence_ids",
+    "execution_eligible",
+    "observed_at"
+  ],
+  "title": "BacklogEta",
+  "type": "object"
+}

@@ -162,21 +162,32 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,id=rocketmq-service-target-${SOURCE_REVISION},target=/workspace/target,sharing=locked <<EOF
 set -eux
-cargo build --locked --release --package rocketmq-broker --no-default-features --features production --bin rocketmq-broker-rust
-cargo build --locked --release --package rocketmq-namesrv --no-default-features --features production --bin rocketmq-namesrv-rust
-cargo build --locked --release --package rocketmq-controller --no-default-features --features production --bin rocketmq-controller-rust
-cargo build --locked --release --package rocketmq-proxy --no-default-features --features production --bin rocketmq-proxy-rust
-cargo build --locked --release --package rocketmq-mcp --no-default-features --features production --bin rocketmq-mcp
+cargo build --locked --release --package rocketmq-broker --features otlp-metrics,otlp-traces,otlp-logs --bin rocketmq-broker-rust
+cargo build --locked --release --package rocketmq-namesrv --features otlp-metrics,otlp-traces,otlp-logs --bin rocketmq-namesrv-rust
+cargo build --locked --release --package rocketmq-controller --features metrics-otlp,otlp-traces,otlp-logs --bin rocketmq-controller-rust
+cargo build --locked --release --package rocketmq-proxy --features otlp-metrics,otlp-traces,otlp-logs --bin rocketmq-proxy-rust
 install -d /opt/rocketmq-binaries
 for binary in \
     rocketmq-broker-rust \
     rocketmq-namesrv-rust \
     rocketmq-controller-rust \
-    rocketmq-proxy-rust \
-    rocketmq-mcp
+    rocketmq-proxy-rust
 do
     install -m 0555 "/workspace/target/release/${binary}" "/opt/rocketmq-binaries/${binary}"
 done
+EOF
+
+FROM builder-base AS mcp-builder
+
+COPY . .
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/workspace/target,sharing=locked <<EOF
+set -eux
+export CARGO_TARGET_DIR=/workspace/target
+cargo build --manifest-path rocketmq-tools/rocketmq-mcp/Cargo.toml --locked --release --package rocketmq-mcp --features streamable-http,otlp --bin rocketmq-mcp
+install -D -m 0555 /workspace/target/release/rocketmq-mcp /opt/rocketmq-binaries/rocketmq-mcp
 EOF
 
 FROM runtime-base AS service-runtime
@@ -245,10 +256,10 @@ LABEL org.opencontainers.image.title="RocketMQ Rust Broker" \
     io.rocketmq.service.binary="rocketmq-broker-rust" \
     io.rocketmq.service.config-path="/etc/rocketmq/broker.toml" \
     io.rocketmq.service.data-path="/var/lib/rocketmq/broker" \
-    io.rocketmq.service.ports="5557,8088,10911,10912" \
+    io.rocketmq.service.ports="8087,8088,10911,10912" \
     io.rocketmq.service.signal="SIGTERM"
 
-EXPOSE 5557 8088 10911 10912
+EXPOSE 8087 8088 10911 10912
 ENTRYPOINT ["/usr/local/bin/rocketmq-broker-rust"]
 CMD ["--configFile", "/etc/rocketmq/broker.toml"]
 
@@ -261,10 +272,10 @@ LABEL org.opencontainers.image.title="RocketMQ Rust NameServer" \
     io.rocketmq.service.binary="rocketmq-namesrv-rust" \
     io.rocketmq.service.config-path="/etc/rocketmq/namesrv.toml" \
     io.rocketmq.service.data-path="/var/lib/rocketmq/namesrv" \
-    io.rocketmq.service.ports="5557,8088,9876" \
+    io.rocketmq.service.ports="8087,8088,9876" \
     io.rocketmq.service.signal="SIGTERM"
 
-EXPOSE 5557 8088 9876
+EXPOSE 8087 8088 9876
 ENTRYPOINT ["/usr/local/bin/rocketmq-namesrv-rust"]
 CMD ["--configFile", "/etc/rocketmq/namesrv.toml"]
 
@@ -277,12 +288,12 @@ LABEL org.opencontainers.image.title="RocketMQ Rust Controller" \
     io.rocketmq.service.binary="rocketmq-controller-rust" \
     io.rocketmq.service.config-path="/etc/rocketmq/controller.toml" \
     io.rocketmq.service.data-path="/var/lib/rocketmq/controller" \
-    io.rocketmq.service.ports="5557,8088,60109,60110" \
+    io.rocketmq.service.ports="8087,8088,60109,60110" \
     io.rocketmq.service.signal="SIGTERM"
 
 ENV ROCKETMQ_CONTROLLER_RAFT_BIND_ADDR=0.0.0.0:60110
 
-EXPOSE 5557 8088 60109 60110
+EXPOSE 8087 8088 60109 60110
 ENTRYPOINT ["/usr/local/bin/rocketmq-controller-rust"]
 CMD ["--config-file", "/etc/rocketmq/controller.toml"]
 
@@ -295,16 +306,16 @@ LABEL org.opencontainers.image.title="RocketMQ Rust Proxy" \
     io.rocketmq.service.binary="rocketmq-proxy-rust" \
     io.rocketmq.service.config-path="/etc/rocketmq/proxy.toml" \
     io.rocketmq.service.data-path="/var/lib/rocketmq/proxy" \
-    io.rocketmq.service.ports="5557,8080,8081,8088" \
+    io.rocketmq.service.ports="8080,8081,8087,8088" \
     io.rocketmq.service.signal="SIGTERM"
 
-EXPOSE 5557 8080 8081 8088
+EXPOSE 8080 8081 8087 8088
 ENTRYPOINT ["/usr/local/bin/rocketmq-proxy-rust"]
 CMD ["--config", "/etc/rocketmq/proxy.toml"]
 
 FROM service-runtime AS mcp
 
-COPY --from=service-builder --chmod=0555 /opt/rocketmq-binaries/rocketmq-mcp /usr/local/bin/rocketmq-mcp
+COPY --from=mcp-builder --chmod=0555 /opt/rocketmq-binaries/rocketmq-mcp /usr/local/bin/rocketmq-mcp
 
 LABEL org.opencontainers.image.title="RocketMQ Rust MCP" \
     io.rocketmq.image.role="mcp" \

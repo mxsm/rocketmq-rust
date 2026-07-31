@@ -17,9 +17,11 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::sync::Arc;
+use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use rocketmq_error::RocketMQResult;
+use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::body::release_checkpoint::ControllerReleaseSnapshotManifest;
 use rocketmq_protocol::protocol::body::release_checkpoint::ControllerReleaseSnapshotRequest;
 use rocketmq_protocol::protocol::body::release_checkpoint::ReleaseCheckpointRestoreVerification;
@@ -33,7 +35,10 @@ use rocketmq_protocol::protocol::header::controller::get_replica_info_request_he
 use rocketmq_protocol::protocol::header::controller::register_broker_to_controller_request_header::RegisterBrokerToControllerRequestHeader;
 use rocketmq_protocol::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_security_api::MaintenanceAuthorizationGrant;
+use tracing::info;
+use tracing::Instrument;
 
 use crate::config::ControllerConfigReader;
 use crate::controller::open_raft_controller::OpenRaftController;
@@ -42,9 +47,9 @@ use crate::controller::Controller;
 use crate::error::Result;
 use crate::heartbeat::default_broker_heartbeat_manager::DefaultBrokerHeartbeatManager;
 use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
+use crate::metrics::controller_metrics_manager::ControllerMetricsManager;
 use crate::typ::Node;
 use crate::typ::NodeId;
-use rocketmq_runtime::ChildServiceContext;
 
 /// Controller wrapper used by the rest of the controller stack.
 ///
@@ -73,6 +78,22 @@ impl RaftController {
                 config,
                 heartbeat_manager,
                 service_context,
+            )),
+        }
+    }
+
+    pub(crate) fn new_open_raft_with_heartbeat_and_metrics(
+        config: ControllerConfigReader,
+        heartbeat_manager: Arc<DefaultBrokerHeartbeatManager>,
+        service_context: ChildServiceContext,
+        metrics_manager: Arc<ControllerMetricsManager>,
+    ) -> Self {
+        Self {
+            inner: Arc::new(OpenRaftController::new_with_heartbeat_and_metrics(
+                config,
+                heartbeat_manager,
+                service_context,
+                metrics_manager,
             )),
         }
     }
@@ -212,7 +233,22 @@ impl Controller for RaftController {
     }
 
     async fn elect_master(&self, request: &ElectMasterRequestHeader) -> RocketMQResult<Option<RemotingCommand>> {
-        self.inner.elect_master(request).await
+        let started_at = Instant::now();
+        let span = rocketmq_observability::trace::controller::election_span();
+        let result = self.inner.elect_master(request).instrument(span.clone()).await;
+        let outcome = election_outcome(&result);
+
+        self.inner
+            .record_election_attempt(u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX));
+        span.record("result", outcome);
+        info!(
+            event = rocketmq_observability::semantic::events::CONTROLLER_ELECTION,
+            state = "completed",
+            result = outcome,
+            "Controller master election completed"
+        );
+
+        result
     }
 
     async fn alter_sync_state_set(
@@ -237,5 +273,34 @@ impl Controller for RaftController {
 
     fn register_broker_lifecycle_listener(&self, listener: Arc<dyn BrokerLifecycleListener>) {
         self.inner.register_broker_lifecycle_listener(listener);
+    }
+}
+
+fn election_outcome(result: &RocketMQResult<Option<RemotingCommand>>) -> &'static str {
+    match result {
+        Err(_) => "error",
+        Ok(None) => "unavailable",
+        Ok(Some(response)) if ResponseCode::from(response.code()).is_success() => "success",
+        Ok(Some(_)) => "rejected",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn election_outcome_is_bounded_and_does_not_expose_response_codes() {
+        let success = Ok(Some(
+            RemotingCommand::create_response_command().set_code(ResponseCode::Success),
+        ));
+        let rejected = Ok(Some(
+            RemotingCommand::create_response_command().set_code(ResponseCode::ControllerElectMasterFailed),
+        ));
+        let unavailable = Ok(None);
+
+        assert_eq!(election_outcome(&success), "success");
+        assert_eq!(election_outcome(&rejected), "rejected");
+        assert_eq!(election_outcome(&unavailable), "unavailable");
     }
 }

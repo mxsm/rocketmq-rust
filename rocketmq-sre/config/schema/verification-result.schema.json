@@ -1,0 +1,91 @@
+{
+  "$defs": {
+    "EvidenceId": {
+      "description": "Stable identifier for an evidence snapshot.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ExecutionStepId": {
+      "description": "Stable identifier for an execution step.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "VerificationOutcome": {
+      "description": "Deterministic verification outcome.",
+      "enum": [
+        "succeeded",
+        "failed",
+        "inconclusive"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Bounded verification result with before/after evidence.",
+  "properties": {
+    "completed_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "during_evidence_ids": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/EvidenceId"
+      },
+      "type": "array"
+    },
+    "failed_conditions": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "outcome": {
+      "$ref": "#/$defs/VerificationOutcome"
+    },
+    "post_evidence_ids": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/EvidenceId"
+      },
+      "type": "array"
+    },
+    "pre_evidence_ids": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/EvidenceId"
+      },
+      "type": "array"
+    },
+    "satisfied_conditions": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "stable_window_seconds": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "started_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "step_id": {
+      "$ref": "#/$defs/ExecutionStepId"
+    }
+  },
+  "required": [
+    "step_id",
+    "outcome",
+    "started_at",
+    "completed_at",
+    "stable_window_seconds"
+  ],
+  "title": "VerificationResult",
+  "type": "object"
+}

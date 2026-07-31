@@ -428,7 +428,7 @@ metadata:
     rocketmq.apache.org/architecture-milestone: P0-05
   annotations:
     rocketmq.apache.org/maintenance-policy-version: "1"
-    rocketmq.apache.org/maintenance-policy-sha256: "328683f40a3aadcca0592c889196294eab10037271b0671de7d1c77287fa51c8"
+    rocketmq.apache.org/maintenance-policy-sha256: "951aca122bb23b78e29235aaf05b2dffe9422bf97636ce6ac04fddab969ba0ee"
 immutable: true
 data:
   maintenance-policy.json: |-
@@ -462,9 +462,7 @@ data:
       "role_grants": [
         {
           "role": "release_operator",
-          "capabilities": [
-            "release_checkpoint"
-          ]
+          "capabilities": ["release_checkpoint"]
         }
       ]
     }
@@ -503,14 +501,13 @@ data:
     maintenanceEnabled = true
     maintenancePolicyPath = "maintenance-policy.json"
     maintenancePolicyVersion = 1
-    maintenancePolicySha256 = "328683f40a3aadcca0592c889196294eab10037271b0671de7d1c77287fa51c8"
+    maintenancePolicySha256 = "951aca122bb23b78e29235aaf05b2dffe9422bf97636ce6ac04fddab969ba0ee"
     maintenanceCheckpointRoot = "/var/lib/rocketmq/checkpoints"
 
     [broker.brokerIdentity]
     brokerName = "rocketmq-broker"
     brokerClusterName = "RocketmqRust"
     brokerId = 0
-
     [store]
     haListenAddress = "0.0.0.0"
     haListenPort = 10912
@@ -535,14 +532,13 @@ data:
     maintenanceEnabled = true
     maintenancePolicyPath = "maintenance-policy.json"
     maintenancePolicyVersion = 1
-    maintenancePolicySha256 = "328683f40a3aadcca0592c889196294eab10037271b0671de7d1c77287fa51c8"
+    maintenancePolicySha256 = "951aca122bb23b78e29235aaf05b2dffe9422bf97636ce6ac04fddab969ba0ee"
     maintenanceCheckpointRoot = "/var/lib/rocketmq/checkpoints"
 
     [broker.brokerIdentity]
     brokerName = "rocketmq-broker"
     brokerClusterName = "RocketmqRust"
     brokerId = 0
-
     [store]
     haListenAddress = "0.0.0.0"
     haListenPort = 10912
@@ -567,14 +563,13 @@ data:
     maintenanceEnabled = true
     maintenancePolicyPath = "maintenance-policy.json"
     maintenancePolicyVersion = 1
-    maintenancePolicySha256 = "328683f40a3aadcca0592c889196294eab10037271b0671de7d1c77287fa51c8"
+    maintenancePolicySha256 = "951aca122bb23b78e29235aaf05b2dffe9422bf97636ce6ac04fddab969ba0ee"
     maintenanceCheckpointRoot = "/var/lib/rocketmq/checkpoints"
 
     [broker.brokerIdentity]
     brokerName = "rocketmq-broker"
     brokerClusterName = "RocketmqRust"
     brokerId = 0
-
     [store]
     haListenAddress = "0.0.0.0"
     haListenPort = 10912
@@ -658,7 +653,7 @@ data:
     maintenanceEnabled = true
     maintenancePolicyPath = "maintenance-policy.json"
     maintenancePolicyVersion = 1
-    maintenancePolicySha256 = "328683f40a3aadcca0592c889196294eab10037271b0671de7d1c77287fa51c8"
+    maintenancePolicySha256 = "951aca122bb23b78e29235aaf05b2dffe9422bf97636ce6ac04fddab969ba0ee"
     maintenanceCheckpointRoot = "/var/lib/rocketmq/controller/checkpoints/node-1"
 
     [[raftPeers]]
@@ -724,7 +719,7 @@ data:
     maintenanceEnabled = true
     maintenancePolicyPath = "maintenance-policy.json"
     maintenancePolicyVersion = 1
-    maintenancePolicySha256 = "328683f40a3aadcca0592c889196294eab10037271b0671de7d1c77287fa51c8"
+    maintenancePolicySha256 = "951aca122bb23b78e29235aaf05b2dffe9422bf97636ce6ac04fddab969ba0ee"
     maintenanceCheckpointRoot = "/var/lib/rocketmq/controller/checkpoints/node-2"
 
     [[raftPeers]]
@@ -790,7 +785,7 @@ data:
     maintenanceEnabled = true
     maintenancePolicyPath = "maintenance-policy.json"
     maintenancePolicyVersion = 1
-    maintenancePolicySha256 = "328683f40a3aadcca0592c889196294eab10037271b0671de7d1c77287fa51c8"
+    maintenancePolicySha256 = "951aca122bb23b78e29235aaf05b2dffe9422bf97636ce6ac04fddab969ba0ee"
     maintenanceCheckpointRoot = "/var/lib/rocketmq/controller/checkpoints/node-3"
 
     [[raftPeers]]
@@ -847,11 +842,13 @@ data:
     namesrvAddr = "rocketmq-namesrv-0.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876;rocketmq-namesrv-1.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876;rocketmq-namesrv-2.rocketmq-namesrv-headless.rocketmq.svc.cluster.local:9876"
 
     [auth]
+    clusterName = "RocketmqRust"
     authenticationEnabled = true
     authorizationEnabled = true
     authConfigPath = "/var/lib/rocketmq/proxy/auth"
     aclFile = "/var/run/secrets/rocketmq/proxy-acl.yml"
     aclFileWatchEnabled = true
+    signatureAlgorithm = "HmacSHA256"
 ---
 # Source: rocketmq-rust/templates/configmaps.yaml
 apiVersion: v1
@@ -1518,6 +1515,7 @@ spec:
             - {name: ROCKETMQ_METRICS_EXPORTER, value: "prometheus"}
             - {name: ROCKETMQ_METRICS_BIND_ADDR, value: "0.0.0.0:5557"}
             - {name: ROCKETMQ_METRICS_PATH, value: "/metrics"}
+
             - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/proxy}
             - {name: OTEL_SERVICE_NAME, value: rocketmq-proxy}
             - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.observability.svc.cluster.local:4317"}
@@ -1839,6 +1837,7 @@ spec:
             - {name: ROCKETMQ_METRICS_EXPORTER, value: "prometheus"}
             - {name: ROCKETMQ_METRICS_BIND_ADDR, value: "0.0.0.0:5557"}
             - {name: ROCKETMQ_METRICS_PATH, value: "/metrics"}
+
             - name: POD_NAME
               valueFrom:
                 fieldRef:
@@ -2042,6 +2041,7 @@ spec:
             - {name: ROCKETMQ_METRICS_EXPORTER, value: "prometheus"}
             - {name: ROCKETMQ_METRICS_BIND_ADDR, value: "0.0.0.0:5557"}
             - {name: ROCKETMQ_METRICS_PATH, value: "/metrics"}
+
             - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/namesrv}
             - {name: OTEL_SERVICE_NAME, value: rocketmq-namesrv}
             - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.observability.svc.cluster.local:4317"}
@@ -2235,6 +2235,7 @@ spec:
             - {name: ROCKETMQ_METRICS_EXPORTER, value: "prometheus"}
             - {name: ROCKETMQ_METRICS_BIND_ADDR, value: "0.0.0.0:5557"}
             - {name: ROCKETMQ_METRICS_PATH, value: "/metrics"}
+
             - name: POD_NAME
               valueFrom:
                 fieldRef:

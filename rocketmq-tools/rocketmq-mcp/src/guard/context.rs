@@ -17,6 +17,7 @@ use std::collections::BTreeSet;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Principal {
     pub id: String,
+    pub tenant: Option<String>,
     pub roles: BTreeSet<String>,
     pub scopes: BTreeSet<String>,
     pub allowed_clusters: Option<BTreeSet<String>>,
@@ -24,12 +25,16 @@ pub struct Principal {
 
 impl Principal {
     pub fn local(profile: &str) -> Self {
-        let mut scopes = BTreeSet::from(["rocketmq:read".to_string(), "rocketmq:diagnose".to_string()]);
+        let mut scopes = BTreeSet::from(["rocketmq:read".to_string()]);
+        if profile.eq_ignore_ascii_case("diagnose") || profile.eq_ignore_ascii_case("operator") {
+            scopes.insert("rocketmq:diagnose".to_string());
+        }
         if profile.eq_ignore_ascii_case("operator") {
             scopes.insert("rocketmq:plan".to_string());
         }
         Self {
             id: "local-stdio".to_string(),
+            tenant: None,
             roles: [profile.to_string()].into_iter().collect(),
             scopes,
             allowed_clusters: None,

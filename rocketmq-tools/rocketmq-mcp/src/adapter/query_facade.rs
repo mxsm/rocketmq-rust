@@ -552,7 +552,11 @@ where
 
         Ok(ResolvedCluster {
             name: config.name.clone(),
+            rocketmq_cluster_name: config.physical_cluster_name().to_string(),
             namesrv_addr: config.namesrv_addr.clone(),
+            credentials: config
+                .resolve_admin_credentials()
+                .map_err(|error| ToolExecutionError::Backend(error.to_string()))?,
         })
     }
 
@@ -568,7 +572,7 @@ where
 impl QueryFacade<AdminCoreSessionFactory> {
     pub(crate) fn new(
         config: McpConfig,
-        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::read_client_adapter::ClientRuntime>,
     ) -> Self {
         Self::with_factory(config, AdminCoreSessionFactory::new(client_runtime))
     }
@@ -1068,12 +1072,12 @@ mod tests {
             })
             .expect("MCP query test runtime should start")
         });
-        let client_runtime = rocketmq_admin_core::client_adapter::ClientRuntime::try_new(
+        let client_runtime = rocketmq_admin_core::read_client_adapter::ClientRuntime::try_new(
             OWNER.root_context().child("client"),
-            rocketmq_admin_core::client_adapter::ClientRuntimeConfig::default(),
-            rocketmq_admin_core::client_adapter::TelemetryHandle::noop(),
+            rocketmq_admin_core::read_client_adapter::ClientRuntimeConfig::default(),
+            rocketmq_observability::TelemetryHandle::noop(),
         )
-        .expect("MCP query test client runtime should be valid");
+        .expect("MCP query test client runtime should start");
         let _: QueryFacade<AdminCoreSessionFactory> = QueryFacade::new(example_config(), client_runtime);
     }
 

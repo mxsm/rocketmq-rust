@@ -29,8 +29,12 @@ use rocketmq_protocol::protocol::body::kv_table::KVTable;
 use rocketmq_protocol::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigToJsonRequestHeader;
 #[cfg(feature = "rocksdb_store")]
 use rocketmq_protocol::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigType;
+use rocketmq_protocol::protocol::header::get_broker_config_response_header::GetBrokerConfigResponseHeader;
+use rocketmq_protocol::protocol::header::update_broker_config_request_header::UpdateBrokerConfigRequestHeader;
+use rocketmq_protocol::protocol::header::update_broker_config_response_header::UpdateBrokerConfigResponseHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::DataVersion;
+use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::MessageStore;
 use rocketmq_store::MADV_NORMAL;
 use rocketmq_store::MADV_RANDOM;
@@ -131,7 +135,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
         &mut self,
         channel: Channel,
         _ctx: ConnectionHandlerContext,
-        _request_code: RequestCode,
+        request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_response_command().set_opaque(request.opaque());
@@ -159,19 +163,61 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
             ));
         }
 
+        let expected_generation = if request_code == RequestCode::UpdateBrokerConfigCas {
+            match request.decode_command_custom_header::<UpdateBrokerConfigRequestHeader>() {
+                Ok(header) if header.expected_generation > 0 => Some(header.expected_generation),
+                Ok(_) => {
+                    return Ok(Some(
+                        response
+                            .set_code(ResponseCode::InvalidParameter)
+                            .set_remark("expectedGeneration must be greater than zero"),
+                    ));
+                }
+                Err(_) => {
+                    return Ok(Some(
+                        response
+                            .set_code(ResponseCode::InvalidParameter)
+                            .set_remark("expectedGeneration is required and must be an unsigned integer"),
+                    ));
+                }
+            }
+        } else {
+            None
+        };
+
         if properties.keys().any(|key| LOG_FILTER_KEYS.contains(&key.as_str())) {
+            if expected_generation.is_some() {
+                return Ok(Some(response.set_code(ResponseCode::InvalidParameter).set_remark(
+                    "generation-checked broker config updates do not accept log filter properties",
+                )));
+            }
             return self.update_log_filter(channel, request, response, &properties).await;
         }
 
-        let generation = match self.broker_runtime_inner.commit_broker_config_patch(&properties) {
+        let commit_result = match expected_generation {
+            Some(expected_generation) => self
+                .broker_runtime_inner
+                .commit_broker_config_patch_if_generation(expected_generation, &properties),
+            None => self.broker_runtime_inner.commit_broker_config_patch(&properties),
+        };
+        let generation = match commit_result {
             Ok(generation) => generation,
             Err(error @ BrokerConfigError::RestartRequired { .. })
             | Err(error @ BrokerConfigError::UnsupportedKeys { .. })
             | Err(error @ BrokerConfigError::InvalidProperty { .. })
-            | Err(error @ BrokerConfigError::Invalid { .. })
-            | Err(error @ BrokerConfigError::GenerationConflict { .. }) => {
+            | Err(error @ BrokerConfigError::Invalid { .. }) => {
                 return Ok(Some(
                     response
+                        .set_code(ResponseCode::InvalidParameter)
+                        .set_remark(error.to_string()),
+                ));
+            }
+            Err(error @ BrokerConfigError::GenerationConflict { actual, .. }) => {
+                return Ok(Some(
+                    response
+                        .set_command_custom_header(UpdateBrokerConfigResponseHeader {
+                            config_generation: actual,
+                        })
                         .set_code(ResponseCode::InvalidParameter)
                         .set_remark(error.to_string()),
                 ));
@@ -185,10 +231,17 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
             }
         };
 
-        Ok(Some(response.set_code(ResponseCode::Success).set_remark(format!(
-            "update broker config success, generation={}",
-            generation.value()
-        ))))
+        Ok(Some(
+            response
+                .set_command_custom_header(UpdateBrokerConfigResponseHeader {
+                    config_generation: generation.value(),
+                })
+                .set_code(ResponseCode::Success)
+                .set_remark(format!(
+                    "update broker config success, generation={}",
+                    generation.value()
+                )),
+        ))
     }
 
     async fn update_log_filter(
@@ -287,10 +340,9 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
         let mut response = RemotingCommand::create_response_command();
         // broker config => broker config
         // default message store config => message store config
-        let broker_config = self.broker_runtime_inner.broker_config();
-        let message_store_config = self.broker_runtime_inner.message_store_config();
-        let broker_config_properties = broker_config.get_properties();
-        let message_store_config_properties = message_store_config.get_properties();
+        let snapshot = self.broker_runtime_inner.runtime_config_snapshot();
+        let broker_config_properties = snapshot.broker().get_properties();
+        let message_store_config_properties = snapshot.store().get_properties();
         let combine_map = broker_config_properties
             .iter()
             .chain(message_store_config_properties.iter())
@@ -302,6 +354,9 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
         if !body.is_empty() {
             response.set_body_mut_ref(body);
         }
+        response.set_command_custom_header_ref(GetBrokerConfigResponseHeader {
+            config_generation: snapshot.id().value(),
+        });
         Ok(Some(response))
     }
 
@@ -576,14 +631,151 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
     }
 
     fn prepare_runtime_info(&self) -> HashMap<CheetahString, CheetahString> {
-        let mut runtime_info = self.broker_runtime_inner.message_store().unwrap().get_runtime_info();
+        let message_store = self.broker_runtime_inner.message_store().unwrap();
+        let mut runtime_info = message_store.get_runtime_info();
+        let generation = self.broker_runtime_inner.runtime_config_snapshot();
+        let store_health = message_store.health_snapshot();
+        let broker_shutdown = self.broker_runtime_inner.is_shutdown();
+        let broker_active = self.is_special_service_running();
+        runtime_info.insert(
+            "sreDiagnosticsSchemaVersion".to_string(),
+            "rocketmq.broker-diagnostics.v1".to_string(),
+        );
+        runtime_info.insert(
+            "sreDiagnosticsObservedAtMillis".to_string(),
+            current_millis().to_string(),
+        );
+        runtime_info.insert(
+            "brokerConfigGeneration".to_string(),
+            generation.id().value().to_string(),
+        );
+        runtime_info.insert("brokerShutdown".to_string(), broker_shutdown.to_string());
+        runtime_info.insert(
+            "brokerRegistrationAccepting".to_string(),
+            (!broker_shutdown).to_string(),
+        );
+        runtime_info.insert(
+            "brokerRegistrationConfigured".to_string(),
+            generation.broker().namesrv_addr.is_some().to_string(),
+        );
+        runtime_info.insert(
+            "brokerReady".to_string(),
+            (broker_active && !broker_shutdown && store_health.writeable && !store_health.shutdown).to_string(),
+        );
+        runtime_info.insert(
+            "brokerRole".to_string(),
+            generation.store().broker_role.get_broker_role().to_string(),
+        );
+        runtime_info.insert(
+            "storeType".to_string(),
+            generation.store().store_type.get_store_type().to_string(),
+        );
+        runtime_info.insert(
+            "timerWheelEnabled".to_string(),
+            generation.store().timer_wheel_enable.to_string(),
+        );
+        runtime_info.insert(
+            "transientStorePoolEnabled".to_string(),
+            generation.store().transient_store_pool_enable.to_string(),
+        );
+        #[cfg(feature = "tieredstore")]
+        runtime_info.insert(
+            "tieredStoreConfigured".to_string(),
+            generation.store().tiered_store_config.is_some().to_string(),
+        );
+        #[cfg(not(feature = "tieredstore"))]
+        runtime_info.insert("tieredStoreConfigured".to_string(), "false".to_string());
+        runtime_info.insert("storeWriteable".to_string(), store_health.writeable.to_string());
+        runtime_info.insert(
+            "storeLastFlushError".to_string(),
+            store_health.last_flush_error.is_some().to_string(),
+        );
+        runtime_info.insert(
+            "storeOsPageCacheBusy".to_string(),
+            store_health.os_page_cache_busy.to_string(),
+        );
+        runtime_info.insert(
+            "storeTransientPoolDeficient".to_string(),
+            store_health.transient_store_pool_deficient.to_string(),
+        );
+        runtime_info.insert("storeShutdown".to_string(), store_health.shutdown.to_string());
+        runtime_info.insert(
+            "storeDispatchBehindBytes".to_string(),
+            store_health.dispatch_behind_bytes.to_string(),
+        );
+        runtime_info.insert(
+            "storeHaPendingRequestCount".to_string(),
+            store_health.ha_pending_request_count.to_string(),
+        );
+        runtime_info.insert(
+            "storeHaPendingOldestWaitMillis".to_string(),
+            store_health.ha_pending_oldest_wait_millis.to_string(),
+        );
+        runtime_info.insert(
+            "storeSyncFlushQueueDepth".to_string(),
+            store_health.sync_flush.queue_depth.to_string(),
+        );
+        runtime_info.insert(
+            "storeSyncFlushTimeoutTotal".to_string(),
+            store_health.sync_flush.timeout_total.to_string(),
+        );
+        runtime_info.insert(
+            "storeSyncFlushOldestWaitMillis".to_string(),
+            store_health.sync_flush.oldest_wait_millis.to_string(),
+        );
+        if let Some(auth) = self.auth_admin_service.as_ref() {
+            let auth = auth.diagnostics_snapshot();
+            runtime_info.insert("authDiagnosticsSupported".to_string(), "true".to_string());
+            runtime_info.insert(
+                "authAuthenticationEnabled".to_string(),
+                auth.authentication_enabled.to_string(),
+            );
+            runtime_info.insert(
+                "authAuthorizationEnabled".to_string(),
+                auth.authorization_enabled.to_string(),
+            );
+            runtime_info.insert(
+                "authAclFileWatchEnabled".to_string(),
+                auth.acl_file_watch_enabled.to_string(),
+            );
+            runtime_info.insert("authAclGeneration".to_string(), auth.acl_generation.to_string());
+            runtime_info.insert(
+                "authAclReloadAttempts".to_string(),
+                auth.acl_reload_attempts.to_string(),
+            );
+            runtime_info.insert(
+                "authAclReloadSuccesses".to_string(),
+                auth.acl_reload_successes.to_string(),
+            );
+            runtime_info.insert(
+                "authAclReloadFailures".to_string(),
+                auth.acl_reload_failures.to_string(),
+            );
+            runtime_info.insert("authAclReloadSkipped".to_string(), auth.acl_reload_skipped.to_string());
+        } else {
+            runtime_info.insert("authDiagnosticsSupported".to_string(), "false".to_string());
+        }
+        runtime_info.insert("authCredentialRotationSupported".to_string(), "false".to_string());
+        if let Some(control) = self.broker_runtime_inner.log_filter_control() {
+            let status = control.status();
+            runtime_info.insert("sreLogFilterControlSupported".to_string(), "true".to_string());
+            runtime_info.insert("sreLogFilterEffective".to_string(), status.effective_filter);
+            if let Some(operation_id) = status.active_operation_id {
+                runtime_info.insert("sreLogFilterActiveOperationId".to_string(), operation_id);
+            }
+            if let Some(operation_id) = status.last_completed_operation_id {
+                runtime_info.insert("sreLogFilterLastCompletedOperationId".to_string(), operation_id);
+            }
+            if let Some(expires_at_millis) = status.expires_at_millis {
+                runtime_info.insert("sreLogFilterExpiresAtMillis".to_string(), expires_at_millis.to_string());
+            }
+        } else {
+            runtime_info.insert("sreLogFilterControlSupported".to_string(), "false".to_string());
+        }
         self.broker_runtime_inner
             .schedule_message_service()
             .build_running_stats(&mut runtime_info);
-        runtime_info.insert(
-            "brokerActive".to_string(),
-            self.is_special_service_running().to_string(),
-        );
+        runtime_info.insert("brokerActive".to_string(), broker_active.to_string());
         let version = CURRENT_VERSION;
         runtime_info.insert("brokerVersionDesc".to_string(), version.name().to_string());
         runtime_info.insert("brokerVersion".to_string(), version.name().to_string());
@@ -800,6 +992,9 @@ mod tests {
     use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::code::response_code::ResponseCode;
     use rocketmq_protocol::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigToJsonRequestHeader;
+    use rocketmq_protocol::protocol::header::get_broker_config_response_header::GetBrokerConfigResponseHeader;
+    use rocketmq_protocol::protocol::header::update_broker_config_request_header::UpdateBrokerConfigRequestHeader;
+    use rocketmq_protocol::protocol::header::update_broker_config_response_header::UpdateBrokerConfigResponseHeader;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     #[cfg(feature = "rocksdb_store")]
     use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
@@ -981,6 +1176,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn runtime_diagnostics_generation_comes_from_the_atomic_config_snapshot() {
+        let runtime = new_test_runtime("sre-diagnostics-generation", false).await;
+        let admin = runtime.admin_runtime_for_test();
+        let handler = BrokerConfigRequestHandler::new(admin.clone());
+
+        let initial = handler.prepare_runtime_info();
+        assert_eq!(
+            initial.get("sreDiagnosticsSchemaVersion").map(|value| value.as_str()),
+            Some("rocketmq.broker-diagnostics.v1")
+        );
+        assert_eq!(
+            initial.get("brokerConfigGeneration").map(|value| value.as_str()),
+            Some("1")
+        );
+        assert_eq!(initial.get("storeWriteable").map(|value| value.as_str()), Some("true"));
+        assert_eq!(
+            initial.get("sreLogFilterControlSupported").map(|value| value.as_str()),
+            Some("false")
+        );
+
+        let mut next = admin.broker_config().as_ref().clone();
+        next.max_client_event_count = next.max_client_event_count.saturating_add(1);
+        let mut admin = admin;
+        admin
+            .set_broker_config(next)
+            .expect("valid configuration replacement should advance generation");
+
+        let updated = handler.prepare_runtime_info();
+        assert_eq!(
+            updated.get("brokerConfigGeneration").map(|value| value.as_str()),
+            Some("2")
+        );
+        assert_eq!(
+            updated.get("brokerRole").map(|value| value.as_str()),
+            Some(admin.message_store_config().broker_role.get_broker_role())
+        );
+
+        let _ = fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn get_broker_config_binds_body_to_the_committed_generation() {
+        let runtime = new_test_runtime("get-broker-config-generation", false).await;
+        let admin = runtime.admin_runtime_for_test();
+        let mut handler = BrokerConfigRequestHandler::new(admin);
+        let channel = create_test_channel().await;
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let mut request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerConfig);
+
+        let response = handler
+            .get_broker_config(channel, ctx, RequestCode::GetBrokerConfig, &mut request)
+            .await
+            .expect("get broker config should return broker response")
+            .expect("get broker config should return a response");
+
+        assert_eq!(
+            response
+                .read_custom_header_ref::<GetBrokerConfigResponseHeader>()
+                .map(|header| header.config_generation),
+            Some(1)
+        );
+        assert!(response
+            .get_body()
+            .is_some_and(|body| String::from_utf8_lossy(body).contains("flushDelayOffsetInterval")));
+
+        let _ = fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
     async fn update_broker_config_applies_supported_runtime_properties() {
         let runtime = new_test_runtime("update-broker-config", false).await;
         let admin = runtime.admin_runtime_for_test();
@@ -1006,6 +1270,69 @@ mod tests {
         assert_eq!(admin.broker_config().max_lite_subscription_count, 5);
         assert_eq!(admin.broker_config().max_client_event_count, 7);
         assert_eq!(admin.broker_config().lite_event_full_dispatch_delay_time, 1234);
+
+        let _ = fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn update_broker_config_cas_commits_once_and_rejects_stale_generation() {
+        let runtime = new_test_runtime("update-broker-config-cas", false).await;
+        let admin = runtime.admin_runtime_for_test();
+        let mut handler = BrokerConfigRequestHandler::new(admin.clone());
+
+        let channel = create_test_channel().await;
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::UpdateBrokerConfigCas,
+            UpdateBrokerConfigRequestHeader { expected_generation: 1 },
+        )
+        .set_body("maxClientEventCount=7");
+        request.make_custom_header_to_net();
+
+        let response = handler
+            .update_broker_config(channel, ctx, RequestCode::UpdateBrokerConfigCas, &mut request)
+            .await
+            .expect("CAS update should return broker response")
+            .expect("CAS update should return a response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        assert_eq!(
+            response
+                .read_custom_header_ref::<UpdateBrokerConfigResponseHeader>()
+                .map(|header| header.config_generation),
+            Some(2)
+        );
+        assert_eq!(admin.broker_config().max_client_event_count, 7);
+
+        let channel = create_test_channel().await;
+        let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
+        let mut stale_request = RemotingCommand::create_request_command(
+            RequestCode::UpdateBrokerConfigCas,
+            UpdateBrokerConfigRequestHeader { expected_generation: 1 },
+        )
+        .set_body("maxClientEventCount=9");
+        stale_request.make_custom_header_to_net();
+
+        let stale_response = handler
+            .update_broker_config(channel, ctx, RequestCode::UpdateBrokerConfigCas, &mut stale_request)
+            .await
+            .expect("stale CAS update should return broker response")
+            .expect("stale CAS update should return a response");
+
+        assert_eq!(
+            ResponseCode::from(stale_response.code()),
+            ResponseCode::InvalidParameter
+        );
+        assert_eq!(
+            stale_response
+                .read_custom_header_ref::<UpdateBrokerConfigResponseHeader>()
+                .map(|header| header.config_generation),
+            Some(2)
+        );
+        assert!(stale_response
+            .remark()
+            .is_some_and(|remark| remark.contains("expected 1, actual 2")));
+        assert_eq!(admin.broker_config().max_client_event_count, 7);
 
         let _ = fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }

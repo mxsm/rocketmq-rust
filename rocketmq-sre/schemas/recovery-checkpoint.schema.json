@@ -1,0 +1,142 @@
+{
+  "$defs": {
+    "DrExerciseId": {
+      "description": "Stable identifier for a disaster-recovery exercise.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "EvidenceId": {
+      "description": "Stable identifier for an evidence snapshot.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "RecoveryCheckpointId": {
+      "description": "Stable identifier for one immutable disaster-recovery checkpoint observation.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "RecoveryCheckpointStatus": {
+      "description": "Result recorded for one recovery checkpoint.",
+      "enum": [
+        "pending",
+        "running",
+        "passed",
+        "failed",
+        "manual_confirmation_required",
+        "skipped"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Append-only observation for a recovery checkpoint.",
+  "properties": {
+    "actual_duration_seconds": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "cleanup_complete": {
+      "type": "boolean"
+    },
+    "cleanup_required": {
+      "type": "boolean"
+    },
+    "completed_at": {
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "confirmed_by": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "evidence_ids": {
+      "items": {
+        "$ref": "#/$defs/EvidenceId"
+      },
+      "type": "array"
+    },
+    "exercise_id": {
+      "$ref": "#/$defs/DrExerciseId"
+    },
+    "expected_duration_seconds": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "finding_codes": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "id": {
+      "$ref": "#/$defs/RecoveryCheckpointId"
+    },
+    "key": {
+      "type": "string"
+    },
+    "manual_confirmation_required": {
+      "type": "boolean"
+    },
+    "note": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "observed_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "observed_rpo_seconds": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "sequence": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "started_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/RecoveryCheckpointStatus"
+    },
+    "title": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "exercise_id",
+    "sequence",
+    "key",
+    "title",
+    "status",
+    "expected_duration_seconds",
+    "manual_confirmation_required",
+    "cleanup_required",
+    "cleanup_complete",
+    "evidence_ids",
+    "finding_codes",
+    "started_at",
+    "observed_at"
+  ],
+  "title": "RecoveryCheckpoint",
+  "type": "object"
+}

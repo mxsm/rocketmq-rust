@@ -32,7 +32,7 @@ EXPECTED_SERVICES: dict[str, dict[str, Any]] = {
         "binary": "rocketmq-broker-rust",
         "config_path": "/etc/rocketmq/broker.toml",
         "data_path": "/var/lib/rocketmq/broker",
-        "ports": [5557, 8088, 10911, 10912],
+        "ports": [8087, 8088, 10911, 10912],
         "command": ["--configFile", "/etc/rocketmq/broker.toml"],
     },
     "namesrv": {
@@ -41,7 +41,7 @@ EXPECTED_SERVICES: dict[str, dict[str, Any]] = {
         "binary": "rocketmq-namesrv-rust",
         "config_path": "/etc/rocketmq/namesrv.toml",
         "data_path": "/var/lib/rocketmq/namesrv",
-        "ports": [5557, 8088, 9876],
+        "ports": [8087, 8088, 9876],
         "command": ["--configFile", "/etc/rocketmq/namesrv.toml"],
     },
     "controller": {
@@ -50,7 +50,7 @@ EXPECTED_SERVICES: dict[str, dict[str, Any]] = {
         "binary": "rocketmq-controller-rust",
         "config_path": "/etc/rocketmq/controller.toml",
         "data_path": "/var/lib/rocketmq/controller",
-        "ports": [5557, 8088, 60109, 60110],
+        "ports": [8087, 8088, 60109, 60110],
         "command": ["--config-file", "/etc/rocketmq/controller.toml"],
     },
     "proxy": {
@@ -59,7 +59,7 @@ EXPECTED_SERVICES: dict[str, dict[str, Any]] = {
         "binary": "rocketmq-proxy-rust",
         "config_path": "/etc/rocketmq/proxy.toml",
         "data_path": "/var/lib/rocketmq/proxy",
-        "ports": [5557, 8080, 8081, 8088],
+        "ports": [8080, 8081, 8087, 8088],
         "command": ["--config", "/etc/rocketmq/proxy.toml"],
     },
     "mcp": {
@@ -258,6 +258,7 @@ def audit_foundation(
         findings.append("runtime stage must not resolve mutable packages")
     for fragment in (
         "FROM builder-base AS service-builder",
+        "FROM builder-base AS mcp-builder",
         "FROM runtime-base AS service-runtime",
         "FROM runtime-base-smoke AS container-contract-default",
         'VOLUME ["/var/lib/rocketmq"]',
@@ -295,9 +296,10 @@ def audit_foundation(
             continue
         section = match.group(1)
         binary = contract["binary"]
+        builder = "mcp-builder" if service_name == "mcp" else "service-builder"
         ports = " ".join(str(port) for port in contract["ports"])
         required_service_fragments = [
-            f"COPY --from=service-builder --chmod=0555 /opt/rocketmq-binaries/{binary} /usr/local/bin/{binary}",
+            f"COPY --from={builder} --chmod=0555 /opt/rocketmq-binaries/{binary} /usr/local/bin/{binary}",
             f'io.rocketmq.image.role="{service_name}"',
             f'io.rocketmq.service.binary="{binary}"',
             f'io.rocketmq.service.config-path="{contract["config_path"]}"',
@@ -465,7 +467,7 @@ def audit_foundation(
         "$policy.smoke_network.namesrv_alias",
         "$policy.smoke_network.dependency_chain",
         "$service.data_path",
-        "find /usr/local/bin",
+        "--entrypoint /usr/bin/find",
         "cyclonedx-json",
         "--severity CRITICAL",
         "--exit-code 0",

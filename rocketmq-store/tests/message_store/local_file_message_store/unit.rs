@@ -1947,6 +1947,14 @@ async fn recover_records_structured_recovery_report() {
         report.total_duration_ms,
         report.phases.iter().map(|phase| phase.duration_ms).sum()
     );
+    let runtime_info = store.get_runtime_info();
+    assert_eq!(runtime_info["recoveryReportAvailable"], "true");
+    assert_eq!(runtime_info["recoveryPhaseCount"], report.phases.len().to_string());
+    assert_eq!(runtime_info["recoveryFailedPhaseCount"], "0");
+    assert_eq!(runtime_info["recoveryFallbackPhaseCount"], "0");
+    assert_eq!(runtime_info["recoveryFallbackReasonPresent"], "false");
+    assert!(!runtime_info.contains_key("recoveryFallbackReason"));
+    assert_eq!(runtime_info["tieredStoreConfigured"], "false");
 }
 
 #[test]

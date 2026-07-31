@@ -1,0 +1,50 @@
+schema_version: rocketmq-sre.runbook-definition.v1
+id: 10000000-0000-4000-8000-000000000001
+name: proxy-canary-rollout
+version: 1.0.0
+owner: messaging-platform
+description: Roll out one digest-pinned Proxy canary and require an operator to verify readiness and SLOs.
+risk: r2
+max_parallelism: 1
+steps:
+  - id: 11000000-0000-4000-8000-000000000001
+    sequence: 1
+    name: roll out one Proxy canary
+    depends_on: []
+    parallel_group: null
+    condition: null
+    body:
+      kind: action
+      action: proxy.rollout_image_canary.v1
+      descriptor_version: 1.0.0
+      resource: deployment/rocketmq/proxy
+      parameters:
+        namespace: rocketmq
+        workload: proxy
+        container: proxy
+        expected_generation: 1
+        image_digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+        canary_replicas: 1
+  - id: 11000000-0000-4000-8000-000000000002
+    sequence: 2
+    name: verify Proxy canary
+    depends_on:
+      - 11000000-0000-4000-8000-000000000001
+    parallel_group: null
+    condition:
+      fact: proxy.canary.ready
+      operator: equals
+      expected: true
+    body:
+      kind: manual_gate
+      gate:
+        gate_id: verify-proxy-canary
+        title: Verify Proxy canary
+        instructions: Confirm readiness, PDB health, synthetic message flow, error ratio, and p99 latency before continuing.
+        required_role: approver
+        timeout_seconds: 1800
+compensation_edges:
+  - from_step: 11000000-0000-4000-8000-000000000001
+    compensation_step: 11000000-0000-4000-8000-000000000002
+    trigger: verification_failed
+created_at: 2026-01-01T00:00:00Z

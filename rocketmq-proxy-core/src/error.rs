@@ -23,6 +23,7 @@ pub enum ProxyErrorKind {
     UnrecognizedClientType,
     NotImplemented,
     TooManyRequests,
+    Draining,
     InvalidMetadata,
     Transport,
     IllegalMessageId,
@@ -55,6 +56,9 @@ pub enum ProxyError {
 
     #[error("request was rejected because '{resource}' is saturated")]
     TooManyRequests { resource: &'static str },
+
+    #[error("Proxy is draining and does not accept new requests")]
+    Draining,
 
     #[error("invalid gRPC metadata: {message}")]
     InvalidMetadata { message: String },
@@ -107,6 +111,7 @@ impl ProxyError {
             Self::UnrecognizedClientType(_) => ProxyErrorKind::UnrecognizedClientType,
             Self::NotImplemented { .. } => ProxyErrorKind::NotImplemented,
             Self::TooManyRequests { .. } => ProxyErrorKind::TooManyRequests,
+            Self::Draining => ProxyErrorKind::Draining,
             Self::InvalidMetadata { .. } => ProxyErrorKind::InvalidMetadata,
             Self::Transport { .. } => ProxyErrorKind::Transport,
             Self::IllegalMessageId { .. } => ProxyErrorKind::IllegalMessageId,

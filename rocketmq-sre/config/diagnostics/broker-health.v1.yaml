@@ -1,0 +1,43 @@
+schema: rocketmq-sre.diagnostic-pack.v1
+id: broker-health
+version: 1.0.0
+qualified_id: broker-health.v1
+owner: rocketmq-sre
+components: [broker, store]
+output_schema: rocketmq-sre.diagnostic-result.v1
+required_evidence:
+  - key: broker-metrics
+    source: prometheus
+    resource_prefix: broker-health/
+    fields:
+      - ready
+      - request_error_rate_percent
+      - active_connections
+      - cpu_percent
+      - rss_bytes
+      - disk_used_percent
+      - flush_latency_ms
+      - dispatch_backlog
+      - ha_lag_bytes
+optional_evidence:
+  - { key: broker-runtime, source: rocketmq-mcp, resource_prefix: broker-runtime/ }
+  - { key: connections, source: admin-query, resource_prefix: broker-connections/ }
+rules:
+  - { reason_code: BROKER_NOT_READY, when: "!ready || broker_up == false", severity: critical }
+  - { reason_code: BROKER_REQUEST_ERRORS, when: "request_error_rate_percent >= 5", severity: critical }
+  - { reason_code: BROKER_RESOURCE_PRESSURE, when: "cpu_percent >= 90", severity: warning }
+  - { reason_code: BROKER_DISK_PRESSURE, when: "disk_used_percent >= 85", severity: critical }
+  - reason_code: BROKER_FLUSH_DISPATCH_STALL
+    when: "flush_latency_ms >= 500 || dispatch_backlog >= 1000"
+    severity: critical
+  - { reason_code: BROKER_HA_LAG, when: "ha_lag_bytes >= 10485760", severity: critical }
+  - { reason_code: BROKER_HEALTHY, when: "all fault rules are false", severity: info }
+  - { reason_code: BROKER_HEALTH_EVIDENCE_INCOMPLETE, when: "required fields are absent", severity: warning }
+missing_behavior: inconclusive
+confidence:
+  implementation: deterministic_engine
+  missing_required_cap: 49
+  unsupported_required_cap: 24
+follow_up:
+  - mcp:broker-runtime/{broker}
+  - admin-query:broker-connections/{broker}

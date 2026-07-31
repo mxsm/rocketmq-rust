@@ -27,7 +27,8 @@ Default features are `read-only`, `diagnose`, and `stdio`.
 Optional features:
 
 - `streamable-http`: enables the Streamable HTTP transport.
-- `observability`: reserves integration with the repository observability crate.
+- `observability`: enables in-process metrics and traces without selecting a remote exporter.
+- `otlp`: enables metrics, traces, and logs through the implemented OTLP gRPC exporter.
 - `change-planning`: registers non-mutating change planning Tools and still requires runtime policy.
 
 ## Safety Boundary
@@ -40,7 +41,7 @@ The default profile is diagnostics-oriented and read-only:
 - `audit.enabled = true` records tool decisions and HTTP rejections through a bounded asynchronous writer.
 - `server.stdio.log_to_stderr = true` keeps stdout reserved for MCP protocol frames.
 
-For HTTP deployments, keep `server.http.bind` on loopback unless there is a reviewed network boundary. `server.http.auth.mode = "development-token"` is explicitly for loopback development. Production deployments must use `oauth-jwt`, validate signed issuer/audience-bound access tokens, and configure the public key through the declared environment variable. The server never forwards an incoming bearer token to RocketMQ.
+For HTTP deployments, keep `server.http.bind` on loopback unless there is a reviewed network boundary. `server.http.auth.mode = "development-token"` is explicitly for loopback development. Production deployments must use `oauth-jwt` and validate signed issuer/audience-bound access tokens against the configured HTTPS JWKS endpoint. The server never forwards an incoming bearer token to RocketMQ.
 
 When `change-planning` is compiled, planning Tools are still controlled by runtime policy. They return a plan, impact analysis, and rollback suggestions. Their schemas contain no Apply mode, operator identity, or confirmation token, and no mutation API is called.
 
@@ -49,28 +50,31 @@ The server targets MCP protocol version `2025-11-25`. Clients requesting another
 Successful Tool calls return a `rocketmq-mcp.v2` envelope with `request_id`, cluster, RFC 3339 observation time, freshness, cache status, partial status, warnings, and typed data. Correctable input and backend failures return Tool execution errors with a stable code, retryability, suggestions, and the request identifier.
 
 Read-only Tool calls also return a ResourceLink for the corresponding live Resource. Tool and Resource requests share the application-level `QueryFacade`, bounded TTL cache, and singleflight coordination, so an identical query can be replayed without starting a second admin session while its entry is fresh.
+Both surfaces pass through the same authorization, audit, redaction, row-bound, byte-bound, and stable-error pipeline. Arrays are bounded to 1,000 rows, structured output to 1 MiB, and truncation is reported with `partial = true` and the stable `output_rows_truncated` warning.
 
 ## Build
 
 Run commands from the repository root.
 
 ```bash
-cargo check -p rocketmq-mcp
-cargo test -p rocketmq-mcp
-cargo clippy --all-targets -p rocketmq-mcp --features streamable-http -- -D warnings
-cargo doc -p rocketmq-mcp --no-deps
+cd rocketmq-tools/rocketmq-mcp
+cargo check --locked
+python scripts/check_read_only_boundary.py
+cargo test --locked
+cargo clippy --locked --all-targets --features streamable-http,otlp -- -D warnings
+cargo doc --locked --no-deps
 ```
 
 Build the default stdio binary:
 
 ```bash
-cargo build -p rocketmq-mcp --release
+cargo build --locked --release
 ```
 
 Build with Streamable HTTP support:
 
 ```bash
-cargo build -p rocketmq-mcp --release --features streamable-http
+cargo build --locked --release --features streamable-http,otlp
 ```
 
 ## Configuration
@@ -90,12 +94,20 @@ Important fields:
 - `server.http.tls.cert_path` and `key_path`: server certificate chain and private key. The complete pair is verified before an atomic generation is published; failed reloads keep the last-known-good generation.
 - `server.http.allowed_origins`: allowed browser origins when origin validation is enabled.
 - `server.http.auth.mode`: `development-token` for loopback development or `oauth-jwt` for production JWT access tokens.
+- `server.http.auth.development_tenant`: optional tenant attached to the loopback development identity.
 - `server.http.auth.issuer`, `audience`, `required_scopes`, `jwt_algorithm`, and `jwks_url`: OAuth resource-server validation settings. OAuth accepts only RS256 tokens carrying a `kid`, and the JWKS endpoint must use HTTPS.
+- `server.http.auth.jwks_ca_path`: optional readable PEM CA bundle for a private HTTPS JWKS issuer. Relative paths are resolved from the configuration file, parsed as certificates, and never logged.
 - `server.http.auth.jwks_refresh_seconds` and `jwks_max_stale_seconds`: bounded refresh and last-known-good windows. A fetch or parse failure never clears an already verified key generation.
 - `server.http.auth.jwt_key_env`: retained only for configuration compatibility; OAuth does not use a static key fallback.
 - `server.http.auth.protected_resource_metadata_path`: unauthenticated OAuth protected-resource metadata endpoint.
 - `clusters[].name`: logical cluster name used by tools, resources, and prompts.
+- `clusters[].rocketmq_cluster_name`: optional physical NameServer cluster name when it differs from the logical MCP name.
 - `clusters[].namesrv_addr`: RocketMQ namesrv address for admin queries.
+- `clusters[].tenant`: optional exact-match tenant boundary for JWT `rocketmq_tenant` claims.
+- `clusters[].credentials.file`: mounted YAML reference containing `access_key`, `secret_key`, and an optional
+  `security_token`; the regular file is bounded to 64 KiB.
+- `clusters[].credentials.access_key_env`, `secret_key_env`, and optional `security_token_env`: environment
+  variable references used instead of a file. Inline credential values and mixed file/environment sources are rejected.
 - `security.permissions_file`: executable role, tool, and cluster policy. Claims roles and `rocketmq_clusters` are intersected with this policy.
 - `security.max_concurrent_requests_per_cluster`: bounded concurrent Tool and Resource work per configured cluster.
 - `security.rate_limit_per_minute`: per-principal, per-cluster, per-operation limit.
@@ -125,13 +137,19 @@ rocketmq-mcp --config rocketmq-tools/rocketmq-mcp/conf/mcp.example.toml --transp
 rocketmq-mcp --config rocketmq-tools/rocketmq-mcp/conf/mcp.example.toml --transport streamable-http --bind 127.0.0.1:8089 --endpoint /mcp
 ```
 
+The configuration path is mandatory through `--config` or `ROCKETMQ_MCP_CONFIG`. Relative permission, TLS, JWKS CA, and audit paths are resolved from the configuration file's directory, so startup does not depend on the caller's current working directory.
+RocketMQ request-signing credentials are resolved from the configured reference at startup and again for each new
+read session, enabling mounted-secret rotation without placing a secret in the TOML, command line, logs, or debug
+output. The associated Broker user should remain a normal user with only Topic/Group/Cluster `GET`; MCP rejects
+mutation capability at both its compile-time dependency boundary and Broker authorization boundary.
+
 ## stdio Usage
 
 Use stdio for local desktop clients. Logs are written to stderr so stdout remains valid MCP JSON-RPC traffic.
 
 ```bash
-cargo run -p rocketmq-mcp -- \
-  --config rocketmq-tools/rocketmq-mcp/conf/mcp.example.toml \
+cargo run -- \
+  --config conf/mcp.example.toml \
   --transport stdio
 ```
 
@@ -151,8 +169,8 @@ PowerShell:
 
 ```powershell
 $env:ROCKETMQ_MCP_HTTP_TOKEN = "replace-with-a-long-random-token"
-cargo run -p rocketmq-mcp --features streamable-http -- `
-  --config rocketmq-tools/rocketmq-mcp/conf/mcp.example.toml `
+cargo run --features streamable-http -- `
+  --config conf/mcp.example.toml `
   --transport streamable-http `
   --bind 127.0.0.1:8089 `
   --endpoint /mcp
@@ -162,8 +180,8 @@ Bash:
 
 ```bash
 export ROCKETMQ_MCP_HTTP_TOKEN=replace-with-a-long-random-token
-cargo run -p rocketmq-mcp --features streamable-http -- \
-  --config rocketmq-tools/rocketmq-mcp/conf/mcp.example.toml \
+cargo run --features streamable-http -- \
+  --config conf/mcp.example.toml \
   --transport streamable-http \
   --bind 127.0.0.1:8089 \
   --endpoint /mcp
@@ -176,9 +194,20 @@ Authorization: Bearer replace-with-a-long-random-token
 Accept: application/json, text/event-stream
 ```
 
-For production, set `mode = "oauth-jwt"` and configure `issuer`, `audience`, `required_scopes`, `jwks_url`, and the JWKS refresh windows. Clients must send an RS256 access token with a known `kid` and valid signature, issuer, audience, expiry, and required scope. The server publishes OAuth protected-resource metadata at the configured `protected_resource_metadata_path`; this endpoint remains available without a bearer token for client discovery and its absolute HTTPS URI is included in bearer challenges.
+For production, set `mode = "oauth-jwt"` and configure `issuer`, `audience`, `required_scopes`, `jwks_url`, and the JWKS refresh windows. Set `jwks_ca_path` when that HTTPS endpoint uses a private CA. Clients must send an RS256 access token with a known `kid` and valid signature, issuer, audience, expiry, and required scope. The server publishes OAuth protected-resource metadata at the configured `protected_resource_metadata_path`; this endpoint remains available without a bearer token for client discovery and its absolute HTTPS URI is included in bearer challenges.
 
-`permissions.example.toml` is loaded at startup. Verified principal, client, roles, scopes, and `rocketmq_clusters` claims propagate through the real MCP handler to RBAC, cluster allow-list, rate-limit, and audit decisions; an HTTP request cannot substitute the local stdio identity. Tool, Resource, and Prompt discovery are filtered by this policy, and Resource reads and Tool calls are enforced again at execution time. Audit records contain the verified principal and client identifier but never store the bearer token.
+`permissions.example.toml` is loaded at startup. Verified principal, client, roles, scopes, `rocketmq_tenant`, and `rocketmq_clusters` claims propagate through the real MCP handler to RBAC, tenant boundary, cluster allow-list, rate-limit, and audit decisions; an HTTP request cannot substitute the local stdio identity. Tool, Resource, and Prompt discovery are filtered by this policy, and Resource reads and Tool calls are enforced again at execution time. Audit records contain the verified principal and client identifier but never store the bearer token.
+
+Authorization, source, and output failures expose stable, sanitized codes such as `unauthorized_scope`, `tenant_mismatch`, `cluster_not_allowed`, `rate_limited`, `source_unavailable`, and `output_too_large`. Error envelopes include `retryable` and `correlation_id`; they do not echo credentials or tenant details.
+
+For OTLP export, build with `--features otlp` and set both
+`OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_EXPORTER_OTLP_PROTOCOL=grpc`. A missing
+or blank endpoint leaves remote export disabled. When an endpoint is present,
+any protocol other than `grpc` is rejected at startup; the endpoint authority
+is never written to logs or the authenticated observability status Resource.
+`ROCKETMQ_MCP_TRACE_SAMPLE_RATIO` optionally overrides trace sampling with a
+finite value from `0.0` through `1.0`. When it is unset, the production default
+remains `0.01`; invalid values fail startup without being echoed in the error.
 
 ## Claude Desktop
 
@@ -228,9 +257,9 @@ Use a stdio MCP server definition with:
 
 - Command: the built `rocketmq-mcp` binary.
 - Args: `--config <config-path> --transport stdio`.
-- Working directory: repository root, if the client supports it.
+- Working directory: arbitrary; paths are owned by the explicit configuration file.
 
-For HTTP-capable clients, use the Streamable HTTP URL `http://127.0.0.1:8089/mcp` and configure the bearer token as an HTTP authorization header.
+For HTTP-capable clients, use the Streamable HTTPS URL `https://127.0.0.1:8089/mcp` and configure the bearer token as an HTTP authorization header.
 
 ## Tools
 
@@ -255,6 +284,7 @@ Feature-gated planning Tools, available only with `change-planning`, never mutat
 
 ## Resources
 
+- `rocketmq://clusters/{cluster}/capabilities`
 - `rocketmq://clusters/{cluster}/overview`
 - `rocketmq://clusters/{cluster}/topics`
 - `rocketmq://clusters/{cluster}/topics/{topic}`
@@ -264,8 +294,12 @@ Feature-gated planning Tools, available only with `change-planning`, never mutat
 - `rocketmq://clusters/{cluster}/consumer-groups`
 - `rocketmq://clusters/{cluster}/consumer-groups/{group}`
 - `rocketmq://clusters/{cluster}/consumer-groups/{group}/lag?topic={topic}`
+- `rocketmq://system/runtime/v1` (requires `rocketmq:diagnose`)
+- `rocketmq://system/observability/v1` (requires `rocketmq:diagnose`)
 
-`resources/list` returns cluster root Resources in cursor-paginated pages. `resources/templates/list` publishes the five parameterized forms. All accepted URIs are explicit cluster-scoped v2 URIs; unsupported or incomplete forms return Resource Not Found instead of a placeholder payload.
+The capability Resource identifies MCP `2025-11-25`, business schema `rocketmq-mcp.v2`, per-Tool schema digests, a total Tool-surface digest, the caller-visible Resource surface, and `mutation_supported = false`. System Resources expose only bounded, sanitized MCP-process runtime and observability state.
+
+`resources/list` returns authorized cluster and system Resources in cursor-paginated pages. `resources/templates/list` publishes the five parameterized cluster forms. Unsupported or incomplete forms return Resource Not Found instead of a placeholder payload.
 Cluster and RocketMQ entity names are UTF-8 percent-encoded as URI path or query components, including retry topics and groups that contain `%RETRY%`.
 
 ## Prompts

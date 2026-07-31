@@ -1,0 +1,182 @@
+{
+  "$defs": {
+    "CompensationMode": {
+      "description": "Deterministic compensation mode.",
+      "enum": [
+        "automatic",
+        "manual_takeover",
+        "not_available"
+      ],
+      "type": "string"
+    },
+    "CompensationSpec": {
+      "additionalProperties": false,
+      "description": "Compensation behavior frozen by an action descriptor.",
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/CompensationMode"
+        },
+        "required_before_fields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "timeout_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "mode",
+        "timeout_seconds"
+      ],
+      "type": "object"
+    },
+    "EvidenceId": {
+      "description": "Stable identifier for an evidence snapshot.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ExecutionAction": {
+      "description": "Closed set of Phase 3 actions that may enter supervised planning.\n\nExecution remains gated by the exact descriptor's `plan_only` and\n`execution_supported` flags. Permanently destructive R3 and unknown actions\nare intentionally not representable.",
+      "enum": [
+        "observability.logger_level_ttl.v1",
+        "proxy.scale_out_one.v1",
+        "proxy.restart_one.v1",
+        "broker.config.patch_allowlisted.v1",
+        "topic.config.patch_allowlisted.v1",
+        "subscription_group.patch_allowlisted.v1",
+        "consumer.request_mode.patch_allowlisted.v1",
+        "consumer.offset.reset_bounded.v1",
+        "topic.queue.expand_only.v1",
+        "namesrv.config.patch_allowlisted.v1",
+        "controller.config.patch_allowlisted.v1",
+        "proxy.rollout_image_canary.v1",
+        "broker.restart_one.v1",
+        "static_topic.patch_non_remap.v1",
+        "tiered.cold_data_flow.patch_allowlisted.v1",
+        "store.readahead.patch_allowlisted.v1",
+        "security.credential_rotate_overlap.v1",
+        "telemetry.collector.restart_one.v1",
+        "consumer.offset.clone_or_reset_broad.v1",
+        "message.direct_consume.v1",
+        "message.dlq.resend.v1",
+        "timer.switch.v1",
+        "controller.elect.v1",
+        "static_topic.remap.v1",
+        "broker.container.add_remove.v1"
+      ],
+      "type": "string"
+    },
+    "ImpactScope": {
+      "description": "Maximum descriptor-authorized blast radius.",
+      "enum": [
+        "single_resource",
+        "single_instance",
+        "one_replica",
+        "allowlisted_fields"
+      ],
+      "type": "string"
+    },
+    "PlanStepId": {
+      "description": "Stable identifier for an immutable action plan step.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "VerificationSpec": {
+      "additionalProperties": false,
+      "description": "Verification policy frozen by an action descriptor.",
+      "properties": {
+        "max_wait_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "resource_conditions": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "stable_window_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "technical_slis": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "stable_window_seconds",
+        "max_wait_seconds"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One typed and bounded step in an immutable plan.",
+  "properties": {
+    "action": {
+      "$ref": "#/$defs/ExecutionAction"
+    },
+    "compensation": {
+      "$ref": "#/$defs/CompensationSpec"
+    },
+    "descriptor_version": {
+      "type": "string"
+    },
+    "evidence_ids": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/EvidenceId"
+      },
+      "type": "array"
+    },
+    "id": {
+      "$ref": "#/$defs/PlanStepId"
+    },
+    "max_impact": {
+      "$ref": "#/$defs/ImpactScope"
+    },
+    "parameters": true,
+    "precondition_hash": {
+      "type": "string"
+    },
+    "resource": {
+      "type": "string"
+    },
+    "sequence": {
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "verification": {
+      "$ref": "#/$defs/VerificationSpec"
+    }
+  },
+  "required": [
+    "id",
+    "sequence",
+    "action",
+    "descriptor_version",
+    "resource",
+    "parameters",
+    "precondition_hash",
+    "max_impact",
+    "verification",
+    "compensation"
+  ],
+  "title": "PlanStep",
+  "type": "object"
+}

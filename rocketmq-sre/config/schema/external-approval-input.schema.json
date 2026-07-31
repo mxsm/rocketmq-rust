@@ -1,0 +1,89 @@
+{
+  "$defs": {
+    "ActionPlanId": {
+      "description": "Stable identifier for an immutable action plan.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ApprovalDecision": {
+      "description": "Human approval outcome.",
+      "enum": [
+        "approved",
+        "rejected"
+      ],
+      "type": "string"
+    },
+    "IntegrationTargetId": {
+      "description": "Stable identifier for one tenant-scoped external integration target.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Provider-neutral inbound approval signal.\n\nIt is only an input to the normal Control Plane approval service. The\nservice must still verify scope, role, step-up, plan hash, expiry, and\nseparation of duties before recording an Approval.",
+  "properties": {
+    "decision": {
+      "$ref": "#/$defs/ApprovalDecision"
+    },
+    "expires_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "external_event_id": {
+      "type": "string"
+    },
+    "external_ticket_key": {
+      "type": "string"
+    },
+    "mfa_verified": {
+      "type": "boolean"
+    },
+    "occurred_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "plan_hash": {
+      "type": "string"
+    },
+    "plan_id": {
+      "$ref": "#/$defs/ActionPlanId"
+    },
+    "roles": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "step_up_verified": {
+      "type": "boolean"
+    },
+    "subject": {
+      "type": "string"
+    },
+    "target_id": {
+      "$ref": "#/$defs/IntegrationTargetId"
+    }
+  },
+  "required": [
+    "schema_version",
+    "target_id",
+    "external_event_id",
+    "external_ticket_key",
+    "plan_id",
+    "plan_hash",
+    "decision",
+    "subject",
+    "roles",
+    "mfa_verified",
+    "step_up_verified",
+    "expires_at",
+    "occurred_at"
+  ],
+  "title": "ExternalApprovalInput",
+  "type": "object"
+}

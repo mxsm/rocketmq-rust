@@ -181,8 +181,6 @@ impl DefaultBrokerHeartbeatManager {
         broker_live_table: Arc<DashMap<BrokerIdentityInfo, BrokerLiveInfo>>,
         listeners: Arc<RwLock<Vec<Arc<dyn BrokerLifecycleListener>>>>,
     ) {
-        info!("start scanNotActiveBroker");
-
         let now_millis = current_millis();
         let mut to_remove = Vec::new();
 
@@ -195,25 +193,14 @@ impl DefaultBrokerHeartbeatManager {
             let timeout_millis = live_info.heartbeat_timeout_millis();
 
             // Check if broker has expired
-            if now_millis > last_update_timestamp + timeout_millis {
-                to_remove.push((
-                    broker_identity.clone(),
-                    live_info.broker_name().to_string(),
-                    live_info.broker_id(),
-                    live_info.heartbeat_timeout_millis(),
-                ));
+            if now_millis > last_update_timestamp.saturating_add(timeout_millis) {
+                to_remove.push((broker_identity.clone(), live_info.broker_id()));
             }
         }
-
         // Remove expired brokers and notify the latest registered listeners.
         let listeners = listeners.read().clone();
-        for (identity, _broker_name, broker_id, timeout_millis) in to_remove {
+        for (identity, broker_id) in to_remove {
             broker_live_table.remove(&identity);
-
-            warn!(
-                "The broker channel expired, brokerInfo {}, expired {}ms",
-                identity, timeout_millis
-            );
 
             // Notify all listeners
             for listener in listeners.iter() {

@@ -29,22 +29,13 @@ rust-version.workspace = true
 
 [features]
 default       = []
-observability = [
-  "rocketmq-controller/metrics",
-  "rocketmq-observability/otel-metrics",
-  "rocketmq-transport/observability",
-]
-metrics-prometheus = ["observability", "rocketmq-observability/prometheus"]
-otel-traces = [
-  "rocketmq-controller/otel-traces",
-  "rocketmq-observability/otel-traces",
-  "rocketmq-transport/observability-traces",
-]
-otel-logs = ["rocketmq-observability/otel-logs"]
-otlp-traces = ["otel-traces", "rocketmq-observability/otlp-traces"]
-otlp-logs = ["otel-logs", "rocketmq-observability/otlp-logs"]
-production-observability = ["metrics-prometheus", "otlp-traces", "otlp-logs"]
-production = ["production-observability"]
+observability = ["otel-metrics", "otel-traces"]
+otel-metrics  = ["rocketmq-observability/otel-metrics", "rocketmq-transport/observability"]
+otel-traces   = ["rocketmq-observability/otel-traces"]
+otel-logs     = ["rocketmq-observability/otel-logs"]
+otlp-metrics  = ["otel-metrics", "rocketmq-observability/otlp-metrics"]
+otlp-traces   = ["otel-traces", "rocketmq-observability/otlp-traces"]
+otlp-logs     = ["otel-logs", "rocketmq-observability/otlp-logs"]
 
 [dependencies]
 rocketmq-model         = { workspace = true }

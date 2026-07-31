@@ -1,0 +1,31 @@
+schema_version: rocketmq-sre.autonomy-action-policy.v1
+action_id: telemetry.collector.restart_one.v1
+action_version: 1.0.0
+default_mode: disabled
+owner: messaging-observability
+qualification_template: additional_r1
+diagnostic_pack:
+  id: telemetry-recovery
+  version: 1.0.0
+required_evidence_sources:
+  - observability_status
+  - kubernetes_inventory
+  - prometheus
+minimum_evidence_freshness_seconds: 60
+qualification:
+  min_shadow_samples: 20
+  min_supervised_successes: 5
+  observation_window_days: 7
+limits:
+  max_executions_per_hour: 1
+  cooldown_seconds: 1800
+  max_concurrent_executions: 1
+  stable_window_seconds: 600
+autonomous_preconditions:
+  - one_collector_only
+  - remaining_pipeline_healthy
+  - rocketmq_data_plane_unaffected
+  - error_budget_available
+rollback:
+  required: false
+  manual_takeover_on_failed_readiness: true

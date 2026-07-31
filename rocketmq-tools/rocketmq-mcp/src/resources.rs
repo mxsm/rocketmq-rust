@@ -14,6 +14,8 @@
 
 //! Static MCP resources exposed by the RocketMQ MCP server.
 
+pub mod capability;
 pub mod reader;
 pub mod registry;
+pub mod system;
 pub mod uri;

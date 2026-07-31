@@ -1,0 +1,74 @@
+# Copyright 2026 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0.
+
+[server]
+name = "rocketmq-mcp"
+version = "1.0.0"
+transport = "streamable-http"
+log_level = "info"
+
+[server.stdio]
+log_to_stderr = true
+
+[server.http]
+bind = "127.0.0.1:8089"
+endpoint = "/mcp"
+public_base_url = "https://localhost:8089"
+validate_origin = false
+allowed_origins = ["https://localhost:8089"]
+
+[server.http.tls]
+cert_path = "/etc/rocketmq/tls/server-cert.pem"
+key_path = "/etc/rocketmq/tls/server-key.pem"
+
+[server.http.auth]
+mode = "oauth-jwt"
+development_token_env = "ROCKETMQ_MCP_HTTP_TOKEN_DISABLED"
+issuer = "https://dev-issuer-tls:8443"
+audience = "rocketmq-mcp"
+required_scopes = ["rocketmq:read"]
+jwt_algorithm = "rs256"
+jwt_key_env = ""
+jwks_url = "https://dev-issuer-tls:8443/.well-known/jwks.json"
+jwks_ca_path = "/etc/rocketmq/tls/ca-cert.pem"
+jwks_refresh_seconds = 1
+jwks_max_stale_seconds = 5
+protected_resource_metadata_path = "/.well-known/oauth-protected-resource"
+
+[[clusters]]
+name = "sre-dev"
+rocketmq_cluster_name = "SreDev"
+tenant = "00000000-0000-4000-8000-000000000002"
+namesrv_addr = "namesrv:9876"
+default = true
+
+[clusters.credentials]
+file = "/var/run/secrets/rocketmq/mcp-rmq-credentials.yml"
+
+[security]
+profile = "diagnose"
+allow_change_planning = false
+sanitize_output = true
+rate_limit_per_minute = 120
+permissions_file = "/etc/rocketmq/mcp/permissions.toml"
+max_concurrent_requests_per_cluster = 4
+
+[audit]
+enabled = true
+sink = "memory"
+path = "/var/lib/rocketmq/mcp/audit.log"
+queue_capacity = 64
+max_record_bytes = 4096
+queue_max_bytes = 262144
+
+[cache]
+enabled = true
+max_entries = 64
+cluster_overview_ttl_ms = 1000
+topic_list_ttl_ms = 1000
+broker_metrics_ttl_ms = 1000
+consumer_lag_ttl_ms = 1000
+
+[diagnosis]
+consumer_lag_policy_profile = "production-default"
+consumer_lag_threshold = 1000

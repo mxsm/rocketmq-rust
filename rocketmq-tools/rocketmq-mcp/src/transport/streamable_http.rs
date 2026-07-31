@@ -121,6 +121,11 @@ where
         lifecycle
             .mark_ready()
             .map_err(|error| McpError::InvalidConfig(format!("failed to publish MCP readiness: {error}")))?;
+        rocketmq_observability::metrics::runtime::record_lifecycle(
+            rocketmq_runtime::RuntimeComponent::Mcp,
+            rocketmq_observability::metrics::runtime::RuntimeLifecycleState::Ready,
+            rocketmq_observability::metrics::runtime::RuntimeLifecycleReason::Startup,
+        );
     }
 
     axum::serve(listener, router)

@@ -1,0 +1,28 @@
+{
+  "pack": "message-path.v1",
+  "scenario": "normal",
+  "expected_status": "healthy",
+  "expected_reason_codes": ["MESSAGE_PATH_COMPLETE"],
+  "evidence": [
+    {
+      "evidence_id": "00000000-0000-4000-8006-000000000101",
+      "source": "admin-query",
+      "resource": "message-metadata/id-hash-a",
+      "content": {
+        "message_id_hash": "sha256:id-a",
+        "key_hash": "sha256:key-a",
+        "trace_id_hash": "sha256:trace-a",
+        "queue_id": 2,
+        "queue_offset": 1024,
+        "stages": { "send": true, "route": true, "store": true, "deliver": true, "ack": true },
+        "transaction_status": "not_transactional"
+      }
+    },
+    {
+      "evidence_id": "00000000-0000-4000-8006-000000000111",
+      "source": "tempo",
+      "resource": "message-trace/trace-hash-a",
+      "content": { "trace_id_hash": "sha256:trace-a", "span_count": 5 }
+    }
+  ]
+}

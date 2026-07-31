@@ -1,0 +1,55 @@
+# Copyright 2023 The RocketMQ Rust Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+
+schema_version: rocketmq.sre.observability-spans.v1
+owner: rocketmq-sre-control-plane
+propagation:
+  header: x-correlation-id
+  format: uuid
+  invalid_input_behavior: replace_with_generated_uuid
+  boundaries:
+    - incident
+    - evidence
+    - connector
+    - mcp
+    - diagnostic_pack
+    - model_gateway
+
+spans:
+  - name: sre.incident.run
+    component: control_plane
+    attributes: [correlation_id, component]
+  - name: sre.evidence.collect
+    component: control_plane
+    attributes: [correlation_id, component, source]
+  - name: sre.diagnostic.evaluate
+    component: control_plane
+    attributes: [correlation_id, component, pack]
+  - name: sre.model.invoke
+    component: model_gateway
+    attributes: [correlation_id, component, provider, purpose]
+
+privacy:
+  forbidden_attributes:
+    - prompt
+    - prompt_template
+    - evidence
+    - evidence_content
+    - message_body
+    - tool_arguments
+    - request_body
+    - response_body
+    - access_token
+    - authorization
+    - api_key
+    - secret
+    - tls_material
+    - full_configuration
+  notes:
+    - Correlation ID is carried in traces, never in metric labels.
+    - Source, pack, provider, and purpose use the finite values from metrics.v1.yaml.

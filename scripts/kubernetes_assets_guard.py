@@ -29,6 +29,13 @@ from typing import Any
 EXPECTED_RESOURCE_COUNT = 44
 LOCAL_IMAGE_TAG = "local"
 CONTROLLER_SERVICE_IPS = ("10.96.0.201", "10.96.0.202", "10.96.0.203")
+EXPECTED_CONTAINER_AUXILIARY_PORTS = {
+    "broker": [8087],
+    "namesrv": [8087],
+    "controller": [8087],
+    "proxy": [8087],
+    "mcp": [5557],
+}
 EXPECTED_SERVICES: dict[str, dict[str, Any]] = {
     "broker": {
         "kind": "StatefulSet",
@@ -299,7 +306,8 @@ def validate_exact_policy(guard: Guard, policy: dict[str, Any], container_policy
             guard.require(persistence.get("storage_class_required") is True, f"{service} storage class must be explicit")
             guard.require(persistence.get("retention") == "Retain", f"{service} PVC retention must remain Retain")
         guard.require(
-            container.get("ports") == [5557, *expected["ports"]],
+            sorted(container.get("ports", []))
+            == sorted([*EXPECTED_CONTAINER_AUXILIARY_PORTS[service], *expected["ports"]]),
             f"{service} deployment/container port drift",
         )
         guard.require(container.get("config_path") == expected["config"], f"{service} deployment/container config drift")

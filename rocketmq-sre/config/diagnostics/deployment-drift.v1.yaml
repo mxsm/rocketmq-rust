@@ -1,0 +1,48 @@
+schema: rocketmq-sre.diagnostic-pack.v1
+id: deployment-drift
+version: 1.0.0
+qualified_id: deployment-drift.v1
+owner: rocketmq-sre
+components: [broker, nameserver, controller, proxy, mcp, sre, kubernetes]
+output_schema: rocketmq-sre.diagnostic-result.v1
+content_policy:
+  secret_values: forbidden
+  secret_metadata: allowed
+required_evidence:
+  - key: deployment-diff
+    source: kubernetes
+    resource_prefix: deployment-drift/
+    fields:
+      - image_drift
+      - feature_drift
+      - config_drift
+      - secret_metadata_drift
+      - rbac_drift
+      - pdb_drift
+      - pvc_drift
+      - replica_drift
+      - topology_drift
+optional_evidence:
+  - { key: runtime-build, source: runtime, resource_prefix: build-info/ }
+rules:
+  - reason_code: DEPLOYMENT_IMAGE_FEATURE_DRIFT
+    when: "image_drift || feature_drift"
+    severity: critical
+  - { reason_code: DEPLOYMENT_CONFIG_DRIFT, when: "config_drift", severity: warning }
+  - reason_code: DEPLOYMENT_SECURITY_DRIFT
+    when: "secret_metadata_drift || rbac_drift"
+    severity: critical
+  - reason_code: DEPLOYMENT_AVAILABILITY_DRIFT
+    when: "pdb_drift || replica_drift"
+    severity: critical
+  - { reason_code: DEPLOYMENT_STORAGE_DRIFT, when: "pvc_drift", severity: critical }
+  - { reason_code: DEPLOYMENT_TOPOLOGY_DRIFT, when: "topology_drift", severity: warning }
+  - { reason_code: DEPLOYMENT_IN_SYNC, when: "all nine drift flags are false", severity: info }
+  - { reason_code: DEPLOYMENT_DRIFT_EVIDENCE_INCOMPLETE, when: "required fields are absent", severity: warning }
+missing_behavior: inconclusive
+confidence:
+  implementation: deterministic_engine
+  missing_required_cap: 49
+  unsupported_required_cap: 24
+follow_up:
+  - runtime:build-info/{component}

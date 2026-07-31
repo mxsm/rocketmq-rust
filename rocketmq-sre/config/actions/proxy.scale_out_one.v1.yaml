@@ -1,0 +1,41 @@
+id: proxy.scale_out_one.v1
+version: 1.0.0
+owner: messaging-platform
+supported_versions:
+  - family: rocketmq-sre.action-plan
+    major: 1
+    minor: 0
+required_capabilities:
+  - kubernetes.typed-scale
+config_schema:
+  type: object
+  additionalProperties: false
+parameter_schema:
+  type: object
+  additionalProperties: false
+  required: [namespace, workload, expected_replicas]
+  properties:
+    namespace: { type: string, maxLength: 128 }
+    workload: { type: string, maxLength: 128 }
+    expected_replicas: { type: integer, minimum: 1, maximum: 999 }
+status: active
+deprecation: null
+risk: r1
+execution_supported: true
+preconditions:
+  - desired_replicas_equals_expected
+  - quota_and_capacity_available
+  - pdb_and_readiness_healthy
+max_impact: one_replica
+verification:
+  resource_conditions: [desired_replicas_plus_one, new_replica_ready]
+  technical_slis: [proxy_error_ratio, proxy_p99_latency]
+  stable_window_seconds: 120
+  max_wait_seconds: 900
+timeout_seconds: 900
+compensation:
+  mode: automatic
+  required_before_fields: [expected_replicas]
+  timeout_seconds: 600
+forbidden_fields: [replicas_delta, scale_in, raw_json_patch]
+plan_only: false

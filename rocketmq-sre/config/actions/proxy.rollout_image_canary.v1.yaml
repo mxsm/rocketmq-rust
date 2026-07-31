@@ -1,0 +1,47 @@
+id: proxy.rollout_image_canary.v1
+version: 1.0.0
+owner: messaging-platform
+supported_versions:
+  - family: rocketmq-sre.action-plan
+    major: 1
+    minor: 0
+required_capabilities:
+  - kubernetes.typed-image-rollout
+  - kubernetes.pdb-readiness
+config_schema:
+  type: object
+  additionalProperties: false
+parameter_schema:
+  type: object
+  additionalProperties: false
+  required: [namespace, workload, container, expected_generation, image_digest, canary_replicas]
+  properties:
+    namespace: { type: string, maxLength: 128 }
+    workload: { type: string, maxLength: 128 }
+    container: { type: string, maxLength: 128 }
+    expected_generation: { type: integer, minimum: 1 }
+    image_digest: { type: string, maxLength: 128 }
+    canary_replicas: { type: integer, minimum: 1, maximum: 1 }
+status: active
+deprecation: null
+risk: r2
+execution_supported: true
+preconditions:
+  - valid_heterogeneous_critic
+  - image_reference_is_digest_only
+  - workload_generation_matches
+  - pdb_and_readiness_healthy
+  - only_one_canary_replica
+max_impact: one_replica
+verification:
+  resource_conditions: [canary_generation_observed, canary_ready, old_replicas_unchanged]
+  technical_slis: [proxy_error_ratio, proxy_p99_latency, synthetic_message_path]
+  stable_window_seconds: 600
+  max_wait_seconds: 1800
+timeout_seconds: 1800
+compensation:
+  mode: automatic
+  required_before_fields: [previous_image_digest, expected_generation]
+  timeout_seconds: 900
+forbidden_fields: [image_tag, image_repository, arbitrary_patch, environment, secret, command, args]
+plan_only: false

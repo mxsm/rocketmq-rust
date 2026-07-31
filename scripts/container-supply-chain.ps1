@@ -102,15 +102,42 @@ foreach ($property in $policy.runtime.required_labels.PSObject.Properties) {
     }
 }
 
-$smoke = @(
-    "set -eu",
-    ('test "$(id -u)" = {0}' -f $policy.runtime.uid),
-    ('test "$(id -g)" = {0}' -f $policy.runtime.gid),
-    "! touch /opt/rocketmq/rootfs-must-stay-read-only 2>/dev/null",
-    "touch $($policy.runtime.writable_data_path)/data-write",
-    "touch $($policy.runtime.tmpfs_path)/tmp-write"
-) -join "; "
-Invoke-Checked docker run --rm --network none --read-only --mount "type=volume,destination=$($policy.runtime.writable_data_path)" --tmpfs $tmpfsOptions $ImageRef /bin/sh -c $smoke
+$runtimeArguments = @(
+    "run",
+    "--rm",
+    "--network",
+    "none",
+    "--read-only",
+    "--mount",
+    "type=volume,destination=$($policy.runtime.writable_data_path)",
+    "--tmpfs",
+    $tmpfsOptions
+)
+$runtimeUid = (& docker @runtimeArguments --entrypoint /usr/bin/id $ImageRef -u | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $runtimeUid -ne [string]$policy.runtime.uid) {
+    throw "runtime image effective uid mismatch: $runtimeUid"
+}
+$runtimeGid = (& docker @runtimeArguments --entrypoint /usr/bin/id $ImageRef -g | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $runtimeGid -ne [string]$policy.runtime.gid) {
+    throw "runtime image effective gid mismatch: $runtimeGid"
+}
+$rootfsWriteExitCode = 0
+$previousErrorActionPreference = $ErrorActionPreference
+try {
+    $ErrorActionPreference = "Continue"
+    & docker @runtimeArguments --entrypoint /usr/bin/touch $ImageRef /opt/rocketmq/rootfs-must-stay-read-only `
+        2> $null | Out-Null
+    $rootfsWriteExitCode = $LASTEXITCODE
+}
+finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+}
+if ($rootfsWriteExitCode -eq 0) {
+    throw "runtime image root filesystem must remain read-only"
+}
+Invoke-Checked docker @runtimeArguments --entrypoint /usr/bin/touch $ImageRef `
+    "$($policy.runtime.writable_data_path)/data-write" `
+    "$($policy.runtime.tmpfs_path)/tmp-write"
 
 $sbomPath = Join-Path $outputPath "runtime-base.cdx.json"
 $trivyPath = Join-Path $outputPath "runtime-base.trivy.json"

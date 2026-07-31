@@ -1,0 +1,39 @@
+{
+  "$defs": {
+    "CompensationTrigger": {
+      "description": "Trigger for a compensation edge.",
+      "enum": [
+        "verification_failed",
+        "step_failed",
+        "cancel_after_intent"
+      ],
+      "type": "string"
+    },
+    "RunbookStepId": {
+      "description": "Stable identifier for a typed runbook step.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Directed compensation relationship inside one runbook.",
+  "properties": {
+    "compensation_step": {
+      "$ref": "#/$defs/RunbookStepId"
+    },
+    "from_step": {
+      "$ref": "#/$defs/RunbookStepId"
+    },
+    "trigger": {
+      "$ref": "#/$defs/CompensationTrigger"
+    }
+  },
+  "required": [
+    "from_step",
+    "compensation_step",
+    "trigger"
+  ],
+  "title": "CompensationEdge",
+  "type": "object"
+}

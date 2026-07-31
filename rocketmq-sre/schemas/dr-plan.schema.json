@@ -1,0 +1,194 @@
+{
+  "$defs": {
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "DrExerciseMode": {
+      "description": "Deliberately bounded exercise mode. Production cutover is not representable.",
+      "enum": [
+        "readiness",
+        "tabletop",
+        "supervised_test"
+      ],
+      "type": "string"
+    },
+    "DrPlanId": {
+      "description": "Stable identifier for a versioned disaster-recovery plan.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "DrSubject": {
+      "description": "Recovery subject covered by a plan.",
+      "enum": [
+        "sre_control_plane",
+        "rocket_mq_cluster"
+      ],
+      "type": "string"
+    },
+    "FleetId": {
+      "description": "Stable identifier for an enterprise RocketMQ fleet.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "RecoveryCheckpointDefinition": {
+      "description": "One required checkpoint declared by a versioned plan.",
+      "properties": {
+        "cleanup_required": {
+          "type": "boolean"
+        },
+        "expected_duration_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "key": {
+          "type": "string"
+        },
+        "manual_confirmation_required": {
+          "type": "boolean"
+        },
+        "required_evidence_kinds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "title",
+        "expected_duration_seconds",
+        "manual_confirmation_required",
+        "cleanup_required",
+        "required_evidence_kinds"
+      ],
+      "type": "object"
+    },
+    "RegionId": {
+      "description": "Stable identifier for a data-residency region.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "RtoRpoTarget": {
+      "description": "Recovery-point and recovery-time objectives.",
+      "properties": {
+        "rpo_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rto_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "rto_seconds",
+        "rpo_seconds"
+      ],
+      "type": "object"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Versioned disaster-recovery plan.",
+  "properties": {
+    "active": {
+      "type": "boolean"
+    },
+    "allowed_modes": {
+      "items": {
+        "$ref": "#/$defs/DrExerciseMode"
+      },
+      "type": "array"
+    },
+    "checkpoints": {
+      "items": {
+        "$ref": "#/$defs/RecoveryCheckpointDefinition"
+      },
+      "type": "array"
+    },
+    "cluster_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ClusterId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "created_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "fleet_id": {
+      "$ref": "#/$defs/FleetId"
+    },
+    "id": {
+      "$ref": "#/$defs/DrPlanId"
+    },
+    "name": {
+      "type": "string"
+    },
+    "owner": {
+      "type": "string"
+    },
+    "region_id": {
+      "$ref": "#/$defs/RegionId"
+    },
+    "required_sources": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "subject": {
+      "$ref": "#/$defs/DrSubject"
+    },
+    "target": {
+      "$ref": "#/$defs/RtoRpoTarget"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "version": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "id",
+    "fleet_id",
+    "tenant_id",
+    "region_id",
+    "subject",
+    "name",
+    "version",
+    "owner",
+    "target",
+    "allowed_modes",
+    "required_sources",
+    "checkpoints",
+    "active",
+    "created_at",
+    "updated_at"
+  ],
+  "title": "DrPlan",
+  "type": "object"
+}

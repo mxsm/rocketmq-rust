@@ -1,0 +1,194 @@
+{
+  "$defs": {
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "FinOpsCostEntryId": {
+      "description": "Stable identifier for one append-only FinOps cost ledger entry.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "FinOpsCostSource": {
+      "description": "Metered source represented in the shared cost ledger.",
+      "enum": [
+        "model_invocation",
+        "control_plane",
+        "connector",
+        "execution_agent",
+        "observability",
+        "object_storage",
+        "synthetic_probe"
+      ],
+      "type": "string"
+    },
+    "FinOpsWorkloadKind": {
+      "description": "Stable workload dimension used for cost and outcome attribution.",
+      "enum": [
+        "incident",
+        "diagnostic_pack",
+        "workflow",
+        "inspection",
+        "verification",
+        "rollback",
+        "audit",
+        "system"
+      ],
+      "type": "string"
+    },
+    "FleetId": {
+      "description": "Stable identifier for an enterprise RocketMQ fleet.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "IncidentId": {
+      "description": "Stable identifier for an SRE incident.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "RegionId": {
+      "description": "Stable identifier for a data-residency region.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Append-only usage and cost record. Monetary values are micro-US dollars.",
+  "properties": {
+    "cluster_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ClusterId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "cost_micros": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "error_count": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "fleet_id": {
+      "$ref": "#/$defs/FleetId"
+    },
+    "id": {
+      "$ref": "#/$defs/FinOpsCostEntryId"
+    },
+    "idempotency_key": {
+      "type": "string"
+    },
+    "incident_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/IncidentId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "input_tokens": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "latency_millis": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "model_family": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "occurred_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "output_tokens": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "pack_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "provider_profile": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "quantity_millis": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "recorded_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "region_id": {
+      "$ref": "#/$defs/RegionId"
+    },
+    "request_count": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "source": {
+      "$ref": "#/$defs/FinOpsCostSource"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    },
+    "workflow_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "workload_kind": {
+      "$ref": "#/$defs/FinOpsWorkloadKind"
+    }
+  },
+  "required": [
+    "id",
+    "idempotency_key",
+    "fleet_id",
+    "tenant_id",
+    "region_id",
+    "source",
+    "workload_kind",
+    "request_count",
+    "input_tokens",
+    "output_tokens",
+    "latency_millis",
+    "error_count",
+    "quantity_millis",
+    "cost_micros",
+    "occurred_at",
+    "recorded_at"
+  ],
+  "title": "FinOpsCostEntry",
+  "type": "object"
+}

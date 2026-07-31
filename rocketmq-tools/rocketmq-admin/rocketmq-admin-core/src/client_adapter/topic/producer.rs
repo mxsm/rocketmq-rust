@@ -12,13 +12,49 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::any::Any;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use rocketmq_client_rust::ClientRuntime;
+use rocketmq_client_rust::DefaultMQProducer;
+use rocketmq_client_rust::LocalTransactionState;
+use rocketmq_client_rust::SendResult;
+use rocketmq_client_rust::TransactionListener;
+use rocketmq_client_rust::TransactionMQProducer;
+use rocketmq_client_rust::TransactionSendResult;
+use rocketmq_error::RocketMQError;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_single::Message;
+use rocketmq_model::common::message::MessageTrait;
+use rocketmq_protocol::code::response_code::ResponseCode;
 
-use super::*;
+use crate::core::topic::TopicSendRequest;
+use crate::core::topic::TopicSendResult;
+use crate::core::AdminError;
 
-pub(super) fn is_consumer_not_online_error(error: &RocketMQError) -> bool {
+pub(crate) const SEND_TIMEOUT_MILLIS: u64 = 5_000;
+
+static PRODUCER_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+struct CommitTransactionListener;
+
+impl TransactionListener for CommitTransactionListener {
+    fn execute_local_transaction(
+        &self,
+        _message: &dyn MessageTrait,
+        _argument: Option<&(dyn Any + Send + Sync)>,
+    ) -> LocalTransactionState {
+        LocalTransactionState::CommitMessage
+    }
+
+    fn check_local_transaction(&self, _message: &MessageExt) -> LocalTransactionState {
+        LocalTransactionState::CommitMessage
+    }
+}
+
+pub(crate) fn is_consumer_not_online_error(error: &RocketMQError) -> bool {
     matches!(
         error,
         RocketMQError::BrokerOperationFailed { code, .. }
@@ -26,13 +62,13 @@ pub(super) fn is_consumer_not_online_error(error: &RocketMQError) -> bool {
     )
 }
 
-pub(super) fn unique_producer_group(now_millis: u64, transactional: bool) -> String {
+pub(crate) fn unique_producer_group(now_millis: u64, transactional: bool) -> String {
     let sequence = PRODUCER_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let kind = if transactional { "tx-sender" } else { "sender" };
     format!("dashboard-topic-{kind}-{now_millis}-{sequence}")
 }
 
-pub(super) fn build_send_message(request: &TopicSendRequest) -> Message {
+pub(crate) fn build_send_message(request: &TopicSendRequest) -> Message {
     let mut builder = Message::builder()
         .topic(request.topic.clone())
         .body_slice(request.message_body.as_bytes())
@@ -46,7 +82,7 @@ pub(super) fn build_send_message(request: &TopicSendRequest) -> Message {
     builder.build_unchecked()
 }
 
-pub(super) async fn send_normal_message(
+pub(crate) async fn send_normal_message(
     client_runtime: Arc<ClientRuntime>,
     mut client_config: rocketmq_client_rust::ClientConfig,
     producer_group: String,
@@ -76,7 +112,7 @@ pub(super) async fn send_normal_message(
     Ok(map_send_result(request.topic.clone(), send_result))
 }
 
-pub(super) async fn send_transaction_message(
+pub(crate) async fn send_transaction_message(
     client_runtime: Arc<ClientRuntime>,
     mut client_config: rocketmq_client_rust::ClientConfig,
     producer_group: String,
@@ -102,7 +138,7 @@ pub(super) async fn send_transaction_message(
     )
 }
 
-pub(super) fn map_send_result(topic: String, send_result: SendResult) -> TopicSendResult {
+pub(crate) fn map_send_result(topic: String, send_result: SendResult) -> TopicSendResult {
     TopicSendResult {
         topic,
         send_status: format!("{:?}", send_result.send_status),
@@ -119,7 +155,7 @@ pub(super) fn map_send_result(topic: String, send_result: SendResult) -> TopicSe
     }
 }
 
-pub(super) fn map_transaction_send_result(
+pub(crate) fn map_transaction_send_result(
     topic: String,
     transaction_result: TransactionSendResult,
 ) -> Result<TopicSendResult, AdminError> {
@@ -137,4 +173,17 @@ pub(super) fn map_transaction_send_result(
         result.send_status = format!("{} ({local_state})", result.send_status);
     }
     Ok(result)
+}
+
+fn backend_error(operation: &'static str, error: RocketMQError) -> AdminError {
+    let view = error.boundary_view();
+    let context = (!view.context().is_empty()).then(|| view.context().to_string());
+    AdminError::backend_view(
+        operation,
+        view.code().as_str(),
+        view.message(),
+        context,
+        view.http().status.as_u16(),
+        view.is_retryable(),
+    )
 }

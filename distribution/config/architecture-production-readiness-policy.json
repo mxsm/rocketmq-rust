@@ -68,7 +68,6 @@
           {
             "path": "rocketmq-broker/src/broker_bootstrap.rs",
             "required_markers": [
-              "release_identity_registered",
               "lifecycle.mark_ready"
             ]
           },

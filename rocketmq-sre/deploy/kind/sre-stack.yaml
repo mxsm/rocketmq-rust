@@ -1,0 +1,383 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: rocketmq-sre
+spec:
+  selector:
+    app.kubernetes.io/name: rocketmq-sre-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: rocketmq-sre
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rocketmq-sre-postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rocketmq-sre-postgres
+        app.kubernetes.io/part-of: rocketmq-sre
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: postgres
+          image: postgres:17-alpine
+          imagePullPolicy: Never
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-sre-postgres
+                  key: postgres-user
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-sre-postgres
+                  key: postgres-password
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-sre-postgres
+                  key: postgres-db
+          ports:
+            - name: postgres
+              containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["/bin/sh", "-ec", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            periodSeconds: 3
+            timeoutSeconds: 2
+            failureThreshold: 30
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: data
+          emptyDir:
+            sizeLimit: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sre-model-mock
+  namespace: rocketmq-sre
+spec:
+  selector:
+    app.kubernetes.io/name: rocketmq-sre-model-mock
+  ports:
+    - name: http
+      port: 8094
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sre-model-mock
+  namespace: rocketmq-sre
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rocketmq-sre-model-mock
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rocketmq-sre-model-mock
+        app.kubernetes.io/part-of: rocketmq-sre
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: model-mock
+          image: rocketmq-rust/sre-model-mock:phase00-local
+          imagePullPolicy: Never
+          env:
+            - {name: ROCKETMQ_SRE_MODEL_MOCK_BIND_ADDR, value: "0.0.0.0:8094"}
+          ports:
+            - name: http
+              containerPort: 8094
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 3
+            timeoutSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {cpu: 100m, memory: 64Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sre-control-plane
+  namespace: rocketmq-sre
+spec:
+  selector:
+    app.kubernetes.io/name: rocketmq-sre-control-plane
+  ports:
+    - name: http
+      port: 8090
+      targetPort: http
+    - name: connector-mtls
+      port: 8444
+      targetPort: connector-mtls
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sre-control-plane
+  namespace: rocketmq-sre
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rocketmq-sre-control-plane
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rocketmq-sre-control-plane
+        app.kubernetes.io/part-of: rocketmq-sre
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+      volumes:
+        - name: evidence-objects
+          emptyDir:
+            sizeLimit: 1Gi
+        - name: control-plane-mtls-config
+          configMap:
+            name: sre-control-plane-mtls-proxy
+        - name: control-plane-mtls-server
+          secret:
+            secretName: rocketmq-sre-control-plane-channel-server
+            defaultMode: 0444
+        - name: control-plane-mtls-tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
+      containers:
+        - name: control-plane
+          image: rocketmq-rust/sre-control-plane:phase00-local
+          imagePullPolicy: Never
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-sre-postgres
+                  key: database-url
+            - {name: ROCKETMQ_SRE_BIND_ADDR, value: "0.0.0.0:8090"}
+            - {name: ROCKETMQ_SRE_CONNECTOR_BIND_ADDR, value: "127.0.0.1:8093"}
+            - {name: ROCKETMQ_SRE_CONFIG_DIR, value: "/opt/rocketmq-sre/config"}
+            - {name: ROCKETMQ_SRE_MIGRATIONS_DIR, value: "/opt/rocketmq-sre/migrations"}
+            - {name: ROCKETMQ_SRE_DEV_AUTH, value: "true"}
+            - {name: ROCKETMQ_SRE_EXECUTOR_URL, value: "http://sre-executor:8094"}
+            - {name: ROCKETMQ_SRE_EXECUTOR_TIMEOUT_SECONDS, value: "240"}
+            - {name: ROCKETMQ_SRE_EXECUTOR_ALLOW_INSECURE_HTTP, value: "true"}
+            - {name: ROCKETMQ_SRE_OBJECT_STORE_LOCAL_PATH, value: "/var/lib/rocketmq-sre/evidence"}
+            - {name: ROCKETMQ_SRE_MODEL_ENABLED, value: "true"}
+            - {name: ROCKETMQ_SRE_MODEL_LOCAL_ENDPOINT, value: "http://sre-model-mock:8094/v1"}
+            - {name: ROCKETMQ_SRE_MODEL_LOCAL_NAME, value: "phase01-read-only-fixture"}
+            - {name: ROCKETMQ_SRE_MODEL_SECRET_PROVIDER, value: "none"}
+            - {name: ROCKETMQ_SRE_MODEL_ALLOW_INSECURE_HTTP, value: "true"}
+            - name: ROCKETMQ_SRE_INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-sre-kind-secrets
+                  key: internal-token
+            - name: ROCKETMQ_SRE_CONTROL_PLANE_EXECUTOR_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-sre-kind-secrets
+                  key: internal-token
+            - {name: OTEL_SERVICE_NAME, value: "rocketmq-sre-control-plane"}
+            - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.observability.svc.cluster.local:4317"}
+            - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: "grpc"}
+          ports:
+            - name: http
+              containerPort: 8090
+            - name: connector-api
+              containerPort: 8093
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 3
+            timeoutSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          volumeMounts:
+            - name: evidence-objects
+              mountPath: /var/lib/rocketmq-sre/evidence
+        - name: connector-mtls-proxy
+          image: nginx:1.29-alpine
+          imagePullPolicy: Never
+          command: ["nginx"]
+          args: ["-g", "daemon off;", "-c", "/etc/nginx/nginx.conf"]
+          ports:
+            - name: connector-mtls
+              containerPort: 8444
+              protocol: TCP
+          readinessProbe:
+            exec:
+              command: ["nginx", "-t", "-c", "/etc/nginx/nginx.conf"]
+            periodSeconds: 3
+            timeoutSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            exec:
+              command: ["nginx", "-t", "-c", "/etc/nginx/nginx.conf"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {cpu: 100m, memory: 64Mi}
+          volumeMounts:
+            - name: control-plane-mtls-config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+              readOnly: true
+            - name: control-plane-mtls-server
+              mountPath: /etc/rocketmq/sre-channel
+              readOnly: true
+            - name: control-plane-mtls-tmp
+              mountPath: /tmp
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sre-onboarding-bootstrap
+  namespace: rocketmq-sre
+spec:
+  backoffLimit: 10
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rocketmq-sre-onboarding-bootstrap
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+      containers:
+        - name: onboard
+          image: rocketmq-rust/sre-control-plane:phase00-local
+          imagePullPolicy: Never
+          env:
+            - name: INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: rocketmq-sre-kind-secrets
+                  key: internal-token
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              until curl --fail --silent http://sre-control-plane:8090/readyz >/dev/null; do
+                sleep 2
+              done
+              curl --fail --silent --show-error \
+                --header "Authorization: Bearer $INTERNAL_TOKEN" \
+                --header 'x-rocketmq-tenant: 00000000-0000-4000-8000-000000000002' \
+                --header 'x-rocketmq-clusters: 00000000-0000-4000-8000-000000000001' \
+                --header 'x-rocketmq-subject: phase00-kind-bootstrap' \
+                --header 'Content-Type: application/json' \
+                --data '{"cluster_id":"00000000-0000-4000-8000-000000000001","tenant_id":"00000000-0000-4000-8000-000000000002","external_cluster_key":"rocketmq-rust","environment":"development","region":"kind","rocketmq_version":"1.0.0-dev","deployment_mode":"dev-single","owner":"rocketmq-sre-kind","actor_subject":"phase00-kind-bootstrap"}' \
+                http://sre-control-plane:8090/v1/clusters/onboard
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 100m, memory: 128Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sre-ui
+  namespace: rocketmq-sre
+spec:
+  selector:
+    app.kubernetes.io/name: rocketmq-sre-ui
+  ports:
+    - name: http
+      port: 3004
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sre-ui
+  namespace: rocketmq-sre
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rocketmq-sre-ui
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rocketmq-sre-ui
+        app.kubernetes.io/part-of: rocketmq-sre
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: ui
+          image: rocketmq-rust/sre-ui:phase00-local
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 3004
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 3
+            timeoutSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {cpu: 250m, memory: 256Mi}

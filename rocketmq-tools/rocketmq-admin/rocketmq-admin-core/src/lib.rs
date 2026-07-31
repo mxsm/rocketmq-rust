@@ -25,3 +25,14 @@ pub mod core;
 
 #[cfg(feature = "client-adapter")]
 pub mod client_adapter;
+
+#[cfg(all(feature = "mutation-client-adapter", not(feature = "client-adapter")))]
+mod client_adapter;
+
+#[cfg(feature = "mutation-client-adapter")]
+#[path = "client_adapter/mutation.rs"]
+pub mod mutation_client_adapter;
+
+#[cfg(feature = "read-client-adapter")]
+#[path = "client_adapter/read.rs"]
+pub mod read_client_adapter;

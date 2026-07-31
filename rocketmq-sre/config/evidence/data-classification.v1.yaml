@@ -1,0 +1,31 @@
+schema_version: rocketmq.sre.data-classification.v1
+classes:
+  public:
+    model_outbound: allowed
+    evidence_storage: allowed
+    examples: [schema_version, component, bounded_status]
+  operational:
+    model_outbound: allowed_after_bounding
+    evidence_storage: allowed
+    redaction: remove_internal_addresses_and_raw_runtime_names
+    examples: [aggregate_counts, latency, freshness, bounded_error_class]
+  restricted_identifier:
+    model_outbound: hashed_or_removed
+    evidence_storage: hashed_or_removed
+    redaction: keyed_hash
+    examples: [principal, client_id, internal_address, task_name, task_group_name]
+  secret:
+    model_outbound: forbidden
+    evidence_storage: forbidden
+    redaction: remove
+    examples: [token, password, access_key, secret_key, private_key, tls_key_material]
+  message_content:
+    model_outbound: forbidden
+    evidence_storage: forbidden
+    redaction: remove
+    examples: [message_body, message_keys, user_properties]
+defaults:
+  unknown_field: restricted_identifier
+  missing_signal: missing
+  unavailable_source: not_production_verified
+  numeric_missing_value: null

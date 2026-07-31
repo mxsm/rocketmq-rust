@@ -1,0 +1,125 @@
+{
+  "$defs": {
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "IncidentId": {
+      "description": "Stable identifier for an SRE incident.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "IncidentSlaState": {
+      "description": "Current SLA clocks associated with one incident.",
+      "properties": {
+        "acknowledged_at": {
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "acknowledgement_breached": {
+          "type": "boolean"
+        },
+        "acknowledgement_due_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "resolution_breached": {
+          "type": "boolean"
+        },
+        "resolution_due_at": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "acknowledgement_due_at",
+        "resolution_due_at",
+        "acknowledgement_breached",
+        "resolution_breached"
+      ],
+      "type": "object"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Read model for incident ownership and operator state.",
+  "properties": {
+    "acknowledged_by": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cluster_id": {
+      "$ref": "#/$defs/ClusterId"
+    },
+    "incident_id": {
+      "$ref": "#/$defs/IncidentId"
+    },
+    "merged_into_incident_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/IncidentId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "owner": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "sla": {
+      "$ref": "#/$defs/IncidentSlaState"
+    },
+    "split_incident_ids": {
+      "items": {
+        "$ref": "#/$defs/IncidentId"
+      },
+      "type": "array"
+    },
+    "suppressed_until": {
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "suppression_reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "incident_id",
+    "tenant_id",
+    "cluster_id",
+    "owner",
+    "split_incident_ids",
+    "sla",
+    "updated_at"
+  ],
+  "title": "IncidentOperationsState",
+  "type": "object"
+}

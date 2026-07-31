@@ -26,6 +26,8 @@ use tokio::sync::Mutex;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
+use rocketmq_observability::metrics::mcp::McpCacheEvent;
+
 use crate::model::contract::observed_at;
 use crate::model::contract::CacheStatus;
 use crate::model::contract::QueryResult;
@@ -124,6 +126,7 @@ impl QueryCache {
     {
         if !self.inner.enabled || self.inner.capacity == 0 || ttl.is_zero() {
             self.inner.metrics.bypasses.fetch_add(1, Ordering::Relaxed);
+            rocketmq_observability::metrics::mcp::record_cache_event(McpCacheEvent::Bypass);
             return load().await.map(|data| QueryResult {
                 data,
                 observed_at: observed_at(),
@@ -139,6 +142,7 @@ impl QueryCache {
         let (flight, coalesced) = self.flight_lock(&key).await;
         if coalesced {
             self.inner.metrics.coalesced_waiters.fetch_add(1, Ordering::Relaxed);
+            rocketmq_observability::metrics::mcp::record_cache_event(McpCacheEvent::CoalescedWaiter);
         }
         let _flight_guard = tokio::select! {
             biased;
@@ -155,6 +159,7 @@ impl QueryCache {
         self.insert_if_current(key, data.clone(), observed_at.clone(), ttl, generation)
             .await;
         self.inner.metrics.misses.fetch_add(1, Ordering::Relaxed);
+        rocketmq_observability::metrics::mcp::record_cache_event(McpCacheEvent::Miss);
         Ok(QueryResult {
             data,
             observed_at,
@@ -181,6 +186,7 @@ impl QueryCache {
         state.entries.clear();
         state.insertion_order.clear();
         self.inner.metrics.invalidations.fetch_add(1, Ordering::Relaxed);
+        rocketmq_observability::metrics::mcp::record_cache_event(McpCacheEvent::Invalidation);
         removed
     }
 
@@ -209,6 +215,7 @@ impl QueryCache {
             cache_status: CacheStatus::Hit,
         };
         self.inner.metrics.hits.fetch_add(1, Ordering::Relaxed);
+        rocketmq_observability::metrics::mcp::record_cache_event(McpCacheEvent::Hit);
         Some(result)
     }
 
@@ -227,6 +234,7 @@ impl QueryCache {
             };
             if state.entries.remove(&oldest).is_some() {
                 self.inner.metrics.evictions.fetch_add(1, Ordering::Relaxed);
+                rocketmq_observability::metrics::mcp::record_cache_event(McpCacheEvent::Eviction);
             }
         }
         let inserted_at = Instant::now();

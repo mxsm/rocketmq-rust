@@ -283,6 +283,8 @@ impl RouteInfoManager {
         filter_server_list: Vec<CheetahString>,
         channel: Channel,
     ) -> RouteResult<RegisterBrokerResult> {
+        let registration_span = rocketmq_observability::trace::namesrv::broker_registration_span();
+        let _registration_guard = registration_span.enter();
         // ===================================================================
         // SEGMENTED LOCK ACQUISITION
         // ===================================================================
@@ -332,6 +334,7 @@ impl RouteInfoManager {
                 cluster_name, broker_name, broker_id, broker_addr
             );
             self.metrics.record_broker_registration(self.active_broker_count());
+            registration_span.record("result", "rejected");
             return Ok(result);
         }
         let (register_first, is_min_broker_id_changed) = update_result.unwrap();
@@ -427,6 +430,7 @@ impl RouteInfoManager {
         );
 
         self.metrics.record_broker_registration(self.active_broker_count());
+        registration_span.record("result", "success");
         Ok(result)
     }
 
@@ -1510,6 +1514,22 @@ impl RouteInfoManager {
     /// Get the number of brokers currently tracked as live.
     pub fn active_broker_count(&self) -> usize {
         self.broker_live_table.len()
+    }
+
+    pub(crate) fn route_freshness_millis(&self, route: &TopicRouteData) -> Option<u64> {
+        let now = current_millis();
+        route
+            .broker_datas
+            .iter()
+            .flat_map(|broker| {
+                broker.broker_addrs().values().filter_map(|address| {
+                    let key = BrokerAddrInfo::new(CheetahString::from(broker.cluster()), address.clone());
+                    self.broker_live_table
+                        .get(&key)
+                        .map(|live| now.saturating_sub(live.last_update_timestamp))
+                })
+            })
+            .max()
     }
 
     /// Get topics for a specific cluster

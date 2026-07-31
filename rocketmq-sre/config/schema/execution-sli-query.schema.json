@@ -1,0 +1,51 @@
+{
+  "$defs": {
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "CorrelationId": {
+      "description": "Identifier propagated across one logical SRE operation.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Bounded request for independently evaluated technical SLI conditions.",
+  "properties": {
+    "cluster_id": {
+      "$ref": "#/$defs/ClusterId"
+    },
+    "conditions": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "correlation_id": {
+      "$ref": "#/$defs/CorrelationId"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    }
+  },
+  "required": [
+    "schema_version",
+    "tenant_id",
+    "cluster_id",
+    "correlation_id",
+    "conditions"
+  ],
+  "title": "ExecutionSliQuery",
+  "type": "object"
+}

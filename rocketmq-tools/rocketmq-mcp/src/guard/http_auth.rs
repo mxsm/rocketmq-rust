@@ -50,6 +50,7 @@ pub struct HttpAuthState {
 enum HttpAuthenticator {
     DevelopmentToken {
         token: Arc<str>,
+        tenant: Option<String>,
     },
     OAuthJwt {
         verifier: JwksVerifier,
@@ -61,6 +62,8 @@ enum HttpAuthenticator {
 #[derive(Debug, Deserialize)]
 struct JwtClaims {
     sub: String,
+    #[serde(default)]
+    rocketmq_tenant: Option<String>,
     #[serde(default)]
     scope: String,
     #[serde(default)]
@@ -101,12 +104,16 @@ impl HttpAuthState {
                     .ok_or_else(|| HttpAuthError::MissingTokenConfig(config.development_token_env.clone()))?;
                 HttpAuthenticator::DevelopmentToken {
                     token: Arc::from(token),
+                    tenant: config.development_tenant.clone(),
                 }
             }
             HttpAuthMode::OAuthJwt => {
                 let source = Arc::new(
-                    HttpJwksSource::new(Arc::<str>::from(config.jwks_url.clone()))
-                        .map_err(|_| HttpAuthError::InvalidJwksConfig)?,
+                    HttpJwksSource::new(
+                        Arc::<str>::from(config.jwks_url.clone()),
+                        config.jwks_ca_path.as_deref().map(std::path::Path::new),
+                    )
+                    .map_err(|_| HttpAuthError::InvalidJwksConfig)?,
                 );
                 let verifier = JwksVerifier::new(
                     source,
@@ -137,9 +144,13 @@ impl HttpAuthState {
     pub async fn authenticate(&self, headers: &HeaderMap) -> Result<RequestContext, HttpAuthError> {
         let token = bearer_token(headers)?;
         let context = match &self.authenticator {
-            HttpAuthenticator::DevelopmentToken { token: expected } if expected.as_ref() == token => RequestContext {
+            HttpAuthenticator::DevelopmentToken {
+                token: expected,
+                tenant,
+            } if expected.as_ref() == token => RequestContext {
                 principal: Principal {
                     id: "development-http-client".to_string(),
+                    tenant: tenant.clone(),
                     roles: ["diagnose".to_string()].into_iter().collect(),
                     scopes: ["rocketmq:read".to_string(), "rocketmq:diagnose".to_string()]
                         .into_iter()
@@ -173,6 +184,7 @@ impl HttpAuthState {
                 RequestContext {
                     principal: Principal {
                         id: decoded.claims.sub,
+                        tenant: decoded.claims.rocketmq_tenant,
                         roles: decoded.claims.roles.into_iter().collect(),
                         scopes,
                         allowed_clusters: decoded
@@ -198,6 +210,7 @@ impl HttpAuthState {
         RequestContext {
             principal: Principal {
                 id: "http-anonymous".to_string(),
+                tenant: None,
                 roles: BTreeSet::new(),
                 scopes: BTreeSet::new(),
                 allowed_clusters: None,
@@ -461,6 +474,9 @@ mod tests {
                 name: "local-dev".to_string(),
                 namesrv_addr: "127.0.0.1:9876".to_string(),
                 default: Some(true),
+                rocketmq_cluster_name: None,
+                tenant: None,
+                credentials: None,
             }],
         )
         .unwrap()

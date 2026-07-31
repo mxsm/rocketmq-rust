@@ -15,6 +15,7 @@
 pub mod metrics {
     pub const PROCESSOR_WATERMARK: &str = "rocketmq_processor_watermark";
     pub const BROKER_PERMISSION: &str = "rocketmq_broker_permission";
+    pub const BROKER_UP: &str = "rocketmq_broker_up";
     pub const TOPIC_NUMBER: &str = "rocketmq_topic_number";
     pub const CONSUMER_GROUP_NUMBER: &str = "rocketmq_consumer_group_number";
     pub const MESSAGES_IN_TOTAL: &str = "rocketmq_messages_in_total";
@@ -115,10 +116,15 @@ pub mod metrics {
     pub const NAMESRV_ROUTE_REQUEST_LATENCY: &str = "rocketmq_namesrv_route_request_latency";
     pub const NAMESRV_BROKER_REGISTRATIONS: &str = "rocketmq_namesrv_broker_registrations";
     pub const NAMESRV_ACTIVE_BROKERS: &str = "rocketmq_namesrv_active_brokers";
+    pub const NAMESRV_ROUTE_ERRORS_TOTAL: &str = "rocketmq_namesrv_route_errors_total";
+    pub const NAMESRV_ROUTE_FRESHNESS: &str = "rocketmq_namesrv_route_freshness";
     pub const CONTROLLER_ELECTION_TOTAL: &str = "rocketmq_controller_election_total";
     pub const CONTROLLER_ELECTION_LATENCY: &str = "rocketmq_controller_election_latency";
     pub const CONTROLLER_LEADER_CHANGES_TOTAL: &str = "rocketmq_controller_leader_changes_total";
     pub const CONTROLLER_ACTIVE_BROKERS: &str = "rocketmq_controller_active_brokers";
+    pub const CONTROLLER_QUORUM_HEALTH: &str = "rocketmq_controller_quorum_health";
+    pub const CONTROLLER_HEARTBEAT_AGE: &str = "rocketmq_controller_heartbeat_age";
+    pub const CONTROLLER_STALE_BROKERS: &str = "rocketmq_controller_stale_brokers";
     pub const CONTROLLER_ROLE: &str = "role";
     pub const CONTROLLER_DLEDGER_DISK_USAGE: &str = "dledger_disk_usage";
     pub const CONTROLLER_ACTIVE_BROKER_NUM: &str = "active_broker_num";
@@ -131,6 +137,7 @@ pub mod metrics {
     pub const PROXY_GRPC_REQUEST_LATENCY: &str = "rocketmq_proxy_grpc_request_latency";
     pub const PROXY_FORWARD_LATENCY: &str = "rocketmq_proxy_forward_latency";
     pub const PROXY_ACTIVE_CONNECTIONS: &str = "rocketmq_proxy_active_connections";
+    pub const PROXY_GRPC_ERRORS_TOTAL: &str = "rocketmq_proxy_grpc_errors_total";
     pub const PROXY_UP: &str = "rocketmq_proxy_up";
     pub const LOG_FILTER_RELOAD_TOTAL: &str = "rocketmq_observability_log_filter_reload_total";
     pub const LOG_FILTER_ACTIVE: &str = "rocketmq_observability_log_filter_active";
@@ -140,6 +147,21 @@ pub mod metrics {
         "rocketmq_observability_log_filter_auto_restore_failure_total";
     pub const LOG_FILTER_ROLLBACK_FAILURE_TOTAL: &str = "rocketmq_observability_log_filter_rollback_failure_total";
     pub const RELEASE_INFO: &str = "rocketmq_release_info";
+    pub const MCP_REQUESTS_TOTAL: &str = "rocketmq_mcp_requests_total";
+    pub const MCP_REQUEST_LATENCY: &str = "rocketmq_mcp_request_latency";
+    pub const MCP_ERRORS_TOTAL: &str = "rocketmq_mcp_errors_total";
+    pub const MCP_CACHE_OPERATIONS_TOTAL: &str = "rocketmq_mcp_cache_operations_total";
+    pub const MCP_RATE_LIMIT_TOTAL: &str = "rocketmq_mcp_rate_limit_total";
+    pub const MCP_AUDIT_BACKLOG: &str = "rocketmq_mcp_audit_backlog";
+    pub const MCP_AUDIT_DROPPED_TOTAL: &str = "rocketmq_mcp_audit_dropped_total";
+    pub const MCP_AUDIT_FAILURES_TOTAL: &str = "rocketmq_mcp_audit_failures_total";
+    pub const RUNTIME_TASKS: &str = "rocketmq_runtime_tasks";
+    pub const RUNTIME_TASK_GROUPS: &str = "rocketmq_runtime_task_groups";
+    pub const RUNTIME_LONG_RUNNING_TASKS: &str = "rocketmq_runtime_long_running_tasks";
+    pub const RUNTIME_BLOCKING_QUEUED: &str = "rocketmq_runtime_blocking_queued";
+    pub const RUNTIME_BLOCKING_RUNNING: &str = "rocketmq_runtime_blocking_running";
+    pub const RUNTIME_BLOCKING_TIMEOUTS: &str = "rocketmq_runtime_blocking_timeouts";
+    pub const RUNTIME_LIFECYCLE_TRANSITIONS_TOTAL: &str = "rocketmq_runtime_lifecycle_transitions_total";
 }
 
 pub mod labels {
@@ -167,6 +189,7 @@ pub mod labels {
     pub const RESPONSE_CODE: &str = "response_code";
     pub const IS_LONG_POLLING: &str = "is_long_polling";
     pub const RESULT: &str = "result";
+    pub const STATE: &str = "state";
     pub const STORAGE_TYPE: &str = "storage_type";
     pub const STORAGE_MEDIUM: &str = "storage_medium";
     pub const TYPE: &str = "type";
@@ -194,6 +217,10 @@ pub mod labels {
     pub const SOURCE: &str = "source";
     pub const RELEASE_COMMIT: &str = "release_commit";
     pub const RELEASE_NONCE: &str = "release_nonce";
+    pub const OPERATION_KIND: &str = "operation_kind";
+    pub const COMPONENT: &str = "component";
+    pub const TASK_TYPE: &str = "task_type";
+    pub const BLOCKING_LANE: &str = "blocking_lane";
 }
 
 /// Stable event identifiers consumed by structured-log exporters and guards.
@@ -205,6 +232,10 @@ pub mod events {
     pub const RECOVERY_STATE: &str = "rocketmq.recovery.state";
     pub const EXPORTER_DROP: &str = "rocketmq.exporter.drop";
     pub const EXPORTER_SHUTDOWN: &str = "rocketmq.exporter.shutdown";
+    pub const BROKER_LIFECYCLE: &str = "rocketmq.broker.lifecycle";
+    pub const RUNTIME_LIFECYCLE: &str = "rocketmq.runtime.lifecycle";
+    pub const CONTROLLER_HEARTBEAT: &str = "rocketmq.controller.heartbeat";
+    pub const CONTROLLER_ELECTION: &str = "rocketmq.controller.election";
 }
 
 pub mod trace {

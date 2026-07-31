@@ -1,0 +1,152 @@
+{
+  "$defs": {
+    "EvidenceId": {
+      "description": "Stable identifier for an evidence snapshot.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ModelInvocationId": {
+      "description": "Stable identifier for a model invocation.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "PostmortemConclusion": {
+      "description": "Evidence-backed conclusion used by a postmortem root cause or other\nmaterial claim.",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "evidence_ids": {
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          },
+          "type": "array"
+        },
+        "statement": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "statement",
+        "evidence_ids"
+      ],
+      "type": "object"
+    },
+    "PostmortemId": {
+      "description": "Stable identifier for a postmortem.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "PostmortemRevisionId": {
+      "description": "Stable identifier for an immutable postmortem revision.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Immutable content revision with explicit Evidence citations.",
+  "properties": {
+    "conclusions": {
+      "items": {
+        "$ref": "#/$defs/PostmortemConclusion"
+      },
+      "type": "array"
+    },
+    "contributing_factors": {
+      "items": {
+        "$ref": "#/$defs/PostmortemConclusion"
+      },
+      "type": "array"
+    },
+    "created_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "detection": {
+      "type": "string"
+    },
+    "edited_by": {
+      "type": "string"
+    },
+    "effective_actions": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "evidence_ids": {
+      "items": {
+        "$ref": "#/$defs/EvidenceId"
+      },
+      "type": "array"
+    },
+    "human_confirmed": {
+      "type": "boolean"
+    },
+    "id": {
+      "$ref": "#/$defs/PostmortemRevisionId"
+    },
+    "impact": {
+      "type": "string"
+    },
+    "ineffective_actions": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "model_invocation_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ModelInvocationId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "postmortem_id": {
+      "$ref": "#/$defs/PostmortemId"
+    },
+    "recovery": {
+      "type": "string"
+    },
+    "revision": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "root_causes": {
+      "items": {
+        "$ref": "#/$defs/PostmortemConclusion"
+      },
+      "type": "array"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "timeline": true
+  },
+  "required": [
+    "id",
+    "postmortem_id",
+    "revision",
+    "summary",
+    "impact",
+    "detection",
+    "timeline",
+    "root_causes",
+    "contributing_factors",
+    "conclusions",
+    "recovery",
+    "effective_actions",
+    "ineffective_actions",
+    "evidence_ids",
+    "edited_by",
+    "human_confirmed",
+    "created_at"
+  ],
+  "title": "PostmortemRevision",
+  "type": "object"
+}

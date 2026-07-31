@@ -1,0 +1,29 @@
+{
+  "pack": "telemetry-pipeline.v1",
+  "scenario": "fault",
+  "expected_status": "fault",
+  "expected_reason_codes": [
+    "TELEMETRY_BUILD_FEATURE_DISABLED",
+    "TELEMETRY_EXPORTER_DISABLED",
+    "TELEMETRY_EXPORT_STALE",
+    "TELEMETRY_QUEUE_DROPPING",
+    "TELEMETRY_COLLECTOR_UNAVAILABLE",
+    "TELEMETRY_BACKEND_UNAVAILABLE"
+  ],
+  "evidence": [
+    {
+      "evidence_id": "00000000-0000-4000-8007-000000000102",
+      "source": "runtime",
+      "resource": "observability/broker-a",
+      "content": {
+        "build_feature_enabled": false,
+        "exporter_enabled": false,
+        "last_export_success_age_seconds": 1800,
+        "queue_depth": 5000,
+        "dropped_items": 200,
+        "collector_reachable": false,
+        "backend_reachable": false
+      }
+    }
+  ]
+}

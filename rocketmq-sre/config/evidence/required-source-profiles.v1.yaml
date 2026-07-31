@@ -1,0 +1,31 @@
+schema_version: rocketmq.sre.required-source-profiles.v1
+profiles:
+  cluster_read_only:
+    required_components: [broker, name_server, controller]
+    optional_components: [proxy, mcp, runtime]
+    required_requirements:
+      - broker.availability
+      - broker.consumer_lag
+      - nameserver.route_errors
+      - nameserver.route_freshness
+      - controller.quorum_health
+    degraded_when_missing:
+      - proxy.availability
+      - runtime.diagnostics_view
+  mcp_connector:
+    required_components: [mcp]
+    optional_components: [runtime]
+    required_requirements:
+      - mcp.action_audit
+    degraded_when_missing:
+      - mcp.tool_requests
+      - mcp.request_latency
+      - mcp.audit_health
+  runtime_pressure:
+    required_components: [runtime]
+    optional_components: []
+    required_requirements:
+      - runtime.tasks
+      - runtime.blocking_pressure
+      - runtime.blocking_timeouts
+    degraded_when_missing: []

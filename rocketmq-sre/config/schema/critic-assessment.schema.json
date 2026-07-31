@@ -1,0 +1,111 @@
+{
+  "$defs": {
+    "CriticConclusion": {
+      "description": "Bounded deterministic Critic conclusion.",
+      "enum": [
+        "accept",
+        "needs_revision",
+        "reject"
+      ],
+      "type": "string"
+    },
+    "CriticFinding": {
+      "additionalProperties": false,
+      "description": "One structured finding returned by the Critic.",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/CriticFindingCode"
+        },
+        "evidence_ids": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          },
+          "type": "array"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
+    "CriticFindingCode": {
+      "description": "Closed set of checks that a model Critic may report.",
+      "enum": [
+        "evidence_reference_invalid",
+        "counter_evidence_missing",
+        "parameter_out_of_range",
+        "missing_precondition",
+        "impact_scope_exceeded",
+        "rollback_unavailable"
+      ],
+      "type": "string"
+    },
+    "EvidenceId": {
+      "description": "Stable identifier for an evidence snapshot.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Fixed, bounded model output accepted from the heterogeneous Critic.\n\nIt cannot replace descriptors, policy decisions, plan fields, or execution\nparameters. Those remain locally validated Control Plane inputs.",
+  "properties": {
+    "cited_evidence_ids": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/EvidenceId"
+      },
+      "type": "array"
+    },
+    "conclusion": {
+      "$ref": "#/$defs/CriticConclusion"
+    },
+    "counter_evidence_ids": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/EvidenceId"
+      },
+      "type": "array"
+    },
+    "findings": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/CriticFinding"
+      },
+      "type": "array"
+    },
+    "impact_scope_valid": {
+      "type": "boolean"
+    },
+    "missing_preconditions": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "parameter_ranges_valid": {
+      "type": "boolean"
+    },
+    "rationale": {
+      "type": "string"
+    },
+    "rollback_available": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "conclusion",
+    "parameter_ranges_valid",
+    "impact_scope_valid",
+    "rollback_available",
+    "rationale"
+  ],
+  "title": "CriticAssessment",
+  "type": "object"
+}

@@ -1,0 +1,30 @@
+{
+  "pack": "consumer-runtime.v1",
+  "scenario": "fault",
+  "expected_status": "fault",
+  "expected_reason_codes": [
+    "CONSUMER_CONNECTION_LOST",
+    "CONSUMER_REBALANCE_STALLED",
+    "CONSUMER_PROCESSING_SLOW",
+    "CONSUMER_OFFSET_CONTROL_ANOMALY",
+    "CONSUMER_CLIENT_VERSION_UNSUPPORTED"
+  ],
+  "evidence": [
+    {
+      "evidence_id": "00000000-0000-4000-8003-000000000102",
+      "source": "admin-query",
+      "resource": "consumer-runtime/group-a",
+      "content": {
+        "connected": false,
+        "running_info_available": false,
+        "rebalance_in_progress": true,
+        "unassigned_queues": 4,
+        "process_rt_ms": 2500,
+        "paused": true,
+        "commit_failures": 3,
+        "seek_operations": 1,
+        "client_version_supported": false
+      }
+    }
+  ]
+}

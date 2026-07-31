@@ -1,0 +1,6 @@
+schema_version: rocketmq.sre.replay-quality.v1
+root_cause_top3_min: 0.90
+high_confidence_threshold: 0.80
+citation_coverage_min: 1.0
+max_readonly_tool_calls: 12
+mutation_calls_allowed: 0

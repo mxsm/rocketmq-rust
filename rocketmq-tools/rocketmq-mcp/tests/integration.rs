@@ -74,10 +74,13 @@ fn mcp_inspector_stdio_surface_integration() {
         .unwrap()
         .contains("Broker Health Check Task"));
     assert_eq!(responses[&8]["result"]["isError"], true);
-    assert!(responses[&8]["result"]["content"][0]["text"]
-        .as_str()
-        .unwrap()
-        .contains("missing-cluster"));
+    let backend_error_text = responses[&8]["result"]["content"][0]["text"].as_str().unwrap();
+    let backend_error: Value = serde_json::from_str(backend_error_text).unwrap();
+    assert_eq!(backend_error["code"], "cluster_not_allowed");
+    assert_eq!(backend_error["message"], "permission denied: cluster is not allowed");
+    assert_eq!(backend_error["correlation_id"], "8");
+    assert_eq!(backend_error["retryable"], false);
+    assert!(!backend_error_text.contains("missing-cluster"));
     assert_eq!(responses[&9]["result"]["isError"], true);
     let tool_error: Value =
         serde_json::from_str(responses[&9]["result"]["content"][0]["text"].as_str().unwrap()).unwrap();

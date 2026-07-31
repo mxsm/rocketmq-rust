@@ -1,0 +1,207 @@
+{
+  "$defs": {
+    "AgentStepResult": {
+      "additionalProperties": false,
+      "description": "Narrow Agent result without raw target responses.",
+      "properties": {
+        "completed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "execution_id": {
+          "$ref": "#/$defs/ExecutionId"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "outcome_code": {
+          "type": "string"
+        },
+        "sanitized_summary": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/EffectState"
+        },
+        "step_id": {
+          "$ref": "#/$defs/ExecutionStepId"
+        }
+      },
+      "required": [
+        "execution_id",
+        "step_id",
+        "state",
+        "operation_id",
+        "outcome_code",
+        "sanitized_summary",
+        "completed_at"
+      ],
+      "type": "object"
+    },
+    "EffectState": {
+      "description": "Durable Agent effect state.",
+      "enum": [
+        "prepared",
+        "dispatched",
+        "confirmed",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "EvidenceId": {
+      "description": "Stable identifier for an evidence snapshot.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ExecutionId": {
+      "description": "Stable identifier for a supervised execution.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ExecutionState": {
+      "description": "Recoverable supervised execution state.",
+      "enum": [
+        "pending",
+        "prechecking",
+        "intent_persisted",
+        "applying",
+        "unknown",
+        "reconciling",
+        "verifying",
+        "compensating",
+        "succeeded",
+        "rolled_back",
+        "escalated"
+      ],
+      "type": "string"
+    },
+    "ExecutionStepId": {
+      "description": "Stable identifier for an execution step.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "VerificationOutcome": {
+      "description": "Deterministic verification outcome.",
+      "enum": [
+        "succeeded",
+        "failed",
+        "inconclusive"
+      ],
+      "type": "string"
+    },
+    "VerificationResult": {
+      "additionalProperties": false,
+      "description": "Bounded verification result with before/after evidence.",
+      "properties": {
+        "completed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "during_evidence_ids": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          },
+          "type": "array"
+        },
+        "failed_conditions": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "outcome": {
+          "$ref": "#/$defs/VerificationOutcome"
+        },
+        "post_evidence_ids": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          },
+          "type": "array"
+        },
+        "pre_evidence_ids": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          },
+          "type": "array"
+        },
+        "satisfied_conditions": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "stable_window_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "started_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "step_id": {
+          "$ref": "#/$defs/ExecutionStepId"
+        }
+      },
+      "required": [
+        "step_id",
+        "outcome",
+        "started_at",
+        "completed_at",
+        "stable_window_seconds"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Append-only Executor step result.",
+  "properties": {
+    "agent_result": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AgentStepResult"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "completed_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "reason_code": {
+      "type": "string"
+    },
+    "state": {
+      "$ref": "#/$defs/ExecutionState"
+    },
+    "step_id": {
+      "$ref": "#/$defs/ExecutionStepId"
+    },
+    "verification": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/VerificationResult"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "step_id",
+    "state",
+    "reason_code",
+    "completed_at"
+  ],
+  "title": "StepResult",
+  "type": "object"
+}

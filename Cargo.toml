@@ -41,9 +41,12 @@ members = [
   "rocketmq-tools/rocketmq-admin/rocketmq-admin-cli",
   "rocketmq-tools/rocketmq-admin/rocketmq-admin-core",
   "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui",
-  "rocketmq-tools/rocketmq-mcp",
   "rocketmq-tools/rocketmq-store-inspect",
   "rocketmq-dashboard/rocketmq-dashboard-common",
+]
+exclude = [
+  "rocketmq-tools/rocketmq-mcp",
+  "rocketmq-sre",
 ]
 resolver = "2"
 
@@ -72,7 +75,7 @@ rocketmq-runtime     = { version = "1.0.0", path = "./rocketmq-runtime" }
 rocketmq-macros      = { version = "1.0.0", path = "./rocketmq-macros" }
 rocketmq-filter      = { version = "1.0.0", path = "./rocketmq-filter" }
 rocketmq-store       = { version = "1.0.0", path = "./rocketmq-store", default-features = true }
-rocketmq-client-rust = { version = "1.0.0", path = "./rocketmq-client" }
+rocketmq-client-rust = { version = "1.0.0", path = "./rocketmq-client", default-features = false }
 rocketmq-broker      = { version = "1.0.0", path = "./rocketmq-broker" }
 rocketmq-error       = { version = "1.0.0", path = "./rocketmq-error" }
 rocketmq-auth        = { version = "1.0.0", path = "./rocketmq-auth" }

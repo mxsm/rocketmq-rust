@@ -1,0 +1,120 @@
+# Copyright 2023 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0.
+
+schema_version: rocketmq-sre.shadow-eval.v1
+tenant_id: 00000000-0000-4000-8000-000000000001
+cluster_id: 00000000-0000-4000-8000-000000000002
+policy:
+  mutation_supported: false
+  executor_connected: false
+  connector_identity: read_only
+  model_visible_tools:
+    - query_evidence
+    - read_runtime
+    - read_topology
+    - search_knowledge
+scenarios:
+  - id: topology-change
+    pack: cluster-topology.v1
+    description: Correlate Broker, Topic, Queue, client, and Kubernetes topology changes.
+    cases:
+      - class: normal
+        fixture: diagnostics/cluster-topology.v1/normal.json
+        expected_status: healthy
+      - class: fault
+        fixture: diagnostics/cluster-topology.v1/fault.json
+        expected_status: fault
+      - class: missing
+        fixture: diagnostics/cluster-topology.v1/missing.json
+        expected_status: inconclusive
+  - id: consumer-lag
+    pack: consumer-lag.v2
+    description: Explain lag slope, queue skew, consumption rate, route, Broker, and Store health.
+    cases:
+      - class: normal
+        fixture: diagnostics/consumer-lag.v2/normal.json
+        expected_status: healthy
+      - class: fault
+        fixture: diagnostics/consumer-lag.v2/fault.json
+        expected_status: fault
+      - class: missing
+        fixture: diagnostics/consumer-lag.v2/missing.json
+        expected_status: inconclusive
+  - id: consumer-runtime
+    pack: consumer-runtime.v1
+    description: Inspect rebalance, allocation, processing latency, connection, and client version metadata.
+    cases:
+      - class: normal
+        fixture: diagnostics/consumer-runtime.v1/normal.json
+        expected_status: healthy
+      - class: fault
+        fixture: diagnostics/consumer-runtime.v1/fault.json
+        expected_status: fault
+      - class: missing
+        fixture: diagnostics/consumer-runtime.v1/missing.json
+        expected_status: inconclusive
+  - id: producer-connectivity
+    pack: producer-connectivity.v1
+    description: Explain route refresh, retry, timeout, connection, and backpressure evidence.
+    cases:
+      - class: normal
+        fixture: diagnostics/producer-connectivity.v1/normal.json
+        expected_status: healthy
+      - class: fault
+        fixture: diagnostics/producer-connectivity.v1/fault.json
+        expected_status: fault
+      - class: missing
+        fixture: diagnostics/producer-connectivity.v1/missing.json
+        expected_status: inconclusive
+  - id: broker-health
+    pack: broker-health.v1
+    description: Inspect readiness, request errors, disk, flush, dispatch, and HA lag.
+    cases:
+      - class: normal
+        fixture: diagnostics/broker-health.v1/normal.json
+        expected_status: healthy
+      - class: fault
+        fixture: diagnostics/broker-health.v1/fault.json
+        expected_status: fault
+      - class: missing
+        fixture: diagnostics/broker-health.v1/missing.json
+        expected_status: inconclusive
+  - id: message-path
+    pack: message-path.v1
+    description: Correlate pseudonymized send, route, store, deliver, and acknowledgement metadata without message bodies.
+    cases:
+      - class: normal
+        fixture: diagnostics/message-path.v1/normal.json
+        expected_status: healthy
+      - class: fault
+        fixture: diagnostics/message-path.v1/fault.json
+        expected_status: fault
+      - class: missing
+        fixture: diagnostics/message-path.v1/missing.json
+        expected_status: inconclusive
+  - id: telemetry-outage
+    pack: telemetry-pipeline.v1
+    description: Explain exporter, collector, backend, queue, and drop evidence.
+    cases:
+      - class: normal
+        fixture: diagnostics/telemetry-pipeline.v1/normal.json
+        expected_status: healthy
+      - class: fault
+        fixture: diagnostics/telemetry-pipeline.v1/fault.json
+        expected_status: fault
+      - class: missing
+        fixture: diagnostics/telemetry-pipeline.v1/missing.json
+        expected_status: inconclusive
+  - id: deployment-drift
+    pack: deployment-drift.v1
+    description: Explain image, config, feature, PDB, PVC, replica, and desired/live drift.
+    cases:
+      - class: normal
+        fixture: diagnostics/deployment-drift.v1/normal.json
+        expected_status: healthy
+      - class: fault
+        fixture: diagnostics/deployment-drift.v1/fault.json
+        expected_status: fault
+      - class: missing
+        fixture: diagnostics/deployment-drift.v1/missing.json
+        expected_status: inconclusive

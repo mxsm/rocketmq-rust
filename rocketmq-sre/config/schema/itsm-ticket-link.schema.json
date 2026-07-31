@@ -1,0 +1,65 @@
+{
+  "$defs": {
+    "ActionPlanId": {
+      "description": "Stable identifier for an immutable action plan.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "IncidentId": {
+      "description": "Stable identifier for an SRE incident.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "IntegrationTargetId": {
+      "description": "Stable identifier for one tenant-scoped external integration target.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Sanitized ITSM projection bound to the immutable plan hash.",
+  "properties": {
+    "approval_status": {
+      "type": "string"
+    },
+    "external_ticket_key": {
+      "type": "string"
+    },
+    "incident_id": {
+      "$ref": "#/$defs/IncidentId"
+    },
+    "last_synced_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "plan_hash": {
+      "type": "string"
+    },
+    "plan_id": {
+      "$ref": "#/$defs/ActionPlanId"
+    },
+    "sanitized_summary": {
+      "type": "string"
+    },
+    "sre_url": {
+      "type": "string"
+    },
+    "target_id": {
+      "$ref": "#/$defs/IntegrationTargetId"
+    }
+  },
+  "required": [
+    "target_id",
+    "external_ticket_key",
+    "incident_id",
+    "plan_id",
+    "plan_hash",
+    "approval_status",
+    "sre_url",
+    "sanitized_summary",
+    "last_synced_at"
+  ],
+  "title": "ItsmTicketLink",
+  "type": "object"
+}

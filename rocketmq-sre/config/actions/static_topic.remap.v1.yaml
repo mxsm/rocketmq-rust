@@ -1,0 +1,43 @@
+id: static_topic.remap.v1
+version: 1.0.0
+owner: messaging-platform
+supported_versions:
+  - family: rocketmq-sre.action-plan
+    major: 1
+    minor: 0
+required_capabilities:
+  - planning.static-topic-remap-impact
+config_schema:
+  type: object
+  additionalProperties: false
+parameter_schema:
+  type: object
+  additionalProperties: false
+  required: [topic, expected_epoch, current_mapping_hash, proposed_mapping_hash, impact_preview_id]
+  properties:
+    topic: { type: string, maxLength: 255 }
+    expected_epoch: { type: integer, minimum: 0 }
+    current_mapping_hash: { type: string, maxLength: 80 }
+    proposed_mapping_hash: { type: string, maxLength: 80 }
+    impact_preview_id: { type: string, maxLength: 128 }
+status: active
+deprecation: null
+risk: r2
+execution_supported: false
+preconditions:
+  - mapping_impact_preview_complete
+  - producer_and_consumer_compatibility_reviewed
+  - manual_runbook_owner_assigned
+max_impact: single_resource
+verification:
+  resource_conditions: [manual_mapping_and_epoch_recorded]
+  technical_slis: [route_error_ratio, send_success_ratio, consume_success_ratio]
+  stable_window_seconds: 600
+  max_wait_seconds: 3600
+timeout_seconds: 3600
+compensation:
+  mode: manual_takeover
+  required_before_fields: [current_mapping_hash, expected_epoch]
+  timeout_seconds: 1800
+forbidden_fields: [delete_topic, truncate, auto_execute, raw_request_code]
+plan_only: true

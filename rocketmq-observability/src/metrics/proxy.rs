@@ -14,6 +14,7 @@
 
 pub use crate::semantic::metrics::PROXY_ACTIVE_CONNECTIONS;
 pub use crate::semantic::metrics::PROXY_FORWARD_LATENCY;
+pub use crate::semantic::metrics::PROXY_GRPC_ERRORS_TOTAL;
 pub use crate::semantic::metrics::PROXY_GRPC_REQUESTS_TOTAL;
 pub use crate::semantic::metrics::PROXY_GRPC_REQUEST_LATENCY;
 pub use crate::semantic::metrics::PROXY_UP;
@@ -188,6 +189,9 @@ impl ProxyMetrics {
 
     #[inline]
     pub fn record_active_connections(&self, _count: u64) {}
+
+    #[inline]
+    pub fn record_grpc_error(&self, _outcome: ProxyRpcOutcome) {}
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -204,6 +208,7 @@ struct ProxyMetricInstruments {
     grpc_request_latency: opentelemetry::metrics::Histogram<u64>,
     forward_latency: opentelemetry::metrics::Histogram<u64>,
     active_connections: opentelemetry::metrics::Gauge<u64>,
+    grpc_errors_total: opentelemetry::metrics::Counter<u64>,
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -284,6 +289,23 @@ impl ProxyMetrics {
             }
         }
     }
+
+    #[inline]
+    pub fn record_grpc_error(&self, outcome: ProxyRpcOutcome) {
+        let result = match outcome {
+            ProxyRpcOutcome::Succeeded => return,
+            ProxyRpcOutcome::PayloadFailed => "payload_failure",
+            ProxyRpcOutcome::TransportFailed => "transport_failure",
+        };
+        if self.is_active() {
+            if let Some(instruments) = &self.instruments {
+                instruments.grpc_errors_total.add(
+                    1,
+                    &[opentelemetry::KeyValue::new(crate::semantic::labels::RESULT, result)],
+                );
+            }
+        }
+    }
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -313,6 +335,12 @@ impl ProxyMetricInstruments {
             .with_unit("{connection}")
             .build();
 
+        let grpc_errors_total = meter
+            .u64_counter(PROXY_GRPC_ERRORS_TOTAL)
+            .with_description("Proxy gRPC errors grouped by bounded failure class")
+            .with_unit("{error}")
+            .build();
+
         let proxy_up_attributes = proxy_up_attributes.into_key_values();
         let _proxy_up = meter
             .i64_observable_gauge(PROXY_UP)
@@ -328,6 +356,7 @@ impl ProxyMetricInstruments {
             grpc_request_latency,
             forward_latency,
             active_connections,
+            grpc_errors_total,
         }
     }
 }
@@ -356,10 +385,12 @@ mod tests {
         let provider = SdkMeterProvider::builder().build();
         let meter = provider.meter("proxy-metrics-test");
         let metrics = ProxyMetrics::new(&meter);
+
         metrics.record_grpc_requests_total(1);
         metrics.record_grpc_request_latency(6);
         metrics.record_forward_latency(12);
         metrics.record_active_connections(4);
+        metrics.record_grpc_error(ProxyRpcOutcome::TransportFailed);
     }
 
     #[test]
@@ -379,6 +410,7 @@ mod tests {
         metrics.record_grpc_request_latency(6);
         metrics.record_forward_latency(12);
         metrics.record_active_connections(4);
+        metrics.record_grpc_error(ProxyRpcOutcome::TransportFailed);
     }
 }
 

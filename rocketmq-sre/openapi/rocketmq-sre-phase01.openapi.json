@@ -1,0 +1,2292 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "RocketMQ Rust AI SRE API",
+    "version": "1.0.0",
+    "description": "Canonical checked-in Phase 01 Control Plane and UI contract. All business operations are tenant- and cluster-scoped and do not mutate RocketMQ."
+  },
+  "servers": [
+    {
+      "url": "/"
+    }
+  ],
+  "security": [
+    {
+      "oidc": [
+        "rocketmq:read"
+      ]
+    }
+  ],
+  "paths": {
+    "/healthz": {
+      "get": {
+        "operationId": "getHealth",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Process health",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "operationId": "getReadiness",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Dependency readiness",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/clusters": {
+      "get": {
+        "operationId": "listClusters",
+        "responses": {
+          "200": {
+            "description": "Authorized clusters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/JsonObject"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/clusters/onboard": {
+      "post": {
+        "operationId": "onboardCluster",
+        "security": [
+          {
+            "oidc": [
+              "rocketmq:onboard"
+            ]
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OnboardClusterRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          },
+          "201": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/clusters/{id}": {
+      "get": {
+        "operationId": "getCluster",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/clusters/{id}/handshake": {
+      "post": {
+        "operationId": "recordClusterHandshake",
+        "x-internal-operation": true,
+        "security": [
+          {
+            "internalToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HandshakeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/clusters/{id}/capabilities": {
+      "get": {
+        "operationId": "getClusterCapabilities",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/clusters/{id}/offboard": {
+      "post": {
+        "operationId": "offboardCluster",
+        "x-internal-operation": true,
+        "security": [
+          {
+            "internalToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OffboardRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/clusters/{id}/connector": {
+      "get": {
+        "operationId": "getClusterConnectorStatus",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/clusters/{id}/inventory/latest": {
+      "get": {
+        "operationId": "getLatestClusterInventory",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/capabilities": {
+      "get": {
+        "operationId": "getCapabilities",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/capabilities/coverage": {
+      "get": {
+        "operationId": "getCoverage",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/assets": {
+      "get": {
+        "operationId": "listAssets",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClusterId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/assets/dashboard-link": {
+      "get": {
+        "operationId": "getAssetDashboardLink",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClusterId"
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "external_key",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/topology": {
+      "get": {
+        "operationId": "getTopology",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClusterId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/topology/diff": {
+      "get": {
+        "operationId": "getTopologyDiff",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClusterId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/conversations": {
+      "get": {
+        "operationId": "listConversations",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClusterId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/WorkflowPage"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createConversation",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateConversationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/conversations/{id}": {
+      "get": {
+        "operationId": "getConversation",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/investigations": {
+      "get": {
+        "operationId": "listInvestigations",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClusterId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/WorkflowPage"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createInvestigation",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInvestigationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/investigations/{id}": {
+      "get": {
+        "operationId": "getInvestigation",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/investigations/{id}/promote": {
+      "post": {
+        "operationId": "promoteInvestigation",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PromoteInvestigationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/incidents": {
+      "get": {
+        "operationId": "listIncidents",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClusterId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/WorkflowPage"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createIncident",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateIncidentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/incidents/{id}": {
+      "get": {
+        "operationId": "getIncident",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/incidents/{id}/diagnose": {
+      "post": {
+        "operationId": "diagnoseIncident",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Queued read-only diagnosis",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosisDispatch"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/inspections": {
+      "get": {
+        "operationId": "listInspections",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClusterId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/WorkflowPage"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createInspection",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInspectionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Created or completed inspection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InspectionView"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/inspections/{id}": {
+      "get": {
+        "operationId": "getInspection",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Inspection detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InspectionView"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/inspections/{id}/run": {
+      "post": {
+        "operationId": "runInspection",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Completed inspection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InspectionView"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/inspections/{id}/report": {
+      "get": {
+        "operationId": "getInspectionReport",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "markdown",
+                "html"
+              ],
+              "default": "markdown"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Bounded report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InspectionReport"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/recommendations": {
+      "get": {
+        "operationId": "listRecommendations",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClusterId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/WorkflowPage"
+          }
+        }
+      }
+    },
+    "/v1/recommendations/{id}/disposition": {
+      "post": {
+        "operationId": "dispositionRecommendation",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecommendationDispositionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated recommendation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Recommendation"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/inventory/{id}": {
+      "get": {
+        "operationId": "getInventorySnapshot",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/evidence": {
+      "get": {
+        "operationId": "listEvidence",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClusterId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Canonical evidence page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidencePage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/evidence/{id}": {
+      "get": {
+        "operationId": "getEvidence",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Canonical evidence",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceSnapshot"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/evidence/{id}/content": {
+      "get": {
+        "operationId": "getEvidenceContent",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized bounded JSON content",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/message-journeys": {
+      "get": {
+        "operationId": "getMessageJourney",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClusterId"
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Metadata-only message journey",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageJourney"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/knowledge": {
+      "get": {
+        "operationId": "listKnowledge",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClusterId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/knowledge/import": {
+      "post": {
+        "operationId": "importKnowledge",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportKnowledgeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/knowledge/search": {
+      "get": {
+        "operationId": "searchKnowledge",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClusterId"
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "rocketmq_version",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "component",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20
+            }
+          },
+          {
+            "name": "include_unvalidated",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/knowledge/{id}": {
+      "get": {
+        "operationId": "getKnowledgeItem",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/knowledge/{id}/review": {
+      "post": {
+        "operationId": "reviewKnowledgeItem",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KnowledgeReviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/knowledge/{id}/feedback": {
+      "post": {
+        "operationId": "recordKnowledgeFeedback",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KnowledgeFeedbackRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/models/capabilities": {
+      "get": {
+        "operationId": "getModelCapabilities",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/models/status": {
+      "get": {
+        "operationId": "getModelStatus",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/models/invocations": {
+      "get": {
+        "operationId": "listModelInvocations",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ClusterId"
+          },
+          {
+            "name": "incident_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/JsonObject"
+          }
+        }
+      }
+    },
+    "/v1/events/stream": {
+      "get": {
+        "operationId": "subscribeWorkflowEvents",
+        "responses": {
+          "200": {
+            "description": "SSE stream containing WorkflowStreamEvent data frames",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowStreamEvent"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/openapi.json": {
+      "get": {
+        "operationId": "getOpenApiDocument",
+        "responses": {
+          "200": {
+            "description": "This checked-in Phase 01 OpenAPI document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "oidc": {
+        "type": "openIdConnect",
+        "openIdConnectUrl": "/.well-known/openid-configuration"
+      },
+      "internalToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Internal SRE service token; accepted only by explicitly marked metadata operations."
+      }
+    },
+    "parameters": {
+      "Id": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "ClusterId": {
+        "name": "cluster_id",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      }
+    },
+    "responses": {
+      "JsonObject": {
+        "description": "Successful scoped response",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/JsonObject"
+            }
+          }
+        }
+      },
+      "WorkflowPage": {
+        "description": "Bounded workflow page",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/WorkflowPage"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "JsonObject": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "ServiceStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "healthy",
+              "ready",
+              "not_ready",
+              "unavailable"
+            ]
+          }
+        }
+      },
+      "WorkflowPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "items",
+          "next_cursor",
+          "partial",
+          "warnings",
+          "observed_at"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "rocketmq-sre.workflow-page.v1"
+          },
+          "items": {
+            "type": "array",
+            "items": {}
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "OnboardClusterRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tenant_id",
+          "external_cluster_key",
+          "environment",
+          "region",
+          "rocketmq_version",
+          "deployment_mode",
+          "owner"
+        ],
+        "properties": {
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "tenant_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "external_cluster_key": {
+            "type": "string",
+            "minLength": 1
+          },
+          "environment": {
+            "type": "string",
+            "minLength": 1
+          },
+          "region": {
+            "type": "string",
+            "minLength": 1
+          },
+          "rocketmq_version": {
+            "type": "string",
+            "minLength": 1
+          },
+          "deployment_mode": {
+            "type": "string",
+            "minLength": 1
+          },
+          "owner": {
+            "type": "string",
+            "minLength": 1
+          },
+          "actor_subject": {
+            "type": "string",
+            "minLength": 1,
+            "default": "rocketmq-sre-control-plane"
+          },
+          "correlation_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "HandshakeRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "connector_subject",
+          "connector_issuer",
+          "capability"
+        ],
+        "properties": {
+          "connector_subject": {
+            "type": "string",
+            "minLength": 1
+          },
+          "connector_issuer": {
+            "type": "string",
+            "minLength": 1
+          },
+          "correlation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "capability": {
+            "$ref": "#/components/schemas/HandshakeCapability"
+          },
+          "compatible": {
+            "type": "boolean",
+            "default": true
+          },
+          "incompatibility_code": {
+            "type": "string"
+          }
+        }
+      },
+      "HandshakeCapability": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "digest",
+          "protocol_version",
+          "schema_version",
+          "mutation_supported"
+        ],
+        "properties": {
+          "digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-fA-F]{64}$"
+          },
+          "protocol_version": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "mutation_supported": {
+            "type": "boolean"
+          },
+          "manifest": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "data_sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JsonObject"
+            }
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "OffboardRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "actor_subject": {
+            "type": "string",
+            "minLength": 1,
+            "default": "rocketmq-sre-control-plane"
+          },
+          "correlation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateConversationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "cluster_id",
+          "question",
+          "persist_investigation"
+        ],
+        "properties": {
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "question": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          },
+          "resource": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "persist_investigation": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CreateInvestigationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "cluster_id",
+          "title",
+          "symptom_family"
+        ],
+        "properties": {
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "conversation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "resource": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "symptom_family": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      },
+      "CreateIncidentRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "cluster_id",
+          "title",
+          "symptom_family"
+        ],
+        "properties": {
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "resource": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "symptom_family": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      },
+      "PromoteInvestigationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        }
+      },
+      "CreateInspectionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "cluster_id",
+          "template"
+        ],
+        "properties": {
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "template": {
+            "type": "string",
+            "enum": [
+              "cluster_health",
+              "consumer",
+              "broker",
+              "telemetry"
+            ]
+          },
+          "schedule": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      },
+      "RecommendationDispositionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "reason"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "acknowledged",
+              "assigned",
+              "dismissed",
+              "resolved",
+              "promoted"
+            ]
+          },
+          "assignee": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "promote_to": {
+            "type": "string",
+            "enum": [
+              "investigation",
+              "incident"
+            ]
+          }
+        }
+      },
+      "ImportKnowledgeRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "title",
+          "component",
+          "rocketmq_version_range",
+          "source_uri",
+          "source_version",
+          "owner",
+          "review_due_at",
+          "sensitivity",
+          "markdown"
+        ],
+        "properties": {
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "component": {
+            "type": "string",
+            "minLength": 1
+          },
+          "rocketmq_version_range": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_uri": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_version": {
+            "type": "string",
+            "minLength": 1
+          },
+          "valid_from": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "valid_until": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "owner": {
+            "type": "string",
+            "minLength": 1
+          },
+          "review_due_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "sensitivity": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "confidential",
+              "restricted"
+            ]
+          },
+          "review_status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "in_review",
+              "validated",
+              "deprecated",
+              "expired"
+            ],
+            "default": "draft"
+          },
+          "human_validated": {
+            "type": "boolean",
+            "default": false
+          },
+          "ai_generated": {
+            "type": "boolean",
+            "default": false
+          },
+          "markdown": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "KnowledgeReviewRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "reason"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "in_review",
+              "validated",
+              "deprecated",
+              "expired"
+            ]
+          },
+          "human_confirmed": {
+            "type": "boolean",
+            "default": false
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "KnowledgeFeedbackRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "useful",
+              "incorrect",
+              "outdated"
+            ]
+          },
+          "comment": {
+            "type": "string"
+          }
+        }
+      },
+      "Recommendation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "inspection_run_id",
+          "tenant_id",
+          "cluster_id",
+          "severity",
+          "title",
+          "rationale",
+          "evidence_ids",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "inspection_run_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "severity": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "rationale": {
+            "type": "string"
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "acknowledged",
+              "assigned",
+              "dismissed",
+              "resolved",
+              "promoted"
+            ]
+          },
+          "assignee": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "investigation_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "incident_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "InspectionRun": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "tenant_id",
+          "cluster_id",
+          "template",
+          "status",
+          "finding_count",
+          "partial",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "template": {
+            "type": "string",
+            "enum": [
+              "cluster_health",
+              "consumer",
+              "broker",
+              "telemetry"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "scheduled",
+              "running",
+              "needs_evidence",
+              "completed",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "schedule": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finding_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "InspectionView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "run",
+          "recommendations",
+          "pack_diffs"
+        ],
+        "properties": {
+          "run": {
+            "$ref": "#/components/schemas/InspectionRun"
+          },
+          "recommendations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Recommendation"
+            }
+          },
+          "pack_diffs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "pack_id",
+                "pack_version",
+                "diff"
+              ],
+              "properties": {
+                "pack_id": {
+                  "type": "string"
+                },
+                "pack_version": {
+                  "type": "string"
+                },
+                "diff": {}
+              }
+            }
+          }
+        }
+      },
+      "InspectionReport": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "media_type",
+          "file_name",
+          "content"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "rocketmq-sre.inspection-report.v1"
+          },
+          "media_type": {
+            "type": "string",
+            "enum": [
+              "text/markdown; charset=utf-8",
+              "text/html; charset=utf-8"
+            ]
+          },
+          "file_name": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          }
+        }
+      },
+      "SchemaVersion": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "family",
+          "major",
+          "minor"
+        ],
+        "properties": {
+          "family": {
+            "type": "string"
+          },
+          "major": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "minor": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "required_features": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "EvidenceReference": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "uri",
+          "digest",
+          "media_type",
+          "size_bytes"
+        ],
+        "properties": {
+          "uri": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "media_type": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "EvidenceContent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "storage",
+              "value"
+            ],
+            "properties": {
+              "storage": {
+                "type": "string",
+                "const": "inline"
+              },
+              "value": {}
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "storage",
+              "value"
+            ],
+            "properties": {
+              "storage": {
+                "type": "string",
+                "const": "reference"
+              },
+              "value": {
+                "$ref": "#/components/schemas/EvidenceReference"
+              }
+            }
+          }
+        ]
+      },
+      "EvidenceSnapshot": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema",
+          "evidence_id",
+          "query_id",
+          "correlation_id",
+          "tenant_id",
+          "cluster_id",
+          "source",
+          "resource",
+          "time_range",
+          "observed_at",
+          "freshness_seconds",
+          "partial",
+          "warnings",
+          "sensitivity",
+          "coverage",
+          "content",
+          "content_hash"
+        ],
+        "properties": {
+          "schema": {
+            "$ref": "#/components/schemas/SchemaVersion"
+          },
+          "evidence_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "query_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "correlation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "source": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "string"
+          },
+          "time_range": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "start",
+              "end"
+            ],
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "freshness_seconds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sensitivity": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "confidential",
+              "restricted"
+            ]
+          },
+          "coverage": {
+            "type": "string",
+            "enum": [
+              "available",
+              "partial",
+              "missing",
+              "not_production_verified"
+            ]
+          },
+          "content": {
+            "$ref": "#/components/schemas/EvidenceContent"
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          }
+        }
+      },
+      "EvidencePage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "next_cursor",
+          "partial"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EvidenceSnapshot"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "partial": {
+            "type": "boolean"
+          }
+        }
+      },
+      "MessageJourneyHop": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "stage",
+          "component",
+          "observed_at",
+          "status",
+          "evidence_id",
+          "detail"
+        ],
+        "properties": {
+          "stage": {
+            "type": "string",
+            "enum": [
+              "producer",
+              "proxy",
+              "broker",
+              "store",
+              "consumer"
+            ]
+          },
+          "component": {
+            "type": "string"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "observed",
+              "partial",
+              "missing"
+            ]
+          },
+          "latency_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "evidence_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "detail": {
+            "type": "string"
+          }
+        }
+      },
+      "MessageJourney": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "cluster_id",
+          "trace_fingerprint",
+          "topic",
+          "queue_id",
+          "message_body_available",
+          "partial",
+          "warnings",
+          "hops"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "rocketmq-sre.message-journey.v1"
+          },
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "trace_fingerprint": {
+            "type": "string"
+          },
+          "topic": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "queue_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "message_body_available": {
+            "type": "boolean",
+            "const": false
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "hops": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MessageJourneyHop"
+            }
+          }
+        }
+      },
+      "WorkflowStreamEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tenant_id",
+          "cluster_id",
+          "aggregate_type",
+          "aggregate_id",
+          "event_type",
+          "payload",
+          "correlation_id",
+          "occurred_at"
+        ],
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "cluster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "aggregate_type": {
+            "type": "string",
+            "enum": [
+              "conversation",
+              "investigation",
+              "incident",
+              "inspection",
+              "recommendation"
+            ]
+          },
+          "aggregate_id": {
+            "type": "string"
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "correlation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "DiagnosisDispatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "incident_id",
+          "status",
+          "execution_eligible",
+          "correlation_id"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "string"
+          },
+          "incident_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "const": "queued"
+          },
+          "execution_eligible": {
+            "type": "boolean",
+            "const": false
+          },
+          "correlation_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      }
+    }
+  },
+  "x-rocketmq-phase": "01",
+  "x-rocketmq-effective-access": "read_only",
+  "x-rocketmq-cluster-mutation-supported": false
+}

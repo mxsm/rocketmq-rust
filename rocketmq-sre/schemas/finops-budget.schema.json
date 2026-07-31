@@ -1,0 +1,97 @@
+{
+  "$defs": {
+    "FinOpsBudgetId": {
+      "description": "Stable identifier for a versioned FinOps budget.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "FinOpsBudgetPeriod": {
+      "description": "Calendar window used for usage aggregation and projection.",
+      "enum": [
+        "hourly",
+        "daily",
+        "monthly"
+      ],
+      "type": "string"
+    },
+    "FinOpsBudgetScopeKind": {
+      "description": "Scope supported by a soft/hard cost budget.",
+      "enum": [
+        "tenant",
+        "provider",
+        "model",
+        "region",
+        "cluster",
+        "incident",
+        "diagnostic_pack",
+        "workflow"
+      ],
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Versioned budget with an advisory soft limit and an enforceable hard limit.",
+  "properties": {
+    "active": {
+      "type": "boolean"
+    },
+    "created_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "hard_limit_micros": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "id": {
+      "$ref": "#/$defs/FinOpsBudgetId"
+    },
+    "owner": {
+      "type": "string"
+    },
+    "period": {
+      "$ref": "#/$defs/FinOpsBudgetPeriod"
+    },
+    "scope_key": {
+      "type": "string"
+    },
+    "scope_kind": {
+      "$ref": "#/$defs/FinOpsBudgetScopeKind"
+    },
+    "soft_limit_micros": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    },
+    "version": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "id",
+    "tenant_id",
+    "scope_kind",
+    "scope_key",
+    "version",
+    "period",
+    "soft_limit_micros",
+    "hard_limit_micros",
+    "owner",
+    "active",
+    "created_at"
+  ],
+  "title": "FinOpsBudget",
+  "type": "object"
+}

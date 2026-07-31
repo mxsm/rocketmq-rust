@@ -82,9 +82,11 @@ impl BrokerBootstrap<Configured> {
     /// Returns a lifecycle error when broker initialization, readiness publication, or
     /// platform signal observation fails.
     pub async fn boot_with_lifecycle(self, lifecycle: ServiceLifecycle) -> RuntimeResult<()> {
+        record_broker_lifecycle("starting", "success", "startup");
         let initialized = self.initialize().await.map_err(|error| {
             lifecycle.mark_failed();
             lifecycle.request_shutdown(ShutdownReason::Internal);
+            record_broker_lifecycle("failed", "failure", "initialization");
             RuntimeError::LifecycleOperation {
                 operation: "initialize_broker",
                 message: error.to_string(),
@@ -93,74 +95,24 @@ impl BrokerBootstrap<Configured> {
         let mut running = initialized.start().await.map_err(|error| {
             lifecycle.mark_failed();
             lifecycle.request_shutdown(ShutdownReason::Internal);
+            record_broker_lifecycle("failed", "failure", "startup");
             RuntimeError::LifecycleOperation {
                 operation: "start_broker",
                 message: error.to_string(),
             }
         })?;
-        if running.release_identity_required && !running.broker_runtime.release_identity_registered() {
-            lifecycle.mark_failed();
-            let request = lifecycle.request_shutdown(ShutdownReason::Internal);
-            let report = running
-                .broker_runtime
-                .shutdown_basic_service_until(request.deadline)
-                .await;
-            let cleanup = if report.is_healthy() {
-                "startup cleanup completed".to_string()
-            } else {
-                format!(
-                    "startup cleanup left unhealthy components: {:?}",
-                    report.unhealthy_component_names()
-                )
-            };
-            return Err(RuntimeError::LifecycleOperation {
-                operation: "register_broker_release_identity",
-                message: format!("Broker release identity was not registered before readiness; {cleanup}"),
-            });
-        }
-        if let Err(error) = lifecycle.mark_ready() {
-            lifecycle.mark_failed();
-            let request = lifecycle.request_shutdown(ShutdownReason::Internal);
-            let report = running
-                .broker_runtime
-                .shutdown_basic_service_until(request.deadline)
-                .await;
-            let cleanup = if report.is_healthy() {
-                "startup cleanup completed".to_string()
-            } else {
-                format!(
-                    "startup cleanup left unhealthy components: {:?}",
-                    report.unhealthy_component_names()
-                )
-            };
-            return Err(RuntimeError::LifecycleOperation {
-                operation: "publish_broker_readiness",
-                message: format!("failed to publish Broker readiness: {error}; {cleanup}"),
-            });
-        }
+        lifecycle.mark_ready()?;
+        record_broker_lifecycle("ready", "success", "startup");
         let shutdown_request = match lifecycle.wait_for_shutdown_signal().await {
             Ok(request) => request,
             Err(error) => {
                 lifecycle.mark_failed();
-                let request = lifecycle.request_shutdown(ShutdownReason::Internal);
-                let report = running
-                    .broker_runtime
-                    .shutdown_basic_service_until(request.deadline)
-                    .await;
-                let cleanup = if report.is_healthy() {
-                    "shutdown cleanup completed".to_string()
-                } else {
-                    format!(
-                        "shutdown cleanup left unhealthy components: {:?}",
-                        report.unhealthy_component_names()
-                    )
-                };
-                return Err(RuntimeError::LifecycleOperation {
-                    operation: "observe_broker_shutdown",
-                    message: format!("{error}; {cleanup}"),
-                });
+                lifecycle.request_shutdown(ShutdownReason::Internal);
+                record_broker_lifecycle("failed", "failure", "signal");
+                return Err(error);
             }
         };
+        record_broker_lifecycle("stopping", "success", "shutdown_request");
         info!(
             reason = shutdown_request.reason.as_str(),
             remaining_ms = shutdown_request.deadline.remaining().as_millis(),
@@ -177,6 +129,7 @@ impl BrokerBootstrap<Configured> {
                 "Broker lifecycle shutdown report is unhealthy"
             );
             lifecycle.mark_failed();
+            record_broker_lifecycle("failed", "failure", "shutdown_timeout");
             return Err(RuntimeError::LifecycleOperation {
                 operation: "shutdown_broker",
                 message: format!(
@@ -186,9 +139,16 @@ impl BrokerBootstrap<Configured> {
             });
         }
         lifecycle.mark_stopped();
-        info!("Broker shutdown completed");
+        record_broker_lifecycle("stopped", "success", "shutdown_complete");
         Ok(())
     }
+}
+
+fn record_broker_lifecycle(state: &'static str, result: &'static str, reason: &'static str) {
+    info!(
+        event = rocketmq_observability::semantic::events::BROKER_LIFECYCLE,
+        state, result, reason, "Broker lifecycle transition"
+    );
 }
 
 impl BrokerBootstrap<Initialized> {

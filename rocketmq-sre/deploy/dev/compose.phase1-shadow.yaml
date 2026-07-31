@@ -1,0 +1,26 @@
+# Copyright 2023 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0.
+
+services:
+  sre-phase1-shadow:
+    profiles: ["shadow"]
+    build:
+      context: ../../..
+      dockerfile: rocketmq-sre/deploy/docker/phase1-shadow.Dockerfile
+    environment:
+      ROCKETMQ_SRE_SHADOW_PROVIDER_MODE: ${ROCKETMQ_SRE_SHADOW_PROVIDER_MODE:-mock}
+      ROCKETMQ_SRE_MUTATION_SUPPORTED: "false"
+      ROCKETMQ_SRE_EXECUTOR_CONNECTED: "false"
+    labels:
+      org.opencontainers.image.title: rocketmq-sre-phase1-shadow
+      rocketmq.sre.access-profile: read-only
+      rocketmq.sre.executor-connected: "false"
+      rocketmq.sre.mutation-supported: "false"
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"

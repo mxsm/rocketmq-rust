@@ -18,7 +18,8 @@ use percent_encoding::AsciiSet;
 use percent_encoding::CONTROLS;
 
 pub const JSON_MIME_TYPE: &str = "application/json";
-const URI_PREFIX: &str = "rocketmq://clusters/";
+const CLUSTER_URI_PREFIX: &str = "rocketmq://clusters/";
+const SYSTEM_URI_PREFIX: &str = "rocketmq://system/";
 const RESOURCE_SEGMENT_ENCODE_SET: &AsciiSet = &CONTROLS
     .add(b' ')
     .add(b'"')
@@ -34,6 +35,9 @@ const RESOURCE_SEGMENT_ENCODE_SET: &AsciiSet = &CONTROLS
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResourceKind {
+    Capabilities,
+    SystemRuntimeV1,
+    SystemObservabilityV1,
     Overview,
     Topics,
     Topic(String),
@@ -46,10 +50,37 @@ pub enum ResourceKind {
 }
 
 impl ResourceKind {
-    pub const ROOTS: [Self; 4] = [Self::Overview, Self::Topics, Self::Brokers, Self::ConsumerGroups];
+    pub const ROOTS: [Self; 5] = [
+        Self::Capabilities,
+        Self::Overview,
+        Self::Topics,
+        Self::Brokers,
+        Self::ConsumerGroups,
+    ];
+    pub const SYSTEM_ROOTS: [Self; 2] = [Self::SystemRuntimeV1, Self::SystemObservabilityV1];
+
+    pub(crate) const fn metric_operation(&self) -> &'static str {
+        match self {
+            Self::Capabilities => "cluster_capabilities",
+            Self::SystemRuntimeV1 => "system_runtime_v1",
+            Self::SystemObservabilityV1 => "system_observability_v1",
+            Self::Overview => "cluster_overview",
+            Self::Topics => "topic_list",
+            Self::Topic(_) => "topic_describe",
+            Self::TopicRoute(_) => "topic_route",
+            Self::Brokers => "broker_list",
+            Self::Broker(_) => "broker_describe",
+            Self::ConsumerGroups => "consumer_group_list",
+            Self::ConsumerGroup(_) => "consumer_group_describe",
+            Self::ConsumerLag { .. } => "consumer_lag",
+        }
+    }
 
     fn path(&self) -> String {
         match self {
+            Self::Capabilities => "capabilities".to_string(),
+            Self::SystemRuntimeV1 => "runtime/v1".to_string(),
+            Self::SystemObservabilityV1 => "observability/v1".to_string(),
             Self::Overview => "overview".to_string(),
             Self::Topics => "topics".to_string(),
             Self::Topic(topic) => format!("topics/{}", encode_segment(topic)),
@@ -68,6 +99,9 @@ impl ResourceKind {
 
     pub fn title(&self) -> &'static str {
         match self {
+            Self::Capabilities => "RocketMQ MCP capabilities",
+            Self::SystemRuntimeV1 => "RocketMQ MCP runtime diagnostics",
+            Self::SystemObservabilityV1 => "RocketMQ MCP observability status",
             Self::Overview => "RocketMQ cluster overview",
             Self::Topics => "RocketMQ topics",
             Self::Topic(_) => "RocketMQ topic",
@@ -82,6 +116,9 @@ impl ResourceKind {
 
     pub fn description(&self) -> &'static str {
         match self {
+            Self::Capabilities => "Versioned read-only MCP capability and schema digest manifest.",
+            Self::SystemRuntimeV1 => "Authenticated, bounded, and sanitized MCP runtime diagnostics.",
+            Self::SystemObservabilityV1 => "Authenticated and sanitized MCP observability status.",
             Self::Overview => "Read-only overview for one configured RocketMQ cluster.",
             Self::Topics => "Read-only topic inventory for one configured RocketMQ cluster.",
             Self::Topic(_) => "Read-only details for one RocketMQ topic.",
@@ -97,20 +134,45 @@ impl ResourceKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RocketmqResourceUri {
-    pub cluster: String,
+    cluster: Option<String>,
     pub kind: ResourceKind,
 }
 
 impl RocketmqResourceUri {
     pub fn new(cluster: impl Into<String>, kind: ResourceKind) -> Self {
         Self {
-            cluster: cluster.into(),
+            cluster: Some(cluster.into()),
             kind,
         }
     }
 
+    pub fn system(kind: ResourceKind) -> Option<Self> {
+        matches!(
+            kind,
+            ResourceKind::SystemRuntimeV1 | ResourceKind::SystemObservabilityV1
+        )
+        .then_some(Self { cluster: None, kind })
+    }
+
+    pub fn cluster(&self) -> Option<&str> {
+        self.cluster.as_deref()
+    }
+
+    pub fn is_system(&self) -> bool {
+        self.cluster.is_none()
+    }
+
     pub fn parse(uri: &str) -> Option<Self> {
-        let remainder = uri.strip_prefix(URI_PREFIX)?;
+        if let Some(path) = uri.strip_prefix(SYSTEM_URI_PREFIX) {
+            let kind = match path {
+                "runtime/v1" => ResourceKind::SystemRuntimeV1,
+                "observability/v1" => ResourceKind::SystemObservabilityV1,
+                _ => return None,
+            };
+            return Self::system(kind);
+        }
+
+        let remainder = uri.strip_prefix(CLUSTER_URI_PREFIX)?;
         let (cluster, resource) = remainder.split_once('/')?;
         if cluster.is_empty() || cluster.contains(['?', '#']) || resource.contains('#') {
             return None;
@@ -126,6 +188,7 @@ impl RocketmqResourceUri {
             return None;
         }
         let kind = match (segments.as_slice(), query) {
+            (["capabilities"], None) => ResourceKind::Capabilities,
             (["overview"], None) => ResourceKind::Overview,
             (["topics"], None) => ResourceKind::Topics,
             (["topics", topic], None) => ResourceKind::Topic(decode_segment(topic)?),
@@ -149,12 +212,18 @@ impl RocketmqResourceUri {
     }
 
     pub fn as_string(&self) -> String {
-        format!("{URI_PREFIX}{}/{}", encode_segment(&self.cluster), self.kind.path())
+        match &self.cluster {
+            Some(cluster) => format!("{CLUSTER_URI_PREFIX}{}/{}", encode_segment(cluster), self.kind.path()),
+            None => format!("{SYSTEM_URI_PREFIX}{}", self.kind.path()),
+        }
     }
 
     pub fn name(&self) -> String {
         let path = self.kind.path().replace(['/', '-', '?', '=', '&'], "_");
-        format!("{}_{path}", self.cluster)
+        match &self.cluster {
+            Some(cluster) => format!("{cluster}_{path}"),
+            None => format!("system_{path}"),
+        }
     }
 }
 
@@ -198,7 +267,7 @@ mod tests {
     #[test]
     fn parse_accepts_only_cluster_scoped_resource_uris() {
         let parsed = RocketmqResourceUri::parse("rocketmq://clusters/local-dev/overview").unwrap();
-        assert_eq!(parsed.cluster, "local-dev");
+        assert_eq!(parsed.cluster(), Some("local-dev"));
         assert_eq!(parsed.kind, ResourceKind::Overview);
         assert_eq!(parsed.as_string(), "rocketmq://clusters/local-dev/overview");
 
@@ -226,6 +295,19 @@ mod tests {
         assert!(RocketmqResourceUri::parse("rocketmq://clusters/local-dev/topics/orders?legacy=true").is_none());
         assert!(RocketmqResourceUri::parse("rocketmq://clusters/local-dev/topics/%invalid").is_none());
         assert!(RocketmqResourceUri::parse("file:///etc/passwd").is_none());
+    }
+
+    #[test]
+    fn system_resources_are_exact_and_never_cluster_scoped() {
+        let runtime = RocketmqResourceUri::parse("rocketmq://system/runtime/v1").unwrap();
+        assert!(runtime.is_system());
+        assert_eq!(runtime.kind, ResourceKind::SystemRuntimeV1);
+        assert_eq!(runtime.as_string(), "rocketmq://system/runtime/v1");
+
+        let observability = RocketmqResourceUri::parse("rocketmq://system/observability/v1").unwrap();
+        assert_eq!(observability.kind, ResourceKind::SystemObservabilityV1);
+        assert!(RocketmqResourceUri::parse("rocketmq://system/runtime/v2").is_none());
+        assert!(RocketmqResourceUri::parse("rocketmq://clusters/local-dev/runtime/v1").is_none());
     }
 
     #[test]

@@ -80,6 +80,22 @@ impl PolicyEngine {
         self.authorize(principal, "resource:read", Some(cluster))
     }
 
+    pub fn authorize_system_resource(&self, principal: &Principal) -> Result<(), GuardError> {
+        self.require_scope(principal, RiskLevel::Diagnose)?;
+        if principal
+            .roles
+            .iter()
+            .any(|role| self.collect_role(role, &mut BTreeSet::new()).is_ok())
+        {
+            Ok(())
+        } else {
+            Err(GuardError::PermissionDenied(format!(
+                "principal `{}` has no valid diagnostic role",
+                principal.id
+            )))
+        }
+    }
+
     pub fn allows_tool(&self, principal: &Principal, tool_name: &str, risk_level: RiskLevel) -> bool {
         self.authorize_tool(principal, tool_name, None, risk_level).is_ok()
     }
@@ -90,6 +106,10 @@ impl PolicyEngine {
                 .roles
                 .iter()
                 .any(|role| self.collect_role(role, &mut BTreeSet::new()).is_ok())
+    }
+
+    pub fn allows_system_resources(&self, principal: &Principal) -> bool {
+        self.authorize_system_resource(principal).is_ok()
     }
 
     fn authorize(&self, principal: &Principal, operation: &str, cluster: Option<&str>) -> Result<(), GuardError> {
@@ -127,7 +147,7 @@ impl PolicyEngine {
                     .as_ref()
                     .is_some_and(|clusters| !matches_cluster(clusters, cluster))
             {
-                return Err(GuardError::PermissionDenied(format!(
+                return Err(GuardError::ClusterNotAllowed(format!(
                     "principal `{}` is not authorized for cluster `{cluster}`",
                     principal.id
                 )));
@@ -146,7 +166,7 @@ impl PolicyEngine {
         if principal.scopes.contains(required_scope) {
             return Ok(());
         }
-        Err(GuardError::PermissionDenied(format!(
+        Err(GuardError::UnauthorizedScope(format!(
             "principal `{}` lacks required scope `{required_scope}`",
             principal.id
         )))
@@ -197,6 +217,7 @@ mod tests {
         };
         let principal = Principal {
             id: "sre@example.test".to_string(),
+            tenant: None,
             roles: ["diagnose".to_string()].into_iter().collect(),
             scopes: ["rocketmq:diagnose".to_string()].into_iter().collect(),
             allowed_clusters: Some(["cluster-a".to_string()].into_iter().collect()),

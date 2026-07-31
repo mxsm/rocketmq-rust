@@ -1,0 +1,50 @@
+id: subscription_group.patch_allowlisted.v1
+version: 1.0.0
+owner: messaging-platform
+supported_versions:
+  - family: rocketmq-sre.action-plan
+    major: 1
+    minor: 0
+required_capabilities:
+  - admin.subscription-group-cas
+config_schema:
+  type: object
+  additionalProperties: false
+parameter_schema:
+  type: object
+  additionalProperties: false
+  required: [group, expected_version, patch]
+  properties:
+    group: { type: string, maxLength: 255 }
+    expected_version: { type: integer, minimum: 0 }
+    patch:
+      type: object
+      minProperties: 1
+      maxProperties: 3
+      additionalProperties: false
+      properties:
+        retry_max_times: { type: integer, minimum: 1, maximum: 16 }
+        retry_queue_nums: { type: integer, minimum: 1, maximum: 8 }
+        consume_timeout_minutes: { type: integer, minimum: 1, maximum: 1440 }
+status: active
+deprecation: null
+risk: r2
+execution_supported: true
+preconditions:
+  - valid_heterogeneous_critic
+  - subscription_group_version_matches
+  - retry_semantics_known
+  - every_field_allowlisted
+max_impact: allowlisted_fields
+verification:
+  resource_conditions: [subscription_group_version_incremented, patch_visible]
+  technical_slis: [consume_success_ratio, retry_backlog_growth]
+  stable_window_seconds: 180
+  max_wait_seconds: 900
+timeout_seconds: 900
+compensation:
+  mode: automatic
+  required_before_fields: [before_config, latest_version]
+  timeout_seconds: 600
+forbidden_fields: [delete_group, consume_enable, permissions, retry_policy_unknown, raw_request_code]
+plan_only: false

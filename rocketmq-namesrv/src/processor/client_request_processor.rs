@@ -97,7 +97,15 @@ impl ClientRequestProcessor {
         &self,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let request_header = request.decode_command_custom_header::<GetRouteInfoRequestHeader>()?;
+        let route_span = rocketmq_observability::trace::namesrv::route_lookup_span();
+        let _route_guard = route_span.enter();
+        let request_header = match request.decode_command_custom_header::<GetRouteInfoRequestHeader>() {
+            Ok(header) => header,
+            Err(error) => {
+                route_span.record("result", "invalid_request");
+                return Err(error);
+            }
+        };
 
         // Early return: Check if nameserver is ready (using cached config)
         if self.need_wait_for_service {
@@ -108,6 +116,7 @@ impl ClientRequestProcessor {
             if !namesrv_ready {
                 warn!("name server not ready. request code {}", request.code());
                 let error = rocketmq_error::RocketMQError::not_initialized("name server not ready");
+                route_span.record("result", "not_ready");
                 return Ok(Some(command_from_error_with_remark(&error, "name server not ready")));
             }
         }
@@ -123,6 +132,7 @@ impl ClientRequestProcessor {
                 rocketmq_error::RocketMQError::TopicNotExist { .. }
                 | rocketmq_error::RocketMQError::RouteNotFound { .. },
             ) => {
+                route_span.record("result", "not_found");
                 return Ok(Some(
                     RemotingCommand::create_response_command_with_code(ResponseCode::TopicNotExist).set_remark(
                         format!(
@@ -133,9 +143,20 @@ impl ClientRequestProcessor {
                     ),
                 ));
             }
-            Err(error) => return Err(error),
+            Err(error) => {
+                route_span.record("result", "internal");
+                return Err(error);
+            }
         };
-
+        if let Some(freshness_ms) = self
+            .name_server_runtime_inner
+            .route_info_manager()
+            .route_freshness_millis(&topic_route_data)
+        {
+            self.name_server_runtime_inner
+                .namesrv_metrics()
+                .record_route_freshness(freshness_ms);
+        }
         if self.need_check_namesrv_ready.load(Ordering::Relaxed) {
             self.need_check_namesrv_ready.store(false, Ordering::Relaxed);
         }
@@ -147,11 +168,18 @@ impl ClientRequestProcessor {
             );
         }
 
-        let content = encode_topic_route_response(
+        let content = match encode_topic_route_response(
             &topic_route_data,
             request.version(),
             request_header.accept_standard_json_only,
-        )?;
+        ) {
+            Ok(content) => content,
+            Err(error) => {
+                route_span.record("result", "internal");
+                return Err(error);
+            }
+        };
+        route_span.record("result", "success");
         Ok(Some(
             RemotingCommand::create_response_command_with_code(ResponseCode::Success).set_body(content),
         ))

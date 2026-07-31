@@ -26,6 +26,7 @@ pub mod controller_manager;
 pub mod instruments;
 pub mod labels;
 pub mod log_filter;
+pub mod mcp;
 pub mod namesrv;
 pub mod noop_instruments;
 #[cfg(feature = "otel-metrics")]
@@ -38,6 +39,7 @@ pub mod proxy;
 pub mod release_identity;
 pub mod remoting;
 pub mod rocksdb;
+pub mod runtime;
 pub mod store;
 pub mod tiered_store;
 pub mod timer;

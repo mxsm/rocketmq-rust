@@ -47,6 +47,7 @@ use rocketmq_error::RocketMQError;
 use rocketmq_model::common::mix_all::ACL_CONF_TOOLS_FILE;
 #[cfg(feature = "cluster-mode")]
 use rocketmq_model::utils::env_utils::EnvUtils;
+use rocketmq_protocol::code::request_code::RequestCode;
 #[cfg(test)]
 use rocketmq_protocol::protocol::body::acl_info::AclInfo;
 #[cfg(test)]
@@ -423,7 +424,9 @@ impl ProxyAuthRuntime {
             )));
         }
 
-        self.sync_user_metadata(username.as_deref()).await?;
+        if should_sync_remoting_auth_metadata(command.code()) {
+            self.sync_user_metadata(username.as_deref()).await?;
+        }
 
         if requires_authentication {
             self.authentication_provider
@@ -465,10 +468,15 @@ impl ProxyAuthRuntime {
             .authorization_provider
             .new_contexts_from_remoting_command(channel_context, command)
             .map_err(map_authorization_error)?;
-        self.sync_user_metadata(access_key_from_command(command)).await?;
+        let sync_metadata = should_sync_remoting_auth_metadata(command.code());
+        if sync_metadata {
+            self.sync_user_metadata(access_key_from_command(command)).await?;
+        }
         for context in contexts {
-            if let Some(subject_key) = context.subject_key() {
-                self.sync_acl_metadata(subject_key).await?;
+            if sync_metadata {
+                if let Some(subject_key) = context.subject_key() {
+                    self.sync_acl_metadata(subject_key).await?;
+                }
             }
             self.authorization_provider
                 .authorize(&context)
@@ -883,6 +891,13 @@ fn source_ip_from_channel_context(channel_context: &(dyn std::any::Any + Send + 
     None
 }
 
+fn should_sync_remoting_auth_metadata(code: i32) -> bool {
+    !matches!(
+        RequestCode::from(code),
+        RequestCode::GetProxyDrainState | RequestCode::BeginProxyDrain | RequestCode::CancelProxyDrain
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -896,7 +911,6 @@ mod tests {
     use rocketmq_auth::Resource;
     use rocketmq_auth::UserStatus;
     use rocketmq_auth::UserType;
-    use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 
     use crate::service::ProxyTopicMessageType;
@@ -948,6 +962,29 @@ mod tests {
         RemotingCommand::create_remoting_command(RequestCode::SendMessage.to_i32()).set_ext_fields(ext_fields)
     }
 
+    fn sign_remoting_command(mut command: RemotingCommand, access_key: &str, secret_key: &str) -> RemotingCommand {
+        command.ensure_ext_fields_initialized();
+        command.add_ext_field("AccessKey", access_key);
+        let mut fields = command
+            .ext_fields()
+            .cloned()
+            .expect("ext fields should be initialized")
+            .into_iter()
+            .filter(|(key, _)| key.as_str() != "Signature")
+            .collect::<Vec<_>>();
+        fields.sort_by(|left, right| left.0.cmp(&right.0));
+        let mut content = Vec::new();
+        for (_, value) in fields {
+            content.extend_from_slice(value.as_bytes());
+        }
+        if let Some(body) = command.body() {
+            content.extend_from_slice(body);
+        }
+        let signature = cal_signature(content.as_slice(), secret_key).expect("signature should be generated");
+        command.add_ext_field("Signature", signature);
+        command
+    }
+
     fn normal_user(username: &str, password: &str) -> User {
         let mut user = User::of_with_type(username, password, UserType::Normal);
         user.set_user_status(UserStatus::Enable);
@@ -958,6 +995,43 @@ mod tests {
     struct TestAuthMetadataService {
         users: HashMap<String, UserInfo>,
         acls: HashMap<String, AclInfo>,
+    }
+
+    struct PanicOnAuthMetadataService;
+
+    impl MetadataService for PanicOnAuthMetadataService {
+        fn topic_message_type<'a>(
+            &'a self,
+            _context: &'a rocketmq_proxy_core::ProxyContext,
+            _topic: &'a ResourceIdentity,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, ProxyTopicMessageType> {
+            Box::pin(async { Ok(ProxyTopicMessageType::Unspecified) })
+        }
+
+        fn subscription_group<'a>(
+            &'a self,
+            _context: &'a rocketmq_proxy_core::ProxyContext,
+            _topic: &'a ResourceIdentity,
+            _group: &'a ResourceIdentity,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, Option<SubscriptionGroupMetadata>> {
+            Box::pin(async { Ok(None) })
+        }
+
+        fn user<'a>(
+            &'a self,
+            _context: &'a rocketmq_proxy_core::ProxyContext,
+            _username: &'a str,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, Option<UserInfo>> {
+            Box::pin(async { panic!("Proxy-local management must not fetch Broker user metadata") })
+        }
+
+        fn acl<'a>(
+            &'a self,
+            _context: &'a rocketmq_proxy_core::ProxyContext,
+            _subject: &'a str,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, Option<AclInfo>> {
+            Box::pin(async { panic!("Proxy-local management must not fetch Broker ACL metadata") })
+        }
     }
 
     impl MetadataService for TestAuthMetadataService {
@@ -1088,6 +1162,65 @@ mod tests {
         runtime.sync_user_metadata(Some("alice")).await.unwrap();
         runtime.sync_acl_metadata("User:alice").await.unwrap();
         assert_eq!(runtime.acl_generation(), generation_after_initial_sync);
+
+        runtime.shutdown().await.expect("runtime should shut down");
+        let _ = fs::remove_dir_all(test_dir);
+    }
+
+    #[tokio::test]
+    async fn proxy_drain_management_uses_authenticated_local_metadata() {
+        let test_dir = unique_test_dir("proxy-local-drain-auth");
+        let runtime = ProxyAuthRuntime::from_proxy_config_with_metadata_service(
+            &ProxyAuthConfig {
+                authentication_enabled: true,
+                authorization_enabled: true,
+                auth_config_path: test_dir.join("auth-store").to_string_lossy().into_owned(),
+                ..ProxyAuthConfig::default()
+            },
+            Some(Arc::new(PanicOnAuthMetadataService)),
+        )
+        .await
+        .expect("runtime should build")
+        .expect("runtime should be enabled");
+        runtime
+            .create_user(normal_user("sre-reader", "read-secret"))
+            .await
+            .unwrap();
+        runtime
+            .create_acl(Acl::of(
+                "sre-reader",
+                SubjectType::User,
+                Policy::of(
+                    vec![Resource::of_cluster("DefaultCluster")],
+                    vec![Action::Get, Action::Update],
+                    None,
+                    Decision::Allow,
+                ),
+            ))
+            .await
+            .unwrap();
+
+        for code in [
+            RequestCode::GetProxyDrainState,
+            RequestCode::BeginProxyDrain,
+            RequestCode::CancelProxyDrain,
+        ] {
+            let command = sign_remoting_command(
+                RemotingCommand::create_remoting_command(code.to_i32()),
+                "sre-reader",
+                "read-secret",
+            );
+            let principal = runtime
+                .authenticate_remoting(&command, Some("proxy-management"), Some("127.0.0.1"))
+                .await
+                .expect("local Proxy credential should authenticate")
+                .expect("principal should exist");
+            assert_eq!(principal.username(), "sre-reader");
+            runtime
+                .authorize_remoting(&(), &command)
+                .await
+                .expect("local Proxy ACL should authorize the operation");
+        }
 
         runtime.shutdown().await.expect("runtime should shut down");
         let _ = fs::remove_dir_all(test_dir);

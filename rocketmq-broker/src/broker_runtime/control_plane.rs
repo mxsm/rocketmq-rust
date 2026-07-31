@@ -26,8 +26,14 @@ impl BrokerControlPlane {
 
 impl BrokerRuntime {
     pub(super) fn initialize_observability(&mut self) {
-        #[cfg(feature = "otel-metrics")]
-        if !self.composition.state.telemetry_handle.is_active() {
+        let broker_config = self.composition.state.broker_config();
+        let mut bootstrap_config = build_broker_telemetry_bootstrap_config(&broker_config);
+        if let Err(error) = rocketmq_observability::apply_standard_otlp_environment(&mut bootstrap_config) {
+            warn!("Failed to apply broker OTLP environment: {error}");
+            return;
+        }
+        let config = &bootstrap_config.observability;
+        if !config.enabled {
             return;
         }
 
@@ -42,8 +48,9 @@ impl BrokerRuntime {
                 let subscription_group_manager = self.composition.state.subscription_group_manager().clone();
                 let producer_manager = self.composition.state.producer_manager.clone_shared_state();
                 let consumer_manager = self.composition.state.consumer_manager.clone_shared_state();
+                let broker_fast_failure = self.composition.state.broker_fast_failure.clone();
                 metrics_manager.register_observables(
-                    None::<fn() -> Vec<(String, i64)>>,
+                    Some(move || broker_fast_failure.pending_count_snapshot()),
                     move || broker_permission,
                     move || i64::try_from(topic_config_manager.topic_config_table().len()).unwrap_or(i64::MAX),
                     move || i64::try_from(subscription_group_manager.group_count()).unwrap_or(i64::MAX),
@@ -80,10 +87,23 @@ impl BrokerRuntime {
                             .collect()
                     },
                 );
+                let consumer_offset_manager = self.composition.state.consumer_offset_manager_handle();
+                metrics_manager.register_consumer_lag_observable_gauge(move || {
+                    consumer_offset_manager
+                        .consumer_lag_snapshot()
+                        .into_iter()
+                        .map(|observation| {
+                            crate::metrics::broker_metrics_manager::ConsumerLagAttributes::new(
+                                observation.topic,
+                                observation.consumer_group,
+                                observation.lag_messages,
+                            )
+                        })
+                        .collect()
+                });
             }
 
-            let pop_metrics_manager = self.composition.state.pop_metrics_manager.clone();
-            if let Some(metrics_manager) = pop_metrics_manager {
+            if let Some(metrics_manager) = self.composition.state.pop_metrics_manager.clone() {
                 let pop_offset_processor = self.composition.state.pop_message_processor.clone();
                 let pop_checkpoint_processor = self.composition.state.pop_message_processor.clone();
                 let ack_message_processor = self.composition.state.ack_message_processor.clone();
@@ -750,5 +770,26 @@ impl BrokerRuntime {
             .map_err(|error| BrokerStartupError::component_start("broker_registration", error))?;
         self.composition.state.online_role_state.set_isolated(false);
         Ok(())
+    }
+}
+
+fn observed_replication_lag_bytes(max_phy_offset: i64, confirm_offset: i64) -> Option<u64> {
+    if max_phy_offset < 0 || confirm_offset < 0 || confirm_offset > max_phy_offset {
+        return None;
+    }
+    u64::try_from(max_phy_offset - confirm_offset).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::observed_replication_lag_bytes;
+
+    #[test]
+    fn replication_lag_is_observed_only_for_valid_store_offsets() {
+        assert_eq!(observed_replication_lag_bytes(128, 96), Some(32));
+        assert_eq!(observed_replication_lag_bytes(128, 128), Some(0));
+        assert_eq!(observed_replication_lag_bytes(-1, 0), None);
+        assert_eq!(observed_replication_lag_bytes(128, -1), None);
+        assert_eq!(observed_replication_lag_bytes(96, 128), None);
     }
 }

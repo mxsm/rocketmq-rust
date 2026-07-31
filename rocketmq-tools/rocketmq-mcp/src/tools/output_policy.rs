@@ -18,18 +18,79 @@ use serde_json::Value;
 use crate::tools::executor::ToolExecutionError;
 
 const MAX_STRUCTURED_OUTPUT_BYTES: usize = 1024 * 1024;
-const INTERNAL_TOPOLOGY_KEYS: [&str; 4] = ["namesrv_addr", "broker_addr", "broker_addrs", "client_ip"];
+const MAX_STRUCTURED_OUTPUT_ROWS: usize = 1_000;
 
-pub(crate) fn apply(mut value: Value) -> Result<Value, ToolExecutionError> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct OutputPolicy {
+    pub max_bytes: usize,
+    pub max_rows: usize,
+}
+
+impl Default for OutputPolicy {
+    fn default() -> Self {
+        Self {
+            max_bytes: MAX_STRUCTURED_OUTPUT_BYTES,
+            max_rows: MAX_STRUCTURED_OUTPUT_ROWS,
+        }
+    }
+}
+
+pub(crate) fn apply(value: Value) -> Result<Value, ToolExecutionError> {
+    apply_with_policy(value, OutputPolicy::default())
+}
+
+pub(crate) fn apply_with_policy(mut value: Value, policy: OutputPolicy) -> Result<Value, ToolExecutionError> {
     remove_internal_topology(&mut value);
+    let truncated = bound_rows(&mut value, policy.max_rows);
+    if truncated {
+        mark_partial(&mut value);
+    }
     let size = serde_json::to_vec(&value).map_err(ToolExecutionError::internal)?.len();
-    if size > MAX_STRUCTURED_OUTPUT_BYTES {
+    if size > policy.max_bytes {
         return Err(ToolExecutionError::OutputTooLarge {
             actual_bytes: size,
-            max_bytes: MAX_STRUCTURED_OUTPUT_BYTES,
+            max_bytes: policy.max_bytes,
         });
     }
     Ok(value)
+}
+
+fn bound_rows(value: &mut Value, max_rows: usize) -> bool {
+    match value {
+        Value::Object(object) => {
+            let mut changed = false;
+            for value in object.values_mut() {
+                changed |= bound_rows(value, max_rows);
+            }
+            changed
+        }
+        Value::Array(values) => {
+            let mut changed = values.len() > max_rows;
+            values.truncate(max_rows);
+            for value in values {
+                changed |= bound_rows(value, max_rows);
+            }
+            changed
+        }
+        _ => false,
+    }
+}
+
+fn mark_partial(value: &mut Value) {
+    let Value::Object(object) = value else {
+        return;
+    };
+    object.insert("partial".to_string(), Value::Bool(true));
+    let warning = Value::String("output_rows_truncated".to_string());
+    match object.get_mut("warnings") {
+        Some(Value::Array(warnings)) if !warnings.contains(&warning) => warnings.push(warning),
+        Some(_) => {
+            object.insert("warnings".to_string(), Value::Array(vec![warning]));
+        }
+        None => {
+            object.insert("warnings".to_string(), Value::Array(vec![warning]));
+        }
+    }
 }
 
 fn remove_internal_topology(value: &mut Value) {
@@ -50,9 +111,29 @@ fn remove_internal_topology(value: &mut Value) {
 }
 
 fn remove_sensitive_keys(object: &mut Map<String, Value>) {
-    for key in INTERNAL_TOPOLOGY_KEYS {
-        object.remove(key);
-    }
+    object.retain(|key, _| !is_internal_topology_key(key));
+}
+
+fn is_internal_topology_key(key: &str) -> bool {
+    let normalized = key
+        .chars()
+        .filter(|character| !matches!(character, '_' | '-' | '.'))
+        .flat_map(char::to_lowercase)
+        .collect::<String>();
+    matches!(
+        normalized.as_str(),
+        "namesrvaddr"
+            | "namesrvaddrs"
+            | "brokeraddr"
+            | "brokeraddrs"
+            | "clientip"
+            | "clientaddr"
+            | "remoteaddr"
+            | "remoteaddress"
+            | "localaddr"
+            | "localaddress"
+            | "storehost"
+    )
 }
 
 #[cfg(test)]
@@ -81,5 +162,25 @@ mod tests {
         assert!(!serialized.contains("broker_addr"));
         assert!(!serialized.contains("client_ip"));
         assert!(serialized.contains("broker-a"));
+    }
+
+    #[test]
+    fn row_policy_marks_truncated_envelopes_partial() {
+        let output = apply_with_policy(
+            serde_json::json!({
+                "partial": false,
+                "warnings": [],
+                "data": [1, 2, 3],
+            }),
+            OutputPolicy {
+                max_bytes: 1024,
+                max_rows: 2,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(output["partial"], true);
+        assert_eq!(output["warnings"][0], "output_rows_truncated");
+        assert_eq!(output["data"].as_array().unwrap().len(), 2);
     }
 }

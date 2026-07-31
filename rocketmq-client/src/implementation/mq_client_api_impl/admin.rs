@@ -16,6 +16,8 @@ use super::request_builder::*;
 use super::response_decoder::*;
 use super::*;
 
+mod versioned_config;
+
 pub struct AdminClient<'a> {
     api: &'a MQClientAPIImpl,
 }
@@ -81,6 +83,7 @@ impl MQClientAPIImpl {
         self.get_kvconfig_value(namespace, key, timeout_millis).await
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn delete_kvconfig_value(
         &self,
         namespace: CheetahString,
@@ -112,6 +115,7 @@ impl MQClientAPIImpl {
         Ok(())
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn delete_kv_config_value(
         &self,
         namespace: CheetahString,
@@ -153,6 +157,7 @@ impl MQClientAPIImpl {
         self.get_kvlist_by_namespace(namespace, timeout_millis).await
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn put_kvconfig_value(
         &self,
         namespace: CheetahString,
@@ -185,6 +190,7 @@ impl MQClientAPIImpl {
         Ok(())
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn put_kv_config_value(
         &self,
         namespace: CheetahString,
@@ -195,6 +201,7 @@ impl MQClientAPIImpl {
         self.put_kvconfig_value(namespace, key, value, timeout_millis).await
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn create_user(
         &self,
         broker_address: CheetahString,
@@ -230,6 +237,7 @@ impl MQClientAPIImpl {
         Ok(())
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn update_user(
         &self,
         broker_address: CheetahString,
@@ -265,6 +273,7 @@ impl MQClientAPIImpl {
         Ok(())
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn create_acl(
         &self,
         broker_address: CheetahString,
@@ -293,6 +302,7 @@ impl MQClientAPIImpl {
         }
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn update_acl(
         &self,
         broker_address: CheetahString,
@@ -321,6 +331,7 @@ impl MQClientAPIImpl {
         }
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn create_and_update_plain_access_config(
         &self,
         broker_address: CheetahString,
@@ -343,6 +354,7 @@ impl MQClientAPIImpl {
         }
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn delete_plain_access_config(
         &self,
         broker_address: CheetahString,
@@ -365,6 +377,7 @@ impl MQClientAPIImpl {
         }
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn update_global_white_addrs_config(
         &self,
         broker_address: CheetahString,
@@ -410,6 +423,7 @@ impl MQClientAPIImpl {
         }
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn delete_acl(
         &self,
         broker_address: CheetahString,
@@ -565,6 +579,7 @@ impl MQClientAPIImpl {
         self.list_users(broker_address, filter, timeout_millis).await
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn delete_user(
         &self,
         broker_address: CheetahString,
@@ -595,6 +610,7 @@ impl MQClientAPIImpl {
         Ok(())
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn update_name_server_config(
         &self,
         properties: HashMap<CheetahString, CheetahString>,
@@ -642,6 +658,7 @@ impl MQClientAPIImpl {
         Ok(())
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn add_write_perm_of_broker(
         &self,
         namesrv_addr: CheetahString,
@@ -665,6 +682,7 @@ impl MQClientAPIImpl {
         ))
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn wipe_write_perm_of_broker(
         &self,
         namesrv_addr: CheetahString,
@@ -726,6 +744,7 @@ impl MQClientAPIImpl {
         ))
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn sync_broker_member_group(
         &self,
         cluster_name: &CheetahString,
@@ -944,6 +963,7 @@ impl MQClientAPIImpl {
         ))
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn trigger_lite_dispatch(
         &self,
         addr: &CheetahString,
@@ -969,6 +989,7 @@ impl MQClientAPIImpl {
         }
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn sync_lite_subscription(
         &self,
         broker_addr: &CheetahString,
@@ -991,6 +1012,7 @@ impl MQClientAPIImpl {
         }
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub async fn sync_lite_subscription_async(
         &self,
         broker_addr: &CheetahString,
@@ -1050,6 +1072,7 @@ impl MQClientAPIImpl {
         ))
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub async fn delete_subscription_group(
         &self,
         addr: &CheetahString,
@@ -1080,6 +1103,7 @@ impl MQClientAPIImpl {
         ))
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub async fn reset_master_flush_offset(
         &self,
         broker_addr: &CheetahString,
@@ -1330,6 +1354,7 @@ impl MQClientAPIImpl {
         ))
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn create_static_topic(
         &self,
         addr: &CheetahString,
@@ -1462,6 +1487,7 @@ impl MQClientAPIImpl {
         ))
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(super) async fn invoke_broker_success_request(
         &self,
         addr: &CheetahString,
@@ -1483,6 +1509,7 @@ impl MQClientAPIImpl {
         ))
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn clean_expired_consume_queue(
         &self,
         addr: &CheetahString,
@@ -1492,6 +1519,7 @@ impl MQClientAPIImpl {
             .await
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn delete_expired_commit_log(
         &self,
         addr: &CheetahString,
@@ -1501,11 +1529,13 @@ impl MQClientAPIImpl {
             .await
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn clean_unused_topic(&self, addr: &CheetahString, timeout_millis: u64) -> RocketMQResult<bool> {
         self.invoke_broker_success_request(addr, RequestCode::CleanUnusedTopic, timeout_millis)
             .await
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn clean_unused_topic_by_addr(
         &self,
         addr: &CheetahString,
@@ -1514,6 +1544,7 @@ impl MQClientAPIImpl {
         self.clean_unused_topic(addr, timeout_millis).await
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn create_topic(
         &self,
         addr: &CheetahString,
@@ -1525,6 +1556,7 @@ impl MQClientAPIImpl {
         self.update_or_create_topic(addr, request_header, timeout_millis).await
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn create_topic_list(
         &self,
         address: &CheetahString,
@@ -1567,6 +1599,7 @@ impl MQClientAPIImpl {
         ))
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn create_subscription_group_list(
         &self,
         address: &CheetahString,
@@ -1589,6 +1622,7 @@ impl MQClientAPIImpl {
         }
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn delete_topic_in_broker(
         &self,
         addr: &CheetahString,
@@ -1610,6 +1644,7 @@ impl MQClientAPIImpl {
         ))
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn delete_topic_in_name_server(
         &self,
         addr: &CheetahString,
@@ -1625,6 +1660,7 @@ impl MQClientAPIImpl {
         .await
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn delete_topic_in_nameserver(
         &self,
         addr: &CheetahString,
@@ -1645,6 +1681,7 @@ impl MQClientAPIImpl {
         ))
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn invoke_broker_to_reset_offset(
         &self,
         addr: &CheetahString,
@@ -1741,6 +1778,7 @@ impl MQClientAPIImpl {
         ))
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn clone_group_offset(
         &self,
         addr: &CheetahString,
@@ -1777,6 +1815,69 @@ impl MQClientAPIImpl {
 }
 
 impl MQClientAPIImpl {
+    #[cfg(feature = "admin-read")]
+    pub(crate) async fn get_proxy_drain_state(
+        &self,
+        addr: &CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<ProxyDrainStateResponseBody> {
+        let request = RemotingCommand::create_remoting_command(RequestCode::GetProxyDrainState);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+        decode_proxy_drain_response(response, "get_proxy_drain_state")
+    }
+
+    #[cfg(feature = "admin-mutation")]
+    pub(crate) async fn begin_proxy_drain(
+        &self,
+        addr: &CheetahString,
+        operation_id: CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<ProxyDrainStateResponseBody> {
+        self.proxy_drain_operation(addr, RequestCode::BeginProxyDrain, operation_id, timeout_millis)
+            .await
+    }
+
+    #[cfg(feature = "admin-mutation")]
+    pub(crate) async fn cancel_proxy_drain(
+        &self,
+        addr: &CheetahString,
+        operation_id: CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<ProxyDrainStateResponseBody> {
+        self.proxy_drain_operation(addr, RequestCode::CancelProxyDrain, operation_id, timeout_millis)
+            .await
+    }
+
+    #[cfg(feature = "admin-mutation")]
+    async fn proxy_drain_operation(
+        &self,
+        addr: &CheetahString,
+        request_code: RequestCode,
+        operation_id: CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<ProxyDrainStateResponseBody> {
+        if operation_id.trim().is_empty() {
+            return Err(RocketMQError::illegal_argument(
+                "Proxy drain operation id must not be empty",
+            ));
+        }
+        let body = ProxyDrainOperationRequestBody {
+            schema_version: PROXY_DRAIN_SCHEMA_VERSION.to_owned(),
+            operation_id: operation_id.to_string(),
+        }
+        .encode()?;
+        let request = RemotingCommand::new_request(request_code, body);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+        decode_proxy_drain_response(response, "proxy_drain_operation")
+    }
+
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn update_broker_config(
         &self,
         addr: &CheetahString,
@@ -1811,6 +1912,7 @@ impl MQClientAPIImpl {
         }
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub async fn add_broker(
         &self,
         addr: &CheetahString,
@@ -1835,6 +1937,7 @@ impl MQClientAPIImpl {
         }
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub async fn remove_broker(
         &self,
         addr: &CheetahString,
@@ -1863,6 +1966,7 @@ impl MQClientAPIImpl {
         }
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn notify_min_broker_id_changed(
         &self,
         broker_addr: &CheetahString,
@@ -1876,6 +1980,7 @@ impl MQClientAPIImpl {
         Ok(())
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub async fn export_rocksdb_config_to_json(
         &self,
         broker_addr: CheetahString,
@@ -1910,6 +2015,7 @@ impl MQClientAPIImpl {
         }
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub async fn export_rocks_db_config_to_json(
         &self,
         broker_addr: CheetahString,
@@ -1939,26 +2045,9 @@ impl MQClientAPIImpl {
         addr: &CheetahString,
         timeout_millis: u64,
     ) -> RocketMQResult<HashMap<CheetahString, CheetahString>> {
-        let request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerConfig);
-        let response = self
-            .remoting_client
-            .invoke_request(Some(addr), request, timeout_millis)
-            .await?;
-
-        match ResponseCode::from(response.code()) {
-            ResponseCode::Success => {
-                let body = response
-                    .get_body()
-                    .ok_or_else(|| mq_client_err!("Broker config response body is empty".to_string()))?;
-                let body_str = String::from_utf8_lossy(body.as_ref());
-                mix_all::string_to_properties(body_str.as_ref())
-                    .ok_or_else(|| mq_client_err!("Failed to parse broker config response body".to_string()))
-            }
-            _ => Err(mq_client_err!(
-                response.code(),
-                response.remark().map_or_else(String::new, |remark| remark.to_string())
-            )),
-        }
+        self.get_broker_config_snapshot(addr, timeout_millis)
+            .await
+            .map(|snapshot| snapshot.properties)
     }
 
     pub async fn get_name_server_config(
@@ -2159,6 +2248,7 @@ impl MQClientAPIImpl {
         }
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub async fn update_and_get_group_forbidden(
         &self,
         broker_addr: &CheetahString,
@@ -2215,6 +2305,7 @@ impl MQClientAPIImpl {
         }
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub async fn update_controller_config(
         &self,
         properties: HashMap<CheetahString, CheetahString>,
@@ -2251,6 +2342,7 @@ impl MQClientAPIImpl {
         Ok(())
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub async fn elect_master(
         &self,
         controller_addr: CheetahString,
@@ -2301,6 +2393,7 @@ impl MQClientAPIImpl {
         }
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub async fn clean_controller_broker_data(
         &self,
         controller_addr: CheetahString,
@@ -2338,6 +2431,7 @@ impl MQClientAPIImpl {
         }
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub async fn update_cold_data_flow_ctr_group_config(
         &self,
         broker_addr: CheetahString,
@@ -2367,6 +2461,7 @@ impl MQClientAPIImpl {
         }
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub async fn remove_cold_data_flow_ctr_group_config(
         &self,
         broker_addr: CheetahString,
@@ -2421,6 +2516,7 @@ impl MQClientAPIImpl {
         }
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub async fn set_commit_log_read_ahead_mode(
         &self,
         broker_addr: CheetahString,
@@ -2445,6 +2541,7 @@ impl MQClientAPIImpl {
         }
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub async fn export_pop_record(&self, broker_addr: CheetahString, timeout_millis: u64) -> RocketMQResult<()> {
         let request = RemotingCommand::create_request_command(RequestCode::PopRollback, EmptyHeader {});
         let response = self
@@ -2559,6 +2656,7 @@ impl MQClientAPIImpl {
         ))
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn create_subscription_group(
         &self,
         addr: &CheetahString,
@@ -2622,6 +2720,7 @@ impl MQClientAPIImpl {
         }
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn consume_message_directly(
         &self,
         client_addr: &CheetahString,
@@ -2692,6 +2791,7 @@ impl MQClientAPIImpl {
         }
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn resume_check_half_message(
         &self,
         addr: &CheetahString,
@@ -2722,6 +2822,7 @@ impl MQClientAPIImpl {
         }
     }
 
+    #[cfg(feature = "admin-mutation")]
     pub(crate) async fn switch_timer_engine(
         &self,
         broker_addr: &CheetahString,
@@ -2815,6 +2916,38 @@ impl MQClientAPIImpl {
         }
         Ok(sort_map)
     }
+}
+
+#[cfg(any(feature = "admin-read", feature = "admin-mutation"))]
+fn decode_proxy_drain_response(
+    response: RemotingCommand,
+    operation: &'static str,
+) -> RocketMQResult<ProxyDrainStateResponseBody> {
+    if ResponseCode::from(response.code()) != ResponseCode::Success {
+        return Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or_else(String::new, |remark| remark.to_string())
+        ));
+    }
+    let body = response.body().ok_or_else(|| RocketMQError::ResponseProcessFailed {
+        operation,
+        reason: "Proxy drain response body is missing".to_owned(),
+    })?;
+    let state =
+        ProxyDrainStateResponseBody::decode(body.as_ref()).map_err(|error| RocketMQError::ResponseProcessFailed {
+            operation,
+            reason: format!("invalid Proxy drain response body: {error}"),
+        })?;
+    if state.schema_version != PROXY_DRAIN_SCHEMA_VERSION {
+        return Err(RocketMQError::ResponseProcessFailed {
+            operation,
+            reason: format!(
+                "unsupported Proxy drain schema '{}'; expected '{PROXY_DRAIN_SCHEMA_VERSION}'",
+                state.schema_version
+            ),
+        });
+    }
+    Ok(state)
 }
 
 pub(super) fn pop_msg_queue_offset_for_index(
@@ -3094,6 +3227,7 @@ impl MQClientAPIImpl {
     }
 }
 
+#[cfg(feature = "admin-full")]
 impl MqClientAdminInner for MQClientAPIImpl {
     async fn query_message(
         &self,
@@ -3170,6 +3304,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         ))
     }
 
+    #[cfg(feature = "admin-mutation")]
     async fn update_or_create_topic(
         &self,
         address: &str,
@@ -3187,6 +3322,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         ))
     }
 
+    #[cfg(feature = "admin-mutation")]
     async fn update_or_create_subscription_group(
         &self,
         address: &str,
@@ -3206,6 +3342,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         ))
     }
 
+    #[cfg(feature = "admin-mutation")]
     async fn delete_topic_in_broker(
         &self,
         address: &str,
@@ -3223,6 +3360,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         ))
     }
 
+    #[cfg(feature = "admin-mutation")]
     async fn delete_topic_in_nameserver(
         &self,
         address: &str,
@@ -3240,6 +3378,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         ))
     }
 
+    #[cfg(feature = "admin-mutation")]
     async fn delete_kv_config(
         &self,
         address: &str,
@@ -3257,6 +3396,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         ))
     }
 
+    #[cfg(feature = "admin-mutation")]
     async fn delete_subscription_group(
         &self,
         address: &str,
@@ -3274,6 +3414,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         ))
     }
 
+    #[cfg(feature = "admin-mutation")]
     async fn invoke_broker_to_reset_offset(
         &self,
         address: &str,
@@ -3445,6 +3586,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         }
     }
 
+    #[cfg(feature = "admin-mutation")]
     async fn consume_message_directly(
         &self,
         address: &str,

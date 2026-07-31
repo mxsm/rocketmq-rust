@@ -1,0 +1,43 @@
+id: message.direct_consume.v1
+version: 1.0.0
+owner: messaging-platform
+supported_versions:
+  - family: rocketmq-sre.action-plan
+    major: 1
+    minor: 0
+required_capabilities:
+  - planning.message-impact
+config_schema:
+  type: object
+  additionalProperties: false
+parameter_schema:
+  type: object
+  additionalProperties: false
+  required: [topic, consumer_group, message_id, target_client, reason]
+  properties:
+    topic: { type: string, maxLength: 255 }
+    consumer_group: { type: string, maxLength: 255 }
+    message_id: { type: string, maxLength: 255 }
+    target_client: { type: string, maxLength: 255 }
+    reason: { type: string, maxLength: 1024 }
+status: active
+deprecation: null
+risk: r2
+execution_supported: false
+preconditions:
+  - message_identity_confirmed
+  - target_client_confirmed
+  - manual_runbook_owner_assigned
+max_impact: single_resource
+verification:
+  resource_conditions: [manual_consume_result_recorded]
+  technical_slis: [consume_success_ratio]
+  stable_window_seconds: 60
+  max_wait_seconds: 600
+timeout_seconds: 600
+compensation:
+  mode: not_available
+  required_before_fields: []
+  timeout_seconds: 0
+forbidden_fields: [message_body, wildcard_topic, wildcard_group, auto_execute, raw_request_code]
+plan_only: true

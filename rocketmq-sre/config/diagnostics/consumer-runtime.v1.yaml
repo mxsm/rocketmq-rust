@@ -1,0 +1,44 @@
+schema: rocketmq-sre.diagnostic-pack.v1
+id: consumer-runtime
+version: 1.0.0
+qualified_id: consumer-runtime.v1
+owner: rocketmq-sre
+components: [consumer, broker]
+output_schema: rocketmq-sre.diagnostic-result.v1
+required_evidence:
+  - key: runtime
+    source: admin-query
+    resource_prefix: consumer-runtime/
+    fields:
+      - connected
+      - running_info_available
+      - rebalance_in_progress
+      - unassigned_queues
+      - process_rt_ms
+      - paused
+      - commit_failures
+      - seek_operations
+      - client_version_supported
+optional_evidence:
+  - { key: runtime-metrics, source: prometheus, resource_prefix: consumer-runtime/ }
+rules:
+  - { reason_code: CONSUMER_CONNECTION_LOST, when: "!connected || !running_info_available", severity: critical }
+  - reason_code: CONSUMER_REBALANCE_STALLED
+    when: "rebalance_in_progress && unassigned_queues > 0"
+    severity: critical
+  - { reason_code: CONSUMER_PROCESSING_SLOW, when: "process_rt_ms >= 1000", severity: warning }
+  - reason_code: CONSUMER_OFFSET_CONTROL_ANOMALY
+    when: "paused || commit_failures > 0 || seek_operations > 0"
+    severity: warning
+  - reason_code: CONSUMER_CLIENT_VERSION_UNSUPPORTED
+    when: "!client_version_supported"
+    severity: warning
+  - { reason_code: CONSUMER_RUNTIME_HEALTHY, when: "all fault rules are false", severity: info }
+  - { reason_code: CONSUMER_RUNTIME_EVIDENCE_INCOMPLETE, when: "required fields are absent", severity: warning }
+missing_behavior: inconclusive
+confidence:
+  implementation: deterministic_engine
+  missing_required_cap: 49
+  unsupported_required_cap: 24
+follow_up:
+  - prometheus:consumer-runtime/{group}

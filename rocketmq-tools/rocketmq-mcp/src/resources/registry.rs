@@ -32,15 +32,16 @@ pub fn list_resources(
     config: &McpConfig,
     request: Option<&PaginatedRequestParams>,
 ) -> Result<ListResourcesResult, ErrorData> {
-    list_resources_for(config, request, |_| true)
+    list_resources_for(config, request, |_| true, true)
 }
 
 pub fn list_resources_for(
     config: &McpConfig,
     request: Option<&PaginatedRequestParams>,
     mut allows_cluster: impl FnMut(&str) -> bool,
+    include_system: bool,
 ) -> Result<ListResourcesResult, ErrorData> {
-    let resources = config
+    let mut resources = config
         .clusters
         .iter()
         .filter(|cluster| allows_cluster(&cluster.name))
@@ -51,6 +52,14 @@ pub fn list_resources_for(
         })
         .map(resource_descriptor)
         .collect::<Vec<_>>();
+    if include_system {
+        resources.extend(
+            ResourceKind::SYSTEM_ROOTS
+                .into_iter()
+                .filter_map(RocketmqResourceUri::system)
+                .map(resource_descriptor),
+        );
+    }
     let page = discovery_page(resources, request)?;
     Ok(ListResourcesResult {
         meta: None,
@@ -147,10 +156,13 @@ mod tests {
         assert_eq!(
             uris,
             [
+                "rocketmq://clusters/local-dev/capabilities",
                 "rocketmq://clusters/local-dev/overview",
                 "rocketmq://clusters/local-dev/topics",
                 "rocketmq://clusters/local-dev/brokers",
                 "rocketmq://clusters/local-dev/consumer-groups",
+                "rocketmq://system/runtime/v1",
+                "rocketmq://system/observability/v1",
             ]
         );
         assert!(result.next_cursor.is_none());
@@ -203,7 +215,7 @@ mod tests {
 
         assert_eq!(first.resources.len(), 50);
         assert!(first.next_cursor.is_some());
-        assert_eq!(second.resources.len(), 2);
+        assert_eq!(second.resources.len(), 17);
         assert!(second.next_cursor.is_none());
         assert_ne!(first.resources[0].uri, second.resources[0].uri);
     }

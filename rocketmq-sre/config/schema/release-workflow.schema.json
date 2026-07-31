@@ -1,0 +1,255 @@
+{
+  "$defs": {
+    "ActionPlanId": {
+      "description": "Stable identifier for an immutable action plan.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "CorrelationId": {
+      "description": "Identifier propagated across one logical SRE operation.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "EvidenceId": {
+      "description": "Stable identifier for an evidence snapshot.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ExecutionId": {
+      "description": "Stable identifier for a supervised execution.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "IncidentId": {
+      "description": "Stable identifier for an SRE incident.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ReadinessReportId": {
+      "description": "Stable identifier for an immutable readiness report.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ReleaseId": {
+      "description": "Stable identifier for one supervised release workflow.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ReleaseReadinessSnapshot": {
+      "additionalProperties": false,
+      "description": "Immutable release gate projection from readiness and what-if checks.",
+      "properties": {
+        "capacity_ready": {
+          "type": "boolean"
+        },
+        "evidence_ids": {
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          },
+          "type": "array"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "pdb_ready": {
+          "type": "boolean"
+        },
+        "quorum_ready": {
+          "type": "boolean"
+        },
+        "simulation_id": {
+          "$ref": "#/$defs/SimulationId"
+        },
+        "store_recovery_ready": {
+          "type": "boolean"
+        },
+        "synthetic_probe_ready": {
+          "type": "boolean"
+        },
+        "upgrade_readiness_id": {
+          "$ref": "#/$defs/ReadinessReportId"
+        },
+        "valid_until": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "upgrade_readiness_id",
+        "simulation_id",
+        "pdb_ready",
+        "capacity_ready",
+        "quorum_ready",
+        "store_recovery_ready",
+        "synthetic_probe_ready",
+        "evidence_ids",
+        "observed_at",
+        "valid_until"
+      ],
+      "type": "object"
+    },
+    "ReleaseStatus": {
+      "description": "Durable release escort lifecycle.",
+      "enum": [
+        "planned",
+        "readiness_checking",
+        "ready",
+        "canary_running",
+        "paused",
+        "verifying",
+        "rolling_back",
+        "rolled_back",
+        "completed",
+        "manual_takeover",
+        "failed"
+      ],
+      "type": "string"
+    },
+    "RunbookId": {
+      "description": "Stable identifier for a versioned change runbook.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "SimulationId": {
+      "description": "Stable identifier for a read-only what-if simulation.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Persistent release workflow linked to immutable plans and a typed Runbook.",
+  "properties": {
+    "active_execution_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExecutionId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "change_id": {
+      "type": "string"
+    },
+    "cluster_id": {
+      "$ref": "#/$defs/ClusterId"
+    },
+    "correlation_id": {
+      "$ref": "#/$defs/CorrelationId"
+    },
+    "created_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "created_by": {
+      "type": "string"
+    },
+    "id": {
+      "$ref": "#/$defs/ReleaseId"
+    },
+    "incident_id": {
+      "$ref": "#/$defs/IncidentId"
+    },
+    "pause_reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "plan_hash": {
+      "type": "string"
+    },
+    "plan_id": {
+      "$ref": "#/$defs/ActionPlanId"
+    },
+    "readiness": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReleaseReadinessSnapshot"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "regression_detected": {
+      "type": "boolean"
+    },
+    "release_ref": {
+      "type": "string"
+    },
+    "rollback_plan_hash": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "rollback_plan_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ActionPlanId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "runbook_id": {
+      "$ref": "#/$defs/RunbookId"
+    },
+    "runbook_version": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/ReleaseStatus"
+    },
+    "target_version": {
+      "type": "string"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "id",
+    "tenant_id",
+    "cluster_id",
+    "incident_id",
+    "correlation_id",
+    "change_id",
+    "release_ref",
+    "target_version",
+    "runbook_id",
+    "runbook_version",
+    "plan_id",
+    "plan_hash",
+    "status",
+    "regression_detected",
+    "created_by",
+    "created_at",
+    "updated_at"
+  ],
+  "title": "ReleaseWorkflow",
+  "type": "object"
+}

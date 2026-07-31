@@ -159,6 +159,7 @@ $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $policyPath = Join-Path $root "docker/container-policy.json"
 $policy = Get-Content -Raw -LiteralPath $policyPath | ConvertFrom-Json
 $tmpfsOptions = "$($policy.runtime.tmpfs_path):rw,noexec,nosuid,size=16m,uid=$($policy.runtime.uid),gid=$($policy.runtime.gid),mode=0700"
+$loopbackHealthBind = "127.0.0.1:8088"
 $dockerfilePath = (Resolve-Path (Join-Path $root $policy.foundation_dockerfile)).Path
 $smokeConfigPath = (Resolve-Path (Join-Path $root $policy.smoke_config_directory)).Path
 $outputPath = Join-Path $root $OutputDirectory
@@ -176,15 +177,38 @@ $oldPassword = $env:COSIGN_PASSWORD
 $randomBytes = New-Object byte[] 32
 $random = [System.Security.Cryptography.RandomNumberGenerator]::Create()
 $evidence = [System.Collections.Generic.List[object]]::new()
-$smokeContainerIds = [System.Collections.Generic.List[string]]::new()
-$dependencyContainerIds = @{}
+$nameServerHelperId = ""
+$brokerHelperId = ""
 $smokeNetwork = ""
 $smokeNetworkCreated = $false
+$smokeContainerIds = [System.Collections.Generic.List[string]]::new()
+$dependencyContainerIds = @{}
 
 try {
     $random.GetBytes($randomBytes)
     $env:COSIGN_PASSWORD = [Convert]::ToBase64String($randomBytes)
     Invoke-Checked cosign generate-key-pair --output-key-prefix $keyPrefix
+
+    $nameServerImageRef = "rocketmq-rust/namesrv:verification"
+    Invoke-Checked docker buildx build --load --file $dockerfilePath --target namesrv --tag $nameServerImageRef --build-arg "SOURCE_REVISION=$sourceCommit" --build-arg "SOURCE_VERSION=$sourceVersion" $root
+    $nameServerHelperId = (
+        Invoke-Captured docker run --detach --interactive --network none --read-only `
+            --mount "type=volume,destination=$($policy.runtime.writable_data_path)" `
+            --mount "type=bind,source=$smokeConfigPath,target=/etc/rocketmq,readonly" `
+            --tmpfs $tmpfsOptions `
+            --env "ROCKETMQ_SECURITY_PROFILE=development-insecure-loopback" `
+            --env "ROCKETMQ_HEALTH_BIND_ADDR=127.0.0.1:18088" `
+            $nameServerImageRef `
+            --configFile /etc/rocketmq/namesrv.toml `
+            --bindAddress 127.0.0.1
+    ).Trim()
+    Start-Sleep -Seconds 3
+    $nameServerHelperRunning =
+        (Invoke-Captured docker inspect --format "{{.State.Running}}" $nameServerHelperId).Trim()
+    if ($nameServerHelperRunning -ne "true") {
+        $nameServerHelperLogs = Invoke-Captured docker logs $nameServerHelperId
+        throw "NameServer helper exited before dependent service smoke: $nameServerHelperLogs"
+    }
 
     foreach ($serviceProperty in $policy.services.PSObject.Properties) {
         $serviceName = $serviceProperty.Name
@@ -198,13 +222,17 @@ try {
             throw "$serviceName runtime image user mismatch: $configuredUser"
         }
 
-        $entrypoint = @((Invoke-Captured docker image inspect --format "{{json .Config.Entrypoint}}" $imageRef) | ConvertFrom-Json)
+        $entrypointValue =
+            (Invoke-Captured docker image inspect --format "{{json .Config.Entrypoint}}" $imageRef) | ConvertFrom-Json
+        $entrypoint = @($entrypointValue)
         $expectedEntrypoint = "/usr/local/bin/$($service.binary)"
         if ($entrypoint.Count -ne 1 -or $entrypoint[0] -ne $expectedEntrypoint) {
             throw "$serviceName entrypoint mismatch: $($entrypoint -join ',')"
         }
 
-        $command = @((Invoke-Captured docker image inspect --format "{{json .Config.Cmd}}" $imageRef) | ConvertFrom-Json)
+        $commandValue =
+            (Invoke-Captured docker image inspect --format "{{json .Config.Cmd}}" $imageRef) | ConvertFrom-Json
+        $command = @($commandValue)
         $expectedCommand = @($service.command)
         if (($command -join "`n") -ne ($expectedCommand -join "`n")) {
             throw "$serviceName command mismatch"
@@ -232,25 +260,143 @@ try {
             }
         }
 
-        $ownedBinaries = (Invoke-Captured docker run --rm --entrypoint /bin/sh $imageRef -c "find /usr/local/bin -maxdepth 1 -type f -name 'rocketmq-*' -printf '%f\n' | sort").Split("`n", [System.StringSplitOptions]::RemoveEmptyEntries)
+        $ownedBinaries = (
+            Invoke-Captured docker run --rm --network none --entrypoint /usr/bin/find $imageRef `
+                /usr/local/bin -maxdepth 1 -type f -name "rocketmq-*" -printf '%f\n'
+        ).Split("`n", [System.StringSplitOptions]::RemoveEmptyEntries)
         if ($ownedBinaries.Count -ne 1 -or $ownedBinaries[0] -ne $service.binary) {
             throw "$serviceName runtime image contains binaries outside its owner boundary: $($ownedBinaries -join ',')"
         }
 
-        & docker run --rm --network none --read-only --tmpfs $tmpfsOptions $imageRef *> $null
-        if ($LASTEXITCODE -eq 0) {
+        $missingConfigExitCode = 0
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            & docker run --rm --network none --read-only --tmpfs $tmpfsOptions `
+                --env "ROCKETMQ_SECURITY_PROFILE=development-insecure-loopback" `
+                --env "ROCKETMQ_HEALTH_BIND_ADDR=$loopbackHealthBind" `
+                $imageRef 2> $null | Out-Null
+            $missingConfigExitCode = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+        if ($missingConfigExitCode -eq 0) {
             throw "$serviceName must fail closed when its required config mount is absent"
         }
 
-        $permissionSmoke = @(
-            "set -eu",
-            ('test "$(id -u)" = {0}' -f $policy.runtime.uid),
-            ('test "$(id -g)" = {0}' -f $policy.runtime.gid),
-            "! touch /opt/rocketmq/rootfs-must-stay-read-only 2>/dev/null",
-            "touch $($service.data_path)/data-write",
-            "touch $($policy.runtime.tmpfs_path)/tmp-write"
-        ) -join "; "
-        Invoke-Checked docker run --rm --network none --read-only --mount "type=volume,destination=$($policy.runtime.writable_data_path)" --tmpfs $tmpfsOptions --entrypoint /bin/sh $imageRef -c $permissionSmoke
+        $permissionArguments = @(
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "--read-only",
+            "--mount",
+            "type=volume,destination=$($policy.runtime.writable_data_path)",
+            "--tmpfs",
+            $tmpfsOptions
+        )
+        $runtimeUid = (Invoke-Captured docker @permissionArguments --entrypoint /usr/bin/id $imageRef -u).Trim()
+        if ($runtimeUid -ne [string]$policy.runtime.uid) {
+            throw "$serviceName effective uid mismatch: $runtimeUid"
+        }
+        $runtimeGid = (Invoke-Captured docker @permissionArguments --entrypoint /usr/bin/id $imageRef -g).Trim()
+        if ($runtimeGid -ne [string]$policy.runtime.gid) {
+            throw "$serviceName effective gid mismatch: $runtimeGid"
+        }
+        $rootfsWriteExitCode = 0
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            & docker @permissionArguments --entrypoint /usr/bin/touch $imageRef `
+                /opt/rocketmq/rootfs-must-stay-read-only 2> $null | Out-Null
+            $rootfsWriteExitCode = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+        if ($rootfsWriteExitCode -eq 0) {
+            throw "$serviceName runtime image root filesystem must remain read-only"
+        }
+        Invoke-Checked docker @permissionArguments --entrypoint /usr/bin/touch $imageRef `
+            "$($service.data_path)/data-write" `
+            "$($policy.runtime.tmpfs_path)/tmp-write"
+
+        if ($serviceName -eq "proxy") {
+            $brokerHelperId = (
+                Invoke-Captured docker run --detach --interactive `
+                    --network "container:$nameServerHelperId" `
+                    --read-only `
+                    --mount "type=volume,destination=$($policy.runtime.writable_data_path)" `
+                    --mount "type=bind,source=$smokeConfigPath,target=/etc/rocketmq,readonly" `
+                    --tmpfs $tmpfsOptions `
+                    --env "ROCKETMQ_SECURITY_PROFILE=development-insecure-loopback" `
+                    --env "ROCKETMQ_HEALTH_BIND_ADDR=127.0.0.1:18089" `
+                    rocketmq-rust/broker:verification
+            ).Trim()
+            Start-Sleep -Seconds 5
+            $brokerHelperRunning =
+                (Invoke-Captured docker inspect --format "{{.State.Running}}" $brokerHelperId).Trim()
+            if ($brokerHelperRunning -ne "true") {
+                $brokerHelperLogs = Invoke-Captured docker logs $brokerHelperId
+                throw "Broker helper exited before Proxy smoke: $brokerHelperLogs"
+            }
+        }
+
+        $containerId = ""
+        try {
+            $smokeNetwork = if ($serviceName -in @("broker", "proxy")) {
+                "container:$nameServerHelperId"
+            }
+            else {
+                "none"
+            }
+            $smokeArguments = @(
+                "run",
+                "--detach",
+                "--interactive",
+                "--network",
+                $smokeNetwork,
+                "--read-only",
+                "--mount",
+                "type=volume,destination=$($policy.runtime.writable_data_path)",
+                "--mount",
+                "type=bind,source=$smokeConfigPath,target=/etc/rocketmq,readonly",
+                "--tmpfs",
+                $tmpfsOptions,
+                "--env",
+                "ROCKETMQ_SECURITY_PROFILE=development-insecure-loopback",
+                "--env",
+                "ROCKETMQ_HEALTH_BIND_ADDR=$loopbackHealthBind",
+                "--env",
+                "ROCKETMQ_CONTROLLER_RAFT_BIND_ADDR=127.0.0.1:60110",
+                $imageRef
+            )
+            if ($serviceName -eq "namesrv") {
+                $smokeArguments += @($service.command)
+                $smokeArguments += @("--bindAddress", "127.0.0.1")
+            }
+            $containerId = (
+                Invoke-Captured docker @smokeArguments
+            ).Trim()
+            Start-Sleep -Seconds 5
+            $running = (Invoke-Captured docker inspect --format "{{.State.Running}}" $containerId).Trim()
+            if ($running -ne "true") {
+                $logs = Invoke-Captured docker logs $containerId
+                throw "$serviceName exited before SIGTERM smoke: $logs"
+            }
+            Invoke-Checked docker stop --signal SIGTERM --timeout $($policy.runtime.stop_grace_period_seconds) $containerId
+            $exitCode = [int](Invoke-Captured docker inspect --format "{{.State.ExitCode}}" $containerId).Trim()
+            if ($exitCode -ne 0) {
+                $logs = Invoke-Captured docker logs $containerId
+                throw "$serviceName SIGTERM exit code was $exitCode`: $logs"
+            }
+        }
+        finally {
+            if ($containerId) {
+                & docker rm --force $containerId *> $null
+            }
+        }
 
         $sbomPath = Join-Path $outputPath "$serviceName.cdx.json"
         $trivyPath = Join-Path $outputPath "$serviceName.trivy.json"
@@ -354,8 +500,14 @@ try {
     }
 }
 finally {
-    foreach ($containerId in @($smokeContainerIds)) {
+    foreach ($containerId in $smokeContainerIds) {
         & docker rm --force --volumes $containerId *> $null
+    }
+    if ($brokerHelperId) {
+        & docker rm --force --volumes $brokerHelperId *> $null
+    }
+    if ($nameServerHelperId) {
+        & docker rm --force --volumes $nameServerHelperId *> $null
     }
     if ($smokeNetworkCreated) {
         & docker network rm $smokeNetwork *> $null

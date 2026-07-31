@@ -1,0 +1,30 @@
+{
+  "pack": "deployment-drift.v1",
+  "scenario": "normal",
+  "expected_status": "healthy",
+  "expected_reason_codes": ["DEPLOYMENT_IN_SYNC"],
+  "evidence": [
+    {
+      "evidence_id": "00000000-0000-4000-8008-000000000101",
+      "source": "kubernetes",
+      "resource": "deployment-drift/rocketmq",
+      "content": {
+        "image_drift": false,
+        "feature_drift": false,
+        "config_drift": false,
+        "secret_metadata_drift": false,
+        "rbac_drift": false,
+        "pdb_drift": false,
+        "pvc_drift": false,
+        "replica_drift": false,
+        "topology_drift": false
+      }
+    },
+    {
+      "evidence_id": "00000000-0000-4000-8008-000000000111",
+      "source": "runtime",
+      "resource": "build-info/broker-a",
+      "content": { "image_revision": "sha256:image-a", "feature_set_digest": "sha256:features-a" }
+    }
+  ]
+}

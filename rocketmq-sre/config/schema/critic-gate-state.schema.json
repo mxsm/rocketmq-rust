@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Operator-facing state of the optional or required Critic gate.",
+  "enum": [
+    "unreviewed_not_required",
+    "pending_required",
+    "accepted",
+    "needs_revision",
+    "rejected",
+    "invalid",
+    "unavailable",
+    "conflict"
+  ],
+  "title": "CriticGateState",
+  "type": "string"
+}

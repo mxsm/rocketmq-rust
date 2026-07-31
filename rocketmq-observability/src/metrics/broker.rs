@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub use crate::semantic::metrics::BROKER_PERMISSION;
+pub use crate::semantic::metrics::BROKER_UP;
 pub use crate::semantic::metrics::COMMIT_MESSAGES_TOTAL;
 pub use crate::semantic::metrics::CONSUMER_CONNECTIONS;
 pub use crate::semantic::metrics::CONSUMER_GROUP_CREATE_EXECUTION_TIME;
@@ -56,6 +57,9 @@ impl BrokerMetrics {
 
     #[inline]
     pub fn record_metrics_label_dropped_total(&self, _count: u64, _attributes: &[()]) {}
+
+    #[inline]
+    pub fn record_broker_up(&self, _value: u64, _attributes: &[()]) {}
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -69,6 +73,7 @@ pub struct BrokerMetrics {
     message_size: opentelemetry::metrics::Histogram<u64>,
     send_message_latency: opentelemetry::metrics::Histogram<u64>,
     metrics_label_dropped_total: opentelemetry::metrics::Counter<u64>,
+    broker_up: opentelemetry::metrics::Gauge<u64>,
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -127,6 +132,11 @@ impl BrokerMetrics {
             .with_description("Total number of metrics labels dropped by cardinality guard")
             .with_unit("{label}")
             .build();
+        let broker_up = meter
+            .u64_gauge(BROKER_UP)
+            .with_description("Broker process is initialized and serving")
+            .with_unit("1")
+            .build();
 
         Self {
             telemetry,
@@ -137,6 +147,7 @@ impl BrokerMetrics {
             message_size,
             send_message_latency,
             metrics_label_dropped_total,
+            broker_up,
         }
     }
 
@@ -193,6 +204,11 @@ impl BrokerMetrics {
             self.metrics_label_dropped_total.add(count, attributes);
         }
     }
+
+    #[inline]
+    pub fn record_broker_up(&self, value: u64, attributes: &[opentelemetry::KeyValue]) {
+        self.broker_up.record(value, attributes);
+    }
 }
 
 #[cfg(all(test, feature = "otel-metrics"))]
@@ -216,5 +232,6 @@ mod tests {
         metrics.record_message_size(128, &attrs);
         metrics.record_send_message_latency(10, &attrs);
         metrics.record_metrics_label_dropped_total(1, &attrs);
+        metrics.record_broker_up(1, &attrs);
     }
 }

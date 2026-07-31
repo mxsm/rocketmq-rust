@@ -54,11 +54,18 @@ async fn resource_payload<Q>(query: &Q, uri: &RocketmqResourceUri) -> Result<Val
 where
     Q: ReadOnlyQuery,
 {
+    let cluster = uri.cluster().unwrap_or_default().to_string();
     match &uri.kind {
+        ResourceKind::Capabilities => Err(ToolExecutionError::Internal(
+            "capability resources are rendered by the authenticated protocol handler".to_string(),
+        )),
+        ResourceKind::SystemRuntimeV1 | ResourceKind::SystemObservabilityV1 => Err(ToolExecutionError::Internal(
+            "system resources are rendered by the authenticated protocol handler".to_string(),
+        )),
         ResourceKind::Overview => {
             let output = query
                 .cluster_overview(ClusterOverviewArgs {
-                    cluster: uri.cluster.clone(),
+                    cluster: cluster.clone(),
                 })
                 .await?;
             Ok(live_payload(
@@ -73,7 +80,7 @@ where
         ResourceKind::Topics => {
             let output = query
                 .list_topics(ListTopicsArgs {
-                    cluster: Some(uri.cluster.clone()),
+                    cluster: Some(cluster.clone()),
                     filter: None,
                     page: PageRequest::default(),
                 })
@@ -90,7 +97,7 @@ where
         ResourceKind::Topic(topic) => {
             let output = query
                 .describe_topic(DescribeTopicArgs {
-                    cluster: uri.cluster.clone(),
+                    cluster: cluster.clone(),
                     topic: topic.clone(),
                     page: PageRequest::default(),
                 })
@@ -107,7 +114,7 @@ where
         ResourceKind::TopicRoute(topic) => {
             let output = query
                 .query_topic_route(QueryTopicRouteArgs {
-                    cluster: uri.cluster.clone(),
+                    cluster: cluster.clone(),
                     topic: topic.clone(),
                     page: PageRequest::default(),
                 })
@@ -124,7 +131,7 @@ where
         ResourceKind::Brokers => {
             let output = query
                 .cluster_overview(ClusterOverviewArgs {
-                    cluster: uri.cluster.clone(),
+                    cluster: cluster.clone(),
                 })
                 .await?;
             Ok(live_payload(
@@ -139,14 +146,14 @@ where
         ResourceKind::Broker(broker) => {
             let output = query
                 .describe_broker(DescribeBrokerArgs {
-                    cluster: uri.cluster.clone(),
+                    cluster: cluster.clone(),
                     broker_name: broker.clone(),
                 })
                 .await?;
             if output.data.brokers.is_empty() {
                 return Err(ToolExecutionError::InvalidArguments(format!(
                     "broker not found in cluster {}: {broker}",
-                    uri.cluster
+                    cluster
                 )));
             }
             Ok(live_payload(
@@ -161,7 +168,7 @@ where
         ResourceKind::ConsumerGroups => {
             let output = query
                 .list_consumer_groups(ListConsumerGroupsArgs {
-                    cluster: Some(uri.cluster.clone()),
+                    cluster: Some(cluster.clone()),
                     filter: None,
                     page: PageRequest::default(),
                 })
@@ -178,7 +185,7 @@ where
         ResourceKind::ConsumerGroup(group) => {
             let output = query
                 .list_consumer_groups(ListConsumerGroupsArgs {
-                    cluster: Some(uri.cluster.clone()),
+                    cluster: Some(cluster.clone()),
                     filter: Some(group.clone()),
                     page: PageRequest::default(),
                 })
@@ -193,7 +200,7 @@ where
                 .ok_or_else(|| {
                     ToolExecutionError::InvalidArguments(format!(
                         "consumer group not found in cluster {}: {group}",
-                        uri.cluster
+                        cluster
                     ))
                 })?;
             Ok(live_payload(
@@ -208,7 +215,7 @@ where
         ResourceKind::ConsumerLag { group, topic } => {
             let output = query
                 .query_consumer_lag(QueryConsumerLagArgs {
-                    cluster: uri.cluster.clone(),
+                    cluster: cluster.clone(),
                     topic: topic.clone(),
                     consumer_group: group.clone(),
                     page: PageRequest::default(),
@@ -237,7 +244,7 @@ fn live_payload(
     let mut payload = serde_json::Map::from_iter([
         ("schema_version".to_string(), json!(SCHEMA_VERSION)),
         ("resource".to_string(), json!(uri.as_string())),
-        ("cluster".to_string(), json!(uri.cluster)),
+        ("cluster".to_string(), json!(uri.cluster())),
         ("observed_at".to_string(), json!(observed_at)),
         ("freshness_ms".to_string(), json!(freshness_ms)),
         ("cache_status".to_string(), json!(cache_status)),
@@ -266,7 +273,19 @@ fn resource_error(uri: &str, error: ToolExecutionError) -> ErrorData {
         ),
         ToolExecutionError::PermissionDenied(_) => ErrorData::internal_error(
             format!("permission denied for RocketMQ resource: {uri}"),
-            Some(json!({ "code": "resource_permission_denied", "retryable": false })),
+            Some(json!({ "code": "permission_denied", "retryable": false })),
+        ),
+        ToolExecutionError::UnauthorizedScope(_) => ErrorData::internal_error(
+            format!("permission denied for RocketMQ resource: {uri}"),
+            Some(json!({ "code": "unauthorized_scope", "retryable": false })),
+        ),
+        ToolExecutionError::TenantMismatch(_) => ErrorData::internal_error(
+            format!("permission denied for RocketMQ resource: {uri}"),
+            Some(json!({ "code": "tenant_mismatch", "retryable": false })),
+        ),
+        ToolExecutionError::ClusterNotAllowed(_) => ErrorData::internal_error(
+            format!("permission denied for RocketMQ resource: {uri}"),
+            Some(json!({ "code": "cluster_not_allowed", "retryable": false })),
         ),
         ToolExecutionError::RateLimited(_) => ErrorData::internal_error(
             format!("rate limit exceeded for RocketMQ resource: {uri}"),
@@ -274,11 +293,13 @@ fn resource_error(uri: &str, error: ToolExecutionError) -> ErrorData {
         ),
         ToolExecutionError::Backend(_) => ErrorData::internal_error(
             format!("live RocketMQ resource query failed: {uri}"),
-            Some(json!({ "code": "resource_backend_unavailable", "retryable": true })),
+            Some(json!({ "code": "source_unavailable", "retryable": true })),
         ),
-        ToolExecutionError::ChangePlanningDisabled(_)
-        | ToolExecutionError::Internal(_)
-        | ToolExecutionError::OutputTooLarge { .. } => ErrorData::internal_error(
+        ToolExecutionError::OutputTooLarge { .. } => ErrorData::internal_error(
+            format!("live RocketMQ resource query output is too large: {uri}"),
+            Some(json!({ "code": "output_too_large", "retryable": false })),
+        ),
+        ToolExecutionError::ChangePlanningDisabled(_) | ToolExecutionError::Internal(_) => ErrorData::internal_error(
             format!("live RocketMQ resource query failed: {uri}"),
             Some(json!({ "code": "resource_query_failed", "retryable": false })),
         ),
@@ -542,9 +563,9 @@ mod tests {
             ToolExecutionError::backend("nameserver unavailable secret_key=hidden"),
         );
 
-        assert_eq!(permission.data.unwrap()["code"], "resource_permission_denied");
+        assert_eq!(permission.data.unwrap()["code"], "permission_denied");
         assert_eq!(timeout.data.unwrap()["code"], "resource_query_timeout");
-        assert_eq!(backend.data.unwrap()["code"], "resource_backend_unavailable");
+        assert_eq!(backend.data.unwrap()["code"], "source_unavailable");
         assert!(!backend.message.contains("secret_key"));
     }
 

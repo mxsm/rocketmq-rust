@@ -135,6 +135,23 @@ impl ConsumerConnectionAttributes {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConsumerLagAttributes {
+    pub topic: String,
+    pub consumer_group: String,
+    pub lag_messages: i64,
+}
+
+impl ConsumerLagAttributes {
+    pub fn new(topic: impl Into<String>, consumer_group: impl Into<String>, lag_messages: i64) -> Self {
+        Self {
+            topic: topic.into(),
+            consumer_group: consumer_group.into(),
+            lag_messages,
+        }
+    }
+}
+
 impl AttributesBuilderSupplier for BrokerAttributesSupplier {
     fn get(&self) -> Vec<KeyValue> {
         vec![
@@ -445,6 +462,8 @@ impl BrokerMetricsManager {
 
         #[cfg(feature = "otel-metrics")]
         let broker_metrics = BrokerMetrics::new(&meter);
+        #[cfg(feature = "otel-metrics")]
+        broker_metrics.record_broker_up(1, &attributes_supplier.get());
 
         let send_to_dlq_messages = meter
             .u64_counter(BrokerMetricsConstant::COUNTER_CONSUMER_SEND_TO_DLQ_MESSAGES_TOTAL)
@@ -746,6 +765,61 @@ impl BrokerMetricsManager {
                     let mut attrs = attributes_supplier.get();
                     attrs.push(KeyValue::new(BrokerMetricsConstant::LABEL_AUTH_METRIC, sample.name));
                     observer.observe(sample.value, &attrs);
+                }
+            })
+            .build();
+    }
+
+    #[cfg(feature = "otel-metrics")]
+    pub fn register_consumer_lag_observable_gauge<F>(&self, consumer_lag_snapshot_fn: F)
+    where
+        F: Fn() -> Vec<ConsumerLagAttributes> + Send + Sync + 'static,
+    {
+        let attributes_supplier = self.attributes_supplier.clone();
+        let label_policy = self.label_policy.clone();
+        let broker_metrics = self.broker_metrics.clone();
+        let _consumer_lag = self
+            .meter
+            .i64_observable_gauge(BrokerMetricsConstant::GAUGE_CONSUMER_LAG_MESSAGES)
+            .with_description("Current consumer lag aggregated by topic and consumer group")
+            .with_unit("{message}")
+            .with_callback(move |observer| {
+                for observation in consumer_lag_snapshot_fn() {
+                    let topic_label =
+                        guarded_bounded_label(&label_policy, BrokerMetricsConstant::LABEL_TOPIC, &observation.topic);
+                    let consumer_group_label = guarded_bounded_label(
+                        &label_policy,
+                        BrokerMetricsConstant::LABEL_CONSUMER_GROUP,
+                        &observation.consumer_group,
+                    );
+                    for (label_key, dropped) in [
+                        (BrokerMetricsConstant::LABEL_TOPIC, topic_label.dropped),
+                        (
+                            BrokerMetricsConstant::LABEL_CONSUMER_GROUP,
+                            consumer_group_label.dropped,
+                        ),
+                    ] {
+                        if dropped {
+                            let mut dropped_attrs = attributes_supplier.get();
+                            dropped_attrs.push(KeyValue::new("label_key", label_key));
+                            broker_metrics.record_metrics_label_dropped_total(1, &dropped_attrs);
+                        }
+                    }
+
+                    let mut attrs = attributes_supplier.get();
+                    attrs.extend([
+                        topic_label.key_value,
+                        consumer_group_label.key_value,
+                        KeyValue::new(
+                            BrokerMetricsConstant::LABEL_IS_RETRY,
+                            is_retry_or_dlq_topic(&observation.topic).to_string(),
+                        ),
+                        KeyValue::new(
+                            BrokerMetricsConstant::LABEL_IS_SYSTEM,
+                            is_system(&observation.topic, &observation.consumer_group).to_string(),
+                        ),
+                    ]);
+                    observer.observe(observation.lag_messages.max(0), &attrs);
                 }
             })
             .build();
@@ -1337,6 +1411,20 @@ mod tests {
                 ..AuthMetricsSnapshot::default()
             })
         });
+    }
+
+    #[test]
+    #[cfg(feature = "otel-metrics")]
+    fn consumer_lag_observable_gauge_accepts_bounded_snapshot() {
+        let meter_provider = SdkMeterProvider::builder().build();
+        let meter = meter_provider.meter("consumer-lag-metrics-test");
+        let manager = BrokerMetricsManager::new_with_label_config(
+            meter,
+            Arc::new(NoopAttributesSupplier),
+            BrokerMetricsLabelConfig::new(10, true, true),
+        );
+
+        manager.register_consumer_lag_observable_gauge(|| vec![ConsumerLagAttributes::new("topic-a", "group-a", 42)]);
     }
 
     #[test]

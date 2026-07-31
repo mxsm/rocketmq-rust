@@ -28,6 +28,18 @@ use rocketmq_security_api::Action;
 use crate::auth::acl_converter::AclConverter;
 use crate::auth::user_converter::UserConverter;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthAdminDiagnosticsSnapshot {
+    pub authentication_enabled: bool,
+    pub authorization_enabled: bool,
+    pub acl_file_watch_enabled: bool,
+    pub acl_generation: u64,
+    pub acl_reload_attempts: u64,
+    pub acl_reload_successes: u64,
+    pub acl_reload_failures: u64,
+    pub acl_reload_skipped: u64,
+}
+
 #[derive(Clone)]
 pub struct AuthAdminService {
     auth_config: AuthConfig,
@@ -68,6 +80,20 @@ impl AuthAdminService {
 
     pub fn authorization_provider(&self) -> Arc<LocalAuthorizationMetadataProvider> {
         self.authorization_provider.clone()
+    }
+
+    pub(crate) fn diagnostics_snapshot(&self) -> AuthAdminDiagnosticsSnapshot {
+        let metrics = self.provider_registry.metrics_snapshot();
+        AuthAdminDiagnosticsSnapshot {
+            authentication_enabled: self.auth_config.authentication_enabled,
+            authorization_enabled: self.auth_config.authorization_enabled,
+            acl_file_watch_enabled: self.auth_config.acl_file_watch_enabled,
+            acl_generation: self.provider_registry.acl_generation(),
+            acl_reload_attempts: metrics.acl_reload_attempts,
+            acl_reload_successes: metrics.acl_reload_successes,
+            acl_reload_failures: metrics.acl_reload_failures,
+            acl_reload_skipped: metrics.acl_reload_skipped,
+        }
     }
 
     pub async fn create_user(&self, user: User) -> RocketMQResult<()> {

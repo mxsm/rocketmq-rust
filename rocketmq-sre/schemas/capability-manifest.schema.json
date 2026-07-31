@@ -1,0 +1,85 @@
+{
+  "$defs": {
+    "CapabilityToolWire": {
+      "properties": {
+        "destructive": {
+          "type": "boolean"
+        },
+        "mutates_cluster": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "read_only": {
+          "type": "boolean"
+        },
+        "risk_level": {
+          "type": "string"
+        },
+        "schema_digest": {
+          "type": "string"
+        },
+        "task_support": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "risk_level",
+        "schema_digest",
+        "read_only",
+        "destructive",
+        "task_support",
+        "mutates_cluster"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Schema-only mirror of the Connector-owned MCP capability wire contract.\n\nKeeping this type local preserves the black-box MCP boundary while still\npublishing the exact Phase 00 JSON shape as a standalone artifact.",
+  "properties": {
+    "business_schema_version": {
+      "type": "string"
+    },
+    "cluster": {
+      "type": "string"
+    },
+    "mcp_protocol_version": {
+      "type": "string"
+    },
+    "mutation_supported": {
+      "type": "boolean"
+    },
+    "resources": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "server_version": {
+      "type": "string"
+    },
+    "tool_surface_digest": {
+      "type": "string"
+    },
+    "tools": {
+      "items": {
+        "$ref": "#/$defs/CapabilityToolWire"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "mcp_protocol_version",
+    "business_schema_version",
+    "server_version",
+    "cluster",
+    "tools",
+    "resources",
+    "tool_surface_digest",
+    "mutation_supported"
+  ],
+  "title": "CapabilityManifestWire",
+  "type": "object"
+}

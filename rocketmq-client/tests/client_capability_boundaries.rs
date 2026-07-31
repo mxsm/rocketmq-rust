@@ -14,6 +14,8 @@
 
 const CLIENT_FACADE: &str = include_str!("../src/implementation/mq_client_api_impl.rs");
 const CLIENT_ADMIN: &str = include_str!("../src/implementation/mq_client_api_impl/admin.rs");
+const CLIENT_VERSIONED_CONFIG: &str =
+    include_str!("../src/implementation/mq_client_api_impl/admin/versioned_config.rs");
 const CLIENT_CONSUMER: &str = include_str!("../src/implementation/mq_client_api_impl/consumer.rs");
 const CLIENT_PRODUCER: &str = include_str!("../src/implementation/mq_client_api_impl/producer.rs");
 const CLIENT_REQUEST_BUILDER: &str = include_str!("../src/implementation/mq_client_api_impl/request_builder.rs");
@@ -26,6 +28,7 @@ const ADMIN_FACADE: &str = include_str!("../src/admin/default_mq_admin_ext_impl.
 const ADMIN_API: &str = include_str!("../src/admin/default_mq_admin_ext_impl/admin_api.rs");
 const ADMIN_BROKER: &str = include_str!("../src/admin/default_mq_admin_ext_impl/broker.rs");
 const ADMIN_GROUP: &str = include_str!("../src/admin/default_mq_admin_ext_impl/group.rs");
+const ADMIN_LIFECYCLE: &str = include_str!("../src/admin/default_mq_admin_ext_impl/lifecycle.rs");
 const ADMIN_SECURITY: &str = include_str!("../src/admin/default_mq_admin_ext_impl/security.rs");
 const ADMIN_TOPIC: &str = include_str!("../src/admin/default_mq_admin_ext_impl/topic.rs");
 
@@ -50,7 +53,7 @@ fn client_facades_declare_explicit_capability_modules() {
     ] {
         assert!(CLIENT_FACADE.contains(&format!("mod {module};")));
     }
-    for module in ["admin_api", "broker", "group", "security", "topic"] {
+    for module in ["admin_api", "broker", "group", "lifecycle", "security", "topic"] {
         assert!(ADMIN_FACADE.contains(&format!("mod {module};")));
     }
     for module in ["lifecycle", "retry", "send", "transaction"] {
@@ -60,6 +63,7 @@ fn client_facades_declare_explicit_capability_modules() {
     assert!(CLIENT_FACADE.lines().count() <= 450);
     assert!(ADMIN_FACADE.lines().count() <= 300);
     assert!(PRODUCER_FACADE.lines().count() <= 450);
+    assert!(CLIENT_ADMIN.contains("mod versioned_config;"));
     assert!(!CLIENT_FACADE.contains("pub async fn send_message"));
     assert!(!ADMIN_FACADE.contains("impl MQAdminExt for DefaultMQAdminExtImpl"));
     assert!(!PRODUCER_FACADE.contains("pub async fn send_with_timeout"));
@@ -109,6 +113,7 @@ fn protocol_and_retry_responsibilities_remain_in_their_own_modules() {
 fn capability_files_stay_within_the_reviewed_split_limits() {
     for (name, source, limit) in [
         ("client/admin.rs", CLIENT_ADMIN, 3_650),
+        ("client/admin/versioned_config.rs", CLIENT_VERSIONED_CONFIG, 700),
         ("client/consumer.rs", CLIENT_CONSUMER, 1_650),
         ("client/producer.rs", CLIENT_PRODUCER, 950),
         ("client/request_builder.rs", CLIENT_REQUEST_BUILDER, 150),
@@ -119,6 +124,7 @@ fn capability_files_stay_within_the_reviewed_split_limits() {
         ("admin/admin_api.rs", ADMIN_API, 2_750),
         ("admin/broker.rs", ADMIN_BROKER, 250),
         ("admin/group.rs", ADMIN_GROUP, 550),
+        ("admin/lifecycle.rs", ADMIN_LIFECYCLE, 200),
         ("admin/security.rs", ADMIN_SECURITY, 200),
         ("admin/topic.rs", ADMIN_TOPIC, 450),
         ("producer/lifecycle.rs", PRODUCER_LIFECYCLE, 1_250),
@@ -137,6 +143,7 @@ fn capability_files_stay_within_the_reviewed_split_limits() {
 fn capability_split_does_not_introduce_detached_runtime_work() {
     let production_sources = [
         CLIENT_ADMIN,
+        CLIENT_VERSIONED_CONFIG,
         CLIENT_CONSUMER,
         CLIENT_PRODUCER,
         CLIENT_REQUEST_BUILDER,
@@ -147,6 +154,7 @@ fn capability_split_does_not_introduce_detached_runtime_work() {
         ADMIN_API,
         ADMIN_BROKER,
         ADMIN_GROUP,
+        ADMIN_LIFECYCLE,
         ADMIN_SECURITY,
         ADMIN_TOPIC,
         PRODUCER_LIFECYCLE,

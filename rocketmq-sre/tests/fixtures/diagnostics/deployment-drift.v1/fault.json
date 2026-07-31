@@ -1,0 +1,31 @@
+{
+  "pack": "deployment-drift.v1",
+  "scenario": "fault",
+  "expected_status": "fault",
+  "expected_reason_codes": [
+    "DEPLOYMENT_IMAGE_FEATURE_DRIFT",
+    "DEPLOYMENT_CONFIG_DRIFT",
+    "DEPLOYMENT_SECURITY_DRIFT",
+    "DEPLOYMENT_AVAILABILITY_DRIFT",
+    "DEPLOYMENT_STORAGE_DRIFT",
+    "DEPLOYMENT_TOPOLOGY_DRIFT"
+  ],
+  "evidence": [
+    {
+      "evidence_id": "00000000-0000-4000-8008-000000000102",
+      "source": "kubernetes",
+      "resource": "deployment-drift/rocketmq",
+      "content": {
+        "image_drift": true,
+        "feature_drift": true,
+        "config_drift": true,
+        "secret_metadata_drift": true,
+        "rbac_drift": true,
+        "pdb_drift": true,
+        "pvc_drift": true,
+        "replica_drift": true,
+        "topology_drift": true
+      }
+    }
+  ]
+}

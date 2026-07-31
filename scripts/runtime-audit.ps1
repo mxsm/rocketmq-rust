@@ -276,6 +276,9 @@ function Get-RuntimeAuditScope {
     if ($normalized -match "(^|/)tests/") {
         return "test"
     }
+    if ($normalized -match "(^|/)[^/]+_tests\.rs$") {
+        return "test"
+    }
     if ($normalized -match "(^|/)examples/") {
         return "example"
     }
@@ -1783,6 +1786,62 @@ function Get-SchedulerDisposition {
         }
     }
 
+    if ($path -eq "rocketmq-sre/crates/rocketmq-sre-connector/src/channel.rs") {
+        return [pscustomobject]@{
+            Disposition = "sre-connector-owned-channel-timer"
+            ActionRequired = $false
+            Reason = "Allowed reverse-channel retry and heartbeat timers; the enclosing connector task is rooted in ChildServiceContext, observes its TaskGroup cancellation token, and cancels outstanding commands before exit."
+        }
+    }
+
+    if ($path -eq "rocketmq-sre/crates/rocketmq-sre-probe/src/main.rs") {
+        return [pscustomobject]@{
+            Disposition = "sre-bounded-synthetic-probe-timer"
+            ActionRequired = $false
+            Reason = "Allowed bounded synthetic-probe registration delay; the command is wrapped by the configured operation timeout, runs inside RuntimeOwner, and shuts down both ClientRuntime and RuntimeOwner before exit."
+        }
+    }
+
+    if ($path -eq "rocketmq-sre/crates/rocketmq-sre-probe/src/rocketmq_driver.rs") {
+        return [pscustomobject]@{
+            Disposition = "sre-bounded-probe-rate-pacing"
+            ActionRequired = $false
+            Reason = "Allowed request-local probe send pacing; message count and interval are validated against hard limits, the whole scenario has a deadline, and no background task or scheduler is created."
+        }
+    }
+
+    if ($path -eq "rocketmq-sre/crates/rocketmq-sre-executor/src/verifier.rs") {
+        return [pscustomobject]@{
+            Disposition = "sre-bounded-verification-poll"
+            ActionRequired = $false
+            Reason = "Allowed request-local verification polling; the descriptor maximum wait and hard observation limit bound the loop, and no background task, thread, or scheduler is created."
+        }
+    }
+
+    if ($path -eq "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/production_proxy_restart.rs") {
+        return [pscustomobject]@{
+            Disposition = "sre-bounded-proxy-restart-poll"
+            ActionRequired = $false
+            Reason = "Allowed request-local drain and replacement polling; both loops share the validated action deadline, run inline in the fenced driver request, and create no background task, thread, or scheduler."
+        }
+    }
+
+    if ($path -eq "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/production_proxy_restart_tests.rs") {
+        return [pscustomobject]@{
+            Disposition = "sre-proxy-restart-test-fixture-poll"
+            ActionRequired = $false
+            Reason = "Allowed test-only Kubernetes fixture readiness polling with a fixed iteration bound; no production task or scheduler is created."
+        }
+    }
+
+    if ($path -eq "rocketmq-sre/crates/rocketmq-sre-execution-agent/src/drivers/production_proxy_image_canary_tests.rs") {
+        return [pscustomobject]@{
+            Disposition = "sre-proxy-canary-test-fixture-poll"
+            ActionRequired = $false
+            Reason = "Allowed test-only Kubernetes canary readiness polling with a fixed iteration bound; no production task or scheduler is created."
+        }
+    }
+
     return [pscustomobject]@{
         Disposition = "unclassified-follow-up"
         ActionRequired = $true
@@ -2436,7 +2495,7 @@ $classificationLines = @(
     "",
     "Each audit row includes a Scope column. Scope is production, test, benchmark, or example.",
     "Benchmark scope includes benches/ paths, inline modules named bench_support, and diagnostic functions named run_*_lifecycle_probe.",
-    "Test scope includes tests/ paths and best-effort source ranges under #[cfg(test)] or #[tokio::test].",
+    "Test scope includes tests/ paths, source test modules named *_tests.rs, and best-effort source ranges under #[cfg(test)] or #[tokio::test].",
     "Production-only reports are emitted as production-*.md so migration planning can ignore test harness noise.",
     '`production-runtime-spawn-disposition.md` separates allowed runtime primitives and dedicated OS threads from remaining follow-up items.',
     '`production-runtime-creation-disposition.md` separates entrypoint runtimes, runtime primitives, documented compatibility bridges, and remaining follow-up items.',

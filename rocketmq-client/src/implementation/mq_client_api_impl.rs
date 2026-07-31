@@ -21,6 +21,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::base::client_config::ClientConfig;
+#[cfg(feature = "admin-full")]
 use crate::base::mq_client_admin::MqClientAdminInner;
 use crate::consumer::ack_callback::AckCallback;
 use crate::consumer::ack_result::AckResult;
@@ -52,9 +53,12 @@ use crate::base::validators::Validators;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::attribute::attribute_parser::AttributeParser;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_model::common::base::plain_access_config::PlainAccessConfig;
 use rocketmq_model::common::config::TopicConfig;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_model::common::constant::file_readahead_mode;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_model::common::lite::LiteSubscriptionDTO;
 use rocketmq_model::common::message::message_batch::MessageBatch;
 use rocketmq_model::common::message::message_client_id_setter::MessageClientIDSetter;
@@ -73,7 +77,9 @@ use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+#[cfg(feature = "admin-full")]
 use rocketmq_protocol::protocol::admin::consume_stats::ConsumeStats;
+#[cfg(feature = "admin-full")]
 use rocketmq_protocol::protocol::admin::topic_stats_table::TopicStatsTable;
 use rocketmq_protocol::protocol::bodies::broker::GetBrokerLiteInfoResponseBody;
 use rocketmq_protocol::protocol::body::acl_info::AclInfo;
@@ -85,8 +91,11 @@ use rocketmq_protocol::protocol::body::broker_replicas_info::BrokerReplicasInfo;
 use rocketmq_protocol::protocol::body::check_client_request_body::CheckClientRequestBody;
 use rocketmq_protocol::protocol::body::check_rocksdb_cqwrite_progress_response_body::CheckRocksdbCqWriteResult;
 use rocketmq_protocol::protocol::body::cluster_acl_version_info::ClusterAclVersionInfo;
+#[cfg(feature = "admin-full")]
 use rocketmq_protocol::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
+#[cfg(feature = "admin-full")]
 use rocketmq_protocol::protocol::body::consumer_running_info::ConsumerRunningInfo;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::body::create_topic_list_request_body::CreateTopicListRequestBody;
 use rocketmq_protocol::protocol::body::epoch_entry_cache::EpochEntryCache;
 use rocketmq_protocol::protocol::body::get_consumer_list_by_group_response_body::GetConsumerListByGroupResponseBody;
@@ -94,52 +103,77 @@ use rocketmq_protocol::protocol::body::get_lite_client_info_response_body::GetLi
 use rocketmq_protocol::protocol::body::get_lite_group_info_response_body::GetLiteGroupInfoResponseBody;
 use rocketmq_protocol::protocol::body::get_lite_topic_info_response_body::GetLiteTopicInfoResponseBody;
 use rocketmq_protocol::protocol::body::get_parent_topic_info_response_body::GetParentTopicInfoResponseBody;
+#[cfg(feature = "admin-full")]
 use rocketmq_protocol::protocol::body::group_list::GroupList;
 use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::body::lite_subscription_ctl_request_body::LiteSubscriptionCtlRequestBody;
 use rocketmq_protocol::protocol::body::producer_connection::ProducerConnection;
 use rocketmq_protocol::protocol::body::producer_table_info::ProducerTableInfo;
+#[cfg(feature = "admin-mutation")]
+use rocketmq_protocol::protocol::body::proxy_drain::ProxyDrainOperationRequestBody;
+#[cfg(any(feature = "admin-read", feature = "admin-mutation"))]
+use rocketmq_protocol::protocol::body::proxy_drain::ProxyDrainStateResponseBody;
+#[cfg(any(feature = "admin-read", feature = "admin-mutation"))]
+use rocketmq_protocol::protocol::body::proxy_drain::PROXY_DRAIN_SCHEMA_VERSION;
 use rocketmq_protocol::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
 use rocketmq_protocol::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
 use rocketmq_protocol::protocol::body::query_consume_queue_response_body::QueryConsumeQueueResponseBody;
 use rocketmq_protocol::protocol::body::query_consume_time_span_body::QueryConsumeTimeSpanBody;
 use rocketmq_protocol::protocol::body::query_correction_offset_body::QueryCorrectionOffsetBody;
 use rocketmq_protocol::protocol::body::query_subscription_response_body::QuerySubscriptionResponseBody;
+#[cfg(feature = "admin-full")]
 use rocketmq_protocol::protocol::body::queue_time_span::QueueTimeSpan;
 use rocketmq_protocol::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
 use rocketmq_protocol::protocol::body::response::get_consumer_status_body::GetConsumerStatusBody;
 use rocketmq_protocol::protocol::body::response::lock_batch_response_body::LockBatchResponseBody;
 use rocketmq_protocol::protocol::body::response::reset_offset_body::ResetOffsetBody;
 use rocketmq_protocol::protocol::body::set_message_request_mode_request_body::SetMessageRequestModeRequestBody;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::body::subscription_group_list::SubscriptionGroupList;
 use rocketmq_protocol::protocol::body::topic::topic_list::TopicList;
 use rocketmq_protocol::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
 use rocketmq_protocol::protocol::body::user_info::UserInfo;
 use rocketmq_protocol::protocol::header::ack_message_request_header::AckMessageRequestHeader;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::add_broker_request_header::AddBrokerRequestHeader;
 use rocketmq_protocol::protocol::header::change_invisible_time_request_header::ChangeInvisibleTimeRequestHeader;
 use rocketmq_protocol::protocol::header::change_invisible_time_response_header::ChangeInvisibleTimeResponseHeader;
 use rocketmq_protocol::protocol::header::check_rocksdb_cq_write_progress_request_header::CheckRocksdbCqWriteProgressRequestHeader;
 use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::clone_group_offset_request_header::CloneGroupOffsetRequestHeader;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader;
 use rocketmq_protocol::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::controller::clean_broker_data_request_header::CleanBrokerDataRequestHeader;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::controller::elect_master_request_header::ElectMasterRequestHeader;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::create_acl_request_header::CreateAclRequestHeader;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::create_topic_list_request_header::CreateTopicListRequestHeader;
 use rocketmq_protocol::protocol::header::create_topic_request_header::CreateTopicRequestHeader;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::create_user_request_header::CreateUserRequestHeader;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::delete_acl_request_header::DeleteAclRequestHeader;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::delete_topic_request_header::DeleteTopicRequestHeader;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::delete_user_request_header::DeleteUserRequestHeader;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::elect_master_response_header::ElectMasterResponseHeader;
 use rocketmq_protocol::protocol::header::empty_header::EmptyHeader;
 use rocketmq_protocol::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigToJsonRequestHeader;
 use rocketmq_protocol::protocol::header::extra_info_util::ExtraInfoUtil;
 use rocketmq_protocol::protocol::header::get_acl_request_header::GetAclRequestHeader;
+#[cfg(feature = "admin-full")]
 use rocketmq_protocol::protocol::header::get_consume_stats_request_header::GetConsumeStatsRequestHeader;
 use rocketmq_protocol::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
 use rocketmq_protocol::protocol::header::get_consumer_running_info_request_header::GetConsumerRunningInfoRequestHeader;
@@ -167,17 +201,25 @@ use rocketmq_protocol::protocol::header::message_operation_header::send_message_
 use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
 use rocketmq_protocol::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
 use rocketmq_protocol::protocol::header::namesrv::broker_request::GetBrokerMemberGroupRequestHeader;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::namesrv::brokerid_change_request_header::NotifyMinBrokerIdChangeRequestHeader;
 use rocketmq_protocol::protocol::header::namesrv::config_header::GetNamesrvConfigRequestHeader;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::namesrv::kv_config_header::DeleteKVConfigRequestHeader;
 use rocketmq_protocol::protocol::header::namesrv::kv_config_header::GetKVConfigRequestHeader;
 use rocketmq_protocol::protocol::header::namesrv::kv_config_header::GetKVConfigResponseHeader;
 use rocketmq_protocol::protocol::header::namesrv::kv_config_header::GetKVListByNamespaceRequestHeader;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::namesrv::kv_config_header::PutKVConfigRequestHeader;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::namesrv::perm_broker_header::AddWritePermOfBrokerRequestHeader;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::namesrv::perm_broker_header::AddWritePermOfBrokerResponseHeader;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::namesrv::perm_broker_header::WipeWritePermOfBrokerRequestHeader;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::namesrv::perm_broker_header::WipeWritePermOfBrokerResponseHeader;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::namesrv::topic_operation_header::DeleteTopicFromNamesrvRequestHeader;
 use rocketmq_protocol::protocol::header::namesrv::topic_operation_header::GetTopicsByClusterRequestHeader;
 use rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader;
@@ -196,13 +238,18 @@ use rocketmq_protocol::protocol::header::query_correction_offset_header::QueryCo
 use rocketmq_protocol::protocol::header::query_message_request_header::QueryMessageRequestHeader;
 use rocketmq_protocol::protocol::header::query_message_response_header::QueryMessageResponseHeader;
 use rocketmq_protocol::protocol::header::query_subscription_by_consumer_request_header::QuerySubscriptionByConsumerRequestHeader;
+#[cfg(feature = "admin-full")]
 use rocketmq_protocol::protocol::header::query_topic_consume_by_who_request_header::QueryTopicConsumeByWhoRequestHeader;
 use rocketmq_protocol::protocol::header::query_topics_by_consumer_request_header::QueryTopicsByConsumerRequestHeader;
 use rocketmq_protocol::protocol::header::recall_message_request_header::RecallMessageRequestHeader;
 use rocketmq_protocol::protocol::header::recall_message_response_header::RecallMessageResponseHeader;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::remove_broker_request_header::RemoveBrokerRequestHeader;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::reset_master_flush_offset_header::ResetMasterFlushOffsetHeader;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::reset_offset_request_header::ResetOffsetRequestHeader;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::resume_check_half_message_request_header::ResumeCheckHalfMessageRequestHeader;
 use rocketmq_transport::ConnectionNetEvent;
 use rocketmq_transport::DefaultTopAddressing;
@@ -214,13 +261,18 @@ use rocketmq_transport::TopAddressing;
 
 use rocketmq_model::common::boundary_type::BoundaryType;
 use rocketmq_protocol::protocol::body::consumer_connection::ConsumerConnection;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::trigger_lite_dispatch_request_header::TriggerLiteDispatchRequestHeader;
 use rocketmq_protocol::protocol::header::unlock_batch_mq_request_header::UnlockBatchMqRequestHeader;
 use rocketmq_protocol::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::update_acl_request_header::UpdateAclRequestHeader;
 use rocketmq_protocol::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::update_global_white_addrs_config_request_header::UpdateGlobalWhiteAddrsConfigRequestHeader;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::update_group_forbidden_request_header::UpdateGroupForbiddenRequestHeader;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::header::update_user_request_header::UpdateUserRequestHeader;
 use rocketmq_protocol::protocol::header::view_message_request_header::ViewMessageRequestHeader;
 use rocketmq_protocol::protocol::headers::client::GetConsumerConnectionListRequestHeader;
@@ -234,8 +286,11 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_facade;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::static_topic::topic_config_and_queue_mapping::TopicConfigAndQueueMapping;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::subscription::group_forbidden::GroupForbidden;
+#[cfg(feature = "admin-mutation")]
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_protocol::protocol::LanguageCode;
 use rocketmq_protocol::protocol::RemotingDeserializable;

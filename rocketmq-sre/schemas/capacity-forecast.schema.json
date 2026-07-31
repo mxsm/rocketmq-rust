@@ -1,0 +1,288 @@
+{
+  "$defs": {
+    "ClusterId": {
+      "description": "Internal identifier for an onboarded cluster.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "EvidenceId": {
+      "description": "Stable identifier for an evidence snapshot.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ForecastBacktest": {
+      "description": "Deterministic holdout result used to monitor forecast accuracy.",
+      "properties": {
+        "bias": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "evaluated_points": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "interval_coverage_ratio": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "mean_absolute_error": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "evaluated_points"
+      ],
+      "type": "object"
+    },
+    "ForecastId": {
+      "description": "Stable identifier for a capacity or backlog forecast.",
+      "format": "uuid",
+      "type": "string"
+    },
+    "ForecastPoint": {
+      "description": "One observed or projected point in a forecast series.",
+      "properties": {
+        "at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "projected": {
+          "type": "boolean"
+        },
+        "value": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "at",
+        "value",
+        "projected"
+      ],
+      "type": "object"
+    },
+    "ForecastQuality": {
+      "description": "Explainable quality assessment for a forecast.",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
+    },
+    "ForecastStatus": {
+      "description": "Forecast availability and degradation state.",
+      "enum": [
+        "ready",
+        "insufficient_data",
+        "stale",
+        "unstable_trend",
+        "unsupported"
+      ],
+      "type": "string"
+    },
+    "ForecastTrend": {
+      "description": "Explainable direction of the fitted trend.",
+      "enum": [
+        "increasing",
+        "decreasing",
+        "stable",
+        "unstable",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "ForecastWindow": {
+      "description": "Historical window used to build a forecast.",
+      "enum": [
+        "seven_days",
+        "thirty_days"
+      ],
+      "type": "string"
+    },
+    "ResourceKind": {
+      "description": "Resource classes accepted by the Phase 2 correlation engine.",
+      "enum": [
+        "cluster",
+        "name_server",
+        "controller",
+        "broker",
+        "proxy",
+        "store",
+        "topic",
+        "queue",
+        "consumer_group",
+        "producer_group",
+        "pod",
+        "node",
+        "persistent_volume_claim",
+        "certificate",
+        "runtime",
+        "telemetry"
+      ],
+      "type": "string"
+    },
+    "ResourceRef": {
+      "description": "Tenant-scoped resource identity used for correlation and topology lookup.",
+      "properties": {
+        "display_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ResourceKind"
+        }
+      },
+      "required": [
+        "kind",
+        "key"
+      ],
+      "type": "object"
+    },
+    "TenantId": {
+      "description": "Stable tenant boundary identifier.",
+      "format": "uuid",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Capacity trend for one resource and metric.",
+  "properties": {
+    "advisories": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "algorithm_version": {
+      "type": "string"
+    },
+    "backtest": {
+      "$ref": "#/$defs/ForecastBacktest"
+    },
+    "cluster_id": {
+      "$ref": "#/$defs/ClusterId"
+    },
+    "coverage_ratio": {
+      "format": "double",
+      "type": "number"
+    },
+    "evidence_ids": {
+      "items": {
+        "$ref": "#/$defs/EvidenceId"
+      },
+      "type": "array"
+    },
+    "execution_eligible": {
+      "type": "boolean"
+    },
+    "exhaustion_at": {
+      "format": "date-time",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "id": {
+      "$ref": "#/$defs/ForecastId"
+    },
+    "metric": {
+      "type": "string"
+    },
+    "observed_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "points": {
+      "items": {
+        "$ref": "#/$defs/ForecastPoint"
+      },
+      "type": "array"
+    },
+    "quality": {
+      "$ref": "#/$defs/ForecastQuality"
+    },
+    "resource": {
+      "$ref": "#/$defs/ResourceRef"
+    },
+    "sample_end": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "sample_start": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "slope_per_hour": {
+      "format": "double",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "status": {
+      "$ref": "#/$defs/ForecastStatus"
+    },
+    "tenant_id": {
+      "$ref": "#/$defs/TenantId"
+    },
+    "threshold": {
+      "format": "double",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "trend": {
+      "$ref": "#/$defs/ForecastTrend"
+    },
+    "volatility": {
+      "format": "double",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "window": {
+      "$ref": "#/$defs/ForecastWindow"
+    }
+  },
+  "required": [
+    "id",
+    "tenant_id",
+    "cluster_id",
+    "resource",
+    "metric",
+    "window",
+    "trend",
+    "status",
+    "quality",
+    "algorithm_version",
+    "sample_start",
+    "sample_end",
+    "coverage_ratio",
+    "points",
+    "backtest",
+    "evidence_ids",
+    "execution_eligible",
+    "observed_at"
+  ],
+  "title": "CapacityForecast",
+  "type": "object"
+}

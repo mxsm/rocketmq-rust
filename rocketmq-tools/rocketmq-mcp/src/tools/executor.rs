@@ -15,6 +15,7 @@
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Value;
+use std::time::Instant;
 
 use rmcp::model::CallToolRequestParams;
 use rmcp::model::CallToolResult;
@@ -22,6 +23,10 @@ use rmcp::model::ContentBlock;
 use rmcp::model::JsonObject;
 use rmcp::model::Resource;
 use rmcp::ErrorData;
+use rocketmq_observability::metrics::mcp::McpErrorKind;
+use rocketmq_observability::metrics::mcp::McpOperationKind;
+use rocketmq_observability::metrics::mcp::McpOperationOutcome;
+use tracing::Instrument;
 
 use crate::adapter::query_facade::ReadOnlyQuery;
 use crate::guard::context::RequestContext;
@@ -54,6 +59,15 @@ pub(crate) enum ToolExecutionError {
     #[error("permission denied: {0}")]
     PermissionDenied(String),
 
+    #[error("permission denied: {0}")]
+    UnauthorizedScope(String),
+
+    #[error("permission denied: {0}")]
+    TenantMismatch(String),
+
+    #[error("permission denied: {0}")]
+    ClusterNotAllowed(String),
+
     #[error("rate limit exceeded: {0}")]
     RateLimited(String),
 
@@ -85,8 +99,11 @@ impl ToolExecutionError {
     pub(crate) fn code(&self) -> &'static str {
         match self {
             Self::InvalidArguments(_) => "invalid_arguments",
-            Self::Backend(_) => "backend_error",
+            Self::Backend(_) => "source_unavailable",
             Self::PermissionDenied(_) => "permission_denied",
+            Self::UnauthorizedScope(_) => "unauthorized_scope",
+            Self::TenantMismatch(_) => "tenant_mismatch",
+            Self::ClusterNotAllowed(_) => "cluster_not_allowed",
             Self::RateLimited(_) => "rate_limited",
             Self::ChangePlanningDisabled(_) => "change_planning_disabled",
             Self::Internal(_) => "internal_error",
@@ -105,6 +122,9 @@ impl ToolExecutionError {
             Self::InvalidArguments(_) => vec!["Correct the arguments using the Tool input schema and retry."],
             Self::Backend(_) => vec!["Retry after verifying the selected cluster and RocketMQ availability."],
             Self::PermissionDenied(_) => vec!["Use a principal or profile authorized for this Tool."],
+            Self::UnauthorizedScope(_) => vec!["Request the required OAuth scope and retry."],
+            Self::TenantMismatch(_) => vec!["Use credentials issued for the selected cluster tenant."],
+            Self::ClusterNotAllowed(_) => vec!["Select a cluster present in the caller allow-list."],
             Self::RateLimited(_) => vec!["Retry after the rate-limit window resets."],
             Self::ChangePlanningDisabled(_) => {
                 vec!["Enable change planning explicitly and use an operator-authorized profile."]
@@ -115,12 +135,102 @@ impl ToolExecutionError {
             Self::Cancelled => vec!["Retry the request if the cancellation was not intentional."],
         }
     }
+
+    fn metric_kind(&self) -> McpErrorKind {
+        match self {
+            Self::InvalidArguments(_) => McpErrorKind::InvalidRequest,
+            Self::PermissionDenied(_)
+            | Self::UnauthorizedScope(_)
+            | Self::TenantMismatch(_)
+            | Self::ClusterNotAllowed(_)
+            | Self::ChangePlanningDisabled(_) => McpErrorKind::PermissionDenied,
+            Self::RateLimited(_) => McpErrorKind::RateLimited,
+            Self::Backend(_) | Self::TimedOut { .. } => McpErrorKind::SourceUnavailable,
+            Self::OutputTooLarge { .. } => McpErrorKind::OutputTooLarge,
+            Self::Internal(_) | Self::Cancelled => McpErrorKind::Internal,
+        }
+    }
+
+    fn public_message(&self) -> String {
+        match self {
+            Self::InvalidArguments(message) => format!("invalid arguments: {message}"),
+            Self::Backend(_) => "RocketMQ source is unavailable".to_string(),
+            Self::PermissionDenied(_) => "permission denied for this Tool".to_string(),
+            Self::UnauthorizedScope(_) => "permission denied: required OAuth scope is unavailable".to_string(),
+            Self::TenantMismatch(_) => "permission denied: tenant boundary mismatch".to_string(),
+            Self::ClusterNotAllowed(_) => "permission denied: cluster is not allowed".to_string(),
+            Self::RateLimited(_) => "rate limit exceeded for this Tool".to_string(),
+            Self::ChangePlanningDisabled(_) => "change planning disabled by server policy".to_string(),
+            Self::Internal(_) => "MCP request failed internally".to_string(),
+            Self::OutputTooLarge {
+                actual_bytes,
+                max_bytes,
+            } => format!("tool output is {actual_bytes} bytes; maximum is {max_bytes} bytes"),
+            Self::TimedOut { timeout_ms } => {
+                format!("RocketMQ source timed out after {timeout_ms} ms")
+            }
+            Self::Cancelled => "RocketMQ source query was cancelled".to_string(),
+        }
+    }
+
+    fn has_private_detail(&self) -> bool {
+        matches!(self, Self::Backend(_) | Self::Internal(_))
+    }
+}
+
+struct ToolOperationRecorder {
+    operation: &'static str,
+    started_at: Instant,
+    outcome: McpOperationOutcome,
+    span: tracing::Span,
+}
+
+impl ToolOperationRecorder {
+    fn new(operation: &'static str) -> Self {
+        Self {
+            operation,
+            started_at: Instant::now(),
+            outcome: McpOperationOutcome::Failure,
+            span: rocketmq_observability::trace::mcp::tool_span(operation),
+        }
+    }
+
+    fn span(&self) -> tracing::Span {
+        self.span.clone()
+    }
+
+    fn denied(&mut self) {
+        self.outcome = McpOperationOutcome::Denied;
+    }
+
+    fn observe_call_result(&mut self, result: &Result<CallToolResult, ErrorData>) {
+        if self.outcome == McpOperationOutcome::Denied {
+            return;
+        }
+        self.outcome = match result {
+            Ok(result) if !result.is_error.unwrap_or(false) => McpOperationOutcome::Success,
+            Ok(_) | Err(_) => McpOperationOutcome::Failure,
+        };
+    }
+}
+
+impl Drop for ToolOperationRecorder {
+    fn drop(&mut self) {
+        rocketmq_observability::trace::mcp::record_outcome(&self.span, self.outcome);
+        rocketmq_observability::metrics::mcp::record_operation(
+            McpOperationKind::Tool,
+            self.operation,
+            self.outcome,
+            self.started_at.elapsed(),
+        );
+    }
 }
 
 #[derive(Debug, Serialize)]
 struct ToolErrorContent<'a> {
     schema_version: &'static str,
     request_id: &'a str,
+    correlation_id: &'a str,
     tool: &'a str,
     code: &'static str,
     retryable: bool,
@@ -133,6 +243,9 @@ impl From<GuardError> for ToolExecutionError {
         match error {
             GuardError::InvalidArgument(message) => Self::InvalidArguments(message),
             GuardError::PermissionDenied(message) => Self::PermissionDenied(message),
+            GuardError::UnauthorizedScope(message) => Self::UnauthorizedScope(message),
+            GuardError::TenantMismatch(message) => Self::TenantMismatch(message),
+            GuardError::ClusterNotAllowed(message) => Self::ClusterNotAllowed(message),
             GuardError::RateLimited(message) => Self::RateLimited(message),
             GuardError::ChangePlanningDisabled(message) => Self::ChangePlanningDisabled(message),
         }
@@ -174,9 +287,37 @@ where
         request: CallToolRequestParams,
         request_id: &str,
     ) -> Result<CallToolResult, ErrorData> {
+        let operation = ToolId::resolve(request.name.as_ref())
+            .map(|tool_id| tool_id.descriptor().name)
+            .unwrap_or("unknown_tool");
+        let mut operation_recorder = ToolOperationRecorder::new(operation);
+        let span = operation_recorder.span();
+        let result = self
+            .execute(request, request_id, &mut operation_recorder)
+            .instrument(span)
+            .await;
+        operation_recorder.observe_call_result(&result);
+        result
+    }
+
+    async fn execute(
+        &self,
+        request: CallToolRequestParams,
+        request_id: &str,
+        operation_recorder: &mut ToolOperationRecorder,
+    ) -> Result<CallToolResult, ErrorData> {
         let tool_name = request.name.to_string();
-        let tool_id = ToolId::resolve(&tool_name)
-            .ok_or_else(|| ErrorData::invalid_params(format!("unknown tool: {tool_name}"), None))?;
+        let tool_id = match ToolId::resolve(&tool_name) {
+            Some(tool_id) => tool_id,
+            None => {
+                rocketmq_observability::metrics::mcp::record_error(
+                    McpOperationKind::Tool,
+                    "unknown_tool",
+                    McpErrorKind::InvalidRequest,
+                );
+                return Err(ErrorData::invalid_params(format!("unknown tool: {tool_name}"), None));
+            }
+        };
         let descriptor = tool_id.descriptor();
         let arguments = request.arguments.unwrap_or_default();
         let guarded_call =
@@ -185,11 +326,14 @@ where
                 .begin_tool_call(&self.context, &tool_name, descriptor.risk_level, &arguments)
             {
                 Ok(guarded_call) => guarded_call,
-                Err(error) => return Ok(error_result(&tool_name, request_id, error.into())),
+                Err(error) => {
+                    operation_recorder.denied();
+                    return Ok(error_result(descriptor.name, &tool_name, request_id, error.into()));
+                }
             };
 
         if let Err(error) = validate_input(&descriptor, &arguments) {
-            return Ok(guarded_call.finish_result(error_result(&tool_name, request_id, error)));
+            return Ok(guarded_call.finish_result(error_result(descriptor.name, &tool_name, request_id, error)));
         }
 
         let result = match tool_id {
@@ -197,7 +341,14 @@ where
                 let args = decode_args::<cluster_tools::ClusterOverviewArgs>(arguments.clone());
                 let args = match args {
                     Ok(args) => args,
-                    Err(error) => return Ok(guarded_call.finish_result(error_result(&tool_name, request_id, error))),
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
                 };
                 self.adapter.cluster_overview(args).await.and_then(|output| {
                     let summary = summary_cluster_overview(&output);
@@ -209,7 +360,14 @@ where
             ToolId::ListTopics => {
                 let args = match decode_args::<topic_tools::ListTopicsArgs>(arguments.clone()) {
                     Ok(args) => args,
-                    Err(error) => return Ok(guarded_call.finish_result(error_result(&tool_name, request_id, error))),
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
                 };
                 self.adapter.list_topics(args).await.and_then(|output| {
                     let summary = summary_list_topics(&output);
@@ -221,7 +379,14 @@ where
             ToolId::DescribeTopic => {
                 let args = match decode_args::<topic_tools::DescribeTopicArgs>(arguments.clone()) {
                     Ok(args) => args,
-                    Err(error) => return Ok(guarded_call.finish_result(error_result(&tool_name, request_id, error))),
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
                 };
                 self.adapter.describe_topic(args).await.and_then(|output| {
                     let summary = summary_describe_topic(&output);
@@ -233,7 +398,14 @@ where
             ToolId::GetTopicRoute => {
                 let args = match decode_args::<topic_tools::QueryTopicRouteArgs>(arguments.clone()) {
                     Ok(args) => args,
-                    Err(error) => return Ok(guarded_call.finish_result(error_result(&tool_name, request_id, error))),
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
                 };
                 self.adapter.query_topic_route(args).await.and_then(|output| {
                     let summary = summary_topic_route(&output);
@@ -246,7 +418,14 @@ where
             ToolId::ListConsumerGroups => {
                 let args = match decode_args::<consumer_tools::ListConsumerGroupsArgs>(arguments.clone()) {
                     Ok(args) => args,
-                    Err(error) => return Ok(guarded_call.finish_result(error_result(&tool_name, request_id, error))),
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
                 };
                 self.adapter.list_consumer_groups(args).await.and_then(|output| {
                     let summary = summary_consumer_groups(&output);
@@ -258,7 +437,14 @@ where
             ToolId::GetConsumerLag => {
                 let args = match decode_args::<consumer_tools::QueryConsumerLagArgs>(arguments.clone()) {
                     Ok(args) => args,
-                    Err(error) => return Ok(guarded_call.finish_result(error_result(&tool_name, request_id, error))),
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
                 };
                 self.adapter.query_consumer_lag(args).await.and_then(|output| {
                     let summary = summary_consumer_lag(&output);
@@ -276,7 +462,14 @@ where
             ToolId::DescribeBroker => {
                 let args = match decode_args::<broker_tools::DescribeBrokerArgs>(arguments.clone()) {
                     Ok(args) => args,
-                    Err(error) => return Ok(guarded_call.finish_result(error_result(&tool_name, request_id, error))),
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
                 };
                 self.adapter.describe_broker(args).await.and_then(|output| {
                     let summary = summary_describe_broker(&output);
@@ -289,7 +482,14 @@ where
             ToolId::DiagnoseConsumerLag => {
                 let args = match decode_args::<diagnosis_tools::DiagnoseConsumerLagArgs>(arguments.clone()) {
                     Ok(args) => args,
-                    Err(error) => return Ok(guarded_call.finish_result(error_result(&tool_name, request_id, error))),
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
                 };
                 let cluster = args.cluster.clone();
                 let resource = RocketmqResourceUri::new(
@@ -308,7 +508,14 @@ where
             ToolId::PlanCreateTopic => {
                 let args = match decode_args::<change_tools::CreateTopicArgs>(arguments.clone()) {
                     Ok(args) => args,
-                    Err(error) => return Ok(guarded_call.finish_result(error_result(&tool_name, request_id, error))),
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
                 };
                 let cluster = args.cluster.clone();
                 self.adapter
@@ -329,7 +536,14 @@ where
             ToolId::PlanUpdateTopicConfig => {
                 let args = match decode_args::<change_tools::UpdateTopicConfigArgs>(arguments.clone()) {
                     Ok(args) => args,
-                    Err(error) => return Ok(guarded_call.finish_result(error_result(&tool_name, request_id, error))),
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
                 };
                 let cluster = args.cluster.clone();
                 self.adapter
@@ -350,7 +564,14 @@ where
             ToolId::PlanUpdateTopicPermissions => {
                 let args = match decode_args::<change_tools::UpdateTopicPermArgs>(arguments.clone()) {
                     Ok(args) => args,
-                    Err(error) => return Ok(guarded_call.finish_result(error_result(&tool_name, request_id, error))),
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
                 };
                 let cluster = args.cluster.clone();
                 self.adapter
@@ -371,7 +592,14 @@ where
             ToolId::PlanUpdateBrokerConfig => {
                 let args = match decode_args::<change_tools::UpdateBrokerConfigArgs>(arguments.clone()) {
                     Ok(args) => args,
-                    Err(error) => return Ok(guarded_call.finish_result(error_result(&tool_name, request_id, error))),
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
                 };
                 let cluster = args.cluster.clone();
                 self.adapter
@@ -391,7 +619,14 @@ where
             ToolId::PlanResetConsumerOffset => {
                 let args = match decode_args::<change_tools::ResetConsumerOffsetArgs>(arguments.clone()) {
                     Ok(args) => args,
-                    Err(error) => return Ok(guarded_call.finish_result(error_result(&tool_name, request_id, error))),
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
                 };
                 let cluster = args.cluster.clone();
                 self.adapter
@@ -411,9 +646,10 @@ where
             }
         };
 
-        let result = result.unwrap_or_else(|error| error_result(&tool_name, request_id, error));
+        let result = result.unwrap_or_else(|error| error_result(descriptor.name, &tool_name, request_id, error));
+        let result = guarded_call.finish_result(result);
 
-        Ok(guarded_call.finish_result(result))
+        Ok(result)
     }
 }
 
@@ -519,14 +755,31 @@ fn validate_schema(schema: &JsonObject, value: &Value, label: &str) -> Result<()
     }
 }
 
-fn error_result(tool_name: &str, request_id: &str, error: ToolExecutionError) -> CallToolResult {
+fn error_result(
+    operation: &'static str,
+    tool_name: &str,
+    request_id: &str,
+    error: ToolExecutionError,
+) -> CallToolResult {
+    rocketmq_observability::metrics::mcp::record_error(McpOperationKind::Tool, operation, error.metric_kind());
+    if error.has_private_detail() {
+        let detail = crate::guard::sanitizer::sanitize_text(&error.to_string());
+        tracing::warn!(
+            correlation_id = request_id,
+            tool = operation,
+            code = error.code(),
+            detail = %detail,
+            "MCP Tool execution failed"
+        );
+    }
     let content = ToolErrorContent {
         schema_version: crate::model::contract::SCHEMA_VERSION,
         request_id,
+        correlation_id: request_id,
         tool: tool_name,
         code: error.code(),
         retryable: error.retryable(),
-        message: error.to_string(),
+        message: error.public_message(),
         suggestions: error.suggestions(),
     };
     let text =
@@ -647,7 +900,7 @@ mod tests {
         ) -> Result<QueryResult<cluster_tools::ClusterOverviewOutput>, ToolExecutionError> {
             if self.fail {
                 return Err(ToolExecutionError::backend(
-                    "nameserver unavailable secret_key=super-secret",
+                    "nameserver 10.24.7.9:9876 unavailable token=super-secret",
                 ));
             }
             Ok(QueryResult::bypass(cluster_tools::ClusterOverviewOutput {
@@ -757,7 +1010,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn backend_error_is_returned_as_tool_error() {
+    async fn backend_error_is_returned_as_source_unavailable() {
         let guard = test_guard("diagnose");
         let result = ToolExecutor::new(FakeAdapter { fail: true }, guard.clone())
             .call(
@@ -776,11 +1029,13 @@ mod tests {
         assert_eq!(result.is_error, Some(true));
         assert!(result.structured_content.is_none());
         let error: serde_json::Value = serde_json::from_str(&content_text(&result)).unwrap();
-        assert_eq!(error["code"], "backend_error");
+        assert_eq!(error["code"], "source_unavailable");
         assert_eq!(error["retryable"], true);
         assert_eq!(error["request_id"], "test-request");
-        assert!(error["message"].as_str().unwrap().contains("nameserver unavailable"));
+        assert_eq!(error["message"], "RocketMQ source is unavailable");
         assert!(!content_text(&result).contains("super-secret"));
+        assert!(!content_text(&result).contains("10.24.7.9"));
+        assert!(!content_text(&result).contains("nameserver"));
         let records = guard.audit_log().records();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].status, AuditStatus::Failure);
@@ -832,7 +1087,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.is_error, Some(true));
-        assert!(content_text(&result).contains("permission denied"));
+        let error: serde_json::Value = serde_json::from_str(&content_text(&result)).unwrap();
+        assert_eq!(error["code"], "unauthorized_scope");
+        assert_eq!(error["correlation_id"], "test-request");
+        assert!(error["message"].as_str().unwrap().contains("permission denied"));
         let records = guard.audit_log().records();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].status, AuditStatus::Failure);
@@ -959,6 +1217,9 @@ mod tests {
                 name: "local-dev".to_string(),
                 namesrv_addr: "127.0.0.1:9876".to_string(),
                 default: Some(true),
+                rocketmq_cluster_name: None,
+                tenant: None,
+                credentials: None,
             }],
         )
         .unwrap()

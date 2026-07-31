@@ -1,0 +1,129 @@
+schema_version: rocketmq.sre.required-signals.v1
+component: controller
+exposure:
+  implementation: implemented_local
+  observable: true
+  remote_queryable: protected_connector_api
+signals:
+  - requirement_id: controller.quorum_health
+    purpose: Report an observed leader with committed state.
+    owner: controller
+    source_symbol: CONTROLLER_QUORUM_HEALTH
+    registry_reference: rocketmq_controller_quorum_health
+    signal_type: metric
+    status: queryable
+    query: max(rocketmq_controller_quorum_health_ratio)
+    query_resource: metrics/rocketmq_controller_quorum_health_ratio
+    freshness_seconds: 30
+    expected_attributes: []
+    sensitivity: operational
+    missing_behavior: missing
+    evidence_field: controller.quorum_health
+  - requirement_id: controller.elections
+    purpose: Detect controller leadership instability.
+    owner: controller
+    source_symbol: CONTROLLER_ELECTION_TOTAL
+    registry_reference: rocketmq_controller_election_total
+    signal_type: metric
+    status: queryable
+    query: sum(rate(rocketmq_controller_election_total[5m]))
+    query_resource: metrics/rocketmq_controller_election_total
+    freshness_seconds: 60
+    expected_attributes: []
+    sensitivity: operational
+    missing_behavior: missing
+    evidence_field: controller.election_rate
+  - requirement_id: controller.election_latency
+    purpose: Quantify the end-to-end latency of controller master election attempts.
+    owner: controller
+    source_symbol: CONTROLLER_ELECTION_LATENCY
+    registry_reference: rocketmq_controller_election_latency
+    signal_type: metric
+    status: queryable
+    query: histogram_quantile(0.99, sum by (le) (rate(rocketmq_controller_election_latency_milliseconds_bucket[5m])))
+    query_resource: metrics/rocketmq_controller_election_latency_milliseconds_bucket
+    freshness_seconds: 60
+    expected_attributes: []
+    sensitivity: operational
+    missing_behavior: missing
+    evidence_field: controller.election_latency_p99_ms
+  - requirement_id: controller.heartbeat_age
+    purpose: Quantify broker heartbeat staleness.
+    owner: controller
+    source_symbol: CONTROLLER_HEARTBEAT_AGE
+    registry_reference: rocketmq_controller_heartbeat_age
+    signal_type: metric
+    status: queryable
+    query: histogram_quantile(0.99, sum by (le) (rate(rocketmq_controller_heartbeat_age_milliseconds_bucket[5m])))
+    query_resource: metrics/rocketmq_controller_heartbeat_age_milliseconds_bucket
+    freshness_seconds: 60
+    expected_attributes: []
+    sensitivity: operational
+    missing_behavior: missing
+    evidence_field: controller.heartbeat_age_p99_ms
+  - requirement_id: controller.stale_brokers
+    purpose: Detect brokers removed by heartbeat expiry.
+    owner: controller
+    source_symbol: CONTROLLER_STALE_BROKERS
+    registry_reference: rocketmq_controller_stale_brokers
+    signal_type: metric
+    status: queryable
+    query: max(rocketmq_controller_stale_brokers)
+    query_resource: metrics/rocketmq_controller_stale_brokers
+    freshness_seconds: 30
+    expected_attributes: []
+    sensitivity: operational
+    missing_behavior: missing
+    evidence_field: controller.stale_brokers
+  - requirement_id: controller.heartbeat_trace
+    purpose: Explain heartbeat scan outcomes without broker identities.
+    owner: controller
+    source_symbol: CONTROLLER_HEARTBEAT_SCAN
+    registry_reference: RocketMQ CONTROLLER HEARTBEAT_SCAN
+    signal_type: span
+    status: queryable
+    query: span.name = "RocketMQ CONTROLLER HEARTBEAT_SCAN"
+    freshness_seconds: 300
+    expected_attributes: [result, stale_count]
+    sensitivity: operational
+    missing_behavior: not_production_verified
+    evidence_field: controller.heartbeat_trace
+  - requirement_id: controller.heartbeat_log
+    purpose: Preserve bounded heartbeat-scan lifecycle outcomes for incident correlation.
+    owner: controller
+    source_symbol: CONTROLLER_HEARTBEAT
+    registry_reference: rocketmq.controller.heartbeat
+    signal_type: log
+    status: queryable
+    query: event = "rocketmq.controller.heartbeat"
+    freshness_seconds: 300
+    expected_attributes: [state, result, stale_count]
+    sensitivity: operational
+    missing_behavior: not_production_verified
+    evidence_field: controller.heartbeat_log
+  - requirement_id: controller.election_trace
+    purpose: Correlate controller election attempts and bounded outcomes.
+    owner: controller
+    source_symbol: CONTROLLER_ELECTION
+    registry_reference: RocketMQ CONTROLLER ELECTION
+    signal_type: span
+    status: queryable
+    query: span.name = "RocketMQ CONTROLLER ELECTION"
+    freshness_seconds: 300
+    expected_attributes: [result]
+    sensitivity: operational
+    missing_behavior: not_production_verified
+    evidence_field: controller.election_trace
+  - requirement_id: controller.election_log
+    purpose: Preserve bounded election lifecycle outcomes without broker identities.
+    owner: controller
+    source_symbol: CONTROLLER_ELECTION
+    registry_reference: rocketmq.controller.election
+    signal_type: log
+    status: queryable
+    query: event = "rocketmq.controller.election"
+    freshness_seconds: 300
+    expected_attributes: [state, result]
+    sensitivity: operational
+    missing_behavior: not_production_verified
+    evidence_field: controller.election_log

@@ -1,0 +1,14 @@
+{
+  "pack": "telemetry-pipeline.v1",
+  "scenario": "missing",
+  "expected_status": "inconclusive",
+  "expected_reason_codes": [],
+  "evidence": [
+    {
+      "evidence_id": "00000000-0000-4000-8007-000000000103",
+      "source": "prometheus",
+      "resource": "telemetry-pipeline/collector-a",
+      "content": { "export_failures": 0, "queue_depth": 2 }
+    }
+  ]
+}

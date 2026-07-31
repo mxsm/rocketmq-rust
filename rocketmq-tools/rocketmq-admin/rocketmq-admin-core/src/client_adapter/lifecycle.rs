@@ -14,16 +14,27 @@
 
 //! Client lifecycle adapter for an opaque admin session.
 
+#[cfg(feature = "client-adapter")]
 use std::ops::Deref;
+#[cfg(feature = "client-adapter")]
 use std::ops::DerefMut;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rocketmq_client_rust::ClientRuntime;
+use rocketmq_client_rust::AclClientRPCHook;
 use rocketmq_client_rust::DefaultMQAdminExt;
+use rocketmq_client_rust::SessionCredentials;
+use rocketmq_client_rust::SigningAlgorithm;
 use rocketmq_error::RocketMQError;
 
+pub use rocketmq_client_rust::ClientRuntime;
+#[cfg(feature = "client-adapter")]
+pub use rocketmq_client_rust::ClientRuntimeConfig;
+#[cfg(feature = "client-adapter")]
+pub use rocketmq_client_rust::TelemetryHandle;
+
 use crate::core::clock::Clock;
+use crate::core::security::AdminCredentials;
 use crate::core::AdminError;
 use crate::core::AdminResult;
 
@@ -32,6 +43,7 @@ use crate::core::AdminResult;
 pub struct AdminBuilder {
     client_runtime: Arc<ClientRuntime>,
     config: crate::core::admin::AdminBuilder,
+    credentials: Option<AdminCredentials>,
 }
 
 impl std::fmt::Debug for AdminBuilder {
@@ -49,6 +61,7 @@ impl AdminBuilder {
         Self {
             client_runtime,
             config: crate::core::admin::AdminBuilder::new(),
+            credentials: None,
         }
     }
 
@@ -91,6 +104,12 @@ impl AdminBuilder {
         self.config = self.config.clock(clock);
         self
     }
+
+    /// Configures request signing for the isolated mutation identity.
+    pub fn credentials(mut self, credentials: AdminCredentials) -> Self {
+        self.credentials = Some(credentials);
+        self
+    }
 }
 
 #[must_use = "a started admin session must be explicitly shut down"]
@@ -102,6 +121,7 @@ pub struct AdminSession {
 }
 
 impl AdminSession {
+    #[cfg(feature = "client-adapter")]
     pub(crate) fn from_started(inner: DefaultMQAdminExt, clock: Arc<dyn Clock>) -> Self {
         let client_runtime = inner.client_runtime();
         Self {
@@ -112,10 +132,12 @@ impl AdminSession {
         }
     }
 
+    #[cfg(feature = "client-adapter")]
     pub(crate) fn client(&self) -> &DefaultMQAdminExt {
         &self.inner
     }
 
+    #[cfg(feature = "client-adapter")]
     pub(crate) fn client_mut(&mut self) -> &mut DefaultMQAdminExt {
         &mut self.inner
     }
@@ -135,6 +157,7 @@ impl AdminSession {
         Arc::clone(&self.client_runtime)
     }
 
+    #[cfg(feature = "client-adapter")]
     pub async fn probe_name_server(&self, name_server: &str) -> AdminResult<()> {
         self.ensure_open()?;
         use rocketmq_client_rust::MQAdminExt;
@@ -162,10 +185,12 @@ impl Drop for AdminSession {
 }
 
 #[must_use = "the guard owns a live admin session; call shutdown when the workflow completes"]
+#[cfg(feature = "client-adapter")]
 pub struct AdminGuard {
     session: Option<AdminSession>,
 }
 
+#[cfg(feature = "client-adapter")]
 impl AdminGuard {
     pub(crate) fn new(session: AdminSession) -> Self {
         Self { session: Some(session) }
@@ -200,6 +225,7 @@ impl AdminGuard {
     }
 }
 
+#[cfg(feature = "client-adapter")]
 impl Deref for AdminGuard {
     type Target = AdminSession;
 
@@ -208,6 +234,7 @@ impl Deref for AdminGuard {
     }
 }
 
+#[cfg(feature = "client-adapter")]
 impl DerefMut for AdminGuard {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.inner_mut()
@@ -218,17 +245,23 @@ impl AdminBuilder {
     pub async fn build_and_start(self) -> AdminResult<AdminSession> {
         let client_runtime = self.client_runtime;
         let config = self.config;
+        let credentials = self.credentials;
         let clock = config.configured_clock();
         let now_millis = clock.now_millis();
         let admin_group = config
             .configured_admin_group()
             .map(str::to_owned)
             .unwrap_or_else(|| format!("tools-admin-{now_millis}"));
-        let mut admin = DefaultMQAdminExt::with_admin_ext_group_and_timeout(
-            client_runtime.clone(),
-            admin_group,
-            Duration::from_millis(config.configured_timeout_millis()),
-        );
+        let timeout = Duration::from_millis(config.configured_timeout_millis());
+        let mut admin = match credentials {
+            Some(credentials) => DefaultMQAdminExt::with_admin_ext_group_rpc_hook_and_timeout(
+                client_runtime.clone(),
+                admin_group,
+                Arc::new(admin_acl_rpc_hook(&credentials)),
+                timeout,
+            ),
+            None => DefaultMQAdminExt::with_admin_ext_group_and_timeout(client_runtime.clone(), admin_group, timeout),
+        };
         if let Some(namesrv_addr) = config.configured_namesrv_addr() {
             admin.set_namesrv_addr(namesrv_addr);
         }
@@ -257,9 +290,20 @@ impl AdminBuilder {
         })
     }
 
+    #[cfg(feature = "client-adapter")]
     pub async fn build_with_guard(self) -> AdminResult<AdminGuard> {
         self.build_and_start().await.map(AdminGuard::new)
     }
+}
+
+fn admin_acl_rpc_hook(credentials: &AdminCredentials) -> AclClientRPCHook {
+    let credentials = match credentials.security_token() {
+        Some(security_token) => {
+            SessionCredentials::with_token(credentials.access_key(), credentials.secret_key(), security_token)
+        }
+        None => SessionCredentials::with_keys(credentials.access_key(), credentials.secret_key()),
+    };
+    AclClientRPCHook::with_signature_algorithm(credentials, SigningAlgorithm::HmacSha256)
 }
 
 fn backend_error(operation: &'static str, error: RocketMQError) -> AdminError {
