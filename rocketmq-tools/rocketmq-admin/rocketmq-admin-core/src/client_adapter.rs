@@ -47,3 +47,5 @@ pub use lifecycle::AdminSession;
 pub use lifecycle::ClientRuntime;
 #[cfg(feature = "client-adapter")]
 pub use lifecycle::ClientRuntimeConfig;
+#[cfg(feature = "client-adapter")]
+pub use lifecycle::TelemetryHandle;
