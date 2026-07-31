@@ -72,6 +72,9 @@ pub enum RemotingIngressRoute {
     GetParentTopicInfo,
     GetLiteTopicInfo,
     GetLiteGroupInfo,
+    GetProxyDrainState,
+    BeginProxyDrain,
+    CancelProxyDrain,
     AuthAdminUnsupported,
     Unsupported,
 }
@@ -104,6 +107,9 @@ impl RemotingIngressRoute {
             RequestCode::GetParentTopicInfo => "RemotingGetParentTopicInfo",
             RequestCode::GetLiteTopicInfo => "RemotingGetLiteTopicInfo",
             RequestCode::GetLiteGroupInfo => "RemotingGetLiteGroupInfo",
+            RequestCode::GetProxyDrainState => "RemotingGetProxyDrainState",
+            RequestCode::BeginProxyDrain => "RemotingBeginProxyDrain",
+            RequestCode::CancelProxyDrain => "RemotingCancelProxyDrain",
             _ => "RemotingRequest",
         }
     }
@@ -149,6 +155,9 @@ pub fn classify_remoting_request(code: i32) -> RemotingIngressRoute {
         RequestCode::GetParentTopicInfo => RemotingIngressRoute::GetParentTopicInfo,
         RequestCode::GetLiteTopicInfo => RemotingIngressRoute::GetLiteTopicInfo,
         RequestCode::GetLiteGroupInfo => RemotingIngressRoute::GetLiteGroupInfo,
+        RequestCode::GetProxyDrainState => RemotingIngressRoute::GetProxyDrainState,
+        RequestCode::BeginProxyDrain => RemotingIngressRoute::BeginProxyDrain,
+        RequestCode::CancelProxyDrain => RemotingIngressRoute::CancelProxyDrain,
         RequestCode::AuthCreateUser
         | RequestCode::AuthUpdateUser
         | RequestCode::AuthDeleteUser
@@ -289,6 +298,18 @@ mod tests {
         assert_eq!(
             classify_remoting_request(RequestCode::UpdateBrokerConfig.to_i32()),
             RemotingIngressRoute::Unsupported
+        );
+        assert_eq!(
+            classify_remoting_request(RequestCode::GetProxyDrainState.to_i32()),
+            RemotingIngressRoute::GetProxyDrainState
+        );
+        assert_eq!(
+            classify_remoting_request(RequestCode::BeginProxyDrain.to_i32()),
+            RemotingIngressRoute::BeginProxyDrain
+        );
+        assert_eq!(
+            classify_remoting_request(RequestCode::CancelProxyDrain.to_i32()),
+            RemotingIngressRoute::CancelProxyDrain
         );
     }
 
