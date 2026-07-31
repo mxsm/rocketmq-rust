@@ -18,6 +18,7 @@ use std::sync::Mutex;
 
 use smallvec::SmallVec;
 use std::time::Duration;
+use tokio::sync::Notify;
 
 use super::clock::MonotonicClock;
 use super::clock::SystemMonotonicClock;
@@ -118,10 +119,12 @@ impl ResourceBudgetTree {
         let name = validated_name(name.into())?;
         limit.validate(&name)?;
         let node = Arc::new(BudgetNode::new(Arc::from(name.as_str()), limit, clock));
+        let capacity_notify = Arc::new(Notify::new());
         Ok(Self {
             root: ResourceBudget {
                 node: Arc::clone(&node),
                 chain: Arc::from([node]),
+                capacity_notify,
             },
         })
     }
@@ -138,6 +141,7 @@ impl ResourceBudgetTree {
 pub struct ResourceBudget {
     node: Arc<BudgetNode>,
     chain: Arc<[Arc<BudgetNode>]>,
+    capacity_notify: Arc<Notify>,
 }
 
 impl fmt::Debug for ResourceBudget {
@@ -163,18 +167,36 @@ impl ResourceBudget {
         Ok(Self {
             node,
             chain: Arc::from(chain),
+            capacity_notify: Arc::clone(&self.capacity_notify),
         })
     }
 
     /// Attempts to acquire.
     pub fn try_acquire(&self, bytes: usize, class: BudgetClass) -> Result<ResourcePermit, BudgetAcquireError> {
+        self.try_acquire_internal(bytes, class, true)
+    }
+
+    pub(crate) fn try_acquire_waiting(
+        &self,
+        bytes: usize,
+        class: BudgetClass,
+    ) -> Result<ResourcePermit, BudgetAcquireError> {
+        self.try_acquire_internal(bytes, class, false)
+    }
+
+    fn try_acquire_internal(
+        &self,
+        bytes: usize,
+        class: BudgetClass,
+        record_failure: bool,
+    ) -> Result<ResourcePermit, BudgetAcquireError> {
         let mut reservations = SmallVec::<[NodeReservation; 4]>::with_capacity(self.chain.len());
         for node in self.chain.iter() {
             match node.try_reserve(bytes, class) {
                 Ok(reservation) => reservations.push(reservation),
                 Err(dimension) => {
-                    if !Arc::ptr_eq(node, &self.node) {
-                        self.node.record_rejection(dimension);
+                    if record_failure {
+                        self.record_rejection(node, dimension);
                     }
                     return Err(BudgetAcquireError {
                         path: Arc::clone(&self.node.path),
@@ -192,7 +214,42 @@ impl ResourceBudget {
             reservations,
             bytes,
             class,
+            capacity_notify: Arc::clone(&self.capacity_notify),
         })
+    }
+
+    pub(crate) fn permanent_acquire_error(&self, bytes: usize, class: BudgetClass) -> Option<BudgetAcquireError> {
+        self.chain.iter().find_map(|node| {
+            let dimension = node.permanent_exhaustion_dimension(bytes, class)?;
+            self.record_rejection(node, dimension);
+            Some(BudgetAcquireError {
+                path: Arc::clone(&self.node.path),
+                exhausted_path: Arc::clone(&node.path),
+                dimension,
+                policy: self.node.limit.full_policy,
+            })
+        })
+    }
+
+    pub(crate) fn record_acquire_error(&self, error: &BudgetAcquireError) {
+        if let Some(node) = self
+            .chain
+            .iter()
+            .find(|node| node.path.as_ref() == error.exhausted_path())
+        {
+            self.record_rejection(node, error.dimension());
+        }
+    }
+
+    fn record_rejection(&self, exhausted_node: &Arc<BudgetNode>, dimension: BudgetDimension) {
+        exhausted_node.record_rejection(dimension);
+        if !Arc::ptr_eq(exhausted_node, &self.node) {
+            self.node.record_rejection(dimension);
+        }
+    }
+
+    pub(crate) fn capacity_notify(&self) -> &Notify {
+        &self.capacity_notify
     }
 
     /// Attempts to acquire data.
@@ -261,6 +318,7 @@ pub struct ResourcePermit {
     reservations: SmallVec<[NodeReservation; 4]>,
     bytes: usize,
     class: BudgetClass,
+    capacity_notify: Arc<Notify>,
 }
 
 impl fmt::Debug for ResourcePermit {
@@ -288,6 +346,13 @@ impl ResourcePermit {
     /// Returns the class.
     pub const fn class(&self) -> BudgetClass {
         self.class
+    }
+}
+
+impl Drop for ResourcePermit {
+    fn drop(&mut self) {
+        self.reservations.clear();
+        self.capacity_notify.notify_waiters();
     }
 }
 
@@ -349,10 +414,6 @@ impl BudgetNode {
         };
 
         if let Some(dimension) = dimension {
-            state.rejected_count = state.rejected_count.saturating_add(1);
-            if dimension == BudgetDimension::Rate {
-                state.throttled_count = state.throttled_count.saturating_add(1);
-            }
             return Err(dimension);
         }
 
@@ -371,6 +432,29 @@ impl BudgetNode {
             class,
             committed: false,
         })
+    }
+
+    fn permanent_exhaustion_dimension(&self, bytes: usize, class: BudgetClass) -> Option<BudgetDimension> {
+        let (count_capacity, byte_capacity) = match class {
+            BudgetClass::Data => (
+                self.limit
+                    .capacity
+                    .count
+                    .saturating_sub(self.limit.control_reserve.count),
+                self.limit
+                    .capacity
+                    .bytes
+                    .saturating_sub(self.limit.control_reserve.bytes),
+            ),
+            BudgetClass::Control => (self.limit.capacity.count, self.limit.capacity.bytes),
+        };
+        if count_capacity == 0 {
+            Some(BudgetDimension::Count)
+        } else if bytes > byte_capacity {
+            Some(BudgetDimension::Bytes)
+        } else {
+            None
+        }
     }
 
     fn record_rejection(&self, dimension: BudgetDimension) {

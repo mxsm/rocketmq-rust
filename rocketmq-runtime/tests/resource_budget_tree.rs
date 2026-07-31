@@ -392,3 +392,279 @@ async fn aborted_owner_releases_raii_permit() {
     assert_eq!(budget.snapshot().current_count, 0);
     assert!(budget.try_acquire_data(8).is_ok());
 }
+
+#[tokio::test(start_paused = true)]
+async fn wait_until_deadline_observes_item_capacity_release() {
+    let tree = ResourceBudgetTree::new("wait-count", limit(1, 16, FullPolicy::WaitUntilDeadline)).expect("budget tree");
+    let queue = BudgetedQueue::new(tree.root());
+    queue.try_push_data("held", 1).expect("fill item capacity");
+
+    let waiting_queue = queue.clone();
+    let waiter = tokio::spawn(async move {
+        waiting_queue
+            .push_until(
+                "waiting",
+                1,
+                BudgetClass::Data,
+                tokio::time::Instant::now() + Duration::from_secs(5),
+            )
+            .await
+    });
+    tokio::task::yield_now().await;
+
+    let waiting = queue.snapshot();
+    assert_eq!(waiting.waiters, 1);
+    assert_eq!(waiting.wait_count, 1);
+    assert_eq!(queue.try_pop(), Some("held"));
+    assert_eq!(
+        waiter
+            .await
+            .expect("join waiter")
+            .expect("capacity release admits item"),
+        QueuePushOutcome::Enqueued
+    );
+    assert_eq!(queue.try_pop(), Some("waiting"));
+    assert_eq!(queue.snapshot().reserved_count, 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn wait_until_deadline_observes_byte_capacity_release() {
+    let tree = ResourceBudgetTree::new("wait-bytes", limit(2, 8, FullPolicy::WaitUntilDeadline)).expect("budget tree");
+    let queue = BudgetedQueue::new(tree.root());
+    queue.try_push_data("held", 8).expect("fill byte capacity");
+
+    let waiting_queue = queue.clone();
+    let waiter = tokio::spawn(async move {
+        waiting_queue
+            .push_until(
+                "waiting",
+                1,
+                BudgetClass::Data,
+                tokio::time::Instant::now() + Duration::from_secs(5),
+            )
+            .await
+    });
+    tokio::task::yield_now().await;
+
+    assert_eq!(queue.snapshot().waiters, 1);
+    assert_eq!(queue.try_pop(), Some("held"));
+    waiter
+        .await
+        .expect("join waiter")
+        .expect("byte capacity release admits item");
+    assert_eq!(queue.try_pop(), Some("waiting"));
+    assert_eq!(queue.snapshot().retained_bytes, 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn wait_until_deadline_returns_original_item_when_deadline_wins() {
+    let tree =
+        ResourceBudgetTree::new("wait-deadline", limit(1, 8, FullPolicy::WaitUntilDeadline)).expect("budget tree");
+    let queue = BudgetedQueue::new(tree.root());
+    queue.try_push_data("held", 8).expect("fill queue");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+
+    let waiting_queue = queue.clone();
+    let waiter = tokio::spawn(async move {
+        waiting_queue
+            .push_until("original", 1, BudgetClass::Data, deadline)
+            .await
+    });
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_secs(5)).await;
+
+    let error = waiter
+        .await
+        .expect("join waiter")
+        .expect_err("deadline must reject waiting item");
+    assert_eq!(error.kind(), &QueuePushErrorKind::DeadlineExceeded);
+    assert_eq!(error.into_item(), "original");
+    let snapshot = queue.snapshot();
+    assert_eq!(snapshot.waiters, 0);
+    assert_eq!(snapshot.wait_count, 1);
+    assert_eq!(snapshot.deadline_exceeded_count, 1);
+    assert_eq!(queue.try_pop(), Some("held"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn wait_until_deadline_close_wakes_waiter_and_returns_original_item() {
+    let tree = ResourceBudgetTree::new("wait-close", limit(1, 8, FullPolicy::WaitUntilDeadline)).expect("budget tree");
+    let queue = BudgetedQueue::new(tree.root());
+    queue.try_push_data("held", 8).expect("fill queue");
+
+    let waiting_queue = queue.clone();
+    let waiter = tokio::spawn(async move {
+        waiting_queue
+            .push_until(
+                "original",
+                1,
+                BudgetClass::Data,
+                tokio::time::Instant::now() + Duration::from_secs(30),
+            )
+            .await
+    });
+    tokio::task::yield_now().await;
+    assert_eq!(queue.snapshot().waiters, 1);
+    queue.close();
+
+    let error = waiter
+        .await
+        .expect("join waiter")
+        .expect_err("closed queue must reject waiting item");
+    assert_eq!(error.kind(), &QueuePushErrorKind::Closed);
+    assert_eq!(error.into_item(), "original");
+    assert_eq!(queue.snapshot().waiters, 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn wait_until_deadline_oversized_item_fails_without_waiting() {
+    let tree =
+        ResourceBudgetTree::new("wait-oversized", limit(2, 8, FullPolicy::WaitUntilDeadline)).expect("budget tree");
+    let queue = BudgetedQueue::new(tree.root());
+    let before = tokio::time::Instant::now();
+
+    let error = queue
+        .push_until("oversized", 9, BudgetClass::Data, before + Duration::from_secs(30))
+        .await
+        .expect_err("item can never fit byte capacity");
+
+    assert!(matches!(error.kind(), QueuePushErrorKind::BudgetExhausted(_)));
+    assert_eq!(error.into_item(), "oversized");
+    assert_eq!(tokio::time::Instant::now(), before);
+    assert_eq!(queue.snapshot().wait_count, 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn wait_until_deadline_rejects_item_that_cannot_fit_ancestor_data_reserve() {
+    let root_limit = limit(2, 8, FullPolicy::Reject).with_control_reserve(BudgetCapacity::new(1, 4));
+    let tree = ResourceBudgetTree::new("reserved-root", root_limit).expect("root budget");
+    let child = tree
+        .root()
+        .child("waiting", limit(2, 8, FullPolicy::WaitUntilDeadline))
+        .expect("waiting child");
+    let queue = BudgetedQueue::new(child);
+    let before = tokio::time::Instant::now();
+
+    let error = queue
+        .push_until(
+            "too-large-for-data",
+            5,
+            BudgetClass::Data,
+            before + Duration::from_secs(30),
+        )
+        .await
+        .expect_err("ancestor data reserve permanently excludes item");
+
+    match error.kind() {
+        QueuePushErrorKind::BudgetExhausted(error) => {
+            assert_eq!(error.dimension(), BudgetDimension::Bytes);
+            assert_eq!(error.exhausted_path(), "reserved-root");
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(error.into_item(), "too-large-for-data");
+    assert_eq!(tokio::time::Instant::now(), before);
+    assert_eq!(queue.snapshot().wait_count, 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn wait_until_deadline_returns_rate_exhaustion_without_capacity_wait() {
+    let clock = Arc::new(ManualClock::default());
+    let wait_limit = limit(1, 8, FullPolicy::WaitUntilDeadline).with_rate(RateLimit::new(1, 1));
+    let tree = ResourceBudgetTree::with_clock("rate-wait", wait_limit, clock).expect("budget tree");
+    let queue = BudgetedQueue::new(tree.root());
+    queue.try_push_data("first", 1).expect("consume initial rate token");
+    assert_eq!(queue.try_pop(), Some("first"));
+    let before = tokio::time::Instant::now();
+
+    let error = queue
+        .push_until("second", 1, BudgetClass::Data, before + Duration::from_secs(30))
+        .await
+        .expect_err("rate exhaustion is not capacity-release driven");
+
+    match error.kind() {
+        QueuePushErrorKind::BudgetExhausted(error) => {
+            assert_eq!(error.dimension(), BudgetDimension::Rate);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(error.into_item(), "second");
+    assert_eq!(tokio::time::Instant::now(), before);
+    let snapshot = queue.snapshot();
+    assert_eq!(snapshot.wait_count, 0);
+    assert_eq!(snapshot.throttled_count, 1);
+    assert_eq!(snapshot.rejected_count, 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn ancestor_release_wakes_waiting_child() {
+    let tree = ResourceBudgetTree::new("shared", limit(1, 8, FullPolicy::Reject)).expect("root budget");
+    let waiting_budget = tree
+        .root()
+        .child("waiting", limit(1, 8, FullPolicy::WaitUntilDeadline))
+        .expect("waiting child");
+    let sibling = tree
+        .root()
+        .child("sibling", limit(1, 8, FullPolicy::Reject))
+        .expect("sibling child");
+    let sibling_permit = sibling.try_acquire_data(8).expect("fill ancestor from sibling");
+    let queue = BudgetedQueue::new(waiting_budget);
+
+    let waiting_queue = queue.clone();
+    let waiter = tokio::spawn(async move {
+        waiting_queue
+            .push_until(
+                "child",
+                8,
+                BudgetClass::Data,
+                tokio::time::Instant::now() + Duration::from_secs(5),
+            )
+            .await
+    });
+    tokio::task::yield_now().await;
+    assert_eq!(queue.snapshot().waiters, 1);
+    drop(sibling_permit);
+
+    waiter
+        .await
+        .expect("join waiter")
+        .expect("ancestor release must wake child");
+    assert_eq!(queue.try_pop(), Some("child"));
+    assert_eq!(tree.root().snapshot().current_count, 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn cancelled_waiter_and_panicking_owner_restore_metrics_and_permits() {
+    let tree = ResourceBudgetTree::new("wait-cancel", limit(1, 8, FullPolicy::WaitUntilDeadline)).expect("budget tree");
+    let budget = tree.root();
+    let queue = BudgetedQueue::new(budget.clone());
+    queue.try_push_data("held", 8).expect("fill queue");
+
+    let waiting_queue = queue.clone();
+    let waiter = tokio::spawn(async move {
+        waiting_queue
+            .push_until(
+                "cancelled",
+                1,
+                BudgetClass::Data,
+                tokio::time::Instant::now() + Duration::from_secs(30),
+            )
+            .await
+    });
+    tokio::task::yield_now().await;
+    assert_eq!(queue.snapshot().waiters, 1);
+    waiter.abort();
+    assert!(waiter.await.expect_err("waiter must be cancelled").is_cancelled());
+    assert_eq!(queue.snapshot().waiters, 0);
+    assert_eq!(budget.snapshot().current_count, 1);
+
+    let owned = queue.try_pop_budgeted().expect("take owned permit");
+    let panicking_owner = tokio::spawn(async move {
+        let _owned = owned;
+        panic!("injected owner panic");
+    });
+    assert!(panicking_owner.await.expect_err("owner must panic").is_panic());
+    assert_eq!(budget.snapshot().current_count, 0);
+    assert_eq!(budget.snapshot().current_bytes, 0);
+    assert_eq!(budget.snapshot().admitted_count, budget.snapshot().released_count);
+}

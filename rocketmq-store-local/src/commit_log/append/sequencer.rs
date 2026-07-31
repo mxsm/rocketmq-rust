@@ -103,7 +103,9 @@ impl<T> AppendSequencerSender<T> {
             .map(|_| ())
             .map_err(|error| {
                 let kind = match error.kind() {
-                    QueuePushErrorKind::BudgetExhausted(_) => AppendAdmissionErrorKind::Saturated,
+                    QueuePushErrorKind::BudgetExhausted(_) | QueuePushErrorKind::DeadlineExceeded => {
+                        AppendAdmissionErrorKind::Saturated
+                    }
                     QueuePushErrorKind::Closed | QueuePushErrorKind::SlowConsumerClosed => {
                         AppendAdmissionErrorKind::Closed
                     }

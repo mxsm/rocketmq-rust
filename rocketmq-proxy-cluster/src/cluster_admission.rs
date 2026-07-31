@@ -226,7 +226,7 @@ impl ClusterExecutionLanes {
                     "proxy cluster command admission rejected"
                 );
                 match kind {
-                    QueuePushErrorKind::BudgetExhausted(_) => {
+                    QueuePushErrorKind::BudgetExhausted(_) | QueuePushErrorKind::DeadlineExceeded => {
                         Err(ProxyError::too_many_requests("proxy-cluster-command-queue"))
                     }
                     QueuePushErrorKind::Closed | QueuePushErrorKind::SlowConsumerClosed => Err(ProxyError::Transport {

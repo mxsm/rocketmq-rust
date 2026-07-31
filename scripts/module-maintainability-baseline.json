@@ -97,7 +97,7 @@
       "reexports": 5
     },
     "rocketmq-runtime": {
-      "public_items": 646,
+      "public_items": 647,
       "reexports": 150
     },
     "rocketmq-security-api": {
@@ -4770,7 +4770,7 @@
       "reexports": 0
     },
     "rocketmq-observability/src/exporter/outage.rs": {
-      "production_lines": 923,
+      "production_lines": 924,
       "public_items": 24,
       "reexports": 0
     },
@@ -7066,7 +7066,7 @@
     },
     "rocketmq-runtime/src/resource_budget/queue.rs": {
       "production_lines": 423,
-      "public_items": 27,
+      "public_items": 28,
       "reexports": 0
     },
     "rocketmq-runtime/src/schedule.rs": {
