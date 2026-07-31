@@ -688,6 +688,7 @@ impl StoreMetrics {
         metrics
     }
 
+    #[cfg(test)]
     pub(crate) fn new_with_observables_and_replication_lag<F, H>(
         meter: &opentelemetry::metrics::Meter,
         source: F,
