@@ -46,7 +46,7 @@ spec:
           env:
 {{ include "rocketmq.lifecycleEnv" . | indent 12 }}
 {{ include "rocketmq.telemetryEnv" . | indent 12 }}
-{{ include "rocketmq.runtimeDiagnosticsEnv" . | indent 12 }}
+{{ if .Values.global.runtimeDiagnostics.enabled }}{{ include "rocketmq.runtimeDiagnosticsEnv" . | indent 12 }}{{ end }}
             - name: POD_NAME
               valueFrom:
                 fieldRef:
@@ -57,6 +57,9 @@ spec:
             - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
           ports:
             - {name: health, containerPort: 8088, protocol: TCP}
+{{- if .Values.metrics.enabled }}
+            - {name: metrics, containerPort: {{ .Values.metrics.port }}, protocol: TCP}
+{{- end }}
 {{- if .Values.global.runtimeDiagnostics.enabled }}
             - {name: runtime-diag, containerPort: {{ .Values.global.runtimeDiagnostics.port }}, protocol: TCP}
 {{- end }}
@@ -166,13 +169,16 @@ spec:
           env:
 {{ include "rocketmq.lifecycleEnv" . | indent 12 }}
 {{ include "rocketmq.telemetryEnv" . | indent 12 }}
-{{ include "rocketmq.runtimeDiagnosticsEnv" . | indent 12 }}
+{{ if .Values.global.runtimeDiagnostics.enabled }}{{ include "rocketmq.runtimeDiagnosticsEnv" . | indent 12 }}{{ end }}
             - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/namesrv}
             - {name: OTEL_SERVICE_NAME, value: rocketmq-namesrv}
             - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: {{ .Values.global.otelEndpoint | quote }}}
             - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
           ports:
             - {name: health, containerPort: 8088, protocol: TCP}
+{{- if .Values.metrics.enabled }}
+            - {name: metrics, containerPort: {{ .Values.metrics.port }}, protocol: TCP}
+{{- end }}
 {{- if .Values.global.runtimeDiagnostics.enabled }}
             - {name: runtime-diag, containerPort: {{ .Values.global.runtimeDiagnostics.port }}, protocol: TCP}
 {{- end }}
@@ -264,7 +270,7 @@ spec:
           env:
 {{ include "rocketmq.lifecycleEnv" . | indent 12 }}
 {{ include "rocketmq.telemetryEnv" . | indent 12 }}
-{{ include "rocketmq.runtimeDiagnosticsEnv" . | indent 12 }}
+{{ if .Values.global.runtimeDiagnostics.enabled }}{{ include "rocketmq.runtimeDiagnosticsEnv" . | indent 12 }}{{ end }}
             - name: POD_NAME
               valueFrom:
                 fieldRef:
@@ -277,6 +283,9 @@ spec:
             - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
           ports:
             - {name: health, containerPort: 8088, protocol: TCP}
+{{- if .Values.metrics.enabled }}
+            - {name: metrics, containerPort: {{ .Values.metrics.port }}, protocol: TCP}
+{{- end }}
 {{- if .Values.global.runtimeDiagnostics.enabled }}
             - {name: runtime-diag, containerPort: {{ .Values.global.runtimeDiagnostics.port }}, protocol: TCP}
 {{- end }}
@@ -386,13 +395,16 @@ spec:
           env:
 {{ include "rocketmq.lifecycleEnv" . | indent 12 }}
 {{ include "rocketmq.telemetryEnv" . | indent 12 }}
-{{ include "rocketmq.runtimeDiagnosticsEnv" . | indent 12 }}
+{{ if .Values.global.runtimeDiagnostics.enabled }}{{ include "rocketmq.runtimeDiagnosticsEnv" . | indent 12 }}{{ end }}
             - {name: ROCKETMQ_HOME, value: /var/lib/rocketmq/proxy}
             - {name: OTEL_SERVICE_NAME, value: rocketmq-proxy}
             - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: {{ .Values.global.otelEndpoint | quote }}}
             - {name: OTEL_EXPORTER_OTLP_PROTOCOL, value: grpc}
           ports:
             - {name: health, containerPort: 8088, protocol: TCP}
+{{- if .Values.metrics.enabled }}
+            - {name: metrics, containerPort: {{ .Values.metrics.port }}, protocol: TCP}
+{{- end }}
 {{- if .Values.global.runtimeDiagnostics.enabled }}
             - {name: runtime-diag, containerPort: {{ .Values.global.runtimeDiagnostics.port }}, protocol: TCP}
 {{- end }}
