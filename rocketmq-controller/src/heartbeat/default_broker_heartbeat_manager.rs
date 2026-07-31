@@ -197,11 +197,6 @@ impl DefaultBrokerHeartbeatManager {
                 to_remove.push((broker_identity.clone(), live_info.broker_id()));
             }
         }
-        let stale_count = to_remove.len();
-        rocketmq_observability::metrics::controller::record_active_brokers(
-            u64::try_from(broker_live_table.len().saturating_sub(stale_count)).unwrap_or(u64::MAX),
-        );
-
         // Remove expired brokers and notify the latest registered listeners.
         let listeners = listeners.read().clone();
         for (identity, broker_id) in to_remove {
