@@ -724,17 +724,15 @@ mod tests {
 
         scheduler.start().await.expect("parented scheduler should start");
         scheduler.stop().await.expect("parented scheduler should stop");
+        let child_report = scheduler
+            .last_scheduler_shutdown_report()
+            .await
+            .expect("scheduler shutdown report should exist");
+        assert_eq!(child_report.name, "rocketmq.task-scheduler");
 
         let report = service.task_group().shutdown(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
-        assert!(
-            report
-                .children
-                .iter()
-                .any(|child| child.name == "rocketmq.task-scheduler"),
-            "{}",
-            report.to_json()
-        );
+        assert!(report.children.is_empty(), "{}", report.to_json());
     }
 
     #[tokio::test]
