@@ -54,11 +54,12 @@ use rocketmq_runtime::common::file_utils;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::OperationContext;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_runtime::TaskGroupChildLease;
+use rocketmq_runtime::TaskKind;
 use rocketmq_store::get_delay_offset_store_path;
 use rocketmq_store::ConsumeQueueStore;
 use rocketmq_store::ConsumeQueueStoreTrait;
@@ -102,8 +103,8 @@ struct ScheduleLifecycle {
 
 struct ScheduleRun {
     generation: u64,
-    _lease: TaskGroupChildLease,
     task_group: TaskGroup,
+    operation: OperationContext,
     scheduled_tasks: ScheduledTaskGroup,
 }
 
@@ -111,6 +112,7 @@ struct ScheduleRun {
 struct ScheduleRunContext {
     generation: u64,
     task_group: TaskGroup,
+    operation: OperationContext,
     cancellation: CancellationToken,
 }
 
@@ -501,19 +503,14 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
         let runtime_capabilities = this.runtime_capabilities();
         let generation = lifecycle.next_generation;
         lifecycle.next_generation = lifecycle.next_generation.checked_add(1).unwrap_or(1);
-        let lease = runtime_capabilities
-            .task_group
-            .try_child_lease(format!("rocketmq-broker.schedule.generation-{generation}"))
-            .map_err(schedule_message_service_startup_failed)?;
-        let task_group = lease.group().clone();
-        let scheduled_group = task_group
-            .try_child("scheduled")
-            .map_err(schedule_message_service_startup_failed)?;
-        let scheduled_tasks = ScheduledTaskGroup::new(scheduled_group);
+        let task_group = runtime_capabilities.task_group.clone();
+        let operation = OperationContext::without_deadline(TaskKind::Worker);
+        let scheduled_tasks = ScheduledTaskGroup::new(task_group.clone());
         let run_context = ScheduleRunContext {
             generation,
-            cancellation: task_group.cancellation_token(),
             task_group: task_group.clone(),
+            operation: operation.clone(),
+            cancellation: operation.cancellation_token(),
         };
         let (activation, activation_rx) = watch::channel(false);
 
@@ -563,15 +560,16 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
         .await;
 
         if let Err(error) = install_result {
-            task_group.cancel();
-            let _ = task_group.shutdown(Duration::from_millis(WAIT_FOR_SHUTDOWN)).await;
+            let _ = operation
+                .cancel_and_wait(&task_group, Duration::from_millis(WAIT_FOR_SHUTDOWN))
+                .await;
             return Err(error);
         }
 
         lifecycle.run = Some(ScheduleRun {
             generation,
-            _lease: lease,
             task_group,
+            operation,
             scheduled_tasks,
         });
         this.active_generation.store(generation, Ordering::Release);
@@ -600,7 +598,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
         config.shutdown_timeout = Duration::from_millis(WAIT_FOR_SHUTDOWN);
 
         scheduled_tasks
-            .schedule_fixed_delay(config, move || {
+            .schedule_fixed_delay_operation(&run_context.operation, config, move || {
                 let service = service.clone();
                 let context = context.clone();
                 let mut activation = activation.clone();
@@ -650,19 +648,25 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
                 generation = run.generation,
                 finalize, "Stopping ScheduleMessageService generation"
             );
-            run.task_group.cancel();
+            run.operation.cancel();
 
             // Wait for any already-submitted blocking write. Periodic writers waiting for this
             // gate observe cancellation and leave without writing.
             drop(self.persistence_gate.lock().await);
-            let report = run.task_group.shutdown(Duration::from_millis(WAIT_FOR_SHUTDOWN)).await;
-            if !report.is_healthy() {
+            let joined = run
+                .operation
+                .cancel_and_wait(&run.task_group, Duration::from_millis(WAIT_FOR_SHUTDOWN))
+                .await
+                .map_err(schedule_message_service_shutdown_failed)?;
+            if !joined {
                 warn!(
                     generation = run.generation,
-                    report = %report.to_json(),
-                    "ScheduleMessageService generation shutdown report is unhealthy"
+                    "ScheduleMessageService generation exceeded its shutdown deadline"
                 );
             }
+            run.scheduled_tasks
+                .clear_completed()
+                .map_err(schedule_message_service_shutdown_failed)?;
         }
 
         self.persist_current().await?;
@@ -682,12 +686,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
         self.lifecycle
             .try_lock()
             .ok()
-            .and_then(|lifecycle| {
-                lifecycle
-                    .run
-                    .as_ref()
-                    .map(|run| run.task_group.task_count() + run.scheduled_tasks.group().task_count())
-            })
+            .and_then(|lifecycle| lifecycle.run.as_ref().map(|run| run.operation.active_task_count()))
             .unwrap_or_default()
     }
 
@@ -709,7 +708,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
     {
         run_context
             .task_group
-            .spawn_service(task_name, future)
+            .spawn_operation(&run_context.operation, task_name, future)
             .map(|_| ())
             .map_err(schedule_message_service_startup_failed)
     }
@@ -2145,7 +2144,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn schedule_lifecycle_uses_fresh_generation_and_prunes_dynamic_child() {
+    async fn schedule_lifecycle_reuses_fixed_component_owner_across_generations() {
         let temp_dir = TempDir::new().expect("schedule lifecycle temp dir should be created");
         let root = temp_dir.path().to_string_lossy().into_owned();
         let broker_config = Arc::new(BrokerConfig {
@@ -2165,18 +2164,20 @@ mod tests {
             .schedule_message_service_for_test()
             .expect("schedule message service should be configured")
             .clone();
+        let fixed_children = parent_group.child_stats().active;
 
         ScheduleMessageService::start_persist_task_for_probe(service.clone(), Duration::from_secs(60))
             .await
             .expect("first schedule generation should start");
         let first_generation = service.active_generation.load(Ordering::Acquire);
         assert_ne!(first_generation, 0);
-        assert_eq!(parent_group.child_stats().active, 1);
+        assert_eq!(service.task_count(), 1);
+        assert_eq!(parent_group.child_stats().active, fixed_children);
 
         service.stop().await.expect("first schedule generation should stop");
         assert_eq!(service.active_generation.load(Ordering::Acquire), 0);
         assert_eq!(service.task_count(), 0);
-        assert_eq!(parent_group.child_stats().active, 0);
+        assert_eq!(parent_group.child_stats().active, fixed_children);
 
         ScheduleMessageService::start_persist_task_for_probe(service.clone(), Duration::from_secs(60))
             .await
@@ -2188,7 +2189,8 @@ mod tests {
             .shutdown()
             .await
             .expect("final schedule shutdown should succeed");
-        assert_eq!(parent_group.child_stats().active, 0);
+        assert_eq!(service.task_count(), 0);
+        assert_eq!(parent_group.child_stats().active, fixed_children);
         assert!(
             ScheduleMessageService::start_persist_task_for_probe(service, Duration::from_secs(60))
                 .await

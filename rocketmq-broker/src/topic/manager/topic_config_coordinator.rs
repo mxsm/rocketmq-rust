@@ -30,7 +30,6 @@ use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_runtime::TaskGroupChildLease;
 use rocketmq_runtime::TaskId;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -73,13 +72,10 @@ struct TopicConfigRuntimeCapabilities {
 }
 
 struct TopicConfigRun {
-    _lease: TaskGroupChildLease,
-    task_group: TaskGroup,
     worker: TaskId,
 }
 
 struct TopicConfigLifecycle {
-    next_generation: u64,
     run: Option<TopicConfigRun>,
     finalized: bool,
 }
@@ -149,7 +145,6 @@ impl TopicConfigCoordinator {
             manager,
             runtime_capabilities,
             lifecycle: Mutex::new(TopicConfigLifecycle {
-                next_generation: 1,
                 run: None,
                 finalized: false,
             }),
@@ -212,20 +207,14 @@ impl TopicConfigCoordinator {
         }
 
         let capabilities = self.runtime_capabilities();
-        let generation = lifecycle.next_generation;
-        lifecycle.next_generation = generation.checked_add(1).unwrap_or(1);
-        let lease = capabilities
-            .task_group
-            .try_child_lease(format!("rocketmq-broker.topic-config.generation-{generation}"))
-            .map_err(topic_coordinator_error)?;
-        let task_group = lease.group().clone();
         let (sender, receiver) = mpsc::channel(COMMAND_CAPACITY);
         let manager = Arc::clone(&self.manager);
         let blocking = capabilities.blocking.clone();
         let persist_failures = Arc::clone(&self.persist_failures);
         let registration_failures = Arc::clone(&self.registration_failures);
         let metadata_io = self.metadata_io.clone();
-        let worker = task_group
+        let worker = capabilities
+            .task_group
             .spawn_service(
                 "broker.topic-config.coordinator",
                 run_topic_config_worker(
@@ -239,11 +228,7 @@ impl TopicConfigCoordinator {
             )
             .map_err(topic_coordinator_error)?;
         *self.admission.lock().await = Some(sender);
-        lifecycle.run = Some(TopicConfigRun {
-            _lease: lease,
-            task_group,
-            worker,
-        });
+        lifecycle.run = Some(TopicConfigRun { worker });
         Ok(())
     }
 
@@ -386,7 +371,11 @@ impl TopicConfigCoordinator {
             false
         };
         let timed_out = deadline.is_expired() || (!final_persist_succeeded && detail.is_none());
-        let worker_exited = run.task_group.wait_task(run.worker, deadline.remaining()).await;
+        let worker_exited = self
+            .runtime_capabilities()
+            .task_group
+            .wait_task(run.worker, deadline.remaining())
+            .await;
         let blocking_still_running = self.blocking_still_running();
         let report = TopicConfigCoordinatorShutdownReport {
             admission_closed,

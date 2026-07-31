@@ -256,24 +256,17 @@ impl BrokerRuntime {
             }
         }
         let broker_name = self.composition.state.broker_config().broker_name().clone();
-        let task_group_lease = match self.composition.state.service_context.as_ref() {
-            Some(service_context) => match service_context
+        let task_group = self.composition.state.service_context.as_ref().map(|service_context| {
+            service_context
+                .child(format!("rocketmq-broker.transaction-check.{broker_name}"))
                 .task_group()
-                .try_child_lease(format!("rocketmq-broker.transaction-check.{broker_name}"))
-            {
-                Ok(lease) => Some(lease),
-                Err(error) => {
-                    error!(?error, "Failed to create transaction check task group");
-                    return false;
-                }
-            },
-            None => None,
-        };
+                .clone()
+        });
         let listener = DefaultTransactionalMessageCheckListener::new(
             broker_name,
             self.composition.state.producer_manager().channel_registry(),
             Arc::new(Broker2Client),
-            task_group_lease,
+            task_group,
         );
         self.composition.state.transactional_message_check_listener = Some(listener.clone());
         self.composition.state.transactional_message_check_service = self
