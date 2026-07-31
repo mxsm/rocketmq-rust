@@ -19,6 +19,9 @@ use crate::diagnostics::RuntimeDiagnostics;
 use crate::error::RuntimeError;
 use crate::error::RuntimeResult;
 use crate::handle::RuntimeHandle;
+use crate::resource_budget::MemoryLimitError;
+use crate::resource_budget::ProcessMemoryLimit;
+use crate::resources::RuntimeResources;
 use crate::service_context::RootServiceContext;
 use crate::shutdown_deadline::ShutdownDeadline;
 use crate::shutdown_report::ShutdownReport;
@@ -32,6 +35,7 @@ use crate::task_group::TaskGroupLifecycleState;
 pub struct RuntimeOwner {
     config: RuntimeConfig,
     runtime: Option<tokio::runtime::Runtime>,
+    resources: RuntimeResources,
     root_context: RootServiceContext,
 }
 
@@ -41,9 +45,36 @@ impl RuntimeOwner {
     /// # Errors
     ///
     /// Returns an error when the configuration is invalid, the Tokio runtime
-    /// cannot be built, or the root blocking executor cannot be initialized.
+    /// cannot be built, the process memory limit cannot be detected, or the
+    /// root blocking executor cannot be initialized.
     pub fn new(config: RuntimeConfig) -> RuntimeResult<Self> {
+        Self::try_new_with_memory_detector(config, ProcessMemoryLimit::detect)
+    }
+
+    /// Creates a runtime owner with an explicit process memory limit.
+    ///
+    /// Composition roots with an authoritative container or service limit can
+    /// use this constructor to avoid platform discovery. The resulting budget
+    /// is still owned once by this runtime owner.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the configuration or process budget is invalid,
+    /// the Tokio runtime cannot be built, or the root blocking executor cannot
+    /// be initialized.
+    pub fn new_with_memory_limit(config: RuntimeConfig, memory_limit: ProcessMemoryLimit) -> RuntimeResult<Self> {
+        Self::try_new_with_memory_detector(config, || Ok(memory_limit))
+    }
+
+    fn try_new_with_memory_detector<F>(config: RuntimeConfig, detector: F) -> RuntimeResult<Self>
+    where
+        F: FnOnce() -> Result<ProcessMemoryLimit, MemoryLimitError>,
+    {
         config.validate()?;
+        let memory_limit = detector().map_err(|error| {
+            RuntimeError::InvalidConfig(format!("failed to determine process memory limit: {error}"))
+        })?;
+        let resources = RuntimeResources::from_memory_limit(memory_limit)?;
 
         let mut builder = tokio::runtime::Builder::new_multi_thread();
         builder
@@ -72,10 +103,12 @@ impl RuntimeOwner {
             config.blocking_lane_policies.clone(),
             config.max_blocking_threads,
             diagnostics,
+            resources.clone(),
         )?;
         Ok(Self {
             config,
             runtime: Some(runtime),
+            resources,
             root_context,
         })
     }
@@ -88,6 +121,11 @@ impl RuntimeOwner {
     /// Returns the validated runtime configuration.
     pub fn config(&self) -> &RuntimeConfig {
         &self.config
+    }
+
+    /// Returns the process-wide resource capabilities.
+    pub fn resources(&self) -> &RuntimeResources {
+        &self.resources
     }
 
     /// Blocks the current thread until `future` completes.
@@ -195,5 +233,26 @@ impl RuntimeOwner {
             report.merge_blocking(snapshot);
         }
         report
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+
+    use super::*;
+
+    #[test]
+    fn runtime_owner_invokes_the_memory_detector_once() {
+        let calls = AtomicUsize::new(0);
+        let owner = RuntimeOwner::try_new_with_memory_detector(RuntimeConfig::default(), || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            ProcessMemoryLimit::configured(4 * 1024 * 1024)
+        })
+        .expect("runtime owner");
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(owner.resources().memory_limit().bytes(), 4 * 1024 * 1024);
     }
 }

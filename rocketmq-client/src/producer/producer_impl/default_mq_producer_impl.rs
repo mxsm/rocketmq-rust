@@ -96,6 +96,9 @@ use crate::producer::default_mq_producer::ProducerConfig;
 use crate::producer::default_mq_producer::MIN_BACK_PRESSURE_FOR_ASYNC_SEND_NUM;
 use crate::producer::default_mq_producer::MIN_BACK_PRESSURE_FOR_ASYNC_SEND_SIZE;
 use crate::producer::local_transaction_state::LocalTransactionState;
+use crate::producer::producer_impl::egress::BoundedEgress;
+use crate::producer::producer_impl::egress::OnewayEgressSnapshot;
+use crate::producer::producer_impl::egress::OnewayEnvelope;
 use crate::producer::producer_impl::mq_producer_inner::MQProducerInner;
 use crate::producer::producer_impl::mq_producer_inner::MQProducerInnerImpl;
 use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
@@ -374,6 +377,7 @@ pub struct DefaultMQProducerImpl {
     producer_task_tracker: TaskTracker,
     producer_task_shutdown: CancellationToken,
     task_admission: ParkingLotMutex<()>,
+    oneway_egress: OnceLock<BoundedEgress>,
     compressor_missing_logged: AtomicBool,
 }
 

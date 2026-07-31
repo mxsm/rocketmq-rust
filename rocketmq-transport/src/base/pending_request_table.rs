@@ -27,7 +27,6 @@ use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::BudgetDimension;
 use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::FullPolicy;
-use rocketmq_runtime::ProcessMemoryLimit;
 use rocketmq_runtime::RateLimit;
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::ResourceBudgetTree;
@@ -225,37 +224,51 @@ impl PendingRequestTable {
     ///
     /// # Errors
     ///
-    /// Returns a typed configuration error when process-memory detection or
-    /// budget validation fails.
+    /// Returns a typed configuration error when budget validation fails.
     pub fn try_with_limits(limits: PendingRequestLimits) -> RocketMQResult<Self> {
-        let max_count = limits.max_count.max(1);
-        let process_bytes = ProcessMemoryLimit::detect()
-            .and_then(|limit| limit.fraction(1, 16))
-            .map_err(|error| RocketMQError::ConfigInvalidValue {
-                key: "transport.pendingRequest.processMemoryLimit",
-                value: limits.max_bytes.to_string(),
-                reason: error.to_string(),
-            })?;
-        let process_bytes = usize::try_from(process_bytes).unwrap_or(usize::MAX).max(1);
-        let max_bytes = limits.max_bytes.min(process_bytes).max(1);
-        let request_rate = limits.admission_rate_per_second.max(1);
-        let max_request_age = limits.max_request_age;
-        let table_id = NEXT_TABLE_ID.fetch_add(1, Ordering::Relaxed);
-        let budget = ResourceBudgetTree::new(
-            format!("pending-request-table-{table_id}"),
-            BudgetLimit::new(max_count, max_bytes, FullPolicy::Reject)
-                .with_rate(RateLimit::new(request_rate, request_rate))
-                .with_max_age(max_request_age),
+        let process_budget = ResourceBudgetTree::new(
+            "standalone-pending-request-process",
+            BudgetLimit::new(limits.max_count.max(1), limits.max_bytes.max(1), FullPolicy::Reject),
         )
         .map_err(|error| RocketMQError::ConfigInvalidValue {
-            key: "transport.pendingRequest",
-            value: format!(
-                "count={max_count},bytes={max_bytes},rate={request_rate},age_ms={}",
-                max_request_age.as_millis()
-            ),
+            key: "transport.pendingRequest.standalone",
+            value: limits.max_bytes.to_string(),
             reason: error.to_string(),
         })?
         .root();
+        Self::try_with_limits_and_budget(limits, &process_budget)
+    }
+
+    /// Builds a table below an injected process resource root.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed configuration error when the derived budget is invalid.
+    pub fn try_with_limits_and_budget(
+        limits: PendingRequestLimits,
+        process_budget: &ResourceBudget,
+    ) -> RocketMQResult<Self> {
+        let process_capacity = process_budget.limit().capacity;
+        let max_count = limits.max_count.max(1).min(process_capacity.count);
+        let max_bytes = limits.max_bytes.max(1).min(process_capacity.bytes);
+        let request_rate = limits.admission_rate_per_second.max(1);
+        let max_request_age = limits.max_request_age;
+        let table_id = NEXT_TABLE_ID.fetch_add(1, Ordering::Relaxed);
+        let budget = process_budget
+            .child(
+                format!("pending-request-table-{table_id}"),
+                BudgetLimit::new(max_count, max_bytes, FullPolicy::Reject)
+                    .with_rate(RateLimit::new(request_rate, request_rate))
+                    .with_max_age(max_request_age),
+            )
+            .map_err(|error| RocketMQError::ConfigInvalidValue {
+                key: "transport.pendingRequest",
+                value: format!(
+                    "count={max_count},bytes={max_bytes},rate={request_rate},age_ms={}",
+                    max_request_age.as_millis()
+                ),
+                reason: error.to_string(),
+            })?;
         Ok(Self {
             inner: Arc::new(PendingRequestTableInner {
                 table_id,

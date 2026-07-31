@@ -11,10 +11,11 @@ error[E0624]: associated function `new` is private
   | |         parent_group: &TaskGroup,
   | |         blocking_lanes: BlockingLanes,
   | |         diagnostics: RuntimeDiagnostics,
+  | |         resources: RuntimeResources,
   | |     ) -> Self {
   | |_____________- private associated function defined here
 
-error[E0061]: this function takes 4 arguments but 0 arguments were supplied
+error[E0061]: this function takes 5 arguments but 0 arguments were supplied
  --> tests/ui/service_context/child_raw_constructor_is_private.rs:4:5
   |
 4 |     ChildServiceContext::new()
@@ -27,5 +28,5 @@ note: associated function defined here
   |        ^^^
 help: provide the arguments
   |
-4 |     ChildServiceContext::new(/* ScopeId */, /* &TaskGroup */, /* service_context::BlockingLanes */, /* RuntimeDiagnostics */)
-  |                              +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+4 |     ChildServiceContext::new(/* ScopeId */, /* &TaskGroup */, /* service_context::BlockingLanes */, /* RuntimeDiagnostics */, /* RuntimeResources */)
+  |                              +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++

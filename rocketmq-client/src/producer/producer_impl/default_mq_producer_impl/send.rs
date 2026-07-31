@@ -116,26 +116,23 @@ impl DefaultMQProducerImpl {
         Ok(())
     }
 
-    /// **High-Performance** batch send messages in oneway mode (fire-and-forget).
+    /// Admits a batch of messages into the bounded one-way egress.
     ///
-    /// This API provides **extreme throughput** for scenarios where performance is more important
-    /// than reliability, such as log collection, metrics reporting, and telemetry.
+    /// Accepted messages are processed by the producer's fixed worker set. Each message keeps its
+    /// byte reservation until the transport writer completes, so the batch cannot create one task
+    /// or one independent memory allocation budget per message.
     ///
     /// # Arguments
     /// * `msgs` - Iterator of messages to send
     ///
-    /// # Semantics
-    /// - All messages are sent in parallel (background tasks)
-    /// - Returns immediately after spawning all send tasks
-    /// - No retry, no error propagation
-    /// - Errors are silently logged
-    /// - Uses `send_oneway_unbounded` for maximum throughput
+    /// The return value is the number of messages accepted by the egress. Invalid messages and
+    /// messages without a current publish route are skipped. Capacity or lifecycle rejection is
+    /// returned immediately and no request is built for that rejected message.
     ///
-    /// # Performance Characteristics
-    /// - **Throughput**: 100K+ messages/second per producer
-    /// - **Latency**: < 10μs per message (spawn overhead only)
-    /// - **Memory**: ~1KB per message (task structure)
-    /// - **Parallel**: All messages sent concurrently
+    /// # Errors
+    ///
+    /// Returns an error if the producer is not running, request construction fails, the deadline
+    /// has already expired, or the bounded egress rejects admission.
     ///
     /// # Example
     /// ```rust,ignore
@@ -152,7 +149,7 @@ impl DefaultMQProducerImpl {
         let timeout = runtime.producer_config.send_msg_timeout() as u64;
         let mut sent_count = 0;
 
-        for msg in msgs {
+        for mut msg in msgs {
             // Validate each message
             if let Err(e) = Validators::check_message(Some(&msg), runtime.producer_config.as_ref()) {
                 tracing::debug!("Message validation failed in batch oneway: {:?}", e);
@@ -165,8 +162,42 @@ impl DefaultMQProducerImpl {
             if let Some(info) = topic_publish_info {
                 if info.ok() {
                     if let Some(mq) = self.select_one_message_queue(&info, None, false) {
-                        // Spawn background task for each message
-                        self.spawn_oneway_send(msg, mq, timeout);
+                        let client_instance = self.client_instance()?;
+                        let broker_name = client_instance.get_broker_name_from_message_queue(&mq).await;
+                        let Some(broker_addr) = client_instance.find_broker_address_in_publish(broker_name.as_ref())
+                        else {
+                            continue;
+                        };
+                        let broker_addr = mix_all::broker_vip_channel(
+                            runtime.client_config.vip_channel_enabled,
+                            broker_addr.as_str(),
+                        );
+                        let mq_client_api = client_instance.get_mq_client_api_impl()?;
+                        let send_config = runtime.send_config.clone();
+                        let namespace = runtime.client_config.namespace.clone();
+                        let retained_bytes = Self::message_body_len_for_backpressure(&msg).saturating_add(4 * 1024);
+                        let deadline = rocketmq_transport::RequestDeadline::from_timeout_millis(timeout);
+                        let target = broker_addr.to_string();
+                        self.oneway_egress()?.try_admit(retained_bytes, &target, deadline, || {
+                            let request = build_oneway_request_internal(
+                                &mut msg,
+                                &mq,
+                                &broker_name,
+                                &send_config,
+                                namespace.as_deref(),
+                            )?;
+                            Ok(OnewayEnvelope {
+                                broker_addr,
+                                deadline,
+                                send: Box::new(move |broker_addr, deadline, permit| {
+                                    Box::pin(async move {
+                                        mq_client_api
+                                            .send_oneway_with_permit(&broker_addr, request, deadline, permit)
+                                            .await
+                                    })
+                                }),
+                            })
+                        })?;
                         sent_count += 1;
                     }
                 }
@@ -176,65 +207,6 @@ impl DefaultMQProducerImpl {
         Ok(sent_count)
     }
 
-    /// Spawn a background task for oneway message sending.
-    ///
-    /// This is a helper method for send_oneway_batch to avoid code duplication.
-    pub(super) fn spawn_oneway_send<T>(&self, msg: T, mq: MessageQueue, _timeout: u64)
-    where
-        T: MessageTrait + Send + Sync + 'static,
-    {
-        let Ok(client_instance) = self.client_instance() else {
-            tracing::debug!("Oneway batch send skipped: MQClientInstance is not available");
-            return;
-        };
-        let runtime = self.runtime_snapshot();
-        let send_config = runtime.send_config.clone();
-        let client_config = runtime.client_config.clone();
-
-        let task = async move {
-            // Prepare message in background task
-            let mut msg = msg;
-
-            // Get broker address
-            let broker_name = client_instance.get_broker_name_from_message_queue(&mq).await;
-            let broker_addr = client_instance.find_broker_address_in_publish(broker_name.as_ref());
-
-            let Some(broker_addr) = broker_addr else {
-                return;
-            };
-            let broker_addr = mix_all::broker_vip_channel(client_config.vip_channel_enabled, broker_addr.as_str());
-
-            // Build request (simplified for oneway)
-            let request = match build_oneway_request_internal(
-                &mut msg,
-                &mq,
-                &broker_name,
-                &send_config,
-                client_config.namespace.as_deref(),
-            ) {
-                Ok(req) => req,
-                Err(e) => {
-                    tracing::debug!("Failed to build oneway request: {:?}", e);
-                    return;
-                }
-            };
-
-            // Fire and forget (use unbounded method for maximum batch throughput)
-            match client_instance.get_mq_client_api_impl() {
-                Ok(mq_client_api) => {
-                    let send_start = Instant::now();
-                    if let Err(e) = mq_client_api.send_oneway_unbounded(&broker_addr, request).await {
-                        tracing::debug!("Oneway batch send failed: {:?}", e);
-                    }
-                    client_instance.client_metrics().record_send(send_start.elapsed());
-                }
-                Err(e) => tracing::debug!("Oneway batch send skipped: {:?}", e),
-            }
-        };
-        if let Err(error) = self.spawn_tracked_task("rocketmq-client-producer-oneway-batch", task) {
-            warn!("Failed to spawn batch oneway send task: {}", error);
-        }
-    }
     #[inline]
     pub async fn sync_send_with_message_queue_timeout<T>(
         &self,

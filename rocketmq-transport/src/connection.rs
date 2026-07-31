@@ -53,6 +53,7 @@ use crate::write_strategy::QueuedWrite;
 use crate::write_strategy::QueuedWriteProgress;
 use rocketmq_protocol::protocol::encoded_frame::EncodedFrame;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_runtime::ResourcePermit;
 use std::sync::Arc;
 
 pub(crate) struct SessionLifecycle {
@@ -668,6 +669,7 @@ impl Connection {
         &mut self,
         payload: OutboundPayload,
         class: AdmissionClass,
+        reservation: Option<ResourcePermit>,
         deadline: Option<RequestDeadline>,
         target: String,
     ) -> rocketmq_error::RocketMQResult<()> {
@@ -704,13 +706,20 @@ impl Connection {
                     resume.notified().await;
                 }
             }
-            let permit = queued
-                .admission
-                .try_acquire(AdmissionResource::Queued, queued.scope, encoded_len, class)
-                .map_err(|_| {
-                    queued.writer_diagnostics.record_rejected(None);
-                    rocketmq_error::RocketMQError::network_queue_full(target.clone())
-                })?;
+            let permit = match reservation {
+                Some(reservation) => {
+                    queued
+                        .admission
+                        .rebind_permit(AdmissionResource::Queued, queued.scope, reservation)
+                }
+                None => queued
+                    .admission
+                    .try_acquire(AdmissionResource::Queued, queued.scope, encoded_len, class),
+            }
+            .map_err(|_| {
+                queued.writer_diagnostics.record_rejected(None);
+                rocketmq_error::RocketMQError::network_queue_full(target.clone())
+            })?;
             if let Some(deadline) = deadline {
                 deadline.ensure_before_send(target.clone())?;
             }
@@ -846,6 +855,7 @@ impl Connection {
             OutboundPayload::Frame(frame),
             class,
             None,
+            None,
             "transport-session-writer".to_string(),
         )
         .await
@@ -875,8 +885,41 @@ impl Connection {
         deadline.ensure_before_send(target.clone())?;
 
         self.telemetry.record_network_bytes(frame.encoded_len());
-        self.send_payload(OutboundPayload::Frame(frame), class, Some(deadline), target)
+        self.send_payload(OutboundPayload::Frame(frame), class, None, Some(deadline), target)
             .await
+    }
+
+    /// Sends one command while transferring an existing process-budget
+    /// reservation into the session writer queue.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed queue, before-send, write-timeout, budget-rebind, or
+    /// transport error.
+    pub async fn send_command_with_deadline_and_permit(
+        &mut self,
+        command: RemotingCommand,
+        deadline: RequestDeadline,
+        target: impl Into<String>,
+        permit: ResourcePermit,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        let target = target.into();
+        deadline.ensure_before_send(target.clone())?;
+        let class = self
+            .response_class()
+            .unwrap_or_else(|| AdmissionClass::for_request_code(command.code()));
+        let frame = EncodedFrame::from_command(command)?;
+        deadline.ensure_before_send(target.clone())?;
+
+        self.telemetry.record_network_bytes(frame.encoded_len());
+        self.send_payload(
+            OutboundPayload::Frame(frame),
+            class,
+            Some(permit),
+            Some(deadline),
+            target,
+        )
+        .await
     }
 
     /// Sends a `RemotingCommand` to the peer (borrows command).
@@ -909,6 +952,7 @@ impl Connection {
         self.send_payload(
             OutboundPayload::Frame(frame),
             class,
+            None,
             None,
             "transport-session-writer".to_string(),
         )
@@ -951,6 +995,7 @@ impl Connection {
             payload,
             AdmissionClass::Data,
             None,
+            None,
             "transport-session-writer".to_string(),
         )
         .await
@@ -980,6 +1025,7 @@ impl Connection {
         self.send_payload(
             OutboundPayload::Contiguous(bytes),
             AdmissionClass::Data,
+            None,
             None,
             "transport-session-writer".to_string(),
         )
@@ -1013,6 +1059,7 @@ impl Connection {
         self.send_payload(
             OutboundPayload::Contiguous(bytes),
             AdmissionClass::Control,
+            None,
             None,
             "transport-session-writer".to_string(),
         )

@@ -172,8 +172,11 @@ impl ProduceAccumulator {
     }
 
     pub fn new(service_context: ChildServiceContext, instance_name: &str) -> Self {
-        let resource_budget = crate::runtime::standalone_client_resource_budget()
-            .expect("standalone produce accumulator resource budget must be valid");
+        let resource_budget = crate::runtime::build_client_resource_budget(
+            &crate::runtime::ClientRuntimeConfig::default(),
+            &service_context.process_budget(),
+        )
+        .expect("service-context produce accumulator resource budget must be valid");
         Self::with_resource_budget(service_context, instance_name, resource_budget)
     }
 

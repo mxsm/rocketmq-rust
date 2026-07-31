@@ -146,36 +146,26 @@ impl MQClientAPIImpl {
         }
     }
 
-    /// **High-Performance** unbounded oneway send without timeout control.
+    /// Sends a one-way request while transferring an existing resource reservation.
     ///
-    /// This method provides **maximum throughput** by spawning background tasks immediately
-    /// without waiting for network send completion, achieving near-zero latency overhead.
+    /// The returned future completes only after the transport writer accepts the frame or
+    /// reports an error. The permit remains charged for the complete queued-write lifetime and
+    /// is released by RAII on success, timeout, cancellation, or connection failure.
     ///
-    /// # Performance Characteristics
-    /// - **Latency**: < 10μs per send (tokio spawn overhead only)
-    /// - **Throughput**: 100K+ messages/second per producer
-    /// - **Memory**: ~1KB per spawned task
-    /// - **Zero blocking**: Returns immediately after task spawn
+    /// # Errors
     ///
-    /// # When to Use
-    /// Ideal for high-throughput scenarios where:
-    /// - **Fire-and-forget** semantics are required
-    /// - Message loss is acceptable (e.g., metrics, logs, telemetry)
-    /// - **Maximum throughput** is the priority over reliability
-    /// - Latency is critical (< 10μs send overhead)
-    ///
-    /// # Use Cases
-    /// - Log collection and aggregation
-    /// - Metrics reporting
-    /// - Real-time telemetry
-    /// - High-frequency event streaming
-    pub async fn send_oneway_unbounded(
+    /// Returns an error when the deadline expires, the connection cannot be established, the
+    /// reservation cannot be transferred into the transport budget, or the writer fails.
+    pub async fn send_oneway_with_permit(
         &self,
         addr: &CheetahString,
         request: RemotingCommand,
+        deadline: rocketmq_transport::RequestDeadline,
+        permit: rocketmq_runtime::ResourcePermit,
     ) -> rocketmq_error::RocketMQResult<()> {
-        self.remoting_client.invoke_oneway_unbounded(addr.clone(), request);
-        Ok(())
+        self.remoting_client
+            .invoke_oneway_with_permit(addr, request, deadline, permit)
+            .await
     }
 
     pub async fn send_message_simple<T>(

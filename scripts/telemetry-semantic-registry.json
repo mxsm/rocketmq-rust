@@ -3563,6 +3563,123 @@
       }
     },
     {
+      "id": "rocketmq_client_oneway_egress_items",
+      "source_symbol": "CLIENT_ONEWAY_EGRESS_ITEMS",
+      "signal_type": "metric",
+      "kind": "gauge",
+      "unit": "{message}",
+      "owner": "client",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_client_oneway_egress_bytes",
+      "source_symbol": "CLIENT_ONEWAY_EGRESS_BYTES",
+      "signal_type": "metric",
+      "kind": "gauge",
+      "unit": "By",
+      "owner": "client",
+      "catalog": "rust",
+      "family": "connection-bytes",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_client_oneway_egress_oldest_age",
+      "source_symbol": "CLIENT_ONEWAY_EGRESS_OLDEST_AGE",
+      "signal_type": "metric",
+      "kind": "gauge",
+      "unit": "ms",
+      "owner": "client",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_client_oneway_egress_waiters",
+      "source_symbol": "CLIENT_ONEWAY_EGRESS_WAITERS",
+      "signal_type": "metric",
+      "kind": "gauge",
+      "unit": "{waiter}",
+      "owner": "client",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_client_oneway_egress_events_total",
+      "source_symbol": "CLIENT_ONEWAY_EGRESS_EVENTS_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{event}",
+      "owner": "client",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "result"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
       "id": "rocketmq_namesrv_route_request_total",
       "source_symbol": "NAMESRV_ROUTE_REQUEST_TOTAL",
       "signal_type": "metric",

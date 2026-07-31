@@ -289,8 +289,11 @@ impl MQClientInstance {
         telemetry_handle: TelemetryHandle,
         request_future_holder: Arc<RequestFutureHolder>,
     ) -> Arc<MQClientInstance> {
-        let resource_budget = crate::runtime::standalone_client_resource_budget()
-            .expect("standalone MQClientInstance resource budget must be valid");
+        let resource_budget = crate::runtime::build_client_resource_budget(
+            &crate::runtime::ClientRuntimeConfig::default(),
+            &service_context.process_budget(),
+        )
+        .expect("service-context MQClientInstance resource budget must be valid");
         let client_metrics = ClientMetrics::from_handle(&telemetry_handle);
         Self::new_arc_with_resource_budget(
             client_config,

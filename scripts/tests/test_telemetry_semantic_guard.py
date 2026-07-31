@@ -40,10 +40,10 @@ class TelemetrySemanticGuardTest(unittest.TestCase):
 
     def test_live_registry_matches_every_rust_signal(self) -> None:
         self.assertEqual([], guard.validate_registry(self.registry, self.inventory))
-        self.assertEqual(148, len(self.inventory["metrics"]))
+        self.assertEqual(153, len(self.inventory["metrics"]))
         self.assertEqual(15, len(self.inventory["spans"]))
         self.assertEqual(11, len(self.inventory["events"]))
-        self.assertEqual(174, len(self.registry["signals"]))
+        self.assertEqual(179, len(self.registry["signals"]))
 
     def test_log_filter_metrics_have_stable_registry_contracts(self) -> None:
         symbols = {
@@ -84,7 +84,7 @@ class TelemetrySemanticGuardTest(unittest.TestCase):
             check=False,
         )
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        self.assertIn("metrics=148 spans=15 logs=11 attributes=74", result.stdout)
+        self.assertIn("metrics=153 spans=15 logs=11 attributes=74", result.stdout)
 
     def test_committed_violation_fixtures_are_rejected(self) -> None:
         fixture_ids = {fixture["id"] for fixture in self.fixtures}

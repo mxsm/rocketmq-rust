@@ -90,6 +90,22 @@ impl BudgetAcquireError {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+/// Error returned when a resource permit cannot move to another budget.
+pub enum PermitRebindError {
+    #[error("cannot rebind resource permit from {source_path} to a different budget tree at {target_path}")]
+    /// The target does not share the permit's root budget.
+    DifferentTree {
+        /// The current permit budget path.
+        source_path: Arc<str>,
+        /// The requested target budget path.
+        target_path: Arc<str>,
+    },
+    #[error(transparent)]
+    /// The target budget cannot admit the reservation.
+    Budget(#[from] BudgetAcquireError),
+}
+
 /// Represents resource budget tree.
 pub struct ResourceBudgetTree {
     root: ResourceBudget,
@@ -346,6 +362,68 @@ impl ResourcePermit {
     /// Returns the class.
     pub const fn class(&self) -> BudgetClass {
         self.class
+    }
+
+    /// Moves this reservation to another budget in the same resource tree.
+    ///
+    /// Reservations for the common ancestor chain remain owned throughout the
+    /// transfer. Target-only reservations are acquired before source-only
+    /// reservations are released, so the payload is always covered without
+    /// charging common ancestors twice.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PermitRebindError::DifferentTree`] for an unrelated target.
+    /// Returns [`PermitRebindError::Budget`] when the target is full. On every
+    /// error, this permit remains unchanged and valid for its source budget.
+    pub fn try_rebind(&mut self, target: &ResourceBudget) -> Result<(), PermitRebindError> {
+        let common_ancestors = self
+            .reservations
+            .iter()
+            .zip(target.chain.iter())
+            .take_while(|(reservation, target_node)| Arc::ptr_eq(&reservation.node, target_node))
+            .count();
+        if common_ancestors == 0 {
+            return Err(PermitRebindError::DifferentTree {
+                source_path: Arc::clone(
+                    &self
+                        .reservations
+                        .last()
+                        .expect("resource permit always owns its root reservation")
+                        .node
+                        .path,
+                ),
+                target_path: Arc::clone(&target.node.path),
+            });
+        }
+        if common_ancestors == self.reservations.len() && common_ancestors == target.chain.len() {
+            return Ok(());
+        }
+
+        let mut target_reservations =
+            SmallVec::<[NodeReservation; 4]>::with_capacity(target.chain.len() - common_ancestors);
+        for node in target.chain.iter().skip(common_ancestors) {
+            match node.try_reserve(self.bytes, self.class) {
+                Ok(reservation) => target_reservations.push(reservation),
+                Err(dimension) => {
+                    target.record_rejection(node, dimension);
+                    return Err(PermitRebindError::Budget(BudgetAcquireError {
+                        path: Arc::clone(&target.node.path),
+                        exhausted_path: Arc::clone(&node.path),
+                        dimension,
+                        policy: target.node.limit.full_policy,
+                    }));
+                }
+            }
+        }
+        for reservation in &mut target_reservations {
+            reservation.commit();
+        }
+
+        self.reservations.truncate(common_ancestors);
+        self.reservations.extend(target_reservations);
+        self.capacity_notify.notify_waiters();
+        Ok(())
     }
 }
 

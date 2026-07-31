@@ -24,8 +24,6 @@ use rocketmq_runtime::BudgetConfigError;
 use rocketmq_runtime::BudgetDimension;
 use rocketmq_runtime::BudgetLimit;
 pub use rocketmq_runtime::FullPolicy;
-use rocketmq_runtime::MemoryLimitError;
-use rocketmq_runtime::ProcessMemoryLimit;
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::ResourceBudgetTree;
 use rocketmq_runtime::ResourcePermit;
@@ -219,7 +217,6 @@ impl std::error::Error for AdmissionError {}
 #[derive(Debug)]
 pub enum AdmissionConfigError {
     Budget(BudgetConfigError),
-    Memory(MemoryLimitError),
     ZeroScopeCapacity {
         scope: &'static str,
         dimension: BudgetDimension,
@@ -231,7 +228,6 @@ impl fmt::Display for AdmissionConfigError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Budget(error) => error.fmt(formatter),
-            Self::Memory(error) => error.fmt(formatter),
             Self::ZeroScopeCapacity { scope, dimension } => {
                 write!(formatter, "{scope} admission limit has zero {dimension:?} capacity")
             }
@@ -246,7 +242,6 @@ impl std::error::Error for AdmissionConfigError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Budget(error) => Some(error),
-            Self::Memory(error) => Some(error),
             Self::ZeroScopeCapacity { .. } | Self::ZeroMaxScopeKeys => None,
         }
     }
@@ -255,12 +250,6 @@ impl std::error::Error for AdmissionConfigError {
 impl From<BudgetConfigError> for AdmissionConfigError {
     fn from(error: BudgetConfigError) -> Self {
         Self::Budget(error)
-    }
-}
-
-impl From<MemoryLimitError> for AdmissionConfigError {
-    fn from(error: MemoryLimitError) -> Self {
-        Self::Memory(error)
     }
 }
 
@@ -273,7 +262,7 @@ struct GlobalBudgets {
 }
 
 impl GlobalBudgets {
-    fn new(limits: AdmissionLimits) -> Result<Self, AdmissionConfigError> {
+    fn new(limits: AdmissionLimits, process_budget: &ResourceBudget) -> Result<Self, AdmissionConfigError> {
         let resources = [
             limits.connections,
             limits.handshakes,
@@ -287,22 +276,24 @@ impl GlobalBudgets {
         let requested_root_bytes = resources
             .iter()
             .fold(0usize, |total, limit| total.saturating_add(limit.bytes));
-        let managed_bytes = ProcessMemoryLimit::detect()?.fraction(1, 8)?;
-        let managed_bytes = usize::try_from(managed_bytes).unwrap_or(usize::MAX).max(1);
-        let root_bytes = requested_root_bytes.min(managed_bytes).max(1);
-        let reserve_count = resources.iter().fold(0usize, |total, limit| {
-            total.saturating_add(effective_reserve(limits.control_reserve.count, limit.count))
-        });
+        let process_capacity = process_budget.limit().capacity;
+        let root_count = root_count.min(process_capacity.count).max(1);
+        let root_bytes = requested_root_bytes.min(process_capacity.bytes).max(1);
+        let reserve_count = resources
+            .iter()
+            .fold(0usize, |total, limit| {
+                total.saturating_add(effective_reserve(limits.control_reserve.count, limit.count))
+            })
+            .min(root_count);
         let requested_reserve_bytes = resources.iter().fold(0usize, |total, limit| {
             total.saturating_add(effective_reserve(limits.control_reserve.bytes, limit.bytes))
         });
         let reserve_bytes = effective_reserve(requested_reserve_bytes, root_bytes);
-        let tree = ResourceBudgetTree::new(
+        let root = process_budget.child(
             "transport",
             BudgetLimit::new(root_count, root_bytes, FullPolicy::Reject)
                 .with_control_reserve(BudgetCapacity::new(reserve_count, reserve_bytes)),
         )?;
-        let root = tree.root();
         Ok(Self {
             connections: global_budget(
                 &root,
@@ -410,7 +401,21 @@ impl AdmissionController {
     }
 
     pub fn try_new(limits: AdmissionLimits) -> Result<Self, AdmissionConfigError> {
-        Self::build(limits, None)
+        let process_budget = standalone_process_budget(limits)?;
+        Self::build(limits, &process_budget, None)
+    }
+
+    /// Creates a controller whose transport budgets derive from the injected
+    /// process resource root.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when any transport or derived child limit is invalid.
+    pub fn try_new_with_budget(
+        limits: AdmissionLimits,
+        process_budget: &ResourceBudget,
+    ) -> Result<Self, AdmissionConfigError> {
+        Self::build(limits, process_budget, None)
     }
 
     /// Creates an observed transport admission controller.
@@ -427,17 +432,32 @@ impl AdmissionController {
         limits: AdmissionLimits,
         observer: tokio::sync::mpsc::Sender<AdmissionEvent>,
     ) -> Result<Self, AdmissionConfigError> {
-        Self::build(limits, Some(observer))
+        let process_budget = standalone_process_budget(limits)?;
+        Self::build(limits, &process_budget, Some(observer))
+    }
+
+    /// Creates an observed controller under an injected process resource root.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when any transport or derived child limit is invalid.
+    pub fn try_with_budget_and_observer(
+        limits: AdmissionLimits,
+        process_budget: &ResourceBudget,
+        observer: tokio::sync::mpsc::Sender<AdmissionEvent>,
+    ) -> Result<Self, AdmissionConfigError> {
+        Self::build(limits, process_budget, Some(observer))
     }
 
     fn build(
         limits: AdmissionLimits,
+        process_budget: &ResourceBudget,
         observer: Option<tokio::sync::mpsc::Sender<AdmissionEvent>>,
     ) -> Result<Self, AdmissionConfigError> {
         validate_scope_limits(limits)?;
         Ok(Self {
             limits,
-            global: GlobalBudgets::new(limits)?,
+            global: GlobalBudgets::new(limits, process_budget)?,
             scoped: Mutex::new(HashMap::new()),
             observer,
         })
@@ -466,6 +486,42 @@ impl AdmissionController {
             }
             AdmissionError { resource, policy }
         })?;
+        if let Some(observer) = &self.observer {
+            let _ = observer.try_send(AdmissionEvent {
+                resource,
+                outcome: AdmissionOutcome::Acquired,
+                bytes,
+            });
+        }
+        Ok(AdmissionPermit {
+            _permit: permit,
+            observer: self.observer.clone(),
+            resource,
+            bytes,
+        })
+    }
+
+    pub(crate) fn rebind_permit(
+        &self,
+        resource: AdmissionResource,
+        scope: AdmissionScope,
+        mut permit: ResourcePermit,
+    ) -> Result<AdmissionPermit, AdmissionError> {
+        let budget = self.scoped_budget(resource, scope)?;
+        permit.try_rebind(&budget).map_err(|_| {
+            if let Some(observer) = &self.observer {
+                let _ = observer.try_send(AdmissionEvent {
+                    resource,
+                    outcome: AdmissionOutcome::Rejected,
+                    bytes: permit.bytes(),
+                });
+            }
+            AdmissionError {
+                resource,
+                policy: policy_for(resource),
+            }
+        })?;
+        let bytes = permit.bytes();
         if let Some(observer) = &self.observer {
             let _ = observer.try_send(AdmissionEvent {
                 resource,
@@ -562,6 +618,29 @@ impl AdmissionController {
             processors: resource_snapshot(&self.global.processors),
         }
     }
+}
+
+fn standalone_process_budget(limits: AdmissionLimits) -> Result<ResourceBudget, AdmissionConfigError> {
+    let resources = [
+        limits.connections,
+        limits.handshakes,
+        limits.inflight,
+        limits.queued,
+        limits.processors,
+    ];
+    let count = resources
+        .iter()
+        .fold(0usize, |total, limit| total.saturating_add(limit.count))
+        .max(1);
+    let bytes = resources
+        .iter()
+        .fold(0usize, |total, limit| total.saturating_add(limit.bytes))
+        .max(1);
+    Ok(ResourceBudgetTree::new(
+        "standalone-transport-process",
+        BudgetLimit::new(count, bytes, FullPolicy::Reject),
+    )?
+    .root())
 }
 
 fn global_budget(

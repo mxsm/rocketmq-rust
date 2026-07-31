@@ -26,6 +26,7 @@ use rocketmq_error::NetworkError;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::ResourcePermit;
 use rocketmq_runtime::RuntimeResult;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReport;
@@ -314,10 +315,18 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         service_context: ChildServiceContext,
         telemetry: TransportTelemetry,
     ) -> Self {
+        let process_budget = service_context.process_budget();
         let handler = RemotingGeneralHandler::new_with_telemetry(
             processor,
             vec![],
-            PendingRequestTable::with_capacity(512),
+            PendingRequestTable::try_with_limits_and_budget(
+                crate::base::pending_request_table::PendingRequestLimits {
+                    max_count: 512,
+                    ..Default::default()
+                },
+                &process_budget,
+            )
+            .expect("clamped remoting client pending-request budget must be valid"),
             telemetry.clone(),
         );
         Self {
@@ -1108,6 +1117,36 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingService for Rocketmq
     }
 }
 
+impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
+    /// Sends a one-way command while transferring an existing process-budget
+    /// reservation into the transport writer.
+    pub async fn invoke_oneway_with_permit(
+        &self,
+        addr: &CheetahString,
+        request: RemotingCommand,
+        deadline: RequestDeadline,
+        permit: ResourcePermit,
+    ) -> RocketMQResult<()> {
+        let Some(mut client) = self.get_and_create_client_until(Some(addr), deadline).await? else {
+            return Err(RocketMQError::network_connection_failed(
+                addr.to_string(),
+                "one-way client unavailable",
+            ));
+        };
+        let mut request = request;
+        request.mark_oneway_rpc_ref();
+        if self.cmd_handler.has_rpc_hooks() {
+            let remote_address = client.remote_address();
+            deadline.ensure_before_send(remote_address.to_string())?;
+            request.make_custom_header_to_net();
+            self.cmd_handler
+                .do_before_rpc_hooks_with_addr(remote_address, Some(&mut request))?;
+            deadline.ensure_before_send(remote_address.to_string())?;
+        }
+        client.send_until_with_permit(request, deadline, permit).await
+    }
+}
+
 #[allow(unused_variables)]
 impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqDefaultClient<PR> {
     async fn update_name_server_address_list(&self, addrs: Vec<CheetahString>) {
@@ -1330,87 +1369,16 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
                         return;
                     }
                 }
-                let addr_clone = addr.clone();
-                let Some(task_group) = self.get_or_create_worker_task_group() else {
-                    warn!(remote_addr = %addr, "invoke oneway skipped because client is shut down");
-                    return;
-                };
-                if let Err(error) = task_group.spawn_service("remoting.client.oneway-send", async move {
-                    let mut request = request;
-                    request.mark_oneway_rpc_ref();
-                    match client.send_until(request, deadline).await {
-                        Ok(()) => {}
-                        Err(error) => {
-                            warn!(
-                                remote_addr = %addr_clone,
-                                error = ?error,
-                                "invoke oneway send failed"
-                            );
-                        }
-                    }
-                }) {
+                let mut request = request;
+                request.mark_oneway_rpc_ref();
+                if let Err(error) = client.send_until(request, deadline).await {
                     warn!(
                         remote_addr = %addr,
                         error = ?error,
-                        "invoke oneway send task spawn failed"
+                        "invoke oneway send failed"
                     );
                 }
             }
-        }
-    }
-
-    fn invoke_oneway_unbounded(&self, addr: CheetahString, request: RemotingCommand) {
-        let client_owner = self.clone();
-        let addr_for_spawn_error = addr.clone();
-        let Some(task_group) = self.get_or_create_worker_task_group() else {
-            tracing::debug!(
-                "invoke_oneway_unbounded: client is shut down, skipping send to {}",
-                addr
-            );
-            return;
-        };
-
-        if let Err(error) = task_group.spawn_service("remoting.client.oneway-unbounded", async move {
-            if client_owner.shutdown_token.is_cancelled() {
-                tracing::debug!(
-                    "invoke_oneway_unbounded: client is shut down, skipping send to {}",
-                    addr
-                );
-                return;
-            }
-
-            let Some(mut client) = client_owner.get_and_create_client(Some(&addr)).await else {
-                tracing::warn!("invoke_oneway_unbounded: failed to get or create client for {}", addr);
-                return;
-            };
-
-            let mut request = request;
-            request.mark_oneway_rpc_ref();
-            if client_owner.cmd_handler.has_rpc_hooks() {
-                let remote_address = client.remote_address();
-                request.make_custom_header_to_net();
-                if let Err(error) = client_owner
-                    .cmd_handler
-                    .do_before_rpc_hooks_with_addr(remote_address, Some(&mut request))
-                {
-                    tracing::warn!(
-                        "invoke_oneway_unbounded: before RPC hook failed for {}: {:?}",
-                        addr,
-                        error
-                    );
-                    return;
-                }
-            }
-
-            if let Err(error) = client.send(request).await {
-                tracing::warn!("invoke_oneway_unbounded: send request to {} failed: {:?}", addr, error);
-            }
-        }) {
-            tracing::warn!(
-                "invoke_oneway_unbounded: failed to spawn send task for {}: {:?}",
-                addr_for_spawn_error,
-                error
-            );
         }
     }
 
@@ -1755,7 +1723,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn invoke_oneway_unbounded_creates_connection_before_sending() {
+    async fn invoke_oneway_waits_for_writer_completion() {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
         let addr = listener.local_addr().expect("listener addr");
         let (received_tx, received_rx) = tokio::sync::oneshot::channel();
@@ -1787,18 +1755,11 @@ mod tests {
 
         let target = CheetahString::from_string(addr.to_string());
         let request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo);
-        client.invoke_oneway_unbounded(target, request);
-        let worker_task_group = client
-            .worker_task_group
-            .lock()
-            .as_ref()
-            .cloned()
-            .expect("worker task group");
-        assert_eq!(worker_task_group.lifecycle_state(), TaskGroupLifecycleState::Open);
+        client.invoke_request_oneway(&target, request, 3_000).await;
 
         let (code, is_oneway, hooked) = time::timeout(Duration::from_secs(3), received_rx)
             .await
-            .expect("server should receive unbounded oneway request")
+            .expect("server should receive oneway request")
             .expect("server should report received request");
 
         assert_eq!(code, RequestCode::GetBrokerClusterInfo.to_i32());
@@ -1809,10 +1770,6 @@ mod tests {
 
         server.await.expect("server task");
         client.shutdown();
-        assert_eq!(
-            worker_task_group.lifecycle_state(),
-            TaskGroupLifecycleState::ShutdownCompleted
-        );
     }
 
     #[tokio::test]
