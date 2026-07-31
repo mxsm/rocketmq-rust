@@ -760,20 +760,6 @@ where
     }
 }
 
-fn receive_message_stream_status(response: &v2::ReceiveMessageResponse) -> Option<&v2::Status> {
-    match response.content.as_ref() {
-        Some(v2::receive_message_response::Content::Status(status)) => Some(status),
-        _ => None,
-    }
-}
-
-fn pull_message_stream_status(response: &v2::PullMessageResponse) -> Option<&v2::Status> {
-    match response.content.as_ref() {
-        Some(v2::pull_message_response::Content::Status(status)) => Some(status),
-        _ => None,
-    }
-}
-
 fn proxy_span_outcome(outcome: &ProxyRequestOutcome) -> rocketmq_observability::trace::proxy::ProxySpanOutcome {
     match outcome {
         ProxyRequestOutcome::Payload(status) if status.is_ok() => {
