@@ -24,7 +24,6 @@ use rocketmq_runtime::TaskGroup;
 use tonic::Request;
 use tonic::Response;
 use tonic::Status;
-use tracing::info_span;
 use tracing::Instrument;
 
 use crate::auth;
@@ -73,91 +72,6 @@ const DEFAULT_CONSUMER_MAX_ATTEMPTS: i32 = telemetry::DEFAULT_CONSUMER_MAX_ATTEM
 const DEFAULT_CONSUMER_RECEIVE_BATCH_SIZE: i32 = telemetry::DEFAULT_CONSUMER_RECEIVE_BATCH_SIZE;
 #[cfg(test)]
 const DEFAULT_CONSUMER_CUSTOMIZED_BACKOFF_MS: [u64; 18] = telemetry::DEFAULT_CONSUMER_CUSTOMIZED_BACKOFF_MS;
-
-struct RequestObservation {
-    context: ProxyContext,
-    started_at: std::time::Instant,
-    rpc_span: Span,
-    forward: Option<ForwardObservation>,
-    _drain_admission: rocketmq_proxy_core::ProxyDrainAdmission,
-}
-
-struct ForwardObservation {
-    started_at: std::time::Instant,
-    span: Span,
-}
-
-impl RequestObservation {
-    fn new(context: ProxyContext, drain_admission: rocketmq_proxy_core::ProxyDrainAdmission) -> Self {
-        let rpc_span = info_span!(
-            rocketmq_observability::trace::span_names::PROXY_RPC,
-            rpc = context.rpc_name(),
-            request_id = %context.request_id(),
-            result = tracing::field::Empty,
-        );
-        Self {
-            context,
-            started_at: std::time::Instant::now(),
-            rpc_span,
-            forward: None,
-            _drain_admission: drain_admission,
-        }
-    }
-
-    fn begin_forward(&mut self) {
-        self.forward = Some(ForwardObservation {
-            started_at: std::time::Instant::now(),
-            span: rocketmq_observability::trace::proxy::forward_span(&self.rpc_span, self.context.rpc_name()),
-        });
-    }
-
-    fn record_principal(&mut self, principal: Option<&AuthenticatedPrincipal>) {
-        if let Some(principal) = principal {
-            self.context.set_authenticated_principal(principal.clone());
-        }
-    }
-
-    fn context(&self) -> &ProxyContext {
-        &self.context
-    }
-
-    fn span(&self) -> Span {
-        self.forward
-            .as_ref()
-            .map_or_else(|| self.rpc_span.clone(), |forward| forward.span.clone())
-    }
-
-    fn rpc_span(&self) -> Span {
-        self.rpc_span.clone()
-    }
-
-    fn elapsed(&self) -> Duration {
-        self.started_at.elapsed()
-    }
-
-    fn forward(&self) -> Option<(&Span, Duration)> {
-        self.forward
-            .as_ref()
-            .map(|forward| (&forward.span, forward.started_at.elapsed()))
-    }
-}
-
-struct TelemetryStreamState<P> {
-    service: ProxyGrpcService<P>,
-    context: ProxyContext,
-    principal: Option<AuthenticatedPrincipal>,
-    client_id: String,
-    _permit: OwnedSemaphorePermit,
-    outbound_rx: mpsc::UnboundedReceiver<v2::TelemetryCommand>,
-    inbound: tonic::Streaming<v2::TelemetryCommand>,
-    done: bool,
-}
-
-impl<P> Drop for TelemetryStreamState<P> {
-    fn drop(&mut self) {
-        self.service.sessions.unbind_telemetry_link(self.client_id.as_str());
-    }
-}
 
 pub struct ProxyGrpcService<P> {
     config: Arc<ProxyConfig>,
