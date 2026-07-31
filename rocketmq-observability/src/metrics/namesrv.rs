@@ -253,26 +253,6 @@ impl NameServerMetricInstruments {
     }
 
     #[inline]
-    pub fn record_route_request_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.route_request_total.add(count, attributes);
-    }
-
-    #[inline]
-    pub fn record_route_request_latency(&self, latency_ms: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.route_request_latency.record(latency_ms, attributes);
-    }
-
-    #[inline]
-    pub fn record_broker_registrations(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.broker_registrations.add(count, attributes);
-    }
-
-    #[inline]
-    pub fn record_active_brokers(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.active_brokers.record(count, attributes);
-    }
-
-    #[inline]
     pub fn record_route_errors_total(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
         self.route_errors_total.add(count, attributes);
     }
