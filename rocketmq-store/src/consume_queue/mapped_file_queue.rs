@@ -1607,7 +1607,12 @@ mod tests {
         );
         first_file.set_wrote_position(820);
 
-        let service = AllocateMappedFileService::new();
+        let service = AllocateMappedFileService::new_with_config(
+            None,
+            false,
+            false,
+            crate::runtime::test_scope("mapped-file-queue-preallocation-test").mapped_file_allocation_budget(),
+        );
         service.start();
         let queue = MappedFileQueue::new(
             temp_dir.path().to_string_lossy().to_string(),

@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_runtime::BudgetLimit;
+use rocketmq_runtime::FullPolicy;
+use rocketmq_runtime::ResourceBudgetTree;
 use rocketmq_store::AllocateMappedFileService as LegacyAllocateService;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store_local::base::allocate_mapped_file_service::AllocateMappedFileService as CanonicalAllocateService;
@@ -28,7 +31,13 @@ fn legacy_allocation_service_path_is_the_local_canonical_type() {
         ..MessageStoreConfig::default()
     };
 
-    let service = LegacyAllocateService::new_with_message_store_config(None, false, false, &config);
+    let budget = ResourceBudgetTree::new(
+        "allocation-identity-test",
+        BudgetLimit::new(4, 4_096, FullPolicy::Reject),
+    )
+    .expect("allocation identity budget")
+    .root();
+    let service = LegacyAllocateService::new_with_message_store_config(None, false, false, &config, budget);
     let service = canonical_service(service);
 
     assert_eq!(service.get_service_name(), "AllocateMappedFileService");

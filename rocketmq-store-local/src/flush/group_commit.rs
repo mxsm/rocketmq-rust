@@ -17,6 +17,7 @@
 use std::collections::VecDeque;
 use std::future::Future;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,15 +25,17 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 use parking_lot::Mutex;
-use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
+use rocketmq_runtime::BudgetedItem;
+use rocketmq_runtime::BudgetedQueue;
+use rocketmq_runtime::ResourcePermit;
+
 use crate::flush::FlushProgress;
 
-/// Frozen request-channel capacity used by the R0 group-commit worker.
-pub const GROUP_COMMIT_CHANNEL_CAPACITY: usize = 1024;
+const GROUP_COMMIT_COMPLETION_STATE_BYTES: usize = 256;
 
 /// Neutral completion state for a Local group-commit request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,6 +59,56 @@ pub struct GroupCommitRequest<E> {
     result_sender: Option<oneshot::Sender<GroupCommitResult<E>>>,
     deadline_nanos: u64,
     enqueue_time_millis: u64,
+}
+
+/// Store-owned count-and-byte bounded group commit queue.
+pub type GroupCommitQueue<E> = BudgetedQueue<GroupCommitRequest<E>>;
+
+struct BudgetedGroupCommitRequest<E> {
+    request: Option<GroupCommitRequest<E>>,
+    _permit: ResourcePermit,
+    stats: SyncFlushStats,
+}
+
+impl<E> BudgetedGroupCommitRequest<E> {
+    fn from_item(item: BudgetedItem<GroupCommitRequest<E>>, stats: SyncFlushStats) -> Self {
+        let (request, permit, _) = item.into_parts();
+        Self {
+            request: Some(request),
+            _permit: permit,
+            stats,
+        }
+    }
+
+    fn next_offset(&self) -> i64 {
+        self.request.as_ref().map_or(0, GroupCommitRequest::next_offset)
+    }
+
+    fn is_expired(&self) -> bool {
+        self.request.as_ref().is_none_or(GroupCommitRequest::is_expired)
+    }
+
+    fn complete(mut self, status: GroupCommitStatus) {
+        if let Some(request) = self.request.take() {
+            self.stats.record_completion(&request, status);
+            request.complete(status);
+        }
+    }
+
+    fn complete_error(mut self, error: Arc<E>) {
+        if let Some(request) = self.request.take() {
+            self.stats.record_completion(&request, GroupCommitStatus::TimedOut);
+            request.complete_error(error);
+        }
+    }
+}
+
+impl<E> Drop for BudgetedGroupCommitRequest<E> {
+    fn drop(&mut self) {
+        if let Some(request) = self.request.as_ref() {
+            self.stats.record_abandoned_request(request);
+        }
+    }
 }
 
 impl<E> GroupCommitRequest<E> {
@@ -89,6 +142,20 @@ impl<E> GroupCommitRequest<E> {
         current_nanos() >= self.deadline_nanos
     }
 
+    /// Returns the conservative retained cost of this request and its oneshot
+    /// completion state. Message bodies already resident in mmap are excluded.
+    #[must_use]
+    pub const fn retained_bytes(&self) -> usize {
+        std::mem::size_of::<Self>() + GROUP_COMMIT_COMPLETION_STATE_BYTES
+    }
+
+    /// Returns the absolute Tokio deadline used for queue admission.
+    #[must_use]
+    pub fn admission_deadline(&self) -> tokio::time::Instant {
+        let remaining = self.deadline_nanos.saturating_sub(current_nanos());
+        tokio::time::Instant::now() + Duration::from_nanos(remaining)
+    }
+
     /// Completes the request with a neutral flush status.
     pub fn complete(mut self, status: GroupCommitStatus) {
         if let Some(sender) = self.result_sender.take() {
@@ -108,9 +175,12 @@ impl<E> GroupCommitRequest<E> {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SyncFlushRuntimeInfo {
     pub queue_depth: u64,
+    pub charged_bytes: u64,
     pub enqueue_total: u64,
     pub completed_total: u64,
     pub timeout_total: u64,
+    pub rejected_total: u64,
+    pub abandoned_total: u64,
     pub oldest_wait_millis: u64,
     pub max_wait_millis: u64,
     pub wait_total_millis: u64,
@@ -126,21 +196,64 @@ pub struct SyncFlushStats {
 #[derive(Default)]
 struct SyncFlushStatsInner {
     queue_depth: AtomicU64,
+    charged_bytes: AtomicUsize,
     enqueue_total: AtomicU64,
     completed_total: AtomicU64,
     timeout_total: AtomicU64,
+    rejected_total: AtomicU64,
+    abandoned_total: AtomicU64,
     max_wait_millis: AtomicU64,
     wait_total_millis: AtomicU64,
     pending_enqueue_times: Mutex<VecDeque<u64>>,
 }
 
 impl SyncFlushStats {
-    /// Records a successfully enqueued request.
+    /// Records provisional ownership before queue admission becomes visible.
     #[doc(hidden)]
-    pub fn record_enqueue(&self, enqueue_time_millis: u64) {
+    pub fn record_enqueue(&self, enqueue_time_millis: u64, retained_bytes: usize) {
         self.inner.pending_enqueue_times.lock().push_back(enqueue_time_millis);
         self.inner.queue_depth.fetch_add(1, Ordering::Relaxed);
+        self.inner.charged_bytes.fetch_add(retained_bytes, Ordering::Relaxed);
         self.inner.enqueue_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Records a request rejected before queue ownership transfer.
+    #[doc(hidden)]
+    pub fn record_rejected(&self) {
+        self.inner.rejected_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Removes an admission record that never transferred queue ownership.
+    #[doc(hidden)]
+    pub fn rollback_enqueue(&self, enqueue_time_millis: u64, retained_bytes: usize) {
+        let _ = self
+            .inner
+            .queue_depth
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |depth| {
+                Some(depth.saturating_sub(1))
+            });
+        let _ = self
+            .inner
+            .charged_bytes
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |bytes| {
+                Some(bytes.saturating_sub(retained_bytes))
+            });
+        let mut pending = self.inner.pending_enqueue_times.lock();
+        if let Some(position) = pending.iter().position(|queued_at| *queued_at == enqueue_time_millis) {
+            pending.remove(position);
+        }
+        let _ = self
+            .inner
+            .enqueue_total
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |total| {
+                Some(total.saturating_sub(1))
+            });
+    }
+
+    /// Records a request abandoned because its lifecycle owner stopped.
+    #[doc(hidden)]
+    pub fn record_abandoned(&self) {
+        self.inner.abandoned_total.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Returns the current diagnostic snapshot.
@@ -156,9 +269,12 @@ impl SyncFlushStats {
 
         SyncFlushRuntimeInfo {
             queue_depth: self.inner.queue_depth.load(Ordering::Relaxed),
+            charged_bytes: self.inner.charged_bytes.load(Ordering::Relaxed) as u64,
             enqueue_total: self.inner.enqueue_total.load(Ordering::Relaxed),
             completed_total: self.inner.completed_total.load(Ordering::Relaxed),
             timeout_total: self.inner.timeout_total.load(Ordering::Relaxed),
+            rejected_total: self.inner.rejected_total.load(Ordering::Relaxed),
+            abandoned_total: self.inner.abandoned_total.load(Ordering::Relaxed),
             oldest_wait_millis,
             max_wait_millis: self.inner.max_wait_millis.load(Ordering::Relaxed),
             wait_total_millis: self.inner.wait_total_millis.load(Ordering::Relaxed),
@@ -173,6 +289,12 @@ impl SyncFlushStats {
                 Some(depth.saturating_sub(1))
             });
         self.inner.pending_enqueue_times.lock().pop_front();
+        let _ = self
+            .inner
+            .charged_bytes
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |bytes| {
+                Some(bytes.saturating_sub(request.retained_bytes()))
+            });
 
         let wait_millis = current_millis().saturating_sub(request.enqueue_time_millis());
         self.inner.completed_total.fetch_add(1, Ordering::Relaxed);
@@ -181,6 +303,29 @@ impl SyncFlushStats {
             self.inner.timeout_total.fetch_add(1, Ordering::Relaxed);
         }
         update_atomic_max(&self.inner.max_wait_millis, wait_millis);
+    }
+
+    fn record_abandoned_request<E>(&self, request: &GroupCommitRequest<E>) {
+        let _ = self
+            .inner
+            .queue_depth
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |depth| {
+                Some(depth.saturating_sub(1))
+            });
+        let _ = self
+            .inner
+            .charged_bytes
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |bytes| {
+                Some(bytes.saturating_sub(request.retained_bytes()))
+            });
+        let mut pending = self.inner.pending_enqueue_times.lock();
+        if let Some(position) = pending
+            .iter()
+            .position(|queued_at| *queued_at == request.enqueue_time_millis())
+        {
+            pending.remove(position);
+        }
+        self.record_abandoned();
     }
 }
 
@@ -282,7 +427,7 @@ pub async fn run_group_commit_worker<
     Delay,
     DelayFuture,
 >(
-    mut request_receiver: mpsc::Receiver<GroupCommitRequest<E>>,
+    request_queue: GroupCommitQueue<E>,
     notified: Arc<Notify>,
     shutdown_token: CancellationToken,
     sync_flush_stats: SyncFlushStats,
@@ -302,18 +447,22 @@ pub async fn run_group_commit_worker<
     loop {
         tokio::select! {
             _ = shutdown_token.cancelled() => {
+                request_queue.close();
                 let mut remaining = Vec::new();
-                while let Ok(request) = request_receiver.try_recv() {
-                    remaining.push(request);
+                while let Some(request) = request_queue.try_pop_budgeted() {
+                    remaining.push(BudgetedGroupCommitRequest::from_item(
+                        request,
+                        sync_flush_stats.clone(),
+                    ));
                 }
                 if !remaining.is_empty() {
                     match (ports.flush)().await {
                         Ok(progress) => {
-                            complete_group_commit_batch(remaining, progress.durable, &sync_flush_stats);
+                            complete_budgeted_group_commit_batch(remaining, progress.durable);
                         }
                         Err(error) => {
                             (ports.flush_failure)(error.clone());
-                            complete_group_commit_batch_error(remaining, error, &sync_flush_stats);
+                            complete_budgeted_group_commit_batch_error(remaining, error);
                         }
                     }
                 }
@@ -329,19 +478,32 @@ pub async fn run_group_commit_worker<
                 };
                 checkpoint_if_present(progress.store_timestamp, &mut ports.checkpoint);
             }
-            maybe_request = request_receiver.recv() => match maybe_request {
+            maybe_request = request_queue.recv_budgeted() => match maybe_request {
                 None => break,
                 Some(first_request) => {
-                    let mut requests = vec![first_request];
-                    while let Ok(request) = request_receiver.try_recv() {
-                        requests.push(request);
+                    let mut requests = vec![BudgetedGroupCommitRequest::from_item(
+                        first_request,
+                        sync_flush_stats.clone(),
+                    )];
+                    while let Some(request) = request_queue.try_pop_budgeted() {
+                        requests.push(BudgetedGroupCommitRequest::from_item(
+                            request,
+                            sync_flush_stats.clone(),
+                        ));
                     }
 
-                    let target_offset = requests.iter().map(GroupCommitRequest::next_offset).max().unwrap_or(0);
+                    let target_offset = requests
+                        .iter()
+                        .map(BudgetedGroupCommitRequest::next_offset)
+                        .max()
+                        .unwrap_or(0);
                     let mut flush_ok = (ports.current_flushed_where)() >= target_offset;
                     let mut flush_error = forced_flush_error.clone();
                     for _ in 0..config.max_flush_attempts {
-                        if flush_ok || flush_error.is_some() || requests.iter().all(GroupCommitRequest::is_expired) {
+                        if flush_ok
+                            || flush_error.is_some()
+                            || requests.iter().all(BudgetedGroupCommitRequest::is_expired)
+                        {
                             break;
                         }
                         match (ports.flush)().await {
@@ -353,7 +515,7 @@ pub async fn run_group_commit_worker<
                                 break;
                             }
                         }
-                        if flush_ok || requests.iter().all(GroupCommitRequest::is_expired) {
+                        if flush_ok || requests.iter().all(BudgetedGroupCommitRequest::is_expired) {
                             break;
                         }
                         (ports.retry_delay)(config.retry_interval).await;
@@ -361,16 +523,33 @@ pub async fn run_group_commit_worker<
 
                     if let Some(error) = flush_error {
                         (ports.flush_failure)(error.clone());
-                        complete_group_commit_batch_error(requests, error, &sync_flush_stats);
+                        complete_budgeted_group_commit_batch_error(requests, error);
                         continue;
                     }
 
                     let flushed_where = (ports.current_flushed_where)();
                     checkpoint_if_present((ports.current_store_timestamp)(), &mut ports.checkpoint);
-                    complete_group_commit_batch(requests, flushed_where, &sync_flush_stats);
+                    complete_budgeted_group_commit_batch(requests, flushed_where);
                 }
             }
         }
+    }
+}
+
+fn complete_budgeted_group_commit_batch<E>(requests: Vec<BudgetedGroupCommitRequest<E>>, flushed_where: i64) {
+    for request in requests {
+        let status = if flushed_where >= request.next_offset() {
+            GroupCommitStatus::Flushed
+        } else {
+            GroupCommitStatus::TimedOut
+        };
+        request.complete(status);
+    }
+}
+
+fn complete_budgeted_group_commit_batch_error<E>(requests: Vec<BudgetedGroupCommitRequest<E>>, error: Arc<E>) {
+    for request in requests {
+        request.complete_error(error.clone());
     }
 }
 

@@ -17,26 +17,36 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use rocketmq_runtime::BudgetLimit;
+use rocketmq_runtime::FullPolicy;
+use rocketmq_runtime::ResourceBudgetTree;
 use rocketmq_store_local::flush::group_commit::complete_group_commit_batch;
 use rocketmq_store_local::flush::group_commit::complete_group_commit_batch_error;
 use rocketmq_store_local::flush::group_commit::run_group_commit_worker;
+use rocketmq_store_local::flush::group_commit::GroupCommitQueue;
 use rocketmq_store_local::flush::group_commit::GroupCommitRequest;
 use rocketmq_store_local::flush::group_commit::GroupCommitStatus;
 use rocketmq_store_local::flush::group_commit::GroupCommitWorkerConfig;
 use rocketmq_store_local::flush::group_commit::GroupCommitWorkerPorts;
 use rocketmq_store_local::flush::group_commit::SyncFlushStats;
 use rocketmq_store_local::flush::FlushProgress;
-use tokio::sync::mpsc;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
+
+fn group_commit_queue<E>(count: usize, bytes: usize) -> GroupCommitQueue<E> {
+    let budget = ResourceBudgetTree::new("group-commit-test", BudgetLimit::new(count, bytes, FullPolicy::Reject))
+        .expect("group commit test budget")
+        .root();
+    GroupCommitQueue::new(budget)
+}
 
 #[tokio::test]
 async fn batch_completion_uses_final_durable_watermark_for_every_waiter() {
     let stats = SyncFlushStats::default();
     let (request_64, response_64) = GroupCommitRequest::<&'static str>::new(64, 5_000);
     let (request_96, response_96) = GroupCommitRequest::<&'static str>::new(96, 5_000);
-    stats.record_enqueue(request_64.enqueue_time_millis());
-    stats.record_enqueue(request_96.enqueue_time_millis());
+    stats.record_enqueue(request_64.enqueue_time_millis(), request_64.retained_bytes());
+    stats.record_enqueue(request_96.enqueue_time_millis(), request_96.retained_bytes());
 
     complete_group_commit_batch(vec![request_64, request_96], 80, &stats);
 
@@ -76,12 +86,14 @@ async fn worker_batches_waiters_and_applies_checkpoint_after_completion() {
     let stats = SyncFlushStats::default();
     let (first, first_response) = GroupCommitRequest::<String>::new(64, 5_000);
     let (second, second_response) = GroupCommitRequest::<String>::new(96, 5_000);
-    stats.record_enqueue(first.enqueue_time_millis());
-    stats.record_enqueue(second.enqueue_time_millis());
-    let (sender, receiver) = mpsc::channel(2);
-    sender.send(first).await.unwrap();
-    sender.send(second).await.unwrap();
-    drop(sender);
+    let first_bytes = first.retained_bytes();
+    let second_bytes = second.retained_bytes();
+    stats.record_enqueue(first.enqueue_time_millis(), first.retained_bytes());
+    stats.record_enqueue(second.enqueue_time_millis(), second.retained_bytes());
+    let queue = group_commit_queue(2, 4_096);
+    queue.try_push_data(first, first_bytes).unwrap();
+    queue.try_push_data(second, second_bytes).unwrap();
+    queue.close();
 
     let durable = Arc::new(AtomicI64::new(96));
     let timestamp = Arc::new(AtomicU64::new(77));
@@ -120,7 +132,7 @@ async fn worker_batches_waiters_and_applies_checkpoint_after_completion() {
     );
 
     run_group_commit_worker(
-        receiver,
+        queue,
         Arc::new(Notify::new()),
         CancellationToken::new(),
         stats,
@@ -140,10 +152,11 @@ async fn worker_batches_waiters_and_applies_checkpoint_after_completion() {
 async fn worker_propagates_forced_error_once_to_the_whole_batch() {
     let stats = SyncFlushStats::default();
     let (request, response) = GroupCommitRequest::<String>::new(64, 5_000);
-    stats.record_enqueue(request.enqueue_time_millis());
-    let (sender, receiver) = mpsc::channel(1);
-    sender.send(request).await.unwrap();
-    drop(sender);
+    let retained_bytes = request.retained_bytes();
+    stats.record_enqueue(request.enqueue_time_millis(), request.retained_bytes());
+    let queue = group_commit_queue(1, 2_048);
+    queue.try_push_data(request, retained_bytes).unwrap();
+    queue.close();
 
     let error = Arc::new(String::from("injected flush failure"));
     let failure_calls = Arc::new(AtomicU64::new(0));
@@ -169,7 +182,7 @@ async fn worker_propagates_forced_error_once_to_the_whole_batch() {
     );
 
     run_group_commit_worker(
-        receiver,
+        queue,
         Arc::new(Notify::new()),
         CancellationToken::new(),
         stats,
@@ -183,4 +196,44 @@ async fn worker_propagates_forced_error_once_to_the_whole_batch() {
     assert!(Arc::ptr_eq(&received, &error));
     assert_eq!(failure_calls.load(Ordering::Relaxed), 1);
     assert_eq!(flush_calls.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn worker_panic_drops_request_permit_and_records_abandonment() {
+    let stats = SyncFlushStats::default();
+    let (request, response) = GroupCommitRequest::<String>::new(64, 5_000);
+    let retained_bytes = request.retained_bytes();
+    stats.record_enqueue(request.enqueue_time_millis(), retained_bytes);
+    let queue = group_commit_queue(1, retained_bytes);
+    queue.try_push_data(request, retained_bytes).expect("request fits");
+    queue.close();
+    let diagnostics = queue.clone();
+    let ports = GroupCommitWorkerPorts::new(
+        || async { Ok::<_, Arc<String>>(FlushProgress::default()) },
+        || panic!("injected group commit worker panic"),
+        || 0,
+        |_| {},
+        |_| {},
+        |_| async {},
+    );
+
+    let worker = tokio::spawn(run_group_commit_worker(
+        queue,
+        Arc::new(Notify::new()),
+        CancellationToken::new(),
+        stats.clone(),
+        None,
+        GroupCommitWorkerConfig::legacy(),
+        ports,
+    ));
+    let failure = worker.await.expect_err("worker must panic");
+
+    assert!(failure.is_panic());
+    assert!(response.await.is_err(), "abandoned request drops its response sender");
+    assert_eq!(diagnostics.snapshot().reserved_count, 0);
+    assert_eq!(diagnostics.snapshot().retained_bytes, 0);
+    let snapshot = stats.snapshot();
+    assert_eq!(snapshot.queue_depth, 0);
+    assert_eq!(snapshot.charged_bytes, 0);
+    assert_eq!(snapshot.abandoned_total, 1);
 }
