@@ -333,7 +333,7 @@ impl RouteInfoManager {
                 "Broker registration rejected due to version conflict: cluster={}, broker={}, id={}, addr={}",
                 cluster_name, broker_name, broker_id, broker_addr
             );
-            rocketmq_observability::metrics::namesrv::record_broker_registration(self.active_broker_count());
+            self.metrics.record_broker_registration(self.active_broker_count());
             registration_span.record("result", "rejected");
             return Ok(result);
         }
@@ -429,7 +429,7 @@ impl RouteInfoManager {
             cluster_name, broker_name, broker_id, broker_addr, register_first
         );
 
-        rocketmq_observability::metrics::namesrv::record_broker_registration(self.active_broker_count());
+        self.metrics.record_broker_registration(self.active_broker_count());
         registration_span.record("result", "success");
         Ok(result)
     }
