@@ -35,6 +35,7 @@ use tokio_util::task::TaskTracker;
 use crate::error::RuntimeError;
 use crate::error::RuntimeResult;
 use crate::handle::RuntimeHandle;
+use crate::operation::OperationContext;
 use crate::shutdown_deadline::ShutdownDeadline;
 use crate::shutdown_report::ShutdownAnnotation;
 use crate::shutdown_report::ShutdownReport;
@@ -61,6 +62,10 @@ impl TaskId {
     /// Borrows this value as u64.
     pub fn as_u64(self) -> u64 {
         self.0
+    }
+
+    pub(crate) fn from_raw(value: u64) -> Self {
+        Self(value)
     }
 }
 
@@ -471,6 +476,30 @@ impl TaskGroup {
         F: Future<Output = ()> + Send + 'static,
     {
         self.spawn(name, TaskKind::Service, future)
+    }
+
+    /// Spawns work for a bounded operation under this fixed component owner.
+    ///
+    /// The operation context supplies task classification, cancellation, and
+    /// an optional deadline without creating a child task group.
+    pub fn spawn_operation<F>(
+        &self,
+        context: &OperationContext,
+        name: impl Into<Arc<str>>,
+        future: F,
+    ) -> RuntimeResult<TaskId>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let registration = context.prepare_spawn(self.id())?;
+        let guard = registration.guard();
+        let operation = context.clone();
+        let task_id = self.spawn(name, context.task_kind(), async move {
+            let _guard = guard;
+            operation.run(future).await;
+        })?;
+        registration.register(task_id);
+        Ok(task_id)
     }
 
     /// Spawns with handle.

@@ -27,6 +27,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::error::RuntimeError;
 use crate::error::RuntimeResult;
+use crate::operation::OperationContext;
 use crate::shutdown_report::ShutdownReport;
 use crate::task_group::TaskGroup;
 use crate::task_group::TaskId;
@@ -174,6 +175,78 @@ impl ScheduledTaskGroup {
                 ScheduledTaskControl::Continue
             }
         })
+    }
+
+    /// Schedules fixed-delay work as part of a bounded operation.
+    ///
+    /// The driver is registered directly with this group's fixed component
+    /// owner and stops when the operation is cancelled or reaches its
+    /// deadline.
+    pub fn schedule_fixed_delay_operation<F, Fut>(
+        &self,
+        operation: &OperationContext,
+        config: ScheduledTaskConfig,
+        mut task: F,
+    ) -> RuntimeResult<TaskId>
+    where
+        F: FnMut() -> Fut + Send + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        self.schedule_fixed_delay_controlled_operation(operation, config, move || {
+            let future = task();
+            async move {
+                future.await;
+                ScheduledTaskControl::Continue
+            }
+        })
+    }
+
+    /// Schedules controlled fixed-delay work as part of a bounded operation.
+    pub fn schedule_fixed_delay_controlled_operation<F, Fut>(
+        &self,
+        operation: &OperationContext,
+        mut config: ScheduledTaskConfig,
+        mut task: F,
+    ) -> RuntimeResult<TaskId>
+    where
+        F: FnMut() -> Fut + Send + 'static,
+        Fut: Future<Output = ScheduledTaskControl> + Send + 'static,
+    {
+        config.mode = ScheduleMode::FixedDelay;
+        let name: Arc<str> = Arc::from(config.name.as_str());
+        let name_for_cleanup = name.clone();
+        let metrics = self.register(name.clone(), config.clone())?;
+        let token = operation.cancellation_token();
+        let driver = operation.with_task_kind(TaskKind::ScheduledDriver);
+        let spawn_result = self
+            .group
+            .spawn_operation(&driver, format!("scheduled-driver:{name}"), async move {
+                if !sleep_or_cancel(&token, config.initial_delay).await {
+                    return;
+                }
+
+                loop {
+                    if token.is_cancelled() {
+                        return;
+                    }
+
+                    let started_at = Instant::now();
+                    metrics.begin_serial_run(started_at);
+                    let (control, timed_out) = run_controlled_with_optional_timeout(task(), config.max_run_time).await;
+                    metrics.finish_run(started_at, timed_out);
+                    if control == ScheduledTaskControl::Stop {
+                        return;
+                    }
+
+                    if !sleep_or_cancel(&token, config.period).await {
+                        return;
+                    }
+                }
+            });
+        if spawn_result.is_err() {
+            self.schedules.remove(&name_for_cleanup);
+        }
+        spawn_result
     }
 
     /// Returns the schedule fixed delay controlled.
@@ -357,6 +430,23 @@ impl ScheduledTaskGroup {
     /// Returns the snapshot.
     pub fn snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
         self.schedules.iter().map(|entry| entry.value().snapshot()).collect()
+    }
+
+    /// Clears completed schedule registrations so a fixed component owner can
+    /// start a new operation generation with the same schedule names.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error while the component group still has active tasks.
+    pub fn clear_completed(&self) -> RuntimeResult<()> {
+        if self.group.task_count() != 0 {
+            return Err(RuntimeError::LifecycleOperation {
+                operation: "clear_completed_schedules",
+                message: "scheduled component still owns active tasks".to_string(),
+            });
+        }
+        self.schedules.clear();
+        Ok(())
     }
 
     /// Shuts down the owned service.
