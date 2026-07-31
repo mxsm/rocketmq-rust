@@ -6,7 +6,7 @@ maintenance:
   policyKey: maintenance-policy.json
   mountPath: /etc/rocketmq/auth/maintenance-policy.json
   version: 1
-  sha256: 328683f40a3aadcca0592c889196294eab10037271b0671de7d1c77287fa51c8
+  sha256: 951aca122bb23b78e29235aaf05b2dffe9422bf97636ce6ac04fddab969ba0ee
 
 networkPolicy:
   enabled: false
