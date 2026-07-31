@@ -107,11 +107,10 @@ impl TelemetryProviderGuard {
     }
 
     fn from_config(config: &ObservabilityConfig) -> Self {
-        Self {
-            handle: TelemetryHandle::noop(),
-            status: crate::status::ObservabilityStatusHandle::from_config(config),
-            ..Self::default()
-        }
+        let mut guard = Self::default();
+        guard.handle = TelemetryHandle::noop();
+        guard.status = crate::status::ObservabilityStatusHandle::from_config(config);
+        guard
     }
 
     pub fn shutdown(self) -> Result<(), ObservabilityError> {
