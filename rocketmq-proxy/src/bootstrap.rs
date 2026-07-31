@@ -463,7 +463,7 @@ where
             service_context,
         } = self;
         let auth_context = service_context.child("auth");
-        let mut auth_runtime = auth_runtime;
+        let mut auth_runtime_for_shutdown = auth_runtime.clone();
         let lifecycle_for_shutdown = lifecycle.clone();
         let shared_shutdown = shutdown.boxed().shared();
         let listener_result = async {
@@ -482,7 +482,7 @@ where
                     })?;
             }
             let auth_context = service_context.child("auth");
-            let auth_runtime = match auth_runtime {
+            let effective_auth_runtime = match auth_runtime.clone() {
                 Some(auth_runtime) => Some(auth_runtime),
                 None => {
                     ProxyAuthRuntime::from_proxy_config_with_metadata_service(
@@ -493,8 +493,8 @@ where
                     .await?
                 }
             };
-            let auth_runtime_for_shutdown = auth_runtime.clone();
-            let grpc_service = grpc_service.with_auth_runtime(auth_runtime.clone());
+            auth_runtime_for_shutdown = effective_auth_runtime.clone();
+            let grpc_service = grpc_service.with_auth_runtime(effective_auth_runtime.clone());
             let readiness = lifecycle
                 .map(|lifecycle| LifecycleReadiness::new(lifecycle, if config.remoting.enabled { 2 } else { 1 }));
             let serve_result = if !config.remoting.enabled {
@@ -521,7 +521,7 @@ where
                 let remoting_service_context = service_context.child("remoting-ingress");
                 let grpc_config = config.clone();
                 let remoting_config = config;
-                let remoting_auth_runtime = auth_runtime.clone();
+                let remoting_auth_runtime = effective_auth_runtime;
                 let grpc_ready = readiness.clone();
                 let remoting_ready = readiness;
                 let grpc_future = async move {
@@ -553,7 +553,6 @@ where
                 };
                 tokio::try_join!(grpc_future, remoting_future).map(|_| ())
             };
-            auth_runtime = auth_runtime_for_shutdown;
             serve_result
         }
         .await;
@@ -561,7 +560,7 @@ where
         finalize_proxy_run(
             listener_result,
             backend_context.as_ref(),
-            auth_runtime.as_ref(),
+            auth_runtime_for_shutdown.as_ref(),
             &auth_context,
             &service_context,
             deadline,
