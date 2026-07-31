@@ -35,25 +35,6 @@ pub use crate::semantic::metrics::MCP_RATE_LIMIT_TOTAL;
 pub use crate::semantic::metrics::MCP_REQUESTS_TOTAL;
 pub use crate::semantic::metrics::MCP_REQUEST_LATENCY;
 
-#[cfg(feature = "otel-metrics")]
-use std::sync::OnceLock;
-
-#[cfg(feature = "otel-metrics")]
-static MCP_METRICS: OnceLock<McpMetrics> = OnceLock::new();
-
-/// Installs MCP instruments using the service-owned meter.
-///
-/// Returns `false` when an MCP metric set was already installed.
-#[cfg(feature = "otel-metrics")]
-pub fn init_global(meter: &opentelemetry::metrics::Meter) -> bool {
-    MCP_METRICS.set(McpMetrics::new(meter)).is_ok()
-}
-
-#[cfg(feature = "otel-metrics")]
-fn global_metrics() -> &'static McpMetrics {
-    MCP_METRICS.get_or_init(|| McpMetrics::new(&opentelemetry::global::meter("rocketmq-mcp")))
-}
-
 /// Bounded MCP protocol surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum McpOperationKind {
@@ -219,72 +200,175 @@ impl McpAuditFailureKind {
     }
 }
 
-/// Records a completed Tool or Resource request and its latency.
+/// Instance-owned bounded MCP metric recorder.
+#[derive(Clone)]
+pub struct McpMetricsRecorder {
+    #[cfg(feature = "otel-metrics")]
+    telemetry: crate::TelemetryRecorder,
+    #[cfg(feature = "otel-metrics")]
+    metrics: Option<Arc<McpMetrics>>,
+}
+
+impl McpMetricsRecorder {
+    /// Creates a recorder that never reads process-global telemetry state.
+    #[must_use]
+    pub fn noop() -> Self {
+        Self::from_handle(&crate::TelemetryHandle::noop())
+    }
+
+    /// Creates a recorder from the fixed MCP instrumentation scope.
+    #[must_use]
+    pub fn from_handle(handle: &crate::TelemetryHandle) -> Self {
+        #[cfg(feature = "otel-metrics")]
+        {
+            let telemetry = handle.child(crate::MCP_METER_SCOPE);
+            let metrics = telemetry.meter().map(|meter| Arc::new(McpMetrics::new(&meter)));
+            Self { telemetry, metrics }
+        }
+
+        #[cfg(not(feature = "otel-metrics"))]
+        {
+            let _ = handle;
+            Self {}
+        }
+    }
+
+    /// Records a completed Tool or Resource request and its latency.
+    pub fn record_operation(
+        &self,
+        kind: McpOperationKind,
+        operation: &'static str,
+        outcome: McpOperationOutcome,
+        elapsed: Duration,
+    ) {
+        #[cfg(feature = "otel-metrics")]
+        if self.telemetry.is_active() {
+            if let Some(metrics) = &self.metrics {
+                metrics.record_operation(kind, operation, outcome, duration_millis_u64(elapsed));
+            }
+        }
+
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = (kind, operation, outcome, elapsed);
+    }
+
+    /// Records a bounded error class without including an error message.
+    pub fn record_error(&self, kind: McpOperationKind, operation: &'static str, error: McpErrorKind) {
+        #[cfg(feature = "otel-metrics")]
+        if self.telemetry.is_active() {
+            if let Some(metrics) = &self.metrics {
+                metrics.record_error(kind, operation, error);
+            }
+        }
+
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = (kind, operation, error);
+    }
+
+    /// Records one query-cache event.
+    pub fn record_cache_event(&self, event: McpCacheEvent) {
+        #[cfg(feature = "otel-metrics")]
+        if self.telemetry.is_active() {
+            if let Some(metrics) = &self.metrics {
+                metrics.record_cache_event(event);
+            }
+        }
+
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = event;
+    }
+
+    /// Records one rate-limit decision.
+    pub fn record_rate_limit(&self, outcome: McpRateLimitOutcome) {
+        #[cfg(feature = "otel-metrics")]
+        if self.telemetry.is_active() {
+            if let Some(metrics) = &self.metrics {
+                metrics.record_rate_limit(outcome);
+            }
+        }
+
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = outcome;
+    }
+
+    /// Records the current number of audit records waiting to be persisted.
+    pub fn record_audit_backlog(&self, records: u64) {
+        #[cfg(feature = "otel-metrics")]
+        if self.telemetry.is_active() {
+            if let Some(metrics) = &self.metrics {
+                metrics.audit_backlog.record(records, &[]);
+            }
+        }
+
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = records;
+    }
+
+    /// Records one dropped audit record.
+    pub fn record_audit_drop(&self, reason: McpAuditDropReason) {
+        #[cfg(feature = "otel-metrics")]
+        if self.telemetry.is_active() {
+            if let Some(metrics) = &self.metrics {
+                metrics.record_audit_drop(reason);
+            }
+        }
+
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = reason;
+    }
+
+    /// Records one audit sink or flush failure.
+    pub fn record_audit_failure(&self, kind: McpAuditFailureKind) {
+        #[cfg(feature = "otel-metrics")]
+        if self.telemetry.is_active() {
+            if let Some(metrics) = &self.metrics {
+                metrics.record_audit_failure(kind);
+            }
+        }
+
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = kind;
+    }
+}
+
+/// Compatibility helper that never reads global telemetry state.
 pub fn record_operation(
     kind: McpOperationKind,
     operation: &'static str,
     outcome: McpOperationOutcome,
     elapsed: Duration,
 ) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record_operation(kind, operation, outcome, duration_millis_u64(elapsed));
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = (kind, operation, outcome, elapsed);
+    McpMetricsRecorder::noop().record_operation(kind, operation, outcome, elapsed);
 }
 
-/// Records a bounded error class without including an error message.
+/// Compatibility helper that never reads global telemetry state.
 pub fn record_error(kind: McpOperationKind, operation: &'static str, error: McpErrorKind) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record_error(kind, operation, error);
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = (kind, operation, error);
+    McpMetricsRecorder::noop().record_error(kind, operation, error);
 }
 
-/// Records one query-cache event.
+/// Compatibility helper that never reads global telemetry state.
 pub fn record_cache_event(event: McpCacheEvent) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record_cache_event(event);
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = event;
+    McpMetricsRecorder::noop().record_cache_event(event);
 }
 
-/// Records one rate-limit decision.
+/// Compatibility helper that never reads global telemetry state.
 pub fn record_rate_limit(outcome: McpRateLimitOutcome) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record_rate_limit(outcome);
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = outcome;
+    McpMetricsRecorder::noop().record_rate_limit(outcome);
 }
 
-/// Records the current number of audit records waiting to be persisted.
+/// Compatibility helper that never reads global telemetry state.
 pub fn record_audit_backlog(records: u64) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().audit_backlog.record(records, &[]);
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = records;
+    McpMetricsRecorder::noop().record_audit_backlog(records);
 }
 
-/// Records one dropped audit record.
+/// Compatibility helper that never reads global telemetry state.
 pub fn record_audit_drop(reason: McpAuditDropReason) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record_audit_drop(reason);
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = reason;
+    McpMetricsRecorder::noop().record_audit_drop(reason);
 }
 
-/// Records one audit sink or flush failure.
+/// Compatibility helper that never reads global telemetry state.
 pub fn record_audit_failure(kind: McpAuditFailureKind) {
-    #[cfg(feature = "otel-metrics")]
-    global_metrics().record_audit_failure(kind);
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = kind;
+    McpMetricsRecorder::noop().record_audit_failure(kind);
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -482,6 +566,16 @@ mod tests {
         record_audit_backlog(3);
         record_audit_drop(McpAuditDropReason::Closed);
         record_audit_failure(McpAuditFailureKind::Sink);
+    }
+
+    #[test]
+    fn source_has_no_process_global_meter_access() {
+        let source = include_str!("mcp.rs");
+        let global_meter = ["global", "::meter"].concat();
+        let static_metrics = ["static MCP", "_METRICS"].concat();
+
+        assert!(!source.contains(&global_meter));
+        assert!(!source.contains(&static_metrics));
     }
 
     #[cfg(feature = "otel-metrics")]
