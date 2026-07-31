@@ -300,6 +300,7 @@ where
 )]
 pub async fn serve_with_service_context_and_ready_and_drain<P, F, R>(
     service_context: ChildServiceContext,
+    telemetry: TransportTelemetry,
     config: Arc<ProxyConfig>,
     processor: Arc<P>,
     sessions: ClientSessionRegistry,
@@ -316,6 +317,7 @@ where
 {
     serve_with_context(
         service_context,
+        telemetry,
         config,
         processor,
         sessions,
@@ -359,7 +361,7 @@ where
         remoting_backend,
         drain,
     );
-    let report = run_remoting_server_with_report_with_service_context(
+    let report = run_remoting_server_with_report_with_service_context_and_telemetry(
         service_context,
         listener,
         shutdown,
