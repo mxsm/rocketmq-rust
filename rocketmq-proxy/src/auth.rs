@@ -999,43 +999,41 @@ mod tests {
 
     struct PanicOnAuthMetadataService;
 
-    #[async_trait::async_trait]
     impl MetadataService for PanicOnAuthMetadataService {
-        async fn topic_message_type(
-            &self,
-            _context: &rocketmq_proxy_core::ProxyContext,
-            _topic: &ResourceIdentity,
-        ) -> ProxyResult<ProxyTopicMessageType> {
-            Ok(ProxyTopicMessageType::Unspecified)
+        fn topic_message_type<'a>(
+            &'a self,
+            _context: &'a rocketmq_proxy_core::ProxyContext,
+            _topic: &'a ResourceIdentity,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, ProxyTopicMessageType> {
+            Box::pin(async { Ok(ProxyTopicMessageType::Unspecified) })
         }
 
-        async fn subscription_group(
-            &self,
-            _context: &rocketmq_proxy_core::ProxyContext,
-            _topic: &ResourceIdentity,
-            _group: &ResourceIdentity,
-        ) -> ProxyResult<Option<SubscriptionGroupMetadata>> {
-            Ok(None)
+        fn subscription_group<'a>(
+            &'a self,
+            _context: &'a rocketmq_proxy_core::ProxyContext,
+            _topic: &'a ResourceIdentity,
+            _group: &'a ResourceIdentity,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, Option<SubscriptionGroupMetadata>> {
+            Box::pin(async { Ok(None) })
         }
 
-        async fn user(
-            &self,
-            _context: &rocketmq_proxy_core::ProxyContext,
-            _username: &str,
-        ) -> ProxyResult<Option<UserInfo>> {
-            panic!("Proxy-local management must not fetch Broker user metadata")
+        fn user<'a>(
+            &'a self,
+            _context: &'a rocketmq_proxy_core::ProxyContext,
+            _username: &'a str,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, Option<UserInfo>> {
+            Box::pin(async { panic!("Proxy-local management must not fetch Broker user metadata") })
         }
 
-        async fn acl(
-            &self,
-            _context: &rocketmq_proxy_core::ProxyContext,
-            _subject: &str,
-        ) -> ProxyResult<Option<AclInfo>> {
-            panic!("Proxy-local management must not fetch Broker ACL metadata")
+        fn acl<'a>(
+            &'a self,
+            _context: &'a rocketmq_proxy_core::ProxyContext,
+            _subject: &'a str,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, Option<AclInfo>> {
+            Box::pin(async { panic!("Proxy-local management must not fetch Broker ACL metadata") })
         }
     }
 
-    #[async_trait::async_trait]
     impl MetadataService for TestAuthMetadataService {
         fn topic_message_type<'a>(
             &'a self,
