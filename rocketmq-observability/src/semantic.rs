@@ -146,6 +146,7 @@ pub mod metrics {
     pub const LOG_FILTER_AUTO_RESTORE_FAILURE_TOTAL: &str =
         "rocketmq_observability_log_filter_auto_restore_failure_total";
     pub const LOG_FILTER_ROLLBACK_FAILURE_TOTAL: &str = "rocketmq_observability_log_filter_rollback_failure_total";
+    pub const RELEASE_INFO: &str = "rocketmq_release_info";
     pub const MCP_REQUESTS_TOTAL: &str = "rocketmq_mcp_requests_total";
     pub const MCP_REQUEST_LATENCY: &str = "rocketmq_mcp_request_latency";
     pub const MCP_ERRORS_TOTAL: &str = "rocketmq_mcp_errors_total";
@@ -214,6 +215,8 @@ pub mod labels {
     pub const LABEL_KEY: &str = "label_key";
     pub const SERVICE: &str = "service";
     pub const SOURCE: &str = "source";
+    pub const RELEASE_COMMIT: &str = "release_commit";
+    pub const RELEASE_NONCE: &str = "release_nonce";
     pub const OPERATION_KIND: &str = "operation_kind";
     pub const COMPONENT: &str = "component";
     pub const TASK_TYPE: &str = "task_type";
