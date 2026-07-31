@@ -491,6 +491,7 @@ impl TaskGroup {
     where
         F: Future<Output = ()> + Send + 'static,
     {
+        let _operation_spawn_guard = context.spawn_guard();
         let registration = context.prepare_spawn(self.id())?;
         let guard = registration.guard();
         let operation = context.clone();

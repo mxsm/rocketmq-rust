@@ -23,8 +23,9 @@ use crate::config::TlsConfig;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::OperationContext;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_runtime::TaskGroupChildLease;
+use rocketmq_runtime::TaskKind;
 use rocketmq_security_api::PeerInfo;
 use tokio::sync::broadcast;
 
@@ -78,7 +79,7 @@ type ClientConnectFuture = Pin<Box<dyn Future<Output = RocketMQResult<ConnectedC
 
 struct ClientTaskLifecycle {
     task_group: TaskGroup,
-    _child_lease: Option<TaskGroupChildLease>,
+    operation: OperationContext,
 }
 
 struct ClientInner<PR> {
@@ -92,7 +93,7 @@ impl<PR> ClientInner<PR> {
         let Ok(channel_inner) = ChannelInner::new_transport_session(
             session.connection(),
             self.cmd_handler.response_table.clone(),
-            session.task_group().child("rocketmq.remoting.client-channel"),
+            session.task_group().clone(),
         ) else {
             return;
         };
@@ -142,17 +143,11 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportConnectionHandler f
 
 fn new_client_connection_task_group_with_service_context(
     context: &ChildServiceContext,
-    addr: &str,
-) -> RocketMQResult<(TaskGroup, Option<TaskGroupChildLease>)> {
-    let lease = context
-        .task_group()
-        .try_child_lease(format!("rocketmq-transport.client.connection[{addr}]"))
-        .map_err(|error| {
-            remote_error(format!(
-                "failed to register remoting client connection task group: {error}"
-            ))
-        })?;
-    Ok((lease.group().clone(), Some(lease)))
+) -> (TaskGroup, OperationContext) {
+    (
+        context.task_group().clone(),
+        OperationContext::without_deadline(TaskKind::Service),
+    )
 }
 
 impl<PR> Drop for Client<PR> {
@@ -165,7 +160,8 @@ impl<PR> Drop for Client<PR> {
         self.pending_requests.close_owner(&self.pending_request_owner, || {
             RocketMQError::network_connection_failed("client", "connection dropped")
         });
-        self.task_lifecycle.task_group.cancel();
+        self.session.abort();
+        self.task_lifecycle.operation.cancel();
     }
 }
 
@@ -179,6 +175,7 @@ fn connect<PR>(
     _send_notify: broadcast::Receiver<()>,
     tls_config: TlsConfig,
     task_group: TaskGroup,
+    operation: OperationContext,
     deadline: RequestDeadline,
     telemetry: TransportTelemetry,
 ) -> ClientConnectFuture
@@ -215,7 +212,7 @@ where
             session_handler,
         ));
         task_group
-            .spawn_service("rocketmq.transport.client-session", session_runner)
+            .spawn_operation(&operation, "rocketmq.transport.client-session", session_runner)
             .map_err(|error| remote_error(format!("failed to spawn transport client session: {error}")))?;
         let (channel, pending_request_owner, session) = deadline
             .timeout(connected_session)
@@ -263,14 +260,14 @@ where
         deadline: RequestDeadline,
         telemetry: TransportTelemetry,
     ) -> RocketMQResult<Client<PR>> {
-        let (task_group, child_lease) = new_client_connection_task_group_with_service_context(context, &addr)?;
+        let (task_group, operation) = new_client_connection_task_group_with_service_context(context);
         Self::connect_with_task_group(
             addr,
             cmd_handler,
             tx,
             tls_config,
             task_group,
-            child_lease,
+            operation,
             deadline,
             telemetry,
         )
@@ -285,7 +282,7 @@ where
         tx: Option<&tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
         tls_config: TlsConfig,
         task_group: TaskGroup,
-        child_lease: Option<TaskGroupChildLease>,
+        operation: OperationContext,
         deadline: RequestDeadline,
         telemetry: TransportTelemetry,
     ) -> RocketMQResult<Client<PR>> {
@@ -294,7 +291,7 @@ where
         let send_receiver = notify_shutdown.subscribe();
         let task_lifecycle = Arc::new(ClientTaskLifecycle {
             task_group: task_group.clone(),
-            _child_lease: child_lease,
+            operation: operation.clone(),
         });
         let pending_requests = cmd_handler.response_table.clone();
         let (channel, pending_request_owner, session, remote_address, negotiated_tls) = connect(
@@ -305,6 +302,7 @@ where
             send_receiver,
             tls_config,
             task_group,
+            operation,
             deadline,
             telemetry,
         )
@@ -576,7 +574,21 @@ where
     /// Gracefully stop this client connection and return the task shutdown report.
     pub async fn close_with_report(&self, timeout: Duration) -> rocketmq_runtime::ShutdownReport {
         let _ = self.notify_shutdown.send(());
-        let report = self.task_lifecycle.task_group.shutdown(timeout).await;
+        let _ = self.session.retire().await;
+        let active_before = self.task_lifecycle.operation.active_task_count();
+        let joined = self
+            .task_lifecycle
+            .operation
+            .cancel_and_wait(&self.task_lifecycle.task_group, timeout)
+            .await
+            .unwrap_or(false);
+        let mut report = rocketmq_runtime::ShutdownReport::new("rocketmq.transport.client.connection", Duration::ZERO);
+        if joined {
+            report.completed = active_before;
+        } else {
+            report.aborted = active_before;
+            report.timed_out = usize::from(active_before > 0);
+        }
         self.pending_requests.close_owner(&self.pending_request_owner, || {
             RocketMQError::network_connection_failed("client", "connection closed")
         });
@@ -594,8 +606,9 @@ where
 
     pub(crate) fn retire_after_timeout(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async move {
-            let _ = self.session.retire().await;
+            self.session.abort();
             let _ = self.notify_shutdown.send(());
+            self.task_lifecycle.operation.cancel();
             self.pending_requests.close_owner(&self.pending_request_owner, || {
                 RocketMQError::network_connection_failed("client", "connection retired after request timeout")
             });
@@ -617,7 +630,7 @@ mod lifecycle_tests {
     use crate::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
 
     #[tokio::test]
-    async fn drop_last_client_closes_connection_task_group() {
+    async fn request_timeout_cancels_only_the_connection_operation() {
         let runtime_context = RuntimeContext::from_current("remoting-client-drop-test");
         let service = runtime_context.service_context("remoting-client-service");
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind listener");
@@ -643,9 +656,10 @@ mod lifecycle_tests {
         .await
         .expect("connect client");
         let task_group = client.task_lifecycle.task_group.clone();
+        let operation = client.task_lifecycle.operation.clone();
 
         assert_eq!(task_group.lifecycle_state(), TaskGroupLifecycleState::Open);
-        assert_eq!(task_group.task_count(), 2);
+        assert_eq!(operation.active_task_count(), 1);
 
         let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let callback_called = called.clone();
@@ -657,13 +671,15 @@ mod lifecycle_tests {
             )
             .await;
         assert!(called.load(std::sync::atomic::Ordering::SeqCst));
-        assert!(task_group.cancellation_token().is_cancelled());
+        assert!(operation.is_cancelled());
+        assert!(!task_group.cancellation_token().is_cancelled());
+        assert_eq!(task_group.lifecycle_state(), TaskGroupLifecycleState::Open);
         assert_eq!(client.connection().state(), crate::connection::ConnectionState::Closed);
         assert!(client.send(RemotingCommand::create_remoting_command(6)).await.is_err());
 
         drop(client);
 
-        assert!(task_group.cancellation_token().is_cancelled());
+        assert!(!task_group.cancellation_token().is_cancelled());
         server.abort();
     }
 
@@ -694,8 +710,9 @@ mod lifecycle_tests {
         .await
         .expect("connect client");
         let task_group = client.task_lifecycle.task_group.clone();
+        let operation = client.task_lifecycle.operation.clone();
 
-        assert_eq!(task_group.task_count(), 2);
+        assert_eq!(operation.active_task_count(), 1);
         let started_at = time::Instant::now();
         let results = client
             .send_batch_read(
@@ -720,23 +737,25 @@ mod lifecycle_tests {
             "batch timeout must be one absolute deadline, not one timeout per sequential await"
         );
         time::timeout(Duration::from_secs(1), async {
-            while !task_group.cancellation_token().is_cancelled() {
+            while !operation.is_cancelled() {
                 tokio::task::yield_now().await;
             }
         })
         .await
-        .expect("batch timeout must cancel the canonical session");
+        .expect("batch timeout must cancel the connection operation");
+        assert!(!task_group.cancellation_token().is_cancelled());
         assert_eq!(client.connection().state(), crate::connection::ConnectionState::Closed);
         assert!(client.send(RemotingCommand::create_remoting_command(4)).await.is_err());
         let report = client.close_with_report(Duration::from_secs(1)).await;
 
         assert!(report.is_healthy(), "{}", report.to_json());
-        assert_eq!(report.completed + report.cancelled, 2);
+        assert_eq!(operation.active_task_count(), 0);
+        assert_eq!(task_group.lifecycle_state(), TaskGroupLifecycleState::Open);
         server.abort();
     }
 
     #[tokio::test]
-    async fn connect_with_service_context_parents_connection_tasks() {
+    async fn connect_with_service_context_uses_fixed_component_owner() {
         let runtime_context = RuntimeContext::from_current("remoting-client-context-test");
         let service = runtime_context.service_context("remoting-client-service");
         let baseline_children = service.task_group().child_count();
@@ -765,11 +784,13 @@ mod lifecycle_tests {
         .await
         .expect("connect client with context");
         let task_group = client.task_lifecycle.task_group.clone();
+        let operation = client.task_lifecycle.operation.clone();
 
-        assert_eq!(task_group.parent_id(), Some(service.task_group().id()));
+        assert_eq!(task_group.id(), service.task_group().id());
+        assert_eq!(task_group.parent_id(), service.task_group().parent_id());
         assert_eq!(task_group.lifecycle_state(), TaskGroupLifecycleState::Open);
-        assert_eq!(task_group.task_count(), 2);
-        assert_eq!(service.task_group().child_stats().active, baseline_stats.active + 1);
+        assert_eq!(operation.active_task_count(), 1);
+        assert_eq!(service.task_group().child_stats(), baseline_stats);
 
         let mut retained_client = client.clone();
         let mut retained_request = RemotingCommand::create_remoting_command(105).set_body(vec![7_u8; 4096]);
@@ -793,14 +814,14 @@ mod lifecycle_tests {
         let report = client.close_with_report(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
         drop(client);
-        assert!(task_group.cancellation_token().is_cancelled());
+        assert_eq!(operation.active_task_count(), 0);
+        assert!(!task_group.cancellation_token().is_cancelled());
+        assert_eq!(task_group.lifecycle_state(), TaskGroupLifecycleState::Open);
         drop(task_group);
         tokio::task::yield_now().await;
 
         let final_stats = service.task_group().child_stats();
-        assert_eq!(final_stats.active, baseline_stats.active);
-        assert_eq!(final_stats.created, baseline_stats.created + 1);
-        assert_eq!(final_stats.pruned, baseline_stats.pruned + 1);
+        assert_eq!(final_stats, baseline_stats);
         assert_eq!(service.task_group().child_count(), baseline_children);
         server.abort();
     }

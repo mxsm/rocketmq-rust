@@ -23,6 +23,7 @@ use std::time::Instant;
 use dashmap::DashSet;
 use futures::future::join_all;
 use parking_lot::Mutex;
+use parking_lot::MutexGuard;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::RuntimeError;
@@ -48,6 +49,8 @@ pub struct OperationContext {
 struct OperationContextInner {
     cancellation: CancellationToken,
     deadline: Option<Instant>,
+    accepting: AtomicBool,
+    spawn_gate: Mutex<()>,
     owner_id: Mutex<Option<TaskGroupId>>,
     active_tasks: Arc<DashSet<TaskId>>,
 }
@@ -68,6 +71,8 @@ impl OperationContext {
             inner: Arc::new(OperationContextInner {
                 cancellation: CancellationToken::new(),
                 deadline,
+                accepting: AtomicBool::new(true),
+                spawn_gate: Mutex::new(()),
                 owner_id: Mutex::new(None),
                 active_tasks: Arc::new(DashSet::new()),
             }),
@@ -108,7 +113,16 @@ impl OperationContext {
 
     /// Requests cancellation for every task in this operation.
     pub fn cancel(&self) {
+        let _spawn_guard = self.inner.spawn_gate.lock();
+        self.inner.accepting.store(false, Ordering::Release);
         self.inner.cancellation.cancel();
+    }
+
+    /// Closes task admission without cancelling tasks that were already
+    /// accepted.
+    pub fn close_admission(&self) {
+        let _spawn_guard = self.inner.spawn_gate.lock();
+        self.inner.accepting.store(false, Ordering::Release);
     }
 
     /// Returns the number of operation tasks that have not completed.
@@ -127,8 +141,19 @@ impl OperationContext {
     /// Returns an error when `owner` differs from the component owner used to
     /// spawn the operation.
     pub async fn cancel_and_wait(&self, owner: &TaskGroup, timeout: Duration) -> RuntimeResult<bool> {
-        self.ensure_owner(owner.id())?;
         self.cancel();
+        self.wait(owner, timeout).await
+    }
+
+    /// Waits for all currently registered operation tasks without requesting
+    /// cancellation. Tasks still running at the shared deadline are aborted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `owner` differs from the component owner used to
+    /// spawn the operation.
+    pub async fn wait(&self, owner: &TaskGroup, timeout: Duration) -> RuntimeResult<bool> {
+        self.ensure_owner(owner.id())?;
         let deadline = Instant::now() + timeout;
         let task_ids = self
             .inner
@@ -159,13 +184,20 @@ impl OperationContext {
 
     pub(crate) fn prepare_spawn(&self, owner_id: TaskGroupId) -> RuntimeResult<OperationTaskRegistration> {
         self.bind_owner(owner_id)?;
-        if self.is_cancelled() || self.inner.deadline.is_some_and(|deadline| deadline <= Instant::now()) {
+        if !self.inner.accepting.load(Ordering::Acquire)
+            || self.is_cancelled()
+            || self.inner.deadline.is_some_and(|deadline| deadline <= Instant::now())
+        {
             return Err(RuntimeError::LifecycleOperation {
                 operation: "spawn_operation",
                 message: "operation is cancelled or its deadline has expired".to_string(),
             });
         }
         Ok(OperationTaskRegistration::new(Arc::clone(&self.inner.active_tasks)))
+    }
+
+    pub(crate) fn spawn_guard(&self) -> MutexGuard<'_, ()> {
+        self.inner.spawn_gate.lock()
     }
 
     pub(crate) async fn run<F>(&self, future: F)

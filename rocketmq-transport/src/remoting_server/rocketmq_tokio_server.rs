@@ -1016,7 +1016,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_with_report_with_service_context_adds_remoting_child_to_parent_report() {
+    async fn run_with_report_returns_component_report_without_retaining_completed_child() {
         let context = RuntimeContext::from_current("remoting-server-parent-report-test");
         let service = context.service_context("remoting-server-parent");
         let listener = TcpListener::bind("127.0.0.1:0")
@@ -1046,14 +1046,8 @@ mod tests {
         assert_eq!(report.name, "rocketmq.remoting.server");
 
         let parent_report = service.task_group().shutdown(Duration::from_secs(1)).await;
-        assert!(
-            parent_report
-                .children
-                .iter()
-                .any(|child| child.name == "rocketmq.remoting.server"),
-            "{}",
-            parent_report.to_json()
-        );
+        assert!(parent_report.is_healthy(), "{}", parent_report.to_json());
+        assert!(parent_report.children.is_empty(), "{}", parent_report.to_json());
     }
 
     #[tokio::test]
@@ -1318,7 +1312,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn command_snapshot_task_groups_prune_after_each_response() {
+    async fn command_snapshots_reuse_the_fixed_request_executor_owner() {
         const COMMAND_COUNT: usize = 128;
 
         let request_executor_group = Arc::new(std::sync::Mutex::new(None::<TaskGroup>));
@@ -1385,13 +1379,8 @@ mod tests {
             .expect("request executor group");
         let stats = request_executor_group.child_stats();
         assert_eq!(stats.active, 0);
-        assert_eq!(stats.created, COMMAND_COUNT);
-        assert_eq!(stats.pruned, COMMAND_COUNT);
-        assert_eq!(
-            request_executor_group.child_count(),
-            0,
-            "completed request groups must be pruned"
-        );
+        assert_eq!(stats.created, 0);
+        assert_eq!(stats.pruned, 0);
 
         let _ = shutdown_tx.send(());
         let report = server_task.await.unwrap().unwrap();
@@ -1512,9 +1501,9 @@ mod tests {
             .clone()
             .expect("request executor group");
         let retained_stats = retained_request_executor_group.child_stats();
-        assert_eq!(retained_stats.active, 1);
-        assert_eq!(retained_stats.created, 2);
-        assert_eq!(retained_stats.pruned, 1);
+        assert_eq!(retained_stats.active, 0);
+        assert_eq!(retained_stats.created, 0);
+        assert_eq!(retained_stats.pruned, 0);
 
         let _data_one = admission
             .try_acquire(
@@ -1546,8 +1535,8 @@ mod tests {
         .await;
         let released_stats = retained_request_executor_group.child_stats();
         assert_eq!(released_stats.active, 0);
-        assert_eq!(released_stats.created, 2);
-        assert_eq!(released_stats.pruned, 2);
+        assert_eq!(released_stats.created, 0);
+        assert_eq!(released_stats.pruned, 0);
         assert!(
             tokio::time::timeout(Duration::from_millis(100), client.receive_command())
                 .await
