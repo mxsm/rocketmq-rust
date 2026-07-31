@@ -100,11 +100,22 @@ impl ActiveTaskRegistry {
     }
 
     pub(super) fn children_snapshot(&self) -> Vec<TaskGroup> {
-        self.children
-            .lock()
-            .values()
-            .filter_map(|entry| entry.inner.upgrade())
-            .map(|inner| TaskGroup { inner })
-            .collect()
+        let mut children = self.children.lock();
+        let mut stale_operations = 0usize;
+        let mut snapshot = Vec::with_capacity(children.len());
+        children.retain(|_, entry| {
+            let Some(inner) = entry.inner.upgrade() else {
+                stale_operations += usize::from(entry.kind == ChildRegistrationKind::Operation);
+                return false;
+            };
+            snapshot.push(TaskGroup { inner });
+            true
+        });
+        drop(children);
+
+        if stale_operations > 0 {
+            self.operations_released.fetch_add(stale_operations, Ordering::Relaxed);
+        }
+        snapshot
     }
 }

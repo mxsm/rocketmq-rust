@@ -36,6 +36,29 @@ struct TaskGroupModel {
     released_child_leases: usize,
 }
 
+#[derive(Debug)]
+struct RemovalModel {
+    registered: bool,
+    removals: usize,
+}
+
+impl RemovalModel {
+    fn remove_once(&mut self) -> bool {
+        if !self.registered {
+            return false;
+        }
+        self.registered = false;
+        self.removals += 1;
+        true
+    }
+}
+
+#[derive(Debug)]
+struct ChildRegistryModel {
+    registered: bool,
+    joinable: bool,
+}
+
 impl TaskGroupModel {
     fn new() -> Self {
         Self {
@@ -172,5 +195,68 @@ fn ha_reconnect_child_lease_racing_with_shutdown_is_tracked_or_rejected() {
         assert_eq!(group.lifecycle, Lifecycle::Closed);
         assert_eq!(group.accepted_child_leases, accepted);
         assert_eq!(group.released_child_leases, accepted);
+    });
+}
+
+#[test]
+fn completion_racing_with_abort_removes_the_task_once() {
+    loom::model(|| {
+        let removal = Arc::new(Mutex::new(RemovalModel {
+            registered: true,
+            removals: 0,
+        }));
+
+        let completed_removal = Arc::clone(&removal);
+        let completion = thread::spawn(move || {
+            thread::yield_now();
+            completed_removal.lock().expect("completion removal lock").remove_once()
+        });
+
+        let aborted_removal = Arc::clone(&removal);
+        let abort = thread::spawn(move || {
+            thread::yield_now();
+            aborted_removal.lock().expect("abort removal lock").remove_once()
+        });
+
+        let completed = completion.join().expect("completion thread");
+        let aborted = abort.join().expect("abort thread");
+        let removal = removal.lock().expect("final removal lock");
+        assert_ne!(completed, aborted, "exactly one racing path must remove the task");
+        assert!(!removal.registered);
+        assert_eq!(removal.removals, 1);
+    });
+}
+
+#[test]
+fn child_drop_racing_with_parent_snapshot_is_joinable_or_unregistered() {
+    loom::model(|| {
+        let registry = Arc::new(Mutex::new(ChildRegistryModel {
+            registered: true,
+            joinable: true,
+        }));
+
+        let drop_registry = Arc::clone(&registry);
+        let dropper = thread::spawn(move || {
+            drop_registry.lock().expect("last owner drop lock").joinable = false;
+            thread::yield_now();
+            drop_registry.lock().expect("child unregister lock").registered = false;
+        });
+
+        let snapshot_registry = Arc::clone(&registry);
+        let snapshot = thread::spawn(move || {
+            thread::yield_now();
+            let mut registry = snapshot_registry.lock().expect("snapshot lock");
+            if !registry.joinable {
+                registry.registered = false;
+            }
+            assert!(
+                registry.joinable || !registry.registered,
+                "a registered child snapshot must retain a joinable strong owner"
+            );
+        });
+
+        dropper.join().expect("child drop thread");
+        snapshot.join().expect("parent snapshot thread");
+        assert!(!registry.lock().expect("final child registry lock").registered);
     });
 }
