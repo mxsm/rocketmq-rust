@@ -41,10 +41,6 @@ use rocketmq_client_rust::JavaHashCode;
 use rocketmq_client_rust::LitePullConsumer;
 #[cfg(feature = "admin-full")]
 use rocketmq_client_rust::MQAdminExt;
-#[cfg(feature = "admin-full")]
-use rocketmq_client_rust::MQAdminExtInner;
-#[cfg(feature = "admin-full")]
-use rocketmq_client_rust::MQAdminExtInnerImpl;
 use rocketmq_client_rust::MQConsumer;
 use rocketmq_client_rust::MQProducer;
 use rocketmq_client_rust::MQPushConsumer;
