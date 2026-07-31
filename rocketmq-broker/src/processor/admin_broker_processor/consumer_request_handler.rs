@@ -66,7 +66,7 @@ impl ConsumerRequestHandler {
 
 impl ConsumerRequestHandler {
     pub async fn get_consumer_connection_list<MS: MessageStore>(
-        &mut self,
+        &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
@@ -109,7 +109,7 @@ impl ConsumerRequestHandler {
     }
 
     pub async fn get_consume_stats<MS: MessageStore>(
-        &mut self,
+        &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
@@ -224,7 +224,7 @@ impl ConsumerRequestHandler {
     }
 
     pub async fn get_broker_consume_stats<MS: MessageStore>(
-        &mut self,
+        &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
@@ -282,7 +282,7 @@ impl ConsumerRequestHandler {
     }
 
     pub async fn query_correction_offset<MS: MessageStore>(
-        &mut self,
+        &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
@@ -319,7 +319,7 @@ impl ConsumerRequestHandler {
     }
 
     pub async fn consume_message_directly<MS: MessageStore>(
-        &mut self,
+        &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
@@ -488,7 +488,7 @@ impl ConsumerRequestHandler {
     }
 
     pub async fn get_all_consumer_offset<MS: MessageStore>(
-        &mut self,
+        &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
@@ -510,7 +510,7 @@ impl ConsumerRequestHandler {
     }
 
     pub async fn get_all_message_request_mode<MS: MessageStore>(
-        &mut self,
+        &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
@@ -545,8 +545,8 @@ impl ConsumerRequestHandler {
     }
 
     pub async fn invoke_broker_to_reset_offset<MS: MessageStore>(
-        &mut self,
-        broker_runtime_inner: &mut BrokerAdminRuntime<MS>,
+        &self,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -593,7 +593,7 @@ impl ConsumerRequestHandler {
     }
 
     pub async fn invoke_broker_to_get_consumer_status<MS: MessageStore>(
-        &mut self,
+        &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
@@ -615,7 +615,7 @@ impl ConsumerRequestHandler {
     }
 
     pub async fn query_subscription_by_consumer<MS: MessageStore>(
-        &mut self,
+        &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
@@ -639,7 +639,7 @@ impl ConsumerRequestHandler {
     }
 
     pub async fn query_consume_time_span<MS: MessageStore>(
-        &mut self,
+        &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
@@ -715,7 +715,7 @@ impl ConsumerRequestHandler {
     }
 
     pub async fn clone_group_offset<MS: MessageStore>(
-        &mut self,
+        &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
@@ -773,7 +773,7 @@ impl ConsumerRequestHandler {
     }
 
     pub async fn get_consumer_running_info<MS: MessageStore>(
-        &mut self,
+        &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
@@ -800,7 +800,7 @@ impl ConsumerRequestHandler {
     }
 
     async fn call_consumer<MS: MessageStore>(
-        &mut self,
+        &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         request: RemotingCommand,
         consumer_group: &str,
@@ -856,7 +856,7 @@ impl ConsumerRequestHandler {
     }
 
     async fn reset_offset_inner<MS: MessageStore>(
-        &mut self,
+        &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         topic: &cheetah_string::CheetahString,
         group: &cheetah_string::CheetahString,
@@ -1119,7 +1119,7 @@ mod tests {
                 },
             );
 
-        let mut handler = ConsumerRequestHandler::new();
+        let handler = ConsumerRequestHandler::new();
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request =
@@ -1156,7 +1156,7 @@ mod tests {
     #[tokio::test]
     async fn get_broker_consume_stats_returns_grouped_offsets() {
         let runtime = new_test_runtime("broker-consume-stats").await;
-        let mut admin = runtime.admin_runtime_for_test();
+        let admin = runtime.admin_runtime_for_test();
         let _ = admin
             .topic_config_manager()
             .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1), 0);
@@ -1165,7 +1165,7 @@ mod tests {
                 CheetahString::from_static_str("group-a"),
             );
         admin
-            .subscription_group_manager_mut()
+            .subscription_group_manager()
             .update_subscription_group_config(&mut group_config);
         admin.consumer_offset_manager().commit_offset(
             CheetahString::from_static_str("127.0.0.1"),
@@ -1175,7 +1175,7 @@ mod tests {
             6,
         );
 
-        let mut handler = ConsumerRequestHandler::new();
+        let handler = ConsumerRequestHandler::new();
         let mut request = RemotingCommand::create_request_command(
             RequestCode::GetBrokerConsumeStats,
             GetConsumeStatsInBrokerHeader { is_order: false },
@@ -1231,7 +1231,7 @@ mod tests {
             8,
         );
 
-        let mut handler = ConsumerRequestHandler::new();
+        let handler = ConsumerRequestHandler::new();
         let mut request = RemotingCommand::create_request_command(
             RequestCode::QueryCorrectionOffset,
             QueryCorrectionOffsetHeader {
@@ -1276,11 +1276,11 @@ mod tests {
                 CheetahString::from_static_str("group-a"),
             );
         admin
-            .subscription_group_manager_mut()
+            .subscription_group_manager()
             .update_subscription_group_config(&mut group_config);
         let msg_id = put_test_message(&mut admin, "topic-a").await;
 
-        let mut handler = ConsumerRequestHandler::new();
+        let handler = ConsumerRequestHandler::new();
         let mut request = RemotingCommand::create_request_command(
             RequestCode::ConsumeMessageDirectly,
             ConsumeMessageDirectlyResultRequestHeader {
@@ -1316,7 +1316,7 @@ mod tests {
     #[tokio::test]
     async fn invoke_broker_to_reset_offset_assigns_server_side_offset() {
         let runtime = new_test_runtime("reset-offset").await;
-        let mut admin = runtime.admin_runtime_for_test();
+        let admin = runtime.admin_runtime_for_test();
         let _ = admin
             .topic_config_manager()
             .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1), 0);
@@ -1325,10 +1325,10 @@ mod tests {
                 CheetahString::from_static_str("group-a"),
             );
         admin
-            .subscription_group_manager_mut()
+            .subscription_group_manager()
             .update_subscription_group_config(&mut group_config);
 
-        let mut handler = ConsumerRequestHandler::new();
+        let handler = ConsumerRequestHandler::new();
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(
@@ -1347,7 +1347,7 @@ mod tests {
 
         let mut response = handler
             .invoke_broker_to_reset_offset(
-                &mut admin,
+                &admin,
                 channel,
                 ctx,
                 RequestCode::InvokeBrokerToResetOffset,
@@ -1376,7 +1376,7 @@ mod tests {
     #[tokio::test]
     async fn invoke_broker_to_get_consumer_status_returns_offline_group_error() {
         let runtime = new_test_runtime("consumer-status").await;
-        let mut handler = ConsumerRequestHandler::new();
+        let handler = ConsumerRequestHandler::new();
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(
@@ -1434,7 +1434,7 @@ mod tests {
             false,
         );
 
-        let mut handler = ConsumerRequestHandler::new();
+        let handler = ConsumerRequestHandler::new();
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(
@@ -1487,7 +1487,7 @@ mod tests {
             .topic_config_manager()
             .update_topic_config(TopicConfig::with_queues("topic-a", 1, 1), 0);
 
-        let mut handler = ConsumerRequestHandler::new();
+        let handler = ConsumerRequestHandler::new();
         let mut request = RemotingCommand::create_request_command(
             RequestCode::QueryConsumeTimeSpan,
             QueryConsumeTimeSpanRequestHeader {
@@ -1542,7 +1542,7 @@ mod tests {
             18,
         );
 
-        let mut handler = ConsumerRequestHandler::new();
+        let handler = ConsumerRequestHandler::new();
         let mut request = RemotingCommand::create_request_command(
             RequestCode::CloneGroupOffset,
             CloneGroupOffsetRequestHeader {

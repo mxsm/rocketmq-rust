@@ -21,7 +21,7 @@ impl DeleteAclRequestHandler {
     }
 
     pub async fn delete_acl(
-        &mut self,
+        &self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,

@@ -611,10 +611,7 @@ impl BrokerRuntime {
                     component: "auth_admin_service",
                     detail: "auth admin service must be initialized before request processors".to_owned(),
                 })?;
-        let admin_broker_processor = Arc::new(Mutex::new(AdminBrokerProcessor::new(
-            self.admin_runtime(),
-            auth_admin_service,
-        )));
+        let admin_broker_processor = Arc::new(AdminBrokerProcessor::new(self.admin_runtime(), auth_admin_service));
         broker_request_processor.register_default_processor(BrokerProcessorType::AdminBroker(admin_broker_processor));
 
         Ok((broker_request_processor.clone(), broker_request_processor))

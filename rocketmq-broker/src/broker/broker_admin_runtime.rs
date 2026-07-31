@@ -325,10 +325,6 @@ impl<MS: MessageStore> BrokerAdminRuntime<MS> {
         &self.subscription_group_manager
     }
 
-    pub(crate) fn subscription_group_manager_mut(&mut self) -> &mut SubscriptionGroupManager {
-        &mut self.subscription_group_manager
-    }
-
     pub(crate) fn consumer_filter_manager(&self) -> &ConsumerFilterManager {
         &self.consumer_filter_manager
     }
@@ -474,7 +470,7 @@ impl<MS: MessageStore> BrokerAdminRuntime<MS> {
             .await
     }
 
-    pub(crate) fn set_broker_config(&mut self, broker_config: BrokerConfig) -> Result<(), BrokerConfigError> {
+    pub(crate) fn set_broker_config(&self, broker_config: BrokerConfig) -> Result<(), BrokerConfigError> {
         let update_lock = Arc::clone(&self.config_update_lock);
         let _update_guard = update_lock.lock();
         let generation = self.config.replace_broker(broker_config)?;
@@ -483,7 +479,7 @@ impl<MS: MessageStore> BrokerAdminRuntime<MS> {
     }
 
     pub(crate) fn commit_broker_config_patch(
-        &mut self,
+        &self,
         properties: &HashMap<CheetahString, CheetahString>,
     ) -> Result<ConfigGeneration, BrokerConfigError> {
         self.commit_broker_config_patch_inner(None, properties)
@@ -496,7 +492,7 @@ impl<MS: MessageStore> BrokerAdminRuntime<MS> {
     /// and legacy capability projection are serialized by one lock. A stale
     /// supervised operation therefore cannot overwrite a newer configuration.
     pub(crate) fn commit_broker_config_patch_if_generation(
-        &mut self,
+        &self,
         expected_generation: u64,
         properties: &HashMap<CheetahString, CheetahString>,
     ) -> Result<ConfigGeneration, BrokerConfigError> {
@@ -504,7 +500,7 @@ impl<MS: MessageStore> BrokerAdminRuntime<MS> {
     }
 
     fn commit_broker_config_patch_inner(
-        &mut self,
+        &self,
         expected_generation: Option<u64>,
         properties: &HashMap<CheetahString, CheetahString>,
     ) -> Result<ConfigGeneration, BrokerConfigError> {
@@ -527,7 +523,7 @@ impl<MS: MessageStore> BrokerAdminRuntime<MS> {
     }
 
     fn apply_broker_config_generation(
-        &mut self,
+        &self,
         generation: &crate::broker::broker_runtime_config_state::BrokerRuntimeConfigGeneration,
     ) {
         self.role_state

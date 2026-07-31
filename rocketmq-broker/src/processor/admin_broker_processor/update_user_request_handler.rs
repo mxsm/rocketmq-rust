@@ -23,7 +23,7 @@ impl UpdateUserRequestHandler {
     }
 
     pub async fn update_user(
-        &mut self,
+        &self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,

@@ -854,7 +854,11 @@ pub use crate::consumer::consumer_impl::consume_message_pop_orderly_service::run
 #[doc(hidden)]
 pub use crate::consumer::consumer_impl::consume_message_pop_orderly_service::PopOrderlyLockRefreshLifecycleProbe;
 #[doc(hidden)]
+pub use crate::consumer::consumer_impl::default_lite_pull_consumer_impl::run_lite_pull_assignment_registry_probe;
+#[doc(hidden)]
 pub use crate::consumer::consumer_impl::default_lite_pull_consumer_impl::run_lite_pull_task_lifecycle_probe;
+#[doc(hidden)]
+pub use crate::consumer::consumer_impl::default_lite_pull_consumer_impl::LitePullAssignmentRegistryProbe;
 #[doc(hidden)]
 pub use crate::consumer::consumer_impl::default_lite_pull_consumer_impl::LitePullTaskLifecycleProbe;
 #[doc(hidden)]

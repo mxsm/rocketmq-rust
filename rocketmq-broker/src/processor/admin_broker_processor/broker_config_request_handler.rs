@@ -77,10 +77,6 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
         &self.broker_runtime_inner
     }
 
-    pub(super) fn broker_runtime_inner_mut(&mut self) -> &mut BrokerAdminRuntime<MS> {
-        &mut self.broker_runtime_inner
-    }
-
     pub(super) async fn persist_and_register_topic_updates(
         &self,
         topic_config_list: Vec<Arc<TopicConfig>>,
@@ -132,7 +128,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
 }
 impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
     pub async fn update_broker_config(
-        &mut self,
+        &self,
         channel: Channel,
         _ctx: ConnectionHandlerContext,
         request_code: RequestCode,
@@ -331,7 +327,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
     }
 
     pub async fn get_broker_config(
-        &mut self,
+        &self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -361,7 +357,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
     }
 
     pub async fn get_broker_runtime_info(
-        &mut self,
+        &self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -375,7 +371,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
     }
 
     pub async fn set_commitlog_read_mode(
-        &mut self,
+        &self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -429,7 +425,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
     }
 
     pub async fn export_rocksdb_config_to_json(
-        &mut self,
+        &self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -512,7 +508,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
     }
 
     pub async fn get_timer_metrics(
-        &mut self,
+        &self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -522,7 +518,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
     }
 
     pub async fn get_timer_check_point(
-        &mut self,
+        &self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -532,7 +528,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
     }
 
     pub async fn switch_timer_engine(
-        &mut self,
+        &self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -1132,7 +1128,7 @@ mod tests {
     async fn set_commitlog_read_mode_updates_store_config() {
         let runtime = new_test_runtime("commitlog-read-mode", false).await;
         let admin = runtime.admin_runtime_for_test();
-        let mut handler = BrokerConfigRequestHandler::new(admin.clone());
+        let handler = BrokerConfigRequestHandler::new(admin.clone());
 
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
@@ -1198,7 +1194,7 @@ mod tests {
 
         let mut next = admin.broker_config().as_ref().clone();
         next.max_client_event_count = next.max_client_event_count.saturating_add(1);
-        let mut admin = admin;
+        let admin = admin;
         admin
             .set_broker_config(next)
             .expect("valid configuration replacement should advance generation");
@@ -1220,7 +1216,7 @@ mod tests {
     async fn get_broker_config_binds_body_to_the_committed_generation() {
         let runtime = new_test_runtime("get-broker-config-generation", false).await;
         let admin = runtime.admin_runtime_for_test();
-        let mut handler = BrokerConfigRequestHandler::new(admin);
+        let handler = BrokerConfigRequestHandler::new(admin);
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerConfig);
@@ -1248,7 +1244,7 @@ mod tests {
     async fn update_broker_config_applies_supported_runtime_properties() {
         let runtime = new_test_runtime("update-broker-config", false).await;
         let admin = runtime.admin_runtime_for_test();
-        let mut handler = BrokerConfigRequestHandler::new(admin.clone());
+        let handler = BrokerConfigRequestHandler::new(admin.clone());
 
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
@@ -1278,7 +1274,7 @@ mod tests {
     async fn update_broker_config_cas_commits_once_and_rejects_stale_generation() {
         let runtime = new_test_runtime("update-broker-config-cas", false).await;
         let admin = runtime.admin_runtime_for_test();
-        let mut handler = BrokerConfigRequestHandler::new(admin.clone());
+        let handler = BrokerConfigRequestHandler::new(admin.clone());
 
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
@@ -1341,7 +1337,7 @@ mod tests {
     async fn update_log_filter_requires_broker_authentication_and_authorization() {
         let runtime = new_test_runtime("update-log-filter-auth-disabled", false).await;
         let admin = runtime.admin_runtime_for_test();
-        let mut handler = BrokerConfigRequestHandler::new(admin);
+        let handler = BrokerConfigRequestHandler::new(admin);
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_remoting_command(RequestCode::UpdateBrokerConfig).set_body(concat!(
@@ -1367,7 +1363,7 @@ mod tests {
     async fn update_broker_config_rejects_unsupported_or_invalid_keys() {
         let runtime = new_test_runtime("update-broker-config-invalid", false).await;
         let admin = runtime.admin_runtime_for_test();
-        let mut handler = BrokerConfigRequestHandler::new(admin.clone());
+        let handler = BrokerConfigRequestHandler::new(admin.clone());
 
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
@@ -1470,7 +1466,7 @@ mod tests {
     #[tokio::test]
     async fn export_rocksdb_config_without_rocksdb_returns_not_supported() {
         let runtime = new_test_runtime("export-config", false).await;
-        let mut handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_for_test());
+        let handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_for_test());
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(
@@ -1526,11 +1522,11 @@ mod tests {
             let mut group_config = SubscriptionGroupConfig::new(group.clone());
             group_config.set_consume_broadcast_enable(false);
             inner_mut
-                .subscription_group_manager_mut()
+                .subscription_group_manager()
                 .update_subscription_group_config(&mut group_config);
         }
 
-        let mut handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_for_test());
+        let handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_for_test());
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request = RemotingCommand::create_request_command(
@@ -1571,7 +1567,7 @@ mod tests {
     async fn switch_timer_engine_accepts_file_time_wheel_and_rejects_rocksdb() {
         let runtime = new_test_runtime("switch-timer-engine", true).await;
         let admin = runtime.admin_runtime_for_test();
-        let mut handler = BrokerConfigRequestHandler::new(admin.clone());
+        let handler = BrokerConfigRequestHandler::new(admin.clone());
 
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));

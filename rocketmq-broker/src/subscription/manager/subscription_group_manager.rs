@@ -354,12 +354,12 @@ impl SubscriptionGroupManager {
         true
     }
 
-    pub(crate) fn update_subscription_group_config(&mut self, config: &mut SubscriptionGroupConfig) {
+    pub(crate) fn update_subscription_group_config(&self, config: &mut SubscriptionGroupConfig) {
         self.update_subscription_group_config_without_persist(config);
         self.persist_after_mutation("update");
     }
 
-    fn update_subscription_group_config_without_persist(&mut self, config: &mut SubscriptionGroupConfig) {
+    fn update_subscription_group_config_without_persist(&self, config: &mut SubscriptionGroupConfig) {
         let _transition = self.metadata_transition.lock();
         let start_time = Instant::now();
         let new_attributes = self.request(config);
@@ -893,7 +893,7 @@ impl SubscriptionGroupManager {
     ///
     /// # Returns
     /// Returns the updated config if the group exists, None otherwise
-    pub fn disable_consume(&mut self, group_name: &CheetahString) -> Option<Arc<SubscriptionGroupConfig>> {
+    pub fn disable_consume(&self, group_name: &CheetahString) -> Option<Arc<SubscriptionGroupConfig>> {
         let result = {
             let _transition = self.metadata_transition.lock();
             let result = self.subscription_group_table.get_mut(group_name).map(|mut entry| {
@@ -927,7 +927,7 @@ impl SubscriptionGroupManager {
     ///
     /// # Returns
     /// Returns the updated config if the group exists, None otherwise
-    pub fn enable_consume(&mut self, group_name: &str) -> Option<Arc<SubscriptionGroupConfig>> {
+    pub fn enable_consume(&self, group_name: &str) -> Option<Arc<SubscriptionGroupConfig>> {
         let result = {
             let _transition = self.metadata_transition.lock();
             let result = self.subscription_group_table.get_mut(group_name).map(|mut entry| {
@@ -976,7 +976,7 @@ impl SubscriptionGroupManager {
     ///
     /// # Returns
     /// Returns the deleted config if it existed, None otherwise
-    pub fn delete_subscription_group_config(&mut self, group_name: &str) -> Option<Arc<SubscriptionGroupConfig>> {
+    pub fn delete_subscription_group_config(&self, group_name: &str) -> Option<Arc<SubscriptionGroupConfig>> {
         let old = {
             let _transition = self.metadata_transition.lock();
             let old = self.subscription_group_table.remove(group_name).map(|(_, v)| v);
@@ -1012,7 +1012,7 @@ impl SubscriptionGroupManager {
     /// * `config_list` - List of subscription group configs to update
     ///
     /// This method updates multiple subscription groups in a single persist operation
-    pub fn update_subscription_group_config_list(&mut self, config_list: Vec<SubscriptionGroupConfig>) {
+    pub fn update_subscription_group_config_list(&self, config_list: Vec<SubscriptionGroupConfig>) {
         if config_list.is_empty() {
             return;
         }
@@ -1033,7 +1033,7 @@ impl SubscriptionGroupManager {
     /// * `forbidden_index` - Forbidden flag bit index (0-31)
     ///
     /// Uses bitwise OR to set the forbidden flag at the specified index
-    pub fn set_forbidden(&mut self, group: &CheetahString, topic: &CheetahString, forbidden_index: i32) {
+    pub fn set_forbidden(&self, group: &CheetahString, topic: &CheetahString, forbidden_index: i32) {
         let topic_forbidden = self.get_forbidden_internal(group, topic);
         let new_forbidden = topic_forbidden | (1 << forbidden_index);
         self.update_forbidden_value(group, topic, new_forbidden);
@@ -1047,7 +1047,7 @@ impl SubscriptionGroupManager {
     /// * `forbidden_index` - Forbidden flag bit index (0-31)
     ///
     /// Uses bitwise AND with complement to clear the forbidden flag at the specified index
-    pub fn clear_forbidden(&mut self, group: &CheetahString, topic: &CheetahString, forbidden_index: i32) {
+    pub fn clear_forbidden(&self, group: &CheetahString, topic: &CheetahString, forbidden_index: i32) {
         if !Self::validate_forbidden_index(forbidden_index) {
             warn!("Invalid forbidden index: {}", forbidden_index);
             return;
@@ -1066,7 +1066,7 @@ impl SubscriptionGroupManager {
     ///
     /// Directly sets the forbidden value, replacing any existing value.
     /// If forbidden_value <= 0, removes the group from the forbidden table.
-    pub fn update_forbidden_value(&mut self, group: &CheetahString, topic: &CheetahString, forbidden_value: i32) {
+    pub fn update_forbidden_value(&self, group: &CheetahString, topic: &CheetahString, forbidden_value: i32) {
         {
             let _transition = self.metadata_transition.lock();
             if forbidden_value <= 0 {
@@ -1440,7 +1440,7 @@ mod tests {
         };
         let manager_config = SubscriptionGroupManagerConfig::from_configs(&broker_config, &message_store_config);
         let rocksdb_path = temp_dir.path().join("config").join("subscriptionGroups");
-        let mut manager = SubscriptionGroupManager::new_with_rocksdb_config_manager(
+        let manager = SubscriptionGroupManager::new_with_rocksdb_config_manager(
             manager_config.clone(),
             StateMachineVersionView::default(),
             Arc::new(
@@ -1496,7 +1496,7 @@ mod tests {
         };
         let manager_config = SubscriptionGroupManagerConfig::from_configs(&broker_config, &message_store_config);
         let rocksdb_path = temp_dir.path().join("config").join("subscriptionGroups-delete");
-        let mut manager = SubscriptionGroupManager::new_with_rocksdb_config_manager(
+        let manager = SubscriptionGroupManager::new_with_rocksdb_config_manager(
             manager_config.clone(),
             StateMachineVersionView::default(),
             Arc::new(
@@ -1566,7 +1566,7 @@ mod tests {
             ..MessageStoreConfig::default()
         };
         let manager_config = SubscriptionGroupManagerConfig::from_configs(&broker_config, &message_store_config);
-        let mut manager = SubscriptionGroupManager::new(manager_config, StateMachineVersionView::default(), None);
+        let manager = SubscriptionGroupManager::new(manager_config, StateMachineVersionView::default(), None);
         let group = CheetahString::from_static_str("SRE_CAS_GROUP");
         let mut config = SubscriptionGroupConfig::new(group.clone());
         config.set_consume_enable(false);

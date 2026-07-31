@@ -35,7 +35,7 @@ impl UpdateColdDataFlowCtrGroupConfigRequestHandler {
     }
 
     pub async fn update_cold_data_flow_ctr_group_config(
-        &mut self,
+        &self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -75,7 +75,7 @@ impl UpdateColdDataFlowCtrGroupConfigRequestHandler {
     }
 
     pub async fn remove_cold_data_flow_ctr_group_config(
-        &mut self,
+        &self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -101,7 +101,7 @@ impl UpdateColdDataFlowCtrGroupConfigRequestHandler {
     }
 
     pub async fn get_cold_data_flow_ctr_info(
-        &mut self,
+        &self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -185,7 +185,7 @@ mod tests {
     async fn update_and_get_cold_data_flow_ctr_info_round_trips_config() {
         let runtime = new_test_runtime("update-get", true).await;
         let admin = runtime.admin_runtime_for_test();
-        let mut handler = UpdateColdDataFlowCtrGroupConfigRequestHandler::new(admin.cold_data_cg_ctr_service_handle());
+        let handler = UpdateColdDataFlowCtrGroupConfigRequestHandler::new(admin.cold_data_cg_ctr_service_handle());
         let mut request =
             RemotingCommand::create_request_command(RequestCode::UpdateColdDataFlowCtrConfig, EmptyHeader {})
                 .set_body("group-a=128\ngroup-b=256");
@@ -261,7 +261,7 @@ mod tests {
     async fn update_and_remove_cold_data_flow_ctr_empty_body_match_java_noop_success() {
         let runtime = new_test_runtime("empty-body", true).await;
         let admin = runtime.admin_runtime_for_test();
-        let mut handler = UpdateColdDataFlowCtrGroupConfigRequestHandler::new(admin.cold_data_cg_ctr_service_handle());
+        let handler = UpdateColdDataFlowCtrGroupConfigRequestHandler::new(admin.cold_data_cg_ctr_service_handle());
 
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
@@ -307,7 +307,7 @@ mod tests {
             .cold_data_cg_ctr_service()
             .expect("cold data service")
             .add_or_update_group_config("group-a", 128);
-        let mut handler = UpdateColdDataFlowCtrGroupConfigRequestHandler::new(admin.cold_data_cg_ctr_service_handle());
+        let handler = UpdateColdDataFlowCtrGroupConfigRequestHandler::new(admin.cold_data_cg_ctr_service_handle());
         let mut request =
             RemotingCommand::create_request_command(RequestCode::RemoveColdDataFlowCtrConfig, EmptyHeader {})
                 .set_body("group-a");
@@ -337,7 +337,7 @@ mod tests {
 
     #[tokio::test]
     async fn missing_cold_data_service_returns_system_error() {
-        let mut handler = UpdateColdDataFlowCtrGroupConfigRequestHandler::new(None);
+        let handler = UpdateColdDataFlowCtrGroupConfigRequestHandler::new(None);
         let channel = create_test_channel().await;
         let ctx = std::sync::Arc::new(ConnectionHandlerContextWrapper::new(channel.clone()));
         let mut request =

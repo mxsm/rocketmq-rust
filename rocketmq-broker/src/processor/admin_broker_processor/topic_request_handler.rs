@@ -562,7 +562,7 @@ impl TopicRequestHandler {
 
     pub async fn delete_topic<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &mut BrokerAdminRuntime<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -895,7 +895,7 @@ impl TopicRequestHandler {
 
     fn delete_topic_in_broker<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &mut BrokerAdminRuntime<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         topic: &CheetahString,
     ) -> Result<(), MessageStoreUnavailable> {
         broker_runtime_inner

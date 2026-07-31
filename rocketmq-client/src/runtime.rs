@@ -364,6 +364,13 @@ impl ClientTrackedTaskHandle {
         timed_out_task_report(self.task_name, started_at.elapsed(), aborted)
     }
 
+    pub(crate) async fn abort_and_wait(self, timeout: Duration) -> bool {
+        if !self.task_group.contains_task(self.task_id) {
+            return true;
+        }
+        self.task_group.abort_task_and_wait(self.task_id, timeout).await || !self.task_group.contains_task(self.task_id)
+    }
+
     pub(crate) fn shutdown_blocking(self, timeout: Duration) -> (ShutdownReport, bool) {
         let started_at = Instant::now();
         let completed = match self.completion_rx.into_inner() {
@@ -680,6 +687,20 @@ mod tests {
         let report = second.shutdown(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
         assert_eq!(report.completed, 1);
+
+        let report = service_context.task_group().shutdown(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+    }
+
+    #[tokio::test]
+    async fn tracked_task_abort_waits_for_registry_removal() {
+        let service_context = test_service_context("client-tracked-task-abort-wait-test");
+        let handle =
+            spawn_client_tracked_task_with_context(&service_context, "abort-and-wait-task", std::future::pending())
+                .expect("tracked task should spawn");
+
+        assert!(handle.abort_and_wait(Duration::from_secs(1)).await);
+        assert_eq!(service_context.task_group().task_count(), 0);
 
         let report = service_context.task_group().shutdown(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());

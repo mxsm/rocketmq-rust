@@ -31,7 +31,6 @@ use rocketmq_transport::ConnectionHandlerContext;
 use rocketmq_transport::RejectRequestResponse;
 use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
 use rocketmq_transport::RequestOrdering;
-use tokio::sync::Mutex;
 use tracing::warn;
 
 use self::client_manage_processor::ClientManageProcessor;
@@ -106,7 +105,7 @@ pub enum BrokerProcessorType<MS: MessageStore, TS> {
     LiteSubscriptionCtl(Arc<LiteSubscriptionCtlProcessor<MS>>),
     EndTransaction(Arc<EndTransactionProcessor<TS, MS>>),
     Maintenance(Arc<MaintenanceRequestProcessor>),
-    AdminBroker(Arc<Mutex<AdminBrokerProcessor<MS>>>),
+    AdminBroker(Arc<AdminBrokerProcessor<MS>>),
 }
 
 impl<MS, TS> Clone for BrokerProcessorType<MS, TS>
@@ -224,7 +223,7 @@ where
                 processor.process_request_shared(channel, ctx, request).await
             }
             BrokerProcessorType::AdminBroker(processor) => {
-                processor.lock().await.process_request(channel, ctx, request).await
+                processor.process_request_shared(channel, ctx, request).await
             }
         }
     }

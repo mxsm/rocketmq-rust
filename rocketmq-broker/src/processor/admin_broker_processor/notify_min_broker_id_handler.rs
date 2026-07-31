@@ -61,8 +61,8 @@ impl NotifyMinBrokerChangeIdHandler {
     }
 
     pub async fn notify_min_broker_id_change<MS: MessageStore>(
-        &mut self,
-        broker_runtime_inner: &mut BrokerAdminRuntime<MS>,
+        &self,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
@@ -90,8 +90,8 @@ impl NotifyMinBrokerChangeIdHandler {
     }
 
     async fn update_min_broker<MS: MessageStore>(
-        &mut self,
-        broker_runtime_inner: &mut BrokerAdminRuntime<MS>,
+        &self,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         change_header: NotifyMinBrokerIdChangeRequestHeader,
     ) -> rocketmq_error::RocketMQResult<()> {
         let broker_config = broker_runtime_inner.broker_config();
@@ -126,7 +126,7 @@ impl NotifyMinBrokerChangeIdHandler {
 
     async fn on_min_broker_change<MS: MessageStore>(
         &self,
-        broker_runtime_inner: &mut BrokerAdminRuntime<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         min_broker_id: u64,
         min_broker_addr: &str,
         offline_broker_addr: &Option<CheetahString>,
@@ -177,13 +177,13 @@ impl NotifyMinBrokerChangeIdHandler {
     }
 
     async fn change_special_service_status<MS: MessageStore>(
-        broker_runtime_inner: &mut BrokerAdminRuntime<MS>,
+        broker_runtime_inner: &BrokerAdminRuntime<MS>,
         should_start: bool,
     ) {
         broker_runtime_inner.change_special_service_status(should_start).await;
     }
 
-    async fn on_master_offline<MS: MessageStore>(broker_runtime_inner: &mut BrokerAdminRuntime<MS>) {
+    async fn on_master_offline<MS: MessageStore>(broker_runtime_inner: &BrokerAdminRuntime<MS>) {
         if let Some(slave_synchronize) = broker_runtime_inner.slave_synchronize() {
             if let Some(master_addr) = slave_synchronize.master_addr() {
                 let vip_channel = mix_all::broker_vip_channel(true, master_addr.as_str());
