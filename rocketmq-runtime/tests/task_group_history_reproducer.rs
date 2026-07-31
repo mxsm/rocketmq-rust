@@ -14,15 +14,46 @@
 
 use rocketmq_runtime::RuntimeContext;
 
-const OPERATIONS: usize = 100_000;
+const PR_OPERATIONS: usize = 1_024;
 
 #[tokio::test]
-#[ignore = "red reproducer: active-only registration is implemented by issue #8849 follow-up"]
 async fn transient_static_children_do_not_retain_history_without_scrape() {
     let context = RuntimeContext::from_current("task-group-static-history-reproducer");
     let parent = context.root_group().child("component");
 
-    for index in 0..OPERATIONS {
+    exercise_static_child_churn(&parent, PR_OPERATIONS);
+}
+
+#[tokio::test]
+async fn transient_child_leases_do_not_require_a_diagnostics_scrape_for_cleanup() {
+    let context = RuntimeContext::from_current("task-group-lease-history-reproducer");
+    let parent = context.root_group().child("component");
+
+    exercise_child_lease_churn(&parent, PR_OPERATIONS);
+}
+
+#[tokio::test]
+#[ignore = "100k churn profile is reserved for explicit lifecycle validation"]
+async fn churn_100k() {
+    let context = RuntimeContext::from_current("task-group-100k-history-reproducer");
+    let parent = context.root_group().child("component");
+
+    exercise_static_child_churn(&parent, 100_000);
+    exercise_child_lease_churn(&parent, 100_000);
+}
+
+#[tokio::test]
+#[ignore = "1m churn profile is reserved for explicit lifecycle validation"]
+async fn churn_1m() {
+    let context = RuntimeContext::from_current("task-group-1m-history-reproducer");
+    let parent = context.root_group().child("component");
+
+    exercise_static_child_churn(&parent, 1_000_000);
+    exercise_child_lease_churn(&parent, 1_000_000);
+}
+
+fn exercise_static_child_churn(parent: &rocketmq_runtime::TaskGroup, operations: usize) {
+    for index in 0..operations {
         drop(parent.child(format!("operation-{index}")));
     }
 
@@ -33,13 +64,9 @@ async fn transient_static_children_do_not_retain_history_without_scrape() {
     );
 }
 
-#[tokio::test]
-#[ignore = "red reproducer: lease drop must unregister without diagnostics-driven pruning"]
-async fn transient_child_leases_do_not_require_a_diagnostics_scrape_for_cleanup() {
-    let context = RuntimeContext::from_current("task-group-lease-history-reproducer");
-    let parent = context.root_group().child("component");
-
-    for index in 0..OPERATIONS {
+fn exercise_child_lease_churn(parent: &rocketmq_runtime::TaskGroup, operations: usize) {
+    let before = parent.child_stats();
+    for index in 0..operations {
         drop(
             parent
                 .try_child_lease(format!("operation-{index}"))
@@ -49,8 +76,11 @@ async fn transient_child_leases_do_not_require_a_diagnostics_scrape_for_cleanup(
 
     let stats = parent.child_stats();
     assert_eq!(stats.active, 0);
+    assert_eq!(stats.registry_slots, 0);
+    assert_eq!(stats.created - before.created, operations);
     assert_eq!(
-        stats.pruned, 0,
-        "lease drop must unregister immediately instead of leaving cleanup to child_stats"
+        stats.pruned - before.pruned,
+        operations,
+        "lease drop must unregister immediately"
     );
 }

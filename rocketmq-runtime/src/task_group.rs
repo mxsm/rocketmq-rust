@@ -19,11 +19,9 @@ use std::sync::atomic::AtomicU8;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::sync::Weak;
 use std::time::Duration;
 use std::time::Instant;
 
-use dashmap::DashMap;
 use futures::future::join_all;
 use futures::future::BoxFuture;
 use futures::future::FutureExt;
@@ -41,6 +39,11 @@ use crate::shutdown_deadline::ShutdownDeadline;
 use crate::shutdown_report::ShutdownAnnotation;
 use crate::shutdown_report::ShutdownReport;
 use crate::shutdown_report::TaskSnapshot;
+
+mod registry;
+
+use registry::ActiveTaskRegistry;
+use registry::ChildRegistrationKind;
 
 const STATE_OPEN: u8 = 0;
 const STATE_CLOSING: u8 = 1;
@@ -170,6 +173,8 @@ pub struct TaskGroupChildStats {
     pub created: usize,
     /// The pruned value.
     pub pruned: usize,
+    /// The number of active child registry slots.
+    pub registry_slots: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -195,13 +200,10 @@ struct TaskGroupInner {
     runtime: RuntimeHandle,
     cancellation_token: CancellationToken,
     tracker: TaskTracker,
-    tasks: DashMap<TaskId, TaskMeta>,
-    children: Mutex<Vec<TaskGroup>>,
-    dynamic_children: Mutex<Vec<Weak<TaskGroupInner>>>,
+    registry: Arc<ActiveTaskRegistry>,
+    parent_registry: Option<std::sync::Weak<ActiveTaskRegistry>>,
     next_group_id: Arc<AtomicU64>,
     next_task_id: AtomicU64,
-    dynamic_children_created: AtomicUsize,
-    dynamic_children_pruned: AtomicUsize,
     completed: AtomicUsize,
     cancelled: AtomicUsize,
     aborted: AtomicUsize,
@@ -301,6 +303,7 @@ impl TaskGroup {
                 runtime,
                 CancellationToken::new(),
                 next_group_id,
+                None,
             )),
         }
     }
@@ -337,21 +340,22 @@ impl TaskGroup {
 
     /// Returns the task count.
     pub fn task_count(&self) -> usize {
-        self.inner.tasks.len()
+        self.inner.registry.tasks.len()
     }
 
     /// Returns the child count.
     pub fn child_count(&self) -> usize {
-        self.inner.children.lock().len() + self.live_dynamic_children().len()
+        self.inner.registry.child_count()
     }
 
     /// Returns the child stats.
     pub fn child_stats(&self) -> TaskGroupChildStats {
-        let active = self.live_dynamic_children().len();
+        let stats = self.inner.registry.child_stats();
         TaskGroupChildStats {
-            active,
-            created: self.inner.dynamic_children_created.load(Ordering::Relaxed),
-            pruned: self.inner.dynamic_children_pruned.load(Ordering::Relaxed),
+            active: stats.active_operations,
+            created: stats.operations_created,
+            pruned: stats.operations_released,
+            registry_slots: stats.registry_slots,
         }
     }
 
@@ -367,21 +371,19 @@ impl TaskGroup {
         aggregate: &mut TaskGroupDiagnosticsAccumulator,
     ) {
         aggregate.group_count = aggregate.group_count.saturating_add(1);
-        for task in self.inner.tasks.iter() {
+        for task in self.inner.registry.tasks.iter() {
             let elapsed = task.started_at.elapsed();
             aggregate.record_task(task.kind, elapsed, elapsed >= long_running_threshold);
         }
 
-        let mut children = self.inner.children.lock().clone();
-        children.extend(self.live_dynamic_children());
-        for child in children {
+        for child in self.inner.registry.children_snapshot() {
             child.accumulate_diagnostics(long_running_threshold, aggregate);
         }
     }
 
     /// Returns the contains task.
     pub fn contains_task(&self, task_id: TaskId) -> bool {
-        self.inner.tasks.contains_key(&task_id)
+        self.inner.registry.tasks.contains_key(&task_id)
     }
 
     /// Returns the child.
@@ -403,7 +405,11 @@ impl TaskGroup {
         }
 
         let child = self.open_child(name);
-        self.inner.children.lock().push(child.clone());
+        self.inner.registry.register_child(
+            child.id(),
+            Arc::downgrade(&child.inner),
+            ChildRegistrationKind::Component,
+        );
         Ok(child)
     }
 
@@ -419,8 +425,11 @@ impl TaskGroup {
         }
 
         let child = self.open_child(name);
-        self.inner.dynamic_children.lock().push(Arc::downgrade(&child.inner));
-        self.inner.dynamic_children_created.fetch_add(1, Ordering::Relaxed);
+        self.inner.registry.register_child(
+            child.id(),
+            Arc::downgrade(&child.inner),
+            ChildRegistrationKind::Operation,
+        );
         Ok(TaskGroupChildLease { group: child })
     }
 
@@ -434,6 +443,7 @@ impl TaskGroup {
                 self.inner.runtime.clone(),
                 self.inner.cancellation_token.child_token(),
                 self.inner.next_group_id.clone(),
+                Some(Arc::downgrade(&self.inner.registry)),
             )),
         }
     }
@@ -444,23 +454,6 @@ impl TaskGroup {
         child.inner.cancellation_token.cancel();
         child.inner.lifecycle.store(STATE_SHUTDOWN_COMPLETED, Ordering::Release);
         child
-    }
-
-    fn live_dynamic_children(&self) -> Vec<TaskGroup> {
-        let mut registry = self.inner.dynamic_children.lock();
-        let before = registry.len();
-        let mut live = Vec::with_capacity(before);
-        registry.retain(|entry| {
-            let Some(inner) = entry.upgrade() else {
-                return false;
-            };
-            live.push(TaskGroup { inner });
-            true
-        });
-        self.inner
-            .dynamic_children_pruned
-            .fetch_add(before - registry.len(), Ordering::Relaxed);
-        live
     }
 
     /// Spawns the supplied task.
@@ -533,7 +526,13 @@ impl TaskGroup {
 
     /// Returns the wait task.
     pub async fn wait_task(&self, task_id: TaskId, timeout: Duration) -> bool {
-        let Some(completion) = self.inner.tasks.get(&task_id).map(|meta| meta.completion.clone()) else {
+        let Some(completion) = self
+            .inner
+            .registry
+            .tasks
+            .get(&task_id)
+            .map(|meta| meta.completion.clone())
+        else {
             return true;
         };
 
@@ -622,7 +621,7 @@ impl TaskGroup {
 
         let task_id = TaskId(self.inner.next_task_id.fetch_add(1, Ordering::Relaxed));
         let completion = Arc::new(TaskCompletion::new());
-        self.inner.tasks.insert(
+        self.inner.registry.tasks.insert(
             task_id,
             TaskMeta {
                 id: task_id,
@@ -673,7 +672,7 @@ impl TaskGroup {
         };
         let abort_handle = join_handle.abort_handle();
 
-        if let Some(mut meta) = self.inner.tasks.get_mut(&task_id) {
+        if let Some(mut meta) = self.inner.registry.tasks.get_mut(&task_id) {
             meta.abort_handle = Some(abort_handle);
             meta.state = TaskState::Running;
         }
@@ -682,7 +681,7 @@ impl TaskGroup {
     }
 
     fn abort_task_inner(&self, task_id: TaskId) -> Option<Arc<TaskCompletion>> {
-        let (_, meta) = self.inner.tasks.remove(&task_id)?;
+        let (_, meta) = self.inner.registry.tasks.remove(&task_id)?;
         if let Some(abort_handle) = meta.abort_handle {
             abort_handle.abort();
         }
@@ -698,9 +697,7 @@ impl TaskGroup {
             self.inner.tracker.close();
             self.inner.cancellation_token.cancel();
             self.inner.lifecycle.store(STATE_CLOSED, Ordering::Release);
-            let mut children = self.inner.children.lock().clone();
-            children.extend(self.live_dynamic_children());
-            children
+            self.inner.registry.children_snapshot()
         };
         self.abort_detached_abort_on_shutdown_tasks();
 
@@ -770,9 +767,7 @@ impl TaskGroup {
             self.inner.tracker.close();
             self.inner.cancellation_token.cancel();
             self.inner.lifecycle.store(STATE_CLOSED, Ordering::Release);
-            let mut children = self.inner.children.lock().clone();
-            children.extend(self.live_dynamic_children());
-            children
+            self.inner.registry.children_snapshot()
         };
 
         let mut child_reports = Vec::with_capacity(children.len());
@@ -814,7 +809,7 @@ impl TaskGroup {
     }
 
     fn abort_tracked_tasks(&self) {
-        for mut entry in self.inner.tasks.iter_mut() {
+        for mut entry in self.inner.registry.tasks.iter_mut() {
             if entry.detached {
                 continue;
             }
@@ -826,7 +821,7 @@ impl TaskGroup {
     }
 
     fn abort_detached_abort_on_shutdown_tasks(&self) {
-        for mut entry in self.inner.tasks.iter_mut() {
+        for mut entry in self.inner.registry.tasks.iter_mut() {
             if entry.detached_policy != Some(DetachedTaskPolicy::AbortOnShutdown) {
                 continue;
             }
@@ -840,13 +835,14 @@ impl TaskGroup {
     fn remove_aborted_tasks(&self) -> usize {
         let aborted_ids = self
             .inner
+            .registry
             .tasks
             .iter()
             .filter_map(|entry| (entry.state == TaskState::Aborted).then_some(*entry.key()))
             .collect::<Vec<_>>();
 
         for task_id in &aborted_ids {
-            self.inner.tasks.remove(task_id);
+            self.inner.registry.tasks.remove(task_id);
         }
 
         aborted_ids.len()
@@ -854,6 +850,7 @@ impl TaskGroup {
 
     fn remaining_snapshots(&self, state: TaskState) -> Vec<TaskSnapshot> {
         self.inner
+            .registry
             .tasks
             .iter()
             .map(|entry| entry.value().snapshot(state))
@@ -869,6 +866,7 @@ impl TaskGroupInner {
         runtime: RuntimeHandle,
         cancellation_token: CancellationToken,
         next_group_id: Arc<AtomicU64>,
+        parent_registry: Option<std::sync::Weak<ActiveTaskRegistry>>,
     ) -> Self {
         Self {
             id,
@@ -877,13 +875,10 @@ impl TaskGroupInner {
             runtime,
             cancellation_token,
             tracker: TaskTracker::new(),
-            tasks: DashMap::new(),
-            children: Mutex::new(Vec::new()),
-            dynamic_children: Mutex::new(Vec::new()),
+            registry: Arc::new(ActiveTaskRegistry::new()),
+            parent_registry,
             next_group_id,
             next_task_id: AtomicU64::new(1),
-            dynamic_children_created: AtomicUsize::new(0),
-            dynamic_children_pruned: AtomicUsize::new(0),
             completed: AtomicUsize::new(0),
             cancelled: AtomicUsize::new(0),
             aborted: AtomicUsize::new(0),
@@ -912,7 +907,7 @@ impl TaskGroupInner {
     }
 
     fn finish_task(&self, task_id: TaskId, result: TaskResult) {
-        let Some((_, meta)) = self.tasks.remove(&task_id) else {
+        let Some((_, meta)) = self.registry.tasks.remove(&task_id) else {
             return;
         };
 
@@ -933,6 +928,14 @@ impl TaskGroupInner {
                 self.mark_poisoned_if_open();
             }
             TaskResult::Aborted => {}
+        }
+    }
+}
+
+impl Drop for TaskGroupInner {
+    fn drop(&mut self) {
+        if let Some(parent_registry) = self.parent_registry.as_ref().and_then(std::sync::Weak::upgrade) {
+            parent_registry.unregister_child(self.id);
         }
     }
 }

@@ -54,6 +54,10 @@ pub struct RuntimeDiagnosticsSnapshot {
     pub task_count: usize,
     /// The number of child entries.
     pub child_count: usize,
+    /// The number of active task entries.
+    pub active_tasks: usize,
+    /// The number of active child registry slots.
+    pub registry_slots: usize,
     /// The blocking lanes value.
     pub blocking_lanes: Vec<BlockingExecutorSnapshot>,
 }
@@ -271,6 +275,8 @@ impl RuntimeDiagnostics {
             lifecycle_state: root.lifecycle_state(),
             task_count: root.task_count(),
             child_count: root.child_count(),
+            active_tasks: root.task_count(),
+            registry_slots: root.child_count(),
             blocking_lanes,
         }
     }

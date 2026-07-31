@@ -206,14 +206,17 @@ async fn duplicate_child_names_keep_distinct_identity(group: TaskGroup) {
                 .try_child("duplicate-model-child")
                 .expect("duplicate child name should still create a distinct child");
             assert_eq!(child.parent_id(), Some(group.id()));
-            child.id()
+            child
         }));
     }
 
     let mut child_ids = HashSet::with_capacity(CHILDREN);
+    let mut children = Vec::with_capacity(CHILDREN);
     for creator in creators {
-        let child_id = creator.await.expect("child creator should not panic");
+        let child = creator.await.expect("child creator should not panic");
+        let child_id = child.id();
         assert!(child_ids.insert(child_id), "duplicate TaskGroupId: {child_id:?}");
+        children.push(child);
     }
     assert_eq!(child_ids.len(), CHILDREN);
 
@@ -224,6 +227,7 @@ async fn duplicate_child_names_keep_distinct_identity(group: TaskGroup) {
         .children
         .iter()
         .all(|child| child.name == "duplicate-model-child"));
+    drop(children);
 }
 
 async fn wait_until(timeout: Duration, condition: impl Fn() -> bool) -> Result<(), tokio::time::error::Elapsed> {
