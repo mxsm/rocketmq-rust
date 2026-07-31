@@ -158,9 +158,28 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     bootstrap_config.logging.reload = logging_overrides.logging.reload;
     rocketmq_observability::apply_standard_otlp_environment(&mut bootstrap_config)
         .context("failed to apply standard OTLP environment to controller telemetry")?;
-    let telemetry_guard =
-        rocketmq_observability::install_global_with_filter(&bootstrap_config, resolved_filter.clone())
-            .context("failed to initialize controller telemetry bootstrap")?;
+    let telemetry_guard = rocketmq_observability::install_global_with_filter_and_service_context(
+        &bootstrap_config,
+        resolved_filter.clone(),
+        &service_context,
+    )
+    .await
+    .context("failed to initialize controller telemetry bootstrap")?;
+    let telemetry_handle = telemetry_guard.handle();
+    if let Err(error) = register_controller_release_identity(&process_telemetry, &telemetry_handle) {
+        let request = lifecycle.request_shutdown(ShutdownReason::Internal);
+        if let Err(shutdown_error) = telemetry_guard
+            .shutdown_with_service_context(&service_context, request.deadline.remaining())
+            .await
+            .into_result()
+        {
+            tracing::warn!(
+                error = %shutdown_error,
+                "controller telemetry cleanup after release identity failure was unhealthy"
+            );
+        }
+        return Err(error);
+    }
     log_telemetry_bootstrap(
         &bootstrap_config,
         &resolved_filter,
