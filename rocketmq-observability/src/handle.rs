@@ -48,6 +48,10 @@ pub const NAMESRV_METER_SCOPE: &str = "rocketmq-namesrv";
 pub const PROXY_METER_SCOPE: &str = "rocketmq-proxy";
 /// Fixed instrumentation scope for MCP metrics.
 pub const MCP_METER_SCOPE: &str = "rocketmq-mcp";
+/// Fixed instrumentation scope for AI SRE Control Plane metrics.
+pub const SRE_CONTROL_PLANE_METER_SCOPE: &str = "rocketmq-sre-control-plane";
+/// Fixed instrumentation scope for AI SRE Connector metrics.
+pub const SRE_CONNECTOR_METER_SCOPE: &str = "rocketmq-sre-connector";
 /// Fixed instrumentation scope for tiered-store metrics.
 pub const TIERED_STORE_METER_SCOPE: &str = "rocketmq-tieredstore";
 
@@ -414,6 +418,8 @@ struct FixedMeters {
     namesrv: opentelemetry::metrics::Meter,
     proxy: opentelemetry::metrics::Meter,
     mcp: opentelemetry::metrics::Meter,
+    sre_control_plane: opentelemetry::metrics::Meter,
+    sre_connector: opentelemetry::metrics::Meter,
     tiered_store: opentelemetry::metrics::Meter,
 }
 
@@ -431,6 +437,8 @@ impl FixedMeters {
             namesrv: provider.meter(NAMESRV_METER_SCOPE),
             proxy: provider.meter(PROXY_METER_SCOPE),
             mcp: provider.meter(MCP_METER_SCOPE),
+            sre_control_plane: provider.meter(SRE_CONTROL_PLANE_METER_SCOPE),
+            sre_connector: provider.meter(SRE_CONNECTOR_METER_SCOPE),
             tiered_store: provider.meter(TIERED_STORE_METER_SCOPE),
         }
     }
@@ -445,6 +453,8 @@ impl FixedMeters {
             NAMESRV_METER_SCOPE => Some(self.namesrv.clone()),
             PROXY_METER_SCOPE => Some(self.proxy.clone()),
             MCP_METER_SCOPE => Some(self.mcp.clone()),
+            SRE_CONTROL_PLANE_METER_SCOPE => Some(self.sre_control_plane.clone()),
+            SRE_CONNECTOR_METER_SCOPE => Some(self.sre_connector.clone()),
             TIERED_STORE_METER_SCOPE => Some(self.tiered_store.clone()),
             _ => None,
         }
