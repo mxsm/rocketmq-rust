@@ -112,15 +112,20 @@ impl RuntimeMetricsRecorder {
     /// This method does not create a polling task. Services decide when to
     /// sample from lifecycle-owned work or an authenticated diagnostics request.
     pub fn record_snapshot(&self, view: &RuntimeDiagnosticsViewV1) {
-        if view.component != self.component {
-            return;
-        }
         #[cfg(feature = "otel-metrics")]
-        if self.telemetry.is_active() {
-            if let Some(metrics) = &self.metrics {
-                metrics.record(view);
+        {
+            if view.component != self.component {
+                return;
+            }
+            if self.telemetry.is_active() {
+                if let Some(metrics) = &self.metrics {
+                    metrics.record(view);
+                }
             }
         }
+
+        #[cfg(not(feature = "otel-metrics"))]
+        let _ = view;
     }
 
     /// Records one bounded lifecycle transition and its structured log event.
