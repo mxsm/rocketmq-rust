@@ -1342,8 +1342,8 @@ mod tests {
             .collect::<HashSet<_>>();
 
         assert_eq!(JAVA_METRICS.len(), 94);
-        assert_eq!(RUST_METRICS.len(), 53);
-        assert_eq!(combined.len(), 147, "duplicate metric names across catalogs");
+        assert_eq!(RUST_METRICS.len(), 54);
+        assert_eq!(combined.len(), 148, "duplicate metric names across catalogs");
     }
 
     #[test]
