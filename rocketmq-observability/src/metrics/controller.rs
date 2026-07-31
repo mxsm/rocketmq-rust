@@ -28,87 +28,6 @@ pub use crate::semantic::metrics::CONTROLLER_REQUEST_TOTAL;
 pub use crate::semantic::metrics::CONTROLLER_ROLE;
 pub use crate::semantic::metrics::CONTROLLER_STALE_BROKERS;
 
-#[cfg(feature = "otel-metrics")]
-use std::sync::OnceLock;
-
-#[cfg(feature = "otel-metrics")]
-static CONTROLLER_METRICS: OnceLock<ControllerMetrics> = OnceLock::new();
-
-#[cfg(feature = "otel-metrics")]
-pub fn init_global(meter: &opentelemetry::metrics::Meter) -> bool {
-    CONTROLLER_METRICS.set(ControllerMetrics::new(meter)).is_ok()
-}
-
-pub fn record_election_total(count: u64) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = CONTROLLER_METRICS.get() {
-        metrics.record_election_total(count, &[]);
-    }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = count;
-}
-
-pub fn record_election_latency(latency_ms: u64) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = CONTROLLER_METRICS.get() {
-        metrics.record_election_latency(latency_ms, &[]);
-    }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = latency_ms;
-}
-
-pub fn record_leader_changes_total(count: u64) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = CONTROLLER_METRICS.get() {
-        metrics.record_leader_changes_total(count, &[]);
-    }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = count;
-}
-
-pub fn record_active_brokers(count: u64) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = CONTROLLER_METRICS.get() {
-        metrics.record_active_brokers(count, &[]);
-    }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = count;
-}
-
-pub fn record_quorum_health(healthy: bool) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = CONTROLLER_METRICS.get() {
-        metrics.record_quorum_health(u64::from(healthy), &[]);
-    }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = healthy;
-}
-
-pub fn record_heartbeat_age(age_ms: u64) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = CONTROLLER_METRICS.get() {
-        metrics.record_heartbeat_age(age_ms, &[]);
-    }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = age_ms;
-}
-
-pub fn record_stale_brokers(count: u64) {
-    #[cfg(feature = "otel-metrics")]
-    if let Some(metrics) = CONTROLLER_METRICS.get() {
-        metrics.record_stale_brokers(count, &[]);
-    }
-
-    #[cfg(not(feature = "otel-metrics"))]
-    let _ = count;
-}
-
 #[cfg(not(feature = "otel-metrics"))]
 #[derive(Debug, Clone, Default)]
 pub struct ControllerMetrics;
@@ -210,13 +129,15 @@ impl ControllerMetrics {
             .build();
 
         Self {
-            election_total,
-            election_latency,
-            leader_changes_total,
-            active_brokers,
-            quorum_health,
-            heartbeat_age,
-            stale_brokers,
+            instruments: Some(ControllerMetricInstruments {
+                election_total,
+                election_latency,
+                leader_changes_total,
+                active_brokers,
+                quorum_health,
+                heartbeat_age,
+                stale_brokers,
+            }),
         }
     }
 
@@ -250,17 +171,23 @@ impl ControllerMetrics {
 
     #[inline]
     pub fn record_quorum_health(&self, healthy: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.quorum_health.record(healthy, attributes);
+        if let Some(instruments) = &self.instruments {
+            instruments.quorum_health.record(healthy, attributes);
+        }
     }
 
     #[inline]
     pub fn record_heartbeat_age(&self, age_ms: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.heartbeat_age.record(age_ms, attributes);
+        if let Some(instruments) = &self.instruments {
+            instruments.heartbeat_age.record(age_ms, attributes);
+        }
     }
 
     #[inline]
     pub fn record_stale_brokers(&self, count: u64, attributes: &[opentelemetry::KeyValue]) {
-        self.stale_brokers.record(count, attributes);
+        if let Some(instruments) = &self.instruments {
+            instruments.stale_brokers.record(count, attributes);
+        }
     }
 }
 
@@ -295,6 +222,9 @@ mod tests {
         metrics.record_election_latency(15, &[]);
         metrics.record_leader_changes_total(1, &[]);
         metrics.record_active_brokers(3, &[]);
+        metrics.record_quorum_health(1, &[]);
+        metrics.record_heartbeat_age(50, &[]);
+        metrics.record_stale_brokers(0, &[]);
     }
 
     #[test]
