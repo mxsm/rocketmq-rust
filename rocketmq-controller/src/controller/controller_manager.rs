@@ -37,7 +37,6 @@ use crate::heartbeat::default_broker_heartbeat_manager::DefaultBrokerHeartbeatMa
 use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
 #[cfg(feature = "metrics")]
 use crate::metrics::controller_metrics_manager::active_broker_count_from_snapshot;
-#[cfg(feature = "metrics")]
 use crate::metrics::controller_metrics_manager::ControllerMetricsManager;
 use crate::processor::controller_request_processor::ControllerRequestProcessor;
 use crate::security::ControllerSecurity;
@@ -415,16 +414,28 @@ impl ControllerManager {
             parent_task_group.clone(),
         ));
 
+        #[cfg(feature = "metrics")]
+        let metrics_manager = {
+            info!("Initializing metrics manager");
+            let active_broker_heartbeat_manager = heartbeat_manager.clone();
+            ControllerMetricsManager::new_with_active_broker_source(config.reader(), &telemetry_handle, move || {
+                active_broker_count_from_snapshot(&active_broker_heartbeat_manager.get_active_brokers_num())
+            })
+        };
+        #[cfg(not(feature = "metrics"))]
+        let metrics_manager = ControllerMetricsManager::new(config.reader(), &telemetry_handle);
+
         // Initialize RocketMQ runtime for Raft controller
         //let runtime = Arc::new(RocketMQRuntime::new_multi(2, "controller-runtime"));
 
         // Initialize Raft controller for leader election.
         // The controller and request processor must share the same heartbeat manager so that
         // liveness-aware paths observe the broker heartbeats recorded by RPC handlers.
-        let raft_arc = Arc::new(RaftController::new_open_raft_with_heartbeat(
+        let raft_arc = Arc::new(RaftController::new_open_raft_with_heartbeat_and_metrics(
             config.reader(),
             heartbeat_manager.clone(),
             service_context.child("controller.openraft"),
+            metrics_manager.clone(),
         ));
 
         // Initialize remoting server for inbound requests
@@ -456,18 +467,6 @@ impl ControllerManager {
         let notify_retry_base_delay = Duration::from_millis(config.snapshot().heartbeat_interval_ms.max(100));
         let broker_role_notifier = BrokerRoleNotifier::new(remoting_client.clone(), notify_retry_base_delay);
         info!("Remoting client created");
-
-        // Initialize metrics manager if feature is enabled
-        #[cfg(feature = "metrics")]
-        let metrics_manager = {
-            info!("Initializing metrics manager");
-            let active_broker_heartbeat_manager = heartbeat_manager.clone();
-            ControllerMetricsManager::new_with_active_broker_source(config.reader(), &telemetry_handle, move || {
-                active_broker_count_from_snapshot(&active_broker_heartbeat_manager.get_active_brokers_num())
-            })
-        };
-        #[cfg(not(feature = "metrics"))]
-        let _ = telemetry_handle;
 
         info!("Controller manager created successfully");
 
