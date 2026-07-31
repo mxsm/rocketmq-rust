@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "rules": {
+    "remote_header_decode_unwrap": {
+      "maximum": 10,
+      "matchers": [
+        {
+          "path": "rocketmq-broker/src",
+          "pattern": "decode_command_custom_header(?:_fast)?\\s*::\\s*<[^>]+>\\s*\\(\\s*\\)\\s*\\.unwrap\\s*\\(\\s*\\)"
+        }
+      ]
+    },
+    "hot_path_task_group_child": {
+      "maximum": 7,
+      "matchers": [
+        {
+          "path": "rocketmq-client/src/runtime.rs",
+          "pattern": "task_group\\(\\)\\s*\\.\\s*child\\s*\\(\\s*task_name\\s*\\)"
+        },
+        {
+          "path": "rocketmq-broker/src/proxy_facade.rs",
+          "pattern": "task_group\\(\\)\\s*\\.\\s*child\\s*\\(\\s*\"local-request\"\\s*\\)"
+        },
+        {
+          "path": "rocketmq-transport/src/session_executor.rs",
+          "pattern": "try_child_lease\\s*\\(\\s*\"rocketmq\\.transport\\.session\\.(?:request-executor|request)\"\\s*\\)"
+        }
+      ]
+    }
+  }
+}

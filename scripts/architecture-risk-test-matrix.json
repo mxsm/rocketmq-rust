@@ -112,6 +112,22 @@
           "features": "default",
           "artifact": "architecture-nightly-loom-<commit>",
           "behavior_contract": true
+        },
+        {
+          "kind": "contract",
+          "sources": ["scripts/tests/test_critical_architecture_freeze_guard.py"],
+          "trigger_paths": [
+            "rocketmq-runtime/**",
+            "rocketmq-client/**",
+            "rocketmq-broker/**",
+            "rocketmq-transport/**"
+          ],
+          "command": "python -m unittest scripts.tests.test_critical_architecture_freeze_guard -v",
+          "duration_seconds": 30,
+          "platform": "any",
+          "features": "not-applicable",
+          "artifact": "architecture-guard-output-<commit>",
+          "behavior_contract": true
         }
       ]
     },
