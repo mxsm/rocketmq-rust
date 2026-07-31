@@ -1,7 +1,7 @@
 # Phase 5 Enterprise Validation Record
 
 Date: 2026-07-31
-Result: Passed  
+Result: Passed
 Evidence schema: `rocketmq-sre.phase05-enterprise-smoke.v1`
 
 ## Scope
