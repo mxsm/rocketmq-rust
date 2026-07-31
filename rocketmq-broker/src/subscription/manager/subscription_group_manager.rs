@@ -768,7 +768,7 @@ impl SubscriptionGroupManager {
             };
             if created {
                 info!("auto create a subscription group, {:?}", subscription_group_config_new);
-                Self::record_consumer_group_create_latency(start_time);
+                self.record_consumer_group_create_latency(start_time);
                 self.persist_after_mutation("auto-create");
             }
         }
@@ -1566,7 +1566,7 @@ mod tests {
             ..MessageStoreConfig::default()
         };
         let manager_config = SubscriptionGroupManagerConfig::from_configs(&broker_config, &message_store_config);
-        let mut manager = SubscriptionGroupManager::new(manager_config, StateMachineVersionView::default());
+        let mut manager = SubscriptionGroupManager::new(manager_config, StateMachineVersionView::default(), None);
         let group = CheetahString::from_static_str("SRE_CAS_GROUP");
         let mut config = SubscriptionGroupConfig::new(group.clone());
         config.set_consume_enable(false);
