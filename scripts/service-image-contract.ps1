@@ -179,6 +179,10 @@ $random = [System.Security.Cryptography.RandomNumberGenerator]::Create()
 $evidence = [System.Collections.Generic.List[object]]::new()
 $nameServerHelperId = ""
 $brokerHelperId = ""
+$smokeNetwork = ""
+$smokeNetworkCreated = $false
+$smokeContainerIds = [System.Collections.Generic.List[string]]::new()
+$dependencyContainerIds = @{}
 
 try {
     $random.GetBytes($randomBytes)
@@ -496,11 +500,17 @@ try {
     }
 }
 finally {
+    foreach ($containerId in $smokeContainerIds) {
+        & docker rm --force --volumes $containerId *> $null
+    }
     if ($brokerHelperId) {
-        & docker rm --force $brokerHelperId *> $null
+        & docker rm --force --volumes $brokerHelperId *> $null
     }
     if ($nameServerHelperId) {
-        & docker rm --force $nameServerHelperId *> $null
+        & docker rm --force --volumes $nameServerHelperId *> $null
+    }
+    if ($smokeNetworkCreated) {
+        & docker network rm $smokeNetwork *> $null
     }
     $random.Dispose()
     $env:COSIGN_PASSWORD = $oldPassword
