@@ -323,6 +323,7 @@ impl<T> TelemetryOutageQueue<T> {
         if let Err(error) = self.queue.try_push_data(record, estimated_bytes) {
             let reason = match error.kind() {
                 QueuePushErrorKind::Closed | QueuePushErrorKind::SlowConsumerClosed => TelemetryDropReason::Closed,
+                QueuePushErrorKind::DeadlineExceeded => TelemetryDropReason::ItemLimit,
                 QueuePushErrorKind::BudgetExhausted(error) => match error.dimension() {
                     BudgetDimension::Bytes => TelemetryDropReason::ByteLimit,
                     // This queue has no rate budget. Keep the exhaustive fallback fail-closed if

@@ -19,6 +19,8 @@ use std::time::Duration;
 pub enum FullPolicy {
     /// Represents the reject case.
     Reject,
+    /// Waits for capacity until the caller-provided absolute deadline.
+    WaitUntilDeadline,
     /// Represents the coalesce latest case.
     CoalesceLatest,
     /// Represents the drop stale case.

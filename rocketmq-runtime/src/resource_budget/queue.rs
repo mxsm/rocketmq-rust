@@ -14,11 +14,15 @@
 
 use std::collections::VecDeque;
 use std::fmt;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
 use tokio::sync::Notify;
+use tokio::time::Instant;
 
 use super::budget::BudgetAcquireError;
 use super::budget::ResourceBudget;
@@ -49,6 +53,8 @@ pub enum QueuePushOutcome {
 pub enum QueuePushErrorKind {
     /// Represents the budget exhausted case.
     BudgetExhausted(BudgetAcquireError),
+    /// The absolute admission deadline elapsed before capacity became available.
+    DeadlineExceeded,
     /// Represents the closed case.
     Closed,
     /// Represents the slow consumer closed case.
@@ -88,6 +94,9 @@ impl<T> fmt::Display for QueuePushError<T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
             QueuePushErrorKind::BudgetExhausted(error) => error.fmt(formatter),
+            QueuePushErrorKind::DeadlineExceeded => {
+                formatter.write_str("resource-budgeted queue admission deadline exceeded")
+            }
             QueuePushErrorKind::Closed => formatter.write_str("resource-budgeted queue is closed"),
             QueuePushErrorKind::SlowConsumerClosed => {
                 formatter.write_str("resource-budgeted queue closed its slow consumer")
@@ -154,6 +163,12 @@ pub struct QueueSnapshot {
     pub coalesced_count: u64,
     /// The number of closed slow consumer entries.
     pub closed_slow_consumer_count: u64,
+    /// The number of producers currently waiting for admission.
+    pub waiters: usize,
+    /// The cumulative number of producers that waited for admission.
+    pub wait_count: u64,
+    /// The number of items returned because their admission deadline elapsed.
+    pub deadline_exceeded_count: u64,
     /// Whether closed.
     pub closed: bool,
 }
@@ -193,6 +208,7 @@ impl<T> BudgetedQueue<T> {
                 }),
                 coalesce_push: Mutex::new(()),
                 notify: Notify::new(),
+                metrics: QueueMetrics::default(),
             }),
         }
     }
@@ -242,6 +258,101 @@ impl<T> BudgetedQueue<T> {
     /// Attempts to push control.
     pub fn try_push_control(&self, item: T, retained_bytes: usize) -> Result<QueuePushOutcome, QueuePushError<T>> {
         self.try_push(item, retained_bytes, BudgetClass::Control)
+    }
+
+    /// Pushes one item, waiting for count and byte capacity until an absolute
+    /// Tokio deadline when this queue uses [`FullPolicy::WaitUntilDeadline`].
+    ///
+    /// Other full policies retain their existing immediate behavior. Rate
+    /// exhaustion remains an immediate [`QueuePushErrorKind::BudgetExhausted`]
+    /// result because capacity-release notifications do not represent token
+    /// refill time.
+    ///
+    /// # Errors
+    ///
+    /// Returns the original item with [`QueuePushErrorKind::DeadlineExceeded`]
+    /// when the deadline elapses, [`QueuePushErrorKind::Closed`] when the queue
+    /// closes, or [`QueuePushErrorKind::BudgetExhausted`] when the item can
+    /// never fit or rate capacity is unavailable.
+    pub async fn push_until(
+        &self,
+        item: T,
+        retained_bytes: usize,
+        class: BudgetClass,
+        deadline: Instant,
+    ) -> Result<QueuePushOutcome, QueuePushError<T>> {
+        if self.inner.budget.limit().full_policy != FullPolicy::WaitUntilDeadline {
+            return self.try_push(item, retained_bytes, class);
+        }
+        if self.is_closed() {
+            return Err(QueuePushError {
+                kind: QueuePushErrorKind::Closed,
+                item,
+            });
+        }
+        if let Some(error) = self.inner.budget.permanent_acquire_error(retained_bytes, class) {
+            return Err(QueuePushError {
+                kind: QueuePushErrorKind::BudgetExhausted(error),
+                item,
+            });
+        }
+
+        let mut waiter = None;
+        loop {
+            let capacity_notified = self.inner.budget.capacity_notify().notified();
+            tokio::pin!(capacity_notified);
+            capacity_notified.as_mut().enable();
+            let state_notified = self.inner.notify.notified();
+            tokio::pin!(state_notified);
+            state_notified.as_mut().enable();
+
+            if self.is_closed() {
+                return Err(QueuePushError {
+                    kind: QueuePushErrorKind::Closed,
+                    item,
+                });
+            }
+            if Instant::now() >= deadline {
+                self.inner.metrics.record_deadline_exceeded();
+                return Err(QueuePushError {
+                    kind: QueuePushErrorKind::DeadlineExceeded,
+                    item,
+                });
+            }
+
+            match self.inner.budget.try_acquire_waiting(retained_bytes, class) {
+                Ok(permit) => {
+                    self.enqueue(item, permit)?;
+                    return Ok(QueuePushOutcome::Enqueued);
+                }
+                Err(error) if error.dimension() == BudgetDimension::Rate => {
+                    self.inner.budget.record_acquire_error(&error);
+                    return Err(QueuePushError {
+                        kind: QueuePushErrorKind::BudgetExhausted(error),
+                        item,
+                    });
+                }
+                Err(_) => {}
+            }
+
+            if waiter.is_none() {
+                waiter = Some(self.inner.metrics.begin_wait());
+            }
+            let deadline_sleep = tokio::time::sleep_until(deadline);
+            tokio::pin!(deadline_sleep);
+            tokio::select! {
+                biased;
+                () = &mut deadline_sleep => {
+                    self.inner.metrics.record_deadline_exceeded();
+                    return Err(QueuePushError {
+                        kind: QueuePushErrorKind::DeadlineExceeded,
+                        item,
+                    });
+                }
+                () = &mut state_notified => {}
+                () = &mut capacity_notified => {}
+            }
+        }
     }
 
     /// Attempts to pop.
@@ -354,6 +465,9 @@ impl<T> BudgetedQueue<T> {
             dropped_count: budget.dropped_count,
             coalesced_count: budget.coalesced_count,
             closed_slow_consumer_count: budget.closed_slow_consumer_count,
+            waiters: self.inner.metrics.waiters.load(Ordering::Acquire),
+            wait_count: self.inner.metrics.wait_count.load(Ordering::Relaxed),
+            deadline_exceeded_count: self.inner.metrics.deadline_exceeded_count.load(Ordering::Relaxed),
             closed: state.closed,
         }
     }
@@ -388,7 +502,7 @@ impl<T> BudgetedQueue<T> {
         error: BudgetAcquireError,
     ) -> Result<QueuePushOutcome, QueuePushError<T>> {
         match self.inner.budget.limit().full_policy {
-            FullPolicy::Reject | FullPolicy::DropStale => Err(QueuePushError {
+            FullPolicy::Reject | FullPolicy::WaitUntilDeadline | FullPolicy::DropStale => Err(QueuePushError {
                 kind: QueuePushErrorKind::BudgetExhausted(error),
                 item,
             }),
@@ -518,9 +632,40 @@ struct QueueInner<T> {
     state: Mutex<QueueState<T>>,
     coalesce_push: Mutex<()>,
     notify: Notify,
+    metrics: QueueMetrics,
 }
 
 struct QueueState<T> {
     items: VecDeque<BudgetedItem<T>>,
     closed: bool,
+}
+
+#[derive(Default)]
+struct QueueMetrics {
+    waiters: AtomicUsize,
+    wait_count: AtomicU64,
+    deadline_exceeded_count: AtomicU64,
+}
+
+impl QueueMetrics {
+    fn begin_wait(&self) -> WaiterGuard<'_> {
+        self.wait_count.fetch_add(1, Ordering::Relaxed);
+        self.waiters.fetch_add(1, Ordering::AcqRel);
+        WaiterGuard { metrics: self }
+    }
+
+    fn record_deadline_exceeded(&self) {
+        self.deadline_exceeded_count.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+struct WaiterGuard<'a> {
+    metrics: &'a QueueMetrics,
+}
+
+impl Drop for WaiterGuard<'_> {
+    fn drop(&mut self) {
+        let previous = self.metrics.waiters.fetch_sub(1, Ordering::AcqRel);
+        debug_assert!(previous > 0);
+    }
 }
