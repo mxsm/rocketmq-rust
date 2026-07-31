@@ -1352,7 +1352,7 @@ mod bench_support_tests {
             "store-runtime-scope-test",
         ))
         .expect("store runtime scope test owner should start");
-        let service = owner.root_context().child("store-service");
+        let service = owner.root_context().component("store-service");
         let scope = super::runtime::StoreRuntimeScope::new(service.clone());
 
         owner.block_on(async {
@@ -1382,7 +1382,7 @@ mod bench_support_tests {
             "rocksdb-runtime-scope-test",
         ))
         .expect("RocksDB runtime scope test owner should start");
-        let service = owner.root_context().child("rocksdb-service");
+        let service = owner.root_context().component("rocksdb-service");
         let scope = super::rocksdb::runtime::RocksDbRuntimeScope::new(service.clone());
 
         owner.block_on(async {
@@ -1413,7 +1413,7 @@ mod bench_support_tests {
         ))
         .expect("store blocking probe owner should start");
         let probe = owner.block_on(super::bench_support::run_store_blocking_io_probe(
-            owner.root_context().child("store-service"),
+            owner.root_context().component("store-service"),
             4,
             Duration::from_millis(1),
         ));
@@ -1434,7 +1434,7 @@ mod bench_support_tests {
             "store-blocking-concurrency-probe",
         ))
         .expect("store blocking concurrency probe owner should start");
-        let service_context = owner.root_context().child("store-service");
+        let service_context = owner.root_context().component("store-service");
         let probe = owner.block_on(async {
             let runtime_scope = super::runtime::StoreRuntimeScope::new(service_context.clone());
             let (running_tx, running_rx) = tokio::sync::oneshot::channel();

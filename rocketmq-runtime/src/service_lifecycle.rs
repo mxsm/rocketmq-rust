@@ -41,7 +41,7 @@ use crate::ChildServiceContext;
 use crate::RuntimeError;
 use crate::RuntimeResult;
 use crate::ShutdownDeadline;
-use crate::TaskGroupChildLease;
+use crate::TaskGroup;
 
 /// The health bind addr env constant.
 pub const HEALTH_BIND_ADDR_ENV: &str = "ROCKETMQ_HEALTH_BIND_ADDR";
@@ -216,7 +216,7 @@ struct ServiceLifecycleInner {
     shutdown_request: Mutex<Option<ShutdownRequest>>,
     shutdown_tx: watch::Sender<Option<ShutdownRequest>>,
     started: AtomicBool,
-    lifecycle_tasks: Mutex<Option<TaskGroupChildLease>>,
+    lifecycle_tasks: Mutex<Option<TaskGroup>>,
     probe_local_addr: Mutex<Option<SocketAddr>>,
 }
 
@@ -294,7 +294,7 @@ impl ServiceLifecycle {
     }
 
     /// Starts the progress heartbeat and optional HTTP probe server under a dedicated
-    /// child task group of `service_context`.
+    /// component task group of `service_context`.
     ///
     /// # Errors
     ///
@@ -310,10 +310,14 @@ impl ServiceLifecycle {
         }
 
         let mut start_attempt = ServiceLifecycleStartAttempt::new(&self.inner);
-        let lifecycle_tasks = match service_context.task_group().try_child_lease("service-lifecycle") {
-            Ok(tasks) => tasks,
-            Err(error) => return Err(error),
-        };
+        let lifecycle_context = service_context.component("service-lifecycle");
+        let lifecycle_tasks = lifecycle_context.task_group().clone();
+        if lifecycle_tasks.lifecycle_state() != crate::TaskGroupLifecycleState::Open {
+            return Err(RuntimeError::TaskGroupClosing {
+                group_id: service_context.task_group().id(),
+                group_name: Arc::from(service_context.task_group().name()),
+            });
+        }
         start_attempt.own(lifecycle_tasks.cancellation_token());
 
         let probe = match self.bind_probe_listener().await {
@@ -376,11 +380,7 @@ impl ServiceLifecycle {
         Ok(Some((listener, local_addr)))
     }
 
-    async fn rollback_failed_start(
-        &self,
-        lifecycle_tasks: TaskGroupChildLease,
-        error: RuntimeError,
-    ) -> RuntimeResult<()> {
+    async fn rollback_failed_start(&self, lifecycle_tasks: TaskGroup, error: RuntimeError) -> RuntimeResult<()> {
         let deadline = ShutdownDeadline::after(self.inner.config.shutdown_timeout);
         let report = lifecycle_tasks.shutdown_until(deadline).await;
         report.log_if_unhealthy();
@@ -767,15 +767,7 @@ mod tests {
         assert_eq!(lifecycle.probe_local_addr(), None);
         assert!(!lifecycle.inner.started.load(Ordering::Acquire));
         assert_eq!(service.task_group().task_count(), 0);
-        assert_eq!(
-            service.task_group().child_stats(),
-            crate::TaskGroupChildStats {
-                active: 0,
-                created: 1,
-                pruned: 1,
-                registry_slots: 0,
-            }
-        );
+        assert_eq!(service.task_group().component_count(), 0);
 
         drop(occupied_listener);
         lifecycle
@@ -794,7 +786,7 @@ mod tests {
                 .task_count(),
             2
         );
-        assert_eq!(service.task_group().child_stats().active, 1);
+        assert_eq!(service.task_group().component_count(), 1);
         assert!(request(probe_addr, "/livez").await.starts_with("HTTP/1.1 200"));
 
         let report = context.shutdown_tasks(Duration::from_secs(1)).await;

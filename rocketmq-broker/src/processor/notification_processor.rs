@@ -529,7 +529,7 @@ mod tests {
             long_polling_policy,
             Arc::clone(&topic_config_manager),
             subscription_group_lookup.clone(),
-            inner.broker_service_task_group(),
+            inner.broker_service_context(),
         );
         NotificationProcessor::new(NotificationProcessorContext::new(
             policy,
@@ -638,7 +638,7 @@ mod tests {
         assert!(notification_source.contains("Weak<PopBufferMergeService<MS>>"));
         assert!(!long_polling_source.contains(concat!("rocketmq_rust::", "ArcMut")));
         assert!(!long_polling_source.contains(concat!("BrokerRuntime", "Inner")));
-        assert!(long_polling_source.contains("parent_task_group: Option<TaskGroup>"));
+        assert!(long_polling_source.contains("service_context: Option<ChildServiceContext>"));
         assert!(long_polling_source.contains("PopLongPollingServiceContext"));
     }
 }

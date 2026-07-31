@@ -110,7 +110,7 @@ impl ClientPool {
         telemetry_handle: TelemetryHandle,
         client_metrics: ClientMetrics,
     ) -> Self {
-        let request_future_holder = Arc::new(RequestFutureHolder::new(service_context.child("request-futures")));
+        let request_future_holder = Arc::new(RequestFutureHolder::new(service_context.component("request-futures")));
         Self {
             inner: Arc::new(ClientPoolInner {
                 service_context,
@@ -159,7 +159,7 @@ impl ClientPool {
                 generation,
                 client_id.clone(),
                 rpc_hook,
-                self.inner.service_context.child(format!("instance-{generation}")),
+                self.inner.service_context.component(format!("instance-{generation}")),
                 Arc::clone(&self.inner.request_future_holder),
                 self.inner.resource_budget.clone(),
                 self.inner.telemetry_handle.clone(),
@@ -202,7 +202,9 @@ impl ClientPool {
                 .or_insert_with(|| {
                     info!("Created new ProduceAccumulator for clientId:[{}]", client_id);
                     Arc::new(ProduceAccumulator::with_resource_budget(
-                        self.inner.service_context.child(format!("accumulator-{}", client_id)),
+                        self.inner
+                            .service_context
+                            .component(format!("accumulator-{}", client_id)),
                         client_id.as_str(),
                         self.inner.resource_budget.clone(),
                     ))

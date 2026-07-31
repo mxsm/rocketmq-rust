@@ -350,8 +350,8 @@ impl LocalBrokerFacadeClient {
         let byte_budget = Arc::new(Semaphore::new(config.command_queue_max_bytes));
         let max_queue_age = config.command_queue_max_age();
         let broker_name = config.broker_name.clone();
-        let worker_context = service_context.child("command-worker");
-        let broker_context = worker_context.child("embedded-broker-store");
+        let worker_context = service_context.component("command-worker");
+        let broker_context = worker_context.component("embedded-broker-store");
         let facade =
             ProxyBrokerFacade::from_validated_config(validated_broker_config, broker_context, telemetry_handle);
         let shutdown_context = service_context.clone();
@@ -2476,7 +2476,7 @@ mod tests {
             Err(error) => panic!("unexpected error: {error}"),
             Ok(_) => panic!("invalid embedded broker configuration must be rejected"),
         }
-        assert_eq!(service.task_group().child_count(), 0);
+        assert_eq!(service.task_group().component_count(), 0);
     }
 
     #[tokio::test]
@@ -2493,7 +2493,7 @@ mod tests {
         let client = LocalBrokerFacadeClient::new(config, &service, TelemetryHandle::noop())
             .expect("managed local client builds");
         assert_eq!(service.task_group().task_count(), 0);
-        assert_eq!(service.task_group().child_count(), 1);
+        assert_eq!(service.task_group().component_count(), 1);
 
         drop(client);
         let deadline = ShutdownDeadline::after(Duration::from_secs(5));

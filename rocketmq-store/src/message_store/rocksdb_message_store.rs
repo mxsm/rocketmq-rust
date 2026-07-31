@@ -181,7 +181,7 @@ impl RocksDBMessageStore {
                 timer_enabled: message_store_config.timer_rocksdb_enable,
                 transaction_enabled: message_store_config.trans_rocksdb_enable,
             },
-            service_context.child("rocksdb-derived"),
+            service_context.component("rocksdb-derived"),
             telemetry.rocksdb().clone(),
         )
         .map_err(message_store_adapter_error)?;
@@ -195,7 +195,7 @@ impl RocksDBMessageStore {
             topic_config_table,
             broker_stats_manager,
             notify_message_arrive_in_batch,
-            service_context.child("local-file"),
+            service_context.component("local-file"),
             telemetry,
         )?);
         local_file_store.wire_owned_root_dependencies()?;

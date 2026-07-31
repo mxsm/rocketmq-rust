@@ -33,7 +33,7 @@ impl LocalFileMessageStore {
 
         self.scheduled_task_shutdown = CancellationToken::new();
         let task_group = crate::runtime::task_group(&self.runtime_scope, "rocketmq-store.local-file.scheduled");
-        let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
+        let scheduled_tasks = ScheduledTaskGroup::new(task_group.clone());
 
         // clean files  Periodically
         let clean_commit_log_service_arc = self.clean_commit_log_service.clone();

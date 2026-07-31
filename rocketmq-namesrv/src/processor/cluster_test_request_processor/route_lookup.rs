@@ -129,7 +129,7 @@ impl TransportClusterTestRouteLookup {
     ) -> Self {
         let task_group = service_context.task_group().clone();
         let transport = TransportClient::new(
-            service_context.child("transport"),
+            service_context.component("transport"),
             Arc::new(AdmissionController::new(AdmissionLimits::default())),
         )
         .with_telemetry(telemetry);

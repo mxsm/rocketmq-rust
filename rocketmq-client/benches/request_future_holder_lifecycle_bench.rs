@@ -33,7 +33,7 @@ use rocketmq_client_rust::RequestFutureHolderLifecycleProbe;
 fn run_lifecycle_probe() -> RequestFutureHolderLifecycleProbe {
     let runtime = support::BenchClientRuntime::new("request-future-holder");
     let output = runtime.block_on(run_request_future_holder_lifecycle_probe(
-        runtime.child("request-futures"),
+        runtime.component("request-futures"),
     ));
     runtime.shutdown();
     output
@@ -104,7 +104,7 @@ fn bench_request_future_holder_lifecycle(criterion: &mut Criterion) {
                         let mut total = Duration::ZERO;
                         for _ in 0..iters {
                             let output = scan_runtime.block_on(run_request_future_holder_scan_probe(
-                                scan_runtime.child("scan"),
+                                scan_runtime.component("scan"),
                                 pending_requests,
                                 expired_percent,
                             ));

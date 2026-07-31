@@ -165,8 +165,8 @@ impl RootServiceContext {
         &self.name
     }
 
-    /// Returns the child.
-    pub fn child(&self, scope: impl Into<ScopeId>) -> ChildServiceContext {
+    /// Creates a long-lived component context owned by this process root.
+    pub fn component(&self, scope: impl Into<ScopeId>) -> ChildServiceContext {
         ChildServiceContext::new(
             scope.into(),
             &self.task_group,
@@ -238,7 +238,7 @@ impl ChildServiceContext {
         let name = scope.into_inner();
         Self {
             name: name.clone(),
-            task_group: parent_group.child(name),
+            task_group: parent_group.component(name),
             blocking_lanes,
             diagnostics,
             _sealed: Arc::new(ChildContextSeal),
@@ -300,8 +300,8 @@ impl ChildServiceContext {
             .view_v1(component, &self.task_group, self.blocking_lanes.snapshots())
     }
 
-    /// Returns the child.
-    pub fn child(&self, scope: impl Into<ScopeId>) -> Self {
+    /// Creates a long-lived component context owned by this service.
+    pub fn component(&self, scope: impl Into<ScopeId>) -> Self {
         Self::new(
             scope.into(),
             &self.task_group,
@@ -312,8 +312,8 @@ impl ChildServiceContext {
 
     /// Returns the scheduled tasks.
     pub fn scheduled_tasks(&self, scope: impl Into<ScopeId>) -> ScheduledTaskGroup {
-        let scope = scope.into().into_inner();
-        ScheduledTaskGroup::new(self.task_group.child(scope))
+        let component = self.component(scope);
+        ScheduledTaskGroup::new(component.task_group)
     }
 
     /// Spawns the supplied task.

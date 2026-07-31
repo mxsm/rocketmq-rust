@@ -26,7 +26,9 @@ use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::OperationContext;
 use rocketmq_runtime::RuntimeContext;
+use rocketmq_runtime::TaskKind;
 use rocketmq_transport::run_connected_session;
 use rocketmq_transport::AdmissionController;
 use rocketmq_transport::AdmissionLimits;
@@ -87,6 +89,79 @@ async fn finish_session(
         .expect("session runner should observe peer closure")
         .expect("session runner should complete");
     drop(service);
+    let report = runtime.shutdown_tasks(Duration::from_secs(1)).await;
+    assert!(report.is_healthy(), "{}", report.to_json());
+}
+
+#[tokio::test]
+async fn request_churn_is_history_independent() {
+    const REQUESTS: usize = 100_000;
+
+    let runtime = RuntimeContext::from_current("transport-request-churn");
+    let service = runtime.service_context("session-component");
+    let owner = service.task_group().clone();
+    let baseline_components = owner.component_count();
+    let operation = OperationContext::without_deadline(TaskKind::Worker);
+
+    for _ in 0..REQUESTS {
+        owner
+            .spawn_operation(&operation, "transport-request", async {})
+            .expect("request operation should spawn");
+    }
+    operation.close_admission();
+    assert!(operation
+        .wait(&owner, Duration::from_secs(10))
+        .await
+        .expect("operation must remain bound to its session component"));
+
+    assert_eq!(operation.active_task_count(), 0);
+    assert_eq!(owner.task_count(), 0);
+    assert_eq!(owner.component_count(), baseline_components);
+    let report = runtime.shutdown_tasks(Duration::from_secs(1)).await;
+    assert!(report.is_healthy(), "{}", report.to_json());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn session_close_racing_with_request_registration_leaves_no_task() {
+    const ATTEMPTS: usize = 10_000;
+
+    let runtime = RuntimeContext::from_current("transport-session-close-race");
+    let service = runtime.service_context("session-component");
+    let owner = service.task_group().clone();
+    let operation = OperationContext::without_deadline(TaskKind::Worker);
+    let operation_for_spawn = operation.clone();
+    let owner_for_spawn = owner.clone();
+    let (first_registered_tx, first_registered_rx) = tokio::sync::oneshot::channel();
+
+    let spawner = tokio::spawn(async move {
+        let mut first_registered_tx = Some(first_registered_tx);
+        let mut accepted = 0;
+        for _ in 0..ATTEMPTS {
+            match owner_for_spawn.spawn_operation(&operation_for_spawn, "racing-request", async {}) {
+                Ok(_) => {
+                    accepted += 1;
+                    if let Some(first_registered_tx) = first_registered_tx.take() {
+                        let _ = first_registered_tx.send(());
+                    }
+                }
+                Err(_) => break,
+            }
+            tokio::task::yield_now().await;
+        }
+        accepted
+    });
+
+    first_registered_rx
+        .await
+        .expect("at least one request should register before close");
+    assert!(operation
+        .cancel_and_wait(&owner, Duration::from_secs(5))
+        .await
+        .expect("session operation must remain bound to its component"));
+    assert!(spawner.await.expect("request spawner should join") > 0);
+    assert_eq!(operation.active_task_count(), 0);
+    assert_eq!(owner.task_count(), 0);
+
     let report = runtime.shutdown_tasks(Duration::from_secs(1)).await;
     assert!(report.is_healthy(), "{}", report.to_json());
 }

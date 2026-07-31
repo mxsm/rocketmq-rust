@@ -119,7 +119,7 @@ where
     P: MessagingProcessor + 'static,
     F: Future<Output = ShutdownDeadline> + Send + 'static,
 {
-    let task_group = parent_task_group.child("rocketmq-proxy.grpc-server");
+    let task_group = parent_task_group;
     let housekeeping_service = service.clone();
     let grpc_config = config.grpc.clone();
     let max_decoding_message_size = grpc_config.max_decoding_message_size;
@@ -359,12 +359,13 @@ mod tests {
         let service = ProxyGrpcService::new(config.clone(), processor, ClientSessionRegistry::default());
         let context = RuntimeContext::from_current("proxy-grpc-server-parent-test");
         let proxy_service = context.service_context("proxy-service");
+        let grpc_server = proxy_service.component("rocketmq-proxy.grpc-server");
 
         let report = serve_with_report_with_task_group(
             config,
             service,
             async { ShutdownDeadline::after(Duration::from_secs(1)) },
-            proxy_service.task_group().clone(),
+            grpc_server.task_group().clone(),
         )
         .await
         .expect("server should return a shutdown report");

@@ -37,7 +37,7 @@ fn benchmark_service_context() -> ChildServiceContext {
                 .expect("store stats benchmark runtime should start")
         })
         .root_context()
-        .child("store-stats-service")
+        .component("store-stats-service")
 }
 
 fn bench_hot_path_updates(c: &mut Criterion) {

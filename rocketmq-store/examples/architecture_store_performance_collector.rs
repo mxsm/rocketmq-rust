@@ -852,7 +852,7 @@ fn collect_one_sample(scenario: Scenario) -> Result<SampleObservation> {
         !scenario.is_tiered(),
         "TieredStore scenario requires the tieredstore feature"
     );
-    let service_context = owner.root_context().child("store-performance-collector");
+    let service_context = owner.root_context().component("store-performance-collector");
     let mut collector_store = new_collector_store(scenario, service_context)?;
     let pull_context = if scenario.is_pull() {
         Some(

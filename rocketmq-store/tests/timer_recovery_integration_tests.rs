@@ -52,7 +52,7 @@ fn test_service_context() -> ChildServiceContext {
                 .expect("timer recovery test runtime should start")
         })
         .root_context()
-        .child("timer-recovery-store")
+        .component("timer-recovery-store")
 }
 
 fn timer_store_config(temp_dir: &TempDir) -> MessageStoreConfig {

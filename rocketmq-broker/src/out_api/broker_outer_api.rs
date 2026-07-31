@@ -1688,7 +1688,7 @@ mod tests {
         let runtime = rocketmq_runtime::RuntimeOwner::new(Default::default()).expect("test runtime");
         let api = BrokerOuterAPI::new(
             Arc::new(TokioClientConfig::default()),
-            runtime.root_context().child("broker-outer-api-test"),
+            runtime.root_context().component("broker-outer-api-test"),
             TransportTelemetry::noop(),
         );
         let cloned = api.clone();

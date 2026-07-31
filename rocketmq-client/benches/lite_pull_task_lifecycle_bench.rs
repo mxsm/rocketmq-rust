@@ -30,7 +30,7 @@ use rocketmq_client_rust::LitePullTaskLifecycleProbe;
 
 fn run_lifecycle_probe() -> LitePullTaskLifecycleProbe {
     let runtime = support::BenchClientRuntime::new("lite-pull-task");
-    let output = runtime.block_on(run_lite_pull_task_lifecycle_probe(runtime.child("lite-pull-task")));
+    let output = runtime.block_on(run_lite_pull_task_lifecycle_probe(runtime.component("lite-pull-task")));
     runtime.shutdown();
     output
 }

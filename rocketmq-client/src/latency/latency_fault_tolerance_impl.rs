@@ -393,7 +393,7 @@ pub async fn run_latency_fault_detector_lifecycle_probe(
     service_context: ChildServiceContext,
 ) -> LatencyFaultDetectorLifecycleProbe {
     let detector = Arc::new(LatencyFaultToleranceImpl::<ProbeResolver, ProbeServiceDetector>::new(
-        service_context.child("detector"),
+        service_context.component("detector"),
     ));
     detector.set_start_detector_enable(true);
     let handle = spawn_detector_loop(

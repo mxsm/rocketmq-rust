@@ -58,26 +58,27 @@ where
         self.shutdown.clone()
     }
 
-    pub fn schedule(
+    pub(crate) fn schedule(
         &self,
-        task_group: &TaskGroup,
+        owner: &crate::runtime::TaskOperationOwner,
         cleanup_error: CleanupErrorSlot,
     ) -> Result<ScheduledTaskGroup, RocketMQError> {
-        let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
+        let scheduled_tasks = ScheduledTaskGroup::new(owner.task_group().clone());
         let flat_file_store = self.flat_file_store.clone();
-        let task_group_on_error = task_group.clone();
+        let operation_on_error = owner.operation().clone();
         let shutdown_on_error = self.shutdown.clone();
         let cleanup_error_on_error = cleanup_error.clone();
 
         scheduled_tasks
-            .schedule_fixed_rate_no_overlap(
+            .schedule_fixed_rate_no_overlap_operation(
+                owner.operation(),
                 ScheduledTaskConfig::fixed_rate_no_overlap(
                     "tieredstore.cleanup.expired-files",
                     self.config.delete_file_interval,
                 ),
                 move || {
                     let flat_file_store = flat_file_store.clone();
-                    let task_group_on_error = task_group_on_error.clone();
+                    let operation_on_error = operation_on_error.clone();
                     let shutdown_on_error = shutdown_on_error.clone();
                     let cleanup_error_on_error = cleanup_error_on_error.clone();
                     async move {
@@ -87,7 +88,7 @@ where
                                 *cleanup_error = Some(error);
                             }
                             shutdown_on_error.cancel();
-                            task_group_on_error.cancel();
+                            operation_on_error.cancel();
                         }
                     }
                 },
@@ -95,19 +96,20 @@ where
             .map_err(|error| cleanup_startup_failed("schedule cleanup expired files", error))?;
 
         let shutdown = self.shutdown.clone();
-        let task_group_on_shutdown = task_group.clone();
-        let group_token = task_group.cancellation_token();
-        task_group
-            .spawn_service("cleanup-shutdown-watcher", async move {
+        let operation_on_shutdown = owner.operation().clone();
+        let operation_token = owner.operation().cancellation_token();
+        owner
+            .task_group()
+            .spawn_operation(owner.operation(), "cleanup-shutdown-watcher", async move {
                 tokio::select! {
                     _ = shutdown.cancelled() => {
-                        task_group_on_shutdown.cancel();
+                        operation_on_shutdown.cancel();
                     }
-                    _ = group_token.cancelled() => {}
+                    _ = operation_token.cancelled() => {}
                 }
             })
             .map_err(|error| {
-                task_group.cancel();
+                owner.cancel();
                 cleanup_startup_failed("spawn cleanup shutdown watcher", error)
             })?;
 
@@ -119,12 +121,14 @@ where
     }
 
     pub async fn run(self, parent_task_group: TaskGroup) -> Result<(), RocketMQError> {
-        let task_group = crate::runtime::task_group_with_parent("rocketmq-tieredstore.cleanup.run", &parent_task_group);
+        let owner = crate::runtime::TaskOperationOwner::new(parent_task_group, rocketmq_runtime::TaskKind::Service);
         let cleanup_error = Arc::new(Mutex::new(None));
-        self.schedule(&task_group, cleanup_error.clone())?;
+        self.schedule(&owner, cleanup_error.clone())?;
 
         self.shutdown.cancelled().await;
-        let report = task_group.shutdown(Duration::from_secs(5)).await;
+        let report = owner
+            .shutdown_report("rocketmq-tieredstore.cleanup.run", Duration::from_secs(5))
+            .await;
         crate::runtime::shutdown_report_result("tieredstore cleanup run", report)?;
         let cleanup_error = cleanup_error.lock().await.take();
         cleanup_worker_result(cleanup_error)
@@ -232,7 +236,7 @@ mod tests {
         let shutdown = CancellationToken::new();
         let service = CleanupService::new(config, flat_file_store, shutdown.clone());
         let context = rocketmq_runtime::RuntimeContext::from_current("rocketmq-tieredstore.cleanup-test");
-        let task_group = context.root_group().child("cleanup-worker");
+        let task_group = context.service_context("cleanup-worker").task_group().clone();
         let task_error = Arc::new(tokio::sync::Mutex::new(None));
         let task_error_clone = task_error.clone();
         let service_parent = task_group.clone();

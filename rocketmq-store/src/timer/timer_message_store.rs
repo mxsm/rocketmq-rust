@@ -233,7 +233,7 @@ impl TimerMessageStore {
             .timer_precision_ms
             .max(MIN_SCHEDULER_INTERVAL_MS);
         let scheduler_group = crate::runtime::task_group(&self.runtime_scope, "rocketmq-store.timer.scheduler");
-        let scheduler_tasks = ScheduledTaskGroup::new(scheduler_group.child("scheduled"));
+        let scheduler_tasks = ScheduledTaskGroup::new(scheduler_group.clone());
         if let Err(error) = scheduler_tasks.schedule_fixed_delay(
             ScheduledTaskConfig::fixed_delay("timer-message-scheduler", Duration::from_millis(interval_ms)),
             move || {

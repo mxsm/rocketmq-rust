@@ -20,6 +20,10 @@ use std::time::Duration;
 #[cfg(feature = "prometheus")]
 use opentelemetry_sdk::metrics::SdkMeterProvider;
 #[cfg(feature = "prometheus")]
+use rocketmq_runtime::ChildServiceContext;
+#[cfg(feature = "prometheus")]
+use rocketmq_runtime::OperationContext;
+#[cfg(feature = "prometheus")]
 use rocketmq_runtime::ShutdownReport;
 #[cfg(feature = "prometheus")]
 use rocketmq_runtime::TaskGroup;
@@ -62,7 +66,7 @@ pub(crate) struct PrometheusHttpHandle {
     local_addr: SocketAddr,
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
     task_group: TaskGroup,
-    connection_group: TaskGroup,
+    operation: OperationContext,
 }
 
 #[cfg(feature = "prometheus")]
@@ -72,11 +76,13 @@ impl PrometheusHttpHandle {
     }
 
     pub(crate) fn task_count(&self) -> usize {
-        self.task_group.task_count() + self.connection_group.task_count()
+        self.operation.active_task_count()
     }
 
     pub(crate) async fn shutdown_gracefully(mut self, timeout: Duration) -> ShutdownReport {
         self.signal_shutdown();
+        self.operation.close_admission();
+        let _ = self.operation.wait(&self.task_group, timeout).await;
         self.task_group.shutdown(timeout).await
     }
 
@@ -93,6 +99,7 @@ impl Drop for PrometheusHttpHandle {
         // Explicit graceful shutdown owns the join and report. Drop is only a fail-safe that
         // prevents an endpoint from accepting new scrapes after startup rollback or unwinding.
         self.signal_shutdown();
+        self.operation.cancel();
         self.task_group.cancel();
     }
 }
@@ -129,10 +136,10 @@ pub(crate) fn render_prometheus_metrics(registry: &prometheus::Registry) -> Resu
 }
 
 #[cfg(feature = "prometheus")]
-pub(crate) fn spawn_prometheus_http_endpoint_with_task_group(
+pub(crate) fn spawn_prometheus_http_endpoint(
     config: &ObservabilityConfig,
     registry: prometheus::Registry,
-    parent_task_group: TaskGroup,
+    service_context: &ChildServiceContext,
 ) -> Result<PrometheusHttpHandle, ObservabilityError> {
     let path = normalize_prometheus_path(&config.prometheus.path)?;
     let listener = bind_prometheus_listener(config)?;
@@ -142,12 +149,22 @@ pub(crate) fn spawn_prometheus_http_endpoint_with_task_group(
     let listener = tokio::net::TcpListener::from_std(listener)
         .map_err(|error| ObservabilityError::metrics_init(format!("create Prometheus listener: {error}")))?;
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-    let task_group = parent_task_group.child("rocketmq.observability.prometheus");
-    let connection_group = task_group.child("prometheus.connection");
+    let endpoint_context = service_context.component("rocketmq.observability.prometheus");
+    let task_group = endpoint_context.task_group().clone();
+    let operation = OperationContext::without_deadline(TaskKind::Service);
+    let endpoint_operation = operation.clone();
     task_group
-        .spawn_service(
+        .spawn_operation(
+            &operation,
             "prometheus.accept",
-            run_prometheus_http_endpoint(listener, registry, path, shutdown_rx, connection_group.clone()),
+            run_prometheus_http_endpoint(
+                listener,
+                registry,
+                path,
+                shutdown_rx,
+                task_group.clone(),
+                endpoint_operation,
+            ),
         )
         .map_err(|error| ObservabilityError::metrics_init(format!("spawn Prometheus endpoint: {error}")))?;
 
@@ -155,7 +172,7 @@ pub(crate) fn spawn_prometheus_http_endpoint_with_task_group(
         local_addr,
         shutdown: Some(shutdown_tx),
         task_group,
-        connection_group,
+        operation,
     })
 }
 
@@ -197,9 +214,10 @@ async fn run_prometheus_http_endpoint(
     registry: prometheus::Registry,
     path: String,
     mut shutdown: tokio::sync::oneshot::Receiver<()>,
-    connection_group: TaskGroup,
+    task_group: TaskGroup,
+    operation: OperationContext,
 ) {
-    let endpoint_cancellation = connection_group.cancellation_token();
+    let endpoint_cancellation = operation.cancellation_token();
     loop {
         tokio::select! {
             _ = &mut shutdown => break,
@@ -209,8 +227,9 @@ async fn run_prometheus_http_endpoint(
                     Ok((stream, _peer_addr)) => {
                         let registry = registry.clone();
                         let path = path.clone();
-                        let cancellation = connection_group.cancellation_token();
-                        if let Err(error) = connection_group.spawn("prometheus.connection", TaskKind::Worker, async move {
+                        let cancellation = operation.cancellation_token();
+                        let connection_operation = operation.with_task_kind(TaskKind::Worker);
+                        if let Err(error) = task_group.spawn_operation(&connection_operation, "prometheus.connection", async move {
                                 tokio::select! {
                                     _ = cancellation.cancelled() => {}
                                     result = handle_prometheus_connection(stream, registry, path) => {
@@ -318,7 +337,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn spawn_prometheus_http_endpoint_with_task_group_is_parented() {
+    async fn spawn_prometheus_http_endpoint_uses_component_context() {
         let context = RuntimeContext::from_current("prometheus-parent-test");
         let service = context.service_context("observability-service");
         let mut config = ObservabilityConfig {
@@ -330,8 +349,8 @@ mod tests {
         config.prometheus.path = "/metrics".to_string();
         let registry = prometheus::Registry::new();
 
-        let handle = spawn_prometheus_http_endpoint_with_task_group(&config, registry, service.task_group().clone())
-            .expect("prometheus endpoint should spawn");
+        let handle =
+            spawn_prometheus_http_endpoint(&config, registry, &service).expect("prometheus endpoint should spawn");
         let report = handle.shutdown_gracefully(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
 

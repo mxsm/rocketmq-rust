@@ -78,7 +78,7 @@ pub async fn run(config: ConnectorConfig, service_context: ChildServiceContext) 
     let gateway = Arc::new(RmcpGateway::new(config.clone())?);
     let engine = Arc::new(ConnectorEngine::new(config.clone(), gateway)?);
     engine
-        .initialize_sources(service_context.child("evidence-sources"))
+        .initialize_sources(service_context.component("evidence-sources"))
         .await;
 
     if let Err(error) = engine.reconcile().await {
@@ -90,7 +90,7 @@ pub async fn run(config: ConnectorConfig, service_context: ChildServiceContext) 
     }
 
     if let Some(channel) = ControlPlaneChannel::new(engine.clone(), config.clone())? {
-        let channel_context = service_context.child("control-plane-reverse-channel");
+        let channel_context = service_context.component("control-plane-reverse-channel");
         let channel = Arc::new(channel);
         service_context
             .spawn_service("rocketmq-sre-connector.control-plane-channel", {

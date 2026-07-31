@@ -201,12 +201,12 @@ impl ProduceAccumulator {
             lifecycle: StdMutex::new(AccumulatorLifecycleState::default()),
             message_budget,
             guard_thread_for_async_send: GuardForAsyncSendService::new(
-                service_context.child("async-batch-guard"),
+                service_context.component("async-batch-guard"),
                 instance_name,
                 resource_budget.clone(),
             ),
             guard_thread_for_sync_send: GuardForSyncSendService::new(
-                service_context.child("sync-batch-guard"),
+                service_context.component("sync-batch-guard"),
                 instance_name,
                 resource_budget,
             ),

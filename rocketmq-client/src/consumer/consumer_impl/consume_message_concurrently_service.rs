@@ -962,7 +962,7 @@ pub async fn run_concurrent_clean_expire_lifecycle_probe(
             Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
         });
     let service = ConsumeMessageConcurrentlyService::new(
-        service_context.child("service"),
+        service_context.component("service"),
         TelemetryHandle::noop(),
         ClientMetrics::noop(),
         Arc::new(ClientConfig::default()),
@@ -972,7 +972,7 @@ pub async fn run_concurrent_clean_expire_lifecycle_probe(
         None,
     );
     let this = Arc::new(ConsumeMessageConcurrentlyService::new(
-        service_context.child("runner"),
+        service_context.component("runner"),
         TelemetryHandle::noop(),
         ClientMetrics::noop(),
         Arc::new(ClientConfig::default()),

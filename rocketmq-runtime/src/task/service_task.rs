@@ -249,7 +249,7 @@ fn spawn_service_task_with_task_group<F>(
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    let task_group = parent_task_group.child("rocketmq.service-manager");
+    let task_group = parent_task_group.component("rocketmq.service-manager");
     spawn_service_task_with_group(operation, task_name, task_group, future)
 }
 

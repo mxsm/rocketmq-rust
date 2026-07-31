@@ -270,7 +270,7 @@ impl RebalanceService {
         // Clone config for use in spawned task
         let config = self.config.clone();
 
-        let service_context = instance.service_context().child("rebalance-service");
+        let service_context = instance.service_context().component("rebalance-service");
         let task_handle = match spawn_rebalance_task(&service_context, async move {
             let mut last_rebalance_timestamp = tokio::time::Instant::now();
             let min_interval = config.min_interval();
@@ -510,7 +510,7 @@ pub async fn run_rebalance_service_lifecycle_probe(
         0,
         "rebalance-service-probe",
         None,
-        client_runtime.child("rebalance-service-probe"),
+        client_runtime.component("rebalance-service-probe"),
         client_runtime.telemetry_handle().clone(),
         client_runtime.pool().request_future_holder(),
     );
@@ -547,7 +547,7 @@ mod tests {
             0,
             client_id,
             None,
-            runtime.child(client_id),
+            runtime.component(client_id),
             runtime.telemetry_handle().clone(),
             runtime.pool().request_future_holder(),
         )

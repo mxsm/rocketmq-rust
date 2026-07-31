@@ -11,7 +11,7 @@
       ]
     },
     "hot_path_task_group_child": {
-      "maximum": 7,
+      "maximum": 0,
       "matchers": [
         {
           "path": "rocketmq-client/src/runtime.rs",

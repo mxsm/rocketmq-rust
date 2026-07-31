@@ -32,7 +32,7 @@ use rocketmq_client_rust::TraceWorkerLifecycleProbe;
 
 fn run_lifecycle_probe() -> TraceWorkerLifecycleProbe {
     let runtime = support::BenchClientRuntime::new("trace-worker");
-    let output = runtime.block_on(run_trace_worker_lifecycle_probe(runtime.child("trace-worker")));
+    let output = runtime.block_on(run_trace_worker_lifecycle_probe(runtime.component("trace-worker")));
     runtime.shutdown();
     output
 }

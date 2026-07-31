@@ -163,7 +163,7 @@ impl DefaultMQPushConsumerImpl {
         consumer_config: ConsumerConfig,
         rpc_hook: Option<Arc<dyn RPCHook>>,
     ) -> Self {
-        let service_context = client_runtime.child(format!("push-consumer-{}", consumer_config.consumer_group));
+        let service_context = client_runtime.component(format!("push-consumer-{}", consumer_config.consumer_group));
         let consumer_config = Arc::new(ArcSwap::from_pointee(consumer_config));
         let rebalance_consumer_config = (*consumer_config.load_full()).clone();
         let this = Self {
@@ -433,7 +433,7 @@ impl DefaultMQPushConsumerImpl {
                 } else {
                     let offset_store = Arc::new(match consumer_config.message_model {
                         MessageModel::Broadcasting => OffsetStore::new_with_local(LocalFileOffsetStore::try_new(
-                            self.service_context.child("offset-store"),
+                            self.service_context.component("offset-store"),
                             client_instance.clone(),
                             consumer_config.consumer_group.clone(),
                         )?),
@@ -461,7 +461,7 @@ impl DefaultMQPushConsumerImpl {
                     if let Some(listener) = message_listener.message_listener_concurrently.clone() {
                         self.set_consume_orderly(false);
                         let consume_message_concurrently_service = Arc::new(ConsumeMessageConcurrentlyService::new(
-                            self.service_context.child("concurrent-consume"),
+                            self.service_context.component("concurrent-consume"),
                             self.telemetry_handle.clone(),
                             self.client_metrics.clone(),
                             client_config_snapshot.clone(),
@@ -479,7 +479,7 @@ impl DefaultMQPushConsumerImpl {
                         );
                         let consume_message_pop_concurrently_service =
                             Arc::new(ConsumeMessagePopConcurrentlyService::new(
-                                self.service_context.child("pop-concurrent-consume"),
+                                self.service_context.component("pop-concurrent-consume"),
                                 self.telemetry_handle.clone(),
                                 self.client_metrics.clone(),
                                 client_config_snapshot.clone(),
@@ -499,7 +499,7 @@ impl DefaultMQPushConsumerImpl {
                     } else if let Some(listener) = message_listener.message_listener_orderly.clone() {
                         self.set_consume_orderly(true);
                         let consume_message_orderly_service = Arc::new(ConsumeMessageOrderlyService::new(
-                            self.service_context.child("orderly-consume"),
+                            self.service_context.component("orderly-consume"),
                             self.telemetry_handle.clone(),
                             self.client_metrics.clone(),
                             client_config_snapshot.clone(),
@@ -517,7 +517,7 @@ impl DefaultMQPushConsumerImpl {
                         );
 
                         let consume_message_pop_orderly_service = Arc::new(ConsumeMessagePopOrderlyService::new(
-                            self.service_context.child("pop-orderly-consume"),
+                            self.service_context.component("pop-orderly-consume"),
                             self.telemetry_handle.clone(),
                             self.client_metrics.clone(),
                             client_config_snapshot,
@@ -2566,7 +2566,7 @@ mod tests {
             0,
             "push-post-start-fail-client",
             None,
-            client_runtime.child("push-post-start-fail-client"),
+            client_runtime.component("push-post-start-fail-client"),
             client_runtime.telemetry_handle().clone(),
             client_runtime.pool().request_future_holder(),
         );
@@ -2904,7 +2904,7 @@ mod tests {
             0,
             "push-running-info-status-test",
             None,
-            runtime.child("push-running-info-status-test"),
+            runtime.component("push-running-info-status-test"),
             runtime.telemetry_handle().clone(),
             runtime.pool().request_future_holder(),
         ));

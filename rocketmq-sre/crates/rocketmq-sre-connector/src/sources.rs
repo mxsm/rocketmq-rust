@@ -244,7 +244,7 @@ where
 
     pub(crate) async fn initialize(&self, context: ChildServiceContext) {
         self.kubernetes.initialize(context.metadata_io().clone());
-        if let Err(error) = self.admin.start(context.child("admin-query")).await {
+        if let Err(error) = self.admin.start(context.component("admin-query")).await {
             self.record_failure("admin-query", error.code).await;
             tracing::warn!(
                 code = error.code.as_str(),

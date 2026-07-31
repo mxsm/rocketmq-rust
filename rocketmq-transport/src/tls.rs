@@ -147,7 +147,7 @@ impl TlsServerRuntime {
     /// Initializes the TLS acceptor and reload lifecycle under `service_context`.
     ///
     /// Initial certificate and key loading runs on the context's injected [`BlockingExecutor`],
-    /// and the reload task is owned by a child of the context task group.
+    /// and the reload task is owned by a component of the service context.
     ///
     /// # Errors
     ///
@@ -164,7 +164,7 @@ impl TlsServerRuntime {
         {
             Self::initialize_with_task_group_and_blocking(
                 base_config,
-                service_context.task_group().child("rocketmq-transport.tls"),
+                service_context.component("rocketmq-transport.tls").task_group().clone(),
                 service_context.metadata_io().clone(),
             )
             .await

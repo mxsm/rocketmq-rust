@@ -56,7 +56,7 @@ const LOGO: &str = r#"
 
 fn main() -> Result<()> {
     let owner = RuntimeOwner::new(broker_runtime_config()).context("failed to build broker runtime")?;
-    let service_context = owner.root_context().child("rocketmq-broker-runtime");
+    let service_context = owner.root_context().component("rocketmq-broker-runtime");
     let lifecycle = ServiceLifecycle::from_env("rocketmq-broker").context("invalid broker lifecycle configuration")?;
 
     let run_result = owner.block_on(run(service_context, lifecycle.clone()));

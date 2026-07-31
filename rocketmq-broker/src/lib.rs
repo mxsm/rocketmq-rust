@@ -57,7 +57,7 @@ pub(crate) fn test_service_context(name: impl Into<std::sync::Arc<str>>) -> rock
             .expect("broker test runtime owner should start")
         })
         .root_context()
-        .child(name)
+        .component(name)
 }
 
 #[cfg(test)]
@@ -518,7 +518,7 @@ pub mod bench_support {
             inner.producer_manager().connection_housekeeping(),
             inner.consumer_manager().connection_housekeeping(),
             inner.broker_stats_manager_handle(),
-            inner.broker_service_task_group(),
+            inner.broker_service_context(),
         );
         service.start();
 
@@ -643,9 +643,9 @@ pub mod bench_support {
             wait_time_mills_in_admin_broker_queue: 0,
             ..BrokerConfig::default()
         });
-        let service = crate::latency::broker_fast_failure::BrokerFastFailure::new_with_parent_task_group(
+        let service = crate::latency::broker_fast_failure::BrokerFastFailure::new_with_service_context(
             broker_config,
-            service_context.task_group().clone(),
+            service_context,
         );
         let (_task, response_rx) = service.enqueue(crate::latency::broker_fast_failure::FastFailureQueueKind::Send, 77);
         service.start_with_schedule(Duration::ZERO, Duration::from_millis(1));

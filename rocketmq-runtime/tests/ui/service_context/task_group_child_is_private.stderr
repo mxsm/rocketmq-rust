@@ -1,0 +1,5 @@
+error[E0599]: no method named `child` found for reference `&TaskGroup` in the current scope
+  --> tests/ui/service_context/task_group_child_is_private.rs:17:23
+   |
+17 |         let _ = group.child("request");
+   |                       ^^^^^ method not found in `&TaskGroup`

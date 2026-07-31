@@ -14,11 +14,57 @@
 
 use rocketmq_error::RocketMQError;
 use rocketmq_error::UnifiedServiceError;
+use rocketmq_runtime::OperationContext;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
+use rocketmq_runtime::TaskKind;
 
-pub(crate) fn task_group_with_parent(name: &'static str, parent_task_group: &TaskGroup) -> TaskGroup {
-    parent_task_group.child(name)
+#[derive(Debug, Clone)]
+pub(crate) struct TaskOperationOwner {
+    task_group: TaskGroup,
+    operation: OperationContext,
+}
+
+impl TaskOperationOwner {
+    pub(crate) fn new(task_group: TaskGroup, kind: TaskKind) -> Self {
+        Self {
+            task_group,
+            operation: OperationContext::without_deadline(kind),
+        }
+    }
+
+    pub(crate) fn task_group(&self) -> &TaskGroup {
+        &self.task_group
+    }
+
+    pub(crate) fn operation(&self) -> &OperationContext {
+        &self.operation
+    }
+
+    pub(crate) fn task_count(&self) -> usize {
+        self.operation.active_task_count()
+    }
+
+    pub(crate) fn cancel(&self) {
+        self.operation.cancel();
+    }
+
+    pub(crate) async fn shutdown_report(&self, name: &'static str, timeout: std::time::Duration) -> ShutdownReport {
+        let active_before = self.task_count();
+        let joined = self
+            .operation
+            .cancel_and_wait(&self.task_group, timeout)
+            .await
+            .unwrap_or(false);
+        let mut report = ShutdownReport::new(name, std::time::Duration::ZERO);
+        if joined {
+            report.completed = active_before;
+        } else {
+            report.aborted = active_before;
+            report.timed_out = usize::from(active_before > 0);
+        }
+        report
+    }
 }
 
 pub(crate) fn shutdown_report_result(component: &'static str, report: ShutdownReport) -> Result<(), RocketMQError> {
@@ -37,13 +83,14 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn task_group_with_parent_creates_child_group() {
+    async fn operation_owner_reuses_the_injected_component_group() {
         let context = RuntimeContext::from_current("tieredstore-runtime-parent-test");
         let service = context.service_context("tieredstore-service");
 
-        let task_group = task_group_with_parent("rocketmq-tieredstore.test", service.task_group());
+        let owner = TaskOperationOwner::new(service.task_group().clone(), TaskKind::Service);
 
-        assert_eq!(task_group.parent_id(), Some(service.task_group().id()));
+        assert_eq!(owner.task_group().id(), service.task_group().id());
+        assert_eq!(owner.task_count(), 0);
         let report = service.task_group().shutdown(std::time::Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
     }

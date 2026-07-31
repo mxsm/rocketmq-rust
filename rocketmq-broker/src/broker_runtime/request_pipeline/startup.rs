@@ -64,7 +64,7 @@ impl BrokerRuntime {
                 })?;
         let mut server = RocketMQServer::new_with_telemetry(
             Arc::new(broker_config.broker_server_config.clone()),
-            service_context.child("broker.remoting-server.normal"),
+            service_context.component("broker.remoting-server.normal"),
             self.composition.state.transport_telemetry.clone(),
         );
         // Start the normal Broker remoting server.
@@ -101,7 +101,7 @@ impl BrokerRuntime {
         fast_server_config.listen_port = broker_config.broker_server_config.listen_port - 2;
         let mut fast_server = RocketMQServer::new_with_telemetry(
             Arc::new(fast_server_config),
-            service_context.child("broker.remoting-server.fast"),
+            service_context.component("broker.remoting-server.fast"),
             self.composition.state.transport_telemetry.clone(),
         );
         let shutdown_token = remoting_server_task_group.cancellation_token();

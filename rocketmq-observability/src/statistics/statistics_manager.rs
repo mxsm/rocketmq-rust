@@ -18,9 +18,11 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 use parking_lot::RwLock;
+use rocketmq_runtime::OperationContext;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::TaskGroup;
+use rocketmq_runtime::TaskKind;
 
 use crate::statistics::statistics_item::StatisticsItem;
 use crate::statistics::statistics_item_state_getter::StatisticsItemStateGetter;
@@ -33,24 +35,20 @@ const CLEANUP_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 struct CleanupTask {
     task_group: TaskGroup,
+    operation: OperationContext,
 }
 
 impl CleanupTask {
     async fn shutdown(self, timeout: Duration) {
-        let report = self.task_group.shutdown(timeout).await;
-        if let Err(error) = report.assert_no_task_leak() {
-            tracing::warn!("statistics cleanup task shutdown report is unhealthy: {error}");
+        match self.operation.cancel_and_wait(&self.task_group, timeout).await {
+            Ok(true) => {}
+            Ok(false) => tracing::warn!("statistics cleanup operation exceeded its shutdown deadline"),
+            Err(error) => tracing::warn!(%error, "statistics cleanup operation used an invalid owner"),
         }
     }
 
     fn abort(self) {
-        let report = self.task_group.shutdown_now();
-        if !report.is_healthy() {
-            tracing::warn!(
-                report = %report.to_json(),
-                "statistics cleanup task abort report is unhealthy"
-            );
-        }
+        self.operation.cancel();
     }
 }
 
@@ -111,13 +109,15 @@ impl StatisticsManager {
             return;
         }
 
-        let task_group = self.parent_task_group.child("rocketmq-observability.statistics");
-        let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
+        let task_group = self.parent_task_group.clone();
+        let operation = OperationContext::without_deadline(TaskKind::ScheduledDriver);
+        let scheduled_tasks = ScheduledTaskGroup::new(task_group.clone());
         let stats_table = self.stats_table.clone();
         let kind_meta_map = self.kind_meta_map.clone();
         let statistics_item_state_getter = self.statistics_item_state_getter.clone();
 
-        if let Err(error) = scheduled_tasks.schedule_fixed_rate_no_overlap(
+        if let Err(error) = scheduled_tasks.schedule_fixed_rate_no_overlap_operation(
+            &operation,
             ScheduledTaskConfig::fixed_rate_no_overlap(
                 "common.statistics.cleanup",
                 Duration::from_millis(Self::MAX_IDLE_TIME / 3),
@@ -139,7 +139,7 @@ impl StatisticsManager {
             tracing::warn!(%error, "failed to spawn StatisticsManager cleanup task");
             return;
         }
-        *cleanup_task = Some(CleanupTask { task_group });
+        *cleanup_task = Some(CleanupTask { task_group, operation });
     }
 
     pub async fn shutdown(&self) {
@@ -340,14 +340,15 @@ mod tests {
             .service_context("statistics-cleanup-worker")
             .task_group()
             .clone();
-        let shutdown_token = task_group.cancellation_token();
+        let operation = OperationContext::without_deadline(TaskKind::ScheduledDriver);
+        let shutdown_token = operation.cancellation_token();
         task_group
-            .spawn_service("statistics-cleanup-test-worker", async move {
+            .spawn_operation(&operation, "statistics-cleanup-test-worker", async move {
                 shutdown_token.cancelled().await;
                 observed_shutdown_in_task.store(true, Ordering::SeqCst);
             })
             .expect("cleanup task test worker should spawn");
-        let cleanup_task = CleanupTask { task_group };
+        let cleanup_task = CleanupTask { task_group, operation };
 
         cleanup_task.shutdown(Duration::from_secs(1)).await;
 

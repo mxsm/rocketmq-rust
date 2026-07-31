@@ -59,7 +59,7 @@ fn test_client_instance(client_config: ClientConfig, client_id: &'static str) ->
         0,
         client_id,
         None,
-        runtime.child(client_id),
+        runtime.component(client_id),
         runtime.telemetry_handle().clone(),
         runtime.pool().request_future_holder(),
     )

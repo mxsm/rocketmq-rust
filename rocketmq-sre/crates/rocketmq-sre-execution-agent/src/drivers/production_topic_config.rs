@@ -88,7 +88,7 @@ impl ProductionTopicConfigPatchClient {
         context: ChildServiceContext,
     ) -> Result<Self, ExecutionAgentError> {
         let client_runtime = ClientRuntime::try_new(
-            context.child("topic-admin-client"),
+            context.component("topic-admin-client"),
             ClientRuntimeConfig {
                 shutdown_timeout: config.shutdown_timeout,
                 ..ClientRuntimeConfig::default()

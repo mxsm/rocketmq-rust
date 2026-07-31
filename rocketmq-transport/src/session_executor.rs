@@ -17,13 +17,14 @@ use std::future::Future;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Instant;
 
+use rocketmq_runtime::OperationContext;
 use rocketmq_runtime::RuntimeError;
 use rocketmq_runtime::RuntimeResult;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_runtime::TaskGroupChildLease;
 use rocketmq_runtime::TaskId;
 use rocketmq_runtime::TaskKind;
 
@@ -76,12 +77,12 @@ impl From<RuntimeError> for SessionDispatchError {
 ///
 /// A request first reserves queued and in-flight capacity. Its task then waits
 /// for any declared ordering predecessor, converts queued capacity into a
-/// processor permit, and runs under a dynamically registered child task group.
+/// processor permit, and runs under the session's bounded operation context.
 pub(crate) struct SessionExecutor {
     admission: Arc<AdmissionController>,
     scope: AdmissionScope,
     request_group: TaskGroup,
-    _request_group_lease: TaskGroupChildLease,
+    operation: OperationContext,
     sequencer: RequestSequencer,
     accepting: AtomicBool,
 }
@@ -92,12 +93,11 @@ impl SessionExecutor {
         admission: Arc<AdmissionController>,
         scope: AdmissionScope,
     ) -> RuntimeResult<Self> {
-        let request_group_lease = session_group.try_child_lease("rocketmq.transport.session.request-executor")?;
         Ok(Self {
             admission,
             scope,
-            request_group: request_group_lease.group().clone(),
-            _request_group_lease: request_group_lease,
+            request_group: session_group.clone(),
+            operation: OperationContext::without_deadline(TaskKind::Worker),
             sequencer: RequestSequencer::default(),
             accepting: AtomicBool::new(true),
         })
@@ -112,9 +112,9 @@ impl SessionExecutor {
         reject: R,
     ) -> Result<TaskId, SessionDispatchError>
     where
-        F: FnOnce(TaskGroup) -> Fut + Send + 'static,
+        F: FnOnce(OperationContext) -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send + 'static,
-        R: FnOnce(TaskGroup, AdmissionError) -> Rejected + Send + 'static,
+        R: FnOnce(OperationContext, AdmissionError) -> Rejected + Send + 'static,
         Rejected: Future<Output = ()> + Send + 'static,
     {
         if !self.accepting.load(Ordering::Acquire) {
@@ -123,9 +123,6 @@ impl SessionExecutor {
                 group_name: self.request_group.name().into(),
             }));
         }
-        let request_lease = self
-            .request_group
-            .try_child_lease("rocketmq.transport.session.request")?;
         let queued = self
             .admission
             .try_acquire(AdmissionResource::Queued, self.scope, retained_bytes, class)?;
@@ -135,11 +132,11 @@ impl SessionExecutor {
         let admission = self.admission.clone();
         let scope = self.scope;
         let sequencer = self.sequencer.clone();
-        let request_group = request_lease.group().clone();
-        let spawn_group = request_group.clone();
+        let request_operation = self.operation.clone();
+        let request_operation_for_task = request_operation.clone();
+        let spawn_group = self.request_group.clone();
         spawn_group
-            .spawn("rocketmq.transport.session.request", TaskKind::Worker, async move {
-                let _request_lease = request_lease;
+            .spawn_operation(&request_operation, "rocketmq.transport.session.request", async move {
                 let ordering_guard = sequencer.acquire(ordering).await;
                 let processor = match admission.try_acquire(AdmissionResource::Processor, scope, retained_bytes, class)
                 {
@@ -147,7 +144,7 @@ impl SessionExecutor {
                     Err(error) => {
                         drop(ordering_guard);
                         drop(queued);
-                        reject(request_group, error).await;
+                        reject(request_operation_for_task, error).await;
                         return;
                     }
                 };
@@ -155,21 +152,36 @@ impl SessionExecutor {
                 let _inflight = inflight;
                 let _processor = processor;
                 let _ordering_guard = ordering_guard;
-                execute(request_group).await;
+                execute(request_operation_for_task).await;
             })
             .map_err(SessionDispatchError::Closing)
     }
 
     fn stop_admission(&self) {
         self.accepting.store(false, Ordering::Release);
+        self.operation.close_admission();
     }
 
-    pub(crate) fn task_group(&self) -> &TaskGroup {
-        &self.request_group
+    pub(crate) fn operation_context(&self) -> &OperationContext {
+        &self.operation
     }
 
     pub(crate) async fn drain_until(&self, deadline: ShutdownDeadline) -> ShutdownReport {
+        let started_at = Instant::now();
         self.stop_admission();
-        self.request_group.shutdown_until(deadline).await
+        let active_before = self.operation.active_task_count();
+        let joined = self
+            .operation
+            .wait(&self.request_group, deadline.remaining())
+            .await
+            .unwrap_or(false);
+        let mut report = ShutdownReport::new("rocketmq.transport.session.requests", started_at.elapsed());
+        if joined {
+            report.completed = active_before;
+        } else {
+            report.aborted = active_before;
+            report.timed_out = usize::from(active_before > 0);
+        }
+        report
     }
 }

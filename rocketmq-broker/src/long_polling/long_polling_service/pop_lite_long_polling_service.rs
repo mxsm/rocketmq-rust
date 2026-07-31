@@ -29,6 +29,7 @@ use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::BudgetConfigError;
 use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::BudgetSnapshot;
+use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::FullPolicy;
 use rocketmq_runtime::RateLimit;
 use rocketmq_runtime::ResourceBudget;
@@ -81,7 +82,7 @@ impl PopLiteLongPollingPolicy {
 pub(crate) struct PopLiteLongPollingServiceContext {
     policy: PopLiteLongPollingPolicy,
     lite_event_dispatcher: LiteEventDispatcher,
-    parent_task_group: Option<TaskGroup>,
+    service_context: Option<ChildServiceContext>,
     request_budget: ResourceBudget,
 }
 
@@ -89,7 +90,7 @@ impl PopLiteLongPollingServiceContext {
     pub(crate) fn try_with_resource_budget(
         policy: PopLiteLongPollingPolicy,
         lite_event_dispatcher: LiteEventDispatcher,
-        parent_task_group: Option<TaskGroup>,
+        service_context: Option<ChildServiceContext>,
         parent_budget: &ResourceBudget,
     ) -> Result<Self, BudgetConfigError> {
         let parent_capacity = parent_budget.limit().capacity;
@@ -108,7 +109,7 @@ impl PopLiteLongPollingServiceContext {
         Ok(Self {
             policy,
             lite_event_dispatcher,
-            parent_task_group,
+            service_context,
             request_budget,
         })
     }
@@ -170,7 +171,7 @@ impl<RP: PopLiteLongPollingRequestProcessor + Sync + 'static> PopLiteLongPolling
         }
 
         let Some(task_group) = broker_task_group_or_current(
-            this.context.parent_task_group.as_ref(),
+            this.context.service_context.as_ref(),
             "rocketmq-broker.long-polling.pop-lite",
             "failed to start PopLiteLongPollingService outside Tokio runtime",
         ) else {
@@ -513,7 +514,7 @@ mod tests {
         assert!(!source.contains(concat!("Message", "Store")));
         assert!(source.contains("PopLiteLongPollingServiceContext"));
         assert!(source.contains("lite_event_dispatcher: LiteEventDispatcher"));
-        assert!(source.contains("parent_task_group: Option<TaskGroup>"));
+        assert!(source.contains("service_context: Option<ChildServiceContext>"));
         assert!(source.contains("request_budget: ResourceBudget"));
         assert!(source.contains("waking_clients: Arc<DashMap<CheetahString, ()>>"));
     }

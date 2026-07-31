@@ -217,7 +217,10 @@ pub mod bench_support {
         service_context: ChildServiceContext,
     ) -> ProxyHousekeepingLifecycleProbe {
         let service = housekeeping_service();
-        let task_group = service_context.task_group().child("rocketmq-proxy.bench.housekeeping");
+        let task_group = service_context
+            .component("rocketmq-proxy.bench.housekeeping")
+            .task_group()
+            .clone();
         let housekeeping_parent = task_group.clone();
         let (started_tx, started_rx) = oneshot::channel();
         let (shutdown_tx, shutdown_rx) = oneshot::channel();

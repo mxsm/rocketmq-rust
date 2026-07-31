@@ -79,7 +79,7 @@ fn run_completed_blocking(
         warn_after: Duration::from_secs(10),
     };
     let owner = RuntimeOwner::new(runtime_config(policy)).expect("runtime owner should start");
-    let context = owner.root_context().child("blocking-bench-completed");
+    let context = owner.root_context().component("blocking-bench-completed");
 
     owner.block_on(async move {
         let active = Arc::new(AtomicUsize::new(0));
@@ -138,7 +138,7 @@ fn run_timeout_still_running() -> TimeoutBlockingOutput {
         warn_after: Duration::from_secs(10),
     };
     let owner = RuntimeOwner::new(runtime_config(policy)).expect("runtime owner should start");
-    let context = owner.root_context().child("blocking-bench-timeout");
+    let context = owner.root_context().component("blocking-bench-timeout");
 
     owner.block_on(async move {
         let executor = context.storage_io().clone();

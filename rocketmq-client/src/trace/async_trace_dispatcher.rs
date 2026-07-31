@@ -270,7 +270,7 @@ impl AsyncTraceDispatcher {
         };
 
         Self {
-            service_context: client_runtime.child("trace-dispatcher"),
+            service_context: client_runtime.component("trace-dispatcher"),
             client_runtime,
             config,
             state: Arc::new(DispatcherState::new()),

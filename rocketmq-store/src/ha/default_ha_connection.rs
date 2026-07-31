@@ -1002,7 +1002,7 @@ mod tests {
     async fn lifecycle_take_is_idempotent_and_keeps_shutdown_resources_atomic() {
         let context = rocketmq_runtime::RuntimeContext::from_current("ha-connection-lifecycle-test")
             .service_context("ha-connection");
-        let task_group = context.task_group().child("connection-workers");
+        let task_group = context.component("connection-workers").task_group().clone();
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::broadcast::channel(1);
         let mut lifecycle = HAConnectionLifecycle::Running {
             shutdown_tx,

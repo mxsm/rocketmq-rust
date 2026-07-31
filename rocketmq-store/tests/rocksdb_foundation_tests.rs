@@ -99,7 +99,7 @@ fn rocksdb_service_context(name: &'static str) -> rocketmq_runtime::ChildService
                 .expect("RocksDB integration-test runtime owner should start")
         })
         .root_context()
-        .child(name)
+        .component(name)
 }
 
 fn rocksdb_runtime_scope(name: &'static str) -> RocksDbRuntimeScope {

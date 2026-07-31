@@ -22,6 +22,8 @@ use bytes::BytesMut;
 use futures_util::SinkExt;
 use futures_util::StreamExt;
 use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_runtime::OperationContext;
+use rocketmq_runtime::TaskKind;
 use tokio::net::tcp::OwnedReadHalf;
 use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::TcpStream;
@@ -322,18 +324,7 @@ impl HAClient for DefaultHAClient {
 
                             // use reader/writer to send errors back to main loop
                             let (err_tx, mut err_rx) = mpsc::channel::<HAClientError>(HA_ERROR_CHANNEL_CAPACITY);
-                            let connection_group =
-                                match service_loop_group.try_child_lease("ha-client-connection") {
-                                    Ok(connection_group) => connection_group,
-                                    Err(error) => {
-                                        warn!("HAClient connection task group not started: {error}");
-                                        client.change_current_state(HAConnectionState::Ready).await;
-                                        if client.wait_reconnect_delay().await {
-                                            break;
-                                        }
-                                        continue;
-                                    }
-                                };
+                            let connection_operation = OperationContext::without_deadline(TaskKind::Worker);
 
                             // reader task: read data from master and dispatch to message store
                             let reader_shutdown = client.shutdown_notify.clone();
@@ -354,7 +345,10 @@ impl HAClient for DefaultHAClient {
                                     .enable_controller_mode,
                             };
                             let reader_err_tx = reader_client.err_tx.clone();
-                            if let Err(error) = connection_group.spawn_service("ha-client-reader", async move {
+                            if let Err(error) = service_loop_group.spawn_operation(
+                                &connection_operation,
+                                "ha-client-reader",
+                                async move {
                                 let result = tokio::select! {
                                     res = reader_client.run() => res,
                                     _ = reader_shutdown.notified() => Ok(()),
@@ -395,7 +389,10 @@ impl HAClient for DefaultHAClient {
                                 report_offset: BytesMut::with_capacity(CONTROLLER_REPORT_HEADER_SIZE),
                             };
                             let writer_err_tx = err_tx.clone();
-                            if let Err(error) = connection_group.spawn_service("ha-client-writer", async move {
+                            if let Err(error) = service_loop_group.spawn_operation(
+                                &connection_operation,
+                                "ha-client-writer",
+                                async move {
                                 let result = tokio::select! {
                                     res = writer_client.run() => res,
                                     _ = writer_shutdown.notified() => Ok(()),
@@ -406,11 +403,12 @@ impl HAClient for DefaultHAClient {
                             }) {
                                 warn!("HAClient failed to spawn writer task: {error}");
                                 client.shutdown_notify.notify_waiters();
-                                let report = connection_group.shutdown(Duration::from_secs(3)).await;
-                                if let Err(shutdown_error) =
-                                    crate::runtime::shutdown_report_result("DefaultHAClient connection", report)
+                                if !connection_operation
+                                    .cancel_and_wait(&service_loop_group, Duration::from_secs(3))
+                                    .await
+                                    .unwrap_or(false)
                                 {
-                                    warn!("HAClient partial connection shutdown reported an error: {shutdown_error}");
+                                    warn!("HAClient partial connection shutdown exceeded its deadline");
                                 }
                                 client.change_current_state(HAConnectionState::Ready).await;
                                 if client.wait_reconnect_delay().await {
@@ -458,11 +456,12 @@ impl HAClient for DefaultHAClient {
 
                             // stop reader/writer
                             client.shutdown_notify.notify_waiters();
-                            let report = connection_group.shutdown(Duration::from_secs(3)).await;
-                            if let Err(error) =
-                                crate::runtime::shutdown_report_result("DefaultHAClient connection", report)
+                            if !connection_operation
+                                .cancel_and_wait(&service_loop_group, Duration::from_secs(3))
+                                .await
+                                .unwrap_or(false)
                             {
-                                warn!("HAClient connection task shutdown reported an error: {error}");
+                                warn!("HAClient connection task shutdown exceeded its deadline");
                             }
 
                             if !exit {

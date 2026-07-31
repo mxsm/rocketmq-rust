@@ -102,7 +102,7 @@ impl RocksDbMaintenanceService {
         }
 
         let worker_group = crate::runtime::task_group(&self.runtime_scope, "rocksdb.maintenance");
-        let scheduled_tasks = ScheduledTaskGroup::new(worker_group.child("scheduled"));
+        let scheduled_tasks = ScheduledTaskGroup::new(worker_group.clone());
 
         self.schedule_enabled_operation(
             &scheduled_tasks,

@@ -23,7 +23,6 @@ use rocketmq_model::common::message::MessageTrait;
 use rocketmq_protocol::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_runtime::TaskGroupChildLease;
 use rocketmq_runtime::TaskKind;
 use rocketmq_transport::RpcRequestHeader;
 use tracing::error;
@@ -34,14 +33,12 @@ use crate::client::net::broker_to_client::Broker2Client;
 use crate::transaction::transactional_message_check_listener::TransactionalMessageCheckListener;
 
 struct TransactionCheckTaskOwner {
-    _lease: TaskGroupChildLease,
     group: TaskGroup,
 }
 
 impl TransactionCheckTaskOwner {
-    fn new(lease: TaskGroupChildLease) -> Self {
-        let group = lease.group().clone();
-        Self { _lease: lease, group }
+    fn new(group: TaskGroup) -> Self {
+        Self { group }
     }
 }
 
@@ -58,13 +55,13 @@ impl DefaultTransactionalMessageCheckListener {
         broker_name: CheetahString,
         producer_channels: ProducerChannelRegistry,
         broker_client: Arc<Broker2Client>,
-        task_group_lease: Option<TaskGroupChildLease>,
+        task_group: Option<TaskGroup>,
     ) -> Self {
         Self {
             broker_name,
             producer_channels,
             broker_client,
-            task_owner: task_group_lease.map(TransactionCheckTaskOwner::new).map(Arc::new),
+            task_owner: task_group.map(TransactionCheckTaskOwner::new).map(Arc::new),
         }
     }
 

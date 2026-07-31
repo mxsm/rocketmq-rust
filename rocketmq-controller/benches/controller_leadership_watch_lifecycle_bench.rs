@@ -35,7 +35,7 @@ fn run_lifecycle_probe() -> ControllerLeadershipWatchLifecycleProbe {
         ..RuntimeConfig::default()
     })
     .expect("controller leadership watch benchmark runtime should start");
-    let context = owner.root_context().child("controller-leadership-watch-bench");
+    let context = owner.root_context().component("controller-leadership-watch-bench");
     let output = owner.block_on(run_controller_leadership_watch_lifecycle_probe(context));
     owner
         .shutdown_runtime_blocking()

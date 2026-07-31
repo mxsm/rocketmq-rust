@@ -140,15 +140,15 @@ impl BrokerRuntime {
         let pop_lite_topic_config_manager = self.composition.state.topic_config_manager_handle();
         let pop_lite_subscription_group_lookup = self.composition.state.subscription_group_manager().config_lookup();
         let pop_lite_event_dispatcher = self.composition.state.lite_event_dispatcher().clone();
-        let pop_lite_parent_task_group = self.composition.state.broker_service_task_group();
-        let pop_lite_queue_lock_manager = pop_lite_parent_task_group
+        let pop_lite_service_context = self.composition.state.service_context.clone();
+        let pop_lite_queue_lock_manager = pop_lite_service_context
             .clone()
-            .map(QueueLockManager::new_with_parent_task_group)
+            .map(QueueLockManager::new_with_service_context)
             .expect("BrokerRuntime always has an injected ChildServiceContext");
         let pop_lite_long_polling_context = PopLiteLongPollingServiceContext::try_with_resource_budget(
             PopLiteLongPollingPolicy::from_config(&self.composition.state.broker_config()),
             pop_lite_event_dispatcher.clone(),
-            pop_lite_parent_task_group,
+            pop_lite_service_context,
             self.composition.state.resource_budget(),
         )
         .map_err(|error| BrokerStartupError::Initialization {
@@ -226,7 +226,7 @@ impl BrokerRuntime {
             PopLongPollingPolicy::from_config(&self.composition.state.broker_config()),
             Arc::clone(&notification_topic_config_manager),
             notification_subscription_group_lookup.clone(),
-            self.composition.state.broker_service_task_group(),
+            self.composition.state.broker_service_context(),
         );
         let notification_processor = NotificationProcessor::new(NotificationProcessorContext::new(
             NotificationPolicy::from_config(&self.composition.state.broker_config()),
@@ -308,7 +308,7 @@ impl BrokerRuntime {
             let checkpoint_service = Arc::new(rocketmq_store::StoreReleaseCheckpointService::new(
                 store,
                 std::path::PathBuf::from(broker_config.maintenance_checkpoint_root.as_str()),
-                service_context.child("broker.release-checkpoint"),
+                service_context.component("broker.release-checkpoint"),
             ));
             let maintenance_processor = Arc::new(MaintenanceRequestProcessor::new(
                 Arc::clone(&broker_config),

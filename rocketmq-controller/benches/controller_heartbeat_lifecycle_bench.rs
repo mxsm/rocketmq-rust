@@ -35,7 +35,7 @@ fn run_lifecycle_probe() -> ControllerHeartbeatLifecycleProbe {
         ..RuntimeConfig::default()
     })
     .expect("controller heartbeat benchmark runtime should start");
-    let context = owner.root_context().child("controller-heartbeat-bench");
+    let context = owner.root_context().component("controller-heartbeat-bench");
     let output = owner.block_on(run_controller_heartbeat_lifecycle_probe(context));
     owner
         .shutdown_runtime_blocking()

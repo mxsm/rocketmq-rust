@@ -421,7 +421,7 @@ mod tests {
                 .unwrap();
         let app = McpApp::new(
             McpConfig::load(example_config_path()).unwrap(),
-            owner.root_context().child("mcp-app"),
+            owner.root_context().component("mcp-app"),
             rocketmq_observability::TelemetryHandle::noop(),
         )
         .unwrap();

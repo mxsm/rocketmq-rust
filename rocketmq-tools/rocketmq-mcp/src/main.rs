@@ -38,7 +38,7 @@ fn main() -> Result<(), McpError> {
         operation: "create MCP runtime owner",
         source: Box::new(source),
     })?;
-    let service_context = owner.root_context().child("rocketmq-mcp");
+    let service_context = owner.root_context().component("rocketmq-mcp");
     let lifecycle = ServiceLifecycle::from_env("rocketmq-mcp")
         .map_err(|error| McpError::InvalidConfig(format!("invalid MCP lifecycle configuration: {error}")))?;
 

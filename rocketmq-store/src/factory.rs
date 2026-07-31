@@ -130,7 +130,7 @@ impl StoreFactory {
             config.topic_config_table,
             config.broker_stats_manager,
             config.notify_message_arrive_in_batch,
-            service_context.child("local"),
+            service_context.component("local"),
             config.telemetry,
         )
         .map_err(|source| StoreFactoryError::Open { backend, source })?;
@@ -157,7 +157,7 @@ impl StoreFactory {
             config.topic_config_table,
             config.broker_stats_manager,
             config.notify_message_arrive_in_batch,
-            service_context.child("rocksdb"),
+            service_context.component("rocksdb"),
             config.telemetry,
         )
         .map_err(|source| StoreFactoryError::Open { backend, source })?;

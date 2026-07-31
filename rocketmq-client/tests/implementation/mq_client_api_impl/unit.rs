@@ -686,7 +686,7 @@ async fn api_background_task_tracker_waits_for_completion() {
     let completed_in_task = completed.clone();
 
     MQClientAPIImpl::spawn_api_background_task(
-        &crate::runtime::test_service_context("client-api-background-test").child("api-background"),
+        &crate::runtime::test_service_context("client-api-background-test").component("api-background"),
         "rocketmq-client-api-background-test",
         &tracker,
         &token,
@@ -711,7 +711,7 @@ async fn api_background_task_shutdown_token_cancels_pending_task() {
     let dropped_in_task = dropped.clone();
 
     MQClientAPIImpl::spawn_api_background_task(
-        &crate::runtime::test_service_context("client-api-background-cancel-test").child("api-background"),
+        &crate::runtime::test_service_context("client-api-background-cancel-test").component("api-background"),
         "rocketmq-client-api-background-test",
         &tracker,
         &token,

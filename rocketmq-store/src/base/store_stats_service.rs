@@ -69,7 +69,7 @@ impl StoreStatsService {
         let service = Arc::clone(self);
         let service_name = service.get_service_name();
         let worker_group = crate::runtime::task_group(&self.runtime_scope, "rocketmq-store.stats");
-        let scheduled_tasks = ScheduledTaskGroup::new(worker_group.child("scheduled"));
+        let scheduled_tasks = ScheduledTaskGroup::new(worker_group.clone());
         if let Err(error) = scheduled_tasks.schedule_fixed_delay(
             ScheduledTaskConfig::fixed_delay(service_name.clone(), Duration::from_millis(FREQUENCY_OF_SAMPLING)),
             move || {

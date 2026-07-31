@@ -29,6 +29,7 @@ use rocketmq_protocol::protocol::route::route_data_view::QueueData;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::TaskGroup;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_transport::LocalRequestHarness;
 use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
@@ -106,7 +107,7 @@ pub mod proxy_adapter_compat {
 
 pub struct ProxyBrokerFacade {
     runtime: BrokerRuntime,
-    service_context: ChildServiceContext,
+    local_request_tasks: TaskGroup,
 }
 
 impl ProxyBrokerFacade {
@@ -131,14 +132,15 @@ impl ProxyBrokerFacade {
         service_context: ChildServiceContext,
         telemetry_handle: TelemetryHandle,
     ) -> Self {
-        let runtime_context = service_context.child("embedded-broker");
+        let runtime_context = service_context.component("embedded-broker");
+        let local_request_tasks = service_context.component("local-request").task_group().clone();
         Self {
             runtime: BrokerRuntime::new_with_validated_config_and_telemetry(
                 Arc::new(validated_config),
                 runtime_context,
                 telemetry_handle,
             ),
-            service_context,
+            local_request_tasks,
         }
     }
 
@@ -199,7 +201,7 @@ impl ProxyBrokerFacade {
             .ok_or_else(embedded_broker_request_processor_not_ready)?;
 
         let opaque = request.opaque();
-        let mut harness = LocalRequestHarness::new(self.service_context.task_group().child("local-request")).await?;
+        let mut harness = LocalRequestHarness::new(self.local_request_tasks.clone()).await?;
         if let Some(mut response) = processor
             .process_request(harness.channel(), harness.context(), &mut request)
             .await?

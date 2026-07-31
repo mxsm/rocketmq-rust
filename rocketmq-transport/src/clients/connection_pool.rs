@@ -87,6 +87,7 @@ use std::time::Instant;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::OperationContext;
 use rocketmq_runtime::RuntimeResult;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
@@ -94,6 +95,7 @@ use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownAnnotation;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
+use rocketmq_runtime::TaskKind;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -303,30 +305,50 @@ pub struct ConnectionPool<PR = DefaultRemotingRequestProcessor> {
 /// Handle for a background connection-pool cleanup task.
 #[derive(Debug, Clone)]
 pub struct ConnectionPoolCleanupTask {
-    scheduled_tasks: Option<ScheduledTaskGroup>,
+    owner: Option<CleanupTaskOwner>,
+}
+
+#[derive(Debug, Clone)]
+struct CleanupTaskOwner {
+    task_group: TaskGroup,
+    operation: OperationContext,
+    scheduled_tasks: ScheduledTaskGroup,
 }
 
 impl ConnectionPoolCleanupTask {
     fn inactive() -> Self {
-        Self { scheduled_tasks: None }
+        Self { owner: None }
     }
 
     /// Returns true when the cleanup task was actually spawned.
     pub fn is_active(&self) -> bool {
-        self.scheduled_tasks.is_some()
+        self.owner.is_some()
     }
 
     /// Request the cleanup task to stop without waiting for completion.
     pub fn abort(&self) {
-        if let Some(scheduled_tasks) = &self.scheduled_tasks {
-            scheduled_tasks.group().cancel();
+        if let Some(owner) = &self.owner {
+            owner.operation.cancel();
         }
     }
 
     /// Stop the cleanup task gracefully and return the shutdown report.
     pub async fn shutdown(&self, timeout: Duration) -> ShutdownReport {
-        if let Some(scheduled_tasks) = &self.scheduled_tasks {
-            return scheduled_tasks.shutdown(timeout).await;
+        if let Some(owner) = &self.owner {
+            let active_before = owner.operation.active_task_count();
+            let joined = owner
+                .operation
+                .cancel_and_wait(&owner.task_group, timeout)
+                .await
+                .unwrap_or(false);
+            let mut report = ShutdownReport::new("rocketmq-transport.connection-pool.cleanup", Duration::ZERO);
+            if joined {
+                report.completed = active_before;
+            } else {
+                report.aborted = active_before;
+                report.timed_out = usize::from(active_before > 0);
+            }
+            return report;
         }
 
         let mut report = ShutdownReport::new("rocketmq-transport.connection-pool.inactive", Duration::ZERO);
@@ -338,17 +360,17 @@ impl ConnectionPoolCleanupTask {
 
     /// Number of tracked cleanup tasks.
     pub fn task_count(&self) -> usize {
-        self.scheduled_tasks
+        self.owner
             .as_ref()
-            .map(|scheduled_tasks| scheduled_tasks.group().task_count())
+            .map(|owner| owner.operation.active_task_count())
             .unwrap_or_default()
     }
 
     /// Snapshot of cleanup scheduler metrics.
     pub fn schedule_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
-        self.scheduled_tasks
+        self.owner
             .as_ref()
-            .map(ScheduledTaskGroup::snapshot)
+            .map(|owner| owner.scheduled_tasks.snapshot())
             .unwrap_or_default()
     }
 }
@@ -622,7 +644,7 @@ impl<PR> ConnectionPool<PR> {
     where
         PR: Send + Sync + 'static,
     {
-        let task_group = context.task_group().child("rocketmq-transport.connection-pool");
+        let task_group = context.task_group().clone();
         self.start_cleanup_task_with_group(interval, task_group)
     }
 
@@ -637,8 +659,10 @@ impl<PR> ConnectionPool<PR> {
     {
         let connections = self.connections.clone();
         let max_idle = self.max_idle_duration;
-        let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("remoting.connection-pool.cleanup"));
-        scheduled_tasks.schedule_fixed_delay(
+        let operation = OperationContext::without_deadline(TaskKind::ScheduledDriver);
+        let scheduled_tasks = ScheduledTaskGroup::new(task_group.clone());
+        scheduled_tasks.schedule_fixed_delay_operation(
+            &operation,
             ScheduledTaskConfig::fixed_delay("remoting.connection-pool.cleanup", interval),
             move || {
                 let connections = connections.clone();
@@ -675,7 +699,11 @@ impl<PR> ConnectionPool<PR> {
         )?;
 
         Ok(ConnectionPoolCleanupTask {
-            scheduled_tasks: Some(scheduled_tasks),
+            owner: Some(CleanupTaskOwner {
+                task_group,
+                operation,
+                scheduled_tasks,
+            }),
         })
     }
 }
@@ -795,30 +823,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cleanup_task_with_service_context_is_parented() {
+    async fn cleanup_task_with_service_context_uses_fixed_component_owner() {
         let context = rocketmq_runtime::RuntimeContext::from_current("connection-pool-context-test");
         let service = context.service_context("connection-pool-service");
+        let baseline_components = service.task_group().component_count();
         let pool = ConnectionPool::<()>::new(100, Duration::from_millis(10));
 
         let cleanup_task = pool
             .try_start_cleanup_task_with_service_context(&service, Duration::from_millis(5))
             .expect("cleanup task should start from service context");
         assert!(cleanup_task.is_active());
+        let owner = cleanup_task.owner.as_ref().expect("active cleanup owner");
+        assert_eq!(owner.task_group.id(), service.task_group().id());
+        assert_eq!(service.task_group().component_count(), baseline_components);
 
+        let cleanup_report = cleanup_task.shutdown(Duration::from_secs(1)).await;
+        assert!(cleanup_report.is_healthy(), "{}", cleanup_report.to_json());
         let report = service.task_group().shutdown(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
-        let pool_report = report
-            .children
-            .iter()
-            .find(|child| child.name == "rocketmq-transport.connection-pool")
-            .expect("parent report should include connection-pool child");
-        assert!(
-            pool_report
-                .children
-                .iter()
-                .any(|child| child.name == "remoting.connection-pool.cleanup"),
-            "{}",
-            report.to_json()
-        );
+        assert!(report.children.is_empty(), "{}", report.to_json());
+        assert_eq!(cleanup_task.task_count(), 0);
+        assert_eq!(service.task_group().component_count(), baseline_components);
     }
 }

@@ -31,7 +31,7 @@ use rocketmq_client_rust::ProduceAccumulatorGuardLifecycleProbe;
 fn run_lifecycle_probe() -> ProduceAccumulatorGuardLifecycleProbe {
     let runtime = support::BenchClientRuntime::new("produce-accumulator-guard");
     let output = runtime.block_on(run_produce_accumulator_guard_lifecycle_probe(
-        runtime.child("produce-accumulator"),
+        runtime.component("produce-accumulator"),
     ));
     runtime.shutdown();
     output

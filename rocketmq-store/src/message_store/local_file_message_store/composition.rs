@@ -76,7 +76,7 @@ impl LocalFileMessageStore {
         let alive_replica_num_in_group = Arc::new(AtomicI32::new(1));
         let store_stats_service = Arc::new(StoreStatsService::new(
             Some(broker_config.broker_identity.clone()),
-            service_context.child("store-stats"),
+            service_context.component("store-stats"),
         ));
         let store_checkpoint = Arc::new(
             StoreCheckpoint::new(get_store_checkpoint(message_store_config.store_path_root_dir.as_str())).map_err(

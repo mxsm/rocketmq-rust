@@ -518,7 +518,7 @@ struct GenerationWaiter {
 impl MetadataIoActor {
     /// Starts an actor under the supplied service lifecycle.
     ///
-    /// The coordinator future is owned by a child [`crate::TaskGroup`]. All
+    /// The coordinator future is owned by a component [`crate::TaskGroup`]. All
     /// synchronous writes run through an independent single-concurrency
     /// [`BlockingExecutor`] lane.
     ///
@@ -543,10 +543,7 @@ impl MetadataIoActor {
         file_system: Arc<dyn MetadataFileSystem>,
     ) -> Result<Self, MetadataIoError> {
         config.validate()?;
-        let task_group = service_context
-            .task_group()
-            .try_child("metadata-io")
-            .map_err(startup_error)?;
+        let task_group = service_context.component("metadata-io").task_group().clone();
         let blocking = service_context.metadata_io().clone();
         let (sender, receiver) = mpsc::channel(config.max_pending_operations);
         let inner = Arc::new(ActorInner {

@@ -126,7 +126,7 @@ impl TaskExecutor {
 
     /// Creates with task group.
     pub fn new_with_task_group(config: ExecutorConfig, parent_task_group: TaskGroup) -> Self {
-        Self::new_with_optional_task_group(config, Some(parent_task_group.child("rocketmq.task-executor")))
+        Self::new_with_optional_task_group(config, Some(parent_task_group.component("rocketmq.task-executor")))
     }
 
     fn new_with_optional_task_group(config: ExecutorConfig, task_group: Option<TaskGroup>) -> Self {
@@ -510,7 +510,7 @@ impl ExecutorPool {
             .map(|index| {
                 Arc::new(TaskExecutor::new_with_task_group(
                     config.clone(),
-                    parent_task_group.child(format!("rocketmq.task-executor.{index}")),
+                    parent_task_group.component(format!("rocketmq.task-executor.{index}")),
                 ))
             })
             .collect();

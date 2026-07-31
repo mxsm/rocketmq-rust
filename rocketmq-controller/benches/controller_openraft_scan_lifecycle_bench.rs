@@ -35,7 +35,7 @@ fn run_lifecycle_probe() -> ControllerOpenRaftScanLifecycleProbe {
         ..RuntimeConfig::default()
     })
     .expect("controller OpenRaft scan benchmark runtime should start");
-    let context = owner.root_context().child("controller-openraft-scan-bench");
+    let context = owner.root_context().component("controller-openraft-scan-bench");
     let output = owner.block_on(run_controller_openraft_scan_lifecycle_probe(context));
     owner
         .shutdown_runtime_blocking()

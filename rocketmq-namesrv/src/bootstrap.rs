@@ -209,22 +209,7 @@ impl NameServerBootstrap {
         let relay_group = self
             .name_server_runtime
             .inner
-            .task_group()
-            .ok_or_else(|| namesrv_task_group_unavailable("create shutdown relay task group"))
-            .and_then(|task_group| {
-                task_group
-                    .try_child("namesrv.shutdown-relay")
-                    .map_err(|error| namesrv_startup_failed("create shutdown relay task group", error))
-            });
-        let relay_group = match relay_group {
-            Ok(relay_group) => relay_group,
-            Err(primary_error) => {
-                let primary_error = self
-                    .rollback_startup(primary_error, lifecycle.as_ref(), &mut startup_journal)
-                    .await;
-                return Err(primary_error);
-            }
-        };
+            .component_task_group("namesrv.shutdown-relay");
         startup_journal.shutdown_relay = Some(relay_group);
 
         let relay_spawn_result = match startup_journal.shutdown_relay.as_ref() {
@@ -509,7 +494,7 @@ impl NameServerRuntime {
                 .service_context
                 .as_ref()
                 .expect("NameServerRuntime always has an injected ChildServiceContext")
-                .child("namesrv.embedded-controller");
+                .component("namesrv.embedded-controller");
             let controller_manager = Arc::new(
                 ControllerManager::new(
                     (*controller_config).clone(),
@@ -541,7 +526,7 @@ impl NameServerRuntime {
             .expect("NameServerRuntime always has an injected ChildServiceContext");
         let server = RocketMQServer::new_with_telemetry(
             config,
-            context.child("namesrv.remoting-server"),
+            context.component("namesrv.remoting-server"),
             self.inner.transport_telemetry.clone(),
         );
         self.server_inner = Some(server);
@@ -557,11 +542,7 @@ impl NameServerRuntime {
     fn start_schedule_service(&mut self) -> RocketMQResult<()> {
         let scan_not_active_broker_interval = self.inner.name_server_config().scan_not_active_broker_interval;
         let name_server_runtime_inner = NameServerRuntimeHandle::new(&self.inner);
-        let task_group = self
-            .inner
-            .task_group()
-            .map(|task_group| task_group.child("namesrv.scheduled"))
-            .ok_or_else(|| namesrv_task_group_unavailable("start scheduled tasks"))?;
+        let task_group = self.inner.component_task_group("namesrv.scheduled");
         let scheduled_tasks = ScheduledTaskGroup::new(task_group);
         let mut config = ScheduledTaskConfig::fixed_rate_no_overlap(
             "namesrv.scan-not-active-broker",
@@ -644,11 +625,7 @@ impl NameServerRuntime {
             .as_ref()
             .expect("Shutdown channel not initialized")
             .subscribe();
-        let server_task_group = self
-            .inner
-            .task_group()
-            .map(|task_group| task_group.child("namesrv.server"))
-            .ok_or_else(|| namesrv_task_group_unavailable("spawn server task"))?;
+        let server_task_group = self.inner.component_task_group("namesrv.server");
         let (server_report_tx, server_report_rx) = oneshot::channel();
         server_task_group
             .spawn_service("namesrv.server", async move {
@@ -1055,16 +1032,16 @@ impl Builder {
             name_server_config.scan_not_active_broker_interval
         );
 
-        let service_context = self.service_context.child("rocketmq-namesrv");
+        let service_context = self.service_context.component("rocketmq-namesrv");
         let metadata_io = Some(MetadataIoActor::start(
-            &service_context.child("namesrv.metadata-io"),
+            &service_context.component("namesrv.metadata-io"),
             MetadataIoConfig::default(),
         ));
         let cluster_test_route_lookup = if name_server_config.cluster_test {
             self.cluster_test_route_lookup.or_else(|| {
                 Some(Arc::new(TransportClusterTestRouteLookup::new(
                     &name_server_config.product_env_name,
-                    service_context.child("namesrv.cluster-test-route-lookup"),
+                    service_context.component("namesrv.cluster-test-route-lookup"),
                     transport_telemetry.clone(),
                 )) as Arc<dyn ClusterTestRouteLookup>)
             })
@@ -1076,7 +1053,7 @@ impl Builder {
         let remoting_client = Arc::new(RocketmqDefaultClient::new_with_telemetry(
             Arc::new(tokio_client_config.clone()),
             DefaultRemotingRequestProcessor,
-            service_context.child("namesrv.remoting-client"),
+            service_context.component("namesrv.remoting-client"),
             transport_telemetry.clone(),
         ));
 
@@ -1213,6 +1190,10 @@ impl NameServerRuntimeHandle {
         self.runtime().task_group()
     }
 
+    pub(crate) fn component_task_group(&self, scope: &'static str) -> TaskGroup {
+        self.runtime().component_task_group(scope)
+    }
+
     pub(crate) fn namesrv_metrics(&self) -> NameServerMetrics {
         self.runtime().namesrv_metrics()
     }
@@ -1249,6 +1230,15 @@ impl NameServerRuntimeInner {
             .expect("NameServerRuntime always has an injected ChildServiceContext");
         let _ = self.task_group.set(service_context.task_group().clone());
         self.task_group.get().cloned()
+    }
+
+    pub(crate) fn component_task_group(&self, scope: &'static str) -> TaskGroup {
+        self.service_context
+            .as_ref()
+            .expect("NameServerRuntime always has an injected ChildServiceContext")
+            .component(scope)
+            .task_group()
+            .clone()
     }
 
     pub(crate) fn in_flight_request_tracker(&self) -> Arc<InFlightRequestTracker> {
@@ -1804,7 +1794,7 @@ mod tests {
                 .expect("test runtime owner should build")
             })
             .root_context()
-            .child("namesrv")
+            .component("namesrv")
     }
 
     fn build_bootstrap_with_config(namesrv_config: NamesrvConfig) -> NameServerBootstrap {
@@ -3659,7 +3649,7 @@ mod tests {
         let runtime = RuntimeContext::from_current("namesrv-partial-startup-rollback");
         let service_context = runtime.service_context("namesrv");
         let route_lookup = Arc::new(PartiallyStartedRouteLookup::new(
-            service_context.child("partial-route-lookup"),
+            service_context.component("partial-route-lookup"),
         ));
         let (namesrv_config, _namesrv_root) = isolated_namesrv_config(NamesrvConfig {
             cluster_test: true,

@@ -25,7 +25,7 @@ impl DefaultMQProducerImpl {
         producer_config: ProducerConfig,
         rpc_hook: Option<Arc<dyn RPCHook>>,
     ) -> Self {
-        let service_context = client_runtime.child(format!("producer-{}", producer_config.producer_group()));
+        let service_context = client_runtime.component(format!("producer-{}", producer_config.producer_group()));
         let client_pool = client_runtime.pool().clone();
         Self::new_with_runtime(
             Some(client_runtime),
@@ -67,13 +67,13 @@ impl DefaultMQProducerImpl {
         let topic_publish_info_table = Arc::new(DashMap::new());
         let (state_changes, _) = watch::channel(ProducerState::Created);
         let runtime = ProducerRuntimeSnapshot::new(client_config.clone(), producer_config);
-        let mut mq_fault_strategy = MQFaultStrategy::new(service_context.child("fault-detector"), &client_config);
+        let mut mq_fault_strategy = MQFaultStrategy::new(service_context.component("fault-detector"), &client_config);
         mq_fault_strategy.set_latency_max(runtime.producer_config.latency_max().to_vec());
         mq_fault_strategy.set_not_available_duration(runtime.producer_config.not_available_duration().to_vec());
         let request_future_holder = client_pool
             .as_ref()
             .map(ClientPool::request_future_holder)
-            .unwrap_or_else(|| Arc::new(RequestFutureHolder::new(service_context.child("request-futures"))));
+            .unwrap_or_else(|| Arc::new(RequestFutureHolder::new(service_context.component("request-futures"))));
         DefaultMQProducerImpl {
             client_runtime,
             service_context,

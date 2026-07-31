@@ -22,6 +22,7 @@ use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
@@ -32,6 +33,7 @@ use flume::Sender;
 use rocketmq_error::RocketMQError;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
+use rocketmq_runtime::TaskId;
 use tracing::error;
 use uuid::Uuid;
 
@@ -435,6 +437,7 @@ pub struct ChannelInner {
 
     /// Tracks the outbound send task for shutdown diagnostics.
     send_task_group: TaskGroup,
+    send_task_id: Option<TaskId>,
 }
 
 /// Background task that processes the outbound message queue.
@@ -636,13 +639,12 @@ impl ChannelInner {
         response_table: LegacyResponseTable,
         parent_task_group: TaskGroup,
     ) -> rocketmq_error::RocketMQResult<Self> {
-        let task_group = parent_task_group.child("rocketmq-transport.channel");
         Self::try_new_with_send_task_group(
             connection,
             PendingRequestTable::new(),
             None,
             Some(response_table),
-            task_group,
+            parent_task_group,
             true,
         )
     }
@@ -652,9 +654,8 @@ impl ChannelInner {
         response_table: PendingRequestTable,
         parent_task_group: TaskGroup,
     ) -> rocketmq_error::RocketMQResult<Self> {
-        let task_group = parent_task_group.child("rocketmq-transport.channel");
         let owner = response_table.new_owner();
-        Self::try_new_with_send_task_group(connection, response_table, Some(owner), None, task_group, true)
+        Self::try_new_with_send_task_group(connection, response_table, Some(owner), None, parent_task_group, true)
     }
 
     pub(crate) fn new_transport_session(
@@ -662,11 +663,7 @@ impl ChannelInner {
         response_table: PendingRequestTable,
         parent_task_group: TaskGroup,
     ) -> rocketmq_error::RocketMQResult<Self> {
-        Self::new_transport_session_with_task_group(
-            connection,
-            response_table,
-            parent_task_group.child("rocketmq-transport.channel"),
-        )
+        Self::new_transport_session_with_task_group(connection, response_table, parent_task_group)
     }
 
     /// Creates a transport-backed channel snapshot under an already-owned task group.
@@ -706,26 +703,29 @@ impl ChannelInner {
 
         let connection_state = connection.state_handle();
         let connection = Arc::new(tokio::sync::Mutex::new(connection));
-        if start_send_task {
-            task_group
-                .spawn_service(
-                    "remoting.channel.send",
-                    handle_send(
-                        connection.clone(),
-                        outbound_queue_rx,
-                        response_table.clone(),
-                        legacy_response_table.clone(),
-                    ),
-                )
-                .map_err(|error| {
-                    RocketMQError::network_connection_failed(
-                        "channel",
-                        format!("failed to spawn ChannelInner send task: {error}"),
+        let send_task_id = if start_send_task {
+            Some(
+                task_group
+                    .spawn_service(
+                        "remoting.channel.send",
+                        handle_send(
+                            connection.clone(),
+                            outbound_queue_rx,
+                            response_table.clone(),
+                            legacy_response_table.clone(),
+                        ),
                     )
-                })?;
+                    .map_err(|error| {
+                        RocketMQError::network_connection_failed(
+                            "channel",
+                            format!("failed to spawn ChannelInner send task: {error}"),
+                        )
+                    })?,
+            )
         } else {
             drop(outbound_queue_rx);
-        }
+            None
+        };
         Ok(Self {
             outbound_queue_tx: parking_lot::Mutex::new(Some(outbound_queue_tx)),
             connection,
@@ -734,15 +734,26 @@ impl ChannelInner {
             pending_request_owner,
             legacy_response_table,
             send_task_group: task_group,
+            send_task_id,
         })
     }
 
     /// Closes the outbound queue and waits for the send task shutdown report.
     pub async fn close_with_report(&self, timeout: Duration) -> ShutdownReport {
+        let started_at = Instant::now();
         self.outbound_queue_tx.lock().take();
         self.connection_state.close();
 
-        let report = self.send_task_group.shutdown(timeout).await;
+        let mut report = ShutdownReport::new("remoting.channel.send", Duration::ZERO);
+        if let Some(task_id) = self.send_task_id {
+            if self.send_task_group.wait_task(task_id, timeout).await {
+                report.completed = 1;
+            } else {
+                report.aborted = usize::from(self.send_task_group.abort_task(task_id));
+                report.timed_out = 1;
+            }
+        }
+        report.elapsed = started_at.elapsed();
         if let Some(owner) = self.pending_request_owner.as_ref() {
             self.response_table.close_owner(owner, || {
                 RocketMQError::network_connection_failed("channel", "connection closed")
@@ -757,7 +768,9 @@ impl ChannelInner {
 impl Drop for ChannelInner {
     fn drop(&mut self) {
         self.outbound_queue_tx.get_mut().take();
-        self.send_task_group.cancel();
+        if let Some(task_id) = self.send_task_id {
+            self.send_task_group.abort_task(task_id);
+        }
         if let Some(owner) = self.pending_request_owner.as_ref() {
             self.response_table.close_owner(owner, || {
                 RocketMQError::network_connection_failed("channel", "connection dropped")
@@ -1037,10 +1050,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn try_new_with_task_group_parents_send_task_and_close_returns_report() {
+    async fn channel_send_task_uses_fixed_owner_and_close_waits_for_task_id() {
         let context = rocketmq_runtime::RuntimeContext::from_current("channel-inner-parent-test");
         let service = context.service_context("channel-inner-service");
-        let parent_group = service.task_group().child("channel-inner-parent");
+        let parent_group = service.task_group().clone();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let _client_stream = TcpStream::connect(addr).await.unwrap();
@@ -1053,8 +1066,7 @@ mod tests {
             parent_group.clone(),
         )
         .unwrap();
-        assert_eq!(channel_inner.send_task_group.parent_id(), Some(parent_group.id()));
-        let send_group_name = channel_inner.send_task_group.name().to_string();
+        assert_eq!(channel_inner.send_task_group.id(), parent_group.id());
         let request = RemotingCommand::create_remoting_command(1).set_opaque(73);
 
         let response_task = tokio::spawn(async move {
@@ -1080,15 +1092,17 @@ mod tests {
         let (response, report) = response_task.await.unwrap();
         assert_eq!(response.unwrap().opaque(), 73);
         assert!(report.is_healthy(), "{}", report.to_json());
-        assert_eq!(report.name, send_group_name);
+        assert_eq!(report.name, "remoting.channel.send");
+        assert_eq!(report.completed, 1);
+        assert_eq!(
+            parent_group.lifecycle_state(),
+            rocketmq_runtime::TaskGroupLifecycleState::Open
+        );
+        assert_eq!(parent_group.task_count(), 0);
 
         let parent_report = parent_group.shutdown(Duration::from_secs(1)).await;
         assert!(parent_report.is_healthy(), "{}", parent_report.to_json());
-        assert!(
-            parent_report.children.iter().any(|child| child.name == send_group_name),
-            "{}",
-            parent_report.to_json()
-        );
+        assert!(parent_report.children.is_empty(), "{}", parent_report.to_json());
     }
 
     #[tokio::test]

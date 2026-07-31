@@ -35,7 +35,7 @@ fn run_lifecycle_probe() -> StoreRocksDbMaintenanceLifecycleProbe {
         ..RuntimeConfig::default()
     })
     .expect("store RocksDB maintenance benchmark runtime should start");
-    let context = owner.root_context().child("store-rocksdb-maintenance-bench");
+    let context = owner.root_context().component("store-rocksdb-maintenance-bench");
     let output = owner.block_on(run_store_rocksdb_maintenance_lifecycle_probe(context));
     owner
         .shutdown_runtime_blocking()

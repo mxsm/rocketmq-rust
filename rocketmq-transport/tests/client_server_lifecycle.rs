@@ -503,7 +503,7 @@ async fn tls_client_invocation_releases_pending_and_server_ownership() {
     let address = server.local_addr();
     server.start().unwrap();
     let baseline_tasks = server.live_task_count();
-    let baseline_children = server.owned_child_group_count();
+    let baseline_components = server.owned_component_group_count();
 
     let client = TransportClient::new(
         runtime.service_context("transport-client"),
@@ -540,7 +540,7 @@ async fn tls_client_invocation_releases_pending_and_server_ownership() {
     })
     .await
     .expect("server session and processor tasks should converge");
-    assert_eq!(server.owned_child_group_count(), baseline_children);
+    assert_eq!(server.owned_component_group_count(), baseline_components);
     assert!(transport_io_snapshot().encoded_bytes_written > io_before.encoded_bytes_written);
 
     let _ = server

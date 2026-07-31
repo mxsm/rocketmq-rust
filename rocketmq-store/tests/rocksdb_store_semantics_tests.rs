@@ -52,7 +52,7 @@ fn rocksdb_service_context(name: &'static str) -> rocketmq_runtime::ChildService
                 .expect("RocksDB semantics-test runtime owner should start")
         })
         .root_context()
-        .child(name)
+        .component(name)
 }
 
 fn rocksdb_store_config(temp_dir: &TempDir) -> MessageStoreConfig {

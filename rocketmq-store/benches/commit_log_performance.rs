@@ -166,7 +166,7 @@ fn benchmark_service_context() -> ChildServiceContext {
                 .expect("commit log benchmark runtime should start")
         })
         .root_context()
-        .child("commit-log-benchmark-store")
+        .component("commit-log-benchmark-store")
 }
 
 fn new_bench_store(flush_disk_type: FlushDiskType) -> BenchStore {

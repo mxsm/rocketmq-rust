@@ -48,6 +48,8 @@ mod handle;
 /// Legacy types and operations.
 pub mod legacy;
 pub mod metadata_io;
+/// Bounded operation context types and operations.
+pub mod operation;
 /// Owner types and operations.
 pub mod owner;
 pub mod prelude;
@@ -121,6 +123,7 @@ pub use metadata_io::MetadataIoResourceSnapshot;
 pub use metadata_io::MetadataIoShutdownReport;
 pub use metadata_io::MetadataIoSnapshot;
 pub use metadata_io::MetadataWriteRequest;
+pub use operation::OperationContext;
 pub use public_api::*;
 pub use resource_budget::BudgetAcquireError;
 pub use resource_budget::BudgetCapacity;
@@ -175,8 +178,6 @@ pub use shutdown_report::TaskSnapshot;
 pub use signal::wait_for_signal;
 pub use signal::wait_for_signal_result;
 pub use task_group::DetachedTaskPolicy;
-pub use task_group::TaskGroupChildLease;
-pub use task_group::TaskGroupChildStats;
 pub use task_group::TaskGroupId;
 pub use task_group::TaskGroupLifecycleState;
 pub use task_group::TaskId;

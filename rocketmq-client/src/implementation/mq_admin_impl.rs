@@ -513,7 +513,7 @@ mod tests {
             0,
             "admin-client-binding",
             None,
-            runtime.child("instance"),
+            runtime.component("instance"),
             runtime.telemetry_handle().clone(),
             runtime.pool().request_future_holder(),
         );

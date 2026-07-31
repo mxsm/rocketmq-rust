@@ -16,9 +16,11 @@ use std::sync::Arc;
 
 use dashmap::DashMap;
 use parking_lot::Mutex;
+use rocketmq_runtime::OperationContext;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::TaskGroup;
+use rocketmq_runtime::TaskKind;
 use tokio::time::Duration;
 use tracing::warn;
 
@@ -30,18 +32,23 @@ use rocketmq_runtime::common::util_all::compute_next_minutes_time_millis;
 pub struct MomentStatsItemSet {
     stats_item_table: Arc<DashMap<String, MomentStatsItem>>,
     stats_name: String,
-    task_group: Arc<Mutex<Option<TaskGroup>>>,
+    task_owner: Arc<Mutex<Option<StatsSetTaskOwner>>>,
     parent_task_group: TaskGroup,
+}
+
+struct StatsSetTaskOwner {
+    task_group: TaskGroup,
+    operation: OperationContext,
 }
 
 impl MomentStatsItemSet {
     pub fn new(stats_name: String, parent_task_group: TaskGroup) -> Self {
         let stats_item_table = Arc::new(DashMap::new());
-        let task_group = Arc::new(Mutex::new(None));
+        let task_owner = Arc::new(Mutex::new(None));
         let set = MomentStatsItemSet {
             stats_item_table,
             stats_name,
-            task_group,
+            task_owner,
             parent_task_group,
         };
         set.init();
@@ -61,7 +68,7 @@ impl MomentStatsItemSet {
     }
 
     pub fn init(&self) {
-        if self.task_group.lock().is_some() {
+        if self.task_owner.lock().is_some() {
             return;
         }
 
@@ -69,14 +76,14 @@ impl MomentStatsItemSet {
         let initial_delay =
             Duration::from_millis((compute_next_minutes_time_millis() as i64 - current_millis() as i64).unsigned_abs());
 
-        let group_name = format!("rocketmq-observability.moment-stats-set.{}", self.stats_name);
-        let task_group = self.parent_task_group.child(group_name);
-        let scheduled_tasks = ScheduledTaskGroup::new(task_group.child("scheduled"));
+        let task_group = self.parent_task_group.clone();
+        let operation = OperationContext::without_deadline(TaskKind::ScheduledDriver);
+        let scheduled_tasks = ScheduledTaskGroup::new(task_group.clone());
         let mut config =
             ScheduledTaskConfig::fixed_rate_no_overlap("common.moment-stats-set.print", Duration::from_secs(300));
         config.initial_delay = initial_delay;
 
-        if let Err(error) = scheduled_tasks.schedule_fixed_rate_no_overlap(config, move || {
+        if let Err(error) = scheduled_tasks.schedule_fixed_rate_no_overlap_operation(&operation, config, move || {
             let stats_item_table = stats_item_table.clone();
             async move {
                 MomentStatsItemSet::print_at_minutes(&stats_item_table);
@@ -89,7 +96,7 @@ impl MomentStatsItemSet {
             return;
         }
 
-        *self.task_group.lock() = Some(task_group);
+        *self.task_owner.lock() = Some(StatsSetTaskOwner { task_group, operation });
     }
 
     fn print_at_minutes(stats_item_table: &DashMap<String, MomentStatsItem>) {
@@ -144,15 +151,22 @@ impl MomentStatsItemSet {
     }
 
     pub async fn shutdown(&self) {
-        let task_group = { self.task_group.lock().take() };
-        if let Some(task_group) = task_group {
-            let report = task_group.shutdown(Duration::from_secs(5)).await;
-            if !report.is_healthy() {
-                warn!(
-                    report = %report.to_json(),
-                    "[{}] MomentStatsItemSet shutdown report is unhealthy",
+        let task_owner = { self.task_owner.lock().take() };
+        if let Some(task_owner) = task_owner {
+            match task_owner
+                .operation
+                .cancel_and_wait(&task_owner.task_group, Duration::from_secs(5))
+                .await
+            {
+                Ok(true) => {}
+                Ok(false) => warn!(
+                    "[{}] MomentStatsItemSet shutdown exceeded its deadline",
                     self.stats_name
-                );
+                ),
+                Err(error) => warn!(
+                    "[{}] MomentStatsItemSet used an invalid task owner: {}",
+                    self.stats_name, error
+                ),
             }
         }
 

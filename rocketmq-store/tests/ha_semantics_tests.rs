@@ -45,7 +45,7 @@ fn test_service_context() -> ChildServiceContext {
                 .expect("HA semantics test runtime should start")
         })
         .root_context()
-        .child("ha-semantics-store")
+        .component("ha-semantics-store")
 }
 
 fn new_test_store(message_store_config: MessageStoreConfig) -> LocalFileMessageStore {
