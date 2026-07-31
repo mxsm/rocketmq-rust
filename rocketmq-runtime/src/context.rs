@@ -24,6 +24,8 @@ use crate::diagnostics::RuntimeDiagnosticsSnapshot;
 use crate::error::RuntimeError;
 use crate::error::RuntimeResult;
 use crate::handle::RuntimeHandle;
+use crate::resource_budget::ProcessMemoryLimit;
+use crate::resources::RuntimeResources;
 use crate::service_context::ChildServiceContext;
 use crate::service_context::RootServiceContext;
 use crate::service_context::ScopeId;
@@ -67,6 +69,10 @@ impl RuntimeContext {
         let global_blocking_capacity = blocking_policies.total_max_concurrency();
         let root_group = TaskGroup::root(name.clone(), runtime.clone());
         let diagnostics = RuntimeDiagnostics::new();
+        let resources = RuntimeResources::from_memory_limit(
+            ProcessMemoryLimit::configured(u64::MAX)
+                .map_err(|error| RuntimeError::InvalidConfig(format!("invalid harness memory limit: {error}")))?,
+        )?;
         let root = RootServiceContext::new(
             name,
             runtime,
@@ -74,6 +80,7 @@ impl RuntimeContext {
             blocking_policies,
             global_blocking_capacity,
             diagnostics,
+            resources,
         )?;
         Ok(Self { root: Arc::new(root) })
     }

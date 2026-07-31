@@ -97,6 +97,10 @@ name    = "oneway_benchmark"
 harness = false
 
 [[bench]]
+name    = "producer_oneway_egress"
+harness = false
+
+[[bench]]
 name    = "select_queue_benchmark"
 harness = false
 

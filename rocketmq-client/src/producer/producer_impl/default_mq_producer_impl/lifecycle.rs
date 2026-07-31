@@ -103,6 +103,7 @@ impl DefaultMQProducerImpl {
             producer_task_tracker: TaskTracker::new(),
             producer_task_shutdown: CancellationToken::new(),
             task_admission: ParkingLotMutex::new(()),
+            oneway_egress: OnceLock::new(),
             compressor_missing_logged: AtomicBool::new(false),
         }
     }
@@ -246,6 +247,51 @@ impl DefaultMQProducerImpl {
             &self.producer_task_shutdown,
             task,
         )
+    }
+
+    pub(super) fn initialize_oneway_egress(
+        &self,
+        runtime: &ProducerRuntimeSnapshot,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        if self.oneway_egress.get().is_some() {
+            return Ok(());
+        }
+        let count_limit = runtime
+            .producer_config
+            .back_pressure_for_async_send_num()
+            .max(MIN_BACK_PRESSURE_FOR_ASYNC_SEND_NUM) as usize;
+        let byte_limit = runtime
+            .producer_config
+            .back_pressure_for_async_send_size()
+            .max(MIN_BACK_PRESSURE_FOR_ASYNC_SEND_SIZE) as usize;
+        let egress = BoundedEgress::new(
+            &self.service_context,
+            runtime.producer_config.producer_group(),
+            count_limit,
+            byte_limit,
+            &self.producer_task_tracker,
+            &self.producer_task_shutdown,
+            self.client_runtime
+                .as_ref()
+                .map(|runtime| runtime.client_metrics().clone())
+                .unwrap_or_default(),
+        )?;
+        self.oneway_egress
+            .set(egress)
+            .map_err(|_| mq_client_err!("producer one-way egress initialization raced"))
+    }
+
+    pub(super) fn oneway_egress(&self) -> rocketmq_error::RocketMQResult<&BoundedEgress> {
+        self.oneway_egress
+            .get()
+            .ok_or_else(|| mq_client_err!("producer one-way egress is not initialized"))
+    }
+
+    pub(crate) fn oneway_egress_snapshot(&self) -> OnewayEgressSnapshot {
+        self.oneway_egress
+            .get()
+            .map(BoundedEgress::snapshot)
+            .unwrap_or_default()
     }
 
     #[inline]
@@ -729,6 +775,10 @@ impl DefaultMQProducerImpl {
             self.store_state(ProducerState::StartFailed, Ordering::SeqCst);
             return Err(error);
         }
+        if let Err(error) = self.initialize_oneway_egress(&runtime) {
+            self.store_state(ProducerState::StartFailed, Ordering::SeqCst);
+            return Err(error);
+        }
 
         let producer_config = Arc::clone(&runtime.producer_config);
         let client_instance = if let Ok(instance) = self.client_instance() {
@@ -848,7 +898,15 @@ impl DefaultMQProducerImpl {
     pub async fn shutdown_with_factory(&self, shutdown_factory: bool) -> rocketmq_error::RocketMQResult<()> {
         let _transition = self.lifecycle_transition.lock().await;
         match self.load_state(Ordering::SeqCst) {
-            ProducerState::Stopped | ProducerState::Created | ProducerState::StartFailed => Ok(()),
+            ProducerState::Stopped => Ok(()),
+            ProducerState::Created | ProducerState::StartFailed => {
+                if let Some(egress) = self.oneway_egress.get() {
+                    egress.close();
+                }
+                self.producer_task_tracker.close();
+                self.shutdown_producer_tasks().await;
+                Ok(())
+            }
             ProducerState::Starting => {
                 self.begin_task_shutdown(ProducerState::Starting)?;
                 self.shutdown_producer_tasks().await;
@@ -873,6 +931,9 @@ impl DefaultMQProducerImpl {
         let _admission = self.task_admission.lock();
         self.compare_exchange_state(expected, ProducerState::Stopping, Ordering::SeqCst, Ordering::SeqCst)
             .map_err(|actual| mq_client_err!(format!("Cannot shutdown producer in state {:?}", actual)))?;
+        if let Some(egress) = self.oneway_egress.get() {
+            egress.close();
+        }
         self.producer_task_tracker.close();
         Ok(())
     }

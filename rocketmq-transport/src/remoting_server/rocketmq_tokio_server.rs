@@ -637,6 +637,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> RocketMQServer<RP> {
             RemotingServerRunCapabilities {
                 tls_runtime,
                 task_group,
+                process_budget: self.service_context.process_budget(),
                 transport_security: self.transport_security.clone(),
                 transport_principal: self.transport_principal.clone(),
                 admission: self.admission.clone(),
@@ -758,6 +759,7 @@ pub async fn run_with_report_with_service_context_and_telemetry<RP: RequestProce
         RemotingServerRunCapabilities {
             tls_runtime,
             task_group: remoting_context.task_group().clone(),
+            process_budget: service_context.process_budget(),
             transport_security: None,
             transport_principal: None,
             admission: None,
@@ -771,6 +773,7 @@ pub async fn run_with_report_with_service_context_and_telemetry<RP: RequestProce
 struct RemotingServerRunCapabilities {
     tls_runtime: TlsServerRuntime,
     task_group: TaskGroup,
+    process_budget: rocketmq_runtime::ResourceBudget,
     transport_security: Option<Arc<TransportSecurity>>,
     transport_principal: Option<Principal>,
     admission: Option<Arc<AdmissionController>>,
@@ -790,6 +793,7 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
     let RemotingServerRunCapabilities {
         tls_runtime,
         task_group,
+        process_budget,
         transport_security,
         transport_principal,
         admission,
@@ -802,7 +806,19 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
     let handler = RemotingGeneralHandler::new_with_telemetry(
         request_processor,
         rpc_hooks,
-        PendingRequestTable::with_capacity(512),
+        match PendingRequestTable::try_with_limits_and_budget(
+            crate::base::pending_request_table::PendingRequestLimits {
+                max_count: 512,
+                ..Default::default()
+            },
+            &process_budget,
+        ) {
+            Ok(table) => table,
+            Err(error) => {
+                error!(%error, "failed to initialize remoting pending-request budget");
+                return None;
+            }
+        },
         telemetry.clone(),
     );
     let mut admission_limits = AdmissionLimits::default();
@@ -816,7 +832,7 @@ async fn run_with_tls_config_report<RP: RequestProcessor + Sync + 'static + Clon
     };
     let admission = match admission {
         Some(admission) => admission,
-        None => match AdmissionController::try_new(admission_limits) {
+        None => match AdmissionController::try_new_with_budget(admission_limits, &process_budget) {
             Ok(admission) => Arc::new(admission),
             Err(error) => {
                 error!(%error, "failed to initialize transport admission budgets");
@@ -1719,6 +1735,7 @@ mod tests {
             RemotingServerRunCapabilities {
                 tls_runtime,
                 task_group: service.component("remoting-server").task_group().clone(),
+                process_budget: service.process_budget(),
                 transport_security: None,
                 transport_principal: None,
                 admission: None,

@@ -25,6 +25,7 @@ use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::BudgetedQueue;
 use rocketmq_runtime::FullPolicy;
 use rocketmq_runtime::MonotonicClock;
+use rocketmq_runtime::PermitRebindError;
 use rocketmq_runtime::QueuePushErrorKind;
 use rocketmq_runtime::QueuePushOutcome;
 use rocketmq_runtime::RateLimit;
@@ -128,6 +129,83 @@ fn parent_budget_bounds_the_sum_of_independent_children() {
     assert_eq!(second.snapshot().rejected_count, 1);
     drop(first_permit);
     assert!(second.try_acquire_data(60).is_ok());
+}
+
+#[test]
+fn rebind_between_siblings_preserves_common_ancestor_accounting() {
+    let tree = ResourceBudgetTree::new("process", limit(4, 64, FullPolicy::Reject)).expect("root budget");
+    let source = tree
+        .root()
+        .child("producer", limit(2, 32, FullPolicy::Reject))
+        .expect("source budget");
+    let target = tree
+        .root()
+        .child("transport", limit(2, 32, FullPolicy::Reject))
+        .expect("target budget");
+    let mut permit = source.try_acquire_data(8).expect("source permit");
+
+    permit.try_rebind(&target).expect("same-tree rebind");
+
+    assert_eq!(tree.root().snapshot().current_count, 1);
+    assert_eq!(tree.root().snapshot().current_bytes, 8);
+    assert_eq!(source.snapshot().current_count, 0);
+    assert_eq!(source.snapshot().current_bytes, 0);
+    assert_eq!(target.snapshot().current_count, 1);
+    assert_eq!(target.snapshot().current_bytes, 8);
+
+    drop(permit);
+    assert_eq!(tree.root().snapshot().current_count, 0);
+    assert_eq!(target.snapshot().current_count, 0);
+}
+
+#[test]
+fn failed_rebind_keeps_the_source_permit_valid() {
+    let tree = ResourceBudgetTree::new("process", limit(3, 64, FullPolicy::Reject)).expect("root budget");
+    let source = tree
+        .root()
+        .child("producer", limit(2, 32, FullPolicy::Reject))
+        .expect("source budget");
+    let target = tree
+        .root()
+        .child("transport", limit(1, 32, FullPolicy::Reject))
+        .expect("target budget");
+    let target_owner = target.try_acquire_data(8).expect("fill target");
+    let mut source_owner = source.try_acquire_data(8).expect("source permit");
+
+    let error = source_owner
+        .try_rebind(&target)
+        .expect_err("full target must reject rebind");
+    assert!(matches!(
+        error,
+        PermitRebindError::Budget(ref error) if error.dimension() == BudgetDimension::Count
+    ));
+    assert_eq!(source.snapshot().current_count, 1);
+    assert_eq!(source.snapshot().current_bytes, 8);
+    assert_eq!(target.snapshot().current_count, 1);
+    assert_eq!(tree.root().snapshot().current_count, 2);
+    assert_eq!(tree.root().snapshot().current_bytes, 16);
+
+    drop((source_owner, target_owner));
+    assert_eq!(tree.root().snapshot().current_count, 0);
+    assert_eq!(tree.root().snapshot().current_bytes, 0);
+}
+
+#[test]
+fn rebind_rejects_a_target_from_another_tree() {
+    let source_tree = ResourceBudgetTree::new("source-process", limit(1, 16, FullPolicy::Reject)).expect("source tree");
+    let target_tree = ResourceBudgetTree::new("target-process", limit(1, 16, FullPolicy::Reject)).expect("target tree");
+    let source = source_tree.root();
+    let mut permit = source.try_acquire_data(8).expect("source permit");
+
+    let error = permit
+        .try_rebind(&target_tree.root())
+        .expect_err("cross-tree rebind must fail");
+
+    assert!(matches!(error, PermitRebindError::DifferentTree { .. }));
+    assert_eq!(source.snapshot().current_count, 1);
+    assert_eq!(source.snapshot().current_bytes, 8);
+    drop(permit);
+    assert_eq!(source.snapshot().current_count, 0);
 }
 
 #[test]

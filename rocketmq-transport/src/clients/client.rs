@@ -24,6 +24,8 @@ use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::OperationContext;
+use rocketmq_runtime::ResourceBudget;
+use rocketmq_runtime::ResourcePermit;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
 use rocketmq_security_api::PeerInfo;
@@ -176,6 +178,7 @@ fn connect<PR>(
     tls_config: TlsConfig,
     task_group: TaskGroup,
     operation: OperationContext,
+    process_budget: ResourceBudget,
     deadline: RequestDeadline,
     telemetry: TransportTelemetry,
 ) -> ClientConnectFuture
@@ -205,7 +208,10 @@ where
             local_addr,
             remote_address,
             session_task_group,
-            Arc::new(AdmissionController::new(AdmissionLimits::default())),
+            Arc::new(
+                AdmissionController::try_new_with_budget(AdmissionLimits::default(), &process_budget)
+                    .map_err(|error| remote_error(format!("invalid client transport admission budget: {error}")))?,
+            ),
             Arc::new(TransportSecurity::development_insecure_loopback(None, None)),
             None,
             Duration::from_secs(120),
@@ -268,6 +274,7 @@ where
             tls_config,
             task_group,
             operation,
+            context.process_budget(),
             deadline,
             telemetry,
         )
@@ -283,6 +290,7 @@ where
         tls_config: TlsConfig,
         task_group: TaskGroup,
         operation: OperationContext,
+        process_budget: ResourceBudget,
         deadline: RequestDeadline,
         telemetry: TransportTelemetry,
     ) -> RocketMQResult<Client<PR>> {
@@ -303,6 +311,7 @@ where
             tls_config,
             task_group,
             operation,
+            process_budget,
             deadline,
             telemetry,
         )
@@ -349,6 +358,21 @@ where
     async fn send_transport(&self, mut request: RemotingCommand, deadline: RequestDeadline) -> RocketMQResult<()> {
         self.prepare_transport_request(&mut request, deadline)?;
         self.send_prepared_transport(request, deadline).await
+    }
+
+    async fn send_transport_with_permit(
+        &self,
+        mut request: RemotingCommand,
+        deadline: RequestDeadline,
+        permit: ResourcePermit,
+    ) -> RocketMQResult<()> {
+        self.prepare_transport_request(&mut request, deadline)?;
+        let target = self.peer.address().to_string();
+        deadline.ensure_before_send(target.clone())?;
+        let mut connection = self.session.connection();
+        connection
+            .send_command_with_deadline_and_permit(request, deadline, target, permit)
+            .await
     }
 
     /// Invokes a remote operation with the given `RemotingCommand`.
@@ -449,6 +473,16 @@ where
     /// Sends a request using the caller's existing immutable deadline.
     pub async fn send_until(&mut self, request: RemotingCommand, deadline: RequestDeadline) -> RocketMQResult<()> {
         self.send_transport(request, deadline).await
+    }
+
+    /// Sends a request under an existing deadline and process reservation.
+    pub async fn send_until_with_permit(
+        &mut self,
+        request: RemotingCommand,
+        deadline: RequestDeadline,
+        permit: ResourcePermit,
+    ) -> RocketMQResult<()> {
+        self.send_transport_with_permit(request, deadline, permit).await
     }
 
     /// Sends multiple requests in a batch (fire-and-forget, no response expected).

@@ -30,7 +30,6 @@ use rocketmq_runtime::BudgetCapacity;
 use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::FullPolicy;
-use rocketmq_runtime::ProcessMemoryLimit;
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::ResourceBudgetTree;
 use rocketmq_runtime::ScheduledTaskConfig;
@@ -50,7 +49,8 @@ use crate::implementation::mq_client_manager::ClientPool;
 pub struct ClientRuntimeConfig {
     /// Maximum duration used by [`ClientRuntime::shutdown`].
     pub shutdown_timeout: Duration,
-    /// Process/Pod hard memory limit. Zero selects automatic detection.
+    /// Optional cap below the injected process memory limit. Zero uses the
+    /// complete process budget supplied by the runtime owner.
     pub process_memory_limit_bytes: u64,
     /// Share of the process hard limit managed by client resource budgets.
     pub managed_memory_numerator: u64,
@@ -91,7 +91,7 @@ impl ClientRuntime {
         config: ClientRuntimeConfig,
         telemetry_handle: TelemetryHandle,
     ) -> RocketMQResult<Arc<Self>> {
-        let resource_budget = build_client_resource_budget(&config)?;
+        let resource_budget = build_client_resource_budget(&config, &service_context.process_budget())?;
         let client_metrics = ClientMetrics::from_handle(&telemetry_handle);
         let pool = ClientPool::new(
             service_context.component("pool"),
@@ -161,47 +161,64 @@ impl ClientRuntime {
     }
 }
 
-fn build_client_resource_budget(config: &ClientRuntimeConfig) -> RocketMQResult<ResourceBudget> {
+pub(crate) fn build_client_resource_budget(
+    config: &ClientRuntimeConfig,
+    process_budget: &ResourceBudget,
+) -> RocketMQResult<ResourceBudget> {
     const CLIENT_ITEM_LIMIT: usize = 262_144;
     const CONTROL_RESERVE_COUNT: usize = 1_024;
 
-    let process_limit = if config.process_memory_limit_bytes == 0 {
-        ProcessMemoryLimit::detect()
+    let process_bytes = process_budget.limit().capacity.bytes;
+    let configured_bytes = if config.process_memory_limit_bytes == 0 {
+        process_bytes
     } else {
-        ProcessMemoryLimit::configured(config.process_memory_limit_bytes)
-    }
-    .map_err(|error| RocketMQError::ConfigInvalidValue {
-        key: "client.runtime.processMemoryLimitBytes",
-        value: config.process_memory_limit_bytes.to_string(),
-        reason: error.to_string(),
-    })?;
-    let managed_bytes = process_limit
-        .fraction(config.managed_memory_numerator, config.managed_memory_denominator)
-        .map_err(|error| RocketMQError::ConfigInvalidValue {
+        usize::try_from(config.process_memory_limit_bytes)
+            .unwrap_or(usize::MAX)
+            .min(process_bytes)
+    };
+    if config.managed_memory_numerator == 0
+        || config.managed_memory_denominator == 0
+        || config.managed_memory_numerator > config.managed_memory_denominator
+    {
+        return Err(RocketMQError::ConfigInvalidValue {
             key: "client.runtime.managedMemoryFraction",
             value: format!(
                 "{}/{}",
                 config.managed_memory_numerator, config.managed_memory_denominator
             ),
-            reason: error.to_string(),
-        })?;
-    let managed_bytes = usize::try_from(managed_bytes).unwrap_or(usize::MAX).max(1);
+            reason: "numerator and denominator must be positive and numerator must not exceed denominator".to_string(),
+        });
+    }
+    let managed_bytes = ((configured_bytes as u128 * u128::from(config.managed_memory_numerator))
+        / u128::from(config.managed_memory_denominator)) as usize;
+    let managed_bytes = managed_bytes.max(1);
     let control_bytes = (managed_bytes / 16).max(1);
-    ResourceBudgetTree::new(
-        "client",
-        BudgetLimit::new(CLIENT_ITEM_LIMIT, managed_bytes, FullPolicy::Reject)
-            .with_control_reserve(BudgetCapacity::new(CONTROL_RESERVE_COUNT, control_bytes)),
-    )
-    .map(|tree| tree.root())
-    .map_err(|error| RocketMQError::ConfigInvalidValue {
-        key: "client.runtime.resourceBudget",
-        value: managed_bytes.to_string(),
-        reason: error.to_string(),
-    })
+    process_budget
+        .child(
+            "client",
+            BudgetLimit::new(CLIENT_ITEM_LIMIT, managed_bytes, FullPolicy::Reject)
+                .with_control_reserve(BudgetCapacity::new(CONTROL_RESERVE_COUNT, control_bytes)),
+        )
+        .map_err(|error| RocketMQError::ConfigInvalidValue {
+            key: "client.runtime.resourceBudget",
+            value: managed_bytes.to_string(),
+            reason: error.to_string(),
+        })
 }
 
 pub(crate) fn standalone_client_resource_budget() -> RocketMQResult<ResourceBudget> {
-    build_client_resource_budget(&ClientRuntimeConfig::default())
+    const STANDALONE_TEST_BYTES: usize = 256 * 1024 * 1024;
+    let process_budget = ResourceBudgetTree::new(
+        "standalone-client-process",
+        BudgetLimit::new(usize::MAX, STANDALONE_TEST_BYTES, FullPolicy::Reject),
+    )
+    .map_err(|error| RocketMQError::ConfigInvalidValue {
+        key: "client.runtime.standaloneResourceBudget",
+        value: STANDALONE_TEST_BYTES.to_string(),
+        reason: error.to_string(),
+    })?
+    .root();
+    build_client_resource_budget(&ClientRuntimeConfig::default(), &process_budget)
 }
 
 #[cfg(test)]

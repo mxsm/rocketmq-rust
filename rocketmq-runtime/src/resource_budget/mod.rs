@@ -20,6 +20,7 @@ mod queue;
 
 pub use budget::BudgetAcquireError;
 pub use budget::BudgetSnapshot;
+pub use budget::PermitRebindError;
 pub use budget::ResourceBudget;
 pub use budget::ResourceBudgetTree;
 pub use budget::ResourcePermit;

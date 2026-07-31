@@ -112,6 +112,11 @@ pub mod metrics {
     pub const CLIENT_CONSUME_TOTAL: &str = "rocketmq_client_consume_total";
     pub const CLIENT_CONSUME_LATENCY: &str = "rocketmq_client_consume_latency";
     pub const CLIENT_REBALANCE_TOTAL: &str = "rocketmq_client_rebalance_total";
+    pub const CLIENT_ONEWAY_EGRESS_ITEMS: &str = "rocketmq_client_oneway_egress_items";
+    pub const CLIENT_ONEWAY_EGRESS_BYTES: &str = "rocketmq_client_oneway_egress_bytes";
+    pub const CLIENT_ONEWAY_EGRESS_OLDEST_AGE: &str = "rocketmq_client_oneway_egress_oldest_age";
+    pub const CLIENT_ONEWAY_EGRESS_WAITERS: &str = "rocketmq_client_oneway_egress_waiters";
+    pub const CLIENT_ONEWAY_EGRESS_EVENTS_TOTAL: &str = "rocketmq_client_oneway_egress_events_total";
     pub const NAMESRV_ROUTE_REQUEST_TOTAL: &str = "rocketmq_namesrv_route_request_total";
     pub const NAMESRV_ROUTE_REQUEST_LATENCY: &str = "rocketmq_namesrv_route_request_latency";
     pub const NAMESRV_BROKER_REGISTRATIONS: &str = "rocketmq_namesrv_broker_registrations";

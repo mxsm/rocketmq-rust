@@ -929,6 +929,41 @@ pub const RUST_METRICS: &[MetricDescriptor] = &[
         source: MetricSource::Client,
     },
     MetricDescriptor {
+        name: metrics::CLIENT_ONEWAY_EGRESS_ITEMS,
+        kind: MetricKind::Gauge,
+        unit: "{message}",
+        labels: &[],
+        source: MetricSource::Client,
+    },
+    MetricDescriptor {
+        name: metrics::CLIENT_ONEWAY_EGRESS_BYTES,
+        kind: MetricKind::Gauge,
+        unit: "By",
+        labels: &[],
+        source: MetricSource::Client,
+    },
+    MetricDescriptor {
+        name: metrics::CLIENT_ONEWAY_EGRESS_OLDEST_AGE,
+        kind: MetricKind::Gauge,
+        unit: "ms",
+        labels: &[],
+        source: MetricSource::Client,
+    },
+    MetricDescriptor {
+        name: metrics::CLIENT_ONEWAY_EGRESS_WAITERS,
+        kind: MetricKind::Gauge,
+        unit: "{waiter}",
+        labels: &[],
+        source: MetricSource::Client,
+    },
+    MetricDescriptor {
+        name: metrics::CLIENT_ONEWAY_EGRESS_EVENTS_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{event}",
+        labels: &[labels::RESULT],
+        source: MetricSource::Client,
+    },
+    MetricDescriptor {
         name: metrics::NAMESRV_ROUTE_REQUEST_TOTAL,
         kind: MetricKind::Counter,
         unit: "{request}",
@@ -1342,8 +1377,8 @@ mod tests {
             .collect::<HashSet<_>>();
 
         assert_eq!(JAVA_METRICS.len(), 94);
-        assert_eq!(RUST_METRICS.len(), 54);
-        assert_eq!(combined.len(), 148, "duplicate metric names across catalogs");
+        assert_eq!(RUST_METRICS.len(), 59);
+        assert_eq!(combined.len(), 153, "duplicate metric names across catalogs");
     }
 
     #[test]

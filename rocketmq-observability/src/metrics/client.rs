@@ -14,6 +14,11 @@
 
 pub use crate::semantic::metrics::CLIENT_CONSUME_LATENCY;
 pub use crate::semantic::metrics::CLIENT_CONSUME_TOTAL;
+pub use crate::semantic::metrics::CLIENT_ONEWAY_EGRESS_BYTES;
+pub use crate::semantic::metrics::CLIENT_ONEWAY_EGRESS_EVENTS_TOTAL;
+pub use crate::semantic::metrics::CLIENT_ONEWAY_EGRESS_ITEMS;
+pub use crate::semantic::metrics::CLIENT_ONEWAY_EGRESS_OLDEST_AGE;
+pub use crate::semantic::metrics::CLIENT_ONEWAY_EGRESS_WAITERS;
 pub use crate::semantic::metrics::CLIENT_REBALANCE_TOTAL;
 pub use crate::semantic::metrics::CLIENT_SEND_LATENCY;
 pub use crate::semantic::metrics::CLIENT_SEND_TOTAL;
@@ -73,6 +78,12 @@ impl ClientMetrics {
 
     #[inline]
     pub fn record_rebalance(&self) {}
+
+    #[inline]
+    pub fn record_oneway_egress_state(&self, _items: u64, _bytes: u64, _oldest_age_ms: u64, _waiters: u64) {}
+
+    #[inline]
+    pub fn record_oneway_egress_event(&self, _result: &'static str) {}
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -90,6 +101,11 @@ struct ClientMetricInstruments {
     consume_total: opentelemetry::metrics::Counter<u64>,
     consume_latency: opentelemetry::metrics::Histogram<u64>,
     rebalance_total: opentelemetry::metrics::Counter<u64>,
+    oneway_egress_items: opentelemetry::metrics::Gauge<u64>,
+    oneway_egress_bytes: opentelemetry::metrics::Gauge<u64>,
+    oneway_egress_oldest_age: opentelemetry::metrics::Gauge<u64>,
+    oneway_egress_waiters: opentelemetry::metrics::Gauge<u64>,
+    oneway_egress_events_total: opentelemetry::metrics::Counter<u64>,
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -192,6 +208,30 @@ impl ClientMetrics {
     pub fn record_rebalance(&self) {
         self.record_rebalance_total(1, &[]);
     }
+
+    #[inline]
+    pub fn record_oneway_egress_state(&self, items: u64, bytes: u64, oldest_age_ms: u64, waiters: u64) {
+        if self.is_enabled() {
+            if let Some(instruments) = &self.instruments {
+                instruments.oneway_egress_items.record(items, &[]);
+                instruments.oneway_egress_bytes.record(bytes, &[]);
+                instruments.oneway_egress_oldest_age.record(oldest_age_ms, &[]);
+                instruments.oneway_egress_waiters.record(waiters, &[]);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn record_oneway_egress_event(&self, result: &'static str) {
+        if self.is_enabled() {
+            if let Some(instruments) = &self.instruments {
+                instruments.oneway_egress_events_total.add(
+                    1,
+                    &[opentelemetry::KeyValue::new(crate::semantic::labels::RESULT, result)],
+                );
+            }
+        }
+    }
 }
 
 #[cfg(feature = "otel-metrics")]
@@ -226,6 +266,31 @@ impl ClientMetricInstruments {
             .with_description("Total number of client rebalance events")
             .with_unit("{event}")
             .build();
+        let oneway_egress_items = meter
+            .u64_gauge(CLIENT_ONEWAY_EGRESS_ITEMS)
+            .with_description("Current one-way egress messages charged to the process budget")
+            .with_unit("{message}")
+            .build();
+        let oneway_egress_bytes = meter
+            .u64_gauge(CLIENT_ONEWAY_EGRESS_BYTES)
+            .with_description("Current one-way egress retained bytes charged to the process budget")
+            .with_unit("By")
+            .build();
+        let oneway_egress_oldest_age = meter
+            .u64_gauge(CLIENT_ONEWAY_EGRESS_OLDEST_AGE)
+            .with_description("Age of the oldest one-way egress message")
+            .with_unit("ms")
+            .build();
+        let oneway_egress_waiters = meter
+            .u64_gauge(CLIENT_ONEWAY_EGRESS_WAITERS)
+            .with_description("Current one-way egress admission waiters")
+            .with_unit("{waiter}")
+            .build();
+        let oneway_egress_events_total = meter
+            .u64_counter(CLIENT_ONEWAY_EGRESS_EVENTS_TOTAL)
+            .with_description("One-way egress accepted, delivered, failed, cancelled, and rejected events")
+            .with_unit("{event}")
+            .build();
 
         Self {
             send_total,
@@ -233,6 +298,11 @@ impl ClientMetricInstruments {
             consume_total,
             consume_latency,
             rebalance_total,
+            oneway_egress_items,
+            oneway_egress_bytes,
+            oneway_egress_oldest_age,
+            oneway_egress_waiters,
+            oneway_egress_events_total,
         }
     }
 }

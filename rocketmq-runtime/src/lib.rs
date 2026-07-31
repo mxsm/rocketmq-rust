@@ -56,6 +56,8 @@ pub mod prelude;
 mod public_api;
 /// Resource budget types and operations.
 pub mod resource_budget;
+/// Process-wide runtime resource capabilities.
+pub mod resources;
 /// Schedule types and operations.
 pub mod schedule;
 /// Scheduled types and operations.
@@ -138,6 +140,7 @@ pub use resource_budget::FullPolicy;
 pub use resource_budget::MemoryLimitError;
 pub use resource_budget::MemoryLimitSource;
 pub use resource_budget::MonotonicClock;
+pub use resource_budget::PermitRebindError;
 pub use resource_budget::ProcessMemoryLimit;
 pub use resource_budget::QueuePushError;
 pub use resource_budget::QueuePushErrorKind;
@@ -147,6 +150,7 @@ pub use resource_budget::RateLimit;
 pub use resource_budget::ResourceBudgetTree;
 pub use resource_budget::ResourcePermit;
 pub use resource_budget::SystemMonotonicClock;
+pub use resources::RuntimeResources;
 pub use schedule::executor::ExecutorConfig;
 pub use schedule::executor::ExecutorPool;
 pub use schedule::executor::TaskExecutor;

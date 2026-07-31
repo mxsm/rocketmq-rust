@@ -169,14 +169,18 @@ impl TransportClient {
         admission: Arc<AdmissionController>,
         security: Arc<TransportSecurity>,
     ) -> RocketMQResult<Self> {
+        let process_budget = service_context.process_budget();
         Ok(Self {
             _service_context: service_context,
             admission,
-            pending: PendingRequestTable::try_with_limits(PendingRequestLimits {
-                max_count: 65_536,
-                max_bytes: 256 * 1024 * 1024,
-                ..PendingRequestLimits::default()
-            })?,
+            pending: PendingRequestTable::try_with_limits_and_budget(
+                PendingRequestLimits {
+                    max_count: 65_536,
+                    max_bytes: 256 * 1024 * 1024,
+                    ..PendingRequestLimits::default()
+                },
+                &process_budget,
+            )?,
             next_opaque: AtomicI32::new(1),
             security,
             telemetry: TransportTelemetry::noop(),

@@ -24,6 +24,8 @@ use crate::diagnostics::RuntimeDiagnosticsSnapshot;
 use crate::error::RuntimeError;
 use crate::error::RuntimeResult;
 use crate::handle::RuntimeHandle;
+use crate::resource_budget::ResourceBudget;
+use crate::resources::RuntimeResources;
 use crate::scheduled::ScheduledTaskGroup;
 use crate::task_group::TaskGroup;
 use crate::task_group::TaskId;
@@ -134,6 +136,7 @@ pub struct RootServiceContext {
     task_group: TaskGroup,
     blocking_lanes: BlockingLanes,
     diagnostics: RuntimeDiagnostics,
+    resources: RuntimeResources,
     _sealed: RootContextSeal,
 }
 
@@ -148,6 +151,7 @@ impl RootServiceContext {
         blocking_policies: BlockingLanePolicies,
         global_blocking_capacity: usize,
         diagnostics: RuntimeDiagnostics,
+        resources: RuntimeResources,
     ) -> RuntimeResult<Self> {
         let blocking_lanes = BlockingLanes::new(blocking_policies, global_blocking_capacity)?;
         Ok(Self {
@@ -156,6 +160,7 @@ impl RootServiceContext {
             task_group,
             blocking_lanes,
             diagnostics,
+            resources,
             _sealed: RootContextSeal,
         })
     }
@@ -172,7 +177,18 @@ impl RootServiceContext {
             &self.task_group,
             self.blocking_lanes.clone(),
             self.diagnostics.clone(),
+            self.resources.clone(),
         )
+    }
+
+    /// Returns the shared process resource-budget root.
+    pub fn process_budget(&self) -> ResourceBudget {
+        self.resources.process_budget()
+    }
+
+    /// Returns the process-wide runtime resource capabilities.
+    pub fn resources(&self) -> &RuntimeResources {
+        &self.resources
     }
 
     /// Returns the diagnostics snapshot.
@@ -222,6 +238,7 @@ pub struct ChildServiceContext {
     task_group: TaskGroup,
     blocking_lanes: BlockingLanes,
     diagnostics: RuntimeDiagnostics,
+    resources: RuntimeResources,
     _sealed: Arc<ChildContextSeal>,
 }
 
@@ -234,6 +251,7 @@ impl ChildServiceContext {
         parent_group: &TaskGroup,
         blocking_lanes: BlockingLanes,
         diagnostics: RuntimeDiagnostics,
+        resources: RuntimeResources,
     ) -> Self {
         let name = scope.into_inner();
         Self {
@@ -241,6 +259,7 @@ impl ChildServiceContext {
             task_group: parent_group.component(name),
             blocking_lanes,
             diagnostics,
+            resources,
             _sealed: Arc::new(ChildContextSeal),
         }
     }
@@ -285,6 +304,16 @@ impl ChildServiceContext {
         &self.diagnostics
     }
 
+    /// Returns the shared process resource-budget root.
+    pub fn process_budget(&self) -> ResourceBudget {
+        self.resources.process_budget()
+    }
+
+    /// Returns the process-wide runtime resource capabilities.
+    pub fn resources(&self) -> &RuntimeResources {
+        &self.resources
+    }
+
     /// Returns the diagnostics snapshot.
     pub fn diagnostics_snapshot(&self) -> RuntimeDiagnosticsSnapshot {
         self.diagnostics
@@ -307,6 +336,7 @@ impl ChildServiceContext {
             &self.task_group,
             self.blocking_lanes.clone(),
             self.diagnostics.clone(),
+            self.resources.clone(),
         )
     }
 
