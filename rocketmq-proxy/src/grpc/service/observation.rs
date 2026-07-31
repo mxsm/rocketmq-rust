@@ -15,11 +15,10 @@
 use std::time::Duration;
 use std::time::Instant;
 
+use rocketmq_proxy_core::ProxyDrainAdmission;
 use rocketmq_runtime::BudgetedQueue;
 use rocketmq_runtime::ResourcePermit;
 use tonic::Streaming;
-use tracing::field;
-use tracing::info_span;
 use tracing::Span;
 
 use crate::auth::AuthenticatedPrincipal;
@@ -28,35 +27,46 @@ use crate::proto::v2;
 
 use super::ProxyGrpcService;
 
-#[derive(Clone)]
 pub(super) struct RequestObservation {
     context: ProxyContext,
+    started_at: Instant,
+    rpc_span: Span,
+    forward: Option<ForwardObservation>,
+    _drain_admission: ProxyDrainAdmission,
+}
+
+struct ForwardObservation {
     started_at: Instant,
     span: Span,
 }
 
 impl RequestObservation {
-    pub(super) fn new(context: ProxyContext) -> Self {
-        let span = info_span!(
-            "rocketmq_proxy.rpc",
+    pub(super) fn new(context: ProxyContext, drain_admission: ProxyDrainAdmission) -> Self {
+        let rpc_span = tracing::info_span!(
+            rocketmq_observability::trace::span_names::PROXY_RPC,
             rpc = context.rpc_name(),
             request_id = %context.request_id(),
-            client_id = context.client_id().unwrap_or(""),
-            remote_addr = context.remote_addr().unwrap_or(""),
-            local_addr = context.local_addr().unwrap_or(""),
-            principal = field::Empty,
+            result = tracing::field::Empty,
         );
         Self {
             context,
             started_at: Instant::now(),
-            span,
+            rpc_span,
+            forward: None,
+            _drain_admission: drain_admission,
         }
+    }
+
+    pub(super) fn begin_forward(&mut self) {
+        self.forward = Some(ForwardObservation {
+            started_at: Instant::now(),
+            span: rocketmq_observability::trace::proxy::forward_span(&self.rpc_span, self.context.rpc_name()),
+        });
     }
 
     pub(super) fn record_principal(&mut self, principal: Option<&AuthenticatedPrincipal>) {
         if let Some(principal) = principal {
             self.context.set_authenticated_principal(principal.clone());
-            self.span.record("principal", principal.username());
         }
     }
 
@@ -65,11 +75,23 @@ impl RequestObservation {
     }
 
     pub(super) fn span(&self) -> Span {
-        self.span.clone()
+        self.forward
+            .as_ref()
+            .map_or_else(|| self.rpc_span.clone(), |forward| forward.span.clone())
+    }
+
+    pub(super) fn rpc_span(&self) -> Span {
+        self.rpc_span.clone()
     }
 
     pub(super) fn elapsed(&self) -> Duration {
         self.started_at.elapsed()
+    }
+
+    pub(super) fn forward(&self) -> Option<(&Span, Duration)> {
+        self.forward
+            .as_ref()
+            .map(|forward| (&forward.span, forward.started_at.elapsed()))
     }
 }
 
