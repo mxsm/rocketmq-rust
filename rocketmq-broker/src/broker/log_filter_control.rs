@@ -849,7 +849,14 @@ mod tests {
         assert_eq!(active.last_completed_operation_id, None);
         assert!(active.expires_at_millis.is_some());
         tokio::time::timeout(Duration::from_secs(5), async {
-            while handle.current() != baseline {
+            loop {
+                let status = control.status();
+                if handle.current() == baseline
+                    && status.active_operation_id.is_none()
+                    && status.last_completed_operation_id.as_deref() == Some("ttl")
+                {
+                    break;
+                }
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
         })
