@@ -147,6 +147,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     let telemetry_guard =
         rocketmq_observability::install_global_with_filter(&bootstrap_config, resolved_filter.clone())
             .context("failed to initialize namesrv telemetry bootstrap")?;
+    register_namesrv_release_identity(&telemetry_guard, &process_telemetry)?;
     log_telemetry_bootstrap(
         &bootstrap_config,
         &resolved_filter,
@@ -862,7 +863,18 @@ mod tests {
 
     #[test]
     fn namesrv_bootstrap_accepts_standard_otlp_environment_values() {
-        let mut config = build_namesrv_telemetry_bootstrap_config(&NamesrvConfig::default());
+        let process_telemetry =
+            rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig::try_from_values(
+                "rocketmq-namesrv",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("local NameServer process telemetry");
+        let mut config = build_namesrv_telemetry_bootstrap_config(&NamesrvConfig::default(), &process_telemetry);
 
         rocketmq_observability::apply_standard_otlp_environment_values(
             &mut config,
