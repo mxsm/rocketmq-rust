@@ -41,9 +41,11 @@ use crate::shutdown_report::ShutdownReport;
 use crate::shutdown_report::TaskSnapshot;
 
 mod registry;
+mod shutdown;
 
 use registry::ActiveTaskRegistry;
 use registry::ChildRegistrationKind;
+use shutdown::ShutdownCoordinator;
 
 const STATE_OPEN: u8 = 0;
 const STATE_CLOSING: u8 = 1;
@@ -210,8 +212,7 @@ struct TaskGroupInner {
     panicked: AtomicUsize,
     lifecycle: AtomicU8,
     spawn_gate: Mutex<()>,
-    shutdown_deadline: Mutex<Option<ShutdownDeadline>>,
-    shutdown_report: tokio::sync::OnceCell<ShutdownReport>,
+    shutdown: ShutdownCoordinator,
 }
 
 #[derive(Debug, Clone)]
@@ -330,7 +331,7 @@ impl TaskGroup {
 
     /// Returns the earliest absolute deadline installed by a shutdown owner.
     pub fn shutdown_deadline(&self) -> Option<ShutdownDeadline> {
-        *self.inner.shutdown_deadline.lock()
+        self.inner.shutdown.deadline()
     }
 
     /// Returns the lifecycle state.
@@ -554,20 +555,12 @@ impl TaskGroup {
 
     /// Shuts down until.
     pub fn shutdown_until(&self, deadline: ShutdownDeadline) -> BoxFuture<'_, ShutdownReport> {
-        let deadline = {
-            let mut installed = self.inner.shutdown_deadline.lock();
-            match *installed {
-                Some(existing) if existing.instant() <= deadline.instant() => existing,
-                Some(_) | None => {
-                    *installed = Some(deadline);
-                    deadline
-                }
-            }
-        };
+        self.tighten_shutdown_deadline(deadline);
         async move {
             self.inner
-                .shutdown_report
-                .get_or_init(|| async { self.shutdown_inner(deadline).await })
+                .shutdown
+                .report
+                .get_or_init(|| async { self.shutdown_inner().await })
                 .await
                 .clone()
         }
@@ -576,13 +569,20 @@ impl TaskGroup {
 
     /// Shuts down now.
     pub fn shutdown_now(&self) -> ShutdownReport {
-        if let Some(report) = self.inner.shutdown_report.get() {
+        if let Some(report) = self.inner.shutdown.report.get() {
             return report.clone();
         }
 
         let report = self.shutdown_now_inner();
-        let _ = self.inner.shutdown_report.set(report.clone());
+        let _ = self.inner.shutdown.report.set(report.clone());
         report
+    }
+
+    fn tighten_shutdown_deadline(&self, deadline: ShutdownDeadline) {
+        let installed = self.inner.shutdown.tighten(deadline);
+        for child in self.inner.registry.children_snapshot() {
+            child.tighten_shutdown_deadline(installed);
+        }
     }
 
     fn spawn_inner<F>(
@@ -689,8 +689,13 @@ impl TaskGroup {
         Some(meta.completion)
     }
 
-    async fn shutdown_inner(&self, deadline: ShutdownDeadline) -> ShutdownReport {
+    async fn shutdown_inner(&self) -> ShutdownReport {
         let started_at = Instant::now();
+        let deadline = self
+            .inner
+            .shutdown
+            .deadline()
+            .unwrap_or_else(|| ShutdownDeadline::after(Duration::ZERO));
         let children = {
             let _spawn_guard = self.inner.spawn_gate.lock();
             self.inner.lifecycle.store(STATE_CLOSING, Ordering::Release);
@@ -710,14 +715,9 @@ impl TaskGroup {
             .await
         };
         let tracked_shutdown = async {
-            let remaining = deadline.remaining();
-            if tokio::time::timeout(remaining, self.inner.tracker.wait())
-                .await
-                .is_err()
-            {
+            if self.inner.shutdown.run_until(self.inner.tracker.wait()).await.is_err() {
                 self.abort_tracked_tasks();
-                let drain_timeout = deadline.remaining().min(Duration::from_secs(1));
-                let _ = tokio::time::timeout(drain_timeout, self.inner.tracker.wait()).await;
+                let _ = self.inner.shutdown.run_until(self.inner.tracker.wait()).await;
                 true
             } else {
                 false
@@ -885,8 +885,7 @@ impl TaskGroupInner {
             panicked: AtomicUsize::new(0),
             lifecycle: AtomicU8::new(STATE_OPEN),
             spawn_gate: Mutex::new(()),
-            shutdown_deadline: Mutex::new(None),
-            shutdown_report: tokio::sync::OnceCell::new(),
+            shutdown: ShutdownCoordinator::new(),
         }
     }
 

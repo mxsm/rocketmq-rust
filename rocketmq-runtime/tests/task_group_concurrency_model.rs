@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_runtime::RuntimeError;
+use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskGroupLifecycleState;
 use tokio::sync::Barrier;
@@ -43,6 +44,33 @@ async fn dynamic_child_churn_prunes_inactive_groups_without_retaining_history() 
     let report = group.shutdown(Duration::from_secs(1)).await;
     assert!(report.is_healthy(), "{}", report.to_json());
     assert!(report.children.is_empty(), "{}", report.to_json());
+}
+
+#[tokio::test(start_paused = true)]
+async fn earliest_shutdown_deadline_wakes_existing_waiter() {
+    let context = RuntimeContext::from_current("task-group-earliest-deadline");
+    let group = context.root_group().child("deadline-owner");
+    group
+        .spawn_service("deadline-blocked-task", std::future::pending())
+        .expect("tracked task should spawn");
+
+    let shutdown_group = group.clone();
+    let late = ShutdownDeadline::after(Duration::from_secs(30));
+    let waiter = tokio::spawn(async move { shutdown_group.shutdown_until(late).await });
+    tokio::task::yield_now().await;
+
+    let early = ShutdownDeadline::after(Duration::from_millis(50));
+    drop(group.shutdown_until(early));
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_millis(50)).await;
+    tokio::task::yield_now().await;
+
+    assert!(
+        waiter.is_finished(),
+        "tightening the deadline must wake a shutdown waiter that already observed a later deadline"
+    );
+    let report = waiter.await.expect("shutdown waiter should not panic");
+    assert!(report.timed_out > 0, "{}", report.to_json());
 }
 
 async fn run_task_group_concurrency_model(group: TaskGroup) {
