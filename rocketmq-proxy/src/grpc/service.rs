@@ -25,6 +25,7 @@ use tonic::Request;
 use tonic::Response;
 use tonic::Status;
 use tracing::Instrument;
+use tracing::Span;
 
 use crate::auth;
 use crate::auth::AuthenticatedPrincipal;
@@ -215,7 +216,7 @@ impl<P> ProxyGrpcService<P> {
     }
 
     async fn finish_observation(&self, observation: &RequestObservation, outcome: &ProxyRequestOutcome) {
-        observation.rpc_span.record("result", outcome.metric_result());
+        observation.rpc_span().record("result", outcome.metric_result());
         self.metrics
             .record_request_completed(observation.context().rpc_name(), outcome, observation.elapsed());
         if let Some((span, elapsed)) = observation.forward() {
