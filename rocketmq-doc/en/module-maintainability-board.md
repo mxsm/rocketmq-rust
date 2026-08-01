@@ -10,7 +10,7 @@ A high rank is a review priority, not evidence that line count alone is a defect
 |---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | 1 | `rocketmq-broker/src/broker_runtime.rs` | 730.425 | 767 | 229 | 12 | 2 | 1 | 9 | 2 | 29 |
 | 2 | `rocketmq-client/src/producer/default_mq_producer.rs` | 663.404 | 2138 | 98 | 14 | 1 | 182 | 0 | 0 | 10 |
-| 3 | `rocketmq-store/src/message_store/local_file_message_store.rs` | 574.775 | 1981 | 163 | 5 | 4 | 5 | 21 | 0 | 25 |
+| 3 | `rocketmq-store/src/message_store/local_file_message_store.rs` | 577.375 | 1985 | 164 | 5 | 4 | 5 | 21 | 0 | 25 |
 | 4 | `rocketmq-store/src/log_file/commit_log.rs` | 500.090 | 2277 | 103 | 6 | 4 | 64 | 10 | 0 | 15 |
 | 5 | `rocketmq-client/src/consumer/default_mq_push_consumer.rs` | 430.892 | 1152 | 31 | 3 | 0 | 190 | 0 | 0 | 9 |
 | 6 | `rocketmq-client/src/factory/mq_client_instance.rs` | 415.691 | 2261 | 74 | 3 | 2 | 72 | 12 | 0 | 13 |
