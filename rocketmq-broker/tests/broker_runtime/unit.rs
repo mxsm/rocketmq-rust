@@ -558,9 +558,24 @@ async fn broker_runtime_service_context_parents_probe_task_groups() {
     assert!(report.timed_out_component_names().is_empty());
     assert!(report.component_names().contains(&"scheduled_tasks"));
 
+    let scheduled_task_group_report = runtime
+        .lifecycle
+        .scheduled_task_manager
+        .last_task_group_shutdown_report()
+        .expect("scheduled task group shutdown report should be retained by its owner");
+    assert!(
+        scheduled_task_group_report.is_healthy(),
+        "{}",
+        scheduled_task_group_report.to_json()
+    );
+    assert_eq!(
+        scheduled_task_group_report.name,
+        rocketmq_runtime::schedule::simple_scheduler::LEGACY_SCHEDULED_TASK_MANAGER_BOUNDARY
+    );
+
     let service_report = service.task_group().shutdown(Duration::from_secs(1)).await;
     assert!(
-        service_report
+        !service_report
             .children
             .iter()
             .any(|child| child.name

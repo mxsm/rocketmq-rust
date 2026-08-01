@@ -367,4 +367,21 @@ mod tests {
         let report = runtime.shutdown_tasks(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
     }
+
+    #[tokio::test]
+    async fn owner_shutdown_cancels_operation_tasks() {
+        let runtime = RuntimeContext::from_current("operation-owner-shutdown-test");
+        let owner = runtime.service_context("operations");
+        let operation = OperationContext::without_deadline(TaskKind::Worker);
+
+        owner
+            .task_group()
+            .spawn_operation(&operation, "owned-operation", std::future::pending())
+            .expect("operation task should spawn");
+
+        let report = runtime.shutdown_tasks(Duration::from_secs(1)).await;
+
+        assert!(report.is_healthy(), "{}", report.to_json());
+        assert_eq!(operation.active_task_count(), 0);
+    }
 }

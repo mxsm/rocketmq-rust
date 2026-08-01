@@ -163,19 +163,11 @@ impl ClientHousekeepingService {
     }
 
     pub(crate) fn task_count(&self) -> usize {
-        let root_count = self
-            .task_group
+        self.task_group
             .lock()
             .as_ref()
             .map(TaskGroup::task_count)
-            .unwrap_or_default();
-        let scheduled_count = self
-            .scheduled_tasks
-            .lock()
-            .as_ref()
-            .map(|scheduled_tasks| scheduled_tasks.group().task_count())
-            .unwrap_or_default();
-        root_count + scheduled_count
+            .unwrap_or_default()
     }
 
     pub(crate) fn schedule_snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
