@@ -39,9 +39,31 @@ mod legacy {}
 fn call() {}
 """,
         )
-        self.assertEqual(["crate", "module", "item"], [entry["scope"] for entry in entries])
+        self.assertEqual(["crate", "module"], [entry["scope"] for entry in entries])
         self.assertTrue(all(entry["owner"] == "crate" for entry in entries))
-        self.assertEqual("wire adapter", entries[2]["reason"])
+
+    def test_item_allow_with_inline_reason_is_self_governing(self) -> None:
+        entries = guard.inventory_source(
+            "crate/src/lib.rs",
+            """
+#[allow(clippy::too_many_arguments, reason = "immutable wire fields preserve protocol ordering")]
+fn call() {}
+""",
+        )
+
+        self.assertEqual([], entries)
+
+    def test_unreasoned_item_allow_remains_central_debt(self) -> None:
+        entries = guard.inventory_source(
+            "crate/src/lib.rs",
+            """
+#[allow(clippy::too_many_arguments)]
+fn call() {}
+""",
+        )
+
+        self.assertEqual(1, len(entries))
+        self.assertEqual("item", entries[0]["scope"])
 
     def test_unregistered_allow_and_threshold_drift_fail(self) -> None:
         current = guard.current_inventory(ROOT)

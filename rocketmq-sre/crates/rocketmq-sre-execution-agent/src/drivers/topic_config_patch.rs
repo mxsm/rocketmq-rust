@@ -26,7 +26,6 @@ use rocketmq_sre_contracts::canonical_precondition_hash;
 use serde::Deserialize;
 use serde::Serialize;
 
-use super::AdminCoreDriver;
 use super::AgentActionHandler;
 use super::DriverDispatchOutcome;
 use super::DriverFuture;
@@ -212,8 +211,6 @@ where
         })
     }
 }
-
-impl<C> AdminCoreDriver for TopicConfigPatchHandler<C> where C: TopicConfigPatchClient + 'static {}
 
 fn dispatch_outcome(
     operation_id: &str,

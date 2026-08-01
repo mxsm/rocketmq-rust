@@ -48,6 +48,16 @@ class ArchitectureReleaseGuardTests(unittest.TestCase):
         self.assertNotIn("Traceback", result.stdout + result.stderr)
         self.assertIn("ARCHITECTURE_RELEASE_GUARD_OK", result.stdout)
 
+    def test_standalone_mcp_is_discovered_without_becoming_a_root_member(self) -> None:
+        findings: list[guard.Finding] = []
+
+        inventory = guard.discover_release_inventory(ROOT, findings)
+
+        self.assertEqual([], findings)
+        self.assertIn("rocketmq-tools/rocketmq-mcp/Cargo.toml", inventory.standalone_projects)
+        self.assertIn("rocketmq-mcp", inventory.governance_targets)
+        self.assertNotIn("rocketmq-mcp", inventory.root_members)
+
     def test_plan_contains_no_deleted_legacy_resource(self) -> None:
         source = guard.PLAN_PATH.read_text(encoding="utf-8")
         for legacy in ("rocketmq-common", "rocketmq-remoting", '"rocketmq-rust"'):

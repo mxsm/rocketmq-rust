@@ -32,6 +32,7 @@ PLAN_PATH = ROOT / "scripts" / "architecture-release-plan.json"
 POLICY_PATH = ROOT / "scripts" / "architecture-dependency-policy.json"
 BASELINE_PATH = ROOT / "scripts" / "architecture-dependency-baseline.json"
 CI_PATH = ROOT / ".github" / "workflows" / "rocketmq-rust-ci.yaml"
+VALIDATION_INVENTORY_PATH = ROOT / "scripts" / "architecture-validation-inventory.json"
 EDGE_FIELDS = ("caller", "target", "kind", "path", "alias")
 
 
@@ -43,6 +44,13 @@ class Finding:
 
     def render(self) -> str:
         return f"RELEASE_FINDING code={self.code} path={self.path} detail={self.detail}"
+
+
+@dataclass(frozen=True)
+class ReleaseInventory:
+    root_members: tuple[str, ...]
+    standalone_projects: tuple[str, ...]
+    governance_targets: tuple[str, ...]
 
 
 def load_json(path: Path, label: str, findings: list[Finding]) -> dict[str, Any] | None:
@@ -131,6 +139,55 @@ def workspace_manifests(root: Path, findings: list[Finding]) -> dict[str, str]:
     return packages
 
 
+def discover_release_inventory(root: Path, findings: list[Finding]) -> ReleaseInventory:
+    root_packages = workspace_manifests(root, findings)
+    inventory_path = root / VALIDATION_INVENTORY_PATH.relative_to(ROOT)
+    inventory = load_json(inventory_path, "architecture validation inventory", findings)
+    standalone_paths: list[str] = []
+    standalone_packages: set[str] = set()
+    if inventory is not None:
+        standalone = inventory.get("standalone")
+        if not isinstance(standalone, list):
+            findings.append(
+                Finding(
+                    "inventory-section-missing",
+                    inventory_path.relative_to(root).as_posix(),
+                    "standalone must be a list",
+                )
+            )
+        else:
+            for index, project in enumerate(standalone):
+                manifest_value = project.get("manifest") if isinstance(project, dict) else None
+                relative = normalized_relative_path(manifest_value)
+                if relative is None or not relative.endswith("Cargo.toml"):
+                    findings.append(
+                        Finding(
+                            "manifest-path-invalid",
+                            inventory_path.relative_to(root).as_posix(),
+                            f"standalone[{index}].manifest={manifest_value!r}",
+                        )
+                    )
+                    continue
+                standalone_paths.append(relative)
+                manifest = read_toml(root / relative, "standalone manifest", findings)
+                if manifest is None:
+                    continue
+                package = manifest.get("package")
+                name = package.get("name") if isinstance(package, dict) else None
+                if isinstance(name, str) and name:
+                    if name in root_packages or name in standalone_packages:
+                        findings.append(Finding("package-duplicate", relative, f"package={name}"))
+                    standalone_packages.add(name)
+                elif not isinstance(manifest.get("workspace"), dict):
+                    findings.append(Finding("manifest-section-missing", relative, "package.name or workspace is required"))
+
+    return ReleaseInventory(
+        root_members=tuple(sorted(root_packages)),
+        standalone_projects=tuple(sorted(standalone_paths)),
+        governance_targets=tuple(sorted(set(root_packages) | standalone_packages)),
+    )
+
+
 def edge_identity(edge: dict[str, Any]) -> tuple[str, str, str, str, str] | None:
     if not all(isinstance(edge.get(field), str) and edge[field] for field in EDGE_FIELDS):
         return None
@@ -217,7 +274,7 @@ def validate_design_source(plan: dict[str, Any], root: Path, findings: list[Find
 def validate_release_topology(
     plan: dict[str, Any],
     policy: dict[str, Any],
-    packages: dict[str, str],
+    inventory: ReleaseInventory,
     root: Path,
     findings: list[Finding],
 ) -> None:
@@ -246,12 +303,16 @@ def validate_release_topology(
                 f"missing={sorted(expected - actual)} extra={sorted(actual - expected)}",
             )
         )
-    if set(packages) != expected:
+    available = set(inventory.governance_targets)
+    root_members = set(inventory.root_members)
+    missing = expected - available
+    extra_root_members = root_members - expected
+    if missing or extra_root_members:
         findings.append(
             Finding(
-                "workspace-package-mismatch",
-                "Cargo.toml",
-                f"missing={sorted(expected - set(packages))} extra={sorted(set(packages) - expected)}",
+                "release-inventory-mismatch",
+                "scripts/architecture-validation-inventory.json",
+                f"missing={sorted(missing)} extra_root_members={sorted(extra_root_members)}",
             )
         )
 
@@ -383,8 +444,8 @@ def validate(
     if plan.get("schema_version") != 2 or plan.get("milestone") != "P0":
         findings.append(Finding("plan-schema-invalid", "release-plan", "expected schema_version=2 milestone=P0"))
     validate_design_source(plan, root, findings)
-    packages = workspace_manifests(root, findings)
-    validate_release_topology(plan, policy, packages, root, findings)
+    inventory = discover_release_inventory(root, findings)
+    validate_release_topology(plan, policy, inventory, root, findings)
     validate_compatibility_windows(plan, baseline, root, findings)
     validate_transition_contract(plan, findings)
     if check_ci:
@@ -405,7 +466,7 @@ def main() -> int:
         for finding in findings:
             print(finding.render())
         return 1
-    print("ARCHITECTURE_RELEASE_GUARD_OK packages=29 transition_debt=tracked")
+    print("ARCHITECTURE_RELEASE_GUARD_OK packages=29 standalone=7 transition_debt=tracked")
     return 0
 
 

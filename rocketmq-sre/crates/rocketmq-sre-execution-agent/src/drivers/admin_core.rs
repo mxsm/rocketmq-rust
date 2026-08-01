@@ -19,7 +19,6 @@ use rocketmq_sre_contracts::PlanStepId;
 use serde::Deserialize;
 use serde::Serialize;
 
-use super::AgentActionHandler;
 use super::DriverFuture;
 
 /// Closed Broker fields supported by the supervised patch action.
@@ -31,7 +30,6 @@ pub struct BrokerConfigPatch {
     pub flush_delay_offset_interval_ms: Option<u64>,
     pub max_client_event_count: Option<i32>,
 }
-
 impl BrokerConfigPatch {
     #[must_use]
     pub fn field_names(&self) -> BTreeSet<String> {
@@ -265,10 +263,3 @@ pub trait SubscriptionGroupPatchClient: Send + Sync {
         request: &'a SubscriptionGroupPatchRestore,
     ) -> DriverFuture<'a, SubscriptionGroupPatchApplyOutcome>;
 }
-
-/// Typed RocketMQ Admin mutation adapter.
-///
-/// Implementations must map closed action DTOs to `rocketmq-admin-core`
-/// mutation methods. Raw RequestCode, delete, clean, and arbitrary property
-/// maps are not part of this boundary.
-pub trait AdminCoreDriver: AgentActionHandler {}

@@ -40,12 +40,11 @@ use crate::consumer::topic_message_queue_change_listener::TopicMessageQueueChang
 ///
 /// All methods are asynchronous and do not block the calling thread.
 ///
-/// [`poll`]: MessagePollLocal::poll
-/// [`poll_with_timeout`]: MessagePollLocal::poll_with_timeout
-/// [`assign`]: AssignmentControlLocal::assign
+/// [`poll`]: MessagePoll::poll
+/// [`poll_with_timeout`]: MessagePoll::poll_with_timeout
+/// [`assign`]: AssignmentControl::assign
 #[allow(async_fn_in_trait)]
-#[trait_variant::make(SubscriptionControl: Send)]
-pub trait SubscriptionControlLocal: Sync {
+pub trait SubscriptionControl: Send + Sync {
     /// Subscribes to the specified topic using the default subscription expression.
     ///
     /// This function does not block the calling thread.
@@ -261,8 +260,7 @@ pub trait SubscriptionControlLocal: Sync {
 }
 
 #[allow(async_fn_in_trait)]
-#[trait_variant::make(AssignmentControl: Send)]
-pub trait AssignmentControlLocal: Sync {
+pub trait AssignmentControl: Send + Sync {
     /// Returns the set of [`MessageQueue`]s currently assigned to this consumer.
     ///
     /// This function does not block the calling thread.
@@ -320,7 +318,7 @@ pub trait AssignmentControlLocal: Sync {
     /// Returns an error if the queue is not currently assigned to this consumer,
     /// or if the specified offset is out of the valid range.
     ///
-    /// [`poll`]: MessagePollLocal::poll
+    /// [`poll`]: MessagePoll::poll
     async fn seek(&self, message_queue: &MessageQueue, offset: i64) -> rocketmq_error::RocketMQResult<()>;
 
     /// Suspends message fetching for the specified [`MessageQueue`]s.
@@ -332,8 +330,8 @@ pub trait AssignmentControlLocal: Sync {
     ///
     /// * `message_queues` - The queues to pause.
     ///
-    /// [`poll`]: MessagePollLocal::poll
-    /// [`resume`]: AssignmentControlLocal::resume
+    /// [`poll`]: MessagePoll::poll
+    /// [`resume`]: AssignmentControl::resume
     async fn pause(&self, message_queues: Vec<MessageQueue>);
 
     /// Resumes message fetching for the specified [`MessageQueue`]s.
@@ -373,7 +371,7 @@ pub trait AssignmentControlLocal: Sync {
     /// Returns an error if the queue is not assigned to this consumer or if the latest
     /// offset cannot be retrieved from the broker.
     ///
-    /// [`poll`]: MessagePollLocal::poll
+    /// [`poll`]: MessagePoll::poll
     async fn seek_to_end(&self, message_queue: &MessageQueue) -> rocketmq_error::RocketMQResult<()>;
 
     /// Checks whether a specific [`MessageQueue`] is currently paused.
@@ -390,13 +388,12 @@ pub trait AssignmentControlLocal: Sync {
     ///
     /// `true` if the queue is paused, `false` otherwise.
     ///
-    /// [`poll`]: MessagePollLocal::poll
+    /// [`poll`]: MessagePoll::poll
     async fn is_paused(&self, message_queue: &MessageQueue) -> bool;
 }
 
 #[allow(async_fn_in_trait)]
-#[trait_variant::make(MessagePoll: Send)]
-pub trait MessagePollLocal: Sync {
+pub trait MessagePoll: Send + Sync {
     /// Fetches the next batch of messages without allocating owned copies.
     ///
     /// Returns immutable `Arc<MessageExt>` handles without heap allocation or deep cloning.
@@ -494,7 +491,7 @@ pub trait MessagePollLocal: Sync {
     ///
     /// This function does not block the calling thread.
     ///
-    /// [`poll`]: MessagePollLocal::poll
+    /// [`poll`]: MessagePoll::poll
     async fn poll_timeout_millis(&self) -> u64;
 
     /// Sets the default timeout used by [`poll`] in milliseconds.
@@ -504,8 +501,8 @@ pub trait MessagePollLocal: Sync {
     ///
     /// This function does not block the calling thread.
     ///
-    /// [`poll`]: MessagePollLocal::poll
-    /// [`poll_with_timeout`]: MessagePollLocal::poll_with_timeout
+    /// [`poll`]: MessagePoll::poll
+    /// [`poll_with_timeout`]: MessagePoll::poll_with_timeout
     async fn set_poll_timeout_millis(&self, timeout_millis: u64);
 
     /// Returns the maximum time that the broker may suspend a long-poll pull request.
@@ -585,8 +582,7 @@ pub trait MessagePollLocal: Sync {
 }
 
 #[allow(async_fn_in_trait)]
-#[trait_variant::make(ConsumerOffsetControl: Send)]
-pub trait ConsumerOffsetControlLocal: Sync {
+pub trait ConsumerOffsetControl: Send + Sync {
     /// Returns the configured offset store, if one has been set or initialized.
     async fn offset_store(&self) -> Option<Arc<OffsetStore>>;
 
@@ -614,8 +610,8 @@ pub trait ConsumerOffsetControlLocal: Sync {
     ///
     /// * `auto_commit` - `true` to enable automatic offset commit; `false` to disable it.
     ///
-    /// [`commit`]: ConsumerOffsetControlLocal::commit
-    /// [`commit_sync`]: ConsumerOffsetControlLocal::commit_sync
+    /// [`commit`]: ConsumerOffsetControl::commit
+    /// [`commit_sync`]: ConsumerOffsetControl::commit_sync
     async fn set_auto_commit(&self, auto_commit: bool);
 
     /// Returns the interval between automatic offset commits in milliseconds.
@@ -720,7 +716,7 @@ pub trait ConsumerOffsetControlLocal: Sync {
     /// `DefaultLitePullConsumer.commitSync()` delegates to `commitAll()` and only updates the
     /// consumer offset store. Use [`commit`] for the modern equivalent.
     ///
-    /// [`commit`]: ConsumerOffsetControlLocal::commit
+    /// [`commit`]: ConsumerOffsetControl::commit
     async fn commit_sync(&self);
 
     /// Commits the provided offsets and optionally persists them to the broker.
@@ -738,7 +734,7 @@ pub trait ConsumerOffsetControlLocal: Sync {
     /// * `offset_map` - A map from [`MessageQueue`] to the offset to commit.
     /// * `persist` - When `true`, the committed offsets are persisted to the broker immediately.
     ///
-    /// [`commit_with_map`]: ConsumerOffsetControlLocal::commit_with_map
+    /// [`commit_with_map`]: ConsumerOffsetControl::commit_with_map
     async fn commit_sync_with_map(&self, offset_map: HashMap<MessageQueue, i64>, persist: bool);
 
     /// Commits all consumed offsets to the consumer offset store.
@@ -747,7 +743,7 @@ pub trait ConsumerOffsetControlLocal: Sync {
     /// performed by the normal periodic persistence task, shutdown, or explicit
     /// `commit_with_map` / `commit_with_set` calls with `persist = true`.
     ///
-    /// [`commit_sync`]: ConsumerOffsetControlLocal::commit_sync
+    /// [`commit_sync`]: ConsumerOffsetControl::commit_sync
     async fn commit(&self);
 
     /// Commits the provided offsets asynchronously, optionally persisting them to the broker.
@@ -798,13 +794,12 @@ pub trait ConsumerOffsetControlLocal: Sync {
     ///
     /// Returns an error if the consumer is not in the running state.
     ///
-    /// [`commit`]: ConsumerOffsetControlLocal::commit
+    /// [`commit`]: ConsumerOffsetControl::commit
     async fn commit_all(&self) -> rocketmq_error::RocketMQResult<()>;
 }
 
 #[allow(async_fn_in_trait)]
-#[trait_variant::make(ConsumerLifecycle: Send)]
-pub trait ConsumerLifecycleLocal: Sync {
+pub trait ConsumerLifecycle: Send + Sync {
     /// Starts the consumer and establishes connections to the broker and name server.
     ///
     /// This function does not block the calling thread.

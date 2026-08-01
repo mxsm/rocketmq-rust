@@ -85,102 +85,6 @@
       "scope": "crate"
     },
     {
-      "identity": "rocketmq-broker/src/broker/broker_admin_runtime.rs:item:fn new:clippy::too_many_arguments:0",
-      "item": "fn new",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-broker",
-      "path": "rocketmq-broker/src/broker/broker_admin_runtime.rs",
-      "reason": "the broker composition root enumerates the complete Admin boundary",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-broker/src/broker/broker_control_plane.rs:item:fn apply_controller_role_change:clippy::too_many_arguments:0",
-      "item": "fn apply_controller_role_change",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-broker",
-      "path": "rocketmq-broker/src/broker/broker_control_plane.rs",
-      "reason": "preserves the controller notification protocol",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-broker/src/broker/broker_control_plane.rs:item:fn new:clippy::too_many_arguments:0",
-      "item": "fn new",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-broker",
-      "path": "rocketmq-broker/src/broker/broker_control_plane.rs",
-      "reason": "the composition root lists the complete controller boundary",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-broker/src/broker/broker_pre_online_capability.rs:item:fn new:clippy::too_many_arguments:0",
-      "item": "fn new",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-broker",
-      "path": "rocketmq-broker/src/broker/broker_pre_online_capability.rs",
-      "reason": "the composition root lists each role-sensitive service capability explicitly",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-broker/src/broker/broker_pre_online_capability.rs:item:fn new:clippy::too_many_arguments:1",
-      "item": "fn new",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-broker",
-      "path": "rocketmq-broker/src/broker/broker_pre_online_capability.rs",
-      "reason": "the composition root lists the complete broker pre-online capability boundary",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-broker/src/broker/broker_registration_runtime.rs:item:fn new:clippy::too_many_arguments:0",
-      "item": "fn new",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-broker",
-      "path": "rocketmq-broker/src/broker/broker_registration_runtime.rs",
-      "reason": "the broker composition root enumerates the complete registration boundary",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-broker/src/failover/escape_bridge.rs:item:fn get_message_with_size_limit_from_local_store:clippy::too_many_arguments:0",
-      "item": "fn get_message_with_size_limit_from_local_store",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-broker",
-      "path": "rocketmq-broker/src/failover/escape_bridge.rs",
-      "reason": "preserves the Store pull read contract",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-broker/src/failover/escape_bridge_capability.rs:item:fn get_message_with_size_limit:clippy::too_many_arguments:0",
-      "item": "fn get_message_with_size_limit",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-broker",
-      "path": "rocketmq-broker/src/failover/escape_bridge_capability.rs",
-      "reason": "preserves the Store pull read contract",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
       "identity": "rocketmq-broker/src/filter/expression_for_retry_message_filter.rs:item:impl MessageFilter:unused_variables:0",
       "item": "impl MessageFilter",
       "lints": [
@@ -265,54 +169,6 @@
       "scope": "item"
     },
     {
-      "identity": "rocketmq-broker/src/out_api/broker_outer_api.rs:item:fn register_broker_all:clippy::too_many_arguments:0",
-      "item": "fn register_broker_all",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-broker",
-      "path": "rocketmq-broker/src/out_api/broker_outer_api.rs",
-      "reason": "existing broker registration wire composition is tracked by the lint debt registry",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-broker/src/processor/ack_message_processor.rs:item:fn new:clippy::too_many_arguments:0",
-      "item": "fn new",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-broker",
-      "path": "rocketmq-broker/src/processor/ack_message_processor.rs",
-      "reason": "constructor lists the complete narrow acknowledgment capability boundary",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-broker/src/processor/change_invisible_time_processor.rs:item:fn new:clippy::too_many_arguments:0",
-      "item": "fn new",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-broker",
-      "path": "rocketmq-broker/src/processor/change_invisible_time_processor.rs",
-      "reason": "constructor lists the complete narrow change-invisible-time capability boundary",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-broker/src/processor/change_invisible_time_processor.rs:item:fn update_next_visible_time:clippy::too_many_arguments:0",
-      "item": "fn update_next_visible_time",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-broker",
-      "path": "rocketmq-broker/src/processor/change_invisible_time_processor.rs",
-      "reason": "arguments preserve ConsumerOrderInfoManager's protocol update coordinates",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
       "identity": "rocketmq-broker/src/processor/consumer_manage_processor.rs:item:fn process_request_inner:unused_variables:0",
       "item": "fn process_request_inner",
       "lints": [
@@ -321,66 +177,6 @@
       "owner": "rocketmq-broker",
       "path": "rocketmq-broker/src/processor/consumer_manage_processor.rs",
       "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-broker/src/processor/lite_manager_processor.rs:item:fn new:clippy::too_many_arguments:0",
-      "item": "fn new",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-broker",
-      "path": "rocketmq-broker/src/processor/lite_manager_processor.rs",
-      "reason": "composition root wires explicit Lite manager capabilities",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-broker/src/processor/lite_subscription_ctl_processor.rs:item:fn new:clippy::too_many_arguments:0",
-      "item": "fn new",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-broker",
-      "path": "rocketmq-broker/src/processor/lite_subscription_ctl_processor.rs",
-      "reason": "composition root lists each Lite subscription capability explicitly",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-broker/src/processor/notification_processor.rs:item:fn new:clippy::too_many_arguments:0",
-      "item": "fn new",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-broker",
-      "path": "rocketmq-broker/src/processor/notification_processor.rs",
-      "reason": "constructor lists the complete narrow Notification capability boundary",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-broker/src/processor/peek_message_processor.rs:item:fn new:clippy::too_many_arguments:0",
-      "item": "fn new",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-broker",
-      "path": "rocketmq-broker/src/processor/peek_message_processor.rs",
-      "reason": "constructor lists the complete narrow Peek capability boundary",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-broker/src/processor/pop_lite_message_processor.rs:item:fn new:clippy::too_many_arguments:0",
-      "item": "fn new",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-broker",
-      "path": "rocketmq-broker/src/processor/pop_lite_message_processor.rs",
-      "reason": "composition root lists each POP Lite capability explicitly",
       "removal_issue": "ARC-ALLOW-001",
       "scope": "item"
     },
@@ -395,78 +191,6 @@
       "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
       "removal_issue": "ARC-ALLOW-001",
       "scope": "crate"
-    },
-    {
-      "identity": "rocketmq-broker/src/processor/pop_message_processor.rs:item:fn pop_msg_from_queue:clippy::too_many_arguments:0",
-      "item": "fn pop_msg_from_queue",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-broker",
-      "path": "rocketmq-broker/src/processor/pop_message_processor.rs",
-      "reason": "existing POP queue execution context is tracked by the lint debt registry",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-broker/src/processor/pop_message_processor.rs:item:fn pop_msg_from_topic:clippy::too_many_arguments:0",
-      "item": "fn pop_msg_from_topic",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-broker",
-      "path": "rocketmq-broker/src/processor/pop_message_processor.rs",
-      "reason": "existing POP topic execution context is tracked by the lint debt registry",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-broker/src/processor/pop_message_processor.rs:item:fn pop_msg_from_topic_by_name:clippy::too_many_arguments:0",
-      "item": "fn pop_msg_from_topic_by_name",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-broker",
-      "path": "rocketmq-broker/src/processor/pop_message_processor.rs",
-      "reason": "existing POP topic lookup context is tracked by the lint debt registry",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-broker/src/processor/pop_message_processor/capability.rs:item:fn new:clippy::too_many_arguments:0",
-      "item": "fn new",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-broker",
-      "path": "rocketmq-broker/src/processor/pop_message_processor/capability.rs",
-      "reason": "composition root enumerates the POP request capability boundary",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-broker/src/processor/pop_message_processor/capability.rs:item:fn new:clippy::too_many_arguments:1",
-      "item": "fn new",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-broker",
-      "path": "rocketmq-broker/src/processor/pop_message_processor/capability.rs",
-      "reason": "composition root enumerates the POP revive capability boundary",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-broker/src/processor/pop_message_processor/capability.rs:item:fn update:clippy::too_many_arguments:0",
-      "item": "fn update",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-broker",
-      "path": "rocketmq-broker/src/processor/pop_message_processor/capability.rs",
-      "reason": "preserves the POP order update contract",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
     },
     {
       "identity": "rocketmq-broker/src/processor/processor_service/pop_buffer_merge_service.rs:crate:<crate>:unused_variables:0",
@@ -493,90 +217,6 @@
       "scope": "item"
     },
     {
-      "identity": "rocketmq-broker/src/processor/pull_message_processor/capability.rs:item:fn new:clippy::too_many_arguments:0",
-      "item": "fn new",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-broker",
-      "path": "rocketmq-broker/src/processor/pull_message_processor/capability.rs",
-      "reason": "composition root enumerates the complete pull processor capability boundary",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-broker/src/processor/pull_message_result_handler.rs:item:fn handle:clippy::too_many_arguments:0",
-      "item": "fn handle",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-broker",
-      "path": "rocketmq-broker/src/processor/pull_message_result_handler.rs",
-      "reason": "existing pull result protocol context is tracked by the lint debt registry",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-broker/src/processor/send_message_processor.rs:item:fn handle_put_message_result:clippy::too_many_arguments:0",
-      "item": "fn handle_put_message_result",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-broker",
-      "path": "rocketmq-broker/src/processor/send_message_processor.rs",
-      "reason": "existing send result protocol context is tracked by the lint debt registry",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-broker/src/processor/send_message_processor/capability.rs:item:fn new:clippy::too_many_arguments:0",
-      "item": "fn new",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-broker",
-      "path": "rocketmq-broker/src/processor/send_message_processor/capability.rs",
-      "reason": "constructor enumerates the complete topic creation and registration boundary",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-broker/src/processor/send_message_processor/capability.rs:item:fn new:clippy::too_many_arguments:1",
-      "item": "fn new",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-broker",
-      "path": "rocketmq-broker/src/processor/send_message_processor/capability.rs",
-      "reason": "constructor enumerates the complete send/reply processor capability boundary",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-broker/src/slave/slave_synchronize.rs:item:fn new:clippy::too_many_arguments:0",
-      "item": "fn new",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-broker",
-      "path": "rocketmq-broker/src/slave/slave_synchronize.rs",
-      "reason": "the composition root wires explicit slave synchronization capabilities",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-broker/src/transaction/queue/default_transactional_message_service.rs:item:fn process_message_queue:clippy::too_many_arguments:0",
-      "item": "fn process_message_queue",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-broker",
-      "path": "rocketmq-broker/src/transaction/queue/default_transactional_message_service.rs",
-      "reason": "existing transaction scan context is tracked by the lint debt registry",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
       "identity": "rocketmq-client/src/admin/default_mq_admin_ext_impl.rs:crate:<crate>:dead_code:0",
       "item": "<crate>",
       "lints": [
@@ -587,30 +227,6 @@
       "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
       "removal_issue": "ARC-ALLOW-001",
       "scope": "crate"
-    },
-    {
-      "identity": "rocketmq-client/src/admin/default_mq_admin_ext_impl/admin_api.rs:item:impl MQAdminExt:unused_variables:0",
-      "item": "impl MQAdminExt",
-      "lints": [
-        "unused_variables"
-      ],
-      "owner": "rocketmq-client",
-      "path": "rocketmq-client/src/admin/default_mq_admin_ext_impl/admin_api.rs",
-      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-client/src/admin/mq_admin_ext_async.rs:item:trait MQAdminExt:dead_code:0",
-      "item": "trait MQAdminExt",
-      "lints": [
-        "dead_code"
-      ],
-      "owner": "rocketmq-client",
-      "path": "rocketmq-client/src/admin/mq_admin_ext_async.rs",
-      "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
     },
     {
       "identity": "rocketmq-client/src/base/mq_admin.rs:item:trait MQAdmin:dead_code:0",
@@ -721,54 +337,6 @@
       "scope": "item"
     },
     {
-      "identity": "rocketmq-client/src/consumer/consumer_impl/pull_api_wrapper.rs:item:fn pull_kernel_impl:clippy::too_many_arguments:0",
-      "item": "fn pull_kernel_impl",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-client",
-      "path": "rocketmq-client/src/consumer/consumer_impl/pull_api_wrapper.rs",
-      "reason": "existing pull wire adapter signature is tracked by the lint debt registry",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-client/src/consumer/consumer_impl/pull_api_wrapper.rs:item:fn pull_kernel_impl_default_size:clippy::too_many_arguments:0",
-      "item": "fn pull_kernel_impl_default_size",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-client",
-      "path": "rocketmq-client/src/consumer/consumer_impl/pull_api_wrapper.rs",
-      "reason": "existing pull convenience signature is tracked by the lint debt registry",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-client/src/implementation/mq_client_api_impl/producer.rs:item:fn send_message:clippy::too_many_arguments:0",
-      "item": "fn send_message",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-client",
-      "path": "rocketmq-client/src/implementation/mq_client_api_impl/producer.rs",
-      "reason": "existing send wire adapter signature is tracked by the lint debt registry",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-client/src/implementation/mq_client_api_impl/producer.rs:item:fn send_message_async_impl:clippy::too_many_arguments:0",
-      "item": "fn send_message_async_impl",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-client",
-      "path": "rocketmq-client/src/implementation/mq_client_api_impl/producer.rs",
-      "reason": "existing asynchronous send context is tracked by the lint debt registry",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
       "identity": "rocketmq-client/src/lib.rs:crate:<crate>:clippy::result_large_err:0",
       "item": "<crate>",
       "lints": [
@@ -791,30 +359,6 @@
       "reason": "legacy private Client items remain under the non-growth lint debt registry",
       "removal_issue": "ARC-ALLOW-001",
       "scope": "crate"
-    },
-    {
-      "identity": "rocketmq-client/src/lib.rs:item:fn consumer_send_message_back:clippy::too_many_arguments:0",
-      "item": "fn consumer_send_message_back",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-client",
-      "path": "rocketmq-client/src/lib.rs",
-      "reason": "mirrors the RocketMQ send-back wire contract",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-client/src/lib.rs:item:fn query_assignment:clippy::too_many_arguments:0",
-      "item": "fn query_assignment",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-client",
-      "path": "rocketmq-client/src/lib.rs",
-      "reason": "mirrors the RocketMQ query-assignment wire contract",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
     },
     {
       "identity": "rocketmq-controller/src/lib.rs:crate:<crate>:dead_code:0",
@@ -909,18 +453,6 @@
       "owner": "dashboard",
       "path": "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/src/message/types.rs",
       "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-dashboard/rocketmq-dashboard-web/backend/src/admin/dashboard_admin_client.rs:item:fn query_messages:clippy::too_many_arguments:0",
-      "item": "fn query_messages",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "dashboard",
-      "path": "rocketmq-dashboard/rocketmq-dashboard-web/backend/src/admin/dashboard_admin_client.rs",
-      "reason": "preserves the existing HTTP query facade",
       "removal_issue": "ARC-ALLOW-001",
       "scope": "item"
     },
@@ -1081,102 +613,6 @@
       "scope": "item"
     },
     {
-      "identity": "rocketmq-observability/src/metrics/release_identity.rs:item:fn try_from_values:clippy::too_many_arguments:0",
-      "item": "fn try_from_values",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-observability",
-      "path": "rocketmq-observability/src/metrics/release_identity.rs",
-      "reason": "mirrors the seven explicit process-root inputs",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-proxy-cluster/src/cluster.rs:item:fn consumer_send_message_back:clippy::too_many_arguments:0",
-      "item": "fn consumer_send_message_back",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-proxy-cluster",
-      "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "reason": "mirrors the RocketMQ send-back wire contract",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-proxy-cluster/src/cluster.rs:item:fn query_assignment:clippy::too_many_arguments:0",
-      "item": "fn query_assignment",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-proxy-cluster",
-      "path": "rocketmq-proxy-cluster/src/cluster.rs",
-      "reason": "mirrors the RocketMQ query-assignment wire contract",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-proxy-cluster/src/cluster_execution.rs:item:fn spawn_execution:clippy::too_many_arguments:0",
-      "item": "fn spawn_execution",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-proxy-cluster",
-      "path": "rocketmq-proxy-cluster/src/cluster_execution.rs",
-      "reason": "execution ownership is assembled at one private boundary",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-proxy/src/bootstrap.rs:item:fn from_processor_with_local_mode_support_and_guards:clippy::too_many_arguments:0",
-      "item": "fn from_processor_with_local_mode_support_and_guards",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-proxy",
-      "path": "rocketmq-proxy/src/bootstrap.rs",
-      "reason": "assembles the validated Proxy runtime from independently owned production components",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-store-local/src/consume_queue/batch.rs:item:fn correct_batch_min_offsets:clippy::too_many_arguments:0",
-      "item": "fn correct_batch_min_offsets",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-store-local",
-      "path": "rocketmq-store-local/src/consume_queue/batch.rs",
-      "reason": "callbacks keep mapped-file ownership out of the BatchCQ kernel",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-store-local/src/consume_queue/batch.rs:item:fn new:clippy::too_many_arguments:0",
-      "item": "fn new",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-store-local",
-      "path": "rocketmq-store-local/src/consume_queue/batch.rs",
-      "reason": "the constructor mirrors the frozen seven-field persisted BatchCQ format",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-store-local/src/consume_queue/single.rs:item:fn search_queue_offset_by_time:clippy::too_many_arguments:0",
-      "item": "fn search_queue_offset_by_time",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-store-local",
-      "path": "rocketmq-store-local/src/consume_queue/single.rs",
-      "reason": "The frozen search boundary is clearer as explicit scalar inputs until the SingleConsumeQueue root moves",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
       "identity": "rocketmq-store-local/src/mapped_file/default_mapped_file.rs:item:fn get_mapped_file:unused_variables:0",
       "item": "fn get_mapped_file",
       "lints": [
@@ -1197,18 +633,6 @@
       "owner": "rocketmq-store-local",
       "path": "rocketmq-store-local/src/mapped_file/default_mapped_file.rs",
       "reason": "reviewed legacy exception; additions require a narrower API or explicit registry review",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
-      "identity": "rocketmq-store-local/src/mapped_file/queue_lifecycle.rs:item:fn delete_expired_mapped_files_by_time_before:clippy::too_many_arguments:0",
-      "item": "fn delete_expired_mapped_files_by_time_before",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "rocketmq-store-local",
-      "path": "rocketmq-store-local/src/mapped_file/queue_lifecycle.rs",
-      "reason": "mirrors the legacy cleanup policy plus one hard WAL boundary",
       "removal_issue": "ARC-ALLOW-001",
       "scope": "item"
     },
@@ -1705,18 +1129,6 @@
       "scope": "item"
     },
     {
-      "identity": "rocketmq-tools/rocketmq-mcp/src/guard/audit.rs:item:fn new:clippy::too_many_arguments:0",
-      "item": "fn new",
-      "lints": [
-        "clippy::too_many_arguments"
-      ],
-      "owner": "mcp",
-      "path": "rocketmq-tools/rocketmq-mcp/src/guard/audit.rs",
-      "reason": "audit records are constructed from a complete decision",
-      "removal_issue": "ARC-ALLOW-001",
-      "scope": "item"
-    },
-    {
       "identity": "rocketmq-transport/src/clients/client.rs:item:fn connect:clippy::too_many_arguments:0",
       "item": "fn connect",
       "lints": [
@@ -1813,7 +1225,7 @@
       "scope": "item"
     }
   ],
-  "maximum_entries": 151,
+  "maximum_entries": 102,
   "schema_version": 1,
   "too_many_arguments": {
     "current_threshold": 12,

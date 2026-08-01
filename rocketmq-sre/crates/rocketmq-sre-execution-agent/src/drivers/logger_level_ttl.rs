@@ -28,7 +28,6 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use super::AgentActionHandler;
-use super::ConfigDriver;
 use super::DriverDispatchOutcome;
 use super::DriverFuture;
 use super::LoggerLevelControlClient;
@@ -238,8 +237,6 @@ where
         })
     }
 }
-
-impl<C> ConfigDriver for LoggerLevelTtlHandler<C> where C: LoggerLevelControlClient + 'static {}
 
 fn require_action(action: ExecutionAction) -> Result<(), ExecutionAgentError> {
     if action == ExecutionAction::ObservabilityLoggerLevelTtl {

@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Inventory production async-trait strategies and empty public markers."""
+"""Inventory production async-trait macros and empty public markers."""
 
 from __future__ import annotations
 
@@ -33,10 +33,6 @@ ROOT = Path(__file__).resolve().parents[1]
 BASELINE = ROOT / "scripts" / "trait-policy-baseline.json"
 ASYNC_ATTR = re.compile(r"#\s*\[\s*(?:(?:async_trait|tonic)\s*::\s*)?async_trait(?:\s*\([^]]*\))?\s*\]")
 TRAIT_VARIANT_ATTR = re.compile(r"#\s*\[\s*trait_variant\s*::\s*make\s*\([^]]*\)\s*\]")
-TRAIT_START = re.compile(
-    r"\b(?:(?:pub(?:\s*\([^)]*\))?\s+)?(?:unsafe\s+)?)trait\s+([A-Za-z_][A-Za-z0-9_]*)[^{;]*\{"
-)
-ASYNC_FN = re.compile(r"\basync\s+fn\s+([A-Za-z_][A-Za-z0-9_]*)")
 EMPTY_PUBLIC_TRAIT = re.compile(
     r"\bpub(?:\s*\([^)]*\))?\s+trait\s+([A-Za-z_][A-Za-z0-9_]*)[^;{]*\{\s*\}",
     re.DOTALL,
@@ -59,18 +55,6 @@ def line_number(source: str, offset: int) -> int:
 
 def in_ranges(offset: int, ranges: list[tuple[int, int]]) -> bool:
     return any(start <= offset < end for start, end in ranges)
-
-
-def matching_brace(source: str, opening: int) -> int | None:
-    depth = 0
-    for offset in range(opening, len(source)):
-        if source[offset] == "{":
-            depth += 1
-        elif source[offset] == "}":
-            depth -= 1
-            if depth == 0:
-                return offset + 1
-    return None
 
 
 def following_item(masked: str, offset: int) -> str:
@@ -104,24 +88,6 @@ def inventory_source(relative: str, source: str) -> list[dict[str, Any]]:
                     "item": following_item(masked, match.end()),
                     "owner": owner,
                     "decision": decision,
-                }
-            )
-
-    for trait in TRAIT_START.finditer(masked):
-        if in_ranges(trait.start(), tests):
-            continue
-        end = matching_brace(masked, trait.end() - 1)
-        if end is None:
-            continue
-        for method in ASYNC_FN.finditer(masked, trait.end(), end):
-            entries.append(
-                {
-                    "kind": "native_async",
-                    "path": relative,
-                    "line": line_number(source, method.start()),
-                    "item": f"trait {trait.group(1)}::{method.group(1)}",
-                    "owner": owner,
-                    "decision": "preferred-static-dispatch",
                 }
             )
 

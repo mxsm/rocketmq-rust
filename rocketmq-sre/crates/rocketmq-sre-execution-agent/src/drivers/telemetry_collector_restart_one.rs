@@ -29,7 +29,6 @@ use serde::Serialize;
 use super::AgentActionHandler;
 use super::DriverDispatchOutcome;
 use super::DriverFuture;
-use super::KubernetesDriver;
 use super::TelemetryCollectorRestartClient;
 use super::TelemetryCollectorRestartOneWrite;
 use super::TelemetryCollectorRestartState;
@@ -227,8 +226,6 @@ where
         })
     }
 }
-
-impl<C> KubernetesDriver for TelemetryCollectorRestartOneHandler<C> where C: TelemetryCollectorRestartClient + 'static {}
 
 fn require_action(action: ExecutionAction) -> Result<(), ExecutionAgentError> {
     if action == ExecutionAction::TelemetryCollectorRestartOne {

@@ -53,7 +53,6 @@ use crate::core::consumer::DashboardConsumerMutationResult;
 use crate::core::consumer::DashboardConsumerUpsertRequest;
 use crate::core::consumer::SetConsumerRequestModeRequest;
 use crate::core::consumer::SetConsumerRequestModeResult;
-use crate::core::dashboard::DashboardMutationAdmin;
 use crate::core::message::DirectConsumeRequest;
 use crate::core::message::DirectConsumeResult;
 use crate::core::message::DlqMessageLookupRequest;
@@ -854,8 +853,6 @@ impl ProxyMutationAdmin for MutationAdminSession {
     }
 }
 
-impl DashboardMutationAdmin for MutationAdminSession {}
-
 async fn require_topic_route(
     admin: &rocketmq_client_rust::DefaultMQAdminExt,
     topic: &str,
@@ -1155,11 +1152,7 @@ mod tests {
     #[test]
     fn mutation_session_exposes_all_mutation_contracts() {
         fn assert_mutation_contracts<
-            T: TopicMutationAdmin
-                + ConsumerMutationAdmin
-                + MessageMutationAdmin
-                + BrokerMutationAdmin
-                + DashboardMutationAdmin,
+            T: TopicMutationAdmin + ConsumerMutationAdmin + MessageMutationAdmin + BrokerMutationAdmin,
         >() {
         }
 

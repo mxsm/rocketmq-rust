@@ -48,8 +48,21 @@ mod tests {
         kinds = [entry["kind"] for entry in entries]
         self.assertEqual(1, kinds.count("async_trait"))
         self.assertEqual(1, kinds.count("trait_variant"))
-        self.assertEqual(3, kinds.count("native_async"))
+        self.assertEqual(0, kinds.count("native_async"))
         self.assertEqual(1, kinds.count("empty_marker"))
+
+    def test_native_async_is_compliant_and_not_inventory_debt(self) -> None:
+        entries = guard.inventory_source(
+            "rocketmq-client/src/capability.rs",
+            """
+#[allow(async_fn_in_trait)]
+pub trait Capability: Send + Sync {
+    async fn execute(&self);
+}
+""",
+        )
+
+        self.assertEqual([], entries)
 
     def test_mq_admin_marker_has_p2_4_owner_decision(self) -> None:
         entries = guard.inventory_source(

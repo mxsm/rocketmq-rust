@@ -29,7 +29,6 @@ use serde::Serialize;
 use super::AgentActionHandler;
 use super::DriverDispatchOutcome;
 use super::DriverFuture;
-use super::KubernetesDriver;
 use super::ProxyImageCanaryClient;
 use super::ProxyImageCanaryRestore;
 use super::ProxyImageCanaryState;
@@ -242,8 +241,6 @@ where
         })
     }
 }
-
-impl<C> KubernetesDriver for ProxyImageCanaryHandler<C> where C: ProxyImageCanaryClient + 'static {}
 
 fn require_action(action: ExecutionAction) -> Result<(), ExecutionAgentError> {
     if action == ExecutionAction::ProxyRolloutImageCanary {

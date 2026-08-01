@@ -20,7 +20,6 @@ use std::pin::Pin;
 use rocketmq_sre_contracts::ExecutionId;
 use rocketmq_sre_contracts::PlanStepId;
 
-use super::AgentActionHandler;
 use super::DriverFuture;
 use crate::ExecutionAgentError;
 
@@ -31,7 +30,6 @@ pub struct LoggerLevelState {
     pub active_operation_id: Option<String>,
     pub last_completed_operation_id: Option<String>,
 }
-
 /// Closed logger-level mutation accepted by the configuration client.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LoggerLevelTtlWrite {
@@ -136,6 +134,3 @@ pub trait CredentialRotationClient: Send + Sync {
 
     fn restore_previous_credential<'a>(&'a self, request: &'a CredentialOverlapRestore) -> DriverFuture<'a, ()>;
 }
-
-/// Typed configuration-system driver.
-pub trait ConfigDriver: AgentActionHandler {}

@@ -18,7 +18,7 @@ use super::security::*;
 use super::topic::*;
 use super::*;
 
-#[allow(unused_variables)]
+#[allow(unused_variables, reason = "trait contracts reserve parameters")]
 #[allow(unused_mut)]
 impl RouteAdmin for DefaultMQAdminExtImpl {
     async fn examine_broker_cluster_info(&self) -> rocketmq_error::RocketMQResult<ClusterInfo> {
@@ -122,7 +122,7 @@ impl RouteAdmin for DefaultMQAdminExtImpl {
     }
 }
 
-#[allow(unused_variables)]
+#[allow(unused_variables, reason = "trait contracts reserve parameters")]
 #[allow(unused_mut)]
 impl TopicAdmin for DefaultMQAdminExtImpl {
     async fn create_and_update_topic_config(
@@ -728,7 +728,7 @@ impl TopicAdmin for DefaultMQAdminExtImpl {
     }
 }
 
-#[allow(unused_variables)]
+#[allow(unused_variables, reason = "trait contracts reserve parameters")]
 #[allow(unused_mut)]
 impl ConsumerAdmin for DefaultMQAdminExtImpl {
     async fn create_and_update_subscription_group_config(
@@ -1348,7 +1348,7 @@ impl ConsumerAdmin for DefaultMQAdminExtImpl {
     }
 }
 
-#[allow(unused_variables)]
+#[allow(unused_variables, reason = "trait contracts reserve parameters")]
 #[allow(unused_mut)]
 impl BrokerAdmin for DefaultMQAdminExtImpl {
     async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
@@ -1770,7 +1770,7 @@ impl BrokerAdmin for DefaultMQAdminExtImpl {
     }
 }
 
-#[allow(unused_variables)]
+#[allow(unused_variables, reason = "trait contracts reserve parameters")]
 #[allow(unused_mut)]
 impl AuthAdmin for DefaultMQAdminExtImpl {
     async fn create_and_update_plain_access_config(
@@ -2110,7 +2110,7 @@ impl AuthAdmin for DefaultMQAdminExtImpl {
     }
 }
 
-#[allow(unused_variables)]
+#[allow(unused_variables, reason = "trait contracts reserve parameters")]
 #[allow(unused_mut)]
 impl OffsetAdmin for DefaultMQAdminExtImpl {
     async fn reset_offset_by_timestamp(

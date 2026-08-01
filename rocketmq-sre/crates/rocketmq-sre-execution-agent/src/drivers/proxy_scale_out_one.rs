@@ -29,7 +29,6 @@ use serde::Serialize;
 use super::AgentActionHandler;
 use super::DriverDispatchOutcome;
 use super::DriverFuture;
-use super::KubernetesDriver;
 use super::ProxyScaleClient;
 use super::ProxyScaleOutOneWrite;
 use super::ProxyScaleRestore;
@@ -238,8 +237,6 @@ where
         })
     }
 }
-
-impl<C> KubernetesDriver for ProxyScaleOutOneHandler<C> where C: ProxyScaleClient + 'static {}
 
 fn require_action(action: ExecutionAction) -> Result<(), ExecutionAgentError> {
     if action == ExecutionAction::ProxyScaleOutOne {

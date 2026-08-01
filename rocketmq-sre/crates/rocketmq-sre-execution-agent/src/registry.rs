@@ -18,11 +18,8 @@ use std::sync::Arc;
 use rocketmq_sre_contracts::AgentStepRequest;
 use rocketmq_sre_contracts::ExecutionAction;
 
-use crate::AdminCoreDriver;
 use crate::AgentActionHandler;
-use crate::ConfigDriver;
 use crate::ExecutionAgentError;
-use crate::KubernetesDriver;
 use rocketmq_sre_contracts::AgentReadRequest;
 use rocketmq_sre_contracts::EXECUTION_AGENT_SCHEMA_VERSION;
 use rocketmq_sre_contracts::ExecutionAgentCapabilities;
@@ -60,7 +57,7 @@ impl AgentDriverRegistry {
     /// Rejects wrong driver families and duplicate registrations.
     pub fn register_admin<T>(&mut self, action: ExecutionAction, handler: T) -> Result<(), ExecutionAgentError>
     where
-        T: AdminCoreDriver + 'static,
+        T: AgentActionHandler + 'static,
     {
         self.register(action, DriverFamily::AdminCore, Arc::new(handler))
     }
@@ -72,7 +69,7 @@ impl AgentDriverRegistry {
     /// Rejects wrong driver families and duplicate registrations.
     pub fn register_kubernetes<T>(&mut self, action: ExecutionAction, handler: T) -> Result<(), ExecutionAgentError>
     where
-        T: KubernetesDriver + 'static,
+        T: AgentActionHandler + 'static,
     {
         self.register(action, DriverFamily::Kubernetes, Arc::new(handler))
     }
@@ -84,7 +81,7 @@ impl AgentDriverRegistry {
     /// Rejects wrong driver families and duplicate registrations.
     pub fn register_config<T>(&mut self, action: ExecutionAction, handler: T) -> Result<(), ExecutionAgentError>
     where
-        T: ConfigDriver + 'static,
+        T: AgentActionHandler + 'static,
     {
         self.register(action, DriverFamily::Config, Arc::new(handler))
     }

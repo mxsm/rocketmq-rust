@@ -49,7 +49,6 @@ use rocketmq_sre_execution_agent::DriverFuture;
 use rocketmq_sre_execution_agent::ExecutionAgent;
 use rocketmq_sre_execution_agent::ExecutionAgentError;
 use rocketmq_sre_execution_agent::FenceAckSigner;
-use rocketmq_sre_execution_agent::KubernetesDriver;
 use rocketmq_sre_execution_agent::LeaseAuthorityClient;
 use rocketmq_sre_executor::ExecutionJournal;
 use rocketmq_sre_executor::LeaseCoordinator;
@@ -176,8 +175,6 @@ impl AgentActionHandler for BlockingKubernetesDriver {
         })
     }
 }
-
-impl KubernetesDriver for BlockingKubernetesDriver {}
 
 #[tokio::test]
 #[ignore = "requires ROCKETMQ_SRE_TEST_DATABASE_URL pointing to Docker PostgreSQL"]
