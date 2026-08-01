@@ -12,29 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use chrono::DateTime;
-use chrono::Utc;
 use serde_json::json;
 
-use super::admin_query::AdminQuerySource;
-use super::common::CancelSignal;
 use super::common::SourceOutput;
 use super::common::validate_identifier;
-use super::mcp::McpSource;
 use crate::ConnectorError;
 use crate::EvidenceOperation;
 use crate::mcp::McpGateway;
+use crate::read_gateway::ConnectorReadGateway;
+use crate::read_gateway::ReadSession;
 
 pub(crate) struct TopologySource;
 
 impl TopologySource {
     pub(crate) async fn query<G>(
-        mcp: &McpSource<G>,
-        admin: &AdminQuerySource,
-        cluster: &str,
+        read_gateway: &ConnectorReadGateway<G>,
+        session: &ReadSession<'_, '_>,
         resource: &str,
-        deadline: DateTime<Utc>,
-        cancel: &CancelSignal,
     ) -> Result<SourceOutput, ConnectorError>
     where
         G: McpGateway,
@@ -59,10 +53,12 @@ impl TopologySource {
             ));
         };
 
-        let mut output = match mcp.query(cluster, &operation, deadline, cancel).await {
+        let mut output = match read_gateway.mcp_query(session, &operation).await {
             Ok(output) => output,
-            Err(error) if error.code == crate::ConnectorErrorCode::SourceUnavailable && admin.configured() => {
-                admin.query(cluster, &admin_resource, deadline, cancel).await?
+            Err(error)
+                if error.code == crate::ConnectorErrorCode::SourceUnavailable && read_gateway.admin_configured() =>
+            {
+                read_gateway.admin_query(session, &admin_resource).await?
             }
             Err(error) => return Err(error),
         };

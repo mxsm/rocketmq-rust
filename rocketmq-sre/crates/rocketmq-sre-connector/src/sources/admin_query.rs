@@ -70,6 +70,10 @@ struct ClientConnectionsResult {
 /// this crate's resolved feature graph.
 pub(crate) struct AdminQuerySource {
     config: Option<AdminSourceConfig>,
+    // ReadAdminSession is intentionally single-owner and exposes its read
+    // operations through `&mut self`. A Tokio mutex serializes those bounded
+    // network futures without blocking a runtime worker; lifecycle paths take
+    // the session out of the state before awaiting shutdown.
     state: Mutex<AdminState>,
 }
 

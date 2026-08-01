@@ -28,13 +28,12 @@ use serde_json::Value;
 use serde_json::json;
 
 use self::coverage::InventoryCoverage;
-use super::admin_query::AdminQuerySource;
-use super::common::CancelSignal;
 use super::kubernetes::KubernetesSource;
-use super::mcp::McpSource;
 use crate::ConnectorError;
 use crate::ConnectorErrorCode;
 use crate::mcp::McpGateway;
+use crate::read_gateway::ConnectorReadGateway;
+use crate::read_gateway::ReadSession;
 
 const INVENTORY_UPLOAD_MAX_BYTES: usize = 512 * 1024;
 const MAX_EDGE_MULTIPLIER: usize = 2;
@@ -380,46 +379,42 @@ pub(super) fn recoverable_gap(error: &ConnectorError) -> bool {
     reason = "inventory collection keeps all source, security, and resource bounds explicit"
 )]
 pub(super) async fn collect<G>(
-    mcp: &McpSource<G>,
-    admin: &AdminQuerySource,
+    read_gateway: &ConnectorReadGateway<G>,
     kubernetes: &KubernetesSource,
     cluster_id: ClusterId,
-    external_cluster: &str,
     max_rows: usize,
     max_bytes: usize,
     pseudonymization_key: &[u8],
-    deadline: DateTime<Utc>,
-    cancel: &CancelSignal,
+    session: &ReadSession<'_, '_>,
 ) -> Result<InventoryUpload, ConnectorError>
 where
     G: McpGateway,
 {
+    let context = session.context();
     let observed_at = Utc::now();
-    let mut inventory = InventoryAccumulator::new(cluster_id, external_cluster, observed_at);
-    let consumer_groups = rocketmq::collect(&mut inventory, mcp, admin, external_cluster, max_rows, deadline, cancel)
+    let mut inventory = InventoryAccumulator::new(cluster_id, context.external_cluster, observed_at);
+    let consumer_groups = rocketmq::collect(&mut inventory, read_gateway, session, max_rows)
         .await
         .inspect_err(|error| log_collection_error("rocketmq", "collect", error))?;
     client_connections::collect(
         &mut inventory,
-        admin,
-        external_cluster,
+        read_gateway,
+        session,
         &consumer_groups,
         max_rows,
         pseudonymization_key,
-        deadline,
-        cancel,
     )
     .await
     .inspect_err(|error| log_collection_error("rocketmq", "client_connections", error))?;
     k8s::collect(
         &mut inventory,
         kubernetes,
-        external_cluster,
+        context.external_cluster,
         max_rows,
         max_bytes,
         pseudonymization_key,
-        deadline,
-        cancel,
+        context.deadline,
+        context.cancel,
     )
     .await
     .inspect_err(|error| log_collection_error("kubernetes", "collect", error))?;

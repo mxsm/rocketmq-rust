@@ -313,7 +313,12 @@ where
                 let spawn_result = context.spawn(format!("connector-query-{sequence}"), TaskKind::Worker, async move {
                     let result = channel
                         .connector
-                        .collect_contract_query(envelope.query, envelope.deadline, &cancel)
+                        .collect_contract_query(
+                            envelope.query,
+                            &channel.config.connector_subject,
+                            envelope.deadline,
+                            &cancel,
+                        )
                         .await;
                     let response = match result {
                         Ok(evidence) => ConnectorResponseEnvelope {
@@ -409,7 +414,10 @@ where
         {
             return Ok(());
         }
-        let inventory = self.connector.inventory(self.config.cluster_id).await?;
+        let inventory = self
+            .connector
+            .inventory(self.config.cluster_id, &self.config.connector_subject)
+            .await?;
         let path = format!("/internal/v1/connectors/v1/{}/inventory", self.session_id);
         let response = self.send(&path, &inventory).await?;
         let cancel = CancelSignal::default();

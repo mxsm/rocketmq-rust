@@ -28,6 +28,7 @@ mod config;
 mod engine;
 mod error;
 mod mcp;
+mod read_gateway;
 mod sources;
 mod wire;
 

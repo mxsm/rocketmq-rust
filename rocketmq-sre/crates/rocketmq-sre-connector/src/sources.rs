@@ -35,7 +35,6 @@ mod tempo;
 mod topology;
 
 use std::collections::BTreeMap;
-use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -58,21 +57,21 @@ use serde_json::Value;
 use sha2::Digest;
 use sha2::Sha256;
 use tokio::sync::Mutex;
-use tokio::sync::Semaphore;
 
-use self::admin_query::AdminQuerySource;
+pub(crate) use self::admin_query::AdminQuerySource;
 use self::alertmanager::AlertmanagerSource;
 use self::canonical::CanonicalQuery;
 use self::canonical::CanonicalResourceRoute;
 pub(crate) use self::common::CancelSignal;
-use self::common::SourceOutput;
+pub(crate) use self::common::SourceOutput;
+pub(crate) use self::common::bounded_future;
 pub(crate) use self::common::bounded_response;
 use self::common::max_duration;
-use self::common::sanitize_and_bound;
+pub(crate) use self::common::sanitize_and_bound;
 pub(crate) use self::inventory::InventoryUpload;
 use self::kubernetes::KubernetesSource;
 use self::loki::LokiSource;
-use self::mcp::McpSource;
+pub(crate) use self::mcp::McpSource;
 use self::prometheus::PrometheusSource;
 use self::required_signals::RequiredSignalsSource;
 use self::runtime_diagnostics::RuntimeDiagnosticsSource;
@@ -83,6 +82,11 @@ use crate::ConnectorError;
 use crate::ConnectorErrorCode;
 use crate::EvidenceOperation;
 use crate::mcp::McpGateway;
+use crate::read_gateway::ConnectorReadGateway;
+use crate::read_gateway::ReadAdapterKind;
+use crate::read_gateway::ReadAuditTarget;
+use crate::read_gateway::ReadContext;
+use crate::read_gateway::ReadSession;
 
 const CACHE_MAX_ENTRIES: usize = 1024;
 const CONSUMER_LAG_HISTORY_MIN_INTERVAL: Duration = Duration::from_secs(1);
@@ -120,56 +124,18 @@ struct SourceRuntimeState {
     freshness_seconds: Option<u64>,
 }
 
-struct QueryAdmission {
-    concurrency: Semaphore,
-    recent: Mutex<VecDeque<Instant>>,
-    max_per_minute: usize,
-}
-
-impl QueryAdmission {
-    fn new(max_concurrency: usize, max_per_minute: usize) -> Self {
-        Self {
-            concurrency: Semaphore::new(max_concurrency),
-            recent: Mutex::new(VecDeque::with_capacity(max_per_minute.min(1024))),
-            max_per_minute,
-        }
-    }
-
-    async fn rate_limit(&self) -> Result<(), ConnectorError> {
-        let now = Instant::now();
-        let mut recent = self.recent.lock().await;
-        while recent
-            .front()
-            .is_some_and(|instant| now.duration_since(*instant) >= Duration::from_secs(60))
-        {
-            recent.pop_front();
-        }
-        if recent.len() >= self.max_per_minute {
-            return Err(ConnectorError::new(
-                ConnectorErrorCode::RateLimited,
-                true,
-                "connector evidence rate budget is exhausted",
-            ));
-        }
-        recent.push_back(now);
-        Ok(())
-    }
-}
-
 /// Read-only evidence registry with one canonical bounding, caching and
 /// missing-evidence path, including the fixed component Required Signals
 /// composition.
 pub(crate) struct SourceManager<G> {
     config: Arc<ConnectorConfig>,
-    mcp: McpSource<G>,
-    admin: AdminQuerySource,
+    read_gateway: ConnectorReadGateway<G>,
     alertmanager: AlertmanagerSource,
     prometheus: PrometheusSource,
     loki: LokiSource,
     tempo: TempoSource,
     kubernetes: KubernetesSource,
     runtime: RuntimeDiagnosticsSource,
-    admission: QueryAdmission,
     cache: Mutex<BTreeMap<String, CacheEntry>>,
     consumer_lag_history: Mutex<BTreeMap<String, ConsumerLagSample>>,
     state: Mutex<BTreeMap<&'static str, SourceRuntimeState>>,
@@ -187,7 +153,7 @@ where
             .user_agent(concat!("rocketmq-sre-connector/", env!("CARGO_PKG_VERSION")))
             .build()
             .map_err(|_| ConnectorError::configuration("evidence source HTTP client cannot be built"))?;
-        let admin = AdminQuerySource::new(config.admin_source.clone());
+        let read_gateway = ConnectorReadGateway::new(&config, gateway);
         let alertmanager = AlertmanagerSource::new(
             http.clone(),
             config.alertmanager_url.clone(),
@@ -213,7 +179,7 @@ where
         let runtime = RuntimeDiagnosticsSource::new(http, &config);
         let mut state = BTreeMap::new();
         state.insert("rocketmq-mcp", initial_state(true));
-        state.insert("admin-query", initial_state(admin.configured()));
+        state.insert("admin-query", initial_state(read_gateway.admin_configured()));
         state.insert("alertmanager", initial_state(alertmanager.configured()));
         state.insert("prometheus", initial_state(prometheus.configured()));
         state.insert("loki", initial_state(loki.configured()));
@@ -223,12 +189,7 @@ where
         state.insert("required-signals", initial_state(true));
         state.insert("topology", initial_state(true));
         Ok(Self {
-            admission: QueryAdmission::new(
-                config.source_limits.max_concurrency,
-                config.source_limits.max_requests_per_minute,
-            ),
-            mcp: McpSource::new(gateway),
-            admin,
+            read_gateway,
             alertmanager,
             prometheus,
             loki,
@@ -244,7 +205,7 @@ where
 
     pub(crate) async fn initialize(&self, context: ChildServiceContext) {
         self.kubernetes.initialize(context.metadata_io().clone());
-        if let Err(error) = self.admin.start(context.component("admin-query")).await {
+        if let Err(error) = self.read_gateway.initialize(context).await {
             self.record_failure("admin-query", error.code).await;
             tracing::warn!(
                 code = error.code.as_str(),
@@ -281,30 +242,32 @@ where
         &self,
         query: EvidenceQuery,
         external_cluster: &str,
+        subject: &str,
         operation: Option<&EvidenceOperation>,
         deadline: DateTime<Utc>,
         cancel: &CancelSignal,
     ) -> Result<EvidenceSnapshot, ConnectorError> {
         self.validate_bounds(&query, deadline)?;
+        let context = ReadContext {
+            tenant_id: query.tenant_id,
+            cluster_id: query.cluster_id,
+            external_cluster,
+            subject,
+            correlation_id: query.correlation_id,
+            time_range_start: query.time_range.start,
+            time_range_end: query.time_range.end,
+            deadline,
+            cancel,
+        };
         let source = normalize_source(&query.source)?;
+        let session = self.read_gateway.admit(&context, gateway_audit_target(source)).await?;
         let cache_key = cache_key(&query, external_cluster)?;
         if let Some(output) = self.cached(&cache_key).await {
             return capture(query, output);
         }
 
-        self.admission.rate_limit().await?;
-        let _permit = common::bounded_future(deadline, cancel, async {
-            self.admission
-                .concurrency
-                .acquire()
-                .await
-                .map_err(|_| ConnectorError::source("connector concurrency limiter is closed"))
-        })
-        .await?;
         let started_at = Instant::now();
-        let result = self
-            .query_uncached(source, &query, external_cluster, operation, deadline, cancel)
-            .await;
+        let result = self.query_uncached(source, &query, operation, &session).await;
         let mut output = match result {
             Ok(output) => {
                 self.record_success(source, output.freshness_seconds).await;
@@ -346,6 +309,7 @@ where
             partial = output.partial,
             "bounded evidence source query completed"
         );
+        validate_query_completion(&context)?;
         self.insert_cache(cache_key, output.clone()).await;
         capture(query, output)
     }
@@ -354,29 +318,34 @@ where
         &self,
         cluster_id: ClusterId,
         external_cluster: &str,
+        subject: &str,
         deadline: DateTime<Utc>,
         cancel: &CancelSignal,
     ) -> Result<InventoryUpload, ConnectorError> {
-        self.admission.rate_limit().await?;
-        let _permit = common::bounded_future(deadline, cancel, async {
-            self.admission
-                .concurrency
-                .acquire()
-                .await
-                .map_err(|_| ConnectorError::source("connector concurrency limiter is closed"))
-        })
-        .await?;
-        inventory::collect(
-            &self.mcp,
-            &self.admin,
-            &self.kubernetes,
+        let observed_at = Utc::now();
+        let context = ReadContext {
+            tenant_id: self.config.tenant_id,
             cluster_id,
             external_cluster,
+            subject,
+            correlation_id: rocketmq_sre_contracts::CorrelationId::new(),
+            time_range_start: observed_at,
+            time_range_end: observed_at,
+            deadline,
+            cancel,
+        };
+        let session = self
+            .read_gateway
+            .admit(&context, Some(ReadAuditTarget::new(ReadAdapterKind::Mcp, "inventory")))
+            .await?;
+        inventory::collect(
+            &self.read_gateway,
+            &self.kubernetes,
+            cluster_id,
             self.config.source_limits.max_rows,
             self.config.source_limits.max_bytes,
             self.config.pseudonymization_key(),
-            deadline,
-            cancel,
+            &session,
         )
         .await
     }
@@ -389,18 +358,13 @@ where
         &self,
         source: &'static str,
         query: &EvidenceQuery,
-        external_cluster: &str,
         operation: Option<&EvidenceOperation>,
-        deadline: DateTime<Utc>,
-        cancel: &CancelSignal,
+        session: &ReadSession<'_, '_>,
     ) -> Result<SourceOutput, ConnectorError> {
         if let Some(route) = canonical::resolve(source, &query.resource) {
-            return self
-                .query_canonical(source, route, external_cluster, query, deadline, cancel)
-                .await;
+            return self.query_canonical(source, route, query, session).await;
         }
-        self.query_legacy_uncached(source, query, external_cluster, operation, deadline, cancel)
-            .await
+        self.query_legacy_uncached(source, query, operation, session).await
     }
 
     #[allow(
@@ -411,11 +375,10 @@ where
         &self,
         source: &'static str,
         route: CanonicalResourceRoute,
-        external_cluster: &str,
         query: &EvidenceQuery,
-        deadline: DateTime<Utc>,
-        cancel: &CancelSignal,
+        session: &ReadSession<'_, '_>,
     ) -> Result<SourceOutput, ConnectorError> {
+        let context = session.context();
         let CanonicalResourceRoute::Query {
             query: canonical_query,
             projection,
@@ -428,36 +391,36 @@ where
         };
 
         let output = match canonical_query {
-            CanonicalQuery::Mcp(operation) => self.mcp.query(external_cluster, &operation, deadline, cancel).await,
-            CanonicalQuery::Admin(resource) => self.admin.query(external_cluster, &resource, deadline, cancel).await,
+            CanonicalQuery::Mcp(operation) => self.read_gateway.mcp_query(session, &operation).await,
+            CanonicalQuery::Admin(resource) => self.read_gateway.admin_query(session, &resource).await,
             CanonicalQuery::Prometheus { resource, matchers } => {
                 self.prometheus
                     .query_with_matchers(
-                        external_cluster,
+                        context.external_cluster,
                         &resource,
                         &matchers,
                         query.time_range.start,
                         query.time_range.end,
                         self.config.source_limits.max_rows,
                         self.config.source_limits.max_bytes,
-                        deadline,
-                        cancel,
+                        context.deadline,
+                        context.cancel,
                     )
                     .await
             }
             CanonicalQuery::Kubernetes(resource) => {
                 self.kubernetes
                     .query(
-                        external_cluster,
+                        context.external_cluster,
                         &resource,
                         self.config.source_limits.max_rows,
                         self.config.source_limits.max_bytes,
-                        deadline,
-                        cancel,
+                        context.deadline,
+                        context.cancel,
                     )
                     .await
             }
-            CanonicalQuery::Runtime(resource) => self.runtime.query(&self.mcp, &resource, deadline, cancel).await,
+            CanonicalQuery::Runtime(resource) => self.runtime.query(&self.read_gateway, session, &resource).await,
         }
         .inspect_err(|error| {
             tracing::warn!(
@@ -481,8 +444,13 @@ where
             );
         })?;
         if projection == canonical::CanonicalProjection::ConsumerLag {
-            self.enrich_consumer_lag_rates(external_cluster, &query.resource, &mut projected, source_was_partial)
-                .await?;
+            self.enrich_consumer_lag_rates(
+                context.external_cluster,
+                &query.resource,
+                &mut projected,
+                source_was_partial,
+            )
+            .await?;
         }
         Ok(projected)
     }
@@ -524,11 +492,10 @@ where
         &self,
         source: &'static str,
         query: &EvidenceQuery,
-        external_cluster: &str,
         operation: Option<&EvidenceOperation>,
-        deadline: DateTime<Utc>,
-        cancel: &CancelSignal,
+        session: &ReadSession<'_, '_>,
     ) -> Result<SourceOutput, ConnectorError> {
+        let context = session.context();
         match source {
             "rocketmq-mcp" => {
                 let derived;
@@ -539,29 +506,27 @@ where
                         &derived
                     }
                 };
-                self.mcp.query(external_cluster, operation, deadline, cancel).await
+                self.read_gateway.mcp_query(session, operation).await
             }
             "admin-query" => {
                 if let Ok(operation) = mcp_operation(&query.resource) {
-                    match self.mcp.query(external_cluster, &operation, deadline, cancel).await {
+                    match self.read_gateway.mcp_query(session, &operation).await {
                         Ok(output) => return Ok(output),
                         Err(error) if error.code == ConnectorErrorCode::SourceUnavailable => {}
                         Err(error) => return Err(error),
                     }
                 }
-                self.admin
-                    .query(external_cluster, &query.resource, deadline, cancel)
-                    .await
+                self.read_gateway.admin_query(session, &query.resource).await
             }
             "alertmanager" => {
                 self.alertmanager
                     .query(
-                        external_cluster,
+                        context.external_cluster,
                         &query.resource,
                         self.config.source_limits.max_rows,
                         self.config.source_limits.max_bytes,
-                        deadline,
-                        cancel,
+                        context.deadline,
+                        context.cancel,
                     )
                     .await
             }
@@ -569,40 +534,40 @@ where
                 "proxy/diagnostics" | "proxy-diagnostics" => {
                     proxy_diagnostics::query(
                         &self.prometheus,
-                        external_cluster,
+                        context.external_cluster,
                         query.time_range.start,
                         query.time_range.end,
                         self.config.source_limits.max_rows,
                         self.config.source_limits.max_bytes,
-                        deadline,
-                        cancel,
+                        context.deadline,
+                        context.cancel,
                     )
                     .await
                 }
                 "remoting/diagnostics" | "remoting-diagnostics" => {
                     remoting_diagnostics::query(
                         &self.prometheus,
-                        external_cluster,
+                        context.external_cluster,
                         query.time_range.start,
                         query.time_range.end,
                         self.config.source_limits.max_rows,
                         self.config.source_limits.max_bytes,
-                        deadline,
-                        cancel,
+                        context.deadline,
+                        context.cancel,
                     )
                     .await
                 }
                 _ => {
                     self.prometheus
                         .query(
-                            external_cluster,
+                            context.external_cluster,
                             &query.resource,
                             query.time_range.start,
                             query.time_range.end,
                             self.config.source_limits.max_rows,
                             self.config.source_limits.max_bytes,
-                            deadline,
-                            cancel,
+                            context.deadline,
+                            context.cancel,
                         )
                         .await
                 }
@@ -610,73 +575,61 @@ where
             "loki" => {
                 self.loki
                     .query(
-                        external_cluster,
+                        context.external_cluster,
                         &query.resource,
                         query.time_range.start,
                         query.time_range.end,
                         self.config.source_limits.max_rows,
                         self.config.source_limits.max_bytes,
-                        deadline,
-                        cancel,
+                        context.deadline,
+                        context.cancel,
                     )
                     .await
             }
             "tempo" => {
                 self.tempo
                     .query(
-                        external_cluster,
+                        context.external_cluster,
                         &query.resource,
                         query.time_range.start,
                         query.time_range.end,
                         self.config.source_limits.max_rows,
                         self.config.source_limits.max_bytes,
-                        deadline,
-                        cancel,
+                        context.deadline,
+                        context.cancel,
                     )
                     .await
             }
             "kubernetes" => {
                 self.kubernetes
                     .query(
-                        external_cluster,
+                        context.external_cluster,
                         &query.resource,
                         self.config.source_limits.max_rows,
                         self.config.source_limits.max_bytes,
-                        deadline,
-                        cancel,
+                        context.deadline,
+                        context.cancel,
                     )
                     .await
             }
-            "runtime" => self.runtime.query(&self.mcp, &query.resource, deadline, cancel).await,
+            "runtime" => self.runtime.query(&self.read_gateway, session, &query.resource).await,
             "required-signals" => {
                 RequiredSignalsSource::query(
                     &self.prometheus,
                     &self.loki,
                     &self.tempo,
-                    &self.mcp,
+                    &self.read_gateway,
                     &self.runtime,
-                    external_cluster,
+                    session,
                     &query.resource,
                     query.time_range.start,
                     query.time_range.end,
                     self.config.source_limits.max_rows,
                     self.config.source_limits.max_bytes,
-                    deadline,
-                    cancel,
                 )
                 .await
             }
-            "topology" => {
-                TopologySource::query(
-                    &self.mcp,
-                    &self.admin,
-                    external_cluster,
-                    &query.resource,
-                    deadline,
-                    cancel,
-                )
-                .await
-            }
+            "topology" => TopologySource::query(&self.read_gateway, session, &query.resource).await,
             _ => Err(ConnectorError::new(
                 ConnectorErrorCode::InvalidEvidenceQuery,
                 false,
@@ -766,8 +719,28 @@ where
     }
 
     pub(crate) async fn shutdown(&self) {
-        self.admin.shutdown().await;
+        self.read_gateway.shutdown().await;
     }
+}
+
+fn validate_query_completion(context: &ReadContext<'_>) -> Result<(), ConnectorError> {
+    if context.cancel.is_cancelled() {
+        return Err(ConnectorError::new(
+            ConnectorErrorCode::QueryCancelled,
+            false,
+            "evidence query was cancelled before cache publication",
+        )
+        .with_correlation_id(context.correlation_id));
+    }
+    if Utc::now() >= context.deadline {
+        return Err(ConnectorError::new(
+            ConnectorErrorCode::DeadlineExceeded,
+            true,
+            "evidence deadline elapsed before cache publication",
+        )
+        .with_correlation_id(context.correlation_id));
+    }
+    Ok(())
 }
 
 fn consumer_lag_sample(content: &Value, observed_at: Instant) -> Result<ConsumerLagSample, ConnectorError> {
@@ -886,6 +859,17 @@ fn normalize_source(source: &str) -> Result<&'static str, ConnectorError> {
             false,
             "evidence source is not registered",
         )),
+    }
+}
+
+fn gateway_audit_target(source: &'static str) -> Option<ReadAuditTarget> {
+    match source {
+        "rocketmq-mcp" => Some(ReadAuditTarget::new(ReadAdapterKind::Mcp, "logical_query")),
+        "admin-query" => Some(ReadAuditTarget::new(ReadAdapterKind::Admin, "logical_query")),
+        "runtime" => Some(ReadAuditTarget::new(ReadAdapterKind::Mcp, "runtime_diagnostics")),
+        "required-signals" => Some(ReadAuditTarget::new(ReadAdapterKind::Mcp, "required_signals")),
+        "topology" => Some(ReadAuditTarget::new(ReadAdapterKind::Mcp, "topology")),
+        _ => None,
     }
 }
 
@@ -1222,6 +1206,7 @@ mod tests {
                     time_range: TimeRange::new(at, at).expect("range"),
                 },
                 "local",
+                "test-subject",
                 None,
                 Utc::now() + chrono::Duration::seconds(2),
                 &CancelSignal::default(),

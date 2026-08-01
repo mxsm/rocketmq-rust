@@ -315,11 +315,24 @@ fn pseudonymize_value(value: Value, key: &[u8]) -> Value {
 }
 
 pub(super) fn pseudonymize_identifier(value: &str, key: &[u8]) -> String {
+    if is_canonical_pseudonym(value) {
+        return value.to_owned();
+    }
     let mut digest = Sha256::new();
     digest.update(key);
     digest.update(b"\0");
     digest.update(value.as_bytes());
     format!("sha256:{:x}", digest.finalize())
+}
+
+fn is_canonical_pseudonym(value: &str) -> bool {
+    value.strip_prefix("sha256:").is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .as_bytes()
+                .iter()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+    })
 }
 
 fn truncate_utf8(value: &str, max_bytes: usize) -> String {
@@ -456,6 +469,17 @@ mod tests {
                 .is_some_and(|value| value.starts_with("sha256:"))
         );
         assert_eq!(value["rows"].as_array().map(Vec::len), Some(2));
+    }
+
+    #[test]
+    fn sanitizer_is_idempotent_for_canonical_pseudonyms() {
+        let first = pseudonymize_identifier("message-a", b"test-key");
+        let second = pseudonymize_identifier(&first, b"test-key");
+        let malformed = pseudonymize_identifier("sha256:not-a-digest", b"test-key");
+
+        assert_eq!(second, first);
+        assert_ne!(malformed, "sha256:not-a-digest");
+        assert!(is_canonical_pseudonym(&malformed));
     }
 
     #[test]

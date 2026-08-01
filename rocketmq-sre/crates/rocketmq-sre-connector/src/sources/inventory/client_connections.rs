@@ -31,8 +31,9 @@ use super::schema_mismatch;
 use super::validate_inventory_name;
 use crate::ConnectorError;
 use crate::ConnectorErrorCode;
-use crate::sources::admin_query::AdminQuerySource;
-use crate::sources::common::CancelSignal;
+use crate::mcp::McpGateway;
+use crate::read_gateway::ConnectorReadGateway;
+use crate::read_gateway::ReadSession;
 use crate::sources::common::SourceOutput;
 use crate::sources::common::pseudonymize_identifier;
 
@@ -75,17 +76,18 @@ struct ClientConnectionWire {
     clippy::too_many_arguments,
     reason = "connection collection keeps scope, identity, and resource bounds explicit"
 )]
-pub(super) async fn collect(
+pub(super) async fn collect<G>(
     inventory: &mut InventoryAccumulator,
-    admin: &AdminQuerySource,
-    cluster: &str,
+    read_gateway: &ConnectorReadGateway<G>,
+    session: &ReadSession<'_, '_>,
     consumer_groups: &[String],
     max_rows: usize,
     pseudonymization_key: &[u8],
-    deadline: DateTime<Utc>,
-    cancel: &CancelSignal,
-) -> Result<(), ConnectorError> {
-    if !admin.configured() {
+) -> Result<(), ConnectorError>
+where
+    G: McpGateway,
+{
+    if !read_gateway.admin_configured() {
         inventory.mark_gap("producer", "admin_read_connection_source_not_configured");
         inventory.mark_gap("connection", "admin_read_connection_source_not_configured");
         inventory.mark_partial("client_connection_query_not_configured");
@@ -93,10 +95,7 @@ pub(super) async fn collect(
     }
 
     let row_limit = max_rows.clamp(1, CLIENT_CONNECTION_QUERY_LIMIT);
-    match admin
-        .query_producer_connections(cluster, row_limit, deadline, cancel)
-        .await
-    {
+    match read_gateway.admin_producer_connections(session, row_limit).await {
         Ok(output) => {
             add_producer_connections(inventory, output, row_limit, pseudonymization_key)?;
         }
@@ -115,8 +114,8 @@ pub(super) async fn collect(
             inventory.mark_partial("client_connection_row_budget_applied");
             break;
         }
-        match admin
-            .query_consumer_connections(cluster, consumer_group, remaining_rows, deadline, cancel)
+        match read_gateway
+            .admin_consumer_connections(session, consumer_group, remaining_rows)
             .await
         {
             Ok(output) => {
