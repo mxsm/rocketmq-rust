@@ -277,6 +277,11 @@ impl HAReplicaStoreHandle {
     }
 
     #[inline]
+    pub(crate) fn get_flushed_where(&self) -> i64 {
+        self.commit_log.get_flushed_where()
+    }
+
+    #[inline]
     pub(crate) fn get_confirm_offset(&self) -> i64 {
         self.commit_log.get_confirm_offset()
     }

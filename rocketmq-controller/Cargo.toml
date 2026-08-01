@@ -31,6 +31,7 @@ rocketmq-error    = { workspace = true }
 rocketmq-model    = { workspace = true }
 rocketmq-protocol = { workspace = true }
 rocketmq-runtime  = { workspace = true }
+rocketmq-store-api = { workspace = true }
 rocketmq-security-api = { workspace = true }
 rocketmq-observability = { workspace = true }
 rocketmq-transport = { workspace = true }

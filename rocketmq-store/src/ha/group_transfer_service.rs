@@ -28,6 +28,13 @@ use rocketmq_runtime::FullPolicy;
 use rocketmq_runtime::ProcessMemoryLimit;
 use rocketmq_runtime::RateLimit;
 use rocketmq_runtime::ResourceBudgetTree;
+use rocketmq_store_api::decide_replication;
+use rocketmq_store_api::AckPolicy;
+use rocketmq_store_api::HaRejectReason;
+use rocketmq_store_api::ReplicaAck;
+use rocketmq_store_api::ReplicationDecision;
+use rocketmq_store_api::ReplicationObservation;
+use rocketmq_store_api::SyncStateSet;
 use tokio::sync::Notify;
 use tokio::time::timeout;
 use tracing::error;
@@ -41,8 +48,6 @@ use crate::ha::ha_service::HAService;
 use crate::log_file::group_commit_request::GroupCommitRequest;
 use crate::store_error::HAError;
 use crate::store_error::HAResult;
-use rocketmq_store_local::ha::replication::has_required_acks;
-use rocketmq_store_local::ha::replication::has_required_sync_state_set_acks;
 pub(crate) use rocketmq_store_local::ha::replication::GroupTransferRuntimeInfo;
 
 pub struct GroupTransferService {
@@ -178,6 +183,49 @@ impl GroupTransferServiceInner {
         ha_service.snapshot_acked_replicas().await
     }
 
+    fn decide_transfer(
+        ha_service: &GeneralHAService,
+        policy: AckPolicy,
+        next_offset: i64,
+        snapshots: &[HAAckedReplicaSnapshot],
+    ) -> ReplicationDecision {
+        let Some(authority) = ha_service.write_authority() else {
+            return ReplicationDecision::Reject(HaRejectReason::AuthorityMismatch);
+        };
+        let mut members = ha_service
+            .sync_state_set()
+            .unwrap_or_else(|| std::collections::HashSet::from([authority.broker_id()]));
+        let require_controller_ids = ha_service.is_auto_switch_enabled();
+        let replica_acks = snapshots
+            .iter()
+            .enumerate()
+            .filter_map(|(index, snapshot)| {
+                let broker_id = match snapshot.slave_broker_id {
+                    Some(broker_id) => broker_id,
+                    None if !require_controller_ids => i64::try_from(index).ok()?.checked_add(1)?,
+                    None => return None,
+                };
+                members.insert(broker_id);
+                ReplicaAck::try_new(broker_id, snapshot.slave_ack_offset).ok()
+            })
+            .collect::<Vec<_>>();
+        let Ok(sync_state_set) = SyncStateSet::try_new(members) else {
+            return ReplicationDecision::Reject(HaRejectReason::AuthorityMismatch);
+        };
+        let Ok(observation) = ReplicationObservation::try_new(
+            authority,
+            authority,
+            policy,
+            next_offset,
+            ha_service.local_durable_watermark().max(0),
+            replica_acks,
+            sync_state_set,
+        ) else {
+            return ReplicationDecision::Reject(HaRejectReason::AuthorityMismatch);
+        };
+        decide_replication(&observation)
+    }
+
     async fn do_wait_transfer(&self) {
         let ha_service = self.ha_service.upgrade();
 
@@ -186,7 +234,15 @@ impl GroupTransferServiceInner {
             let request = pending.request_mut();
             let mut transfer_ok = false;
             let deadline = request.get_deadline();
-            let all_ack_in_sync_state_set = request.get_ack_nums() == mix_all::ALL_ACK_IN_SYNC_STATE_SET;
+            let policy = match AckPolicy::try_from_legacy(request.get_ack_nums(), mix_all::ALL_ACK_IN_SYNC_STATE_SET) {
+                Ok(policy) => policy,
+                Err(error) => {
+                    warn!(error = %error, "HA group-transfer request has an invalid ACK policy");
+                    request.wakeup_customer(PutMessageStatus::FlushSlaveTimeout);
+                    pending.complete();
+                    continue;
+                }
+            };
             let mut index = 0;
             while !transfer_ok && Instant::now() < deadline {
                 if index > 0
@@ -205,25 +261,17 @@ impl GroupTransferServiceInner {
                 let Some(ha_service) = ha_service.as_ref() else {
                     break;
                 };
-                //handle only one slave ack, ackNums <= 2 means master + 1 slave
-                if !all_ack_in_sync_state_set && request.get_ack_nums() <= 2 {
-                    transfer_ok = ha_service.get_push_to_slave_max_offset() >= request.get_next_offset();
-                    continue;
-                }
-                if all_ack_in_sync_state_set && ha_service.is_auto_switch_enabled() {
-                    if let Some(sync_state_set) = ha_service.sync_state_set() {
-                        let acked_replicas = Self::load_acked_replicas(ha_service).await;
-                        transfer_ok = has_required_sync_state_set_acks(
-                            &sync_state_set,
-                            &acked_replicas,
-                            request.get_next_offset(),
+                let acked_replicas = Self::load_acked_replicas(ha_service).await;
+                match Self::decide_transfer(ha_service, policy, request.get_next_offset(), &acked_replicas) {
+                    ReplicationDecision::Acknowledge(_) => transfer_ok = true,
+                    ReplicationDecision::Wait { .. } => {}
+                    ReplicationDecision::Reject(reason) => {
+                        warn!(
+                            ?reason,
+                            "HA group-transfer request was rejected by the canonical decision"
                         );
-                        continue;
+                        break;
                     }
-                    transfer_ok = ha_service.in_sync_replicas_nums(request.get_next_offset()) >= request.get_ack_nums();
-                } else {
-                    let acked_replicas = Self::load_acked_replicas(ha_service).await;
-                    transfer_ok = has_required_acks(request.get_ack_nums(), &acked_replicas, request.get_next_offset());
                 }
             }
             if !transfer_ok {
@@ -294,7 +342,6 @@ mod tests {
     use super::*;
     use crate::ha::default_ha_service::DefaultHAService;
     use crate::ha::test_support::new_test_message_store;
-    use std::collections::HashSet;
 
     fn new_test_ha_service() -> GeneralHAService {
         let temp_root = tempfile::tempdir().expect("create temp root dir");
@@ -305,47 +352,6 @@ mod tests {
         ));
         service.init().expect("init default ha service");
         service
-    }
-
-    #[test]
-    fn sync_state_set_ack_requires_all_members() {
-        let sync_state_set = HashSet::from([7_i64, 9_i64, 10_i64]);
-        let acked_replicas = vec![
-            HAAckedReplicaSnapshot {
-                slave_broker_id: Some(9),
-                slave_ack_offset: 128,
-            },
-            HAAckedReplicaSnapshot {
-                slave_broker_id: Some(10),
-                slave_ack_offset: 64,
-            },
-        ];
-
-        assert!(!has_required_sync_state_set_acks(&sync_state_set, &acked_replicas, 96));
-        assert!(has_required_sync_state_set_acks(&sync_state_set, &acked_replicas, 64));
-    }
-
-    #[test]
-    fn all_ack_in_sync_state_set_requires_controller_members() {
-        let request_ack_nums = mix_all::ALL_ACK_IN_SYNC_STATE_SET;
-        let sync_state_set = HashSet::from([7_i64, 9_i64, 10_i64]);
-        let mut acked_replicas = vec![
-            HAAckedReplicaSnapshot {
-                slave_broker_id: Some(9),
-                slave_ack_offset: 128,
-            },
-            HAAckedReplicaSnapshot {
-                slave_broker_id: Some(10),
-                slave_ack_offset: 127,
-            },
-        ];
-
-        assert!(request_ack_nums < 0);
-        assert!(!has_required_sync_state_set_acks(&sync_state_set, &acked_replicas, 128));
-
-        acked_replicas[1].slave_ack_offset = 128;
-
-        assert!(has_required_sync_state_set_acks(&sync_state_set, &acked_replicas, 128));
     }
 
     #[tokio::test]
@@ -427,6 +433,24 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn invalid_ack_policy_fails_closed_and_drains_the_request() {
+        let ha_service = new_test_ha_service();
+        let reference = GeneralHAServiceReference::new();
+        reference.bind(&ha_service).expect("bind general ha service");
+        let inner = GroupTransferServiceInner::try_new(reference).expect("group transfer service");
+        let (request, mut response) = GroupCommitRequest::with_ack_nums(0, 5_000, 0);
+
+        inner.put_request(request).await;
+        inner.do_wait_transfer().await;
+
+        assert_eq!(
+            response.wait_for_result_with_timeout().await.expect("rejected status"),
+            PutMessageStatus::FlushSlaveTimeout
+        );
+        assert_eq!(inner.runtime_info().pending_request_count, 0);
+    }
+
     #[test]
     fn general_service_reference_does_not_retain_root() {
         let ha_service = new_test_ha_service();
@@ -436,40 +460,5 @@ mod tests {
         assert!(reference.upgrade().is_some());
         drop(ha_service);
         assert!(reference.upgrade().is_none());
-    }
-
-    #[test]
-    fn sync_state_set_ack_ignores_non_members() {
-        let sync_state_set = HashSet::from([7_i64, 9_i64]);
-        let acked_replicas = vec![
-            HAAckedReplicaSnapshot {
-                slave_broker_id: Some(11),
-                slave_ack_offset: 256,
-            },
-            HAAckedReplicaSnapshot {
-                slave_broker_id: Some(9),
-                slave_ack_offset: 256,
-            },
-        ];
-
-        assert!(has_required_sync_state_set_acks(&sync_state_set, &acked_replicas, 128));
-    }
-
-    #[test]
-    fn required_acks_count_master_and_acked_slaves() {
-        let acked_replicas = vec![
-            HAAckedReplicaSnapshot {
-                slave_broker_id: Some(9),
-                slave_ack_offset: 32,
-            },
-            HAAckedReplicaSnapshot {
-                slave_broker_id: Some(10),
-                slave_ack_offset: 96,
-            },
-        ];
-
-        assert!(!has_required_acks(3, &acked_replicas, 64));
-        assert!(has_required_acks(2, &acked_replicas, 64));
-        assert!(has_required_acks(3, &acked_replicas, 32));
     }
 }

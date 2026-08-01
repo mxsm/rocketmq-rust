@@ -42,15 +42,37 @@ impl NotifyBrokerRoleChangeHandler {
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let request_header = request.decode_command_custom_header::<NotifyBrokerRoleChangedRequestHeader>();
-
-        let sync_state_set_info = SyncStateSet::decode(request.get_body().unwrap()).unwrap_or_default();
-
         let response = RemotingCommand::create_response_command();
+
+        let request_header = match request.decode_command_custom_header::<NotifyBrokerRoleChangedRequestHeader>() {
+            Ok(header) => header,
+            Err(error) => {
+                return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::SystemError,
+                    format!("invalid role-change header: {error}"),
+                )));
+            }
+        };
+
+        let Some(body) = request.get_body() else {
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::SystemError,
+                "notify broker role change is missing the sync-state-set body",
+            )));
+        };
+        let sync_state_set_info = match SyncStateSet::decode(body) {
+            Ok(sync_state_set) => sync_state_set,
+            Err(error) => {
+                return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::SystemError,
+                    format!("invalid sync-state-set body: {error}"),
+                )));
+            }
+        };
 
         info!(
             "Receive notifyBrokerRoleChanged request, try to change brokerRole, request:{}",
-            request_header.as_ref().expect("null")
+            request_header
         );
 
         if broker_config_request_handler
@@ -62,26 +84,24 @@ impl NotifyBrokerRoleChangeHandler {
             return Ok(Some(response.set_code(ResponseCode::Success)));
         }
 
-        if let Ok(request_header) = request_header {
-            let sync_state_set = sync_state_set_info.get_sync_state_set().cloned().unwrap_or_default();
-            let controller_leader_address = channel.remote_address().to_string().into();
+        let sync_state_set = sync_state_set_info.get_sync_state_set().cloned().unwrap_or_default();
+        let controller_leader_address = channel.remote_address().to_string().into();
 
-            if let Err(error) = broker_config_request_handler
-                .apply_controller_role_change(
-                    Some(controller_leader_address),
-                    request_header.master_broker_id,
-                    request_header.master_address,
-                    request_header.master_epoch,
-                    request_header.sync_state_set_epoch,
-                    sync_state_set,
-                )
-                .await
-            {
-                return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::SystemError,
-                    error.to_string(),
-                )));
-            }
+        if let Err(error) = broker_config_request_handler
+            .apply_controller_role_change(
+                Some(controller_leader_address),
+                request_header.master_broker_id,
+                request_header.master_address,
+                request_header.master_epoch,
+                request_header.sync_state_set_epoch,
+                sync_state_set,
+            )
+            .await
+        {
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::SystemError,
+                error.to_string(),
+            )));
         }
 
         Ok(Some(response.set_code(ResponseCode::Success)))
@@ -132,7 +152,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn uninitialized_controller_returns_success_without_retaining_runtime_owner() {
+    async fn uninitialized_controller_fails_closed_without_retaining_runtime_owner() {
         let runtime = BrokerRuntime::new(
             Arc::new(BrokerConfig::default()),
             Arc::new(MessageStoreConfig::default()),
@@ -164,9 +184,9 @@ mod tests {
                 &mut request,
             )
             .await
-            .expect("uninitialized controller notification should not fail")
+            .expect("uninitialized controller notification should return a response")
             .expect("notification should return a response");
 
-        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);
     }
 }

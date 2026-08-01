@@ -20,6 +20,7 @@ mod capability;
 pub mod checkpoint;
 mod checkpoint_artifact;
 mod error;
+mod ha_contract;
 mod progress;
 mod wal;
 
@@ -51,6 +52,19 @@ pub use error::StoreComponent;
 pub use error::StoreError;
 pub use error::StoreErrorKind;
 pub use error::StoreOperation;
+pub use ha_contract::decide_replication;
+pub use ha_contract::AckPolicy;
+pub use ha_contract::HaContractError;
+pub use ha_contract::HaRejectReason;
+pub use ha_contract::MasterEpoch;
+pub use ha_contract::ReplicaAck;
+pub use ha_contract::ReplicaCount;
+pub use ha_contract::ReplicationAcknowledgement;
+pub use ha_contract::ReplicationDecision;
+pub use ha_contract::ReplicationObservation;
+pub use ha_contract::SyncStateSet;
+pub use ha_contract::SyncStateSetEpoch;
+pub use ha_contract::WriteAuthority;
 pub use progress::CursorAdvance;
 pub use progress::CursorAdvanceDisposition;
 pub use progress::CursorAdvanceError;
@@ -162,6 +176,10 @@ pub enum AppendReceiptError {
     DurableWatermarkAheadOfAppended,
     /// Represents the memory durability already covered case.
     MemoryDurabilityAlreadyCovered,
+    /// Represents a replicated claim without a canonical acknowledgement decision.
+    ReplicatedDurabilityRequiresDecision,
+    /// Represents an acknowledgement decision that does not cover the appended range.
+    ReplicationDecisionBehindRange,
 }
 
 impl fmt::Display for AppendReceiptError {
@@ -175,6 +193,10 @@ impl fmt::Display for AppendReceiptError {
             Self::DurableWatermarkBehindRange => "durable watermark does not cover the claimed durability",
             Self::DurableWatermarkAheadOfAppended => "durable watermark exceeds appended progress",
             Self::MemoryDurabilityAlreadyCovered => "memory durability under-reports reached local durability",
+            Self::ReplicatedDurabilityRequiresDecision => {
+                "replicated durability requires a canonical replication acknowledgement"
+            }
+            Self::ReplicationDecisionBehindRange => "replication acknowledgement does not cover the appended range",
         };
         formatter.write_str(message)
     }
@@ -210,6 +232,9 @@ impl AppendReceipt {
         if durable_watermark > appended_watermark {
             return Err(AppendReceiptError::DurableWatermarkAheadOfAppended);
         }
+        if durability == Durability::Replicated {
+            return Err(AppendReceiptError::ReplicatedDurabilityRequiresDecision);
+        }
         match durability {
             Durability::Memory if durable_watermark >= appended_range.end => {
                 return Err(AppendReceiptError::MemoryDurabilityAlreadyCovered);
@@ -226,6 +251,33 @@ impl AppendReceipt {
             durable_watermark,
             durability,
         })
+    }
+
+    /// Creates a receipt from a proof produced by [`decide_replication`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppendReceiptError`] when receipt fields contradict each other or the supplied
+    /// acknowledgement does not cover the complete appended range.
+    pub fn try_new_with_replication(
+        status: AppendStatus,
+        appended_range: Range<i64>,
+        appended_watermark: i64,
+        durable_watermark: i64,
+        acknowledgement: ReplicationAcknowledgement,
+    ) -> Result<Self, AppendReceiptError> {
+        if acknowledgement.acknowledged_offset() < appended_range.end {
+            return Err(AppendReceiptError::ReplicationDecisionBehindRange);
+        }
+        let mut receipt = Self::try_new(
+            status,
+            appended_range,
+            appended_watermark,
+            durable_watermark,
+            Durability::Local,
+        )?;
+        receipt.durability = acknowledgement.durability();
+        Ok(receipt)
     }
 
     /// Creates a rejected receipt after validating status and watermark invariants.

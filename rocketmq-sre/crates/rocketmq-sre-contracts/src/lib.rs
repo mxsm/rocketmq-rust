@@ -121,6 +121,7 @@ pub use connector::ConnectorRegister;
 pub use connector::ConnectorResponseEnvelope;
 pub use connector::ConnectorSourceCapability;
 pub use connector::ConnectorSourceStatus;
+pub use connector::HaStatusProjection;
 pub use connector::REQUIRED_SIGNALS_EVIDENCE_SCHEMA_VERSION;
 pub use connector::RequiredSignalObservation;
 pub use connector::RequiredSignalStatus;

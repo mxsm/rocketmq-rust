@@ -26,6 +26,10 @@ use rocketmq_model::common::mix_all::MASTER_ID;
 use rocketmq_protocol::protocol::body::epoch_entry_cache::EpochEntry;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::MessageStoreConfig;
+use rocketmq_store_api::MasterEpoch;
+use rocketmq_store_api::SyncStateSet as HaSyncStateSet;
+use rocketmq_store_api::SyncStateSetEpoch;
+use rocketmq_store_api::WriteAuthority;
 use serde::Deserialize;
 use serde::Serialize;
 use tracing::info;
@@ -167,8 +171,8 @@ pub struct ReplicasManager {
     controller_leader_address: Option<CheetahString>,
     master_broker_id: Option<u64>,
     master_address: Option<CheetahString>,
-    master_epoch: i32,
-    sync_state_set_epoch: i32,
+    write_authority: Option<WriteAuthority>,
+    sync_state_set_epoch: Option<SyncStateSetEpoch>,
     sync_state_set: HashSet<i64>,
     metadata_path: PathBuf,
     temp_metadata_path: PathBuf,
@@ -193,8 +197,8 @@ impl ReplicasManager {
             controller_leader_address: None,
             master_broker_id: None,
             master_address: None,
-            master_epoch: 0,
-            sync_state_set_epoch: 0,
+            write_authority: None,
+            sync_state_set_epoch: None,
             sync_state_set: HashSet::new(),
             metadata_path,
             temp_metadata_path,
@@ -224,10 +228,9 @@ impl ReplicasManager {
     }
 
     pub fn get_epoch_entries(&self) -> Vec<EpochEntry> {
-        if self.master_epoch <= 0 {
-            return Vec::new();
-        }
-        vec![EpochEntry::new(self.master_epoch, 0)]
+        self.write_authority
+            .map(|authority| vec![EpochEntry::new(authority.master_epoch().get(), 0)])
+            .unwrap_or_default()
     }
 
     pub fn broker_controller_id(&self) -> u64 {
@@ -279,11 +282,19 @@ impl ReplicasManager {
     }
 
     pub fn master_epoch(&self) -> i32 {
-        self.master_epoch
+        self.write_authority
+            .map(|authority| authority.master_epoch().get())
+            .unwrap_or_default()
     }
 
     pub fn sync_state_set_epoch(&self) -> i32 {
         self.sync_state_set_epoch
+            .map(SyncStateSetEpoch::get)
+            .unwrap_or_default()
+    }
+
+    pub fn write_authority(&self) -> Option<WriteAuthority> {
+        self.write_authority
     }
 
     pub fn sync_state_set(&self) -> &HashSet<i64> {
@@ -294,7 +305,7 @@ impl ReplicasManager {
         ControllerHeartbeatState {
             controller_targets: self.heartbeat_targets(),
             broker_id: self.broker_controller_id as i64,
-            epoch: (self.master_epoch > 0).then_some(self.master_epoch),
+            epoch: self.write_authority.map(|authority| authority.master_epoch().get()),
         }
     }
 
@@ -563,48 +574,95 @@ impl ReplicasManager {
             self.set_controller_leader_address(controller_leader_address);
         }
 
-        let Some(new_master_epoch) = new_master_epoch else {
+        let Some(new_master_epoch_value) = new_master_epoch else {
             return Err(RocketMQError::illegal_argument(
                 "notify broker role change missing master epoch",
             ));
         };
-
-        if new_master_epoch < self.master_epoch {
-            return Ok(self.outcome(None, false));
-        }
-
-        let next_sync_state_set_epoch = sync_state_set_epoch.unwrap_or(self.sync_state_set_epoch);
-        let sync_state_set_changed = next_sync_state_set_epoch > self.sync_state_set_epoch;
-        if sync_state_set_changed {
-            self.sync_state_set_epoch = next_sync_state_set_epoch;
-            self.sync_state_set = sync_state_set.cloned().unwrap_or_default();
-        }
-
-        if new_master_epoch == self.master_epoch {
-            return Ok(self.outcome(None, sync_state_set_changed));
-        }
-
         let Some(master_broker_id) = new_master_broker_id else {
             return Err(RocketMQError::illegal_argument(
                 "notify broker role change missing master broker id",
             ));
         };
+        let new_master_epoch = MasterEpoch::try_from(new_master_epoch_value).map_err(|_| {
+            RocketMQError::illegal_argument("notify broker role change carries an invalid master epoch")
+        })?;
+        let requested_authority = WriteAuthority::try_from_u64(master_broker_id, new_master_epoch).map_err(|_| {
+            RocketMQError::illegal_argument("notify broker role change carries an invalid master broker id")
+        })?;
 
-        self.master_epoch = new_master_epoch;
-        self.master_broker_id = Some(master_broker_id);
-
-        let role = if master_broker_id == self.broker_controller_id {
-            self.master_address = Some(self.broker_address.clone());
-            Some(BrokerReplicaRole::Master)
-        } else {
-            let Some(master_address) = new_master_address else {
+        if let Some(current_authority) = self.write_authority {
+            if requested_authority.master_epoch() < current_authority.master_epoch() {
+                return Ok(self.outcome(None, false));
+            }
+            if requested_authority.master_epoch() == current_authority.master_epoch()
+                && requested_authority != current_authority
+            {
                 return Err(RocketMQError::illegal_argument(
-                    "notify broker role change missing master address for slave transition",
+                    "notify broker role change conflicts with the installed authority at the same epoch",
                 ));
-            };
-            self.master_address = Some(master_address);
-            Some(BrokerReplicaRole::Slave)
+            }
+        }
+
+        let next_sync_state_set_epoch = match sync_state_set_epoch {
+            Some(epoch) => Some(SyncStateSetEpoch::try_from(epoch).map_err(|_| {
+                RocketMQError::illegal_argument("notify broker role change carries an invalid sync-state-set epoch")
+            })?),
+            None => self.sync_state_set_epoch,
         };
+        if self
+            .sync_state_set_epoch
+            .zip(next_sync_state_set_epoch)
+            .is_some_and(|(current, next)| next < current)
+        {
+            return Err(RocketMQError::illegal_argument(
+                "notify broker role change carries a stale sync-state-set epoch",
+            ));
+        }
+        let sync_state_set_changed = next_sync_state_set_epoch > self.sync_state_set_epoch;
+        let next_sync_state_set = if sync_state_set_changed {
+            let members = sync_state_set.ok_or_else(|| {
+                RocketMQError::illegal_argument(
+                    "notify broker role change advances sync-state-set epoch without membership",
+                )
+            })?;
+            let validated = HaSyncStateSet::try_new(members.iter().copied()).map_err(|_| {
+                RocketMQError::illegal_argument("notify broker role change carries an invalid sync-state set")
+            })?;
+            if !validated.contains(requested_authority.broker_id()) {
+                return Err(RocketMQError::illegal_argument(
+                    "notify broker role change sync-state set does not contain the authorized master",
+                ));
+            }
+            Some(members.clone())
+        } else {
+            None
+        };
+
+        if self.write_authority == Some(requested_authority) {
+            if let Some(next_sync_state_set) = next_sync_state_set {
+                self.sync_state_set_epoch = next_sync_state_set_epoch;
+                self.sync_state_set = next_sync_state_set;
+            }
+            return Ok(self.outcome(None, sync_state_set_changed));
+        }
+
+        let (role, master_address) = if master_broker_id == self.broker_controller_id {
+            (BrokerReplicaRole::Master, self.broker_address.clone())
+        } else {
+            let master_address = new_master_address.ok_or_else(|| {
+                RocketMQError::illegal_argument("notify broker role change missing master address for slave transition")
+            })?;
+            (BrokerReplicaRole::Slave, master_address)
+        };
+
+        self.write_authority = Some(requested_authority);
+        self.master_broker_id = Some(master_broker_id);
+        self.master_address = Some(master_address);
+        if let Some(next_sync_state_set) = next_sync_state_set {
+            self.sync_state_set_epoch = next_sync_state_set_epoch;
+            self.sync_state_set = next_sync_state_set;
+        }
 
         info!(
             "Apply controller role change, broker_controller_id={}, new_role={:?}, master_broker_id={:?}, \
@@ -613,11 +671,11 @@ impl ReplicasManager {
             role,
             self.master_broker_id,
             self.master_address,
-            self.master_epoch,
-            self.sync_state_set_epoch
+            new_master_epoch.get(),
+            self.sync_state_set_epoch()
         );
 
-        Ok(self.outcome(role, sync_state_set_changed))
+        Ok(self.outcome(Some(role), sync_state_set_changed))
     }
 
     fn outcome(&self, role: Option<BrokerReplicaRole>, sync_state_set_changed: bool) -> RoleChangeOutcome {
@@ -627,8 +685,8 @@ impl ReplicasManager {
             sync_state_set_changed,
             master_broker_id: self.master_broker_id,
             master_address: self.master_address.clone(),
-            master_epoch: self.master_epoch,
-            sync_state_set_epoch: self.sync_state_set_epoch,
+            master_epoch: self.master_epoch(),
+            sync_state_set_epoch: self.sync_state_set_epoch(),
             sync_state_set: self.sync_state_set.clone(),
             local_broker_id: if should_start_special_service {
                 MASTER_ID
@@ -1037,6 +1095,51 @@ mod tests {
             manager.controller_leader_address(),
             Some(&CheetahString::from("127.0.0.4:9878"))
         );
+    }
+
+    #[test]
+    fn change_broker_role_rejects_conflicting_authority_at_same_epoch() {
+        let config = broker_config_with_controller_addr("127.0.0.1:9878", 2);
+        let message_store_config = message_store_config_with_identity_path("conflicting-authority");
+        let mut manager = ReplicasManager::new(&config, &message_store_config, "127.0.0.1:10911".into());
+
+        manager
+            .change_broker_role(None, Some(2), None, Some(3), Some(3), Some(&HashSet::from([2_i64])))
+            .expect("initial authority should be installed");
+        let installed = manager.write_authority().expect("installed authority");
+
+        let error = manager
+            .change_broker_role(
+                None,
+                Some(1),
+                Some("127.0.0.9:10911".into()),
+                Some(3),
+                Some(4),
+                Some(&HashSet::from([1_i64])),
+            )
+            .expect_err("same epoch must not authorize a different master");
+
+        assert!(error.to_string().contains("conflicts with the installed authority"));
+        assert_eq!(manager.write_authority(), Some(installed));
+        assert_eq!(manager.master_broker_id(), Some(2));
+        assert_eq!(manager.sync_state_set(), &HashSet::from([2_i64]));
+    }
+
+    #[test]
+    fn change_broker_role_rejects_non_positive_epochs_without_mutation() {
+        let config = broker_config_with_controller_addr("127.0.0.1:9878", 2);
+        let message_store_config = message_store_config_with_identity_path("invalid-epoch");
+        let mut manager = ReplicasManager::new(&config, &message_store_config, "127.0.0.1:10911".into());
+
+        for epoch in [-1, 0] {
+            manager
+                .change_broker_role(None, Some(2), None, Some(epoch), Some(1), Some(&HashSet::from([2_i64])))
+                .expect_err("non-positive epoch must fail closed");
+        }
+
+        assert_eq!(manager.write_authority(), None);
+        assert_eq!(manager.master_broker_id(), None);
+        assert!(manager.sync_state_set().is_empty());
     }
 
     #[test]

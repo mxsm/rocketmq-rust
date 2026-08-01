@@ -4330,6 +4330,7 @@ dependencies = [
  "rocketmq-protocol",
  "rocketmq-runtime",
  "rocketmq-security-api",
+ "rocketmq-store-api",
  "rocketmq-transport",
  "rocksdb",
  "serde",

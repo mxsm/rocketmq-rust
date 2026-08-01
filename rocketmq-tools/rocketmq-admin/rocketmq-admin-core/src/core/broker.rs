@@ -145,6 +145,19 @@ pub struct StoreHealthDiagnostics {
     pub sync_flush: SyncFlushDiagnostics,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HaDiagnostics {
+    pub supported: bool,
+    pub role: Option<String>,
+    pub master_epoch: Option<i32>,
+    pub sync_state_set_epoch: Option<i32>,
+    pub sync_state_set_size: Option<u64>,
+    pub max_replica_lag_bytes: Option<u64>,
+    pub ack_policy: Option<String>,
+    pub required_ack_count: Option<u64>,
+    pub decision_code: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecoveryDiagnostics {
     pub available: bool,
@@ -230,6 +243,8 @@ pub struct BrokerDiagnostics {
     pub readiness: Option<BrokerReadinessDiagnostics>,
     pub config: Option<BrokerConfigSummary>,
     pub store_health: Option<StoreHealthDiagnostics>,
+    #[serde(default)]
+    pub ha: HaDiagnostics,
     pub recovery: Option<RecoveryDiagnostics>,
     pub background_index_rebuild: Option<BackgroundIndexRebuildDiagnostics>,
     pub rocksdb: RocksDbMaintenanceDiagnostics,
@@ -642,6 +657,7 @@ pub(crate) fn project_broker_diagnostics(broker_name: String, broker_id: u64, ru
         readiness,
         config,
         store_health,
+        ha: parse_ha(runtime),
         recovery: parse_recovery(runtime),
         background_index_rebuild,
         rocksdb: RocksDbMaintenanceDiagnostics {
@@ -683,6 +699,7 @@ fn unsupported_diagnostics(broker_name: String, broker_id: u64) -> BrokerDiagnos
         readiness: None,
         config: None,
         store_health: None,
+        ha: HaDiagnostics::default(),
         recovery: None,
         background_index_rebuild: None,
         rocksdb: RocksDbMaintenanceDiagnostics {
@@ -754,6 +771,28 @@ fn parse_store_health(runtime: &KVTable) -> Option<StoreHealthDiagnostics> {
 }
 
 #[cfg(any(feature = "read-client-adapter", test))]
+fn parse_ha(runtime: &KVTable) -> HaDiagnostics {
+    let supported = runtime_bool(runtime, "haDiagnosticsSupported").unwrap_or(false);
+    HaDiagnostics {
+        supported,
+        role: supported
+            .then(|| runtime_value(runtime, "haRole").map(str::to_owned))
+            .flatten(),
+        master_epoch: runtime_i32(runtime, "haMasterEpoch"),
+        sync_state_set_epoch: runtime_i32(runtime, "haSyncStateSetEpoch"),
+        sync_state_set_size: runtime_u64(runtime, "haSyncStateSetSize"),
+        max_replica_lag_bytes: runtime_u64(runtime, "haMaxReplicaLagBytes"),
+        ack_policy: supported
+            .then(|| runtime_value(runtime, "haAckPolicy").map(str::to_owned))
+            .flatten(),
+        required_ack_count: runtime_u64(runtime, "haRequiredAckCount"),
+        decision_code: supported
+            .then(|| runtime_value(runtime, "haDecisionCode").map(str::to_owned))
+            .flatten(),
+    }
+}
+
+#[cfg(any(feature = "read-client-adapter", test))]
 fn parse_recovery(runtime: &KVTable) -> Option<RecoveryDiagnostics> {
     let available = runtime_bool(runtime, "recoveryReportAvailable")?;
     Some(RecoveryDiagnostics {
@@ -809,6 +848,11 @@ fn runtime_u64(runtime: &KVTable, key: &str) -> Option<u64> {
 
 #[cfg(any(feature = "read-client-adapter", test))]
 fn runtime_i64(runtime: &KVTable, key: &str) -> Option<i64> {
+    runtime_value(runtime, key)?.parse().ok()
+}
+
+#[cfg(any(feature = "read-client-adapter", test))]
+fn runtime_i32(runtime: &KVTable, key: &str) -> Option<i32> {
     runtime_value(runtime, key)?.parse().ok()
 }
 

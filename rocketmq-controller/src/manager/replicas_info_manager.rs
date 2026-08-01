@@ -57,6 +57,10 @@ use rocketmq_protocol::protocol::header::controller::register_broker_to_controll
 use rocketmq_protocol::protocol::header::elect_master_response_header::ElectMasterResponseHeader;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_store_api::MasterEpoch;
+use rocketmq_store_api::SyncStateSet as HaSyncStateSet;
+use rocketmq_store_api::SyncStateSetEpoch;
+use rocketmq_store_api::WriteAuthority;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -151,6 +155,53 @@ impl ReplicasInfoManager {
     ) -> ControllerResult<AlterSyncStateSetResponseHeader> {
         let mut result = ControllerResult::new(Some(AlterSyncStateSetResponseHeader::default()));
 
+        let Ok(master_epoch) = MasterEpoch::try_from(master_epoch) else {
+            result.set_code_and_remark(
+                ResponseCode::ControllerFencedMasterEpoch,
+                "Master epoch must be positive",
+            );
+            return result;
+        };
+        let Ok(sync_state_set_epoch) = SyncStateSetEpoch::try_from(sync_state_set_epoch) else {
+            result.set_code_and_remark(
+                ResponseCode::ControllerFencedSyncStateSetEpoch,
+                "Sync-state-set epoch must be positive",
+            );
+            return result;
+        };
+        let Ok(requested_authority) = WriteAuthority::try_from_u64(master_broker_id, master_epoch) else {
+            result.set_code_and_remark(
+                ResponseCode::ControllerInvalidMaster,
+                "Master broker id is out of range",
+            );
+            return result;
+        };
+        let mut canonical_members = Vec::with_capacity(new_sync_state_set.len());
+        for broker_id in &new_sync_state_set {
+            let Ok(broker_id) = i64::try_from(*broker_id) else {
+                result.set_code_and_remark(
+                    ResponseCode::ControllerInvalidReplicas,
+                    "Sync-state-set broker id is out of range",
+                );
+                return result;
+            };
+            canonical_members.push(broker_id);
+        }
+        let Ok(canonical_sync_state_set) = HaSyncStateSet::try_new(canonical_members) else {
+            result.set_code_and_remark(
+                ResponseCode::ControllerInvalidReplicas,
+                "Sync-state set must contain valid broker ids",
+            );
+            return result;
+        };
+        if !canonical_sync_state_set.contains(requested_authority.broker_id()) {
+            result.set_code_and_remark(
+                ResponseCode::ControllerAlterSyncStateSetFailed,
+                "Sync-state set must contain the authorized master",
+            );
+            return result;
+        }
+
         // Check if broker exists
         if !self.is_contains_broker(broker_name) {
             result.set_code_and_remark(
@@ -194,11 +245,11 @@ impl ReplicasInfoManager {
         }
 
         // Check master epoch
-        if master_epoch != sync_state_info.master_epoch() {
+        if MasterEpoch::try_from(sync_state_info.master_epoch()).ok() != Some(master_epoch) {
             let err = format!(
                 "Rejecting alter syncStateSet request because the current master epoch is:{}, not {}",
                 sync_state_info.master_epoch(),
-                master_epoch
+                master_epoch.get()
             );
             error!("{}", err);
             result.set_code_and_remark(ResponseCode::ControllerFencedMasterEpoch, &err);
@@ -206,11 +257,11 @@ impl ReplicasInfoManager {
         }
 
         // Check syncStateSet epoch
-        if sync_state_set_epoch != sync_state_info.sync_state_set_epoch() {
+        if SyncStateSetEpoch::try_from(sync_state_info.sync_state_set_epoch()).ok() != Some(sync_state_set_epoch) {
             let err = format!(
                 "Rejecting alter syncStateSet request because the current syncStateSet epoch is:{}, not {}",
                 sync_state_info.sync_state_set_epoch(),
-                sync_state_set_epoch
+                sync_state_set_epoch.get()
             );
             error!("{}", err);
             result.set_code_and_remark(ResponseCode::ControllerFencedSyncStateSetEpoch, &err);

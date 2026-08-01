@@ -98,13 +98,25 @@ fn receipt_rejects_a_durable_watermark_ahead_of_appended_progress() {
 
 #[test]
 fn receipt_requires_local_and_replicated_durability_to_be_reached() {
-    for durability in [Durability::Local, Durability::Replicated] {
-        assert_eq!(
-            AppendReceiptError::DurableWatermarkBehindRange,
-            AppendReceipt::try_new(AppendStatus::PutOk, 40..60, 80, 59, durability)
-                .expect_err("claimed durability must cover range")
-        );
-    }
+    assert_eq!(
+        AppendReceiptError::DurableWatermarkBehindRange,
+        AppendReceipt::try_new(AppendStatus::PutOk, 40..60, 80, 59, Durability::Local)
+            .expect_err("claimed durability must cover range")
+    );
+    assert_eq!(
+        AppendReceiptError::ReplicatedDurabilityRequiresDecision,
+        AppendReceipt::try_new(AppendStatus::PutOk, 40..60, 80, 59, Durability::Replicated)
+            .expect_err("replicated durability requires a canonical decision")
+    );
+}
+
+#[test]
+fn local_receipt_constructor_cannot_claim_replicated_durability() {
+    assert_eq!(
+        AppendReceiptError::ReplicatedDurabilityRequiresDecision,
+        AppendReceipt::try_new(AppendStatus::PutOk, 40..60, 80, 60, Durability::Replicated)
+            .expect_err("local watermarks alone cannot prove replication")
+    );
 }
 
 #[test]

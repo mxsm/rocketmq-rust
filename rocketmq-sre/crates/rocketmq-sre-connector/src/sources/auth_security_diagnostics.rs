@@ -119,6 +119,7 @@ fn millis_to_datetime(value: u64) -> Option<DateTime<Utc>> {
 mod tests {
     use rocketmq_admin_core::core::broker::AuthSecurityDiagnostics;
     use rocketmq_admin_core::core::broker::BrokerDiagnostics;
+    use rocketmq_admin_core::core::broker::HaDiagnostics;
     use rocketmq_admin_core::core::broker::RocksDbMaintenanceDiagnostics;
     use rocketmq_admin_core::core::broker::TieredDispatchDiagnostics;
 
@@ -137,6 +138,7 @@ mod tests {
                 readiness: None,
                 config: None,
                 store_health: None,
+                ha: HaDiagnostics::default(),
                 recovery: None,
                 background_index_rebuild: None,
                 rocksdb: RocksDbMaintenanceDiagnostics {
