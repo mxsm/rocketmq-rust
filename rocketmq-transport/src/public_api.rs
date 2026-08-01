@@ -16,6 +16,16 @@
 
 pub use crate::client::TransportClient;
 pub use crate::config::ServerConfig;
+pub use crate::dispatch::AuthorizedCommandDispatcher;
+pub use crate::dispatch::AuthorizedDispatchBoundary;
+pub use crate::dispatch::DispatchError;
+pub use crate::dispatch::DispatchOutcome;
+pub use crate::dispatch::LocalResponseReceiver;
+pub use crate::dispatch::RequestContext;
+pub use crate::dispatch::RequestContextError;
+pub use crate::dispatch::RequestTransport;
+pub use crate::dispatch::ResponseSink;
+pub use crate::dispatch::ResponseSinkError;
 pub use crate::remoting::RemotingService;
 pub use crate::remoting_server::rocketmq_tokio_server::RocketMQServer;
 pub use crate::runtime::config::client_config::TokioClientConfig;

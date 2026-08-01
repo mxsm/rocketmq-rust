@@ -25,8 +25,8 @@ use std::time::UNIX_EPOCH;
 use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::Criterion;
-use rocketmq_client_rust::run_rebalance_service_lifecycle_probe;
-use rocketmq_client_rust::RebalanceServiceLifecycleProbe;
+use rocketmq_client_rust::test_support::run_rebalance_service_lifecycle_probe;
+use rocketmq_client_rust::test_support::RebalanceServiceLifecycleProbe;
 
 fn run_lifecycle_probe() -> RebalanceServiceLifecycleProbe {
     let runtime = support::BenchClientRuntime::new("rebalance-service");

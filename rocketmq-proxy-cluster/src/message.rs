@@ -16,8 +16,8 @@ use std::collections::HashMap;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::proxy_adapter_compat::Message;
-use rocketmq_client_rust::proxy_adapter_compat::MessageExt;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_single::Message;
 use rocketmq_proxy_core::ProxyMessage;
 use rocketmq_proxy_core::ProxyMessageExt;
 

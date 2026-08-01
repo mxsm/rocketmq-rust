@@ -670,7 +670,7 @@ mod tests {
     use rocketmq_auth::AuthRuntimeBuilder;
     use rocketmq_protocol::code::response_code::ResponseCode;
     use rocketmq_store::LocalFileMessageStore;
-    use rocketmq_transport::LocalRequestHarness;
+    use rocketmq_transport::test_support::LocalRequestHarness;
 
     use crate::transaction::queue::default_transactional_message_service::DefaultTransactionalMessageService;
 

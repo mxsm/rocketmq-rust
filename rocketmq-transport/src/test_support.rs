@@ -12,17 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod authorized_dispatcher;
-mod request_context;
-mod response_sink;
+//! Explicit test fixtures excluded from default production builds.
 
-pub use authorized_dispatcher::AuthorizedCommandDispatcher;
-pub use authorized_dispatcher::AuthorizedDispatchBoundary;
-pub use authorized_dispatcher::DispatchError;
-pub use authorized_dispatcher::DispatchOutcome;
-pub use request_context::RequestContext;
-pub use request_context::RequestContextError;
-pub use request_context::RequestTransport;
-pub use response_sink::LocalResponseReceiver;
-pub use response_sink::ResponseSink;
-pub use response_sink::ResponseSinkError;
+pub use crate::local::LocalRequestHarness;

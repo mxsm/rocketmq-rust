@@ -25,8 +25,8 @@ use std::time::UNIX_EPOCH;
 use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::Criterion;
-use rocketmq_client_rust::run_latency_fault_detector_lifecycle_probe;
-use rocketmq_client_rust::LatencyFaultDetectorLifecycleProbe;
+use rocketmq_client_rust::test_support::run_latency_fault_detector_lifecycle_probe;
+use rocketmq_client_rust::test_support::LatencyFaultDetectorLifecycleProbe;
 
 fn run_lifecycle_probe() -> LatencyFaultDetectorLifecycleProbe {
     let runtime = support::BenchClientRuntime::new("latency-fault-detector");

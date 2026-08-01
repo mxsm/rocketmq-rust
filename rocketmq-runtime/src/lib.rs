@@ -30,41 +30,38 @@
 //! deprecated compatibility boundary.
 
 /// Actor types and operations.
-pub mod actor;
+mod actor;
 pub mod blocking;
 /// Common types and operations.
 pub mod common;
 /// Config types and operations.
-pub mod config;
+mod config;
 /// Context types and operations.
-pub mod context;
-/// Diagnostics types and operations.
-pub mod diagnostics;
+mod context;
+mod diagnostics;
 /// Error types and operations.
-pub mod error;
+mod error;
 /// Executor service types and operations.
-pub mod executor_service;
+mod executor_service;
 mod handle;
 /// Legacy types and operations.
-pub mod legacy;
-pub mod metadata_io;
-/// Bounded operation context types and operations.
-pub mod operation;
+mod legacy;
+mod metadata_io;
+mod operation;
 /// Owner types and operations.
-pub mod owner;
+mod owner;
 pub mod prelude;
 mod public_api;
 /// Resource budget types and operations.
 pub mod resource_budget;
-/// Process-wide runtime resource capabilities.
-pub mod resources;
+mod resources;
 /// Schedule types and operations.
 pub mod schedule;
 /// Scheduled types and operations.
-pub mod scheduled;
+mod scheduled;
 /// Service context types and operations.
 pub mod service_context;
-pub mod service_lifecycle;
+mod service_lifecycle;
 /// Shutdown types and operations.
 pub mod shutdown;
 /// Shutdown deadline types and operations.
@@ -90,18 +87,6 @@ pub use blocking::BlockingPoolPolicy;
 pub use blocking::BlockingTaskSnapshot;
 pub use config::RuntimeConfig;
 pub use context::RuntimeContext;
-pub use diagnostics::RuntimeBlockingKindSummaryV1;
-pub use diagnostics::RuntimeBlockingKindV1;
-pub use diagnostics::RuntimeBlockingLaneSummaryV1;
-pub use diagnostics::RuntimeBlockingLaneV1;
-pub use diagnostics::RuntimeComponent;
-pub use diagnostics::RuntimeDiagnostics;
-pub use diagnostics::RuntimeDiagnosticsSnapshot;
-pub use diagnostics::RuntimeDiagnosticsViewOptions;
-pub use diagnostics::RuntimeDiagnosticsViewV1;
-pub use diagnostics::RuntimeLifecycleStateV1;
-pub use diagnostics::RuntimeTaskKindSummaryV1;
-pub use diagnostics::RuntimeTaskKindV1;
 pub use error::RuntimeError;
 pub use error::RuntimeResult;
 pub use executor_service::FuturesExecutorService;
@@ -125,7 +110,6 @@ pub use metadata_io::MetadataIoResourceSnapshot;
 pub use metadata_io::MetadataIoShutdownReport;
 pub use metadata_io::MetadataIoSnapshot;
 pub use metadata_io::MetadataWriteRequest;
-pub use operation::OperationContext;
 pub use public_api::*;
 pub use resource_budget::BudgetAcquireError;
 pub use resource_budget::BudgetCapacity;
@@ -140,7 +124,6 @@ pub use resource_budget::FullPolicy;
 pub use resource_budget::MemoryLimitError;
 pub use resource_budget::MemoryLimitSource;
 pub use resource_budget::MonotonicClock;
-pub use resource_budget::PermitRebindError;
 pub use resource_budget::ProcessMemoryLimit;
 pub use resource_budget::QueuePushError;
 pub use resource_budget::QueuePushErrorKind;
@@ -150,7 +133,6 @@ pub use resource_budget::RateLimit;
 pub use resource_budget::ResourceBudgetTree;
 pub use resource_budget::ResourcePermit;
 pub use resource_budget::SystemMonotonicClock;
-pub use resources::RuntimeResources;
 pub use schedule::executor::ExecutorConfig;
 pub use schedule::executor::ExecutorPool;
 pub use schedule::executor::TaskExecutor;

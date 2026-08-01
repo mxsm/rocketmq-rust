@@ -61,7 +61,8 @@ pub use stable::Api;
         manifest = guard.validate_manifest(
             json.loads((ROOT / "scripts/public-api-intent.json").read_text(encoding="utf-8"))
         )
-        self.assertEqual([], guard.compare(manifest, guard.current_inventory(ROOT)))
+        findings = guard.compare(manifest, guard.current_inventory(ROOT))
+        self.assertEqual([], findings, "\n".join(findings))
         counts = guard.summary(manifest)
         for crate in guard.CRATES:
             self.assertGreater(counts[crate]["stable"], 0)

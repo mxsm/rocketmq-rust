@@ -12,20 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_client_rust::run_concurrent_clean_expire_lifecycle_probe;
-use rocketmq_client_rust::run_connection_event_listener_lifecycle_probe;
-use rocketmq_client_rust::run_consumer_stats_manager_lifecycle_probe;
-use rocketmq_client_rust::run_latency_fault_detector_lifecycle_probe;
-use rocketmq_client_rust::run_lite_pull_task_lifecycle_probe;
-use rocketmq_client_rust::run_local_file_offset_store_lifecycle_probe;
-use rocketmq_client_rust::run_namesrv_refresh_lifecycle_probe;
-use rocketmq_client_rust::run_orderly_lock_periodic_lifecycle_probe;
-use rocketmq_client_rust::run_pop_orderly_lock_refresh_lifecycle_probe;
-use rocketmq_client_rust::run_produce_accumulator_guard_lifecycle_probe;
-use rocketmq_client_rust::run_pull_message_service_lifecycle_probe;
-use rocketmq_client_rust::run_rebalance_service_lifecycle_probe;
-use rocketmq_client_rust::run_request_future_holder_lifecycle_probe;
-use rocketmq_client_rust::run_trace_worker_lifecycle_probe;
+use rocketmq_client_rust::test_support::run_concurrent_clean_expire_lifecycle_probe;
+use rocketmq_client_rust::test_support::run_connection_event_listener_lifecycle_probe;
+use rocketmq_client_rust::test_support::run_consumer_stats_manager_lifecycle_probe;
+use rocketmq_client_rust::test_support::run_latency_fault_detector_lifecycle_probe;
+use rocketmq_client_rust::test_support::run_lite_pull_task_lifecycle_probe;
+use rocketmq_client_rust::test_support::run_local_file_offset_store_lifecycle_probe;
+use rocketmq_client_rust::test_support::run_namesrv_refresh_lifecycle_probe;
+use rocketmq_client_rust::test_support::run_orderly_lock_periodic_lifecycle_probe;
+use rocketmq_client_rust::test_support::run_pop_orderly_lock_refresh_lifecycle_probe;
+use rocketmq_client_rust::test_support::run_produce_accumulator_guard_lifecycle_probe;
+use rocketmq_client_rust::test_support::run_pull_message_service_lifecycle_probe;
+use rocketmq_client_rust::test_support::run_rebalance_service_lifecycle_probe;
+use rocketmq_client_rust::test_support::run_request_future_holder_lifecycle_probe;
+use rocketmq_client_rust::test_support::run_trace_worker_lifecycle_probe;
 
 mod support;
 

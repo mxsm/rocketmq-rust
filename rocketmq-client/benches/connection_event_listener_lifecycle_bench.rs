@@ -25,10 +25,10 @@ use std::time::UNIX_EPOCH;
 use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::Criterion;
-use rocketmq_client_rust::run_connection_event_listener_lifecycle_probe;
-use rocketmq_client_rust::run_heartbeat_route_index_probe;
-use rocketmq_client_rust::ConnectionEventListenerLifecycleProbe;
-use rocketmq_client_rust::HeartbeatRouteIndexProbe;
+use rocketmq_client_rust::test_support::run_connection_event_listener_lifecycle_probe;
+use rocketmq_client_rust::test_support::run_heartbeat_route_index_probe;
+use rocketmq_client_rust::test_support::ConnectionEventListenerLifecycleProbe;
+use rocketmq_client_rust::test_support::HeartbeatRouteIndexProbe;
 
 fn run_lifecycle_probe() -> ConnectionEventListenerLifecycleProbe {
     let runtime = support::BenchClientRuntime::new("connection-events");

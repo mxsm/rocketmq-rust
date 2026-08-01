@@ -102,13 +102,11 @@ class PublicApiCompatibilityTests(unittest.TestCase):
                 "cluster-mode",
                 "local-mode",
                 "observability",
-                "metrics-prometheus",
                 "otel-traces",
                 "otel-logs",
+                "otlp-metrics",
                 "otlp-traces",
                 "otlp-logs",
-                "production-observability",
-                "production",
                 "tieredstore",
             },
             set(proxy),
@@ -171,14 +169,18 @@ class PublicApiCompatibilityTests(unittest.TestCase):
         self.assertIn("feature=24/24", evidence)
         self.assertIn("wire=6/6", evidence)
         self.assertIn("storage=10/10", evidence)
-        self.assertIn("additive: 4", evidence)
+        self.assertIn("additive groups: 4", evidence)
         self.assertIn("deprecated: 0", evidence)
-        self.assertIn("breaking: 4", evidence)
+        self.assertIn("breaking groups: 4", evidence)
+        self.assertIn("scoped Client capabilities", evidence)
+        self.assertIn("versioned Runtime diagnostics", evidence)
+        self.assertIn("authorized Transport dispatch capabilities", evidence)
+        self.assertIn("non-default `test-support`", evidence)
+        self.assertIn("Client compatibility facade", evidence)
+        self.assertIn("Store `bench_support`", evidence)
         self.assertIn("ClientRuntime::new", evidence)
         self.assertIn("ClusterConfig", evidence)
         self.assertIn("Dashboard admin operations", evidence)
-        self.assertIn("RuntimeConfig::for_parallelism", evidence)
-        self.assertIn("writer diagnostics", evidence)
         self.assertIn("MappedBuffer::read_zero_copy", evidence)
         self.assertIn("MappedBuffer::read_copy", evidence)
         self.assertIn("repository owner explicitly approved", evidence)

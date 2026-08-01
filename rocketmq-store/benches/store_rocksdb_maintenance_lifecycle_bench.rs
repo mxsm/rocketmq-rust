@@ -24,8 +24,8 @@ use criterion::criterion_main;
 use criterion::Criterion;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
-use rocketmq_store::bench_support::run_store_rocksdb_maintenance_lifecycle_probe;
-use rocketmq_store::bench_support::StoreRocksDbMaintenanceLifecycleProbe;
+use rocketmq_store::test_support::run_store_rocksdb_maintenance_lifecycle_probe;
+use rocketmq_store::test_support::StoreRocksDbMaintenanceLifecycleProbe;
 
 fn run_lifecycle_probe() -> StoreRocksDbMaintenanceLifecycleProbe {
     let owner = RuntimeOwner::new(RuntimeConfig {

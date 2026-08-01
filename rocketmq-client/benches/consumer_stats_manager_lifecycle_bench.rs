@@ -25,8 +25,8 @@ use std::time::UNIX_EPOCH;
 use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::Criterion;
-use rocketmq_client_rust::run_consumer_stats_manager_lifecycle_probe;
-use rocketmq_client_rust::ConsumerStatsManagerLifecycleProbe;
+use rocketmq_client_rust::test_support::run_consumer_stats_manager_lifecycle_probe;
+use rocketmq_client_rust::test_support::ConsumerStatsManagerLifecycleProbe;
 
 fn run_lifecycle_probe() -> ConsumerStatsManagerLifecycleProbe {
     let runtime = support::BenchClientRuntime::new("consumer-stats");

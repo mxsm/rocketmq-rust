@@ -25,8 +25,8 @@ use criterion::BenchmarkId;
 use criterion::Criterion;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
-use rocketmq_store::bench_support::run_store_blocking_io_probe;
-use rocketmq_store::bench_support::StoreBlockingIoProbe;
+use rocketmq_store::test_support::run_store_blocking_io_probe;
+use rocketmq_store::test_support::StoreBlockingIoProbe;
 
 fn run_store_blocking_probe(task_count: usize, work_duration: Duration) -> StoreBlockingIoProbe {
     let owner = RuntimeOwner::new(RuntimeConfig {

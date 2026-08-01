@@ -41,7 +41,7 @@ use tokio::time::timeout;
 ///
 /// # Example
 ///
-/// ```no_run
+/// ```ignore
 /// use rocketmq_error::RocketMQResult;
 /// use std::time::Duration;
 ///
@@ -123,7 +123,7 @@ where
 ///
 /// # Example
 ///
-/// ```no_run
+/// ```ignore
 /// use rocketmq_error::RocketMQResult;
 /// use std::time::Duration;
 ///

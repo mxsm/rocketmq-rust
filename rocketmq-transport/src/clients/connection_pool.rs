@@ -19,7 +19,7 @@
 //! - **Connection Reuse**: Maintains long-lived TCP connections to brokers
 //! - **Idle Timeout**: Automatically closes unused connections after timeout
 //! - **Health Checking**: Validates connection health before returning
-//! - **Metrics Collection**: Tracks usage, latency, and error rates
+//! - **Metrics Collection**: Tracks request and error counts
 //! - **Concurrency**: Lock-free reads via DashMap
 //!
 //! # Architecture
@@ -34,14 +34,14 @@
 //! │  │  addr -> Entry     │───►│  - last_used         ││
 //! │  │                    │    │  - request_count     ││
 //! │  │                    │    │  - error_count       ││
-//! │  └────────────────────┘    │  - latency_sum       ││
+//! │  └────────────────────┘    │  - total_errors      ││
 //! │           │                └──────────────────────┘│
 //! │           ↓                                         │
 //! │  ┌────────────────────┐                            │
 //! │  │  PooledConnection  │                            │
 //! │  │  - client          │                            │
 //! │  │  - metrics         │                            │
-//! │  │  - created_at      │                            │
+//! │  │  - metrics         │                            │
 //! │  └────────────────────┘                            │
 //! │                                                      │
 //! └──────────────────────────────────────────────────────┘
@@ -69,12 +69,7 @@
 //!     .await
 //! {
 //!     // Use connection
-//!     let metrics = pool.get_metrics("127.0.0.1:9876");
-//!     println!("Connection used {} times", metrics.request_count);
 //! }
-//!
-//! // Cleanup idle connections
-//! pool.evict_idle().await;
 //! # }
 //! ```
 
@@ -119,9 +114,6 @@ pub struct PooledConnection<PR = DefaultRemotingRequestProcessor> {
 
     /// Connection metrics for monitoring
     metrics: Arc<ConnectionMetrics>,
-
-    /// When this connection was created
-    created_at: Instant,
 }
 
 impl<PR> PooledConnection<PR> {
@@ -130,7 +122,6 @@ impl<PR> PooledConnection<PR> {
         Self {
             client,
             metrics: Arc::new(ConnectionMetrics::new()),
-            created_at: Instant::now(),
         }
     }
 
@@ -166,11 +157,6 @@ impl<PR> PooledConnection<PR> {
     pub fn record_error(&self) {
         self.metrics.record_error();
     }
-
-    /// Get connection age
-    pub fn age(&self) -> Duration {
-        self.created_at.elapsed()
-    }
 }
 
 /// Connection metrics for monitoring and decision-making.
@@ -186,12 +172,6 @@ pub struct ConnectionMetrics {
     /// Total number of requests sent
     request_count: AtomicU64,
 
-    /// Number of consecutive errors
-    consecutive_errors: AtomicU64,
-
-    /// Sum of all request latencies (milliseconds)
-    latency_sum: AtomicU64,
-
     /// Total number of errors
     total_errors: AtomicU64,
 }
@@ -202,51 +182,21 @@ impl ConnectionMetrics {
         Self {
             last_used: parking_lot::Mutex::new(Instant::now()),
             request_count: AtomicU64::new(0),
-            consecutive_errors: AtomicU64::new(0),
-            latency_sum: AtomicU64::new(0),
             total_errors: AtomicU64::new(0),
         }
     }
 
     /// Record successful request
-    pub fn record_success(&self, latency_ms: u64) {
+    pub fn record_success(&self, _latency_ms: u64) {
         *self.last_used.lock() = Instant::now();
         self.request_count.fetch_add(1, Ordering::Relaxed);
-        self.latency_sum.fetch_add(latency_ms, Ordering::Relaxed);
-        self.consecutive_errors.store(0, Ordering::Relaxed);
     }
 
     /// Record failed request
     pub fn record_error(&self) {
         *self.last_used.lock() = Instant::now();
         self.request_count.fetch_add(1, Ordering::Relaxed);
-        self.consecutive_errors.fetch_add(1, Ordering::Relaxed);
         self.total_errors.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Get average latency in milliseconds
-    pub fn avg_latency(&self) -> f64 {
-        let count = self.request_count.load(Ordering::Relaxed);
-        if count == 0 {
-            return 0.0;
-        }
-        let sum = self.latency_sum.load(Ordering::Relaxed);
-        sum as f64 / count as f64
-    }
-
-    /// Get error rate (0.0 - 1.0)
-    pub fn error_rate(&self) -> f64 {
-        let count = self.request_count.load(Ordering::Relaxed);
-        if count == 0 {
-            return 0.0;
-        }
-        let errors = self.total_errors.load(Ordering::Relaxed);
-        errors as f64 / count as f64
-    }
-
-    /// Get consecutive error count
-    pub fn consecutive_errors(&self) -> u64 {
-        self.consecutive_errors.load(Ordering::Relaxed)
     }
 
     /// Get total request count
@@ -470,16 +420,6 @@ impl<PR> ConnectionPool<PR> {
         self.connections.clear();
     }
 
-    /// Get connection metrics.
-    ///
-    /// # Returns
-    ///
-    /// * `Some(metrics)` - Metrics for the connection
-    /// * `None` - Connection not in pool
-    pub fn get_metrics(&self, addr: &CheetahString) -> Option<Arc<ConnectionMetrics>> {
-        self.connections.get(addr).map(|entry| entry.value().metrics.clone())
-    }
-
     /// Record successful request on connection.
     pub fn record_success(&self, addr: &CheetahString, latency_ms: u64) {
         if let Some(entry) = self.connections.get(addr) {
@@ -492,68 +432,6 @@ impl<PR> ConnectionPool<PR> {
         if let Some(entry) = self.connections.get(addr) {
             entry.value().record_error();
         }
-    }
-
-    /// Evict idle connections from the pool.
-    ///
-    /// # Returns
-    ///
-    /// Number of connections evicted
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// # use crate::clients::connection_pool::ConnectionPool;
-    /// # async fn example(pool: &ConnectionPool) {
-    /// let evicted = pool.evict_idle().await;
-    /// println!("Evicted {} idle connections", evicted);
-    /// # }
-    /// ```
-    pub async fn evict_idle(&self) -> usize {
-        let mut to_remove = Vec::new();
-
-        // Collect idle connections
-        for entry in self.connections.iter() {
-            if entry.value().is_idle(self.max_idle_duration) {
-                to_remove.push(entry.key().clone());
-            }
-        }
-
-        let count = to_remove.len();
-        if count > 0 {
-            info!("Evicting {} idle connections", count);
-            for addr in to_remove {
-                self.connections.remove(&addr);
-            }
-        }
-
-        count
-    }
-
-    /// Evict unhealthy connections from the pool.
-    ///
-    /// # Returns
-    ///
-    /// Number of connections evicted
-    pub async fn evict_unhealthy(&self) -> usize {
-        let mut to_remove = Vec::new();
-
-        // Collect unhealthy connections
-        for entry in self.connections.iter() {
-            if !entry.value().is_healthy() {
-                to_remove.push(entry.key().clone());
-            }
-        }
-
-        let count = to_remove.len();
-        if count > 0 {
-            warn!("Evicting {} unhealthy connections", count);
-            for addr in to_remove {
-                self.connections.remove(&addr);
-            }
-        }
-
-        count
     }
 
     /// Get pool statistics.
@@ -777,18 +655,14 @@ mod tests {
         metrics.record_success(30);
 
         assert_eq!(metrics.request_count(), 3);
-        assert_eq!(metrics.avg_latency(), 20.0);
-        assert_eq!(metrics.error_rate(), 0.0);
 
         // Record error
         metrics.record_error();
         assert_eq!(metrics.request_count(), 4);
-        assert_eq!(metrics.consecutive_errors(), 1);
-        assert_eq!(metrics.error_rate(), 0.25);
 
-        // Success resets consecutive errors
+        // Success advances the request counter.
         metrics.record_success(15);
-        assert_eq!(metrics.consecutive_errors(), 0);
+        assert_eq!(metrics.request_count(), 5);
     }
 
     #[test]

@@ -25,12 +25,12 @@ use criterion::Criterion;
 use criterion::Throughput;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
-use rocketmq_store::bench_support::run_ha_bytes_vectored_benchmark_report;
+use rocketmq_store::test_support::run_ha_bytes_vectored_benchmark_report;
 #[cfg(target_os = "linux")]
-use rocketmq_store::bench_support::run_ha_vectored_sendfile_benchmark_report;
+use rocketmq_store::test_support::run_ha_vectored_sendfile_benchmark_report;
 #[cfg(target_os = "linux")]
-use rocketmq_store::bench_support::HaSendfileBenchmarkReport;
-use rocketmq_store::bench_support::HaTransferBenchmarkReport;
+use rocketmq_store::test_support::HaSendfileBenchmarkReport;
+use rocketmq_store::test_support::HaTransferBenchmarkReport;
 
 const BODY_SIZE: usize = 64 * 1024;
 #[cfg(target_os = "linux")]
