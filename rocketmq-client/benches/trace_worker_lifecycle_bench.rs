@@ -26,9 +26,9 @@ use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::BatchSize;
 use criterion::Criterion;
-use rocketmq_client_rust::run_trace_queue_depth_accounting_probe;
-use rocketmq_client_rust::run_trace_worker_lifecycle_probe;
-use rocketmq_client_rust::TraceWorkerLifecycleProbe;
+use rocketmq_client_rust::test_support::run_trace_queue_depth_accounting_probe;
+use rocketmq_client_rust::test_support::run_trace_worker_lifecycle_probe;
+use rocketmq_client_rust::test_support::TraceWorkerLifecycleProbe;
 
 fn run_lifecycle_probe() -> TraceWorkerLifecycleProbe {
     let runtime = support::BenchClientRuntime::new("trace-worker");

@@ -25,10 +25,10 @@ use std::time::UNIX_EPOCH;
 use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::Criterion;
-use rocketmq_client_rust::run_namesrv_refresh_lifecycle_probe;
-use rocketmq_client_rust::run_route_refresh_shard_probe;
-use rocketmq_client_rust::NamesrvRefreshLifecycleProbe;
-use rocketmq_client_rust::RouteRefreshShardProbe;
+use rocketmq_client_rust::test_support::run_namesrv_refresh_lifecycle_probe;
+use rocketmq_client_rust::test_support::run_route_refresh_shard_probe;
+use rocketmq_client_rust::test_support::NamesrvRefreshLifecycleProbe;
+use rocketmq_client_rust::test_support::RouteRefreshShardProbe;
 
 fn run_lifecycle_probe() -> NamesrvRefreshLifecycleProbe {
     let runtime = support::BenchClientRuntime::new("namesrv-refresh");

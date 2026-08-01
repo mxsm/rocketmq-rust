@@ -143,7 +143,7 @@ mod tests {
     use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
     use rocketmq_protocol::protocol::route::route_data_view::QueueData;
     use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
-    use rocketmq_transport::LocalRequestHarness;
+    use rocketmq_transport::test_support::LocalRequestHarness;
     use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
 
     use super::route_lookup::ClusterTestLookupFuture;

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_client_rust::run_lite_pull_assignment_registry_probe;
+use rocketmq_client_rust::test_support::run_lite_pull_assignment_registry_probe;
 
 #[tokio::test]
 async fn assignment_registry_releases_every_resource_after_100k_churn() {

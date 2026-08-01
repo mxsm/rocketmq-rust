@@ -26,9 +26,9 @@ use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::BenchmarkId;
 use criterion::Criterion;
-use rocketmq_client_rust::run_request_future_holder_lifecycle_probe;
-use rocketmq_client_rust::run_request_future_holder_scan_probe;
-use rocketmq_client_rust::RequestFutureHolderLifecycleProbe;
+use rocketmq_client_rust::test_support::run_request_future_holder_lifecycle_probe;
+use rocketmq_client_rust::test_support::run_request_future_holder_scan_probe;
+use rocketmq_client_rust::test_support::RequestFutureHolderLifecycleProbe;
 
 fn run_lifecycle_probe() -> RequestFutureHolderLifecycleProbe {
     let runtime = support::BenchClientRuntime::new("request-future-holder");

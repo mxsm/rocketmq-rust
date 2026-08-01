@@ -25,8 +25,8 @@ use std::time::UNIX_EPOCH;
 use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::Criterion;
-use rocketmq_client_rust::run_pull_message_service_lifecycle_probe;
-use rocketmq_client_rust::PullMessageServiceLifecycleProbe;
+use rocketmq_client_rust::test_support::run_pull_message_service_lifecycle_probe;
+use rocketmq_client_rust::test_support::PullMessageServiceLifecycleProbe;
 
 fn run_lifecycle_probe() -> PullMessageServiceLifecycleProbe {
     let runtime = support::BenchClientRuntime::new("pull-message-service");

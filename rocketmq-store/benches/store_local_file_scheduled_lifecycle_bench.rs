@@ -24,8 +24,8 @@ use criterion::criterion_main;
 use criterion::Criterion;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
-use rocketmq_store::bench_support::run_store_local_file_scheduled_lifecycle_probe;
-use rocketmq_store::bench_support::StoreLocalFileScheduledLifecycleProbe;
+use rocketmq_store::test_support::run_store_local_file_scheduled_lifecycle_probe;
+use rocketmq_store::test_support::StoreLocalFileScheduledLifecycleProbe;
 
 fn run_lifecycle_probe() -> StoreLocalFileScheduledLifecycleProbe {
     let owner = RuntimeOwner::new(RuntimeConfig {

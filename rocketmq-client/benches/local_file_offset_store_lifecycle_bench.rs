@@ -25,8 +25,8 @@ use std::time::UNIX_EPOCH;
 use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::Criterion;
-use rocketmq_client_rust::run_local_file_offset_store_lifecycle_probe;
-use rocketmq_client_rust::LocalFileOffsetStoreLifecycleProbe;
+use rocketmq_client_rust::test_support::run_local_file_offset_store_lifecycle_probe;
+use rocketmq_client_rust::test_support::LocalFileOffsetStoreLifecycleProbe;
 
 fn run_lifecycle_probe() -> LocalFileOffsetStoreLifecycleProbe {
     let runtime = support::BenchClientRuntime::new("local-file-offset-store");

@@ -14,10 +14,58 @@
 
 //! Deliberate stable Client entry points.
 
+#[cfg(feature = "admin-full")]
+pub use crate::admin::AuthAdmin;
+#[cfg(feature = "admin-full")]
+pub use crate::admin::BrokerAdmin;
+#[cfg(feature = "admin-read")]
+pub use crate::admin::BrokerConfigAllowlisted;
+#[cfg(feature = "admin-mutation")]
+pub use crate::admin::BrokerConfigPatchOutcome;
+#[cfg(feature = "admin-full")]
+pub use crate::admin::ConsumerAdmin;
+pub use crate::admin::DefaultMQAdminExt;
+pub use crate::admin::DefaultMQAdminExtImpl;
+#[cfg(feature = "admin-mutation")]
+pub use crate::admin::MQAdminMutationExt;
+#[cfg(feature = "admin-read")]
+pub use crate::admin::MQAdminReadExt;
+#[cfg(feature = "admin-full")]
+pub use crate::admin::OffsetAdmin;
+#[cfg(feature = "admin-full")]
+pub use crate::admin::RouteAdmin;
+#[cfg(feature = "admin-mutation")]
+pub use crate::admin::SubscriptionGroupConfigPatch;
+#[cfg(feature = "admin-mutation")]
+pub use crate::admin::SubscriptionGroupConfigPatchOutcome;
+#[cfg(feature = "admin-read")]
+pub use crate::admin::SubscriptionGroupConfigVersioned;
+#[cfg(feature = "admin-full")]
+pub use crate::admin::TopicAdmin;
+#[cfg(feature = "admin-mutation")]
+pub use crate::admin::TopicConfigPatch;
+#[cfg(feature = "admin-mutation")]
+pub use crate::admin::TopicConfigPatchOutcome;
+#[cfg(feature = "admin-read")]
+pub use crate::admin::TopicConfigVersioned;
 pub use crate::base::client_config::ClientConfig;
+pub use crate::cluster_session::{
+    client_config_for_managed_domain, rpc_hook_from_outbound_signer, ClientInstanceHandle, ClientRpcHook,
+};
+pub use crate::consumer::AssignmentControl;
+pub use crate::consumer::ConsumerLifecycle;
+pub use crate::consumer::ConsumerOffsetControl;
 pub use crate::consumer::DefaultLitePullConsumer;
 pub use crate::consumer::DefaultMQPushConsumer;
+pub use crate::consumer::MessagePoll;
+pub use crate::consumer::SubscriptionControl;
 pub use crate::producer::DefaultMQProducer;
+pub use crate::producer::MessageQuery;
 pub use crate::producer::MessageRecall;
 pub use crate::producer::MessageSend;
 pub use crate::producer::ProducerConfig;
+pub use crate::producer::ProducerTopicAdmin;
+pub use crate::producer::RequestReply;
+pub use crate::producer::TransactionSend;
+pub use crate::session::ClientSession;
+pub use crate::session::ClientSessionProvider;

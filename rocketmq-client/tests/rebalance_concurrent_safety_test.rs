@@ -26,7 +26,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::run_route_refresh_concurrent_stale_guard_probe;
+use rocketmq_client_rust::test_support::run_route_refresh_concurrent_stale_guard_probe;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use tokio::sync::RwLock;

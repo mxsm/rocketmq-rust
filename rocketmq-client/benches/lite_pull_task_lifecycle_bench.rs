@@ -25,8 +25,8 @@ use std::time::UNIX_EPOCH;
 use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::Criterion;
-use rocketmq_client_rust::run_lite_pull_task_lifecycle_probe;
-use rocketmq_client_rust::LitePullTaskLifecycleProbe;
+use rocketmq_client_rust::test_support::run_lite_pull_task_lifecycle_probe;
+use rocketmq_client_rust::test_support::LitePullTaskLifecycleProbe;
 
 fn run_lifecycle_probe() -> LitePullTaskLifecycleProbe {
     let runtime = support::BenchClientRuntime::new("lite-pull-task");

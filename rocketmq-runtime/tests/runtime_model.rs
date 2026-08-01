@@ -10,8 +10,10 @@ use rocketmq_runtime::BlockingKind;
 use rocketmq_runtime::BlockingLane;
 use rocketmq_runtime::BlockingLanePolicies;
 use rocketmq_runtime::BlockingPoolPolicy;
+use rocketmq_runtime::RuntimeComponent;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeContext;
+use rocketmq_runtime::RuntimeDiagnosticsViewV1;
 use rocketmq_runtime::RuntimeError;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ScheduledTaskConfig;
@@ -25,6 +27,14 @@ use tokio::sync::Barrier;
 use tokio::sync::Notify;
 
 struct DropCounter(Arc<AtomicUsize>);
+
+#[test]
+fn canonical_runtime_diagnostics_compile_from_the_crate_root() {
+    fn accepts_view(_: RuntimeDiagnosticsViewV1) {}
+
+    let _accepts_view = accepts_view as fn(RuntimeDiagnosticsViewV1);
+    let _component = RuntimeComponent::Broker;
+}
 
 impl Drop for DropCounter {
     fn drop(&mut self) {

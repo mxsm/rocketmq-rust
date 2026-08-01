@@ -21,6 +21,15 @@ use rocketmq_store::StoreFactoryError;
 #[test]
 fn store_consumers_use_only_intentional_root_exports() {
     let source = include_str!("../src/lib.rs");
+    assert!(
+        source.contains("#[cfg(any(test, feature = \"test-support\"))]\npub mod test_support;"),
+        "Store test fixtures must require the explicit test-support feature"
+    );
+    assert!(
+        !source.contains("bench_support"),
+        "the retired production bench_support path must stay deleted"
+    );
+
     for module in [
         "base",
         "capability",

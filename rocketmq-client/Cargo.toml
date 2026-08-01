@@ -38,6 +38,7 @@ observability = [
 ]
 observability-metrics = ["rocketmq-observability/otel-metrics", "rocketmq-transport/observability"]
 otlp-traces = ["observability", "rocketmq-observability/otlp-traces"]
+test-support = []
 
 [dependencies]
 rocketmq-model           = { workspace = true }
@@ -108,6 +109,7 @@ harness = false
 [[bench]]
 name    = "client_hot_path_benchmark"
 harness = false
+required-features = ["test-support"]
 
 [[bench]]
 name    = "client_send_pipeline_benchmark"
@@ -116,6 +118,7 @@ harness = false
 [[bench]]
 name    = "client_consume_pipeline_benchmark"
 harness = false
+required-features = ["test-support"]
 
 [[bench]]
 name    = "client_runtime_spawn_benchmark"
@@ -124,62 +127,97 @@ harness = false
 [[bench]]
 name    = "request_future_holder_lifecycle_bench"
 harness = false
+required-features = ["test-support"]
 
 [[bench]]
 name    = "latency_fault_detector_lifecycle_bench"
 harness = false
+required-features = ["test-support"]
 
 [[bench]]
 name    = "local_file_offset_store_lifecycle_bench"
 harness = false
+required-features = ["test-support"]
 
 [[bench]]
 name    = "orderly_lock_periodic_lifecycle_bench"
 harness = false
+required-features = ["test-support"]
 
 [[bench]]
 name    = "pop_orderly_lock_refresh_lifecycle_bench"
 harness = false
+required-features = ["test-support"]
 
 [[bench]]
 name    = "trace_worker_lifecycle_bench"
 harness = false
+required-features = ["test-support"]
 
 [[bench]]
 name    = "produce_accumulator_guard_lifecycle_bench"
 harness = false
+required-features = ["test-support"]
 
 [[bench]]
 name    = "consumer_stats_manager_lifecycle_bench"
 harness = false
+required-features = ["test-support"]
 
 [[bench]]
 name    = "namesrv_refresh_lifecycle_bench"
 harness = false
+required-features = ["test-support"]
 
 [[bench]]
 name    = "concurrent_clean_expire_lifecycle_bench"
 harness = false
+required-features = ["test-support"]
 
 [[bench]]
 name    = "pull_message_service_lifecycle_bench"
 harness = false
+required-features = ["test-support"]
 
 [[bench]]
 name    = "client_pull_scheduler_benchmark"
 harness = false
+required-features = ["test-support"]
 
 [[bench]]
 name    = "rebalance_service_lifecycle_bench"
 harness = false
+required-features = ["test-support"]
 
 [[bench]]
 name    = "connection_event_listener_lifecycle_bench"
 harness = false
+required-features = ["test-support"]
 
 [[bench]]
 name    = "lite_pull_task_lifecycle_bench"
 harness = false
+required-features = ["test-support"]
+
+[[test]]
+name = "client_lifecycle_probes_test"
+required-features = ["test-support"]
+
+[[test]]
+name = "integration_tests"
+required-features = ["test-support"]
+
+[[test]]
+name = "lite_pull_assignment_registry_tests"
+required-features = ["test-support"]
+
+[[test]]
+name = "pull_message_service_test"
+required-features = ["test-support"]
+
+[[test]]
+name = "rebalance_concurrent_safety_test"
+required-features = ["test-support"]
 
 [[example]]
 name = "simple-producer"

@@ -6,31 +6,79 @@ paths removed by the architecture migration.
 
 ## Public API snapshot
 
-- Scope: every current workspace library target (`library_targets=28`)
+- Scope: every current workspace library target (`library_targets=27`);
+  the standalone `rocketmq-mcp` project is validated by its own locked matrix
 - Feature profile: default
 - Snapshot comparison: `differences=0`
+- Canonical target path counts:
+
+  | Package | Previous | Current | Reviewed cause |
+  |---|---:|---:|---|
+  | `rocketmq-client-rust` | 280 | 285 | scoped Admin/LitePull/Producer/Session and Proxy Cluster capabilities |
+  | `rocketmq-runtime` | 351 | 374 | bounded operation/resource and versioned runtime diagnostics capabilities |
+  | `rocketmq-transport` | 194 | 212 | authorized dispatch and request/response sink capabilities |
+  | `rocketmq-store` | 254 | 263 | cumulative Store capability work; benchmark helpers are absent from the default feature surface |
+
 - Accepted source-level cleanup relative to the previous compatibility surface:
-  - additive: 4 (`ClusterExecutionDiagnostics` and its client snapshot
-    accessor, plus `RuntimeConfig::for_parallelism` and
-    `RuntimeConfig::with_max_blocking_threads`, and per-session Transport
-    writer diagnostics)
+  - additive groups: 4
+    - scoped Client capabilities
+    - versioned Runtime diagnostics and resource capabilities
+    - authorized Transport dispatch capabilities
+    - explicit, non-default `test-support` feature modules
   - deprecated: 0
-  - breaking: 4
-    - `ClientRuntime::new` removed; callers use fallible
-      `ClientRuntime::try_new`
-    - `ClusterConfig` gained mandatory bounded-execution fields for Rust
-      struct literals; Serde configuration remains backward-readable through
-      defaults
-    - Dashboard admin operations changed their receiver from `&mut self` to
-      `&self`; implementations and callers adopt the concurrent session
-      capability instead of retaining the obsolete mutable RPC contract
-    - `MappedBuffer::read` and the copying
-      `MappedBuffer::read_zero_copy` were replaced by the accurately named
-      `MappedBuffer::read_copy`; the unsupported zero-copy claim and unsafe
-      copy branch were deleted
+  - breaking groups: 4
+    - Client compatibility facade, implementation aliases, and hidden
+      production probe exports removed
+    - unused Runtime implementation-module paths removed while canonical root
+      capabilities remain
+    - unused Transport concrete implementation exports removed and the local
+      harness moved under `test-support`
+    - Store `bench_support` moved under non-default `test-support`
+
+Previously approved source cleanups remain in force: `ClientRuntime::new` was
+removed and callers use fallible `ClientRuntime::try_new`; `ClusterConfig` owns mandatory bounded-execution
+fields without changing Serde backward reads; Dashboard admin operations use
+concurrent `&self` receivers; and `MappedBuffer::read_zero_copy` was replaced
+by the accurately named `MappedBuffer::read_copy`.
 
 The package count is derived from `cargo metadata`; the guard rejects a
 baseline that is missing a current library target or retains a removed one.
+
+## Canonical-path cutover inventory
+
+PR-13 treats Rust source paths as an architecture boundary. The cutover was
+started from an executable red baseline rather than by regenerating the intent
+manifest: the current repository produced 73 individually reported findings
+(the older plan recorded 22 before the PR-11/PR-12 capability additions).
+`cargo public-api` was not available in the repository toolchain, so the
+repository-owned intent and rustdoc snapshot guards remain the acceptance
+authority.
+
+The following table is the deletion and caller-migration ledger. Entries in the
+old-symbol column are exhaustive for the compatibility aliases and hidden
+Client/Transport/Store root exports removed by this cutover.
+
+| Old symbol or path | Caller before cutover | Canonical target |
+|---|---|---|
+| `rocketmq_client_rust::proxy_adapter_compat::{ClientInstanceHandle, ClientRpcHook, client_config_for_managed_domain, rpc_hook_from_outbound_signer}` | `rocketmq-proxy-cluster` | Client-owned capability exported once at the Client root; the implementation module is private |
+| `rocketmq_client_rust::proxy_adapter_compat::{TopicMessageType, BoundaryType, ExpressionType, MessageExt, MessageId, MessageQueue, MessageQueueAssignment, Message, MessageConst, MessageTrait, LOGICAL_QUEUE_MOCK_BROKER_PREFIX, MASTER_ID, MessageSysFlag, PullSysFlag}` | `rocketmq-proxy-cluster` | Direct `rocketmq-model` imports |
+| `rocketmq_client_rust::proxy_adapter_compat::{MessageDecoder, BrokerDataExt}` | `rocketmq-proxy-cluster` | Direct `rocketmq-protocol` imports |
+| `rocketmq_client_rust::proxy_adapter_compat::current_millis` | `rocketmq-proxy-cluster` | Direct `rocketmq-runtime` import |
+| `MQClientAPIExt`, `MqClientAdminImpl` | No repository caller | Deleted; callers use scoped Client capabilities |
+| `run_concurrent_clean_expire_lifecycle_probe`, `ConcurrentCleanExpireLifecycleProbe`, `run_orderly_lock_periodic_lifecycle_probe`, `OrderlyLockPeriodicLifecycleProbe`, `run_pop_orderly_lock_refresh_lifecycle_probe`, `PopOrderlyLockRefreshLifecycleProbe`, `run_lite_pull_assignment_registry_probe`, `run_lite_pull_task_lifecycle_probe`, `LitePullAssignmentRegistryProbe`, `LitePullTaskLifecycleProbe` | Client integration tests and lifecycle benchmarks | `rocketmq_client_rust::test_support::*` with explicit `test-support` |
+| `run_process_queue_has_temp_message_probe`, `run_process_queue_max_span_only_probe`, `run_process_queue_put_probe`, `run_process_queue_remove_probe`, `run_process_queue_take_probe`, `ProcessQueue`, `ProcessQueueOperationFixture` | Client integration tests and hot-path benchmarks | `rocketmq_client_rust::test_support::*` with explicit `test-support` |
+| `run_pull_message_service_lifecycle_probe`, `PullMessageService`, `PullMessageServiceLifecycleProbe`, `PullMessageServiceShardSnapshot`, `PullRequest`, `run_rebalance_service_lifecycle_probe`, `RebalanceServiceLifecycleProbe` | Client integration tests and scheduler benchmarks | `rocketmq_client_rust::test_support::*` with explicit `test-support` |
+| `run_local_file_offset_store_lifecycle_probe`, `LocalFileOffsetStoreLifecycleProbe`, `run_connection_event_listener_lifecycle_probe`, `run_heartbeat_route_index_probe`, `run_route_refresh_concurrent_stale_guard_probe`, `run_route_refresh_shard_probe`, `ConnectionEventListenerLifecycleProbe`, `HeartbeatRouteIndexProbe`, `MQClientInstance`, `RouteRefreshConcurrentProbe`, `RouteRefreshShardProbe` | Client integration tests and lifecycle benchmarks | `rocketmq_client_rust::test_support::*` with explicit `test-support` |
+| `run_namesrv_refresh_lifecycle_probe`, `NamesrvRefreshLifecycleProbe`, `run_consumer_stats_manager_lifecycle_probe`, `ConsumerStatsManagerLifecycleProbe`, `run_latency_fault_detector_lifecycle_probe`, `LatencyFaultDetectorLifecycleProbe` | Client integration tests and lifecycle benchmarks | `rocketmq_client_rust::test_support::*` with explicit `test-support` |
+| `run_produce_accumulator_guard_lifecycle_probe`, `ProduceAccumulatorGuardLifecycleProbe`, `with_timeout`, `with_timeout_all`, `TopicPublishInfo`, `run_request_future_holder_lifecycle_probe`, `run_request_future_holder_scan_probe`, `RequestFutureHolderLifecycleProbe`, `RequestFutureHolderScanProbe` | Client tests, doctests, and producer benchmarks | Test/benchmark helpers move to `rocketmq_client_rust::test_support::*`; timeout helpers remain internal |
+| `run_trace_queue_depth_accounting_probe`, `run_trace_worker_lifecycle_probe`, `TraceWorkerLifecycleProbe` | Client integration tests and trace benchmarks | `rocketmq_client_rust::test_support::*` with explicit `test-support` |
+| `rocketmq_transport::LocalRequestHarness` | Broker, NameServer, Proxy, and Client test modules | `rocketmq_transport::test_support::LocalRequestHarness` with explicit `test-support` |
+| `rocketmq_transport::LocalResponseSink` | No external caller | Private Transport dispatch implementation |
+| `rocketmq_store::bench_support::*` | Store benchmarks and Store contract tests | `rocketmq_store::test_support::*` with explicit `test-support` |
+
+The cutover does not change request codes, headers, Serde names/defaults, or
+persisted layouts. Because the project has not reached its first production
+release, no deprecated forwarding aliases are retained.
 
 The repository owner explicitly approved removal of obsolete internal crates,
 facades, module paths, and source-level contracts on 2026-07-29. That decision

@@ -52,6 +52,7 @@ observability = [
   "rocketmq-tieredstore?/otel-metrics",
 ]
 observability-traces = ["rocketmq-observability/otel-traces"]
+test-support = []
 
 
 [dependencies]
@@ -140,6 +141,7 @@ harness = false
 [[bench]]
 name    = "commitlog_recovery_bench"
 harness = false
+required-features = ["test-support"]
 
 [[bench]]
 name    = "commit_log_performance"
@@ -152,19 +154,22 @@ harness = false
 [[bench]]
 name    = "store_stats_service_lifecycle_bench"
 harness = false
+required-features = ["test-support"]
 
 [[bench]]
 name    = "store_timer_scheduler_lifecycle_bench"
 harness = false
+required-features = ["test-support"]
 
 [[bench]]
 name    = "store_local_file_scheduled_lifecycle_bench"
 harness = false
+required-features = ["test-support"]
 
 [[bench]]
 name              = "io_uring_performance"
 harness           = false
-required-features = ["io_uring"]
+required-features = ["io_uring", "test-support"]
 
 [[bench]]
 name              = "rocksdb_store"
@@ -174,16 +179,19 @@ required-features = ["rocksdb_store"]
 [[bench]]
 name              = "store_rocksdb_maintenance_lifecycle_bench"
 harness           = false
-required-features = ["rocksdb_store"]
+required-features = ["rocksdb_store", "test-support"]
 
 [[bench]]
 name    = "store_blocking_executor_bench"
 harness = false
+required-features = ["test-support"]
 
 [[bench]]
 name    = "store_kv_compaction_lifecycle_bench"
 harness = false
+required-features = ["test-support"]
 
 [[bench]]
 name    = "ha_transfer_benchmark"
 harness = false
+required-features = ["test-support"]

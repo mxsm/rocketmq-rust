@@ -20,31 +20,14 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::proxy_adapter_compat::client_config_for_managed_domain;
-use rocketmq_client_rust::proxy_adapter_compat::current_millis;
+use rocketmq_client_rust::client_config_for_managed_domain;
 #[cfg(test)]
-use rocketmq_client_rust::proxy_adapter_compat::rpc_hook_from_outbound_signer;
-use rocketmq_client_rust::proxy_adapter_compat::BoundaryType;
-use rocketmq_client_rust::proxy_adapter_compat::BrokerDataExt;
-use rocketmq_client_rust::proxy_adapter_compat::ClientInstanceHandle;
-use rocketmq_client_rust::proxy_adapter_compat::ClientRpcHook;
-use rocketmq_client_rust::proxy_adapter_compat::ExpressionType;
-use rocketmq_client_rust::proxy_adapter_compat::Message;
-use rocketmq_client_rust::proxy_adapter_compat::MessageConst;
-use rocketmq_client_rust::proxy_adapter_compat::MessageDecoder;
-use rocketmq_client_rust::proxy_adapter_compat::MessageExt;
-use rocketmq_client_rust::proxy_adapter_compat::MessageId;
-use rocketmq_client_rust::proxy_adapter_compat::MessageQueue;
-use rocketmq_client_rust::proxy_adapter_compat::MessageQueueAssignment;
-use rocketmq_client_rust::proxy_adapter_compat::MessageSysFlag;
-use rocketmq_client_rust::proxy_adapter_compat::MessageTrait;
-use rocketmq_client_rust::proxy_adapter_compat::PullSysFlag;
-use rocketmq_client_rust::proxy_adapter_compat::TopicMessageType;
-use rocketmq_client_rust::proxy_adapter_compat::LOGICAL_QUEUE_MOCK_BROKER_PREFIX;
-use rocketmq_client_rust::proxy_adapter_compat::MASTER_ID;
+use rocketmq_client_rust::rpc_hook_from_outbound_signer;
 use rocketmq_client_rust::AckResult;
 use rocketmq_client_rust::AckStatus;
 use rocketmq_client_rust::ClientConfig as RocketmqClientConfig;
+use rocketmq_client_rust::ClientInstanceHandle;
+use rocketmq_client_rust::ClientRpcHook;
 use rocketmq_client_rust::ClientRuntime;
 #[cfg(test)]
 use rocketmq_client_rust::ClientRuntimeConfig;
@@ -53,8 +36,23 @@ use rocketmq_client_rust::PopResult;
 use rocketmq_client_rust::PopStatus;
 use rocketmq_client_rust::TelemetryHandle;
 use rocketmq_error::RocketMQError;
+use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
+use rocketmq_model::common::boundary_type::BoundaryType;
+use rocketmq_model::common::filter::expression_type::ExpressionType;
+use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_id::MessageId;
+use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::message::message_queue_assignment::MessageQueueAssignment;
+use rocketmq_model::common::message::message_single::Message;
+use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::common::message::MessageTrait;
+use rocketmq_model::common::mix_all::LOGICAL_QUEUE_MOCK_BROKER_PREFIX;
+use rocketmq_model::common::mix_all::MASTER_ID;
+use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
+use rocketmq_model::common::sys_flag::pull_sys_flag::PullSysFlag;
 use rocketmq_model::result::PullStatus;
 use rocketmq_model::result::SendResult;
+use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_protocol::protocol::body::acl_info::AclInfo;
 use rocketmq_protocol::protocol::body::broker_body::cluster_info::ClusterInfo;
 use rocketmq_protocol::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
@@ -72,6 +70,7 @@ use rocketmq_protocol::protocol::header::query_consumer_offset_request_header::Q
 use rocketmq_protocol::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_protocol::protocol::route_facade::BrokerDataExt;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_protocol::rpc::rpc_request_header::RpcRequestHeader;
 use rocketmq_protocol::rpc::topic_request_header::TopicRequestHeader;
@@ -113,6 +112,7 @@ use rocketmq_proxy_core::TransactionResolution;
 use rocketmq_proxy_core::TransactionSource;
 use rocketmq_proxy_core::UpdateOffsetPlan;
 use rocketmq_proxy_core::UpdateOffsetRequest;
+use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_security_api::OutboundSigner;
 
@@ -2759,8 +2759,8 @@ mod tests {
     use std::time::Instant;
 
     use cheetah_string::CheetahString;
-    use rocketmq_client_rust::proxy_adapter_compat::TopicMessageType;
     use rocketmq_error::RocketMQError;
+    use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
     use rocketmq_protocol::protocol::body::broker_body::cluster_info::ClusterInfo;
     use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
     use rocketmq_protocol::protocol::route::route_data_view::QueueData;
@@ -2796,7 +2796,7 @@ mod tests {
     use super::RocketmqClusterClient;
     use super::TelemetryHandle;
     use crate::config::ClusterConfig;
-    use rocketmq_client_rust::proxy_adapter_compat::MessageQueue;
+    use rocketmq_model::common::message::message_queue::MessageQueue;
     use rocketmq_proxy_core::ProxyError;
     use rocketmq_proxy_core::ProxyTopicMessageType;
 
@@ -2824,14 +2824,10 @@ mod tests {
         let config = ClusterConfig::default();
         let domain_id = 71_011;
         let producer = build_send_producer(test_client_runtime(), domain_id, &config, "GroupA", 3_000, None);
-        let expected = rocketmq_client_rust::proxy_adapter_compat::client_config_for_managed_domain(
-            domain_id,
-            cluster_client_config(&config),
-        );
-        let other_domain = rocketmq_client_rust::proxy_adapter_compat::client_config_for_managed_domain(
-            domain_id + 1,
-            cluster_client_config(&config),
-        );
+        let expected =
+            rocketmq_client_rust::client_config_for_managed_domain(domain_id, cluster_client_config(&config));
+        let other_domain =
+            rocketmq_client_rust::client_config_for_managed_domain(domain_id + 1, cluster_client_config(&config));
 
         assert_eq!(
             producer.client_config_snapshot().build_mq_client_id(),

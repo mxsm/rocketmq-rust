@@ -45,6 +45,8 @@ mod security;
 mod server;
 mod session_executor;
 mod telemetry;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 mod tls;
 mod write_strategy;
 
@@ -65,14 +67,6 @@ pub use base::response_future::ResponseFuture;
 pub use buffer::ByteBufferPool;
 pub use client::connect_with_config;
 pub use client::connect_with_config_and_telemetry;
-pub use client::ConnectedTransport;
-pub use clients::connection_pool::ConnectionMetrics;
-pub use clients::connection_pool::ConnectionPool;
-pub use clients::connection_pool::ConnectionPoolCleanupTask;
-pub use clients::connection_pool::PoolStats;
-pub use clients::connection_pool::PooledConnection;
-pub use clients::reconnect::CircuitBreaker;
-pub use clients::reconnect::ExponentialBackoff;
 pub use clients::rocketmq_tokio_client::RemotingClientShutdownReport;
 pub use clients::rocketmq_tokio_client::RocketmqDefaultClient;
 pub use clients::Client;
@@ -90,8 +84,6 @@ pub use config_support::network_util::NetworkUtil;
 pub use connection::transport_io_snapshot;
 pub use connection::Connection;
 pub use connection::ConnectionState;
-pub use connection::SessionWriterSnapshot;
-pub use connection::TransportIoSnapshot;
 pub use connection_context::ConnectionContext;
 pub use deadline::RequestDeadline;
 pub use discovery::default_top_addressing::DefaultTopAddressing;
@@ -99,21 +91,6 @@ pub use discovery::http_tiny_client::HttpResult;
 pub use discovery::http_tiny_client::HttpTinyClient;
 pub use discovery::name_server_update_callback::NameServerUpdateCallback;
 pub use discovery::top_addressing::TopAddressing;
-pub use dispatch::AuthorizedCommandDispatcher;
-pub use dispatch::AuthorizedDispatchBoundary;
-pub use dispatch::DispatchError;
-pub use dispatch::DispatchOutcome;
-pub use dispatch::LocalResponseReceiver;
-#[doc(hidden)]
-pub use dispatch::LocalResponseSink;
-pub use dispatch::RequestContext;
-pub use dispatch::RequestContextError;
-pub use dispatch::RequestTransport;
-pub use dispatch::ResponseSink;
-pub use dispatch::ResponseSinkError;
-#[cfg(any(test, feature = "test-support"))]
-#[doc(hidden)]
-pub use local::LocalRequestHarness;
 pub use net::channel::ArcChannel;
 pub use net::channel::Channel;
 pub use net::channel::ChannelId;

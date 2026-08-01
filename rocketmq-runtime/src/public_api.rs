@@ -15,8 +15,23 @@
 //! Deliberate stable runtime ownership and shutdown entry points.
 
 pub use crate::blocking::BlockingExecutor;
+pub use crate::diagnostics::RuntimeBlockingKindSummaryV1;
+pub use crate::diagnostics::RuntimeBlockingKindV1;
+pub use crate::diagnostics::RuntimeBlockingLaneSummaryV1;
+pub use crate::diagnostics::RuntimeBlockingLaneV1;
+pub use crate::diagnostics::RuntimeComponent;
+pub use crate::diagnostics::RuntimeDiagnostics;
+pub use crate::diagnostics::RuntimeDiagnosticsSnapshot;
+pub use crate::diagnostics::RuntimeDiagnosticsViewOptions;
+pub use crate::diagnostics::RuntimeDiagnosticsViewV1;
+pub use crate::diagnostics::RuntimeLifecycleStateV1;
+pub use crate::diagnostics::RuntimeTaskKindSummaryV1;
+pub use crate::diagnostics::RuntimeTaskKindV1;
+pub use crate::operation::OperationContext;
 pub use crate::owner::RuntimeOwner;
+pub use crate::resource_budget::PermitRebindError;
 pub use crate::resource_budget::ResourceBudget;
+pub use crate::resources::RuntimeResources;
 pub use crate::service_context::ChildServiceContext;
 pub use crate::service_context::RootServiceContext;
 pub use crate::shutdown_deadline::ShutdownDeadline;

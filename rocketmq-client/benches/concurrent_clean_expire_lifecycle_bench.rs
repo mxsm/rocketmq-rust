@@ -25,8 +25,8 @@ use std::time::UNIX_EPOCH;
 use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::Criterion;
-use rocketmq_client_rust::run_concurrent_clean_expire_lifecycle_probe;
-use rocketmq_client_rust::ConcurrentCleanExpireLifecycleProbe;
+use rocketmq_client_rust::test_support::run_concurrent_clean_expire_lifecycle_probe;
+use rocketmq_client_rust::test_support::ConcurrentCleanExpireLifecycleProbe;
 
 fn run_lifecycle_probe() -> ConcurrentCleanExpireLifecycleProbe {
     let runtime = support::BenchClientRuntime::new("concurrent-clean-expire");

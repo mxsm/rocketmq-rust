@@ -15,13 +15,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use rocketmq_client_rust::proxy_adapter_compat::rpc_hook_from_outbound_signer;
-use rocketmq_client_rust::proxy_adapter_compat::ClientRpcHook;
-use rocketmq_client_rust::proxy_adapter_compat::MessageQueueAssignment;
+use rocketmq_client_rust::rpc_hook_from_outbound_signer;
+use rocketmq_client_rust::ClientRpcHook;
 use rocketmq_client_rust::ClientRuntime;
 use rocketmq_client_rust::ClientRuntimeConfig;
 use rocketmq_client_rust::TelemetryHandle;
 use rocketmq_error::RocketMQError;
+use rocketmq_model::common::message::message_queue_assignment::MessageQueueAssignment;
 use rocketmq_protocol::protocol::body::acl_info::AclInfo;
 use rocketmq_protocol::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
 use rocketmq_protocol::protocol::body::response::lock_batch_response_body::LockBatchResponseBody;

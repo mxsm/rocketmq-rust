@@ -90,44 +90,12 @@ mod public_api;
 mod runtime;
 mod session;
 mod stat;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 mod trace;
 mod types;
 mod utils;
 
-#[cfg(feature = "admin-full")]
-pub use crate::admin::AuthAdmin;
-#[cfg(feature = "admin-full")]
-pub use crate::admin::BrokerAdmin;
-#[cfg(feature = "admin-read")]
-pub use crate::admin::BrokerConfigAllowlisted;
-#[cfg(feature = "admin-mutation")]
-pub use crate::admin::BrokerConfigPatchOutcome;
-#[cfg(feature = "admin-full")]
-pub use crate::admin::ConsumerAdmin;
-pub use crate::admin::DefaultMQAdminExt;
-pub use crate::admin::DefaultMQAdminExtImpl;
-#[cfg(feature = "admin-mutation")]
-pub use crate::admin::MQAdminMutationExt;
-#[cfg(feature = "admin-read")]
-pub use crate::admin::MQAdminReadExt;
-#[cfg(feature = "admin-full")]
-pub use crate::admin::OffsetAdmin;
-#[cfg(feature = "admin-full")]
-pub use crate::admin::RouteAdmin;
-#[cfg(feature = "admin-mutation")]
-pub use crate::admin::SubscriptionGroupConfigPatch;
-#[cfg(feature = "admin-mutation")]
-pub use crate::admin::SubscriptionGroupConfigPatchOutcome;
-#[cfg(feature = "admin-read")]
-pub use crate::admin::SubscriptionGroupConfigVersioned;
-#[cfg(feature = "admin-full")]
-pub use crate::admin::TopicAdmin;
-#[cfg(feature = "admin-mutation")]
-pub use crate::admin::TopicConfigPatch;
-#[cfg(feature = "admin-mutation")]
-pub use crate::admin::TopicConfigPatchOutcome;
-#[cfg(feature = "admin-read")]
-pub use crate::admin::TopicConfigVersioned;
 pub use crate::base::query_result::QueryResult;
 pub use crate::base::MQAdmin;
 pub use crate::base::MqClientAdmin;
@@ -145,10 +113,7 @@ pub use crate::common::nameserver_access_config::NameserverAccessConfig;
 pub use crate::common::session_credentials::SessionCredentials;
 pub use crate::common::thread_local_index::ThreadLocalIndex;
 
-/// Compatibility surface used by the Proxy Cluster adapter while Client
-/// runtime signatures are narrowed to canonical protocol contracts.
-#[doc(hidden)]
-pub mod proxy_adapter_compat {
+mod cluster_session {
     use std::collections::HashMap;
     use std::net::SocketAddr;
     use std::sync::Arc;
@@ -160,23 +125,10 @@ pub mod proxy_adapter_compat {
     use rocketmq_security_api::SecurityRequestView;
     use rocketmq_transport::RPCHook;
 
-    pub use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
     pub use rocketmq_model::common::boundary_type::BoundaryType;
-    pub use rocketmq_model::common::filter::expression_type::ExpressionType;
     pub use rocketmq_model::common::message::message_ext::MessageExt;
-    pub use rocketmq_model::common::message::message_id::MessageId;
     pub use rocketmq_model::common::message::message_queue::MessageQueue;
     pub use rocketmq_model::common::message::message_queue_assignment::MessageQueueAssignment;
-    pub use rocketmq_model::common::message::message_single::Message;
-    pub use rocketmq_model::common::message::MessageConst;
-    pub use rocketmq_model::common::message::MessageTrait;
-    pub use rocketmq_model::common::mix_all::LOGICAL_QUEUE_MOCK_BROKER_PREFIX;
-    pub use rocketmq_model::common::mix_all::MASTER_ID;
-    pub use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
-    pub use rocketmq_model::common::sys_flag::pull_sys_flag::PullSysFlag;
-    pub use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
-    pub use rocketmq_protocol::protocol::route_facade::BrokerDataExt;
-    pub use rocketmq_runtime::common::time_utils::current_millis;
 
     pub type ClientRpcHook = dyn RPCHook;
 
@@ -852,63 +804,11 @@ pub mod proxy_adapter_compat {
         }
     }
 }
-#[doc(hidden)]
-pub use crate::consumer::consumer_impl::consume_message_concurrently_service::run_concurrent_clean_expire_lifecycle_probe;
-#[doc(hidden)]
-pub use crate::consumer::consumer_impl::consume_message_concurrently_service::ConcurrentCleanExpireLifecycleProbe;
-#[doc(hidden)]
-pub use crate::consumer::consumer_impl::consume_message_orderly_service::run_orderly_lock_periodic_lifecycle_probe;
-#[doc(hidden)]
-pub use crate::consumer::consumer_impl::consume_message_orderly_service::OrderlyLockPeriodicLifecycleProbe;
-#[doc(hidden)]
-pub use crate::consumer::consumer_impl::consume_message_pop_orderly_service::run_pop_orderly_lock_refresh_lifecycle_probe;
-#[doc(hidden)]
-pub use crate::consumer::consumer_impl::consume_message_pop_orderly_service::PopOrderlyLockRefreshLifecycleProbe;
-#[doc(hidden)]
-pub use crate::consumer::consumer_impl::default_lite_pull_consumer_impl::run_lite_pull_assignment_registry_probe;
-#[doc(hidden)]
-pub use crate::consumer::consumer_impl::default_lite_pull_consumer_impl::run_lite_pull_task_lifecycle_probe;
-#[doc(hidden)]
-pub use crate::consumer::consumer_impl::default_lite_pull_consumer_impl::LitePullAssignmentRegistryProbe;
-#[doc(hidden)]
-pub use crate::consumer::consumer_impl::default_lite_pull_consumer_impl::LitePullTaskLifecycleProbe;
-#[doc(hidden)]
-pub use crate::consumer::consumer_impl::process_queue::run_process_queue_has_temp_message_probe;
-#[doc(hidden)]
-pub use crate::consumer::consumer_impl::process_queue::run_process_queue_max_span_only_probe;
-#[doc(hidden)]
-pub use crate::consumer::consumer_impl::process_queue::run_process_queue_put_probe;
-#[doc(hidden)]
-pub use crate::consumer::consumer_impl::process_queue::run_process_queue_remove_probe;
-#[doc(hidden)]
-pub use crate::consumer::consumer_impl::process_queue::run_process_queue_take_probe;
-#[doc(hidden)]
-pub use crate::consumer::consumer_impl::process_queue::ProcessQueue;
-#[doc(hidden)]
-pub use crate::consumer::consumer_impl::process_queue::ProcessQueueOperationFixture;
-#[doc(hidden)]
-pub use crate::consumer::consumer_impl::pull_message_service::run_pull_message_service_lifecycle_probe;
-#[doc(hidden)]
-pub use crate::consumer::consumer_impl::pull_message_service::PullMessageService;
-#[doc(hidden)]
-pub use crate::consumer::consumer_impl::pull_message_service::PullMessageServiceLifecycleProbe;
-#[doc(hidden)]
-pub use crate::consumer::consumer_impl::pull_message_service::PullMessageServiceShardSnapshot;
-#[doc(hidden)]
-pub use crate::consumer::consumer_impl::pull_request::PullRequest;
 pub use crate::consumer::consumer_impl::pull_request_ext::PullResultExt;
-#[doc(hidden)]
-pub use crate::consumer::consumer_impl::re_balance::rebalance_service::run_rebalance_service_lifecycle_probe;
-#[doc(hidden)]
-pub use crate::consumer::consumer_impl::re_balance::rebalance_service::RebalanceServiceLifecycleProbe;
 pub use crate::consumer::listener::message_listener_concurrently::ArcMessageListenerConcurrently;
 pub use crate::consumer::listener::message_listener_orderly::ArcMessageListenerOrderly;
 pub use crate::consumer::notify_result::NotifyResult;
 pub use crate::consumer::pull_result::PullOutcome;
-#[doc(hidden)]
-pub use crate::consumer::store::local_file_offset_store::run_local_file_offset_store_lifecycle_probe;
-#[doc(hidden)]
-pub use crate::consumer::store::local_file_offset_store::LocalFileOffsetStoreLifecycleProbe;
 pub use crate::consumer::AbstractAllocateMessageQueueStrategy;
 pub use crate::consumer::AckCallback;
 pub use crate::consumer::AckCallbackFn;
@@ -923,13 +823,10 @@ pub use crate::consumer::AllocateMessageQueueByMachineRoomNearby;
 pub use crate::consumer::AllocateMessageQueueConsistentHash;
 pub use crate::consumer::AllocateMessageQueueStrategy;
 pub use crate::consumer::ArcMessageQueueListener;
-pub use crate::consumer::AssignmentControl;
 pub use crate::consumer::ConsumeConcurrentlyContext;
 pub use crate::consumer::ConsumeConcurrentlyStatus;
 pub use crate::consumer::ConsumeOrderlyContext;
 pub use crate::consumer::ConsumeOrderlyStatus;
-pub use crate::consumer::ConsumerLifecycle;
-pub use crate::consumer::ConsumerOffsetControl;
 pub use crate::consumer::ConsumerTuningProfile;
 pub use crate::consumer::ControllableOffset;
 pub use crate::consumer::DefaultLitePullConsumerBuilder;
@@ -943,7 +840,6 @@ pub use crate::consumer::MachineRoomResolver;
 pub use crate::consumer::MessageListener;
 pub use crate::consumer::MessageListenerConcurrently;
 pub use crate::consumer::MessageListenerOrderly;
-pub use crate::consumer::MessagePoll;
 pub use crate::consumer::MessageQueueListener;
 pub use crate::consumer::MessageSelector;
 pub use crate::consumer::OffsetSerialize;
@@ -959,63 +855,24 @@ pub use crate::consumer::PullResult;
 pub use crate::consumer::PullStatus;
 pub use crate::consumer::ReadOffsetType;
 pub use crate::consumer::RemoteBrokerOffsetStore;
-pub use crate::consumer::SubscriptionControl;
 pub use crate::consumer::TopicMessageQueueChangeListener;
 pub use crate::exception::MQBrokerException;
 pub use crate::exception::MQClientException;
 pub use crate::exception::OffsetNotFoundException;
 pub use crate::exception::RequestTimeoutException;
-#[doc(hidden)]
-pub use crate::factory::mq_client_instance::run_connection_event_listener_lifecycle_probe;
-#[doc(hidden)]
-pub use crate::factory::mq_client_instance::run_heartbeat_route_index_probe;
-#[doc(hidden)]
-pub use crate::factory::mq_client_instance::run_route_refresh_concurrent_stale_guard_probe;
-#[doc(hidden)]
-pub use crate::factory::mq_client_instance::run_route_refresh_shard_probe;
-#[doc(hidden)]
-pub use crate::factory::mq_client_instance::ConnectionEventListenerLifecycleProbe;
-#[doc(hidden)]
-pub use crate::factory::mq_client_instance::HeartbeatRouteIndexProbe;
-#[doc(hidden)]
-pub use crate::factory::mq_client_instance::MQClientInstance;
-#[doc(hidden)]
-pub use crate::factory::mq_client_instance::RouteRefreshConcurrentProbe;
-#[doc(hidden)]
-pub use crate::factory::mq_client_instance::RouteRefreshShardProbe;
 pub use crate::hook::check_forbidden_context::CheckForbiddenContext;
 pub use crate::hook::check_forbidden_hook::CheckForbiddenHook;
 pub use crate::hook::consume_message_context::ConsumeMessageContext;
 pub use crate::hook::consume_message_hook::ConsumeMessageHook;
 pub use crate::hook::consume_message_hook::ConsumeMessageHookArc;
 pub use crate::hook::namespace_rpc_hook::NamespaceRpcHook;
-#[doc(hidden)]
-pub use crate::implementation::mq_client_api_factory::run_namesrv_refresh_lifecycle_probe;
 pub use crate::implementation::mq_client_api_factory::MQClientAPIFactory;
-#[doc(hidden)]
-pub use crate::implementation::mq_client_api_factory::NamesrvRefreshLifecycleProbe;
-pub use crate::implementation::mq_client_manager::ClientPool;
-pub use crate::runtime::ClientMetrics;
-pub use crate::runtime::ClientRuntime;
-pub use crate::runtime::ClientRuntimeConfig;
-pub use crate::runtime::TelemetryHandle;
-pub use crate::session::ClientSession;
-pub use crate::session::ClientSessionProvider;
-#[doc(hidden)]
-pub use crate::stat::consumer_stats_manager::run_consumer_stats_manager_lifecycle_probe;
-#[doc(hidden)]
-pub use crate::stat::consumer_stats_manager::ConsumerStatsManagerLifecycleProbe;
-pub type MQClientAPIExt = crate::implementation::mq_client_api_impl::MQClientAPIImpl;
-pub type MqClientAdminImpl = crate::implementation::mq_client_api_impl::MQClientAPIImpl;
 pub use crate::implementation::mq_client_api_impl::AdminClient;
 pub use crate::implementation::mq_client_api_impl::ConsumerClient;
 pub use crate::implementation::mq_client_api_impl::ProducerClient;
 pub use crate::implementation::mq_client_api_impl::RouteClient;
 pub use crate::implementation::mq_client_api_impl::TransactionClient;
-#[doc(hidden)]
-pub use crate::latency::latency_fault_tolerance_impl::run_latency_fault_detector_lifecycle_probe;
-#[doc(hidden)]
-pub use crate::latency::latency_fault_tolerance_impl::LatencyFaultDetectorLifecycleProbe;
+pub use crate::implementation::mq_client_manager::ClientPool;
 pub use crate::latency::BrokerFilter;
 pub use crate::latency::MQFaultStrategy;
 pub use crate::latency::Resolver;
@@ -1050,40 +907,19 @@ pub use crate::legacy::SendMessageOpenTracingHookImpl;
 #[allow(deprecated)]
 pub use crate::legacy::TransactionCheckListener;
 pub use crate::lock::ReadWriteCASLock;
-#[doc(hidden)]
-pub use crate::producer::produce_accumulator::run_produce_accumulator_guard_lifecycle_probe;
-#[doc(hidden)]
-pub use crate::producer::produce_accumulator::ProduceAccumulatorGuardLifecycleProbe;
-#[doc(hidden)]
-pub use crate::producer::producer_impl::timeout_utils::with_timeout;
-#[doc(hidden)]
-pub use crate::producer::producer_impl::timeout_utils::with_timeout_all;
-#[doc(hidden)]
-pub use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
-#[doc(hidden)]
-pub use crate::producer::request_future_holder::run_request_future_holder_lifecycle_probe;
-#[doc(hidden)]
-pub use crate::producer::request_future_holder::run_request_future_holder_scan_probe;
-#[doc(hidden)]
-pub use crate::producer::request_future_holder::RequestFutureHolderLifecycleProbe;
-#[doc(hidden)]
-pub use crate::producer::request_future_holder::RequestFutureHolderScanProbe;
 pub use crate::producer::send_callback::ArcSendCallback;
 pub use crate::producer::transaction_listener::ArcTransactionListener;
 pub use crate::producer::BatchSendCallbackRequest;
 pub use crate::producer::BatchSendRequest;
 pub use crate::producer::JavaHashCode;
 pub use crate::producer::LocalTransactionState;
-pub use crate::producer::MessageQuery;
 pub use crate::producer::MessageQueueSelector;
 pub use crate::producer::MessageQueueSelectorFn;
 pub use crate::producer::ProducerLifecycle;
 pub use crate::producer::ProducerQueryRequest;
 pub use crate::producer::ProducerQueryResponse;
-pub use crate::producer::ProducerTopicAdmin;
 pub use crate::producer::RecallRequest;
 pub use crate::producer::RequestCallback;
-pub use crate::producer::RequestReply;
 pub use crate::producer::RequestReplyCallbackRequest;
 pub use crate::producer::RequestReplyRequest;
 pub use crate::producer::SelectMessageQueueByHash;
@@ -1104,17 +940,13 @@ pub use crate::producer::TopicCreateRequest;
 pub use crate::producer::TransactionListener;
 pub use crate::producer::TransactionMQProducer;
 pub use crate::producer::TransactionMQProducerBuilder;
-pub use crate::producer::TransactionSend;
 pub use crate::producer::TransactionSendRequest;
 pub use crate::producer::TransactionSendResult;
-pub use crate::public_api::*;
-#[doc(hidden)]
-pub use crate::trace::async_trace_dispatcher::run_trace_queue_depth_accounting_probe;
-#[doc(hidden)]
-pub use crate::trace::async_trace_dispatcher::run_trace_worker_lifecycle_probe;
+pub use crate::runtime::ClientMetrics;
+pub use crate::runtime::ClientRuntime;
+pub use crate::runtime::ClientRuntimeConfig;
+pub use crate::runtime::TelemetryHandle;
 pub use crate::trace::async_trace_dispatcher::AsyncTraceDispatcher;
-#[doc(hidden)]
-pub use crate::trace::async_trace_dispatcher::TraceWorkerLifecycleProbe;
 pub use crate::trace::trace_data_encoder::TraceDataEncoder;
 pub use crate::trace::trace_dispatcher::ArcTraceDispatcher;
 pub use crate::trace::trace_dispatcher::TraceDispatcher;
@@ -1122,6 +954,7 @@ pub use crate::trace::trace_dispatcher::Type as TraceDispatcherOperation;
 pub use crate::trace::trace_dispatcher_type::TraceDispatcherType;
 pub use crate::trace::trace_type::TraceType;
 pub use crate::utils::message_util::MessageUtil;
+pub use public_api::*;
 
 #[cfg(test)]
 mod tests {

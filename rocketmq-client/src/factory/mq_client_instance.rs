@@ -109,7 +109,9 @@ use crate::stat::consumer_stats_manager::ConsumerStatsManager;
 mod connection_listener;
 mod route_conversion;
 
+#[cfg(any(test, feature = "test-support"))]
 pub use connection_listener::run_lifecycle_probe as run_connection_event_listener_lifecycle_probe;
+#[cfg(any(test, feature = "test-support"))]
 pub use connection_listener::ConnectionEventListenerLifecycleProbe;
 use route_conversion::cap_default_topic_route_queue_nums;
 #[allow(

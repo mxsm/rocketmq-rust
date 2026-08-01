@@ -24,8 +24,8 @@ use criterion::criterion_main;
 use criterion::Criterion;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
-use rocketmq_store::bench_support::run_store_kv_compaction_lifecycle_probe;
-use rocketmq_store::bench_support::StoreKvCompactionLifecycleProbe;
+use rocketmq_store::test_support::run_store_kv_compaction_lifecycle_probe;
+use rocketmq_store::test_support::StoreKvCompactionLifecycleProbe;
 
 fn run_lifecycle_probe() -> StoreKvCompactionLifecycleProbe {
     let owner = RuntimeOwner::new(RuntimeConfig {

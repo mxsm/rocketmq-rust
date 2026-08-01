@@ -29,6 +29,9 @@ use rocketmq_client_rust::AsyncTraceDispatcher;
 use rocketmq_client_rust::AuthAdmin;
 #[cfg(feature = "admin-full")]
 use rocketmq_client_rust::BrokerAdmin;
+use rocketmq_client_rust::ClientInstanceHandle;
+use rocketmq_client_rust::ClientRpcHook;
+use rocketmq_client_rust::ClientSession;
 use rocketmq_client_rust::ConsumeMessageContext;
 use rocketmq_client_rust::ConsumeMessageHook;
 use rocketmq_client_rust::ConsumeMessageHookArc;
@@ -96,6 +99,16 @@ use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::message::message_single::Message;
 
 mod support;
+
+#[test]
+fn canonical_client_capabilities_compile_from_the_crate_root() {
+    fn assert_send_sync<T: Send + Sync>() {}
+    fn accepts_rpc_hook(_: Option<&ClientRpcHook>) {}
+
+    assert_send_sync::<ClientInstanceHandle>();
+    assert_send_sync::<ClientSession>();
+    accepts_rpc_hook(None);
+}
 
 struct CustomOrderKey(i32);
 

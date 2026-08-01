@@ -639,7 +639,7 @@ fn write_phase5_platform_acceptance_manifest() {
         .duration_since(UNIX_EPOCH)
         .expect("system clock should be after unix epoch")
         .as_millis();
-    let report = rocketmq_store::bench_support::phase5_platform_optimization_acceptance_report();
+    let report = rocketmq_store::test_support::phase5_platform_optimization_acceptance_report();
     let payload = serde_json::json!({
         "case": "commitlog_recovery_phase5_platform_acceptance",
         "generated_at_unix_ms": generated_at_unix_ms,
@@ -843,7 +843,7 @@ fn bench_phase3_cq_concurrency_comparison(c: &mut Criterion) {
 fn bench_phase5_platform_acceptance(c: &mut Criterion) {
     write_phase5_platform_acceptance_manifest();
 
-    let report = rocketmq_store::bench_support::phase5_platform_optimization_acceptance_report();
+    let report = rocketmq_store::test_support::phase5_platform_optimization_acceptance_report();
     let mut group = c.benchmark_group("commitlog_recovery/phase5_platform_acceptance");
     for scenario in &report.scenarios {
         group.bench_with_input(

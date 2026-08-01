@@ -24,7 +24,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::proxy_adapter_compat::MessageQueue;
+use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_proxy_core::MessageQueueTarget;
 use rocketmq_proxy_core::ProxyError;
 use rocketmq_proxy_core::ProxyResult;

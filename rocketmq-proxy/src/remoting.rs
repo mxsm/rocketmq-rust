@@ -1698,7 +1698,7 @@ mod tests {
     use rocketmq_runtime::ServiceLifecycle;
     use rocketmq_runtime::ServiceLifecycleConfig;
     use rocketmq_security_api::Action;
-    use rocketmq_transport::LocalRequestHarness;
+    use rocketmq_transport::test_support::LocalRequestHarness;
     use rocketmq_transport::RemotingDeserializable;
     use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
     use rocketmq_transport::RemotingSerializable;

@@ -560,7 +560,7 @@ mod tests {
 
     use bytes::Bytes;
     use rocketmq_model::common::message::message_queue::MessageQueue;
-    use rocketmq_transport::LocalRequestHarness;
+    use rocketmq_transport::test_support::LocalRequestHarness;
 
     use super::*;
     use crate::base::client_config::ClientConfig;

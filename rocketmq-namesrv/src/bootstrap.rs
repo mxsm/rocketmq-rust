@@ -1764,8 +1764,8 @@ mod tests {
     use rocketmq_protocol::protocol::RemotingDeserializable;
     use rocketmq_protocol::protocol::RemotingSerializable;
     use rocketmq_runtime::RuntimeContext;
+    use rocketmq_transport::test_support::LocalRequestHarness;
     use rocketmq_transport::ConnectionState;
-    use rocketmq_transport::LocalRequestHarness;
     use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
     use rocketmq_transport::ServerConfig;
     use rocketmq_transport::TlsMode;
