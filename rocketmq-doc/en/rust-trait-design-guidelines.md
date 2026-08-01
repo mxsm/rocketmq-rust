@@ -14,8 +14,9 @@ future implementation is not a public seam.
 ## Dispatch and async choice
 
 - Use a concrete type or generics for static dispatch.
-- Use native `async fn` for crate-private traits and for public static
-  dispatch that does not promise a `Send` future. Scope any
+- Use native `async fn` for crate-private traits and public static-dispatch
+  contracts. Add `Send + Sync` supertraits when implementations, rather than
+  the returned future itself, cross task boundaries. Scope any
   `async_fn_in_trait` lint allowance to the trait and document the contract.
 - Use `trait_variant` only when a public interface must guarantee a `Send`
   future. The generated naming convention must identify the `Send` variant.
@@ -63,16 +64,20 @@ together with the code.
 
 ## Inventory and ownership
 
-Run `python scripts/trait_policy_guard.py` to compare production macro,
-native-async, and empty-marker sites with the generated baseline. Run
+Run `python scripts/trait_policy_guard.py` to compare production macro and
+empty-marker sites with the generated baseline. Native `async fn` is an
+approved implementation style and is deliberately absent from the debt
+inventory. Run
 `python scripts/trait_policy_guard.py --write-baseline` only after reviewing
 every changed identity and decision.
 
 The inventory assigns existing macro sites to their owning crate with a
-migrate-on-touch decision. `MQAdminExtInner` passed the P2.4 deletion test and
-was removed at the approved major-version boundary without replacement by
-another empty trait. A new marker with no behavior is treated as fresh policy
-debt, not as a compatible substitute.
+migrate-on-touch decision. The Lite Pull Consumer contracts use direct native
+async traits because their callers use static dispatch; no generated local/send
+trait pair is required. `MQAdminExtInner` passed the P2.4 deletion test and was
+removed at the approved major-version boundary without replacement by another
+empty trait. A new marker with no behavior is treated as fresh policy debt, not
+as a compatible substitute.
 
 P1 async ownership work and P2 interface work use this policy directly.
 Their touched-domain inventory may decrease; any addition requires an

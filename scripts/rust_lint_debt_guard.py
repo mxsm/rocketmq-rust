@@ -97,10 +97,14 @@ def inventory_source(relative: str, source: str) -> list[dict[str, Any]]:
             scope, item = "crate", "<crate>"
         else:
             scope, item = following_item(masked, match.end())
+        inline_reason = REASON.search(raw)
+        # Narrow item exceptions carry their review evidence next to the code.
+        # The central registry remains reserved for broad or unreasoned debt.
+        if scope == "item" and inline_reason is not None:
+            continue
         base = f"{relative}:{scope}:{item}:{','.join(lints)}"
         ordinal = duplicates[base]
         duplicates[base] += 1
-        inline_reason = REASON.search(raw)
         entries.append(
             {
                 "identity": f"{base}:{ordinal}",

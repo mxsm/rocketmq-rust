@@ -203,6 +203,19 @@ mistaken for a pass.
 
 ## Evidence execution boundary
 
+Pull requests use the lightweight candidate record validated by
+`scripts/architecture_candidate_guard.py`. The record binds a Git commit, OS,
+Rust toolchain, the exact static command, its pass status, and an empty
+known-failure list. It deliberately rejects SHA-256 inventories, image digests,
+signatures, and promotion state because those fields are meaningful only after
+real artifacts and a production-like environment exist.
+
+```powershell
+python scripts/architecture_candidate_guard.py `
+  --record scripts/tests/fixtures/architecture-candidate/pass.json
+python scripts/run_architecture_tests.py --tier pr_static
+```
+
 The six-hour sampler runs only on the dedicated
 `self-hosted,linux,x64,rocketmq-architecture-evidence` runner. Pull requests execute
 the static contract job only. The dynamic workflow generates cryptographically
@@ -219,7 +232,8 @@ not inputs to this isolated evidence environment.
 
 ## Evidence verification
 
-From the repository root, validate policy and fixtures:
+From the repository root, validate policy and dynamic fixtures during the later
+production-validation tier:
 
 ```powershell
 python scripts/architecture_slo_guard.py --policy-only

@@ -28,7 +28,6 @@ pub struct TargetSelector {
     pub cluster_name: Option<String>,
     pub broker_name: Option<String>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdminMutationResult {
     pub message: String,
@@ -443,13 +442,3 @@ pub trait DashboardAdmin: Send + Sync {
         request: &'a DashboardDirectConsumeRequest,
     ) -> AdminFuture<'a, AdminMutationResult>;
 }
-
-/// Marker implemented by complete dashboard adapters to classify their query
-/// surface. Read-only adapters should expose narrower domain query traits.
-pub trait DashboardQueryAdmin: Send {}
-
-/// Marker proving that dashboard mutations were compiled intentionally.
-pub trait DashboardMutationAdmin: Send {}
-
-impl<T: DashboardAdmin + ?Sized> DashboardQueryAdmin for T {}
-impl<T: DashboardAdmin + ?Sized> DashboardMutationAdmin for T {}

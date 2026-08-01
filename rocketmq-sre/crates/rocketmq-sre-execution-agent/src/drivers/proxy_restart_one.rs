@@ -30,7 +30,6 @@ use serde::Serialize;
 use super::AgentActionHandler;
 use super::DriverDispatchOutcome;
 use super::DriverFuture;
-use super::KubernetesDriver;
 use super::ProxyRestartClient;
 use super::ProxyRestartOneWrite;
 use super::ProxyRestartRestore;
@@ -281,8 +280,6 @@ where
         })
     }
 }
-
-impl<C> KubernetesDriver for ProxyRestartOneHandler<C> where C: ProxyRestartClient + 'static {}
 
 fn require_action(action: ExecutionAction) -> Result<(), ExecutionAgentError> {
     if action == ExecutionAction::ProxyRestartOne {

@@ -17,7 +17,6 @@ use rocketmq_sre_contracts::ExecutionId;
 use rocketmq_sre_contracts::PlanStepId;
 use serde::Serialize;
 
-use super::AgentActionHandler;
 use super::DriverFuture;
 
 /// Sanitized Deployment state required by the one-replica scale action.
@@ -31,7 +30,6 @@ pub struct ProxyScaleState {
     pub pdb_healthy: bool,
     pub last_operation_id: Option<String>,
 }
-
 /// Closed scale-out request. The target is always exactly `expected + 1`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProxyScaleOutOneWrite {
@@ -238,9 +236,3 @@ pub trait TelemetryCollectorRestartClient: Send + Sync {
         request: &'a TelemetryCollectorRestartOneWrite,
     ) -> DriverFuture<'a, ()>;
 }
-
-/// Typed Kubernetes scale/restart/rollout adapter.
-///
-/// Implementations use concrete Kubernetes API types and never accept an
-/// arbitrary JSON Patch document.
-pub trait KubernetesDriver: AgentActionHandler {}

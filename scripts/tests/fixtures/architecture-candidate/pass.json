@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "commit": "1d3c07b700130945c030c30f1a9995ab69c3613d",
+  "environment": {
+    "os": "windows",
+    "rustc": "1.95.0"
+  },
+  "checks": [
+    {
+      "name": "pr_static",
+      "command": "python scripts/run_architecture_tests.py --tier pr_static",
+      "status": "passed"
+    }
+  ],
+  "known_failures": []
+}

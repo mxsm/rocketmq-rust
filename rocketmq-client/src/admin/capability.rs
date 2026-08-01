@@ -65,7 +65,7 @@ use rocketmq_protocol::protocol::subscription::subscription_group_config::Subscr
 
 use crate::common::admin_tool_result::AdminToolResult;
 
-#[allow(dead_code)]
+#[allow(dead_code, reason = "command families consume selected capability methods")]
 #[allow(async_fn_in_trait)]
 pub trait RouteAdmin: Send {
     async fn examine_broker_cluster_info(&self) -> rocketmq_error::RocketMQResult<ClusterInfo>;
@@ -111,7 +111,7 @@ pub trait RouteAdmin: Send {
     async fn probe_name_server(&self, name_server: CheetahString) -> rocketmq_error::RocketMQResult<()>;
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, reason = "command families consume selected capability methods")]
 #[allow(async_fn_in_trait)]
 pub trait TopicAdmin: Send {
     async fn create_and_update_topic_config(
@@ -303,7 +303,7 @@ pub trait TopicAdmin: Send {
     ) -> rocketmq_error::RocketMQResult<GetLiteTopicInfoResponseBody>;
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, reason = "command families consume selected capability methods")]
 #[allow(async_fn_in_trait)]
 pub trait ConsumerAdmin: Send {
     async fn create_and_update_subscription_group_config(
@@ -499,7 +499,7 @@ pub trait ConsumerAdmin: Send {
     ) -> rocketmq_error::RocketMQResult<GetLiteGroupInfoResponseBody>;
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, reason = "command families consume selected capability methods")]
 #[allow(async_fn_in_trait)]
 pub trait BrokerAdmin: Send {
     async fn start(&mut self) -> rocketmq_error::RocketMQResult<()>;
@@ -659,7 +659,7 @@ pub trait BrokerAdmin: Send {
     ) -> rocketmq_error::RocketMQResult<()>;
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, reason = "command families consume selected capability methods")]
 #[allow(async_fn_in_trait)]
 pub trait AuthAdmin: Send {
     async fn create_and_update_plain_access_config(
@@ -809,7 +809,7 @@ pub trait AuthAdmin: Send {
     ) -> rocketmq_error::RocketMQResult<Vec<AclInfo>>;
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, reason = "command families consume selected capability methods")]
 #[allow(async_fn_in_trait)]
 pub trait OffsetAdmin: Send {
     async fn reset_offset_by_timestamp_old(

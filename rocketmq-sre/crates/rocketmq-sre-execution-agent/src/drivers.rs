@@ -40,7 +40,6 @@ use std::pin::Pin;
 
 use rocketmq_sre_contracts::AgentStepRequest;
 
-pub use admin_core::AdminCoreDriver;
 pub use admin_core::BrokerConfigPatch;
 pub use admin_core::BrokerConfigPatchApplyOutcome;
 pub use admin_core::BrokerConfigPatchClient;
@@ -61,7 +60,6 @@ pub use admin_core::TopicConfigPatchState;
 pub use admin_core::TopicConfigPatchWrite;
 pub use broker_config_patch::BrokerConfigPatchHandler;
 pub use broker_config_patch::BrokerConfigPatchParameters;
-pub use config::ConfigDriver;
 pub use config::ConfigWriteClient;
 pub use config::CredentialOverlapRestore;
 pub use config::CredentialOverlapWrite;
@@ -73,7 +71,6 @@ pub use config::LoggerLevelTtlRestore;
 pub use config::LoggerLevelTtlWrite;
 pub use credential_rotation::CredentialRotationHandler;
 pub use credential_rotation::CredentialRotationParameters;
-pub use kubernetes::KubernetesDriver;
 pub use kubernetes::ProxyImageCanaryClient;
 pub use kubernetes::ProxyImageCanaryRestore;
 pub use kubernetes::ProxyImageCanaryState;

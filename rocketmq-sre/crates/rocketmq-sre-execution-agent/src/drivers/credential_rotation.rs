@@ -27,7 +27,6 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use super::AgentActionHandler;
-use super::ConfigDriver;
 use super::CredentialOverlapRestore;
 use super::CredentialOverlapWrite;
 use super::CredentialRotationClient;
@@ -241,8 +240,6 @@ where
         })
     }
 }
-
-impl<C> ConfigDriver for CredentialRotationHandler<C> where C: CredentialRotationClient + 'static {}
 
 fn require_action(action: ExecutionAction) -> Result<(), ExecutionAgentError> {
     if action == ExecutionAction::SecurityCredentialRotateOverlap {

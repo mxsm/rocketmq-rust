@@ -77,11 +77,11 @@
       "target_release": "2.0.0",
       "evidence": [
         "scripts/error_architecture_guard.py",
-        "docs/07-error-hygiene-allowlist.md",
+        "rocketmq-doc/en/error-hygiene-allowlist.md",
         "scripts/rust-lint-debt-registry.json",
         "scripts/rust_lint_debt_guard.py"
       ],
-      "scope_count": 232
+      "scope_count": 183
     },
     {
       "id": "ARC-RUNTIME-001",

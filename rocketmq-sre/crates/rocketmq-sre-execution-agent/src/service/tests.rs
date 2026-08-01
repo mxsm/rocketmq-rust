@@ -58,7 +58,6 @@ use crate::AgentActionHandler;
 use crate::AgentDriverRegistry;
 use crate::AgentEffectStore;
 use crate::AuthorityFuture;
-use crate::ConfigDriver;
 use crate::DispatchBarrier;
 use crate::DriverDispatchOutcome;
 use crate::DriverFuture;
@@ -203,8 +202,6 @@ impl AgentActionHandler for CountingConfigDriver {
         })
     }
 }
-
-impl ConfigDriver for CountingConfigDriver {}
 
 #[tokio::test]
 async fn authority_outage_prevents_driver_invocation_before_database_access() {
