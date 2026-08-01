@@ -4,7 +4,7 @@
   "build_mode": {
     "locked": true,
     "release": true,
-    "default_features": false,
+    "default_features": true,
     "local_images_only": true,
     "remote_push_enabled": false,
     "tag_pattern": "^rocketmq-rust/(broker|namesrv|controller|proxy|mcp):[0-9a-f]{7,12}$"
@@ -36,19 +36,19 @@
       "binary": "rocketmq-broker-rust",
       "docker_target": "broker",
       "features": [
-        "production"
+        "otlp-metrics",
+        "otlp-traces",
+        "otlp-logs"
       ],
       "resolved_features": [
+        "default",
         "local_file_store",
-        "metrics-prometheus",
         "otel-logs",
         "otel-metrics",
         "otel-traces",
         "otlp-logs",
-        "otlp-traces",
-        "production",
-        "production-observability",
-        "prometheus"
+        "otlp-metrics",
+        "otlp-traces"
       ]
     },
     "namesrv": {
@@ -57,17 +57,18 @@
       "binary": "rocketmq-namesrv-rust",
       "docker_target": "namesrv",
       "features": [
-        "production"
+        "otlp-metrics",
+        "otlp-traces",
+        "otlp-logs"
       ],
       "resolved_features": [
-        "metrics-prometheus",
-        "observability",
+        "default",
         "otel-logs",
+        "otel-metrics",
         "otel-traces",
         "otlp-logs",
-        "otlp-traces",
-        "production",
-        "production-observability"
+        "otlp-metrics",
+        "otlp-traces"
       ]
     },
     "controller": {
@@ -76,17 +77,18 @@
       "binary": "rocketmq-controller-rust",
       "docker_target": "controller",
       "features": [
-        "production"
+        "metrics-otlp",
+        "otlp-traces",
+        "otlp-logs"
       ],
       "resolved_features": [
+        "default",
         "metrics",
-        "metrics-prometheus",
+        "metrics-otlp",
         "otel-logs",
         "otel-traces",
         "otlp-logs",
         "otlp-traces",
-        "production",
-        "production-observability",
         "storage-rocksdb"
       ]
     },
@@ -96,18 +98,20 @@
       "binary": "rocketmq-proxy-rust",
       "docker_target": "proxy",
       "features": [
-        "production"
+        "otlp-metrics",
+        "otlp-traces",
+        "otlp-logs"
       ],
       "resolved_features": [
         "cluster-mode",
-        "metrics-prometheus",
+        "default",
+        "local-mode",
         "observability",
         "otel-logs",
         "otel-traces",
         "otlp-logs",
-        "otlp-traces",
-        "production",
-        "production-observability"
+        "otlp-metrics",
+        "otlp-traces"
       ]
     },
     "mcp": {
@@ -116,18 +120,15 @@
       "binary": "rocketmq-mcp",
       "docker_target": "mcp",
       "features": [
-        "production"
+        "streamable-http",
+        "otlp"
       ],
       "resolved_features": [
         "auth",
+        "default",
         "diagnose",
-        "metrics-prometheus",
         "observability",
-        "otel-logs",
-        "otlp-logs",
-        "otlp-traces",
-        "production",
-        "production-observability",
+        "otlp",
         "read-only",
         "stdio",
         "streamable-http"

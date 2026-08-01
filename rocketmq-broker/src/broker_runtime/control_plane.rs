@@ -32,9 +32,12 @@ impl BrokerRuntime {
         let mut bootstrap_config = build_broker_telemetry_bootstrap_config(&broker_config);
         if let Err(error) = rocketmq_observability::apply_standard_otlp_environment(&mut bootstrap_config) {
             warn!("Failed to apply broker OTLP environment: {error}");
+            #[cfg(feature = "otel-metrics")]
             return;
         }
+        #[cfg(feature = "otel-metrics")]
         let config = &bootstrap_config.observability;
+        #[cfg(feature = "otel-metrics")]
         if !config.enabled {
             return;
         }

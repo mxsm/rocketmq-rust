@@ -76,7 +76,7 @@ class ProductionReleaseStateTests(unittest.TestCase):
         self.assertEqual("production", self.profile["profile"])
         self.assertTrue(self.profile["build_mode"]["locked"])
         self.assertTrue(self.profile["build_mode"]["release"])
-        self.assertFalse(self.profile["build_mode"]["default_features"])
+        self.assertTrue(self.profile["build_mode"]["default_features"])
         self.assertTrue(self.profile["build_mode"]["local_images_only"])
         self.assertFalse(self.profile["build_mode"]["remote_push_enabled"])
         self.assertEqual(set(SERVICES), set(self.profile["services"]))
@@ -85,14 +85,17 @@ class ProductionReleaseStateTests(unittest.TestCase):
             with self.subTest(service=service_name):
                 manifest = tomllib.loads((ROOT / service["manifest"]).read_text(encoding="utf-8"))
                 features = manifest["features"]
-                self.assertEqual(["production"], service["features"])
+                self.assertNotIn("production", service["features"])
+                roots = ["default", *service["features"]]
                 self.assertEqual(
                     service["resolved_features"],
-                    feature_closure(features, service["features"]),
+                    feature_closure(features, roots),
                 )
+                selected_features = ",".join(service["features"])
+                manifest_arg = f"--manifest-path {service['manifest']} " if service_name == "mcp" else ""
                 command = (
-                    f"cargo build --locked --release --package {service['package']} "
-                    f"--no-default-features --features production --bin {service['binary']}"
+                    f"cargo build {manifest_arg}--locked --release --package {service['package']} "
+                    f"--features {selected_features} --bin {service['binary']}"
                 )
                 self.assertIn(command, self.dockerfile)
 

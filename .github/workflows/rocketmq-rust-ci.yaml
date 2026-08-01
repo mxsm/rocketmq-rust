@@ -75,6 +75,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -303,10 +305,22 @@ jobs:
           rustup show active-toolchain
           rustup component add clippy
 
+      - name: Normalize observability cache key
+        id: observability-cache-key
+        shell: bash
+        env:
+          FEATURES: ${{ matrix.features }}
+        run: |
+          if [ -z "$FEATURES" ]; then
+            echo "value=default" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${FEATURES//,/-}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Cache Rust + RocksDB
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: observability-features-${{ matrix.features || 'default' }}
+          shared-key: observability-features-${{ steps.observability-cache-key.outputs.value }}
           workspaces: |
             .
           env-vars: |

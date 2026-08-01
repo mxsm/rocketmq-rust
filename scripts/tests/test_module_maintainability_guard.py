@@ -190,6 +190,15 @@ pub struct RuntimeState;
 
 
 class RepositoryModuleMaintainabilityContracts(unittest.TestCase):
+    def test_ci_scans_maintainability_with_complete_git_history(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / ".github/workflows/rocketmq-rust-ci.yaml").read_text(encoding="utf-8")
+        architecture_guards = workflow.split("  architecture-guards:", 1)[1].split(
+            "  architecture-contracts:", 1
+        )[0]
+
+        self.assertIn("fetch-depth: 0", architecture_guards)
+
     def test_repository_baseline_and_report_are_current(self) -> None:
         root = Path(__file__).resolve().parents[2]
         baseline = json.loads((root / "scripts/module-maintainability-baseline.json").read_text(encoding="utf-8"))

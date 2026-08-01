@@ -190,6 +190,23 @@ where
 
     pub async fn shutdown_with_report(&self) -> Result<ShutdownReport, RocketMQError> {
         self.shutdown.cancel();
+        let _drained_permits = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            self.pending_bytes
+                .clone()
+                .acquire_many_owned(self.pending_byte_capacity),
+        )
+        .await
+        .map_err(|_| {
+            RocketMQError::Service(UnifiedServiceError::ShutdownFailed(
+                "tieredstore dispatcher timed out draining accepted requests".to_owned(),
+            ))
+        })?
+        .map_err(|error| {
+            RocketMQError::Service(UnifiedServiceError::ShutdownFailed(format!(
+                "tieredstore dispatcher pending-byte budget closed during shutdown: {error}"
+            )))
+        })?;
         let report = if let Some(owner) = self.task_owner.lock().await.take() {
             let report = owner
                 .shutdown_report("rocketmq-tieredstore.dispatcher", std::time::Duration::from_secs(5))

@@ -92,7 +92,7 @@ fn transient_requests_do_not_create_component_groups() {
         .expect("ProxyBrokerFacade::process_request should exist");
 
     assert!(
-        process_request.contains("self.local_request_tasks.clone()"),
+        process_request.contains("&self.local_request_tasks"),
         "local requests must reuse the component owner created during facade composition"
     );
     assert!(

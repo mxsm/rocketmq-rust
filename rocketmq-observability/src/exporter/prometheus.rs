@@ -351,18 +351,14 @@ mod tests {
 
         let handle =
             spawn_prometheus_http_endpoint(&config, registry, &service).expect("prometheus endpoint should spawn");
+        assert_eq!(handle.task_group.task_count(), 1);
         let report = handle.shutdown_gracefully(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
+        assert_eq!(report.name, "rocketmq.observability.prometheus");
+        assert_eq!(report.completed, 1, "{}", report.to_json());
 
         let parent_report = service.task_group().shutdown(Duration::from_secs(1)).await;
         assert!(parent_report.is_healthy(), "{}", parent_report.to_json());
-        assert!(
-            parent_report
-                .children
-                .iter()
-                .any(|child| child.name == "rocketmq.observability.prometheus"),
-            "{}",
-            parent_report.to_json()
-        );
+        assert!(parent_report.children.is_empty(), "{}", parent_report.to_json());
     }
 }

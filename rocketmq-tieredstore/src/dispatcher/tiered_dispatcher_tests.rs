@@ -129,18 +129,13 @@ async fn new_with_task_group_parents_dispatcher_task() -> Result<(), RocketMQErr
     );
 
     dispatcher.start().await?;
+    assert!(service.task_group().task_count() >= 2);
     dispatcher.shutdown().await?;
 
     let report = service.task_group().shutdown(Duration::from_secs(1)).await;
-    assert!(
-        report
-            .children
-            .iter()
-            .any(|child| child.name == "rocketmq-tieredstore.dispatcher"),
-        "{}",
-        report.to_json()
-    );
     assert!(report.is_healthy(), "{}", report.to_json());
+    assert!(report.completed >= 2, "{}", report.to_json());
+    assert!(report.children.is_empty(), "{}", report.to_json());
     Ok(())
 }
 

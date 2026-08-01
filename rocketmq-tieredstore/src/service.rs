@@ -169,18 +169,13 @@ mod tests {
         services
             .start_cleanup(config, flat_file_store, CancellationToken::new())
             .await?;
+        assert!(services.task_count().await > 0);
         services.shutdown().await?;
 
         let report = service.task_group().shutdown(Duration::from_secs(1)).await;
-        assert!(
-            report
-                .children
-                .iter()
-                .any(|child| child.name == "rocketmq-tieredstore.cleanup"),
-            "{}",
-            report.to_json()
-        );
         assert!(report.is_healthy(), "{}", report.to_json());
+        assert!(report.completed >= 2, "{}", report.to_json());
+        assert!(report.children.is_empty(), "{}", report.to_json());
         Ok(())
     }
 }
