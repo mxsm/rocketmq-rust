@@ -30,7 +30,7 @@ use rocketmq_protocol::protocol::header::notify_consumer_ids_changed_request_hea
 use rocketmq_protocol::protocol::header::notify_unsubscribe_lite_request_header::NotifyUnsubscribeLiteRequestHeader;
 use rocketmq_protocol::protocol::header::reset_offset_request_header::ResetOffsetRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerAdminStore;
 use rocketmq_transport::Channel;
 use tracing::error;
 use tracing::info;
@@ -158,7 +158,7 @@ impl Broker2Client {
     ///
     /// # Returns
     /// Response command with result
-    pub async fn reset_offset<MS: MessageStore>(
+    pub async fn reset_offset<MS: BrokerAdminStore>(
         &self,
         broker_inner: &BrokerAdminRuntime<MS>,
         topic: &CheetahString,
@@ -181,7 +181,7 @@ impl Broker2Client {
     ///
     /// # Returns
     /// Response command with result
-    pub async fn reset_offset_for_c<MS: MessageStore>(
+    pub async fn reset_offset_for_c<MS: BrokerAdminStore>(
         &self,
         broker_inner: &BrokerAdminRuntime<MS>,
         topic: &CheetahString,
@@ -194,7 +194,7 @@ impl Broker2Client {
     }
 
     /// Internal reset offset implementation.
-    async fn reset_offset_inner<MS: MessageStore>(
+    async fn reset_offset_inner<MS: BrokerAdminStore>(
         &self,
         broker_inner: &BrokerAdminRuntime<MS>,
         topic: &CheetahString,
@@ -378,7 +378,7 @@ impl Broker2Client {
     ///
     /// # Returns
     /// Response command with consumer status
-    pub async fn get_consume_status<MS: MessageStore>(
+    pub async fn get_consume_status<MS: BrokerAdminStore>(
         &self,
         broker_inner: &BrokerAdminRuntime<MS>,
         topic: &CheetahString,

@@ -4101,121 +4101,121 @@
     },
     {
       "kind": "native_async",
-      "path": "rocketmq-store/src/base/message_store.rs",
+      "path": "rocketmq-store/src/base/backend_ops.rs",
       "line": 247,
-      "item": "trait MessageStore::load",
+      "item": "trait BackendOps::load",
       "owner": "store",
       "decision": "preferred-static-dispatch"
     },
     {
       "kind": "native_async",
-      "path": "rocketmq-store/src/base/message_store.rs",
+      "path": "rocketmq-store/src/base/backend_ops.rs",
       "line": 250,
-      "item": "trait MessageStore::start",
+      "item": "trait BackendOps::start",
       "owner": "store",
       "decision": "preferred-static-dispatch"
     },
     {
       "kind": "native_async",
-      "path": "rocketmq-store/src/base/message_store.rs",
+      "path": "rocketmq-store/src/base/backend_ops.rs",
       "line": 253,
-      "item": "trait MessageStore::init",
+      "item": "trait BackendOps::init",
       "owner": "store",
       "decision": "preferred-static-dispatch"
     },
     {
       "kind": "native_async",
-      "path": "rocketmq-store/src/base/message_store.rs",
+      "path": "rocketmq-store/src/base/backend_ops.rs",
       "line": 261,
-      "item": "trait MessageStore::shutdown_gracefully",
+      "item": "trait BackendOps::shutdown_gracefully",
       "owner": "store",
       "decision": "preferred-static-dispatch"
     },
     {
       "kind": "native_async",
-      "path": "rocketmq-store/src/base/message_store.rs",
+      "path": "rocketmq-store/src/base/backend_ops.rs",
       "line": 264,
-      "item": "trait MessageStore::shutdown",
+      "item": "trait BackendOps::shutdown",
       "owner": "store",
       "decision": "preferred-static-dispatch"
     },
     {
       "kind": "native_async",
-      "path": "rocketmq-store/src/base/message_store.rs",
+      "path": "rocketmq-store/src/base/backend_ops.rs",
       "line": 301,
-      "item": "trait MessageStore::put_message",
+      "item": "trait BackendOps::put_message",
       "owner": "store",
       "decision": "preferred-static-dispatch"
     },
     {
       "kind": "native_async",
-      "path": "rocketmq-store/src/base/message_store.rs",
+      "path": "rocketmq-store/src/base/backend_ops.rs",
       "line": 310,
-      "item": "trait MessageStore::put_messages",
+      "item": "trait BackendOps::put_messages",
       "owner": "store",
       "decision": "preferred-static-dispatch"
     },
     {
       "kind": "native_async",
-      "path": "rocketmq-store/src/base/message_store.rs",
+      "path": "rocketmq-store/src/base/backend_ops.rs",
       "line": 324,
-      "item": "trait MessageStore::get_message",
+      "item": "trait BackendOps::get_message",
       "owner": "store",
       "decision": "preferred-static-dispatch"
     },
     {
       "kind": "native_async",
-      "path": "rocketmq-store/src/base/message_store.rs",
+      "path": "rocketmq-store/src/base/backend_ops.rs",
       "line": 346,
-      "item": "trait MessageStore::get_message_with_size_limit",
+      "item": "trait BackendOps::get_message_with_size_limit",
       "owner": "store",
       "decision": "preferred-static-dispatch"
     },
     {
       "kind": "native_async",
-      "path": "rocketmq-store/src/base/message_store.rs",
+      "path": "rocketmq-store/src/base/backend_ops.rs",
       "line": 400,
-      "item": "trait MessageStore::get_offset_in_queue_by_time_async",
+      "item": "trait BackendOps::get_offset_in_queue_by_time_async",
       "owner": "store",
       "decision": "preferred-static-dispatch"
     },
     {
       "kind": "native_async",
-      "path": "rocketmq-store/src/base/message_store.rs",
+      "path": "rocketmq-store/src/base/backend_ops.rs",
       "line": 409,
-      "item": "trait MessageStore::get_offset_in_queue_by_time_with_boundary_async",
+      "item": "trait BackendOps::get_offset_in_queue_by_time_with_boundary_async",
       "owner": "store",
       "decision": "preferred-static-dispatch"
     },
     {
       "kind": "native_async",
-      "path": "rocketmq-store/src/base/message_store.rs",
+      "path": "rocketmq-store/src/base/backend_ops.rs",
       "line": 467,
-      "item": "trait MessageStore::get_message_store_timestamp_async",
+      "item": "trait BackendOps::get_message_store_timestamp_async",
       "owner": "store",
       "decision": "preferred-static-dispatch"
     },
     {
       "kind": "native_async",
-      "path": "rocketmq-store/src/base/message_store.rs",
+      "path": "rocketmq-store/src/base/backend_ops.rs",
       "line": 484,
-      "item": "trait MessageStore::append_to_commit_log",
+      "item": "trait BackendOps::append_to_commit_log",
       "owner": "store",
       "decision": "preferred-static-dispatch"
     },
     {
       "kind": "native_async",
-      "path": "rocketmq-store/src/base/message_store.rs",
+      "path": "rocketmq-store/src/base/backend_ops.rs",
       "line": 496,
-      "item": "trait MessageStore::query_message",
+      "item": "trait BackendOps::query_message",
       "owner": "store",
       "decision": "preferred-static-dispatch"
     },
     {
       "kind": "native_async",
-      "path": "rocketmq-store/src/base/message_store.rs",
+      "path": "rocketmq-store/src/base/backend_ops.rs",
       "line": 506,
-      "item": "trait MessageStore::update_ha_master_address",
+      "item": "trait BackendOps::update_ha_master_address",
       "owner": "store",
       "decision": "preferred-static-dispatch"
     },
@@ -5093,9 +5093,9 @@
     },
     {
       "kind": "trait_variant",
-      "path": "rocketmq-store/src/base/message_store.rs",
+      "path": "rocketmq-store/src/base/backend_ops.rs",
       "line": 242,
-      "item": "trait MessageStore",
+      "item": "trait BackendOps",
       "owner": "store",
       "decision": "retain-send-contract-review-on-touch"
     },

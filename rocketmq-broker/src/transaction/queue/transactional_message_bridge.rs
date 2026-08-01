@@ -32,7 +32,8 @@ use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerMasterAddressStore;
+use rocketmq_store::BrokerWriteStore;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
 use rocketmq_store_api::ReadOutcome;
@@ -46,7 +47,7 @@ use crate::transaction::queue::transaction_message_store::TransactionMessageStor
 use crate::transaction::queue::transaction_topic_registration::TransactionTopicRegistration;
 use crate::transaction::queue::transactional_message_util::TransactionalMessageUtil;
 
-pub(crate) struct TransactionalMessageBridgeContext<MS: MessageStore> {
+pub(crate) struct TransactionalMessageBridgeContext<MS: BrokerWriteStore> {
     pub(crate) store_host: SocketAddr,
     pub(crate) broker_name: CheetahString,
     pub(crate) consumer_offset_manager: Arc<ConsumerOffsetManager<MS>>,
@@ -55,7 +56,7 @@ pub(crate) struct TransactionalMessageBridgeContext<MS: MessageStore> {
     pub(crate) escape_bridge: Weak<EscapeBridge<MS>>,
 }
 
-pub struct TransactionalMessageBridge<MS: MessageStore> {
+pub struct TransactionalMessageBridge<MS: BrokerWriteStore> {
     pub(crate) op_queue_map: Arc<Mutex<HashMap<i32, MessageQueue>>>,
     pub(crate) store_host: SocketAddr,
     broker_name: CheetahString,
@@ -67,7 +68,7 @@ pub struct TransactionalMessageBridge<MS: MessageStore> {
 
 impl<MS> TransactionalMessageBridge<MS>
 where
-    MS: MessageStore,
+    MS: BrokerWriteStore,
 {
     pub(crate) fn new(context: TransactionalMessageBridgeContext<MS>) -> Self {
         Self {
@@ -84,7 +85,7 @@ where
 
 impl<MS> TransactionalMessageBridge<MS>
 where
-    MS: MessageStore,
+    MS: BrokerWriteStore,
 {
     pub(crate) fn fetch_consume_offset(&self, mq: &MessageQueue) -> i64 {
         let group = CheetahString::from_static_str(TransactionalMessageUtil::build_consumer_group());
@@ -97,7 +98,10 @@ where
         offset
     }
 
-    pub async fn fetch_message_queues(&self, topic: &CheetahString) -> HashSet<MessageQueue> {
+    pub async fn fetch_message_queues(&self, topic: &CheetahString) -> HashSet<MessageQueue>
+    where
+        MS: BrokerMasterAddressStore,
+    {
         let mut message_queues = HashSet::new();
         let topic_config = self.select_topic_config(topic).await;
         if let Some(topic_config) = topic_config {
@@ -169,11 +173,17 @@ where
         }
     }
 
-    pub async fn select_topic_config(&self, topic: &CheetahString) -> Option<Arc<TopicConfig>> {
+    pub async fn select_topic_config(&self, topic: &CheetahString) -> Option<Arc<TopicConfig>>
+    where
+        MS: BrokerMasterAddressStore,
+    {
         self.topic_registration.select_or_create_send_back_topic(topic).await
     }
 
-    pub(crate) async fn select_tran_check_max_time_topic(&self) -> Option<Arc<TopicConfig>> {
+    pub(crate) async fn select_tran_check_max_time_topic(&self) -> Option<Arc<TopicConfig>>
+    where
+        MS: BrokerMasterAddressStore,
+    {
         self.topic_registration.select_or_create_check_max_time_topic().await
     }
 

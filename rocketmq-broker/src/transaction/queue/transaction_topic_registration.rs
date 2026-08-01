@@ -25,7 +25,8 @@ use rocketmq_model::common::constant::PermName;
 use rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
 use rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigSerializeWrapper;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerMasterAddressStore;
+use rocketmq_store::BrokerWriteStore;
 use tracing::debug;
 use tracing::info;
 
@@ -41,7 +42,7 @@ use crate::transaction::queue::transaction_message_store::TransactionMessageStor
 
 const TCMT_QUEUE_NUMS: i32 = 1;
 
-pub(crate) struct TransactionTopicRegistration<MS: MessageStore> {
+pub(crate) struct TransactionTopicRegistration<MS: BrokerWriteStore> {
     broker_config: Arc<BrokerConfig>,
     topic_config_manager: Arc<TopicConfigManager>,
     topic_config_coordinator: Arc<TopicConfigCoordinator>,
@@ -53,7 +54,7 @@ pub(crate) struct TransactionTopicRegistration<MS: MessageStore> {
     shutdown: Arc<AtomicBool>,
 }
 
-pub(crate) struct TransactionTopicRegistrationContext<MS: MessageStore> {
+pub(crate) struct TransactionTopicRegistrationContext<MS: BrokerWriteStore> {
     pub(crate) broker_config: Arc<BrokerConfig>,
     pub(crate) topic_config_manager: Arc<TopicConfigManager>,
     pub(crate) topic_config_coordinator: Arc<TopicConfigCoordinator>,
@@ -67,7 +68,7 @@ pub(crate) struct TransactionTopicRegistrationContext<MS: MessageStore> {
 
 impl<MS> TransactionTopicRegistration<MS>
 where
-    MS: MessageStore + Send + Sync + 'static,
+    MS: BrokerWriteStore + Send + Sync + 'static,
 {
     pub(crate) fn new(context: TransactionTopicRegistrationContext<MS>) -> Self {
         Self {
@@ -86,7 +87,10 @@ where
     pub(crate) async fn select_or_create_send_back_topic(
         self: &Arc<Self>,
         topic: &CheetahString,
-    ) -> Option<Arc<TopicConfig>> {
+    ) -> Option<Arc<TopicConfig>>
+    where
+        MS: BrokerMasterAddressStore,
+    {
         if let Some(topic_config) = self.topic_config_manager.select_topic_config(topic) {
             return Some(topic_config);
         }
@@ -99,7 +103,10 @@ where
         queue_nums: i32,
         is_order: bool,
         topic_sys_flag: u32,
-    ) -> Option<Arc<TopicConfig>> {
+    ) -> Option<Arc<TopicConfig>>
+    where
+        MS: BrokerMasterAddressStore,
+    {
         let start_time = Instant::now();
         let state_machine_version = self.message_store.state_machine_version()?;
         let creation = self.topic_config_manager.create_topic_in_send_message_back_method(
@@ -113,7 +120,10 @@ where
         Some(self.complete_creation(creation, start_time).await)
     }
 
-    pub(crate) async fn select_or_create_check_max_time_topic(self: &Arc<Self>) -> Option<Arc<TopicConfig>> {
+    pub(crate) async fn select_or_create_check_max_time_topic(self: &Arc<Self>) -> Option<Arc<TopicConfig>>
+    where
+        MS: BrokerMasterAddressStore,
+    {
         let start_time = Instant::now();
         let state_machine_version = self.message_store.state_machine_version()?;
         let creation = self.topic_config_manager.create_topic_of_tran_check_max_time(
@@ -124,11 +134,10 @@ where
         Some(self.complete_creation(creation, start_time).await)
     }
 
-    async fn complete_creation(
-        self: &Arc<Self>,
-        creation: TopicConfigCreation,
-        start_time: Instant,
-    ) -> Arc<TopicConfig> {
+    async fn complete_creation(self: &Arc<Self>, creation: TopicConfigCreation, start_time: Instant) -> Arc<TopicConfig>
+    where
+        MS: BrokerMasterAddressStore,
+    {
         let registration = Arc::clone(self);
         complete_topic_config_creation(
             Arc::clone(&self.topic_config_coordinator),
@@ -143,7 +152,10 @@ where
         .await
     }
 
-    async fn register_update(&self, update: TopicConfigUpdate) {
+    async fn register_update(&self, update: TopicConfigUpdate)
+    where
+        MS: BrokerMasterAddressStore,
+    {
         if self.broker_config.enable_single_topic_register {
             self.register_single_topic(update.topic_config).await;
         } else {
@@ -181,7 +193,10 @@ where
             .await;
     }
 
-    async fn register_incremental_topic(&self, update: TopicConfigUpdate) {
+    async fn register_incremental_topic(&self, update: TopicConfigUpdate)
+    where
+        MS: BrokerMasterAddressStore,
+    {
         if self.shutdown.load(Ordering::Acquire) {
             info!("Skip transaction topic registration after broker shutdown");
             return;
@@ -251,7 +266,9 @@ where
     async fn handle_register_result(
         &self,
         register_broker_result: Vec<rocketmq_protocol::protocol::namesrv::RegisterBrokerResult>,
-    ) {
+    ) where
+        MS: BrokerMasterAddressStore,
+    {
         let Some(result) = register_broker_result.into_iter().next() else {
             return;
         };

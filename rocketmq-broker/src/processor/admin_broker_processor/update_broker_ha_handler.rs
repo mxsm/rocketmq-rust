@@ -18,7 +18,7 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::exchange_ha_info_request_header::ExchangeHAInfoRequestHeader;
 use rocketmq_protocol::protocol::header::exchange_ha_info_response_header::ExchangeHaInfoResponseHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerAdminStore;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
 use tracing::info;
@@ -32,7 +32,7 @@ impl UpdateBrokerHaHandler {
         Self
     }
 
-    pub async fn update_broker_ha_info<MS: MessageStore>(
+    pub async fn update_broker_ha_info<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
@@ -55,7 +55,7 @@ impl UpdateBrokerHaHandler {
                 message_store.update_ha_master_address(master_ha_addr.as_str()).await;
 
                 let master_address = exchange_request_header.master_address.unwrap_or_default();
-                message_store.update_master_address(&master_address);
+                message_store.update_logical_master_address(&master_address);
 
                 let should_sync_master_flush_offset_on_startup = broker_runtime_inner
                     .message_store_config()

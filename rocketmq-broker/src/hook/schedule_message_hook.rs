@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_model::common::message::MessageTrait;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerWriteStore;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::PutMessageHook;
 use rocketmq_store::PutMessageResult;
@@ -26,13 +26,13 @@ use tracing::warn;
 use crate::schedule::schedule_message_service::ScheduleMessageService;
 use crate::util::hook_utils::HookUtils;
 
-pub struct ScheduleMessageHook<MS: MessageStore> {
+pub struct ScheduleMessageHook<MS: BrokerWriteStore> {
     message_store_config: Arc<MessageStoreConfig>,
     timer_message_store: Option<Arc<TimerMessageStore>>,
     schedule_message_service: Arc<ScheduleMessageService<MS>>,
 }
 
-impl<MS: MessageStore> ScheduleMessageHook<MS> {
+impl<MS: BrokerWriteStore> ScheduleMessageHook<MS> {
     pub fn new(
         message_store_config: Arc<MessageStoreConfig>,
         timer_message_store: Option<Arc<TimerMessageStore>>,
@@ -46,7 +46,7 @@ impl<MS: MessageStore> ScheduleMessageHook<MS> {
     }
 }
 
-impl<MS: MessageStore> PutMessageHook for ScheduleMessageHook<MS> {
+impl<MS: BrokerWriteStore> PutMessageHook for ScheduleMessageHook<MS> {
     fn hook_name(&self) -> &'static str {
         "ScheduleMessageHook"
     }

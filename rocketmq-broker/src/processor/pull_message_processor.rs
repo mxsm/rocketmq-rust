@@ -43,9 +43,9 @@ use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
 use rocketmq_store::ArcMessageFilter;
+use rocketmq_store::BrokerReadStore;
 use rocketmq_store::GetMessageResult;
 use rocketmq_store::GetMessageStatus;
-use rocketmq_store::MessageStore;
 use rocketmq_store::MAX_PULL_MSG_SIZE;
 use rocketmq_transport::request_code_not_supported_with_remark_and_opaque;
 use rocketmq_transport::Channel;
@@ -93,7 +93,7 @@ fn store_read_max_msg_bytes(max_msg_bytes: Option<i32>) -> i32 {
 /// When cold data flow control is enabled:
 /// - PUSH consumers receive `SYSTEM_BUSY` immediately
 /// - PULL consumers are either suspended or limited to 1 message
-pub struct PullMessageProcessor<MS: MessageStore> {
+pub struct PullMessageProcessor<MS: BrokerReadStore> {
     pull_message_result_handler: Arc<DefaultPullMessageResultHandler<MS>>,
     context: Arc<PullMessageProcessorContext<MS>>,
     wakeup_task_group: OnceLock<TaskGroup>,
@@ -101,7 +101,7 @@ pub struct PullMessageProcessor<MS: MessageStore> {
 
 impl<MS> RequestProcessor for PullMessageProcessor<MS>
 where
-    MS: MessageStore,
+    MS: BrokerReadStore,
 {
     async fn process_request(
         &mut self,
@@ -119,7 +119,7 @@ where
 
 impl<MS> PullMessageProcessor<MS>
 where
-    MS: MessageStore,
+    MS: BrokerReadStore,
 {
     pub(crate) async fn process_request_shared(
         &self,
@@ -168,7 +168,7 @@ struct SubscriptionDataResult {
 
 impl<MS> PullMessageProcessor<MS>
 where
-    MS: MessageStore,
+    MS: BrokerReadStore,
 {
     pub fn new(
         pull_message_result_handler: Arc<DefaultPullMessageResultHandler<MS>>,
@@ -602,7 +602,7 @@ pub fn rewrite_response_for_static_topic(
 #[allow(unused_variables)]
 impl<MS> PullMessageProcessor<MS>
 where
-    MS: MessageStore + Send + Sync + 'static,
+    MS: BrokerReadStore + Send + Sync + 'static,
 {
     /// Processes a pull message request with all the entry point options.
     pub async fn process_request_(
@@ -1002,7 +1002,7 @@ where
 
 impl<MS> PullRequestProcessor for PullMessageProcessor<MS>
 where
-    MS: MessageStore + Send + Sync + 'static,
+    MS: BrokerReadStore + Send + Sync + 'static,
 {
     fn long_polling_scan_config(&self) -> (bool, u64) {
         let policy = self.context.policy();
@@ -1076,7 +1076,7 @@ mod tests {
     use rocketmq_protocol::protocol::request_source::RequestSource;
     use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
     use rocketmq_protocol::protocol::LanguageCode;
-    use rocketmq_store::MessageStore;
+    use rocketmq_store::BrokerReadStore;
     use rocketmq_store::MessageStoreConfig;
     use rocketmq_store::MAX_PULL_MSG_SIZE;
     use rocketmq_transport::Channel;
@@ -1157,7 +1157,7 @@ mod tests {
         assert!(dropped.load(Ordering::Acquire));
     }
 
-    fn new_processor<MS: MessageStore>(context: Arc<PullMessageProcessorContext<MS>>) -> PullMessageProcessor<MS> {
+    fn new_processor<MS: BrokerReadStore>(context: Arc<PullMessageProcessorContext<MS>>) -> PullMessageProcessor<MS> {
         let handler = Arc::new(DefaultPullMessageResultHandler::new(
             Arc::new(vec![]),
             Arc::clone(&context),
@@ -1222,7 +1222,7 @@ mod tests {
         ClientChannelInfo::new(channel, client_id.into(), LanguageCode::JAVA, 1)
     }
 
-    async fn register_consumer_group_without_subscriptions<MS: MessageStore>(
+    async fn register_consumer_group_without_subscriptions<MS: BrokerReadStore>(
         context: &PullMessageProcessorContext<MS>,
         group: &str,
         client_id: &str,
@@ -1237,7 +1237,7 @@ mod tests {
         );
     }
 
-    fn inject_subscription<MS: MessageStore>(
+    fn inject_subscription<MS: BrokerReadStore>(
         context: &PullMessageProcessorContext<MS>,
         group: &str,
         topic: &str,

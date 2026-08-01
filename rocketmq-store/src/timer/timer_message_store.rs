@@ -1402,7 +1402,7 @@ mod tests {
     use super::MAGIC_ROLL;
     use super::TIMER_TOPIC;
     use super::TIMER_WHEEL_TTL_DAY;
-    use crate::base::message_store::MessageStore;
+    use crate::base::backend_ops::BackendOps;
     use crate::message_store::local_file_message_store::LocalFileMessageStore;
     use std::sync::atomic::Ordering;
     use std::time::Duration;

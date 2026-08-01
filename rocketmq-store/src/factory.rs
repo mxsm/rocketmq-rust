@@ -22,16 +22,16 @@ use rocketmq_model::common::config::TopicConfig;
 use rocketmq_runtime::ChildServiceContext;
 use thiserror::Error;
 
-use crate::base::message_store::MessageStore;
+use crate::base::backend_ops::BackendOps;
 use crate::base::store_enum::StoreType;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::config::store_runtime_config::StoreRuntimeConfig;
 use crate::message_store::local_file_message_store::LocalFileMessageStore;
 #[cfg(feature = "rocksdb_store")]
 use crate::message_store::rocksdb_message_store::RocksDBMessageStore;
-use crate::message_store::OwnedMessageStore;
 use crate::stats::broker_stats_manager::BrokerStatsManager;
 use crate::store_error::StoreError;
+use crate::store_ports::StorePorts;
 use crate::telemetry::StoreTelemetry;
 use crate::timer::timer_message_store::TimerMessageStore;
 
@@ -72,7 +72,7 @@ impl StoreFactoryConfig {
 /// A fully wired store plus optional services owned by the selected backend.
 pub struct OpenedStore {
     backend: StoreType,
-    message_store: OwnedMessageStore,
+    message_store: StorePorts,
     timer_message_store: Option<Arc<TimerMessageStore>>,
 }
 
@@ -81,7 +81,7 @@ impl OpenedStore {
         self.backend
     }
 
-    pub fn into_parts(self) -> (OwnedMessageStore, Option<Arc<TimerMessageStore>>) {
+    pub fn into_parts(self) -> (StorePorts, Option<Arc<TimerMessageStore>>) {
         (self.message_store, self.timer_message_store)
     }
 }
@@ -140,7 +140,7 @@ impl StoreFactory {
         let timer_message_store = store.get_timer_message_store().cloned();
         Ok(OpenedStore {
             backend,
-            message_store: OwnedMessageStore::local_file(store),
+            message_store: StorePorts::local_file(store),
             timer_message_store,
         })
     }
@@ -164,7 +164,7 @@ impl StoreFactory {
         let timer_message_store = store.get_timer_message_store().cloned();
         Ok(OpenedStore {
             backend,
-            message_store: OwnedMessageStore::rocksdb(store),
+            message_store: StorePorts::rocksdb(store),
             timer_message_store,
         })
     }

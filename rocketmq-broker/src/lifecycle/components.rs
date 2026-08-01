@@ -20,7 +20,7 @@ use super::BrokerStartupError;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum BrokerComponent {
     Metadata,
-    MessageStore,
+    BrokerStorePort,
     Security,
     BrokerOuterApi,
     RequestProcessors,
@@ -35,7 +35,7 @@ impl BrokerComponent {
     pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::Metadata => "metadata",
-            Self::MessageStore => "message_store",
+            Self::BrokerStorePort => "message_store",
             Self::Security => "security",
             Self::BrokerOuterApi => "broker_outer_api",
             Self::RequestProcessors => "request_processors",
@@ -161,7 +161,7 @@ mod tests {
     #[test]
     fn startup_journal_rolls_back_in_reverse_completion_order() {
         let mut journal = StartupJournal::default();
-        journal.complete(BrokerComponent::MessageStore);
+        journal.complete(BrokerComponent::BrokerStorePort);
         journal.complete(BrokerComponent::NormalListener);
         journal.complete(BrokerComponent::FastListener);
 
@@ -170,7 +170,7 @@ mod tests {
             vec![
                 BrokerComponent::FastListener,
                 BrokerComponent::NormalListener,
-                BrokerComponent::MessageStore
+                BrokerComponent::BrokerStorePort
             ]
         );
     }

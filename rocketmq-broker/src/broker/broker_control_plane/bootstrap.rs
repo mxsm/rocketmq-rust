@@ -23,7 +23,7 @@ use cheetah_string::CheetahString;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::MetadataDeadline;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerReplicationStore;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -36,7 +36,7 @@ use crate::controller::replicas_manager::ControllerReplicaInfoFollowup;
 use crate::controller::replicas_manager::ControllerReplicaSyncFollowup;
 use crate::controller::replicas_manager::ReplicasManager;
 
-impl<MS: MessageStore> BrokerControllerRuntime<MS> {
+impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
     pub(crate) async fn run_heartbeat_cycle(&self) {
         if self.shutdown.load(Ordering::Acquire) {
             return;

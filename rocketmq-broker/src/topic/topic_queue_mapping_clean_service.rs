@@ -596,7 +596,7 @@ mod tests {
 
         assert!(!production_source.contains("ArcMut"));
         assert!(!production_source.contains("BrokerRuntimeState"));
-        assert!(!production_source.contains("MessageStore"));
+        assert!(!production_source.contains("BrokerAdminStore"));
         assert!(!production_source.contains("TopicQueueMappingCleanService<"));
     }
 

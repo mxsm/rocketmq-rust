@@ -28,7 +28,7 @@ use rocketmq_protocol::protocol::header::notification_request_header::Notificati
 use rocketmq_protocol::protocol::header::notification_response_header::NotificationResponseHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
 use rocketmq_transport::RemotingRequestProcessor as RequestProcessor;
@@ -68,11 +68,11 @@ impl NotificationPolicy {
     }
 }
 
-pub(crate) struct NotificationStoreCapability<MS: MessageStore> {
+pub(crate) struct NotificationStoreCapability<MS: BrokerReadWriteStore> {
     escape_bridge: Weak<EscapeBridge<MS>>,
 }
 
-impl<MS: MessageStore> NotificationStoreCapability<MS> {
+impl<MS: BrokerReadWriteStore> NotificationStoreCapability<MS> {
     pub(crate) fn new(escape_bridge: &Arc<EscapeBridge<MS>>) -> Self {
         Self {
             escape_bridge: Arc::downgrade(escape_bridge),
@@ -94,11 +94,11 @@ impl<MS: MessageStore> NotificationStoreCapability<MS> {
     }
 }
 
-pub(crate) struct NotificationPopOffsetCapability<MS: MessageStore> {
+pub(crate) struct NotificationPopOffsetCapability<MS: BrokerReadWriteStore> {
     merge_service: Weak<PopBufferMergeService<MS>>,
 }
 
-impl<MS: MessageStore> NotificationPopOffsetCapability<MS> {
+impl<MS: BrokerReadWriteStore> NotificationPopOffsetCapability<MS> {
     pub(crate) fn new(merge_service: &Arc<PopBufferMergeService<MS>>) -> Self {
         Self {
             merge_service: Arc::downgrade(merge_service),
@@ -113,7 +113,7 @@ impl<MS: MessageStore> NotificationPopOffsetCapability<MS> {
     }
 }
 
-pub(crate) struct NotificationProcessorContext<MS: MessageStore> {
+pub(crate) struct NotificationProcessorContext<MS: BrokerReadWriteStore> {
     policy: NotificationPolicy,
     topic_config_manager: Arc<TopicConfigManager>,
     subscription_group_lookup: SubscriptionGroupConfigLookup,
@@ -124,7 +124,7 @@ pub(crate) struct NotificationProcessorContext<MS: MessageStore> {
     long_polling: PopLongPollingServiceContext,
 }
 
-impl<MS: MessageStore> NotificationProcessorContext<MS> {
+impl<MS: BrokerReadWriteStore> NotificationProcessorContext<MS> {
     #[allow(
         clippy::too_many_arguments,
         reason = "constructor lists the complete narrow Notification capability boundary"
@@ -152,13 +152,13 @@ impl<MS: MessageStore> NotificationProcessorContext<MS> {
     }
 }
 
-pub struct NotificationProcessor<MS: MessageStore> {
+pub struct NotificationProcessor<MS: BrokerReadWriteStore> {
     context: NotificationProcessorContext<MS>,
     pop_long_polling_service: Arc<PopLongPollingService<NotificationProcessor<MS>>>,
     lifecycle: AsyncMutex<()>,
 }
 
-impl<MS: MessageStore> NotificationProcessor<MS> {
+impl<MS: BrokerReadWriteStore> NotificationProcessor<MS> {
     pub const BORN_TIME: &'static str = "bornTime";
     pub(crate) fn new(context: NotificationProcessorContext<MS>) -> Arc<Self> {
         Arc::new_cyclic(move |processor| Self {
@@ -291,7 +291,7 @@ impl<MS: MessageStore> NotificationProcessor<MS> {
 
 impl<MS> NotificationProcessor<MS>
 where
-    MS: MessageStore,
+    MS: BrokerReadWriteStore,
 {
     pub(crate) async fn process_request_shared(
         &self,
@@ -480,7 +480,7 @@ where
 
 impl<MS> PopLongPollingRequestProcessor for NotificationProcessor<MS>
 where
-    MS: MessageStore,
+    MS: BrokerReadWriteStore,
 {
     async fn process_request_when_wakeup(
         &self,
@@ -494,7 +494,7 @@ where
 
 impl<MS> RequestProcessor for NotificationProcessor<MS>
 where
-    MS: MessageStore,
+    MS: BrokerReadWriteStore,
 {
     async fn process_request(
         &mut self,
@@ -513,7 +513,7 @@ mod tests {
     use super::*;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_store::OwnedMessageStore;
+    use rocketmq_store::StorePorts;
 
     use crate::broker_runtime::BrokerMessageStore;
     use crate::broker_runtime::BrokerRuntime;
@@ -612,10 +612,10 @@ mod tests {
 
     #[tokio::test]
     async fn notification_store_and_pop_capabilities_fail_closed_after_provider_shutdown() {
-        let store = NotificationStoreCapability::<OwnedMessageStore> {
+        let store = NotificationStoreCapability::<StorePorts> {
             escape_bridge: Weak::new(),
         };
-        let pop = NotificationPopOffsetCapability::<OwnedMessageStore> {
+        let pop = NotificationPopOffsetCapability::<StorePorts> {
             merge_service: Weak::new(),
         };
         let topic = CheetahString::from_static_str("topic-a");

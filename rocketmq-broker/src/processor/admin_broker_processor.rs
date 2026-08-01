@@ -46,7 +46,7 @@ use rocketmq_error::RocketMQError;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerAdminStore;
 use rocketmq_transport::apply_error_to_response;
 use rocketmq_transport::request_code_not_supported_with_remark;
 use rocketmq_transport::Channel;
@@ -83,7 +83,7 @@ mod update_cold_data_flow_ctr_group_config;
 mod update_global_white_addrs_config_request_handler;
 mod update_user_request_handler;
 
-pub struct AdminBrokerProcessor<MS: MessageStore> {
+pub struct AdminBrokerProcessor<MS: BrokerAdminStore> {
     topic_request_handler: TopicRequestHandler,
     broker_config_request_handler: BrokerConfigRequestHandler<MS>,
     consumer_request_handler: ConsumerRequestHandler,
@@ -116,7 +116,7 @@ pub struct AdminBrokerProcessor<MS: MessageStore> {
 
 impl<MS> RequestProcessor for AdminBrokerProcessor<MS>
 where
-    MS: MessageStore,
+    MS: BrokerAdminStore,
 {
     async fn process_request(
         &mut self,
@@ -128,7 +128,7 @@ where
     }
 }
 
-impl<MS: MessageStore> AdminBrokerProcessor<MS> {
+impl<MS: BrokerAdminStore> AdminBrokerProcessor<MS> {
     pub(crate) async fn process_request_shared(
         &self,
         channel: Channel,
@@ -140,7 +140,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
     }
 }
 
-impl<MS: MessageStore> AdminBrokerProcessor<MS> {
+impl<MS: BrokerAdminStore> AdminBrokerProcessor<MS> {
     pub fn new(broker_runtime_inner: BrokerAdminRuntime<MS>, auth_admin_service: Arc<AuthAdminService>) -> Self {
         let topic_request_handler = TopicRequestHandler::new();
         let broker_config_request_handler =
@@ -212,7 +212,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
     }
 }
 
-impl<MS: MessageStore> AdminBrokerProcessor<MS> {
+impl<MS: BrokerAdminStore> AdminBrokerProcessor<MS> {
     async fn process_request_inner(
         &self,
         channel: Channel,

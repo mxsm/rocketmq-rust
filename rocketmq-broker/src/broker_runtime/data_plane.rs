@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use super::*;
+use rocketmq_store::BrokerReadStore;
+use rocketmq_store::BrokerStorePort;
 pub(super) struct BrokerDataPlane {
     #[cfg(feature = "local_file_store")]
     pub(super) escape_bridge_owner: Arc<EscapeBridge<BrokerMessageStore>>,
@@ -46,7 +48,7 @@ impl BrokerRuntime {
     pub(super) async fn load_message_store(&mut self) -> bool {
         self.detach_message_store_provider();
         let loaded = match self.composition.state.message_store_exclusive_mut() {
-            Some(message_store) => message_store.load().await,
+            Some(message_store) => BrokerStorePort::load(message_store).await,
             None => false,
         };
         self.bind_message_store_provider();
@@ -56,7 +58,7 @@ impl BrokerRuntime {
     pub(super) async fn start_message_store(&mut self) -> Result<(), StoreError> {
         self.detach_message_store_provider();
         let result = match self.composition.state.message_store_mut() {
-            Some(message_store) => message_store.start().await,
+            Some(message_store) => BrokerStorePort::start(message_store).await,
             None => Err(StoreError::new(StoreErrorKind::NotStarted, StoreOperation::Start)),
         };
         self.bind_message_store_provider();
@@ -94,7 +96,7 @@ impl BrokerRuntime {
         self.composition.state.broker_stats = Some(Arc::new(BrokerStats::from_manager(
             self.composition.state.broker_stats_manager.clone(),
         )));
-        let put_message_preflight = message_store.put_message_preflight();
+        let put_message_preflight = BrokerReadStore::put_message_preflight(message_store.as_ref());
         self.composition.state.message_store = Some(message_store);
         let page_cache_busy_timeout_millis = message_store_config.os_page_cache_busy_timeout_mills;
         self.composition
@@ -104,7 +106,7 @@ impl BrokerRuntime {
                 put_message_preflight.is_os_page_cache_busy(page_cache_busy_timeout_millis)
             });
         if let Some(message_store) = self.composition.state.message_store_mut() {
-            match message_store.init().await {
+            match BrokerStorePort::init(message_store).await {
                 Ok(_) => {
                     info!("Initialize message store success");
                 }
@@ -127,7 +129,7 @@ impl BrokerRuntime {
             consumer_filter_manager,
         ));
         if let Some(message_store) = self.composition.state.message_store_exclusive_mut() {
-            message_store.add_first_dispatcher(filter);
+            BrokerStorePort::add_first_dispatcher(message_store, filter);
         } else {
             error!("Message store is not exclusively owned while installing the commit-log dispatcher");
             flag = false;
@@ -193,21 +195,27 @@ impl BrokerRuntime {
             .composition
             .state
             .message_store()
-            .map(MessageStore::put_message_preflight);
+            .map(BrokerReadStore::put_message_preflight);
         self.detach_message_store_provider();
         if let Some(message_store) = self.composition.state.message_store_mut() {
             if let Some(put_message_preflight) = put_message_preflight {
-                message_store.set_put_message_hook(Box::new(CheckBeforePutMessageHook::new(
-                    put_message_preflight,
-                    config.clone(),
-                )));
+                BrokerStorePort::set_put_message_hook(
+                    message_store,
+                    Box::new(CheckBeforePutMessageHook::new(put_message_preflight, config.clone())),
+                );
             }
-            message_store.set_put_message_hook(Box::new(BatchCheckBeforePutMessageHook::new(topic_config_table)));
-            message_store.set_put_message_hook(Box::new(ScheduleMessageHook::new(
-                config,
-                timer_message_store,
-                schedule_message_service,
-            )))
+            BrokerStorePort::set_put_message_hook(
+                message_store,
+                Box::new(BatchCheckBeforePutMessageHook::new(topic_config_table)),
+            );
+            BrokerStorePort::set_put_message_hook(
+                message_store,
+                Box::new(ScheduleMessageHook::new(
+                    config,
+                    timer_message_store,
+                    schedule_message_service,
+                )),
+            )
         }
         self.bind_message_store_provider();
     }

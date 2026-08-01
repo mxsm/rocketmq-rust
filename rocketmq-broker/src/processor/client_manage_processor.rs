@@ -31,7 +31,7 @@ use rocketmq_protocol::protocol::header::unregister_client_request_header::Unreg
 use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_protocol::protocol::heartbeat::heartbeat_data::HeartbeatData;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerStorePort;
 use rocketmq_transport::request_code_not_supported_with_remark_and_opaque;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
@@ -46,7 +46,7 @@ use crate::subscription::manager::subscription_group_manager::SubscriptionGroupC
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 use crate::transaction::queue::transaction_topic_registration::TransactionTopicRegistration;
 
-pub struct ClientManageProcessor<MS: MessageStore> {
+pub struct ClientManageProcessor<MS: BrokerStorePort> {
     consumer_group_heartbeat_table:
         Arc<parking_lot::RwLock<HashMap<CheetahString /* ConsumerGroup */, i32 /* HeartbeatFingerprint */>>>,
     broker_config: Arc<BrokerConfig>,
@@ -57,7 +57,7 @@ pub struct ClientManageProcessor<MS: MessageStore> {
     retry_topic_registration: Arc<TransactionTopicRegistration<MS>>,
 }
 
-pub(crate) struct ClientManageProcessorContext<MS: MessageStore> {
+pub(crate) struct ClientManageProcessorContext<MS: BrokerStorePort> {
     pub(crate) broker_config: Arc<BrokerConfig>,
     pub(crate) topic_config_manager: Arc<TopicConfigManager>,
     pub(crate) subscription_group_lookup: SubscriptionGroupConfigLookup,
@@ -68,7 +68,7 @@ pub(crate) struct ClientManageProcessorContext<MS: MessageStore> {
 
 impl<MS> RequestProcessor for ClientManageProcessor<MS>
 where
-    MS: MessageStore,
+    MS: BrokerStorePort,
 {
     async fn process_request(
         &mut self,
@@ -100,7 +100,7 @@ where
 
 impl<MS> ClientManageProcessor<MS>
 where
-    MS: MessageStore,
+    MS: BrokerStorePort,
 {
     pub(crate) fn new(context: ClientManageProcessorContext<MS>) -> Self {
         Self {
@@ -117,7 +117,7 @@ where
 
 impl<MS> ClientManageProcessor<MS>
 where
-    MS: MessageStore,
+    MS: BrokerStorePort,
 {
     pub async fn process_request_shared(
         &self,
@@ -421,7 +421,7 @@ where
     }
 }
 
-impl<MS: MessageStore> Clone for ClientManageProcessor<MS> {
+impl<MS: BrokerStorePort> Clone for ClientManageProcessor<MS> {
     fn clone(&self) -> Self {
         Self {
             consumer_group_heartbeat_table: self.consumer_group_heartbeat_table.clone(),

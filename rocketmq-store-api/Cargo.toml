@@ -32,7 +32,10 @@ rocketmq-model.workspace = true
 rocketmq-error.workspace = true
 rocketmq-security-api.workspace = true
 bytes.workspace = true
+hex = "0.4"
 serde.workspace = true
+sha2 = "0.11"
+thiserror.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

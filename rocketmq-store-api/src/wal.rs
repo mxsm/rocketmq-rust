@@ -12,35 +12,38 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_store_api::StoreError;
+//! Backend-neutral primary WAL contracts.
 
-/// Narrow read port for the single Local CommitLog owned by a composed backend.
+use crate::StoreError;
+
+/// Read access to the authoritative primary log owned by a composed backend.
 ///
-/// Derived stores use this port to read the primary log without owning another
-/// message log or depending on the legacy Store facade.
-pub trait LocalWalPort: Send + Sync {
+/// Derived stores depend on this neutral port so they can inspect the primary
+/// WAL without depending on another backend implementation crate.
+pub trait WalPort: Send + Sync {
+    /// Backend-owned selection that keeps the referenced bytes alive.
     type Selection;
 
     /// Reads one exact message range from the primary log.
     ///
     /// # Errors
     ///
-    /// Returns a backend-neutral error when the Local WAL cannot safely serve
-    /// the requested range.
+    /// Returns a backend-neutral error when the WAL cannot safely serve the
+    /// requested range.
     fn read_message(&self, offset: i64, size: i32) -> Result<Option<Self::Selection>, StoreError>;
 
     /// Reads the message range beginning at a physical offset.
     ///
     /// # Errors
     ///
-    /// Returns a backend-neutral error when the Local WAL cannot safely serve
-    /// the requested offset.
+    /// Returns a backend-neutral error when the WAL cannot safely serve the
+    /// requested offset.
     fn read_from(&self, offset: i64) -> Result<Option<Self::Selection>, StoreError>;
 
-    /// Borrows the selected message bytes while the selection keeps its Local
-    /// mapped-file lease alive.
+    /// Borrows the selected bytes while the selection keeps its backend lease
+    /// alive.
     fn selection_bytes<'a>(&self, selection: &'a Self::Selection) -> &'a [u8];
 
-    /// Applies the Local offset-correction policy used by legacy pull results.
+    /// Applies the composed store's logical-offset correction policy.
     fn correct_queue_offset(&self, old_offset: i64, new_offset: i64) -> i64;
 }

@@ -35,7 +35,7 @@ use rocketmq_protocol::protocol::header::update_broker_config_response_header::U
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::DataVersion;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerAdminStore;
 use rocketmq_store::MADV_NORMAL;
 use rocketmq_store::MADV_RANDOM;
 use rocketmq_transport::request_code_not_supported_with_remark;
@@ -50,12 +50,12 @@ use crate::broker::log_filter_control::LOG_FILTER_KEYS;
 use crate::topic::manager::topic_config_coordinator::TopicRegistrationAction;
 
 #[derive(Clone)]
-pub(super) struct BrokerConfigRequestHandler<MS: MessageStore> {
+pub(super) struct BrokerConfigRequestHandler<MS: BrokerAdminStore> {
     broker_runtime_inner: BrokerAdminRuntime<MS>,
     auth_admin_service: Option<Arc<AuthAdminService>>,
 }
 
-impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
+impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
     pub fn new(broker_runtime_inner: BrokerAdminRuntime<MS>) -> Self {
         BrokerConfigRequestHandler {
             broker_runtime_inner,
@@ -126,7 +126,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
             .await
     }
 }
-impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
+impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
     pub async fn update_broker_config(
         &self,
         channel: Channel,
@@ -995,7 +995,7 @@ mod tests {
     #[cfg(feature = "rocksdb_store")]
     use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
     use rocketmq_runtime::common::time_utils::current_millis;
-    use rocketmq_store::MessageStore;
+    use rocketmq_store::BrokerReadStore;
     use rocketmq_store::MessageStoreConfig;
     #[cfg(feature = "rocksdb_store")]
     use rocketmq_store::StoreType;

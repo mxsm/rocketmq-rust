@@ -21,7 +21,7 @@ use rocketmq_error::RocketMQError;
 use rocketmq_store_api::GetStatus;
 use rocketmq_store_api::StoreError as ApiStoreError;
 use rocketmq_store_api::StoreLifecycle;
-use rocketmq_store_local::commit_log::read::LocalWalPort;
+use rocketmq_store_api::WalPort;
 use thiserror::Error;
 use tracing::warn;
 
@@ -495,7 +495,7 @@ impl RocksDbMessageStoreRoot {
         mut message_filter: MessageFilter,
     ) -> Result<RocksDbReadResult<L::Selection>, RocksDbMessageStoreError>
     where
-        L: LocalWalPort,
+        L: WalPort,
         CqFilter: FnMut(i64) -> bool,
         MessageFilter: FnMut(&[u8]) -> bool,
     {
@@ -586,7 +586,7 @@ impl RocksDbMessageStoreRoot {
         max_query_days: usize,
     ) -> Result<RocksDbIndexLookup<L::Selection>, RocksDbMessageStoreError>
     where
-        L: LocalWalPort,
+        L: WalPort,
     {
         let (offsets, last_update_timestamp, last_update_physical_offset) =
             self.derived

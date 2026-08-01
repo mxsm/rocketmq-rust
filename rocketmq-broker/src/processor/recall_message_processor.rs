@@ -36,7 +36,7 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::build_delete_key;
 use rocketmq_store::BrokerStatsManager;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerWriteStore;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
@@ -84,11 +84,11 @@ impl RecallMessagePolicy {
     }
 }
 
-pub(crate) struct RecallMessageStoreCapability<MS: MessageStore> {
+pub(crate) struct RecallMessageStoreCapability<MS: BrokerWriteStore> {
     escape_bridge: Weak<EscapeBridge<MS>>,
 }
 
-impl<MS: MessageStore> RecallMessageStoreCapability<MS> {
+impl<MS: BrokerWriteStore> RecallMessageStoreCapability<MS> {
     pub(crate) fn new(escape_bridge: &Arc<EscapeBridge<MS>>) -> Self {
         Self {
             escape_bridge: Arc::downgrade(escape_bridge),
@@ -112,7 +112,7 @@ impl<MS: MessageStore> RecallMessageStoreCapability<MS> {
     }
 }
 
-impl<MS: MessageStore> Clone for RecallMessageStoreCapability<MS> {
+impl<MS: BrokerWriteStore> Clone for RecallMessageStoreCapability<MS> {
     fn clone(&self) -> Self {
         Self {
             escape_bridge: Weak::clone(&self.escape_bridge),
@@ -120,14 +120,14 @@ impl<MS: MessageStore> Clone for RecallMessageStoreCapability<MS> {
     }
 }
 
-pub(crate) struct RecallMessageProcessorContext<MS: MessageStore> {
+pub(crate) struct RecallMessageProcessorContext<MS: BrokerWriteStore> {
     policy: RecallMessagePolicy,
     topic_config_manager: Arc<TopicConfigManager>,
     message_store: RecallMessageStoreCapability<MS>,
     broker_stats_manager: Arc<BrokerStatsManager>,
 }
 
-impl<MS: MessageStore> RecallMessageProcessorContext<MS> {
+impl<MS: BrokerWriteStore> RecallMessageProcessorContext<MS> {
     pub(crate) fn new(
         policy: RecallMessagePolicy,
         topic_config_manager: Arc<TopicConfigManager>,
@@ -143,7 +143,7 @@ impl<MS: MessageStore> RecallMessageProcessorContext<MS> {
     }
 }
 
-impl<MS: MessageStore> Clone for RecallMessageProcessorContext<MS> {
+impl<MS: BrokerWriteStore> Clone for RecallMessageProcessorContext<MS> {
     fn clone(&self) -> Self {
         Self {
             policy: self.policy.clone(),
@@ -154,17 +154,17 @@ impl<MS: MessageStore> Clone for RecallMessageProcessorContext<MS> {
     }
 }
 
-pub struct RecallMessageProcessor<MS: MessageStore> {
+pub struct RecallMessageProcessor<MS: BrokerWriteStore> {
     context: RecallMessageProcessorContext<MS>,
 }
 
-impl<MS: MessageStore> RecallMessageProcessor<MS> {
+impl<MS: BrokerWriteStore> RecallMessageProcessor<MS> {
     pub(crate) fn new(context: RecallMessageProcessorContext<MS>) -> Self {
         Self { context }
     }
 }
 
-impl<MS: MessageStore> Clone for RecallMessageProcessor<MS> {
+impl<MS: BrokerWriteStore> Clone for RecallMessageProcessor<MS> {
     fn clone(&self) -> Self {
         Self {
             context: self.context.clone(),
@@ -174,7 +174,7 @@ impl<MS: MessageStore> Clone for RecallMessageProcessor<MS> {
 
 impl<MS> RequestProcessor for RecallMessageProcessor<MS>
 where
-    MS: MessageStore,
+    MS: BrokerWriteStore,
 {
     async fn process_request(
         &mut self,
@@ -211,7 +211,7 @@ where
 
 impl<MS> RecallMessageProcessor<MS>
 where
-    MS: MessageStore,
+    MS: BrokerWriteStore,
 {
     pub async fn process_request_shared(
         &self,
@@ -512,7 +512,7 @@ fn recall_response_header_missing() -> RocketMQError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocketmq_store::OwnedMessageStore;
+    use rocketmq_store::StorePorts;
 
     #[test]
     fn test_recall_message_tag_constant() {
@@ -556,7 +556,7 @@ mod tests {
 
     #[tokio::test]
     async fn recall_put_capability_fails_closed_after_provider_shutdown() {
-        let capability = RecallMessageStoreCapability::<OwnedMessageStore> {
+        let capability = RecallMessageStoreCapability::<StorePorts> {
             escape_bridge: Weak::new(),
         };
 

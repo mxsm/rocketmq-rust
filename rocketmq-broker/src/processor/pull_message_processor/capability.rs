@@ -23,9 +23,9 @@ use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
 use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_store::ArcMessageFilter;
+use rocketmq_store::BrokerReadStore;
 use rocketmq_store::BrokerStatsManager;
 use rocketmq_store::GetMessageResult;
-use rocketmq_store::MessageStore;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_transport::RpcClientImpl;
 
@@ -178,7 +178,7 @@ trait PullMessageStorePort: Send + Sync {
     ) -> Result<bool, MessageStoreUnavailable>;
 }
 
-impl<MS: MessageStore> PullMessageStorePort for EscapeBridge<MS> {
+impl<MS: BrokerReadStore> PullMessageStorePort for EscapeBridge<MS> {
     fn min_offset(&self, topic: &CheetahString, queue_id: i32) -> Result<i64, MessageStoreUnavailable> {
         self.get_min_offset_from_local_store(topic, queue_id)
     }
@@ -230,7 +230,7 @@ pub(crate) struct PullMessageStoreCapability {
 }
 
 impl PullMessageStoreCapability {
-    pub(crate) fn new<MS: MessageStore>(provider: &Arc<EscapeBridge<MS>>) -> Self {
+    pub(crate) fn new<MS: BrokerReadStore>(provider: &Arc<EscapeBridge<MS>>) -> Self {
         let provider: Arc<dyn PullMessageStorePort> = provider.clone();
         Self {
             provider: Arc::downgrade(&provider),
@@ -290,7 +290,7 @@ impl PullMessageStoreCapability {
 }
 
 /// Complete dependency set shared by pull processing and result handling.
-pub(crate) struct PullMessageProcessorContext<MS: MessageStore> {
+pub(crate) struct PullMessageProcessorContext<MS: BrokerReadStore> {
     policy: PullMessagePolicyState,
     rpc_client: RpcClientImpl,
     consumer_manager: ConsumerManager,
@@ -307,7 +307,7 @@ pub(crate) struct PullMessageProcessorContext<MS: MessageStore> {
     pull_request_hold: Arc<OnceLock<Arc<PullRequestHoldService<MS>>>>,
 }
 
-impl<MS: MessageStore> PullMessageProcessorContext<MS> {
+impl<MS: BrokerReadStore> PullMessageProcessorContext<MS> {
     #[allow(
         clippy::too_many_arguments,
         reason = "composition root enumerates the complete pull processor capability boundary"
@@ -471,7 +471,7 @@ mod tests {
     use cheetah_string::CheetahString;
     use rocketmq_model::common::broker::broker_role::BrokerRole;
     use rocketmq_store::MessageStoreConfig;
-    use rocketmq_store::OwnedMessageStore;
+    use rocketmq_store::StorePorts;
 
     use super::EscapeBridge;
     use super::PullMessagePolicyState;
@@ -509,7 +509,7 @@ mod tests {
 
     #[test]
     fn pull_store_capability_fails_closed_without_provider() {
-        let provider: Weak<dyn PullMessageStorePort> = Weak::<EscapeBridge<OwnedMessageStore>>::new();
+        let provider: Weak<dyn PullMessageStorePort> = Weak::<EscapeBridge<StorePorts>>::new();
         let capability = PullMessageStoreCapability { provider };
 
         assert!(capability

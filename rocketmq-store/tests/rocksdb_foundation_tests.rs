@@ -19,6 +19,9 @@ use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::message::MessageConst;
+use rocketmq_store::BrokerAdminStore;
+use rocketmq_store::BrokerReadStore;
+use rocketmq_store::BrokerStorePort;
 use rocketmq_store::CommitLogDispatcher;
 use rocketmq_store::CommitLogDispatcherBuildRocksDbConsumeQueue;
 use rocketmq_store::CommitLogDispatcherBuildRocksDbTimer;
@@ -38,7 +41,6 @@ use rocketmq_store::IndexRocksDbValue;
 use rocketmq_store::KeyValueStore;
 use rocketmq_store::MaxPhysicalOffsetCheckpointValue;
 use rocketmq_store::MessageRocksDbStorage;
-use rocketmq_store::MessageStore;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::RocksDBMessageStore;
 use rocketmq_store::RocksDbColumnFamily;
@@ -552,7 +554,7 @@ fn rocksdb_message_store_try_new_rejects_non_rocksdb_store_type() {
 
 #[test]
 fn rocksdb_message_store_implements_message_store_trait_boundary() {
-    fn assert_message_store<MS: MessageStore>() {}
+    fn assert_message_store<MS: BrokerStorePort>() {}
 
     assert_message_store::<RocksDBMessageStore>();
 }

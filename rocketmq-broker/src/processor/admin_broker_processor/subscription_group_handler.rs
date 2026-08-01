@@ -29,7 +29,7 @@ use rocketmq_protocol::protocol::subscription::subscription_group_config::Subscr
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerAdminStore;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
 use tracing::info;
@@ -45,7 +45,7 @@ impl SubscriptionGroupHandler {
         Self
     }
 
-    pub async fn update_and_create_subscription_group<MS: MessageStore>(
+    pub async fn update_and_create_subscription_group<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
@@ -88,7 +88,7 @@ impl SubscriptionGroupHandler {
         Ok(Some(response))
     }
 
-    pub async fn update_subscription_group_config_cas<MS: MessageStore>(
+    pub async fn update_subscription_group_config_cas<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         channel: Channel,
@@ -248,7 +248,7 @@ impl SubscriptionGroupHandler {
         ))
     }
 
-    pub async fn get_subscription_group_config<MS: MessageStore>(
+    pub async fn get_subscription_group_config<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
@@ -295,7 +295,7 @@ impl SubscriptionGroupHandler {
         }
     }
 
-    pub async fn update_and_create_subscription_group_list<MS: MessageStore>(
+    pub async fn update_and_create_subscription_group_list<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         channel: Channel,
@@ -332,7 +332,7 @@ impl SubscriptionGroupHandler {
         Ok(Some(response.set_code(ResponseCode::Success)))
     }
 
-    pub async fn delete_subscription_group<MS: MessageStore>(
+    pub async fn delete_subscription_group<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         channel: Channel,
@@ -371,7 +371,7 @@ impl SubscriptionGroupHandler {
         ))
     }
 
-    pub async fn update_and_get_group_forbidden<MS: MessageStore>(
+    pub async fn update_and_get_group_forbidden<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         channel: Channel,

@@ -235,12 +235,12 @@ impl From<&StoreError> for StoreHealthError {
     }
 }
 
-/// Frozen compatibility surface for pre-capability Store implementations.
+/// Internal implementation adapter for concrete Store backends.
 ///
-/// Do not add methods. New Store behavior belongs in a narrow
-/// `rocketmq-store-api` capability.
+/// Broker consumers must use the narrow capability ports. This adapter is
+/// crate-private and exists only to share concrete backend implementation.
 #[trait_variant::make(Send)]
-pub trait MessageStore: Send + Sync + 'static {
+pub trait BackendOps: Send + Sync + 'static {
     /// Load previously stored messages.
     ///
     /// Returns true if successful, false otherwise.
@@ -714,10 +714,10 @@ pub trait MessageStore: Send + Sync + 'static {
     fn increase_offset(&self, msg: &MessageExtBrokerInner, message_num: i16);
 
     /// Get master broker message store in process in broker container
-    fn get_master_store_in_process<M: MessageStore + Send + Sync + 'static>(&self) -> Option<Arc<M>>;
+    fn get_master_store_in_process<M: BackendOps + Send + Sync + 'static>(&self) -> Option<Arc<M>>;
 
     /// Set master broker message store in process
-    fn set_master_store_in_process<M: MessageStore + Send + Sync + 'static>(&self, master_store_in_process: Arc<M>);
+    fn set_master_store_in_process<M: BackendOps + Send + Sync + 'static>(&self, master_store_in_process: Arc<M>);
 
     /// Use FileChannel to get data
     fn get_data(&self, offset: i64, size: i32, byte_buffer: &mut BytesMut) -> bool;
@@ -789,7 +789,7 @@ pub trait MessageStore: Send + Sync + 'static {
     /// Returns a read-only state-machine version capability.
     ///
     /// Stores whose version can change after initialization should override this method with a
-    /// live view backed by the same state as [`MessageStore::get_state_machine_version`].
+    /// live view backed by the same state as [`BackendOps::get_state_machine_version`].
     fn state_machine_version_view(&self) -> StateMachineVersionView {
         StateMachineVersionView::snapshot(self.get_state_machine_version())
     }
@@ -921,7 +921,7 @@ mod tests {
     #[test]
     fn immutable_commit_log_mutation_facade_is_absent() {
         let sources = [
-            include_str!("message_store.rs"),
+            include_str!("backend_ops.rs"),
             include_str!("../message_store.rs"),
             include_str!("../message_store/local_file_message_store.rs"),
             include_str!("../message_store/rocksdb_message_store.rs"),

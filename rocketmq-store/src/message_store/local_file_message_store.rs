@@ -108,6 +108,12 @@ use rocketmq_store_local::message_store::reput::ReputPolicy;
 use rocketmq_store_local::message_store::LocalStoreComposition;
 
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
+use crate::base::backend_ops::BackendOps;
+use crate::base::backend_ops::MessageStoreShutdownReport;
+use crate::base::backend_ops::PutMessagePreflight;
+use crate::base::backend_ops::StateMachineVersionView;
+use crate::base::backend_ops::StoreHealthRecorder;
+use crate::base::backend_ops::StoreHealthSnapshot;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::dispatch_request::DispatchRequest;
 use crate::base::get_message_result::GetMessageResult;
@@ -116,12 +122,6 @@ use crate::base::message_result::AppendMessageResult;
 use crate::base::message_result::PutMessageResult;
 use crate::base::message_status_enum::GetMessageStatus;
 use crate::base::message_status_enum::PutMessageStatus;
-use crate::base::message_store::MessageStore;
-use crate::base::message_store::MessageStoreShutdownReport;
-use crate::base::message_store::PutMessagePreflight;
-use crate::base::message_store::StateMachineVersionView;
-use crate::base::message_store::StoreHealthRecorder;
-use crate::base::message_store::StoreHealthSnapshot;
 use crate::base::query_message_result::QueryMessageResult;
 use crate::base::select_result::SelectMappedBufferResult;
 use crate::base::store_checkpoint::StoreCheckpoint;
@@ -712,7 +712,7 @@ impl LocalFileMessageStore {
 
 #[allow(unused_variables)]
 #[allow(unused_assignments)]
-impl MessageStore for LocalFileMessageStore {
+impl BackendOps for LocalFileMessageStore {
     async fn load(&mut self) -> bool {
         self.load_store().await
     }
@@ -1911,7 +1911,7 @@ impl MessageStore for LocalFileMessageStore {
         }
     }
 
-    fn get_master_store_in_process<M: MessageStore + Send + Sync + 'static>(&self) -> Option<Arc<M>> {
+    fn get_master_store_in_process<M: BackendOps + Send + Sync + 'static>(&self) -> Option<Arc<M>> {
         let guard = match self.master_store_in_process.read() {
             Ok(guard) => guard,
             Err(error) => {
@@ -1924,7 +1924,7 @@ impl MessageStore for LocalFileMessageStore {
         Some(Arc::clone(boxed_master_store.as_ref()))
     }
 
-    fn set_master_store_in_process<M: MessageStore + Send + Sync + 'static>(&self, master_store_in_process: Arc<M>) {
+    fn set_master_store_in_process<M: BackendOps + Send + Sync + 'static>(&self, master_store_in_process: Arc<M>) {
         let mut guard = match self.master_store_in_process.write() {
             Ok(guard) => guard,
             Err(error) => {

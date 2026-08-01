@@ -3325,10 +3325,13 @@ name = "rocketmq-store-api"
 version = "1.0.0"
 dependencies = [
  "bytes",
+ "hex",
  "rocketmq-error",
  "rocketmq-model",
  "rocketmq-security-api",
  "serde",
+ "sha2",
+ "thiserror",
 ]
 
 [[package]]

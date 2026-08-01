@@ -28,9 +28,9 @@ use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_protocol::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
 use rocketmq_protocol::protocol::DataVersion;
+use rocketmq_store::BrokerAdminStore;
 use rocketmq_store::BrokerStats;
 use rocketmq_store::BrokerStatsManager;
-use rocketmq_store::MessageStore;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::StoreError;
@@ -89,7 +89,7 @@ pub(crate) enum CommitLogReadModeUpdateError {
 /// The carrier shares only independently synchronized managers and narrow
 /// control-plane capabilities. It never owns or dereferences the complete
 /// broker runtime composition root.
-pub(crate) struct BrokerAdminRuntime<MS: MessageStore> {
+pub(crate) struct BrokerAdminRuntime<MS: BrokerAdminStore> {
     config: BrokerRuntimeConfigState,
     store_host: SocketAddr,
     broker_addr: CheetahString,
@@ -128,7 +128,7 @@ pub(crate) struct BrokerAdminRuntime<MS: MessageStore> {
     config_update_lock: Arc<parking_lot::Mutex<()>>,
 }
 
-impl<MS: MessageStore> Clone for BrokerAdminRuntime<MS> {
+impl<MS: BrokerAdminStore> Clone for BrokerAdminRuntime<MS> {
     fn clone(&self) -> Self {
         Self {
             config: self.config.clone(),
@@ -171,7 +171,7 @@ impl<MS: MessageStore> Clone for BrokerAdminRuntime<MS> {
     }
 }
 
-impl<MS: MessageStore> BrokerAdminRuntime<MS> {
+impl<MS: BrokerAdminStore> BrokerAdminRuntime<MS> {
     #[allow(
         clippy::too_many_arguments,
         reason = "the broker composition root enumerates the complete Admin boundary"

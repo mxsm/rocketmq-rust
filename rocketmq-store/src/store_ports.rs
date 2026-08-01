@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::local_file_message_store::LocalFileMessageStore;
+use crate::message_store::local_file_message_store::LocalFileMessageStore;
 #[cfg(feature = "rocksdb_store")]
-use super::rocksdb_message_store::RocksDBMessageStore;
+use crate::message_store::rocksdb_message_store::RocksDBMessageStore;
 use rocketmq_model::common::message::message_batch::MessageExtBatch;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 
@@ -25,15 +25,14 @@ use crate::base::message_result::PutMessageResult;
 /// This type does not add a shared-mutation wrapper around the concrete backend.
 /// Shared consumers should receive narrow Store capabilities while the application
 /// lifecycle retains the only mutable root owner.
-#[non_exhaustive]
-pub enum OwnedMessageStore {
+pub enum StorePorts {
     LocalFileStore(Box<LocalFileMessageStore>),
 
     #[cfg(feature = "rocksdb_store")]
     RocksDBStore(Box<RocksDBMessageStore>),
 }
 
-impl OwnedMessageStore {
+impl StorePorts {
     pub fn local_file(store: LocalFileMessageStore) -> Self {
         Self::LocalFileStore(Box::new(store))
     }

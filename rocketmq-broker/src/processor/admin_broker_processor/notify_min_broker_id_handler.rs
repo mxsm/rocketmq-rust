@@ -24,7 +24,7 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::namesrv::brokerid_change_request_header::NotifyMinBrokerIdChangeRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::tokio_lock::RocketMQTokioRwLock;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerAdminStore;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
 use tracing::error;
@@ -60,7 +60,7 @@ impl NotifyMinBrokerChangeIdHandler {
         }
     }
 
-    pub async fn notify_min_broker_id_change<MS: MessageStore>(
+    pub async fn notify_min_broker_id_change<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
@@ -89,7 +89,7 @@ impl NotifyMinBrokerChangeIdHandler {
         Ok(Some(response.set_code(ResponseCode::Success)))
     }
 
-    async fn update_min_broker<MS: MessageStore>(
+    async fn update_min_broker<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         change_header: NotifyMinBrokerIdChangeRequestHeader,
@@ -124,7 +124,7 @@ impl NotifyMinBrokerChangeIdHandler {
         Ok(())
     }
 
-    async fn on_min_broker_change<MS: MessageStore>(
+    async fn on_min_broker_change<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         min_broker_id: u64,
@@ -176,14 +176,14 @@ impl NotifyMinBrokerChangeIdHandler {
         }
     }
 
-    async fn change_special_service_status<MS: MessageStore>(
+    async fn change_special_service_status<MS: BrokerAdminStore>(
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         should_start: bool,
     ) {
         broker_runtime_inner.change_special_service_status(should_start).await;
     }
 
-    async fn on_master_offline<MS: MessageStore>(broker_runtime_inner: &BrokerAdminRuntime<MS>) {
+    async fn on_master_offline<MS: BrokerAdminStore>(broker_runtime_inner: &BrokerAdminRuntime<MS>) {
         if let Some(slave_synchronize) = broker_runtime_inner.slave_synchronize() {
             if let Some(master_addr) = slave_synchronize.master_addr() {
                 let vip_channel = mix_all::broker_vip_channel(true, master_addr.as_str());
@@ -194,11 +194,11 @@ impl NotifyMinBrokerChangeIdHandler {
 
         broker_runtime_inner.update_slave_master_addr(None);
         if let Some(message_store) = broker_runtime_inner.message_store() {
-            message_store.update_master_address(&CheetahString::empty());
+            message_store.update_logical_master_address(&CheetahString::empty());
         }
     }
 
-    async fn on_master_on_line<MS: MessageStore>(
+    async fn on_master_on_line<MS: BrokerAdminStore>(
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         master_addr: &str,
         master_ha_addr: &Option<CheetahString>,
@@ -234,7 +234,7 @@ impl NotifyMinBrokerChangeIdHandler {
                                 message_store.update_ha_master_address(master_hs_address.as_str()).await;
                             }
                             if let Some(master_address) = broker_sync_info.master_address {
-                                message_store.update_master_address(&master_address);
+                                message_store.update_logical_master_address(&master_address);
                             }
                         }
                     } else {

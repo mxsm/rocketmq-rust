@@ -29,10 +29,10 @@ use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::peek_message_request_header::PeekMessageRequestHeader;
 use rocketmq_protocol::protocol::header::pop_message_response_header::PopMessageResponseHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_store::BrokerStatsManager;
 use rocketmq_store::GetMessageResult;
 use rocketmq_store::GetMessageStatus;
-use rocketmq_store::MessageStore;
 use rocketmq_transport::command_from_error_with_remark_and_opaque;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
@@ -68,11 +68,11 @@ impl PeekMessagePolicy {
     }
 }
 
-pub(crate) struct PeekMessageStoreCapability<MS: MessageStore> {
+pub(crate) struct PeekMessageStoreCapability<MS: BrokerReadWriteStore> {
     escape_bridge: Weak<EscapeBridge<MS>>,
 }
 
-impl<MS: MessageStore> PeekMessageStoreCapability<MS> {
+impl<MS: BrokerReadWriteStore> PeekMessageStoreCapability<MS> {
     pub(crate) fn new(escape_bridge: &Arc<EscapeBridge<MS>>) -> Self {
         Self {
             escape_bridge: Arc::downgrade(escape_bridge),
@@ -116,11 +116,11 @@ impl<MS: MessageStore> PeekMessageStoreCapability<MS> {
     }
 }
 
-pub(crate) struct PeekPopOffsetCapability<MS: MessageStore> {
+pub(crate) struct PeekPopOffsetCapability<MS: BrokerReadWriteStore> {
     merge_service: Weak<PopBufferMergeService<MS>>,
 }
 
-impl<MS: MessageStore> PeekPopOffsetCapability<MS> {
+impl<MS: BrokerReadWriteStore> PeekPopOffsetCapability<MS> {
     pub(crate) fn new(merge_service: &Arc<PopBufferMergeService<MS>>) -> Self {
         Self {
             merge_service: Arc::downgrade(merge_service),
@@ -136,7 +136,7 @@ impl<MS: MessageStore> PeekPopOffsetCapability<MS> {
     }
 }
 
-pub(crate) struct PeekMessageProcessorContext<MS: MessageStore> {
+pub(crate) struct PeekMessageProcessorContext<MS: BrokerReadWriteStore> {
     policy: PeekMessagePolicy,
     topic_config_manager: Arc<TopicConfigManager>,
     subscription_group_lookup: SubscriptionGroupConfigLookup,
@@ -146,7 +146,7 @@ pub(crate) struct PeekMessageProcessorContext<MS: MessageStore> {
     pop_offset: PeekPopOffsetCapability<MS>,
 }
 
-impl<MS: MessageStore> PeekMessageProcessorContext<MS> {
+impl<MS: BrokerReadWriteStore> PeekMessageProcessorContext<MS> {
     #[allow(
         clippy::too_many_arguments,
         reason = "constructor lists the complete narrow Peek capability boundary"
@@ -173,12 +173,12 @@ impl<MS: MessageStore> PeekMessageProcessorContext<MS> {
 }
 
 /// Handles peek message requests from clients.
-pub struct PeekMessageProcessor<MS: MessageStore> {
+pub struct PeekMessageProcessor<MS: BrokerReadWriteStore> {
     context: PeekMessageProcessorContext<MS>,
     random_counter: AtomicU32,
 }
 
-impl<MS: MessageStore> PeekMessageProcessor<MS> {
+impl<MS: BrokerReadWriteStore> PeekMessageProcessor<MS> {
     pub(crate) fn new(context: PeekMessageProcessorContext<MS>) -> Self {
         Self {
             context,
@@ -187,7 +187,7 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
     }
 }
 
-impl<MS: MessageStore> RequestProcessor for PeekMessageProcessor<MS> {
+impl<MS: BrokerReadWriteStore> RequestProcessor for PeekMessageProcessor<MS> {
     async fn process_request(
         &mut self,
         channel: Channel,
@@ -198,7 +198,7 @@ impl<MS: MessageStore> RequestProcessor for PeekMessageProcessor<MS> {
     }
 }
 
-impl<MS: MessageStore> PeekMessageProcessor<MS> {
+impl<MS: BrokerReadWriteStore> PeekMessageProcessor<MS> {
     pub async fn process_request_shared(
         &self,
         channel: Channel,
@@ -640,7 +640,7 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocketmq_store::OwnedMessageStore;
+    use rocketmq_store::StorePorts;
 
     #[test]
     fn peek_policy_captures_only_required_startup_values() {
@@ -664,7 +664,7 @@ mod tests {
 
     #[tokio::test]
     async fn peek_store_capability_fails_closed_after_provider_shutdown() {
-        let capability = PeekMessageStoreCapability::<OwnedMessageStore> {
+        let capability = PeekMessageStoreCapability::<StorePorts> {
             escape_bridge: Weak::new(),
         };
         let topic = CheetahString::from_static_str("topic-a");
@@ -678,7 +678,7 @@ mod tests {
 
     #[tokio::test]
     async fn peek_pop_offset_capability_fails_closed_after_provider_shutdown() {
-        let capability = PeekPopOffsetCapability::<OwnedMessageStore> {
+        let capability = PeekPopOffsetCapability::<StorePorts> {
             merge_service: Weak::new(),
         };
 

@@ -4705,11 +4705,14 @@ name = "rocketmq-store-api"
 version = "1.0.0"
 dependencies = [
  "bytes",
+ "hex",
  "rocketmq-error",
  "rocketmq-model",
  "rocketmq-security-api",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -4766,7 +4769,6 @@ dependencies = [
  "rocketmq-runtime",
  "rocketmq-security-api",
  "rocketmq-store-api",
- "rocketmq-store-local",
  "rocksdb",
  "serde_json",
  "tempfile",

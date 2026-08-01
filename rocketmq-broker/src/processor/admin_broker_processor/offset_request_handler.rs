@@ -26,7 +26,7 @@ use rocketmq_protocol::protocol::header::message_operation_header::TopicRequestH
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerAdminStore;
 use rocketmq_transport::request_code_not_supported_with_remark;
 use rocketmq_transport::Channel;
 use rocketmq_transport::ConnectionHandlerContext;
@@ -43,7 +43,7 @@ impl OffsetRequestHandler {
         Self
     }
 
-    pub async fn get_max_offset<MS: MessageStore>(
+    pub async fn get_max_offset<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
@@ -75,7 +75,7 @@ impl OffsetRequestHandler {
         )))
     }
 
-    pub async fn get_min_offset<MS: MessageStore>(
+    pub async fn get_min_offset<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
@@ -108,7 +108,7 @@ impl OffsetRequestHandler {
         )))
     }
 
-    async fn handle_get_min_offset_for_static_topic<MS: MessageStore>(
+    async fn handle_get_min_offset_for_static_topic<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         mut request_header: GetMinOffsetRequestHeader,
@@ -175,7 +175,7 @@ impl OffsetRequestHandler {
         )))
     }
 
-    async fn rewrite_request_for_static_topic<MS: MessageStore>(
+    async fn rewrite_request_for_static_topic<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         mut request_header: GetMaxOffsetRequestHeader,
@@ -242,7 +242,7 @@ impl OffsetRequestHandler {
         )))
     }
 
-    pub async fn get_all_delay_offset<MS: MessageStore>(
+    pub async fn get_all_delay_offset<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
@@ -263,7 +263,7 @@ impl OffsetRequestHandler {
         Ok(Some(response_command))
     }
 
-    pub async fn get_earliest_msg_store_time<MS: MessageStore>(
+    pub async fn get_earliest_msg_store_time<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
@@ -293,7 +293,7 @@ impl OffsetRequestHandler {
         )))
     }
 
-    pub async fn clean_expired_consumequeue<MS: MessageStore>(
+    pub async fn clean_expired_consumequeue<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
@@ -310,7 +310,7 @@ impl OffsetRequestHandler {
         ))
     }
 
-    pub async fn delete_expired_commitlog<MS: MessageStore>(
+    pub async fn delete_expired_commitlog<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _channel: Channel,
@@ -345,7 +345,7 @@ impl OffsetRequestHandler {
         ))
     }
 
-    pub async fn get_all_subscription_group_config<MS: MessageStore>(
+    pub async fn get_all_subscription_group_config<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         channel: Channel,
@@ -370,7 +370,7 @@ impl OffsetRequestHandler {
         Ok(Some(response_command))
     }
 
-    async fn rewrite_get_earliest_request_for_static_topic<MS: MessageStore>(
+    async fn rewrite_get_earliest_request_for_static_topic<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         mut request_header: GetEarliestMsgStoretimeRequestHeader,
@@ -475,7 +475,7 @@ mod tests {
     use rocketmq_protocol::protocol::header::get_earliest_msg_storetime_request_header::GetEarliestMsgStoretimeRequestHeader;
     use rocketmq_protocol::protocol::header::get_earliest_msg_storetime_response_header::GetEarliestMsgStoretimeResponseHeader;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-    use rocketmq_store::MessageStore;
+    use rocketmq_store::BrokerReadStore;
     use rocketmq_store::MessageStoreConfig;
     use rocketmq_transport::Channel;
     use rocketmq_transport::ChannelInner;

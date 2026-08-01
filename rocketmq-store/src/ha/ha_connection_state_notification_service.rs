@@ -275,7 +275,7 @@ mod tests {
         let source = include_str!("ha_connection_state_notification_service.rs");
         let service_source = include_str!("ha_service.rs");
         let forbidden_handle = concat!("Arc", "Mut");
-        let forbidden_store = concat!("LocalFile", "MessageStore");
+        let forbidden_store = concat!("LocalFile", "BackendOps");
         let forbidden_connection_list = concat!("get_connection", "_list");
 
         assert!(!source.contains(forbidden_handle));

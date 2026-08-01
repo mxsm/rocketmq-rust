@@ -22,7 +22,8 @@ use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::task::service_task::ServiceTask;
 use rocketmq_runtime::task::service_task::ServiceTaskContext;
 use rocketmq_runtime::task::ServiceManager;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerMasterAddressStore;
+use rocketmq_store::BrokerWriteStore;
 use tracing::info;
 use tracing::warn;
 
@@ -30,14 +31,14 @@ use crate::transaction::queue::default_transactional_message_service::DefaultTra
 
 pub struct TransactionalOpBatchService<MS>
 where
-    MS: MessageStore,
+    MS: BrokerWriteStore + BrokerMasterAddressStore,
 {
     service_manager: ServiceManager<TransactionalOpBatchServiceInner<MS>>,
 }
 
 impl<MS> TransactionalOpBatchService<MS>
 where
-    MS: MessageStore,
+    MS: BrokerWriteStore + BrokerMasterAddressStore,
 {
     pub fn new(
         broker_config: Arc<BrokerConfig>,
@@ -76,7 +77,7 @@ where
 
 struct TransactionalOpBatchServiceInner<MS>
 where
-    MS: MessageStore,
+    MS: BrokerWriteStore + BrokerMasterAddressStore,
 {
     broker_config: Arc<BrokerConfig>,
     transactional_message_service: Weak<DefaultTransactionalMessageService<MS>>,
@@ -85,7 +86,7 @@ where
 
 impl<MS> ServiceTask for TransactionalOpBatchServiceInner<MS>
 where
-    MS: MessageStore,
+    MS: BrokerWriteStore + BrokerMasterAddressStore,
 {
     fn get_service_name(&self) -> String {
         "TransactionalOpBatchService".to_string()

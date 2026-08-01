@@ -51,6 +51,7 @@ mod stats;
 mod store;
 mod store_error;
 mod store_path_config_helper;
+mod store_ports;
 mod telemetry;
 #[cfg(feature = "tieredstore")]
 mod tieredstore;
@@ -59,6 +60,10 @@ mod transfer;
 mod utils;
 
 pub use public_api::*;
+
+// Backend implementations and repository-internal test fakes use this sealed
+// implementation contract. Application code receives narrow capabilities or
+// the concrete `StorePorts` composition root.
 
 #[doc(hidden)]
 pub mod bench_support {
@@ -93,7 +98,7 @@ pub mod bench_support {
     use serde::Serialize;
     use tokio::io::AsyncWrite;
 
-    use crate::base::message_store::MessageStore;
+    use crate::base::backend_ops::BackendOps;
     use crate::base::store_stats_service::StoreStatsService;
     use crate::config::message_store_config::MessageStoreConfig;
     use crate::ha::transfer_engine::bytes::BytesTransferEngine;

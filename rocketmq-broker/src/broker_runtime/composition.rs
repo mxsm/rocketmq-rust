@@ -17,6 +17,7 @@ use super::data_plane::BrokerDataPlane;
 use super::metadata::BrokerMetadata;
 use super::request_pipeline::BrokerRequestPipeline;
 use super::*;
+use rocketmq_store::BrokerReadStore;
 
 pub(super) struct BrokerComposition {
     pub(super) state: Box<BrokerRuntimeState<BrokerMessageStore>>,
@@ -48,7 +49,7 @@ impl BrokerComposition {
     }
 }
 
-impl<MS: MessageStore> BrokerRuntimeState<MS> {
+impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
     pub(super) fn build_special_service_capability(&self) -> BrokerSpecialServiceCapability<MS> {
         BrokerSpecialServiceCapability::new(
             self.schedule_message_service(),
@@ -165,7 +166,7 @@ impl<MS: MessageStore> BrokerRuntimeState<MS> {
     }
 }
 
-impl<MS: MessageStore> BrokerRuntimeState<MS> {
+impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
     pub(super) fn build_pull_message_context(&self) -> Arc<PullMessageProcessorContext<MS>> {
         let escape_bridge = self.escape_bridge();
         Arc::new(PullMessageProcessorContext::new(
@@ -639,7 +640,7 @@ impl<MS: MessageStore> BrokerRuntimeState<MS> {
     pub fn timer_message_store(&self) -> Option<&Arc<TimerMessageStore>> {
         self.timer_message_store
             .as_ref()
-            .or_else(|| self.message_store().and_then(MessageStore::get_timer_message_store))
+            .or_else(|| self.message_store().and_then(BrokerReadStore::get_timer_message_store))
     }
 
     #[inline]
@@ -1351,7 +1352,7 @@ impl BrokerRuntime {
         );
         let state_machine_version = state
             .message_store()
-            .map(|message_store| message_store.state_machine_version_view())
+            .map(BrokerReadStore::state_machine_version_view)
             .unwrap_or_default();
         #[cfg(feature = "rocksdb_store")]
         {

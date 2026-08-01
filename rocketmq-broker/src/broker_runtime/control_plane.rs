@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use super::*;
+use rocketmq_store::BrokerReadStore;
+use rocketmq_store::BrokerReplicationStore;
 #[derive(Default)]
 pub(super) struct BrokerControlPlane {
     pub(super) broadcast_offset_scan_started: bool,
@@ -426,7 +428,7 @@ impl BrokerRuntime {
                             let behind = message_store.dispatch_behind_bytes();
                             info!("Dispatch task fall behind commit log {behind}bytes");
                         }) {
-                            warn!("MessageStore is not initialized");
+                            warn!("BrokerStorePort is not initialized");
                         }
                         Ok(())
                     }
@@ -449,7 +451,7 @@ impl BrokerRuntime {
                             message_store.update_ha_master_address(ha_master_address.as_str()).await;
                             self.composition.state.update_master_haserver_addr_periodically = false;
                         } else {
-                            warn!("MessageStore is unavailable before replica synchronization");
+                            warn!("BrokerStorePort is unavailable before replica synchronization");
                             self.composition.state.update_master_haserver_addr_periodically = true;
                         }
                     } else {

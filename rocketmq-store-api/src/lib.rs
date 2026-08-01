@@ -18,8 +18,10 @@
 
 mod capability;
 pub mod checkpoint;
+mod checkpoint_artifact;
 mod error;
 mod progress;
+mod wal;
 
 pub use capability::AdminStore;
 pub use capability::DerivedRecordSink;
@@ -39,6 +41,12 @@ pub use checkpoint::CheckpointRestoreVerification;
 pub use checkpoint::CheckpointStorageIdentity;
 pub use checkpoint::CheckpointValidationError;
 pub use checkpoint::CHECKPOINT_SCHEMA_VERSION;
+pub use checkpoint_artifact::file_uri_to_path;
+pub use checkpoint_artifact::hash_checkpoint_directory;
+pub use checkpoint_artifact::path_to_file_uri;
+pub use checkpoint_artifact::CheckpointArtifactError;
+pub use checkpoint_artifact::CheckpointDirectoryDigest;
+pub use checkpoint_artifact::RELEASE_CHECKPOINT_MANIFEST_FILE;
 pub use error::StoreComponent;
 pub use error::StoreError;
 pub use error::StoreErrorKind;
@@ -55,6 +63,7 @@ pub use progress::DerivedRecordIdError;
 pub use progress::LegacyDerivedCursorV0;
 pub use progress::DERIVED_CHECKPOINT_ENCODED_LEN;
 pub use progress::DERIVED_CHECKPOINT_FORMAT_VERSION;
+pub use wal::WalPort;
 
 use std::error::Error as StdError;
 use std::fmt;

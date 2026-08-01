@@ -35,7 +35,6 @@ rocketmq-observability.workspace = true
 rocketmq-runtime.workspace = true
 rocketmq-security-api.workspace = true
 rocketmq-store-api.workspace = true
-rocketmq-store-local.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

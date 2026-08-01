@@ -34,8 +34,8 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::AckMsg;
+use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_store::BrokerStatsManager;
-use rocketmq_store::MessageStore;
 use rocketmq_store::PopCheckPoint;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
@@ -75,11 +75,11 @@ impl ChangeInvisibleTimePolicy {
     }
 }
 
-pub(crate) struct ChangeInvisibleTimeStoreCapability<MS: MessageStore> {
+pub(crate) struct ChangeInvisibleTimeStoreCapability<MS: BrokerReadWriteStore> {
     escape_bridge: Weak<EscapeBridge<MS>>,
 }
 
-impl<MS: MessageStore> ChangeInvisibleTimeStoreCapability<MS> {
+impl<MS: BrokerReadWriteStore> ChangeInvisibleTimeStoreCapability<MS> {
     pub(crate) fn new(escape_bridge: &Arc<EscapeBridge<MS>>) -> Self {
         Self {
             escape_bridge: Arc::downgrade(escape_bridge),
@@ -104,11 +104,11 @@ impl<MS: MessageStore> ChangeInvisibleTimeStoreCapability<MS> {
     }
 }
 
-pub(crate) struct ChangeInvisibleTimePopCapability<MS: MessageStore> {
+pub(crate) struct ChangeInvisibleTimePopCapability<MS: BrokerReadWriteStore> {
     merge_service: Weak<PopBufferMergeService<MS>>,
 }
 
-impl<MS: MessageStore> ChangeInvisibleTimePopCapability<MS> {
+impl<MS: BrokerReadWriteStore> ChangeInvisibleTimePopCapability<MS> {
     pub(crate) fn new(merge_service: &Arc<PopBufferMergeService<MS>>) -> Self {
         Self {
             merge_service: Arc::downgrade(merge_service),
@@ -154,7 +154,7 @@ impl ChangeInvisibleTimeOrderCapability {
     }
 }
 
-pub(crate) struct ChangeInvisibleTimeProcessorContext<MS: MessageStore> {
+pub(crate) struct ChangeInvisibleTimeProcessorContext<MS: BrokerReadWriteStore> {
     policy: ChangeInvisibleTimePolicy,
     topic_config_manager: Arc<TopicConfigManager>,
     consumer_offset_query: ConsumerOffsetQueryCapability<MS>,
@@ -165,7 +165,7 @@ pub(crate) struct ChangeInvisibleTimeProcessorContext<MS: MessageStore> {
     queue_lock_manager: QueueLockManager,
 }
 
-impl<MS: MessageStore> ChangeInvisibleTimeProcessorContext<MS> {
+impl<MS: BrokerReadWriteStore> ChangeInvisibleTimeProcessorContext<MS> {
     #[allow(
         clippy::too_many_arguments,
         reason = "constructor lists the complete narrow change-invisible-time capability boundary"
@@ -193,13 +193,13 @@ impl<MS: MessageStore> ChangeInvisibleTimeProcessorContext<MS> {
     }
 }
 
-pub struct ChangeInvisibleTimeProcessor<MS: MessageStore> {
+pub struct ChangeInvisibleTimeProcessor<MS: BrokerReadWriteStore> {
     context: ChangeInvisibleTimeProcessorContext<MS>,
 }
 
 impl<MS> RequestProcessor for ChangeInvisibleTimeProcessor<MS>
 where
-    MS: MessageStore,
+    MS: BrokerReadWriteStore,
 {
     async fn process_request(
         &mut self,
@@ -213,7 +213,7 @@ where
 
 impl<MS> ChangeInvisibleTimeProcessor<MS>
 where
-    MS: MessageStore,
+    MS: BrokerReadWriteStore,
 {
     pub async fn process_request_shared(
         &self,
@@ -244,7 +244,7 @@ where
     }
 }
 
-impl<MS: MessageStore> ChangeInvisibleTimeProcessor<MS> {
+impl<MS: BrokerReadWriteStore> ChangeInvisibleTimeProcessor<MS> {
     pub(crate) fn new(context: ChangeInvisibleTimeProcessorContext<MS>) -> Self {
         Self { context }
     }
@@ -252,7 +252,7 @@ impl<MS: MessageStore> ChangeInvisibleTimeProcessor<MS> {
 
 impl<MS> ChangeInvisibleTimeProcessor<MS>
 where
-    MS: MessageStore,
+    MS: BrokerReadWriteStore,
 {
     async fn process_request_(
         &self,
@@ -581,7 +581,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocketmq_store::OwnedMessageStore;
+    use rocketmq_store::StorePorts;
 
     #[test]
     fn change_invisible_time_policy_captures_only_required_startup_values() {
@@ -602,10 +602,10 @@ mod tests {
 
     #[tokio::test]
     async fn change_invisible_time_weak_capabilities_fail_closed_after_provider_shutdown() {
-        let store = ChangeInvisibleTimeStoreCapability::<OwnedMessageStore> {
+        let store = ChangeInvisibleTimeStoreCapability::<StorePorts> {
             escape_bridge: Weak::new(),
         };
-        let pop_buffer = ChangeInvisibleTimePopCapability::<OwnedMessageStore> {
+        let pop_buffer = ChangeInvisibleTimePopCapability::<StorePorts> {
             merge_service: Weak::new(),
         };
         let order = ChangeInvisibleTimeOrderCapability { manager: Weak::new() };

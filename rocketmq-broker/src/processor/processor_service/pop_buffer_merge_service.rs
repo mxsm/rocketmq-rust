@@ -47,7 +47,7 @@ use rocketmq_runtime::TaskGroup;
 use rocketmq_store::AckMessage;
 use rocketmq_store::AckMsg;
 use rocketmq_store::BatchAckMsg;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_store::PopCheckPoint;
 use rocketmq_store::PutMessageStatus;
 use tokio::select;
@@ -66,7 +66,7 @@ use crate::processor::pop_message_processor::capability::PopBufferMergeContext;
 use crate::processor::pop_message_processor::PopMessageProcessor;
 use crate::processor::pop_message_processor::QueueLockManager;
 
-pub(crate) struct PopBufferMergeService<MS: MessageStore> {
+pub(crate) struct PopBufferMergeService<MS: BrokerReadWriteStore> {
     buffer: DashMap<CheetahString /* mergeKey */, Arc<PopCheckPointWrapper>>,
     commit_offsets: DashMap<CheetahString /* topic@cid@queueId */, QueueWithTime<Arc<PopCheckPointWrapper>>>,
     serving: AtomicBool,
@@ -90,7 +90,7 @@ pub(crate) struct PopBufferMergeService<MS: MessageStore> {
     pop_consumer_store: Option<Arc<PopConsumerRocksDbStore>>,
 }
 
-impl<MS: MessageStore> PopBufferMergeService<MS> {
+impl<MS: BrokerReadWriteStore> PopBufferMergeService<MS> {
     pub fn new(
         revive_topic: CheetahString,
         queue_lock_manager: QueueLockManager,
@@ -129,7 +129,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
     }
 }
 
-impl<MS: MessageStore> PopBufferMergeService<MS> {
+impl<MS: BrokerReadWriteStore> PopBufferMergeService<MS> {
     /// Adds a checkpoint to the buffer
     pub async fn add_ck(
         &self,

@@ -20,7 +20,7 @@ use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
-use rocketmq_store::MessageStore;
+use rocketmq_store::BrokerStorePort;
 use rocketmq_transport::command_from_error_with_opaque;
 use rocketmq_transport::command_from_error_with_remark_and_opaque;
 use rocketmq_transport::internal_error_with_opaque;
@@ -85,7 +85,7 @@ pub(crate) mod reply_message_processor;
 mod request_ordering;
 pub(crate) mod send_message_processor;
 
-pub enum BrokerProcessorType<MS: MessageStore, TS> {
+pub enum BrokerProcessorType<MS: BrokerStorePort, TS> {
     Send(Arc<SendMessageProcessor<MS, TS>>),
     Pull(Arc<PullMessageProcessor<MS>>),
     Peek(Arc<PeekMessageProcessor<MS>>),
@@ -110,7 +110,7 @@ pub enum BrokerProcessorType<MS: MessageStore, TS> {
 
 impl<MS, TS> Clone for BrokerProcessorType<MS, TS>
 where
-    MS: MessageStore,
+    MS: BrokerStorePort,
 {
     fn clone(&self) -> Self {
         match self {
@@ -141,7 +141,7 @@ where
 #[cfg(test)]
 impl<MS, TS> BrokerProcessorType<MS, TS>
 where
-    MS: MessageStore,
+    MS: BrokerStorePort,
 {
     pub(crate) fn variant_name_for_test(&self) -> &'static str {
         match self {
@@ -171,7 +171,7 @@ where
 
 impl<MS, TS> RequestProcessor for BrokerProcessorType<MS, TS>
 where
-    MS: MessageStore,
+    MS: BrokerStorePort,
     TS: TransactionalMessageService,
 {
     async fn process_request(
@@ -260,7 +260,7 @@ where
 
 pub(crate) type RequestCodeType = i32;
 
-pub struct BrokerRequestProcessor<MS: MessageStore, TS> {
+pub struct BrokerRequestProcessor<MS: BrokerStorePort, TS> {
     process_table: Arc<HashMap<RequestCodeType, BrokerProcessorType<MS, TS>>>,
     default_request_processor: Option<Arc<BrokerProcessorType<MS, TS>>>,
     auth_runtime: Option<Arc<AuthRuntime>>,
@@ -270,7 +270,7 @@ pub struct BrokerRequestProcessor<MS: MessageStore, TS> {
 
 impl<MS, TS> BrokerRequestProcessor<MS, TS>
 where
-    MS: MessageStore,
+    MS: BrokerStorePort,
     TS: TransactionalMessageService,
 {
     pub fn new() -> Self {
@@ -307,7 +307,7 @@ where
 #[cfg(test)]
 impl<MS, TS> BrokerRequestProcessor<MS, TS>
 where
-    MS: MessageStore,
+    MS: BrokerStorePort,
 {
     pub(crate) fn dispatch_processor_variant_for_test(&self, request_code: RequestCode) -> Option<&'static str> {
         self.process_table
@@ -321,7 +321,7 @@ where
     }
 }
 
-impl<MS: MessageStore, TS> Clone for BrokerRequestProcessor<MS, TS> {
+impl<MS: BrokerStorePort, TS> Clone for BrokerRequestProcessor<MS, TS> {
     fn clone(&self) -> Self {
         Self {
             process_table: self.process_table.clone(),
@@ -335,7 +335,7 @@ impl<MS: MessageStore, TS> Clone for BrokerRequestProcessor<MS, TS> {
 
 impl<MS, TS> RequestProcessor for BrokerRequestProcessor<MS, TS>
 where
-    MS: MessageStore + Send + Sync + 'static,
+    MS: BrokerStorePort + Send + Sync + 'static,
     TS: TransactionalMessageService + Send + Sync + 'static,
 {
     async fn process_request(
@@ -436,7 +436,7 @@ const fn is_privileged_maintenance_request(request_code: RequestCode) -> bool {
 
 impl<MS, TS> BrokerRequestProcessor<MS, TS>
 where
-    MS: MessageStore + Send + Sync + 'static,
+    MS: BrokerStorePort + Send + Sync + 'static,
     TS: TransactionalMessageService + Send + Sync + 'static,
 {
     async fn process_with_optional_fast_failure(
