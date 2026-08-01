@@ -26,13 +26,14 @@ use serde_json::json;
 use super::common;
 use super::common::CancelSignal;
 use super::common::SourceOutput;
-use super::mcp::McpSource;
 use crate::ConnectorConfig;
 use crate::ConnectorError;
 use crate::ConnectorErrorCode;
 use crate::config::RuntimeDiagnosticsSourceConfig;
 use crate::config::SecretValue;
 use crate::mcp::McpGateway;
+use crate::read_gateway::ConnectorReadGateway;
+use crate::read_gateway::ReadSession;
 
 const RUNTIME_RESOURCE_URI: &str = "rocketmq://system/runtime/v1";
 const OBSERVABILITY_RESOURCE_URI: &str = "rocketmq://system/observability/v1";
@@ -78,29 +79,31 @@ impl RuntimeDiagnosticsSource {
 
     pub(crate) async fn query<G>(
         &self,
-        mcp: &McpSource<G>,
+        read_gateway: &ConnectorReadGateway<G>,
+        session: &ReadSession<'_, '_>,
         resource: &str,
-        deadline: DateTime<Utc>,
-        cancel: &CancelSignal,
     ) -> Result<SourceOutput, ConnectorError>
     where
         G: McpGateway,
     {
+        let context = session.context();
         match resource {
             "runtime" | "runtime/diagnostics" | RUNTIME_RESOURCE_URI => {
-                let wire = mcp.system_resource(RUNTIME_RESOURCE_URI, deadline, cancel).await?;
+                let wire = read_gateway.mcp_system_resource(session, RUNTIME_RESOURCE_URI).await?;
                 project_runtime(wire.content)
             }
             "runtime/observability" | "observability" | OBSERVABILITY_RESOURCE_URI => {
-                let wire = mcp
-                    .system_resource(OBSERVABILITY_RESOURCE_URI, deadline, cancel)
+                let wire = read_gateway
+                    .mcp_system_resource(session, OBSERVABILITY_RESOURCE_URI)
                     .await?;
                 project_observability(wire.content)
             }
-            COMPONENTS_RESOURCE | "components" => self.query_components(deadline, cancel).await,
+            COMPONENTS_RESOURCE | "components" => self.query_components(context.deadline, context.cancel).await,
             _ if resource.starts_with("runtime/") => {
                 let component = resource.trim_start_matches("runtime/");
-                let view = self.fetch_component(component, deadline, cancel).await?;
+                let view = self
+                    .fetch_component(component, context.deadline, context.cancel)
+                    .await?;
                 Ok(project_component_runtime(view))
             }
             _ => Err(ConnectorError::new(

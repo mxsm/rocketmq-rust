@@ -207,7 +207,7 @@ where
             "internal evidence query body is not valid JSON",
         )
     })?;
-    engine.evidence(request).await.map(Json)
+    engine.evidence(request, "internal-api").await.map(Json)
 }
 
 fn bearer_header(headers: &HeaderMap) -> Option<&str> {

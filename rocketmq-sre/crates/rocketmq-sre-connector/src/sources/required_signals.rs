@@ -26,16 +26,16 @@ use rocketmq_sre_contracts::RequiredSignalsEvidenceV1;
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::common::CancelSignal;
 use super::common::SourceOutput;
 use super::loki::LokiSource;
-use super::mcp::McpSource;
 use super::prometheus::PrometheusSource;
 use super::runtime_diagnostics::RuntimeDiagnosticsSource;
 use super::tempo::TempoSource;
 use crate::ConnectorError;
 use crate::ConnectorErrorCode;
 use crate::mcp::McpGateway;
+use crate::read_gateway::ConnectorReadGateway;
+use crate::read_gateway::ReadSession;
 
 const MANIFEST_SCHEMA_VERSION: &str = "rocketmq.sre.required-signals.v1";
 const BROKER_MANIFEST: &str = include_str!("../../../../config/observability/required-signals/broker.yaml");
@@ -109,20 +109,19 @@ impl RequiredSignalsSource {
         prometheus: &PrometheusSource,
         loki: &LokiSource,
         tempo: &TempoSource,
-        mcp: &McpSource<G>,
+        read_gateway: &ConnectorReadGateway<G>,
         runtime: &RuntimeDiagnosticsSource,
-        external_cluster: &str,
+        session: &ReadSession<'_, '_>,
         resource: &str,
         start: DateTime<Utc>,
         end: DateTime<Utc>,
         max_rows: usize,
         max_bytes: usize,
-        deadline: DateTime<Utc>,
-        cancel: &CancelSignal,
     ) -> Result<SourceOutput, ConnectorError>
     where
         G: McpGateway,
     {
+        let context = session.context();
         let component = normalize_component(resource)?;
         let manifest = parse_manifest(component, manifest_source(component)?)?;
         let mut shared = SharedReads::default();
@@ -139,14 +138,14 @@ impl RequiredSignalsSource {
                         "prometheus",
                         prometheus
                             .query(
-                                external_cluster,
+                                context.external_cluster,
                                 metric_resource,
                                 start,
                                 end,
                                 max_rows,
                                 max_bytes,
-                                deadline,
-                                cancel,
+                                context.deadline,
+                                context.cancel,
                             )
                             .await,
                     )?;
@@ -157,14 +156,14 @@ impl RequiredSignalsSource {
                         shared.logs = Some(normalize_read(
                             "loki",
                             loki.query(
-                                external_cluster,
+                                context.external_cluster,
                                 log_resource,
                                 start,
                                 end,
                                 max_rows,
                                 max_bytes,
-                                deadline,
-                                cancel,
+                                context.deadline,
+                                context.cancel,
                             )
                             .await,
                         )?);
@@ -181,14 +180,14 @@ impl RequiredSignalsSource {
                             "tempo",
                             tempo
                                 .query(
-                                    external_cluster,
+                                    context.external_cluster,
                                     trace_resource,
                                     start,
                                     end,
                                     max_rows,
                                     max_bytes,
-                                    deadline,
-                                    cancel,
+                                    context.deadline,
+                                    context.cancel,
                                 )
                                 .await,
                         )?);
@@ -200,7 +199,7 @@ impl RequiredSignalsSource {
                     observation_from_read(signal, read)
                 }
                 FixedQuery::Runtime(runtime_resource) => {
-                    let read = normalize_read("runtime", runtime.query(mcp, runtime_resource, deadline, cancel).await)?;
+                    let read = normalize_read("runtime", runtime.query(read_gateway, session, runtime_resource).await)?;
                     observation_from_read(signal, read)
                 }
             };

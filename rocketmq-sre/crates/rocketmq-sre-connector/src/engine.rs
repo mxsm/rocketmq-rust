@@ -214,13 +214,18 @@ where
         self.sources.capabilities().await
     }
 
-    pub(crate) async fn evidence(&self, request: EvidenceQueryRequest) -> Result<EvidenceSnapshot, ConnectorError> {
+    pub(crate) async fn evidence(
+        &self,
+        request: EvidenceQueryRequest,
+        subject: &str,
+    ) -> Result<EvidenceSnapshot, ConnectorError> {
         self.validate_request(&request)?;
         let deadline = Utc::now()
             + chrono::Duration::from_std(self.config.request_timeout).unwrap_or_else(|_| chrono::Duration::seconds(15));
         self.collect(
             request.query,
             &request.mcp_cluster,
+            subject,
             Some(&request.operation),
             deadline,
             &CancelSignal::default(),
@@ -231,6 +236,7 @@ where
     pub(crate) async fn collect_contract_query(
         &self,
         query: EvidenceQuery,
+        subject: &str,
         deadline: DateTime<Utc>,
         cancel: &CancelSignal,
     ) -> Result<EvidenceSnapshot, ConnectorError> {
@@ -248,12 +254,14 @@ where
                 .with_correlation_id(query.correlation_id)
             })?;
         self.validate_query_boundary(&query, &external_cluster)?;
-        self.collect(query, &external_cluster, None, deadline, cancel).await
+        self.collect(query, &external_cluster, subject, None, deadline, cancel)
+            .await
     }
 
     pub(crate) async fn inventory(
         &self,
         cluster_id: rocketmq_sre_contracts::ClusterId,
+        subject: &str,
     ) -> Result<InventoryUpload, ConnectorError> {
         let external_cluster = self
             .config
@@ -277,7 +285,13 @@ where
         let deadline = Utc::now()
             + chrono::Duration::from_std(self.config.request_timeout).unwrap_or_else(|_| chrono::Duration::seconds(15));
         self.sources
-            .inventory(cluster_id, external_cluster, deadline, &CancelSignal::default())
+            .inventory(
+                cluster_id,
+                external_cluster,
+                subject,
+                deadline,
+                &CancelSignal::default(),
+            )
             .await
     }
 
@@ -285,6 +299,7 @@ where
         &self,
         query: EvidenceQuery,
         external_cluster: &str,
+        subject: &str,
         operation: Option<&EvidenceOperation>,
         deadline: DateTime<Utc>,
         cancel: &CancelSignal,
@@ -303,7 +318,7 @@ where
             return Err(error.with_correlation_id(query.correlation_id));
         }
         self.sources
-            .query(query, external_cluster, operation, deadline, cancel)
+            .query(query, external_cluster, subject, operation, deadline, cancel)
             .await
     }
 
@@ -552,8 +567,11 @@ mod tests {
             },
         };
 
-        let evidence = engine.evidence(request.clone()).await.expect("evidence");
-        let cached = engine.evidence(request).await.expect("cached evidence");
+        let evidence = engine
+            .evidence(request.clone(), "test-subject")
+            .await
+            .expect("evidence");
+        let cached = engine.evidence(request, "test-subject").await.expect("cached evidence");
         assert!(engine.is_ready().await);
         assert_eq!(evidence.freshness_seconds, 2);
         assert!(evidence.partial);
@@ -592,7 +610,11 @@ mod tests {
             operation: EvidenceOperation::ClusterOverview,
         };
         assert_eq!(
-            engine.evidence(request).await.expect_err("tenant mismatch").code,
+            engine
+                .evidence(request, "test-subject")
+                .await
+                .expect_err("tenant mismatch")
+                .code,
             ConnectorErrorCode::TenantMismatch
         );
     }
@@ -619,14 +641,14 @@ mod tests {
         };
 
         engine
-            .evidence(request.clone())
+            .evidence(request.clone(), "test-subject")
             .await
             .expect("active cluster should collect");
         assert_eq!(gateway.query_count.load(Ordering::SeqCst), 1);
 
         gateway.active.store(false, Ordering::SeqCst);
         let error = engine
-            .evidence(request)
+            .evidence(request, "test-subject")
             .await
             .expect_err("offboarded cluster must not collect");
         assert_eq!(error.code, ConnectorErrorCode::ClusterNotAllowed);
@@ -655,7 +677,10 @@ mod tests {
             operation: EvidenceOperation::ClusterOverview,
         };
 
-        let evidence = engine.evidence(request).await.expect("missing evidence");
+        let evidence = engine
+            .evidence(request, "test-subject")
+            .await
+            .expect("missing evidence");
         assert!(evidence.partial);
         assert_eq!(evidence.coverage, CoverageStatus::Missing);
         assert_eq!(

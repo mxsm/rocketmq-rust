@@ -47,8 +47,11 @@ flowchart LR
     CLI --> CP
 
     CP <--> Connector["Connector"]
-    Connector --> MCP["RocketMQ MCP<br/>read-only"]
+    Connector --> ReadGateway["Private ReadGateway<br/>auth / budget / audit"]
+    ReadGateway --> MCP["RocketMQ MCP<br/>read-only adapter"]
+    ReadGateway --> Admin["Admin read-client<br/>read-only adapter"]
     MCP --> Cluster["RocketMQ Rust cluster"]
+    Admin --> Cluster
 
     CP --> Evidence["Evidence / Knowledge"]
     Evidence --> PostgreSQL["PostgreSQL"]
@@ -73,6 +76,10 @@ sessions or raw mutation APIs.
 
 - MCP and Connector are read-only. They never expose RocketMQ apply, delete,
   reset, clean, or arbitrary Admin operations.
+- Every RocketMQ read crosses one private Connector
+  [ReadGateway](docs/read-gateway-contract.md). MCP and Admin adapters share
+  tenant/cluster authorization, rate and concurrency admission, deadline,
+  cancellation, output bounding, redaction, and typed audit policy.
 - Evidence, logs, diagnostics, errors, and model requests are bounded and
   sanitized. Credentials, tokens, ACL/TLS material, private keys, message
   bodies, and full configuration values are excluded.
@@ -189,6 +196,7 @@ Run Rust commands from `rocketmq-sre/`:
 ```powershell
 python scripts/check_source_layout.py
 python scripts/check_execution_dependency_boundary.py
+python scripts/check_read_gateway_boundary.py
 cargo fmt -p rocketmq-sre-contracts -p rocketmq-sre-core -p rocketmq-sre-model-gateway -p rocketmq-sre-control-plane -p rocketmq-sre-connector -p rocketmq-sre-executor -p rocketmq-sre-execution-agent -p rocketmq-sre-probe -p rocketmq-sre-eval -p rocketmq-sre-client -p rocketmq-sre-cli -- --check
 cargo check --locked --workspace
 cargo test --locked --workspace --all-features
@@ -224,6 +232,7 @@ design is intentionally outside the current scope.
 - [Read-only MCP boundary](docs/decisions/0002-read-only-mcp-boundary.md)
 - [Control Plane–Connector mTLS](docs/control-plane-connector-mtls.md)
 - [Connector transport](docs/connector-control-plane-transport-adr.md)
+- [Connector ReadGateway](docs/read-gateway-contract.md)
 - [Diagnostic Pack catalog](docs/phase02-diagnostic-packs.md)
 - [Execution contracts](docs/phase03-execution-contracts.md)
 - [Plan, policy, approval, and audit](docs/phase03-plan-policy-approval.md)

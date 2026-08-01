@@ -32,10 +32,9 @@ use crate::ConnectorError;
 use crate::ConnectorErrorCode;
 use crate::EvidenceOperation;
 use crate::mcp::McpGateway;
-use crate::sources::admin_query::AdminQuerySource;
-use crate::sources::common::CancelSignal;
+use crate::read_gateway::ConnectorReadGateway;
+use crate::read_gateway::ReadSession;
 use crate::sources::common::SourceOutput;
-use crate::sources::mcp::McpSource;
 
 const INVENTORY_PAGE_LIMIT: usize = 200;
 const INVENTORY_DETAIL_QUERY_LIMIT: usize = 32;
@@ -191,23 +190,20 @@ struct QueueLagWire {
 
 pub(super) async fn collect<G>(
     inventory: &mut InventoryAccumulator,
-    mcp: &McpSource<G>,
-    admin: &AdminQuerySource,
-    cluster: &str,
+    read_gateway: &ConnectorReadGateway<G>,
+    session: &ReadSession<'_, '_>,
     max_rows: usize,
-    deadline: DateTime<Utc>,
-    cancel: &CancelSignal,
 ) -> Result<Vec<String>, ConnectorError>
 where
     G: McpGateway,
 {
-    collect_overview(inventory, mcp, admin, cluster, deadline, cancel)
+    collect_overview(inventory, read_gateway, session)
         .await
         .inspect_err(|error| log_stage_error("overview", error))?;
-    let topics = collect_topics(inventory, mcp, admin, cluster, max_rows, deadline, cancel)
+    let topics = collect_topics(inventory, read_gateway, session, max_rows)
         .await
         .inspect_err(|error| log_stage_error("topics", error))?;
-    let discovered_consumers = collect_consumers(inventory, mcp, admin, cluster, max_rows, deadline, cancel)
+    let discovered_consumers = collect_consumers(inventory, read_gateway, session, max_rows)
         .await
         .inspect_err(|error| log_stage_error("consumers", error))?;
 
@@ -215,17 +211,14 @@ where
     for topic in topics.topics.iter().take(remaining_detail_queries) {
         remaining_detail_queries = remaining_detail_queries.saturating_sub(1);
         match query_preferred(
-            mcp,
-            admin,
-            cluster,
+            read_gateway,
+            session,
             &EvidenceOperation::TopicDescribe {
                 topic: topic.clone(),
                 limit: Some(page_limit(max_rows)),
                 cursor: None,
             },
             &format!("admin/topic-route/{topic}"),
-            deadline,
-            cancel,
         )
         .await
         {
@@ -257,9 +250,8 @@ where
     let consumer_query_budget = remaining_detail_queries;
     for consumer_topic in topics.consumer_topics.iter().take(consumer_query_budget) {
         match query_preferred(
-            mcp,
-            admin,
-            cluster,
+            read_gateway,
+            session,
             &EvidenceOperation::ConsumerLag {
                 topic: consumer_topic.topic.clone(),
                 consumer_group: consumer_topic.group.clone(),
@@ -267,8 +259,6 @@ where
                 cursor: None,
             },
             &format!("admin/consumer-lag/{}/{}", consumer_topic.group, consumer_topic.topic),
-            deadline,
-            cancel,
         )
         .await
         {
@@ -315,29 +305,24 @@ fn log_stage_error(stage: &'static str, error: &ConnectorError) {
 
 async fn collect_overview<G>(
     inventory: &mut InventoryAccumulator,
-    mcp: &McpSource<G>,
-    admin: &AdminQuerySource,
-    cluster: &str,
-    deadline: DateTime<Utc>,
-    cancel: &CancelSignal,
+    read_gateway: &ConnectorReadGateway<G>,
+    session: &ReadSession<'_, '_>,
 ) -> Result<(), ConnectorError>
 where
     G: McpGateway,
 {
+    let context = session.context();
     let observed = query_preferred(
-        mcp,
-        admin,
-        cluster,
+        read_gateway,
+        session,
         &EvidenceOperation::ClusterOverview,
         "admin/brokers",
-        deadline,
-        cancel,
     )
     .await;
     match observed {
-        Ok(observed) if observed.is_mcp => add_cluster_overview(inventory, cluster, observed.output)
+        Ok(observed) if observed.is_mcp => add_cluster_overview(inventory, context.external_cluster, observed.output)
             .inspect_err(|error| log_stage_error("overview_projection", error)),
-        Ok(observed) => add_admin_brokers(inventory, cluster, observed.output)
+        Ok(observed) => add_admin_brokers(inventory, context.external_cluster, observed.output)
             .inspect_err(|error| log_stage_error("overview_projection", error)),
         Err(error) if recoverable_gap(&error) => {
             inventory.mark_gap("broker", "broker_inventory_source_unavailable");
@@ -354,28 +339,22 @@ where
 
 async fn collect_topics<G>(
     inventory: &mut InventoryAccumulator,
-    mcp: &McpSource<G>,
-    admin: &AdminQuerySource,
-    cluster: &str,
+    read_gateway: &ConnectorReadGateway<G>,
+    session: &ReadSession<'_, '_>,
     max_rows: usize,
-    deadline: DateTime<Utc>,
-    cancel: &CancelSignal,
 ) -> Result<TopicDiscovery, ConnectorError>
 where
     G: McpGateway,
 {
     match query_preferred(
-        mcp,
-        admin,
-        cluster,
+        read_gateway,
+        session,
         &EvidenceOperation::TopicList {
             filter: None,
             limit: Some(page_limit(max_rows)),
             cursor: None,
         },
         "admin/topics",
-        deadline,
-        cancel,
     )
     .await
     {
@@ -398,28 +377,22 @@ where
 
 async fn collect_consumers<G>(
     inventory: &mut InventoryAccumulator,
-    mcp: &McpSource<G>,
-    admin: &AdminQuerySource,
-    cluster: &str,
+    read_gateway: &ConnectorReadGateway<G>,
+    session: &ReadSession<'_, '_>,
     max_rows: usize,
-    deadline: DateTime<Utc>,
-    cancel: &CancelSignal,
 ) -> Result<Vec<String>, ConnectorError>
 where
     G: McpGateway,
 {
     match query_preferred(
-        mcp,
-        admin,
-        cluster,
+        read_gateway,
+        session,
         &EvidenceOperation::ConsumerGroupList {
             filter: None,
             limit: Some(page_limit(max_rows)),
             cursor: None,
         },
         "admin/consumer-groups",
-        deadline,
-        cancel,
     )
     .await
     {
@@ -435,21 +408,18 @@ where
 }
 
 async fn query_preferred<G>(
-    mcp: &McpSource<G>,
-    admin: &AdminQuerySource,
-    cluster: &str,
+    read_gateway: &ConnectorReadGateway<G>,
+    session: &ReadSession<'_, '_>,
     operation: &EvidenceOperation,
     admin_resource: &str,
-    deadline: DateTime<Utc>,
-    cancel: &CancelSignal,
 ) -> Result<ObservedOutput, ConnectorError>
 where
     G: McpGateway,
 {
-    match mcp.query(cluster, operation, deadline, cancel).await {
+    match read_gateway.mcp_query(session, operation).await {
         Ok(output) => Ok(ObservedOutput { output, is_mcp: true }),
-        Err(error) if recoverable_gap(&error) && admin.configured() => admin
-            .query(cluster, admin_resource, deadline, cancel)
+        Err(error) if recoverable_gap(&error) && read_gateway.admin_configured() => read_gateway
+            .admin_query(session, admin_resource)
             .await
             .map(|output| ObservedOutput { output, is_mcp: false }),
         Err(error) => Err(error),

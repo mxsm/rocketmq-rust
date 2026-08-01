@@ -1063,6 +1063,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mismatched_query_scope_is_rejected_before_enqueue() {
+        let store = MemoryStore::default();
+        let service = ConnectorChannelService::new(store.clone(), "test-token").expect("test service");
+        let tenant_id = TenantId::new();
+        let cluster_id = ClusterId::new();
+        let session_id = ConnectorSessionId::new();
+        service
+            .register(&principal(), &registration(tenant_id, cluster_id, session_id))
+            .await
+            .expect("register");
+
+        for mismatched in [query(TenantId::new(), cluster_id), query(tenant_id, ClusterId::new())] {
+            assert!(
+                service
+                    .enqueue_query(
+                        tenant_id,
+                        cluster_id,
+                        mismatched,
+                        Utc::now() + chrono::Duration::seconds(30),
+                    )
+                    .await
+                    .is_err()
+            );
+        }
+
+        assert!(
+            store
+                .state
+                .lock()
+                .await
+                .commands
+                .get(&session_id)
+                .is_none_or(Vec::is_empty)
+        );
+    }
+
+    #[tokio::test]
     async fn auxiliary_upload_scope_comes_from_the_live_registered_session() {
         let service = ConnectorChannelService::new(MemoryStore::default(), "test-token").expect("test service");
         let tenant_id = TenantId::new();

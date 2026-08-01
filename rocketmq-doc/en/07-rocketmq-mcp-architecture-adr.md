@@ -2,7 +2,7 @@
 title: "RocketMQ MCP Architecture ADR"
 permalink: /docs/rocketmq-mcp-architecture-adr/
 excerpt: "Accepted clean-break architecture and public contract for the RocketMQ MCP server refactor."
-last_modified_at: 2026-07-10T00:00:00+08:00
+last_modified_at: 2026-07-31T00:00:00+08:00
 toc: true
 classes: wide
 ---
@@ -36,6 +36,7 @@ diagnosis efficient without creating a global connection pool prematurely.
 | ADR-008 | Target MCP `2025-11-25` only. The refactor does not promise a dual-version protocol bridge with MCP `2025-06-18`. |
 | ADR-009 | Replace the current implementation with a clean break because it is unused. Do not retain legacy Tool, URI, schema, configuration, or feature aliases. |
 | ADR-010 | Keep a bounded, process-local TTL cache inside the shared `QueryFacade`. Keys include schema version, visibility class, query kind, resolved cluster, and normalized parameters; failures are not cached, and identical concurrent misses use singleflight. |
+| ADR-011 | AI SRE consumes MCP through the Connector's private `ReadGateway`. The Control Plane uses ConnectorChannel only; MCP and direct Admin remain internal read-only adapters behind one authorization, admission, deadline, cancellation, redaction, output, and audit policy. |
 
 ## Frozen Public Contract
 
@@ -89,6 +90,13 @@ transport and protocol
 normalization, and read-model construction. Resources and Tools are different
 MCP presentations of the same query results. Diagnosis consumes the same
 facade, adds versioned evidence, and evaluates versioned rules.
+
+AI SRE does not import this server's Rust DTOs. Its Connector verifies the
+public MCP wire capability and routes fixed `EvidenceOperation` values through
+a crate-private `ReadGateway`. Direct Admin fallback is compiled only with
+`rocketmq-admin-core/read-client-adapter`; it is not a second Control Plane
+path and cannot expose mutation capabilities. The detailed Connector contract
+is maintained in `rocketmq-sre/docs/read-gateway-contract.md`.
 
 The cache stores normalized query results, not protocol envelopes. This keeps
 request identifiers and output policy request-specific while allowing Tools
