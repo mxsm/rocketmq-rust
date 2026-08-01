@@ -182,14 +182,14 @@ impl ClusterRepository for PostgresRepository {
     }
 
     async fn list(&self) -> Result<Vec<Cluster>, ControlPlaneError> {
-        let rows = sqlx::query(&format!("{CLUSTER_COLUMNS} ORDER BY created_at ASC, id ASC"))
+        let rows = sqlx::query(cluster_query(" ORDER BY created_at ASC, id ASC"))
             .fetch_all(&self.pool)
             .await?;
         rows.iter().map(cluster_from_row).collect()
     }
 
     async fn get(&self, id: ClusterId) -> Result<Cluster, ControlPlaneError> {
-        let row = sqlx::query(&format!("{CLUSTER_COLUMNS} WHERE id = $1"))
+        let row = sqlx::query(cluster_query(" WHERE id = $1"))
             .bind(id.as_uuid())
             .fetch_optional(&self.pool)
             .await?
@@ -395,7 +395,12 @@ const CLUSTER_COLUMNS: &str = "SELECT
     id, tenant_id, external_cluster_key, environment, region,
     rocketmq_version, deployment_mode, owner_name, onboarding_state,
     created_at, updated_at, offboarded_at
-    FROM clusters";
+                              FROM clusters";
+
+fn cluster_query(suffix: &'static str) -> sqlx::AssertSqlSafe<String> {
+    // Both fragments are compile-time constants; request data is supplied only through binds.
+    sqlx::AssertSqlSafe(format!("{CLUSTER_COLUMNS}{suffix}"))
+}
 
 const CLUSTER_BY_EXTERNAL_KEY_FOR_UPDATE: &str = "SELECT
     id, tenant_id, external_cluster_key, environment, region,
@@ -461,7 +466,7 @@ async fn get_cluster_for_update(
     transaction: &mut Transaction<'_, Postgres>,
     id: ClusterId,
 ) -> Result<Cluster, ControlPlaneError> {
-    let row = sqlx::query(&format!("{CLUSTER_COLUMNS} WHERE id = $1 FOR UPDATE"))
+    let row = sqlx::query(cluster_query(" WHERE id = $1 FOR UPDATE"))
         .bind(id.as_uuid())
         .fetch_optional(&mut **transaction)
         .await?
@@ -473,7 +478,7 @@ async fn get_cluster_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     id: ClusterId,
 ) -> Result<Cluster, ControlPlaneError> {
-    let row = sqlx::query(&format!("{CLUSTER_COLUMNS} WHERE id = $1"))
+    let row = sqlx::query(cluster_query(" WHERE id = $1"))
         .bind(id.as_uuid())
         .fetch_optional(&mut **transaction)
         .await?
